@@ -1,15 +1,4 @@
-/**
- * The three things anyone can do with the owner's experience library:
- * publish what this workspace has proven, search what the owner's other
- * workspaces proved, and import one entry here.
- *
- * This is the whole behaviour, independent of who asks. It was the body of an
- * `experience` tool until the surface it sat on became the wrong one: sharing
- * proven work across workspaces is a rare, deliberate, owner-shaped decision,
- * not something an agent should be weighing on every turn — and every tool on
- * the model's surface costs attention on all of them. The library kept
- * working; only its caller changed, from the model to the owner's RPCs.
- */
+// Publish, search and import against the owner's experience library; called from owner RPCs, not a model tool.
 import * as v from 'valibot';
 import {
   EXPERIENCE_KINDS,
@@ -25,8 +14,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { renderThrownChain } from '../obs/index';
 
-/** The owner's library, as reached from a workspace. Every method crosses the
- *  capability boundary on the backend that implements it. */
+/** Every method crosses the capability boundary on the implementing backend. */
 export interface ExperienceLibraryClient {
   publish(candidate: PublishableCandidate): Promise<ExperienceEntry>;
   search(options: { query?: string; kind?: ExperienceKind; limit?: number }): Promise<ExperienceEntry[]>;
@@ -35,7 +23,6 @@ export interface ExperienceLibraryClient {
 
 export interface ExperienceActionDeps {
   library: ExperienceLibraryClient;
-  /** This workspace's own stores — what it publishes from and imports into. */
   rt: AgentRuntime;
   facts: FactsStore;
 }
@@ -83,9 +70,7 @@ function summarizeCandidate(candidate: PublishableCandidate) {
   };
 }
 
-/** Dispatch one library action. Errors come back in the result rather than
- *  thrown: every caller is a surface that has to render a refusal ("nothing
- *  here qualifies yet") as an ordinary answer, not as a failure. */
+/** Errors are returned, not thrown: callers render refusals as ordinary answers. */
 export async function runExperienceAction(
   deps: ExperienceActionDeps,
   input: { readonly value: unknown },

@@ -1,26 +1,5 @@
-/**
- * The advisor: a second model reads a finished turn and may say one thing
- * about it.
- *
- * Every judge this codebase already has grades a bounded pair — a task and an
- * output (evolution/outcomes.ts, scaffold/auto-judge.ts). None of them reads
- * the turn as it happened, and none of them speaks into the conversation. This
- * one does both, once per turn, and usually says nothing.
- *
- * It reads the record the turn already wrote. The `CompletedTurn` carries the
- * tool calls, their results, the step count and whether the turn errored, and
- * the prepared messages carry what the model was working from. So the advisor
- * gets no tools: re-reading files to learn what a turn did would pay for
- * evidence the runtime already holds.
- *
- * This module holds no state and owns no storage. Recent notes arrive as an
- * argument (`EvolutionEngine.recentAdvisorNotes` reads them off the audit stream
- * the engine already writes), the metered and governed `LLM` arrives as an
- * argument, and delivery and recording arrive as two functions. That is what
- * makes every suppression rule below a pure function with its own test, and it
- * is why {@link runAdvisorLane} can be the ONE turn-end policy both backends
- * call instead of the same five branches written twice.
- */
+// The advisor: a second model reads a finished turn's record (no tools) and may say one thing about it.
+// Stateless: notes, LLM, delivery and recording arrive as arguments, so both backends share runAdvisorLane.
 
 import * as v from 'valibot';
 import type { FiberCtx, LLM, SqlExecutor } from '../types/primitives';
@@ -47,34 +26,14 @@ export function isAdvisorSeverity<Value>(value: Value): value is Value & Advisor
   return ADVISOR_SEVERITIES.some((severity) => severity === value);
 }
 
-/** What each severity means to a reader who did not write it. */
 export const ADVISOR_SEVERITY_LABEL = {
   nit: 'Nit',
   concern: 'Concern',
   blocker: 'Blocker',
 } as const satisfies Readonly<Record<AdvisorSeverity, string>>;
 
-/**
- * WHAT the note is about, in the order {@link buildAdvisorPrompt} offers the
- * three classes.
- *
- * The prompt has always asked for exactly these three and the reply threw the
- * answer away, so every note landed on the audit stream as undifferentiated
- * prose. The class is what makes an advisor row usable as evidence rather than
- * as reading material: `buildOutcomeEvalSplit` renders it into the instance a
- * judge scores, so the judge is told what KIND of failure it is grading.
- *
- *   wrong-work        — the turn did not do what was asked: a check skipped, an
- *                       assumption about to be built on, a failure read as a
- *                       success.
- *   missed-capability — a capability the turn HAD and did not use, where using
- *                       it was the right shape for the work. This is the one
- *                       signal `turn_outcomes` structurally cannot carry: the
- *                       outcome classifier grades what happened, never what was
- *                       available and went unused.
- *   dissatisfaction   — the user said so in this turn, in their own words, which
- *                       the note quotes.
- */
+/** Order matches {@link buildAdvisorPrompt}. `missed-capability` is the signal `turn_outcomes` cannot carry:
+ *  a capability the turn had and did not use. */
 const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
 
 export type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
@@ -83,47 +42,29 @@ function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteCl
   return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
 }
 
-/** What each class means to a reader who did not write it — the phrase an eval
- *  instance carries, so a judge reads the kind and not the token. */
+/** The phrase an eval instance carries, so a judge reads the kind and not the token. */
 export const ADVISOR_CLASS_LABEL = {
   'wrong-work': 'the work did not do what was asked',
   'missed-capability': 'a capability it had and did not use',
   dissatisfaction: 'the user said they were unhappy',
 } as const satisfies Readonly<Record<AdvisorNoteClass, string>>;
 
-/** The `kinuEvent` an advisor signal carries: its provenance in the run log,
- *  and what makes the chat render it as a card instead of a user bubble. */
+/** Also what makes the chat render the signal as a card instead of a user bubble. */
 export const ADVISOR_SIGNAL_KIND = 'advisor';
 
-/** The turn-metadata key carrying the note's severity to the card. */
 export const ADVISOR_SEVERITY_METADATA_KEY = 'advisorSeverity';
 
-/** The `EvolutionEvent.type` a sub-threshold or held note is stored under, and
- *  the type {@link recentAdvisorNotes} reads back. One string, two directions. */
+/** Written and read back ({@link recentAdvisorNotes}) under one string. */
 export const ADVISOR_EVENT_TYPE = 'advisor_note';
 
-/** One thing the advisor has to say about one turn. */
 export interface AdvisorNote {
   readonly note: string;
   readonly severity: AdvisorSeverity;
   readonly class: AdvisorNoteClass;
 }
 
-/**
- * The `evolution_events.data` payload of an advisor row: what the writer stamps
- * and what the scorer parses.
- *
- * One schema for both directions on purpose. A hand-rolled `json_extract` read
- * beside a hand-built write is how a payload comes to be written in one shape
- * and read in another while both sides look like they work — recorded, in this
- * repo, at `test-utils/tests/agent-evals.test.ts`. `EvolutionEngine
- * .recordAdvisorNote` types its object as this, so a field renamed on one side
- * fails to compile on the other.
- *
- * `turnId` is nullable because a turn can end with no durable id (a programmatic
- * wake). Such a note is still recorded and still deduped against; it just has no
- * conversation to join back to, so it scores nothing.
- */
+/** Shared by writer and scorer so a renamed field fails to compile on the other side.
+ *  `turnId` is null for a turn with no durable id (programmatic wake); such a note is deduped but scores nothing. */
 export const AdvisorRowDataSchema = v.object({
   severity: v.picklist(ADVISOR_SEVERITIES),
   class: v.picklist(ADVISOR_NOTE_CLASSES),
@@ -132,26 +73,14 @@ export const AdvisorRowDataSchema = v.object({
 
 export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
 
-// ── Suppression ─────────────────────────────────────────────────────────────
-
-/**
- * Why a note did not reach the conversation.
- *
- * oh-my-pi's advisor is the recorded evidence that prose rules do not hold
- * here: one captured session logged 309 `advise` calls covering 92 unique
- * notes, 114 of them the single word "Stop."
- * (`can1357/oh-my-pi`, `https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/advisor/emission-guard.ts#L9-L16`).
- * So the guard is code, and each rule is one function.
- */
+/** The guard is code, not prompt rules: one oh-my-pi session logged 309 `advise` calls, 114 of them "Stop."
+ *  (`https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/advisor/emission-guard.ts#L9-L16`). */
 export type SuppressionRule = 'duplicate' | 'content-free' | 'gate-open' | 'below-floor';
 
-/** What the caller does with the note. */
 export type AdvisorDisposition =
-  /** Speak it: one signal, one card, one severity. */
   | 'deliver'
   /** Record it and stay quiet: one `evolution_events` row the owner can read. */
   | 'changelog'
-  /** Say nothing and store nothing. Only for a note that adds no fact. */
   | 'drop';
 
 export interface NoteVerdict {
@@ -160,34 +89,15 @@ export interface NoteVerdict {
   readonly rule: SuppressionRule | null;
 }
 
-/**
- * The note text as the dedupe window compares it: lowercase, with every run of
- * non-alphanumeric characters collapsed to one space.
- *
- * Comparing raw text would let "Stop." and "Stop!" both through, which is the
- * failure mode above with punctuation on it.
- */
+/** Lowercase, non-alphanumeric runs collapsed, so "Stop." and "Stop!" dedupe together. */
 export function normalizeNote(note: string): string {
   return note.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-/**
- * How many recent notes the dedupe window holds.
- *
- * A window, not a lifetime: an advisor that never repeats itself cannot raise a
- * concern that came back weeks later, and a concern coming back is exactly the
- * thing worth saying twice. 50 is roughly a long session, which is the span
- * over which a repeat reads as nagging rather than as news.
- */
+/** A window, not a lifetime: a concern that returns weeks later is worth saying again. */
 export const ADVISOR_DEDUPE_WINDOW = 50;
 
-/**
- * Notes that carry no fact.
- *
- * Normalised forms, so the table is compared against {@link normalizeNote}'s
- * output and cannot drift from it. Short and fixed on purpose: a growing
- * blocklist of phrases is a model-behaviour problem being solved in a list.
- */
+/** Normalised forms, compared against {@link normalizeNote}'s output. Kept short: a growing blocklist hides a model problem. */
 export const CONTENT_FREE_NOTES: readonly string[] = [
   'stop',
   'ok',
@@ -208,33 +118,19 @@ export const CONTENT_FREE_NOTES: readonly string[] = [
   'n a',
 ];
 
-/** A note that says nothing. */
 export function isContentFree(note: string): boolean {
   const normalized = normalizeNote(note);
 
   return normalized.length === 0 || CONTENT_FREE_NOTES.includes(normalized);
 }
 
-/** A note the workspace has already been told. `recent` is the normalised text
- *  of the advisor rows already in the audit stream. */
+/** `recent` is the normalised text of advisor rows already in the audit stream. */
 export function isDuplicateNote(note: string, recent: readonly string[]): boolean {
   return recent.includes(normalizeNote(note));
 }
 
-/**
- * The four rules, in the order their answers matter.
- *
- * A note that adds no fact is dropped whole — neither said nor stored, because
- * storing "Stop." helps nobody read a changelog. Everything else that cannot be
- * said is stored, so a held note is never a lost one.
- *
- * `gateOpen` is the completion gate holding this turn
- * (orchestrator/completion-gate.ts). One runtime voice per boundary: the gate
- * asked the agent a mechanical question and an advisory arriving beside it reads
- * as the same speaker contradicting itself. The advisor's note becomes a
- * Changelog row instead, and the advisor sees the turn again next time if the
- * condition still holds.
- */
+/** A content-free note is dropped whole; every other unsaid note is stored. While the completion gate holds the turn,
+ *  the note goes to the changelog: one runtime voice per boundary. */
 export function judgeNote(opts: {
   readonly note: AdvisorNote;
   readonly minSeverity: AdvisorSeverity;
@@ -255,39 +151,15 @@ export function judgeNote(opts: {
   return { disposition: 'deliver', rule: null };
 }
 
-// ── The call ────────────────────────────────────────────────────────────────
-
-/**
- * What the model may answer.
- *
- * `note` absent, empty, or `severity` or `class` absent is the silent answer,
- * and silence is the expected one. Asking for an explicit null would make "I
- * have nothing" a shape the model has to get right.
- */
+/** An absent or empty field is the silent answer, which is the expected one. */
 const AdvisorReplySchema = v.object({
   note: v.optional(v.string()),
   severity: v.optional(v.string()),
   class: v.optional(v.string()),
 });
 
-/**
- * Credential shapes that must not reach the advisor model verbatim. The deep
- * lane may resolve to a different vendor than the turn model, so a secret the
- * turn saw would travel to a second provider inside the review prompt.
- *
- * Value shapes, mirrored from `scripts/secret-scan.ts` PATTERNS rather than
- * imported: scripts run under raw Node and core must not depend on them, and
- * the scan's benign exemptions do not apply here — a tool result naming a
- * shape is still shaped like the secret. Each placeholder keeps the shape
- * class so the advisor can still reason about the call, reusing the redaction
- * shape the event hub and the release diff marker already write.
- *
- * The private-key block comes first: its base64 body is gone before the value
- * scans run, so a key fragment that happens to read as another shape cannot
- * survive inside a redacted block. No shape matches, no change: the walk
- * below returns its input untouched, and a secret-free turn renders
- * byte-identical.
- */
+/** Secrets are redacted before the review prompt: the deep lane may be a different vendor. Shapes mirror
+ *  `scripts/secret-scan.ts` (not imported: core cannot depend on scripts); private-key blocks go first. */
 const ADVISOR_PRIVATE_KEY_BLOCK = /-----BEGIN[^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END[^-]*PRIVATE KEY[^-]*-----|-----BEGIN[^-]*PRIVATE KEY[^-]*-----/gu;
 
 const ADVISOR_BEARER_TOKEN = /Bearer\s+[A-Za-z0-9\-._~+/=]{20,}/gu;
@@ -297,7 +169,6 @@ const ADVISOR_AWS_ACCESS_KEY = /AKIA[0-9A-Z]{16}/gu;
 const ADVISOR_PROVIDER_SECRET = /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/gu;
 
 const ADVISOR_KINU_TOKEN = /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/gu;
-
 
 const AdvisorStringSchema = v.string();
 
@@ -310,9 +181,7 @@ function obfuscateAdvisorString(value: string): string {
     .replace(ADVISOR_KINU_TOKEN, '[redacted kinu-token]');
 }
 
-/** Credential-shaped strings out of a tool payload, rebuilding containers
- *  only along paths that changed. Strings narrow through the string schema
- *  rather than `typeof`, the way `redactPayload` narrows with `isJsonObject`. */
+/** Rebuilds containers only along paths that changed. */
 function obfuscateAdvisorSecrets(value: JsonValue): JsonValue {
   if (v.is(AdvisorStringSchema, value)) return obfuscateAdvisorString(value);
 
@@ -346,10 +215,7 @@ function obfuscateAdvisorSecrets(value: JsonValue): JsonValue {
   return changed ? next : value;
 }
 
-/** One tool call as the advisor is shown it. Arguments and result are bounded
- *  by the same per-call budget the pattern extractor uses, and
- *  credential-shaped values are obfuscated first, so a secret the turn saw
- *  never travels verbatim to the advisor's vendor. */
+/** Arguments and result share the pattern extractor's per-call budget; secrets are obfuscated first. */
 function renderToolCall(call: ToolCallRecord): string {
   const args = evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.args)), EVIDENCE_BUDGETS.patternToolCall);
 
@@ -362,35 +228,9 @@ function renderToolCall(call: ToolCallRecord): string {
   return `  - ${call.name}(${args}) outcome=${outcome}${result}`;
 }
 
-/**
- * The reviewer's prompt.
- *
- * It states the one thing the advisor is for — the note the agent would want at
- * its next step and did not get — and it states silence as the default answer,
- * because a reviewer asked to review will always find something.
- *
- * Half its budget is negative space, ported from oh-my-pi's own watchdog prompt
- * (https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/prompts/advisor/system.md). The suppression rules in
- * this file stop a note from being REPEATED; nothing stopped it being about scope,
- * backwards compatibility, or a request for clarification — the three classes a
- * reviewer reaches for when the turn was actually fine. Each severity carries a
- * worked note inside its own length bound, so severity calibration gets the
- * treatment note content already had.
- *
- * `reachable` is the capability names the turn genuinely had (the keys of the
- * ToolSet it ran with). It is what makes the missed-capability class checkable
- * rather than speculative: without it a reviewer can only guess that delegation
- * was available, and a note naming a capability the actor never had is worse
- * than no note. Empty means the caller could not say, and then the class is
- * simply not offered.
- *
- * A capability is USED whether it was called natively or reached through the
- * sandbox. Both matter here because the unused list is the ONLY input to the
- * missed-capability class: with `called` read off native names alone, the
- * production turn that delegated five times through codemode would have been
- * told `agents` went unused, and the likeliest note was one instructing the
- * agent to delegate — which it had just done, five times, unsuccessfully.
- */
+/** Silence is the stated default: a reviewer asked to review always finds something. Negative space ported from
+ *  https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/prompts/advisor/system.md.
+ *  `reachable` makes missed-capability checkable; a capability reached through codemode counts as used. */
 export function buildAdvisorPrompt(
   turn: CompletedTurn, reachable: readonly string[] = [], guidance = '',
 ): string {
@@ -472,17 +312,7 @@ export function buildAdvisorPrompt(
   ].join('\n');
 }
 
-/**
- * The note the agent is allowed to be told, as long as the model wrote one.
- *
- * A model that answers a longer note than asked is not a failure — it is the
- * ordinary case — so the text is bounded here rather than rejected. An
- * unreadable answer, an unknown severity or an unknown class IS a failure of the
- * contract and answers null, which the caller records as a turn the advisor did
- * not review. The class is held to the same standard as the severity because the
- * two are read the same way downstream: a note whose kind nobody can name scores
- * nothing, so accepting one would put an unlabeled instance in front of a judge.
- */
+/** Over-long notes are truncated, not rejected; an unknown severity or class is a contract failure (null). */
 export const ADVISOR_NOTE_MAX_CHARS = 240;
 
 export function parseAdvisorReply(raw: string): AdvisorNote | null {
@@ -508,41 +338,16 @@ export function parseAdvisorReply(raw: string): AdvisorNote | null {
   };
 }
 
-/** How many times one turn's lane may run its review. One provider failure
- *  must not lose the turn's only review, and past three transient failures a
- *  further attempt is hammering a provider that already answered. Attempts,
- *  never an elapsed deadline: the budget is a count, not a clock. */
+/** Attempts, never an elapsed deadline. */
 const ADVISOR_REVIEW_MAX_ATTEMPTS = 3;
 
-/**
- * Which classified failures earn another attempt. `unavailable` is the
- * provider saying slow down or not yet (429, 5xx); `timeout` is a deadline
- * passing while the work may still be running; `io` is the transport itself
- * breaking (ECONNRESET). Everything else is definitive: `bad_input` and
- * `denied` are the request refused, `unsupported` and `missing` will not
- * exist on retry, `cancelled` is the caller stopping, and `oom` recurs. An
- * UNCLASSIFIED cause earns no guess at all: an unknown failure is definitive,
- * never presumed transient — the classifier returns null rather than guess,
- * and this list must not be extended to cover it.
- */
+/** Only these classified failures retry; an unclassified cause is definitive, never presumed transient. */
 const ADVISOR_TRANSIENT_CODES: readonly ErrorCode[] = ['unavailable', 'timeout', 'io'];
 
-/**
- * Review one finished turn.
- *
- * `llm` is the caller's: already routed to the advisor role, already reporting
- * its spend under the `advisor` producer, and already governed by the mission
- * the turn ran under. This function does not know any of that, which is why it
- * can be tested against a two-line fake.
- *
- * Null means no note. Malformed model output is one of the ways that happens
- * and it is recorded by the caller rather than thrown, because an advisory the
- * runtime could not read is not a turn failure — the turn already ended.
- */
+/** Null means no note; malformed output is recorded by the caller, not thrown: the turn already ended. */
 export async function reviewCompletedTurn(deps: {
   readonly llm: LLM;
   readonly turn: CompletedTurn;
-  /** Capability names the turn actually ran with. See {@link buildAdvisorPrompt}. */
   readonly reachable?: readonly string[];
   readonly guidance?: string;
 }): Promise<AdvisorNote | null> {
@@ -551,17 +356,8 @@ export async function reviewCompletedTurn(deps: {
   return parseAdvisorReply(raw);
 }
 
-// ── The lane ────────────────────────────────────────────────────────────────
-
-/**
- * How a note is framed for the agent that reads it.
- *
- * The same precedent as {@link COMPLETION_GATE_HEADER}: a runtime-authored
- * message says so in its own words. The UI cannot be fooled either way — the
- * author stamp is data and the classifier reads it before the bubble branch —
- * but the MODEL only has the prose, and a model that reads an advisory as the
- * user's instruction obeys it instead of weighing it.
- */
+/** A runtime-authored message says so (as {@link COMPLETION_GATE_HEADER}): the model only has the prose, and would
+ *  obey an advisory it read as the user's instruction. */
 export const ADVISOR_HEADER =
   '[Advisor — a second model reviewed the turn you just finished. This is the Kinu '
   + 'runtime, not the user. Weigh it against what you know; it may be wrong.]';
@@ -571,55 +367,26 @@ export function advisorSignalText(note: AdvisorNote): string {
 }
 
 interface AdvisorLaneDeps {
-  /** The turn that just ended. */
   readonly turn: CompletedTurn;
-  /** The reviewer's client: routed, metered, and governed by the caller. */
+  /** Routed, metered, and governed by the caller. */
   readonly llm: LLM;
   readonly minSeverity: AdvisorSeverity;
   /** Normalised text of the notes already on the audit stream. */
   readonly recent: readonly string[];
   /** The completion gate has asked its question and not heard back. */
   readonly gateOpen: boolean;
-  /** Capability names the turn ran with, so the missed-capability class is
-   *  checkable rather than speculative. Empty when the caller cannot say. */
+  /** Empty when the caller cannot say. */
   readonly reachable: readonly string[];
   readonly guidance: string;
-  /** Speak the note, through the caller's own inbox. */
   readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
-  /** Record the note on the audit stream (EvolutionEngine.recordAdvisorNote).
-   *  The turn id comes from the lane rather than from each backend's closure:
-   *  it is what joins the row back to the conversation it graded, and a backend
-   *  that forgot to pass it would write a note no scorer can read while looking
-   *  exactly like one that works. */
+  /** Turn id comes from the lane, not each backend: it joins the row to the conversation it graded. */
   readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
   readonly actor?: ActorHandle;
   readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
 }
 
-/**
- * Everything one review needs, durably.
- *
- * The advisor lane's input is the completed turn plus three decisions taken at
- * turn end, and this is the snapshot that makes the lane re-enterable. Without
- * it an eviction terminalizes the lane as lost, so a turn that happened to end
- * near a deploy silently gets no advice.
- *
- * A MIRROR OF THE LANE'S OWN DEPS, field for field, and that is deliberate: a
- * snapshot carrying anything less would re-run the review against different
- * inputs and produce advice about a turn that never happened. `llm`, `send`
- * and `record` are the three deps NOT here, because each is a live seam the
- * recovering host re-resolves for itself; `gateOpen` is absent because the one
- * backend that has a gate records it beside the snapshot, and the other has none.
- *
- * `recent` is snapshotted rather than re-read, so the dedupe window the verdict
- * is judged against is the one the TURN saw. Re-reading it on recovery would
- * judge this turn's note against notes written after it, which is a different
- * question and one nobody asked.
- *
- * Serializable by construction: {@link CompletedTurnSchema} is the same mirror
- * `completed_turns` persists a turn through, so a turn that cannot be
- * snapshotted here could not have been stored there either.
- */
+/** Mirrors the lane's deps field for field so a recovered review judges the same turn; `recent` is snapshotted so
+ *  dedupe uses the window the turn saw. Live seams (`llm`, `send`, `record`) and `gateOpen` are re-resolved. */
 export const AdvisorRecoverySnapshotSchema = v.object({
   turn: CompletedTurnSchema,
   reachable: v.array(v.string()),
@@ -630,17 +397,7 @@ export const AdvisorRecoverySnapshotSchema = v.object({
 
 export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
 
-/**
- * One turn's review, end to end: the ONE turn-end policy, reached by every
- * backend through {@link reviewRecordedTurn}.
- *
- * Shared rather than written per backend because the branch count is what
- * drifts. A cloud actor and a local session that each decided independently
- * whether a `nit` reaches the chat would disagree within a month, and the
- * disagreement would be invisible — both would look like they were working.
- *
- * Answers the disposition it took, or null when there was nothing to say.
- */
+/** The one turn-end policy every backend reaches through {@link reviewRecordedTurn}. Null when there was nothing to say. */
 async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition | null> {
   const note = await reviewCompletedTurn({
     llm: deps.llm, turn: deps.turn, reachable: deps.reachable, guidance: deps.guidance,
@@ -656,10 +413,7 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   });
 
   if (verdict.disposition === 'drop') return 'drop';
-  // Recorded FIRST, and on both remaining paths. The row is what the next
-  // turn's dedupe window reads, so a delivered note that skipped it would be
-  // sayable again on the very next turn — which is the nagging this exists to
-  // prevent, arriving through the one path that looks like it is working.
+  // Recorded first on both remaining paths: the row feeds the next turn's dedupe window.
   deps.record(note, deps.turn.turnId);
 
   if (verdict.disposition === 'changelog') return 'changelog';
@@ -671,9 +425,7 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
     metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: note.severity },
   };
 
-  // Keyed on the FACT: one note per turn, so a re-delivery of the same turn's
-  // review collapses onto the row it already opened. Absent on a turn with no
-  // durable id, because a fabricated key would collide two different turns.
+  // One note per turn, so a re-delivery collapses; no key without a durable id, since a fabricated one would collide.
   const keyed: AgentSignal = deps.turn.turnId === undefined || deps.turn.turnId === ''
     ? signal
     : { ...signal, idempotencyKey: deps.actor === undefined
@@ -688,38 +440,18 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   return 'deliver';
 }
 
-/**
- * The advisor lane's durable fiber name — ONE name, because it is one lane.
- *
- * Both backends dispatch their fiber recovery on it, and each declared it for
- * itself: the Durable Object as `advisor:review`, the CLI as `advisor.review`
- * with a comment claiming it was the same string the Durable Object used. The
- * shared spelling follows core's own lane names (`bg:`, `mcts`).
- */
+/** One fiber name both backends dispatch recovery on. */
 export const ADVISOR_LANE_FIBER = 'advisor:review';
 
-/** The tombstone scope one turn's advisor lane is recorded under. It marks the
- *  lane RECOVERABLE, not finished: from the checkpoint on, a second lane
- *  beside it would be a duplicate review. */
+/** Marks the lane recoverable, not finished: from the checkpoint on, a second lane would be a duplicate review. */
 const ADVISOR_LANE_SCOPE = 'advisor_lane';
 
-/**
- * The key one turn's advisor lane is tombstoned under, or null for a turn with
- * no durable id. An unkeyed turn has no replay to guard against and is not
- * given a fabricated key: every such turn would share it, and the second would
- * read the first's checkpoint as its own review already started.
- */
+/** Null without a durable id: a fabricated key would be shared by every such turn. */
 function advisorLaneKey(turn: Pick<CompletedTurn, 'turnId'>): string | null {
   return turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
 }
 
-/**
- * Whether a lane for this turn has already been STARTED — checkpointed, and
- * therefore recoverable on its own. A terminal replay arriving after the
- * checkpoint but before its row recorded `completed` would otherwise open a
- * second lane beside the first, and two advisors would review one turn, each
- * spending a model call and appending its own note.
- */
+/** Started means checkpointed; a terminal replay after that must not open a second lane. */
 function advisorLaneStarted(
   sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
 ): boolean {
@@ -728,8 +460,7 @@ function advisorLaneStarted(
   return key !== null && effectAlreadyDone(sql, actor, ADVISOR_LANE_SCOPE, key);
 }
 
-/** Record that this turn's lane is checkpointed. Written ADJACENT to the
- *  stash, which is exactly the instant a second lane becomes a duplicate. */
+/** Written adjacent to the stash, the instant a second lane becomes a duplicate. */
 function markAdvisorLaneStarted(
   sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
 ): void {
@@ -738,27 +469,16 @@ function markAdvisorLaneStarted(
   if (key !== null) recordEffectDone(sql, actor, { scope: ADVISOR_LANE_SCOPE, key: key });
 }
 
-/** One turn's advisor lane, as a backend hands it over. */
 export interface AdvisorLaneStart {
   readonly turn: Pick<CompletedTurn, 'turnId'>;
-  /** What the lane's recovery re-drives, stashed at the checkpoint. */
   readonly snapshot: JsonValue;
-  /** The platform's carrier: an Agents SDK durable fiber on a Durable Object,
-   *  a process-tracked fiber on the CLI. */
+  /** An Agents SDK durable fiber on a Durable Object, a process-tracked fiber on the CLI. */
   readonly carry: (name: string, body: (ctx: Pick<FiberCtx, 'stash'>) => Promise<void>) => Promise<void>;
   readonly review: () => Promise<void>;
 }
 
-/**
- * Start one turn's advisor lane and resolve at its CHECKPOINT.
- *
- * From the checkpoint the lane is recoverable on its own, which is what an owed
- * row may complete on: resolving at the review's finish holds the row through a
- * model call, and resolving before the stash completes a row no interruption
- * can resume. ONE lane per turn, ever started, so a terminal replay arriving
- * after the checkpoint opens no second review. A lane that dies before its
- * checkpoint rejects, which keeps the row owed.
- */
+/** Resolves at the checkpoint, from which the lane recovers on its own; a lane that dies before it rejects,
+ *  keeping the row owed. */
 export function startAdvisorLane(
   store: { readonly sql: SqlExecutor; readonly actor: ActorHandle }, lane: AdvisorLaneStart,
 ): Promise<void> {
@@ -782,8 +502,7 @@ export function startAdvisorLane(
     checkpointed.resolve();
     await lane.review();
   }).catch((...rejection: [unknown]) => {
-    // The LANE died around the review: a carrier that never ran the body, or a
-    // review that threw after the checkpoint. The first leaves the row owed.
+    // A carrier that never ran the body leaves the row owed.
     const failure = toKinuError({ doing: 'running the advisor review lane', cause: rejection[0], otherwise: 'unavailable' });
 
     diagnostics.failure('advisor.lane_failed', failure);
@@ -793,25 +512,8 @@ export function startAdvisorLane(
   return checkpointed.promise;
 }
 
-/**
- * The ONE review body a live lane and its recovery both run, from a recorded
- * snapshot.
- *
- * Governed off the TURN's labels rather than the active mission: this runs
- * after the turn ended, and debiting whatever mission happens to be active
- * later would charge work it did not cause. An unlabelled turn is reviewed on
- * the ungoverned client. `gateOpen` is the one input a backend with a
- * completion gate records beside the snapshot; a backend without one passes
- * false by construction.
- *
- * One provider failure must not lose the turn's only review: a transient
- * failure earns another attempt, up to {@link ADVISOR_REVIEW_MAX_ATTEMPTS},
- * and every attempt's failure is stated on `advisor.review_failed` with its
- * number. An exhausted lane is a turn with no advice, answered as null. A
- * classified definitive failure is a defect in the review itself and still
- * throws; an unclassified one is definitive without being classified — one
- * attempt, one report, no advice — since retrying it would be a guess.
- */
+/** The one review body live lanes and recovery run. Governed off the turn's labels, not the mission active later.
+ *  Transient failures retry up to {@link ADVISOR_REVIEW_MAX_ATTEMPTS}; exhausted or unclassified answers null. */
 export async function reviewRecordedTurn(deps: {
   readonly snapshot: AdvisorRecoverySnapshot;
   readonly llm: LLM | undefined;
@@ -819,9 +521,7 @@ export async function reviewRecordedTurn(deps: {
   readonly gateOpen: boolean;
   readonly send: AdvisorLaneDeps['send'];
   readonly record: AdvisorLaneDeps['record'];
-  /** The workspace's advisor guidance, already admitted by the caller's own
-   *  context assembly (advisorWorkspaceGuidance) — a string, the way the turn
-   *  record is data: the review lane reads no files. */
+  /** Already admitted by the caller; the review lane reads no files. */
   readonly guidance?: string;
   readonly actor?: ActorHandle;
   readonly parent?: AdvisorLaneDeps['parent'];
@@ -850,19 +550,9 @@ export async function reviewRecordedTurn(deps: {
     } catch (cause) {
       const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });
 
-      // Advice is optional; the turn is not. Every attempt's failure is
-      // recorded on the lane's own event with its number, so a turn that
-      // stays unreviewed says how many reviews it cost.
       diagnostics.failure('advisor.review_failed', failure, { attempt });
 
-      // A classified definitive failure is a defect in the review itself and
-      // throws, as before. A transient one gets its next attempt on the
-      // shared recovery pace; an exhausted one is a turn with no advice,
-      // never a fabricated note. The retry decision reads the CAUSE's own
-      // classification, not the fallback code: `otherwise` is what the lane
-      // reports, and retrying on it would guess "transient" for a failure
-      // nothing recognised. An unclassified cause is definitive on its own —
-      // one attempt, one report, no advice.
+      // Retry reads the cause's own classification, not the `otherwise` fallback, so nothing unrecognised is guessed transient.
       const classified = classifyErrorCode({ cause });
 
       if (classified !== null && !ADVISOR_TRANSIENT_CODES.includes(classified)) throw failure;

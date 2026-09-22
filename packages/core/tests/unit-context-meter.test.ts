@@ -1,6 +1,4 @@
-// The local context breakdown. The contract under test is honesty: exact
-// character counts, a stated divisor, no scaling toward the provider's total,
-// and no measurement invented for a step that had none.
+// Local context breakdown: exact character counts, a stated divisor, no scaling toward the provider total.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { measureContext, TurnContextMeter, DYNAMIC_CONTEXT_OPEN_TAG } from '../src/index';
@@ -19,7 +17,6 @@ describe('measureContext', () => {
       ['system', 'Runtime context'],
       ['system', 'Delegation'],
     ]);
-    // Exact, not rounded: each block is its own characters.
     expect(segments[0]?.chars).toBe('the soul\nlives here'.length);
     expect(segments[1]?.chars).toBe('## Runtime context\nbackend: cf'.length);
   });
@@ -49,8 +46,7 @@ describe('measureContext', () => {
   });
 
   test('ephemeral live-state blocks are their own plane, never conversation', () => {
-    // They ride as user messages, but counting them as what the user said
-    // would misattribute the runtime's own context pressure to the operator.
+    // Runtime context rides as user messages but must not be attributed to the operator.
     const block = `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="ab">\nstate\n</dynamic_context>`;
     const { segments } = measureContext({ messages: [user('hello'), user(block)] });
     expect(segments).toEqual([
@@ -102,7 +98,6 @@ describe('TurnContextMeter', () => {
     const first = meter.take();
     meter.measure([user('one'), assistant('two')]);
     const second = meter.take();
-    // The system + tools ride every request; only the messages grew.
     expect(first?.segments.filter((s) => s.plane !== 'messages'))
       .toEqual(second?.segments.filter((s) => s.plane !== 'messages') ?? []);
     const firstChars = present(first, 'the first reading').measuredChars;

@@ -1,35 +1,7 @@
 /**
- * Workspace fork — the wire.
- *
- * A fork crosses a process boundary. On Cloudflare the source and the target
- * are two Durable Objects with no cross-DO SQL, and one serialized RPC argument
- * is capped at 32 MiB (`do.facet.rpc_bytes`) while a workspace's history is
- * not. So the snapshot is never one value on either side of the boundary.
- *
- * It crosses as SEMANTIC frames: a `begin` that declares what is coming, a
- * bounded batch of rows of one section, a bounded range of one inherited file,
- * and a `commit`. The source reads each batch out of its own SQL and forgets
- * it; the target stages each batch straight into its own SQL and forgets it.
- * Neither side ever holds the whole snapshot, and no total size is refused —
- * a bigger workspace is more frames.
- *
- * What the target stages is invisible until `commit`. Before it there is no
- * lineage, no fork marker, no mission, no display name, and the roster row is
- * still `create_pending` in the UserDO, so no user route can reach it. `commit`
- * validates the protocol version, the declared per-section counts, the frame
- * order and the rolling digest, and only then publishes.
- *
- * The frames of one fork arrive on SEVERAL activations of the target object: a
- * Durable Object's isolate can be reset between two of them while the source
- * keeps sending. So the cursor this protocol runs on — next frame, rolling
- * digest, what has been staged, whether it published — is the target's own
- * `ForkStagingState` row rather than an instance field, and an interrupted
- * transfer resumes at the frame it stopped at.
- *
- * This module owns the WIRE. The rows it carries belong to
- * `identity/fork-rows.ts`, the reads it streams them through to
- * `identity/fork-plan.ts` and the write it drives to `identity/fork-writer.ts`,
- * which together are the single authority for what a fork copies.
+ * Workspace fork wire. One RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`), so a fork crosses as
+ * bounded frames (`begin`, row batches, file ranges, `commit`); nothing is visible on the target until `commit`.
+ * The cursor lives in the target's `ForkStagingState` row so an interrupted transfer resumes across DO activations.
  */
 
 import * as v from 'valibot';
@@ -73,41 +45,14 @@ import {
 import { ForkTargetWriter, type ForkResult } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
-/**
- * The fork transfer protocol this tree speaks.
- *
- * A receiver refuses a version it does not implement rather than misread the
- * frames of a deployment whose snapshot shape is not its own. Bump it when the
- * frame union changes in a way an older receiver would misinterpret.
- *
- * Version 2 carries the canonical conversation store — message identities,
- * parts, updates, public entries and the restored context membership — where
- * version 1 carried a flattened chain and its pane twin.
- */
+/** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
+ *  receiver would misread the frame union. v2 carries the canonical conversation store. */
 export const FORK_TRANSFER_VERSION = 2;
 
-/**
- * Bytes of payload one frame may carry.
- *
- * A quarter of `do.facet.rpc_bytes`, the catalogued ceiling on ONE serialized
- * RPC argument — a frame IS that argument, and the other three quarters are
- * headroom for the clone metadata and the envelope around the payload.
- *
- * This bounds a FRAME, and through the frame it bounds what either side holds
- * at once. Nothing bounds a snapshot.
- */
+/** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
-/**
- * The row sections, in the order they must cross.
- *
- * The order is load-bearing, not cosmetic: it is the FOREIGN-KEY order of the
- * canonical store. Messages precede the public entries that reference them,
- * entries precede their part references, and the context membership lands last
- * — so every staged statement commits against rows the target already has. A hosted transfer stages one frame per
- * RPC, so there is no transaction spanning the sections to defer a constraint
- * inside.
- */
+/** Row sections in crossing order, which is the canonical store's foreign-key order (no transaction spans frames). */
 export const FORK_ROW_SECTIONS = [
   'agentConfig',
   'craftedTools',
@@ -120,9 +65,7 @@ export const FORK_ROW_SECTIONS = [
 
 export type ForkRowSection = (typeof FORK_ROW_SECTIONS)[number];
 
-/** How many rows each section carries, and how many files follow. Declared up
- *  front by the source, checked against what arrived at `commit` — the
- *  completeness proof a lost frame cannot slip past. */
+/** Per-section row counts and file count, declared by the source and checked at `commit`. */
 export const ForkSectionCountsSchema = v.object({
   agentConfig: v.number(),
   craftedTools: v.number(),
@@ -134,27 +77,17 @@ export const ForkSectionCountsSchema = v.object({
   files: v.number(),
 });
 
-/** Fields every frame carries. `seq` is the frame's 0-based position; `begin`
- *  is always 0 and `commit`'s own `seq` IS the number of frames before it, so
- *  the stream length needs no separate declaration. */
+/** Fields every frame carries. `seq` is 0-based; `commit`'s `seq` is the number of frames before it. */
 const FRAME_ENVELOPE = {
   version: v.literal(FORK_TRANSFER_VERSION),
   transferId: v.string(),
   seq: v.number(),
-  /** SHA-256 of this frame's own canonical preimage — the bounded per-frame
-   *  check, so a corrupt frame is refused where it arrived. */
+  /** SHA-256 of this frame's canonical preimage, so a corrupt frame is refused on arrival. */
   digest: v.string(),
 } as const;
 
-/**
- * One frame of one fork transfer.
- *
- * This union is the canonical wire authority. Every TypeScript type on either
- * side of the boundary is inferred from it, so there is no second declaration
- * of the wire shape to drift, and nothing decodes a frame by assertion.
- */
+/** One frame of one fork transfer; the canonical wire authority every type on both sides is inferred from. */
 export const ForkFrameSchema = v.variant('kind', [
-  /** Opens the transfer: what this fork is, and what is coming. */
   v.object({
     ...FRAME_ENVELOPE,
     kind: v.literal('begin'),
@@ -168,39 +101,21 @@ export const ForkFrameSchema = v.variant('kind', [
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
-  /**
-   * One byte range of one inherited file.
-   *
-   * Bytes, not characters: the range boundary has to be exact to bound the RPC
-   * argument, and a UTF-8 byte count is the only exact unit. `offset` is
-   * checked against what the target has actually staged, never trusted.
-   */
+  /** One byte range of one inherited file. Bytes, since only a byte count bounds the RPC argument exactly. */
   v.object({
     ...FRAME_ENVELOPE,
     kind: v.literal('file'),
     path: v.string(),
     offset: v.number(),
     bytes: v.instance(Uint8Array),
-    /** Last range of THIS file. The file is written, and counted, here. */
     last: v.boolean(),
-    /** SHA-256 of the whole file's bytes, carried on `last` so the target can
-     *  refuse a file that reassembled wrong before it writes it. */
+    /** SHA-256 of the whole file, so the target refuses a mis-reassembled file before writing it. */
     fileDigest: v.optional(v.string()),
-    /** A carried PAYLOAD file, whose `path` is relative to the artifact
-     *  directory that owns it. The receiver re-roots it under its own, because
-     *  an absolute payload path names the plane it came from. */
+    /** A payload file, `path` relative to its artifact directory; the receiver re-roots it. */
     artifact: v.boolean(),
   }),
-  /**
-   * Closes the transfer.
-   *
-   * `stream` is the rolling hash over every PRECEDING frame's own `digest`, in
-   * order, so a dropped, reordered or substituted frame cannot reach a matching
-   * commit. It is a field of its own rather than the envelope's `digest`
-   * because the envelope's digest seals each frame's own content: redeclaring
-   * it here would leave the rolling value with no way onto the wire, and the
-   * commit's `digest` then seals `stream` along with everything else.
-   */
+  /** Closes the transfer. `stream` is the rolling hash over every preceding frame's `digest`, so a
+     *  dropped, reordered or substituted frame cannot reach a matching commit. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('commit'), stream: v.string() }),
 ]);
 
@@ -214,46 +129,24 @@ export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
 
 export type ForkSectionCounts = v.InferOutput<typeof ForkSectionCountsSchema>;
 
-/** A frame before it is sealed. Distributive, so the `kind` discriminant still
- *  narrows each member rather than collapsing the union. */
+/** A frame before it is sealed; distributive so `kind` still narrows each member. */
 export type UnsealedForkFrame = ForkFrame extends infer F
   ? F extends { kind: string } ? Omit<F, 'digest'> : never
   : never;
 
 export type ForkRowValue = ForkRowFrame['rows'][number];
 
-/**
- * One frame as it arrives, before the schema has seen it.
- *
- * {@link ForkFrame} except for the protocol version, which here is the sender's
- * claim rather than this tree's literal: a receiver that refuses a version it
- * does not implement has to be able to hold the frame it is refusing.
- */
+/** One frame before schema validation; the version is the sender's claim so a refused frame can be held. */
 export type ForkFrameWire = ForkFrame extends infer F
   ? F extends { version: number } ? Omit<F, 'version'> & { version: number } : never
   : never;
 
-/**
- * One row section's frame before it is sealed, with the section's name and its
- * rows typed apart.
- *
- * Which rows a section may carry is the WIRE's question, not the caller's:
- * {@link ForkFrameSchema} is the canonical authority and {@link sealForkFrame}
- * applies it to every frame on the way out, so a name paired with the wrong
- * rows is refused there rather than sent. Typing the pair together instead
- * would mean one copy of the envelope per section, and seven copies drift.
- */
+/** One row section's frame before sealing; {@link sealForkFrame} rejects a name paired with the wrong rows. */
 type UnsealedForkSectionFrame =
   Omit<Extract<UnsealedForkFrame, { kind: 'agentConfig' }>, 'kind' | 'rows'>
   & { kind: ForkRowSection; rows: ForkRowValue[] };
 
-/**
- * The canonical preimage of one frame: everything it carries except its own
- * digest, serialized deterministically.
- *
- * A file frame's bytes are hashed as bytes rather than folded into the JSON, so
- * a range never crosses a wider alphabet on its way into the hash either.
- */
+/** Canonical preimage of one frame (all but its digest); file bytes are hashed as bytes, not JSON. */
 type ForkFrameSealInput = (UnsealedForkFrame | UnsealedForkSectionFrame) & { digest?: string };
 
 export function forkFramePreimage(frame: ForkFrameSealInput): string {
@@ -268,54 +161,31 @@ export function forkFramePreimage(frame: ForkFrameSealInput): string {
   return stableStringify(body);
 }
 
-/** Seal a frame with its own digest. The one place a frame becomes sendable, and
- *  the one place the wire schema is applied on the way out. */
+/** Seal a frame with its digest; the one place the wire schema is applied outbound. */
 export function sealForkFrame(frame: ForkFrameSealInput): ForkFrame {
   const { digest: _discarded, ...body } = frame;
 
   return v.parse(ForkFrameSchema, { ...body, digest: sha256Hex(forkFramePreimage(body)) });
 }
 
-/**
- * The rolling stream digest, and its seed.
- *
- * A FOLD rather than one hash over every frame digest concatenated. The receiver
- * is a Durable Object whose activation can end between two frames, so the
- * rolling value has to be something it can STORE and resume from: a hash
- * object's internal state is not storable, and the concatenation itself grows
- * with every frame of an unbounded fork. One 64-character string is neither.
- *
- * Both halves fold the same way, so the sender can seal a commit before the
- * receiver has seen a frame of the stream and the two values still meet.
- */
+/** Rolling stream digest and seed. A fold, so the receiver can store and resume one 64-char value
+ *  across DO activations. */
 export const FORK_STREAM_SEED = '';
 
 export function foldForkStream(previous: string, digest: string): string {
   return sha256Hex(`${previous}${digest}`);
 }
 
-/**
- * The source file plane a streamed fork reads.
- *
- * The ordinary walk plus ONE extra capability: the ranged read
- * ({@link VfsNativeReads.readRange}) every Nimbus-backed plane serves natively.
- * It is required rather than optional because a plane without it can only be
- * read whole, and a fork that read one file whole would put that file's size
- * back into the isolate the framing exists to bound.
- */
+/** Source file plane for a streamed fork; ranged reads are required so no file is read whole. */
 export type ForkFileSource = VFS & Pick<VfsNativeReads, 'readRange'>;
 
-/** Inputs the source half needs to read one workspace into fork frames. */
 export interface ForkTransferSource {
   sql: SqlExecutor;
-  /** Whose conversation is being forked. Entries, messages and memberships are
-   *  keyed on the owner, so a snapshot taken without one would carry a
-   *  sibling's transcript. */
+  /** Whose conversation is forked; rows are keyed on the owner, so omitting it would carry a sibling's transcript. */
   actor: ActorHandle;
   vfs: ForkFileSource;
   untilMessageId: string;
-  /** Where this actor's payload files live. Carried references are made
-   *  relative to it, and the payload files are streamed out of it. */
+  /** This actor's payload directory; references are made relative to it. */
   artifactDirectory: string;
   transferId: string;
   /** Max payload bytes per frame. Production passes FORK_FRAME_BYTES. */
@@ -340,8 +210,7 @@ function memoryChunkPayloadBytes(row: ForkMemoryChunkRow): number {
   return utf8Bytes(row.id) + utf8Bytes(row.path) + utf8Bytes(row.hash) + utf8Bytes(row.text);
 }
 
-/** A message's content is the one unbounded field a conversation carries: an
- *  inline `content_json` is a whole message's parts. */
+/** Message content is the one unbounded conversation field: inline `content_json` is a whole message's parts. */
 function sessionMessagePayloadBytes(row: ForkSessionMessageRow): number {
   return utf8Bytes(row.message_id) + utf8Bytes(row.role)
     + utf8Bytes(row.native_content_kind) + utf8Bytes(row.origin) + utf8Bytes(row.envelope_json)
@@ -367,7 +236,6 @@ function conversationEntryPartPayloadBytes(row: ForkConversationEntryPartRow): n
 function contextMemberPayloadBytes(row: ForkContextMemberRow): number {
   return utf8Bytes(row.entry_id) + utf8Bytes(row.message_id);
 }
-
 
 async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
   const actor = openWorkspaceMainActor(sql);
@@ -424,13 +292,7 @@ async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChun
   }
 }
 
-/**
- * The conversation sections, read one unit at a time.
- *
- * One message or one entry's part references at a time, never a section: what
- * bounds a frame is the batching below, and what bounds the SENDER is reading
- * no more than one unit of one section into the isolate.
- */
+/** Conversation sections, read one message or one entry's parts at a time to bound the sender. */
 async function* sessionMessageRows(
   sql: SqlExecutor, actorId: string, plan: ForkConversationPlan, artifactDirectory: string,
 ): AsyncGenerator<ForkSessionMessageRow> {
@@ -453,14 +315,8 @@ async function* contextMemberRows(plan: ForkConversationPlan): AsyncGenerator<Fo
   for (const member of plan.members) yield member;
 }
 
-/**
- * Reads one source workspace into sealed, bounded fork frames.
- *
- * Counts and paths describe the source as it existed during the preflight reads.
- * SQLite/VFS mutation after that has no transfer snapshot isolation: a changed
- * later row or file can make the stream disagree with `begin.counts`, which the
- * receiver refuses at commit rather than silently publishing a mixed fork.
- */
+/** Reads one source workspace into sealed, bounded fork frames. No snapshot isolation: later mutation
+ *  makes the stream disagree with `begin.counts`, which the receiver refuses at commit. */
 export async function* forkTransferFrames(
   source: ForkTransferSource,
 ): AsyncGenerator<ForkFrame> {
@@ -514,7 +370,6 @@ export async function* forkTransferFrames(
     kind: 'begin', head, counts,
   });
 
-
   const yieldRows = async function* <T extends ForkRowValue>(
     kind: ForkRowSection,
     rows: AsyncIterable<T>,
@@ -531,8 +386,7 @@ export async function* forkTransferFrames(
     for await (const row of rows) {
       const rowBytes = payloadBytes(row);
 
-      // A single row can exceed the frame budget. Send it alone: rejecting it
-      // would recreate the total-size failure framing exists to remove.
+      // A single row may exceed the frame budget; send it alone rather than reject it.
       if (batch.length > 0 && bytes + rowBytes > source.frameBytes) {
         yield frame(batch);
         batch = [];
@@ -581,8 +435,7 @@ export async function* forkTransferFrames(
   }
 
   for (const file of filePaths) {
-    // A payload file's carried path is relative to the artifact directory that
-    // owns it; the read is against the SOURCE's.
+    // Payload paths are relative to the source artifact directory.
     const path = file.artifact ? forkArtifactPath(file.path, source.artifactDirectory) : file.path;
     const stat = await source.vfs.stat(path);
 
@@ -590,8 +443,7 @@ export async function* forkTransferFrames(
       throw new Error(`fork transfer lost file ${JSON.stringify(path)} between the walk and the read`);
     }
 
-    // Hashed as the ranges are read, so the whole-file digest the receiver
-    // checks costs one range of state here rather than the file.
+    // Hashed as ranges are read, so the whole-file digest costs one range of state.
     const fileHash = createHash('sha256');
 
     for (let offset = 0; offset < stat.size || (offset === 0 && stat.size === 0); offset += source.frameBytes) {
@@ -605,9 +457,7 @@ export async function* forkTransferFrames(
         );
       }
 
-      // The frame owns its bytes. A plane is free to answer a range with a view
-      // over a larger buffer, and structured clone carries the whole backing
-      // buffer of a view — which would put more than this range on the wire.
+      // Copy: structured clone of a view carries its whole backing buffer.
       const range = read.slice();
       fileHash.update(range);
       const last = offset + length >= stat.size;
@@ -627,56 +477,27 @@ export async function* forkTransferFrames(
     }
   }
 
-  // `seal` folded each frame in as it went, so the value carried here is O(1)
-  // state on BOTH halves — see {@link foldForkStream}.
+  // O(1) on both halves; see {@link foldForkStream}.
   yield sealForkFrame({
     version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
     kind: 'commit', stream,
   });
 }
 
-
-
-/** What accepting one frame did. */
 export type ForkFrameOutcome =
-  /** Staged. More frames are expected. */
   | { status: 'staged' }
   /** The transfer completed and the target is now a fork. */
   | { status: 'published'; result: ForkResult }
-  /** A frame arrived for a transfer this receiver already published — a
-   *  re-delivery after a lost reply, answered with the fork that landed. */
+  /** A re-delivered frame for an already-published transfer, answered with the fork that landed. */
   | { status: 'settled'; result: ForkResult };
 
 /**
- * Receiver-side driver for one fork transfer.
- *
- * Validates each frame against {@link ForkFrameSchema} — the wire's own
- * authority, so nothing here decodes by assertion — and stages it straight into
- * the target's storage through a {@link ForkTargetWriter}. It holds NO copy of
- * the snapshot, and no copy of the transfer either: which frame is next, the
- * section cursor, the rolling digest and the file in flight are columns of the
- * target's own {@link ForkStagingState} row, because the frames of one fork
- * arrive on SEVERAL activations of one Durable Object.
- *
- * NOTHING about the transfer lives only in the activation. Even a file whose
- * ranges are still arriving is resumable: its offset is a column, its staging is
- * adopted by the next activation's sink, and its whole-file digest is read back
- * out of that staging at the last range rather than folded in memory. The only
- * per-activation value is which path this activation has already opened on the
- * sink, so it opens it once.
- *
- * A `begin` frame resets everything and clears the target's staged rows and
- * files, which is what makes a retry self-heal and what a concurrent transfer
- * does to the one before it. Every other frame must belong to the staged
- * transfer and be the next one in order: a gap, a reordering, a foreign transfer
- * id or a corrupt frame is REFUSED, and the source is expected to destroy the
- * target rather than repair it. Nothing is published until `commit` has matched
- * the declared per-section counts and the rolling digest, so a refused transfer
- * leaves a workspace that is not a fork.
+ * Receiver-side driver for one fork transfer. All transfer state lives in the target's
+ * {@link ForkStagingState} row, since frames arrive on several DO activations; a mid-file range resumes.
+ * `begin` resets and clears staging; any gap, reorder, foreign id or corrupt frame is refused.
  */
 export class ForkTransferReceiver {
-  /** The path this activation has opened on the sink. Not the transfer's state —
-   *  the sink's, and only so it is opened once per activation. */
+  /** Path this activation has opened on the sink, so it is opened once per activation. */
   private opened: string | null = null;
   private readonly staging: ForkStagingState;
 
@@ -684,25 +505,15 @@ export class ForkTransferReceiver {
     private readonly writer: ForkTargetWriter,
     private readonly files: ForkFileSink,
   ) {
-    // The write half owns the row; the wire half owns its own columns of it. One
-    // accessor, so there is one statement of where the state lives.
     this.staging = writer.staging;
   }
 
-  /** The receiver retains no file bytes. The current frame belongs to the RPC
-   * caller; each range is forwarded to the sink before this method resolves. */
+  /** The receiver retains no file bytes; each range reaches the sink before this method resolves. */
   get stagingBytes(): number {
     return 0;
   }
 
-  /**
-   * One frame, or a refusal.
-   *
-   * EVERY refusal removes the sibling temp of the file in flight — a corrupt
-   * frame, a foreign transfer id and a gap are all reasons this transfer will
-   * not continue, and a temp nobody will ever commit must not outlive it. The
-   * destination the temp shadows is untouched either way.
-   */
+  /** One frame, or a refusal. Every refusal removes the in-flight file's sibling temp. */
   async accept(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
     try {
       return await this.acceptFrame(wire);
@@ -727,8 +538,7 @@ export class ForkTransferReceiver {
     if (frame.kind === 'begin') {
       await this.abortOpenFile();
       await this.writer.clearStagedFiles();
-      // The write's reset comes FIRST: it replaces the whole staged row, so the
-      // wire's cursor is declared onto a row that already belongs to this fork.
+      // The write's reset first: the wire's cursor is declared onto a row that already belongs to this fork.
       this.writer.begin(frame.head);
       this.staging.declare({
         transferId: frame.transferId,
@@ -736,8 +546,7 @@ export class ForkTransferReceiver {
         expectedSeq: 1,
         stream: foldForkStream(FORK_STREAM_SEED, frame.digest),
       });
-      // Rows arrive frame by frame from here, so what an abandoned attempt left
-      // has to be gone NOW rather than at publication.
+      // Rows arrive frame by frame from here, so an abandoned attempt's rows must go now.
       this.writer.clearStagedRows();
 
       return { status: 'staged' };
@@ -759,8 +568,7 @@ export class ForkTransferReceiver {
     const landed = this.writer.published;
 
     if (landed !== null) {
-      // The transfer already landed; a re-delivered frame must answer with the
-      // fork rather than refuse one that is already correct.
+      // Already landed: answer a re-delivered frame with the fork.
       return { status: 'settled', result: landed };
     }
 
@@ -770,9 +578,7 @@ export class ForkTransferReceiver {
       );
     }
 
-    // The commit's own digest is NOT folded in: the sender computes `stream`
-    // before it can seal the commit, so the rolling value covers exactly the
-    // frames before it on both sides.
+    // The commit's own digest is not folded in: the sender computes `stream` before sealing the commit.
     if (frame.kind === 'commit') {
       return { status: 'published', result: await this.commit(staged, frame.stream) };
     }
@@ -790,9 +596,7 @@ export class ForkTransferReceiver {
     return { status: 'staged' };
   }
 
-  /** One batch of one section, in the order the wire declares. A section that
-   *  the cursor has already passed cannot come back, which is what lets each
-   *  staged statement reference rows an earlier section already landed. */
+  /** One batch of one section; a section the cursor has passed cannot come back. */
   private stageRows(staged: ForkStaging, frame: ForkRowFrame): number {
     const at = FORK_ROW_SECTIONS.indexOf(frame.kind);
 
@@ -824,27 +628,11 @@ export class ForkTransferReceiver {
   }
 
   /**
-   * One byte range of one file.
-   *
-   * `offset` is checked against the bytes the target has DURABLY counted, so a
-   * range that arrives on a fresh activation is measured against what actually
-   * landed rather than against a counter this isolate happens to hold. The first
-   * range this activation sees opens the sink on those same counted bytes, which
-   * is how a file interrupted part-way through continues instead of restarting.
-   *
-   * The count is stored AFTER the sink took the range, so an activation that
-   * ends in between leaves the range re-deliverable: the source resends it at
-   * the same offset and the sink overwrites the same bytes.
-   *
-   * A completed file is verified against the digest the source declared — read
-   * back out of the staging, because no single activation need have seen every
-   * range — and only then published atomically.
-   */
+     * One byte range of one file. `offset` is checked against durably counted bytes; the count is stored after
+     * the sink takes the range so it stays re-deliverable. A completed file is verified from staging, then published.
+     */
   private async stageRange(staged: ForkStaging, frame: ForkFileFrame): Promise<number> {
-    // A payload frame names its path relative to the artifact directory that
-    // owned it. Everything below — the sink, the staged-file list and the
-    // resumption checks — works in the TARGET's own paths, so the re-rooting
-    // happens once, here.
+    // Re-root a payload path into the target's own paths once, here.
     const path = frame.artifact ? this.writer.artifactPath(frame.path) : frame.path;
 
     if (staged.filePath !== null && staged.filePath !== path) {
@@ -882,14 +670,7 @@ export class ForkTransferReceiver {
     return FORK_ROW_SECTIONS.length;
   }
 
-  /**
-   * The completeness check, then the publication.
-   *
-   * Two independent proofs have to hold. The declared per-section counts must
-   * equal what the target actually took, which is what a dropped batch fails.
-   * And the rolling digest over every frame's own digest must match, which is
-   * what a substituted or reordered batch fails even when the counts agree.
-   */
+  /** Completeness then publication: declared counts must match what was taken, and the rolling digest must match. */
   private async commit(staged: ForkStaging, declared: string): Promise<ForkResult> {
     if (staged.filePath !== null) {
       throw new Error(`fork transfer committed while file ${JSON.stringify(staged.filePath)} was incomplete`);
@@ -927,8 +708,7 @@ export class ForkTransferReceiver {
   }
 }
 
-/** Apply the wire schema to one frame, naming the transfer in any failure so an
- * operator is not left reading a bare valibot issue path. */
+/** Apply the wire schema to one frame, naming the transfer in any failure. */
 function parseForkFrame(frame: ForkFrameWire): ForkFrame {
   const parsed = v.safeParse(ForkFrameSchema, frame);
 

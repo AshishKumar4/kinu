@@ -1,16 +1,4 @@
-/**
- * Reading the activity log.
- *
- * `activity_log` is the agent's own running commentary — one row per notable
- * thing the runtime did, written by `logActivity` on every backend. It is the
- * densest trace the agent keeps, and until now nothing read it back except the
- * five-row subordinate status chip.
- *
- * Deliberately not parsed: `detail` is free text written for a human, and
- * turning it into structured telemetry here would create a second, weaker
- * source for numbers the run-event log already carries properly. It is
- * surfaced as what it is — a log.
- */
+/** Reads the activity log; `detail` is free text for humans and deliberately not parsed. */
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
@@ -39,8 +27,7 @@ export function writeActivityLog(
   }
 }
 
-/** The newest entries, oldest first. `limit` is a hard bound — the table is
- *  append-only and unbounded, so every reader states how much it wants. */
+/** The newest entries, oldest first. The table is unbounded, so `limit` is required. */
 export function readActivityLog(
   sql: SqlExecutor, actor: ActorHandle, limit: number,
 ): ActivityLogEntry[] {

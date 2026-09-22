@@ -1,8 +1,4 @@
-// Behavior tests for the grounded MCTS branch evaluator.
-//   Layer 1: execution grounding — code-bearing branches run in the executor,
-//            pass/fail picks the score band (fail ceiling < pass floor).
-//   Layer 2: judge ensemble — k samples, median, parse-failures dropped;
-//            prose-only branches are judge-only at reduced confidence.
+// Grounded MCTS branch evaluator: execution picks the score band, then a k-sample judge median.
 import { describe, test, expect } from 'bun:test';
 import { evaluateWithMultiModelJudging } from '../src/index';
 import { executionObservation, isParseFailure, judgeCallBudget } from '../src/mcts/evaluation';
@@ -17,13 +13,11 @@ function exec(verdict: { error?: string } = {}, languages: readonly [string, ...
   };
 }
 
-/** A branch answer: prose with its implementation fenced, the way a branch
- *  actually replies — the evaluator reads the code back out of it. */
+/** Prose with its implementation fenced, as a branch replies. */
 function withCode(prose: string, code: string, language = 'js'): string {
   return `${prose}\n\`\`\`${language}\n${code}\n\`\`\``;
 }
 
-/** Judge that always returns the same JSON score and counts/records calls. */
 function countingJudge(json: string): LLM & { prompts: string[] } {
   const prompts: string[] = [];
 
@@ -109,7 +103,6 @@ describe('execution grounding dominates', () => {
       },
     };
 
-    // 1st call = assertion generation, then 3 judge samples.
     const judge = createScriptedLLM([
       '```js\nif (add(1, 2) !== 3) throw new Error("add broken");\n```',
       '{"score": 0.5}', '{"score": 0.5}', '{"score": 0.5}',
@@ -162,7 +155,6 @@ describe('judge ensemble — median, parse-failure-robust', () => {
       task: 'analyze', trajectory: 'analysis', executor: exec(), judge, explorer: judge,
     });
 
-    // prose-only: 0.75 × median(0.2, 0.8, 0.6) = 0.75 × 0.6
     expect(result.grounding).toBe('judge');
     expect(result.judgeSamplesUsed).toBe(3);
     expect(result.score).toBeCloseTo(0.75 * 0.6, 10);
@@ -175,7 +167,6 @@ describe('judge ensemble — median, parse-failure-robust', () => {
       task: 'analyze', trajectory: 'analysis', executor: exec(), judge, explorer: judge,
     });
 
-    // median(0.8, 0.8) — the unparseable sample does not drag the score down.
     expect(result.judgeSamplesUsed).toBe(2);
     expect(result.score).toBeCloseTo(0.75 * 0.8, 10);
   });
@@ -194,10 +185,7 @@ describe('judge ensemble — median, parse-failure-robust', () => {
       },
     };
 
-    // A sample the provider REFUSED is not a sample it declined to parse: the
-    // engine's allSettled reports branch-failed with this reason and scores the
-    // branch 0 (mcts/engine.ts). Dropped, the 500 is gone and the median is
-    // reported as if the ensemble had answered.
+    // A refused sample is a branch failure, not a parse miss: dropping it would hide the error.
     await expect(evaluateWithMultiModelJudging({
       task: 'analyze', trajectory: 'analysis', executor: exec(), judge, explorer: judge,
     })).rejects.toThrow('provider 500');
@@ -278,7 +266,6 @@ describe('band loophole (WP-A5): prose cannot beat failed-but-attempted code', (
       explorer: judge,
     });
 
-    // Without the cap this scored 0.75; now it tops out at the fail ceiling 0.30.
     expect(prose.grounding).toBe('judge');
     expect(prose.score).toBeCloseTo(0.30, 10);
   });
@@ -324,7 +311,7 @@ describe('judge prompt content', () => {
       judge,
       explorer: judge,
       judgeSamples: 1,
-      maxLLMCalls: 1, // no assertion call → prompts[0] is the judge prompt
+      maxLLMCalls: 1,
     });
     const prompt = judge.prompts[0] ?? '';
     expect(prompt).toContain('build the parser');
@@ -342,7 +329,6 @@ describe('budget knobs', () => {
       task: 'analyze', trajectory: 'analysis', executor: exec(),
       judge, explorer: judge, judgeSamples: 5,
     });
-    // maxLLMCalls default 4 caps the 5 requested samples (prose: no assertion call).
     expect(judge.prompts).toHaveLength(4);
   });
 
@@ -353,7 +339,6 @@ describe('budget knobs', () => {
       executor: exec(), judge, explorer: judge,
       judgeSamples: 3, maxLLMCalls: 2,
     });
-    // 1 assertion-generation call + 1 judge sample.
     expect(judge.prompts).toHaveLength(2);
     expect(judge.prompts[0]).toContain('verification harness');
   });
@@ -368,7 +353,7 @@ describe('budget knobs', () => {
 
     expect(judge.prompts).toHaveLength(1);
     expect(result.execution?.assertionsGenerated).toBe(false);
-    expect(result.grounding).toBe('execution'); // bare run still grounds
+    expect(result.grounding).toBe('execution');
   });
 });
 
@@ -415,14 +400,10 @@ describe('grounding follows the executor, not a hardcoded language', () => {
     expect(good.score).toBeGreaterThanOrEqual(0.6);
     expect(bad.execution?.passed).toBe(false);
     expect(bad.score).toBeLessThanOrEqual(0.3);
-    // The executor was told which language to run it as — the seam carries it.
     expect(ran.every((r) => r.language === 'python')).toBe(true);
   });
 
   test('differing candidates do not collapse onto one judge-only value', async () => {
-    // The exact production failure: a saturated judge plus no execution
-    // grounding gave every branch the identical prose-band number, so UCT had
-    // nothing to rank on. With the executor able to run them, they separate.
     const judge = createJSONLLM({ score: 1.0 });
     const python = exec({}, ['python']);
     const failing = exec({ error: 'AssertionError' }, ['python']);
@@ -453,8 +434,6 @@ describe('grounding follows the executor, not a hardcoded language', () => {
       explorer: judge,
     });
 
-    // Not 'judge': the branch DID offer an implementation. Naming the language
-    // is what lets the engine report the search as ungrounded.
     expect(result.grounding).toBe('unrunnable');
     expect(result.unrunnableLanguage).toBe('python');
     expect(result.score).toBeCloseTo(0.3 * 0.6, 10);
@@ -462,9 +441,7 @@ describe('grounding follows the executor, not a hardcoded language', () => {
   });
 
   test('an unrunnable branch cannot outrank a sibling whose code actually ran', async () => {
-    // The invariant the whole band table exists for. At a 0.75 prose cap a
-    // generously-judged unrunnable branch beats a passing branch whose judge is
-    // merely middling (0.6 + 0.4·0.3 = 0.72).
+    // The band table exists so a generously judged unrunnable branch never beats a passing one.
     const unrunnable = await evaluateWithMultiModelJudging({
       task: 't', trajectory: '```ruby\nputs 1\n```',
       executor: exec(), judge: createJSONLLM({ score: 1.0 }), explorer: createJSONLLM({ score: 1.0 }),
@@ -480,8 +457,6 @@ describe('grounding follows the executor, not a hardcoded language', () => {
 });
 
 describe('evaluation cascade — a branch that never parsed skips the judge ensemble', () => {
-  /** A judge whose replies are scripted in order: the assertion harness first,
-   *  then one reply per ensemble sample. */
   function sequencedJudge(replies: string[]): LLM & { prompts: string[] } {
     const prompts: string[] = [];
 
@@ -496,8 +471,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     };
   }
 
-  /** An executor whose verdict depends on whether assertions were appended,
-   *  so the attribution re-run is observable. Counts every call. */
+  /** An executor whose verdict depends on whether assertions were appended. */
   function stagedExec(byRun: Array<{ error?: string }>): Executor & { runs: string[] } {
     const runs: string[] = [];
 
@@ -522,7 +496,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
       judge,
       explorer: judge,
       judgeSamples: 3,
-      maxLLMCalls: 1,  // no assertion call, so the bare run is authoritative
+      maxLLMCalls: 1,
     });
 
     expect(result.grounding).toBe('execution');
@@ -546,15 +520,12 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     });
 
     expect(result.judgeSamplesUsed).toBe(3);
-    expect(judge.prompts).toHaveLength(4);  // 1 assertion call + 3 judge samples
+    expect(judge.prompts).toHaveLength(4);
     expect(result.score).toBeCloseTo(0.05 + 0.25 * 0.8, 10);
   });
 
   test('a parse error the JUDGE\'s assertions caused is not charged to the branch', async () => {
-    // Run 1 = code + a syntactically broken harness → parse error.
-    // Run 2 = the attribution re-run of the code ALONE → clean.
     const executor = stagedExec([{ error: 'SyntaxError: Unexpected token )' }, {}]);
-    // First reply is the (broken) harness, the rest are judge scores.
     const judge = sequencedJudge(['```js\nexpect(\n```', '{"score": 0.5}', '{"score": 0.5}']);
 
     const result = await evaluateWithMultiModelJudging({
@@ -569,7 +540,6 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
 
     expect(executor.runs).toHaveLength(2);
     expect(executor.runs[1]).toBe('const x = 42;');
-    // The branch keeps the original harness verdict AND its judge ensemble.
     expect(result.execution?.error).toBe('SyntaxError: Unexpected token )');
     expect(result.judgeSamplesUsed).toBe(2);
   });
@@ -595,7 +565,6 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     expect(executor.runs).toHaveLength(2);
     expect(result.score).toBeCloseTo(0.05, 10);
     expect(result.judgeSamplesUsed).toBe(0);
-    // Only the assertion-generation call was spent; the ensemble was not.
     expect(judge.prompts).toHaveLength(1);
   });
 
@@ -622,22 +591,15 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
   });
 });
 
-// The invisible spend ceiling (2026-08-18): `judgeSamples` and `maxEvalLLMCalls`
-// are not independent knobs — they share ONE per-evaluation call pool — so a
-// caller who asked for twenty judges was answered by three, and no field
-// anywhere carried the three. These pin the arithmetic AND its disclosure.
+// judgeSamples and maxEvalLLMCalls share one call pool; the realised sample count must be disclosed.
 describe('judge ensemble clamp — requested vs realised', () => {
   test('shipped defaults sit flush against the ceiling', () => {
     const { judgeSamples, maxEvalLLMCalls } = DEFAULT_CONFIG.mcts;
-    // The live numbers, spelled out: the default request is already equal to
-    // what the default budget funds a code branch, so the clamp binds the
-    // instant the request rises by one.
     expect({ judgeSamples, maxEvalLLMCalls }).toEqual({ judgeSamples: 3, maxEvalLLMCalls: 4 });
     expect(judgeCallBudget({ judgeSamples, maxLLMCalls: maxEvalLLMCalls, offersRunnableCode: true }))
       .toEqual({ ensemble: 3, generatesChecks: true });
     expect(judgeCallBudget({ judgeSamples, maxLLMCalls: maxEvalLLMCalls, offersRunnableCode: false }))
       .toEqual({ ensemble: 3, generatesChecks: false });
-    // Twenty, on those same defaults, is three.
     expect(judgeCallBudget({ judgeSamples: 20, maxLLMCalls: maxEvalLLMCalls, offersRunnableCode: true }))
       .toEqual({ ensemble: 3, generatesChecks: true });
   });
@@ -652,13 +614,9 @@ describe('judge ensemble clamp — requested vs realised', () => {
       judge,
       explorer: judge,
       judgeSamples: 20,
-      // maxLLMCalls left at the shipped default (4) — the ceiling under test.
     });
 
-    // 1 check-generation call + 3 samples: the request was funded at three.
     expect(judge.prompts).toHaveLength(4);
-    // And the realised size is on the result. Without this field a caller
-    // reading `judgeSamples: 20` back off its own config had no way to learn it.
     expect(result.judgeSamplesAttempted).toBe(3);
     expect(result.judgeSamplesUsed).toBe(3);
   });
@@ -676,7 +634,6 @@ describe('judge ensemble clamp — requested vs realised', () => {
   });
 
   test('an ensemble that answered nothing is not an ensemble that was never asked', async () => {
-    // Asked three, none parsed: `judgeSamplesUsed` 0 with `attempted` 3.
     const refusing = createScriptedLLM(['no', 'no', 'no', 'no']);
 
     const answeredNothing = await evaluateWithMultiModelJudging({
@@ -687,7 +644,6 @@ describe('judge ensemble clamp — requested vs realised', () => {
     expect(answeredNothing.judgeSamplesAttempted).toBe(3);
     expect(answeredNothing.judgeSamplesUsed).toBe(0);
 
-    // Never asked: the parse cascade short-circuited before the ensemble.
     const judge = countingJudge('{"score": 0.9}');
 
     const neverAsked = await evaluateWithMultiModelJudging({
@@ -734,13 +690,8 @@ describe('isParseFailure', () => {
 });
 
 describe('a judge call carries no elapsed deadline — the evaluator joins it', () => {
-  // Judge calls carry NO elapsed bound: each sample is awaited to settlement,
-  // however long the provider takes. Dropping a judge that has not answered
-  // inside a wall-clock envelope silently shrinks the ensemble on slow
-  // providers. What bounds spend is the CALL COUNT (judgeCallBudget), not the
-  // clock.
+  // Judge calls carry no elapsed bound: spend is bounded by call count (judgeCallBudget), not the clock.
 
-  /** A judge whose completion resolves only when `gate` is released. */
   function gatedJudge(gate: Promise<void>, score: string): LLM & { calls: () => number } {
     let calls = 0;
 
@@ -769,8 +720,6 @@ describe('a judge call carries no elapsed deadline — the evaluator joins it', 
       judgeSamples: 1,
     });
 
-    // Still pending while the provider holds its answer back — no timer
-    // dropped the sample out from under the ensemble.
     let settled = false;
 
     const observed = evaluation.then((result) => {
@@ -785,7 +734,7 @@ describe('a judge call carries no elapsed deadline — the evaluator joins it', 
     gate.resolve();
     const result = await observed;
     expect(result.judgeSamplesUsed).toBe(1);
-    expect(result.score).toBeGreaterThan(0);   // the late answer WAS the score
+    expect(result.score).toBeGreaterThan(0);
   });
 
   test('every sample of the ensemble is awaited before aggregation', async () => {
@@ -815,19 +764,11 @@ describe('a judge call carries no elapsed deadline — the evaluator joins it', 
   });
 });
 
-/**
- * LATS backpropagates `passed_test_count / len(tests)` (programming/mcts.py).
- * Backpropagating a bit instead lands every failing branch at
- * FAIL_FLOOR + FAIL_SPAN·judge, separating "almost right" from "nothing works"
- * by judge noise alone — and the binary reward this repo already measured
- * degenerates a search toward best-of-n (test-utils/src/eval-outcome.ts).
- */
+/** LATS backpropagates `passed_test_count / len(tests)` (programming/mcts.py); a binary bit degenerates toward best-of-n. */
 describe('partial credit: the fail band is positioned by MEASURED checks, not the judge', () => {
   const CHECKS = ['CHECK_A', 'CHECK_B', 'CHECK_C', 'CHECK_D'] as const;
 
-  /** Emits a four-check suite for the harness prompt and a fixed score for the
-   *  scoring prompt, so the judge contributes the SAME number to every branch
-   *  below and cannot be the source of any ordering. */
+  /** The judge scores every branch identically, so it cannot be the source of any ordering. */
   function suiteJudge(score: number): LLM {
     const suite = CHECKS.map((c) => `\`\`\`js\nif (!globalThis.${c}) throw new Error('${c}');\n\`\`\``).join('\n\n');
 
@@ -840,14 +781,13 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
     };
   }
 
-  /** Executor that fails every check except the first `passing` of them. */
   function partialExecutor(passing: number): Executor {
     return {
       languages: ['javascript'],
       async execute(source: string) {
         const index = CHECKS.findIndex((c) => source.includes(`throw new Error('${c}')`));
 
-        if (index === -1) return { result: undefined };           // the bare run
+        if (index === -1) return { result: undefined };
 
         return index < passing
           ? { result: undefined }
@@ -872,12 +812,9 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
     expect(half.execution?.passedChecks).toBe(2);
     expect(most.execution?.passedChecks).toBe(3);
 
-    // The ordering a binary verdict cannot express.
     expect(none.score).toBeLessThan(half.score);
     expect(half.score).toBeLessThan(most.score);
-    // All still inside the fail band: partial credit never reaches a pass.
     expect(most.score).toBeLessThanOrEqual(0.3);
-    // FAIL_FLOOR + FAIL_SPAN * (passed/total), the judge contributing nothing.
     expect(none.score).toBeCloseTo(0.05, 10);
     expect(half.score).toBeCloseTo(0.05 + 0.25 * 0.5, 10);
     expect(most.score).toBeCloseTo(0.05 + 0.25 * 0.75, 10);
@@ -915,7 +852,6 @@ describe('partial credit: the fail band is positioned by MEASURED checks, not th
 
     expect(result.execution?.totalChecks).toBeUndefined();
     expect(result.execution?.assertionsGenerated).toBe(false);
-    // Judge-positioned, exactly as before this change.
     expect(result.score).toBeCloseTo(0.05 + 0.25 * 0.8, 10);
   });
 });

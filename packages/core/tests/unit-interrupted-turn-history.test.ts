@@ -1,29 +1,5 @@
-// An interrupted turn must leave a history a follow-up turn can be built from.
-//
-// Observed in production (2026-08-16, workspace "Principal ML Researcher"): the
-// owner interrupted a turn mid-tool-call and the session stopped being usable —
-// `The last turn failed / Tool result is missing for tool call
-// call_ed15d29f352a4735e6b01b5.` on every attempt, including `Retry last
-// message`. That error is `AI_MissingToolResultsError`, thrown by the AI SDK's
-// own prompt assembly (ai/src/prompt/convert-to-language-model-prompt.ts)
-// CLIENT-side, before any request: an assistant `tool-call` with no matching
-// `tool-result` cannot be turned into a provider prompt. So the failure is a
-// pure function of the persisted history, which is why retrying reproduces it
-// byte for byte forever.
-//
-// These tests drive the REAL turn engine against a local scripted provider (no
-// live model calls), interrupt it exactly between a tool call and its result,
-// and then assert the two things that matter:
-//
-//   1. the history runChat hands back is one the SDK will assemble — checked by
-//      actually running the follow-up turn, not by inspecting shapes;
-//   2. the interrupted call carries a terminal result that says what happened,
-//      so the next turn knows the call was cut rather than believing it never
-//      happened.
-//
-// Cut the wire (drop `settleUnpairedToolCalls` from chat.ts or from
-// assembleTurnMessages) and the follow-up turn throws
-// AI_MissingToolResultsError, which is what test 1 and test 3 assert against.
+// An interrupted turn must leave a history a follow-up turn can be built from: an orphaned tool-call makes
+// the AI SDK throw AI_MissingToolResultsError client-side, so every retry fails identically.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -39,8 +15,7 @@ function sse(events: string[]): string {
   return events.map((e) => `data: ${e}\n\n`).join('');
 }
 
-/** Text + one `shell` call, finishing on tool_calls — the shape a turn is in when
- *  the owner presses stop. */
+/** Text + one `shell` call, finishing on tool_calls: the state when the owner presses stop. */
 function toolStep(id: string): Response {
   return new Response(sse([
     JSON.stringify({ choices: [{ delta: { content: 'checking the tree' } }] }),
@@ -68,9 +43,7 @@ const tools: ToolSet = {
   }),
 };
 
-/** One scripted provider serving a scripted sequence of responses, plus the
- *  prompts it was actually sent (the evidence that a follow-up request left the
- *  process at all). */
+/** A scripted provider plus the prompts it was sent, proving a follow-up request left the process. */
 function scriptedProvider(script: ReadonlyArray<() => Response>) {
   const prompts: unknown[] = [];
   let call = 0;
@@ -97,8 +70,7 @@ function scriptedProvider(script: ReadonlyArray<() => Response>) {
   };
 }
 
-/** Run one turn, interrupting it the instant the tool call is announced — the
- *  window the owner hit. Returns the events and the turn's history. */
+/** Run one turn, interrupting it the instant the tool call is announced. */
 async function interruptedTurn(
   model: LanguageModel,
   history: ModelMessage[],
@@ -131,13 +103,10 @@ describe('a turn interrupted between a tool call and its result', () => {
 
     try {
       const first = await interruptedTurn(provider.model, [{ role: 'user', content: 'check the repo' }]);
-      // The turn is recorded as unfinished, and its history is kept anyway.
       expect(first.threw).toBe('The turn was interrupted before it finished.');
       expect(first.events.some((e) => e.type === 'done')).toBe(true);
 
-      // The follow-up turn: the whole point. An orphaned call left in the
-      // history makes `streamText` throw AI_MissingToolResultsError here,
-      // before it issues a request at all.
+      // An orphaned call in history makes `streamText` throw AI_MissingToolResultsError here, before any request.
       first.persisted.push({ role: 'user', content: 'what did you find?' });
       const replies: string[] = [];
 
@@ -148,8 +117,7 @@ describe('a turn interrupted between a tool call and its result', () => {
       }
 
       expect(replies.join('')).toContain('carrying on');
-      // Two requests reached the provider: the interrupted turn's, and the
-      // follow-up's. A history the SDK refuses to assemble produces one.
+      // A history the SDK refuses to assemble would produce only one request.
       expect(provider.prompts.length).toBe(2);
     } finally {
       await provider.stop();
@@ -162,14 +130,12 @@ describe('a turn interrupted between a tool call and its result', () => {
     try {
       const { persisted } = await interruptedTurn(provider.model, [{ role: 'user', content: 'check the repo' }]);
 
-      // The call the caller was handed is in the record...
       const calls = persisted.flatMap((m) => m.role === 'assistant' && Array.isArray(m.content)
         ? m.content.filter((p) => p.type === 'tool-call') : []);
 
       expect(calls.map((c) => c.toolCallId)).toEqual([ORPHAN_ID]);
 
-      // ...and so is a terminal result for it, saying it was cut off. The model
-      // must not be told the tool did not run: it may have.
+      // The model must not be told the tool did not run: it may have.
       const results = persisted.flatMap((m) => m.role === 'tool'
         ? m.content.filter((p) => p.type === 'tool-result') : []);
 
@@ -182,9 +148,7 @@ describe('a turn interrupted between a tool call and its result', () => {
   });
 
   test('keeps the completed steps the interrupt did not touch', async () => {
-    // Interrupt on the SECOND call: step one ran a tool and finished cleanly,
-    // and that work must survive into the record rather than being discarded
-    // with the turn.
+    // Step one's completed tool work must survive into the record.
     const provider = scriptedProvider([() => toolStep('call_first'), () => toolStep(ORPHAN_ID)]);
 
     try {
@@ -213,9 +177,7 @@ describe('a turn interrupted between a tool call and its result', () => {
         ? m.content.filter((p) => p.type === 'tool-result').map((p) => [p.toolCallId, p.output] as const)
         : []));
 
-      // The completed step keeps its REAL result...
       expect(resultsById.get('call_first')).toEqual({ type: 'text', value: 'ran: git status' });
-      // ...and only the cut-off call gets the synthetic one.
       expect(resultsById.get(ORPHAN_ID)).toEqual({ type: 'error-text', value: INTERRUPTED_TOOL_RESULT });
     } finally {
       await provider.stop();
@@ -224,10 +186,7 @@ describe('a turn interrupted between a tool call and its result', () => {
 });
 
 describe('a history that already holds an orphaned call', () => {
-  // The already-bricked session: an orphan that is already in stored history —
-  // the cf turn driver's partial-message persist is one way it gets there. Turn
-  // assembly is the reconciliation point, so the next turn works without
-  // rewriting a single stored row.
+  // An orphan already in stored history: turn assembly reconciles it without rewriting stored rows.
   const bricked: ModelMessage[] = [
     { role: 'user', content: 'check the repo' },
     { role: 'assistant', content: [

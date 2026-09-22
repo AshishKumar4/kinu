@@ -42,10 +42,7 @@ describe('actor schema', () => {
   });
 
   test('scaffold_versions carries the columns the scaffold code reads, however it was created', () => {
-    // ONE DDL behind every entry point. A second, drifting copy in the unified
-    // initializer gives a workspace created through it no `status` /
-    // `parent_version`, and the shadow rollout and the DGM lineage archive then
-    // read columns that do not exist.
+    // One DDL behind every entry point: a drifting copy in the unified initializer loses columns.
     for (const init of [initAllTables, initActorTables]) {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl), makeSql(db));
@@ -68,9 +65,6 @@ describe('actor schema', () => {
   });
 
   test('search_nodes carries the columns its readers select, however it was created', () => {
-    // Same failure shape as scaffold_versions above: a second copy of this DDL
-    // in the unified initializer means a column added to one is missing from
-    // workspaces created through the other.
     for (const init of [initAllTables, initActorTables]) {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl), makeSql(db));

@@ -1,31 +1,5 @@
-/**
- * Crafted-tool source admission: turn what a model wrote into ONE expression
- * that denotes a function, or say exactly why it cannot.
- *
- * A crafted tool is stored as source text and later spliced into the codemode
- * sandbox as `tools.<name> = (<source>)`. Models write that source in every
- * shape JavaScript allows for "a function": a bare arrow, a named function
- * declaration, `const name = async () => {}`, `module.exports = …`,
- * `export default …`, or a helper followed by the function that uses it. Only
- * the first of those is an expression. Stored source must parse as a single
- * function-valued expression: declaration syntax such as `const name = …`
- * cannot sit verbatim inside that expression. Admission normalizes the source
- * and proves its syntax before persistence, and a load-time failure is
- * attributed to the individual tool.
- *
- * So admission does two things, both with a real parser (acorn, the same one
- * `@cloudflare/codemode` normalizes model programs with):
- *
- *   1. NORMALIZE. A program of declarations becomes an IIFE that runs them
- *      and returns the function the tool means — the one named like the tool,
- *      else the last one declared. `module.exports =` and `export default`
- *      become that returned value.
- *   2. PROVE IT PARSES as one expression. What comes back is guaranteed to
- *      sit inside `(…)` without breaking the module around it. Whether it
- *      evaluates to a function is checked at load time, per tool, by the
- *      sandbox prelude — a runtime failure there is attributed to that tool
- *      alone and never reaches its neighbours.
- */
+// Crafted source is spliced into the sandbox as `tools.<name> = (<source>)`, so it must
+// normalize to one expression; whether it is a function is checked per tool at load time.
 
 import * as acorn from 'acorn';
 import { renderThrownChain } from '../obs/index';
@@ -102,8 +76,7 @@ function exportedExpression(program: acorn.Program, source: string): string | nu
   return null;
 }
 
-/** Strip `export default`, `export`, `module.exports =` statements out of a
- *  program body so it can run inside a plain function. */
+/** Strip export statements so the program body can run inside a plain function. */
 function stripExports(program: acorn.Program, source: string): string {
   let out = '';
   let cursor = 0;
@@ -113,8 +86,7 @@ function stripExports(program: acorn.Program, source: string): string {
       const declared = node.declaration;
       out += source.slice(cursor, node.start);
 
-      // A default-exported declaration keeps its declaration; a default-exported
-      // expression is dropped here and returned by the wrapper instead.
+      // A default-exported expression is dropped here and returned by the wrapper instead.
       if (declared.type === 'FunctionDeclaration' || declared.type === 'ClassDeclaration') {
         out += source.slice(declared.start, declared.end);
       }
@@ -138,22 +110,14 @@ function stripExports(program: acorn.Program, source: string): string {
   return out + source.slice(cursor);
 }
 
-/**
- * Admit crafted source: normalize every accepted shape to one expression and
- * prove that expression parses.
- *
- * `preferredName` is the tool's own name; when the program declares a function
- * or variable by that name, it is the one returned even if helpers follow it.
- */
+/** Normalize crafted source to one parsed expression; a declaration named `preferredName` wins over later helpers. */
 export function admitCraftedSource(source: string, preferredName: string): CraftedSourceAdmission {
   const trimmed = source.trim().replace(/;+\s*$/, '');
 
   if (trimmed.length === 0) return { ok: false, error: 'the tool source is empty' };
 
-  // Shape 1: already one expression (an arrow, a function expression, an IIFE).
   if (parsesAsExpression(trimmed) === null) return { ok: true, code: trimmed };
 
-  // Shape 2: a program — declarations, an export, or helpers plus the tool.
   let program: acorn.Program;
 
   try {

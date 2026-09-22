@@ -1,23 +1,6 @@
 /**
- * The end-to-end absence contract: a field the provider did not report stays
- * ABSENT from the provider's bytes all the way into a durable run record and the
- * read model built from it.
- *
- * This is deliberately a whole-pipeline test rather than a unit test of each
- * stage, because every stage can re-introduce the zero independently: the SDK
- * adapter can fabricate it, `chat.ts` can merge it, the accumulator can sum it,
- * the durable valibot schema can demand it, and the read model can fold it with
- * `?? 0`. Any one of those puts the zero back, and only a test that carries a
- * real provider payload through every stage catches all five.
- *
- * The stages, in order:
- *   real provider bytes
- *     -> the real @ai-sdk provider adapter
- *     -> normalizeUsage (the SDK seam both backends call)
- *     -> TurnAccumulator.recordStep (the per-turn meter)
- *     -> RunEventRecorder.emit (durable, valibot-gated, JSON in SQLite)
- *     -> RunEventRecorder.read (parsed back through the same schema)
- *     -> getRunSummaries (the cross-run budget view)
+ * Unreported usage fields stay absent from provider bytes through the durable run record and read model.
+ * Whole-pipeline on purpose: any stage (adapter, merge, accumulator, schema, fold) can reintroduce the zero.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -44,15 +27,8 @@ function jsonReply(serialized: string): FetchFunction {
 }
 
 /**
- * Verbatim usage from the deployed proxy for
- * `@cf/deepseek-ai/deepseek-v4-pro-0813`. Two properties make it the right
- * fixture for this contract:
- *   - `prompt_tokens_details.cached_tokens: 0` is a REPORTED zero, and must
- *     survive as 0 rather than vanishing.
- *   - there is NO `completion_tokens_details` at all, even though the reply
- *     carried `reasoning_content` — so `reasoning` is UNREPORTED and must stay
- *     absent, even though @ai-sdk/openai-compatible hands over
- *     `reasoningTokens: 0` for it.
+ * Verbatim usage from the deployed proxy: `cached_tokens: 0` is a reported zero, and `reasoning` is
+ * unreported even though @ai-sdk/openai-compatible hands over `reasoningTokens: 0`.
  */
 const WORKERS_AI_USAGE = {
   prompt_tokens: 88,
@@ -82,8 +58,6 @@ async function workersAIStepUsage(): Promise<Usage> {
   return normalizeUsage(r.usage);
 }
 
-/** Anthropic reports the cache halves and the 1h retention split, and says
- *  nothing about reasoning — the mirror image of the Workers AI report. */
 async function anthropicStepUsage(): Promise<Usage> {
   const provider = createAnthropic({
     apiKey: 'test',
@@ -112,8 +86,6 @@ function setup() {
   return { recorder };
 }
 
-/** Drive one turn of `steps` through the meter and the durable recorder, exactly
- *  as a backend's inference loop does. */
 function runOneTurn(recorder: RunEventRecorder, runId: string, steps: readonly Usage[]): void {
   const acc = new TurnAccumulator({
     onStepEvent: (e) => {
@@ -130,9 +102,6 @@ function runOneTurn(recorder: RunEventRecorder, runId: string, steps: readonly U
     acc.recordStep({ usage, response: { messages: [] }, finishReason: 'stop' });
   }
 
-  // `'stop'` here was a model step's finishReason copied into the RUN's reason —
-  // a fourth spelling of a three-value vocabulary, which is what typing
-  // closeTurnRun's `reason` caught. This harness closes a turn that finished.
   closeTurnRun(recorder, runId, { turnIndex: 0, usage: acc.reportedUsage(), reason: 'completed' });
   recorder.emit(runId, { type: 'run_end', reason: 'done' });
 }
@@ -143,31 +112,24 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     const { recorder } = setup();
     runOneTurn(recorder, 'run-wai', [usage]);
 
-    // Stage 1 — the durable step row, read back THROUGH the valibot schema.
     const stored = recorder.read('run-wai');
     const step = stored.find((e) => e.type === 'step_finish');
 
     if (step?.type !== 'step_finish') throw new Error('no step_finish row was recorded');
     expect(step.usage?.input).toBe(88);
     expect(step.usage?.output).toBe(24);
-    // The reported zero is a measurement and is stored as one.
     expect(step.usage?.cacheRead).toBe(0);
-    // The provider-reported neuron figure survives the JSON round-trip.
     expect(step.usage?.neurons).toBeCloseTo(19.1999998, 5);
-    // THE POINT: reasoning was never reported, so the durable row has no such
-    // key. Asserted on the key set, because `toEqual` treats an
-    // explicitly-undefined key as absent and would pass vacuously.
+    // Asserted on the key set: `toEqual` treats an explicitly-undefined key as absent.
     expect(Object.keys(step.usage ?? {}).sort())
       .toEqual(['cacheRead', 'input', 'neurons', 'output']);
 
-    // Stage 2 — the turn row.
     const turn = stored.find((e) => e.type === 'turn_end');
 
     if (turn?.type !== 'turn_end') throw new Error('no turn_end row was recorded');
     expect(turn.usage?.cacheRead).toBe(0);
     expect('reasoning' in (turn.usage ?? {})).toBe(false);
 
-    // Stage 3 — the cross-run read model.
     const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage.input).toBe(88);
     expect(summary?.usage.cacheRead).toBe(0);
@@ -184,30 +146,23 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     expect(summary?.usage.input).toBe(3084);
     expect(summary?.usage.cacheRead).toBe(2048);
     expect(summary?.usage.cacheWrite).toBe(1024);
-    // Recovered from the provider's raw payload, carried through the meter, the
-    // durable schema and the fold. This is the field the whole `raw`-as-oracle
-    // design exists to keep.
     expect(summary?.usage.cacheWrite1h).toBe(1000);
-    // Anthropic reports no reasoning and no neurons; neither is invented.
     expect('reasoning' in (summary?.usage ?? {})).toBe(false);
     expect('neurons' in (summary?.usage ?? {})).toBe(false);
   });
 
   test('a turn whose provider reported nothing is not a turn that cost nothing', () => {
     const { recorder } = setup();
-    // Two steps, neither carrying a provider report at all.
     runOneTurn(recorder, 'run-silent', [{}, {}]);
 
     const stored = recorder.read('run-silent');
 
-    // No usage row is fabricated for a silent step...
     for (const e of stored) {
       if (e.type === 'step_finish') expect(e.usage).toBeUndefined();
 
       if (e.type === 'turn_end') expect(e.usage).toBeUndefined();
     }
 
-    // ...and the read model says the totals are unknown, not zero.
     const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage).toEqual({});
     expect(summary?.turnsWithoutUsage).toBe(1);
@@ -218,9 +173,7 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     runOneTurn(recorder, 'run-zero', [{ input: 0, output: 0 }]);
 
     const [summary] = getRunSummaries(recorder).items;
-    // A report of zero IS a report: the fields are present and the turn is not
-    // counted as unreported. This is the half of the contract that a naive
-    // "treat 0 as missing" fix would break.
+    // A report of zero is a report; a naive "treat 0 as missing" fix breaks this half.
     expect(summary?.usage).toEqual({ input: 0, output: 0 });
     expect(summary?.turnsWithoutUsage).toBe(0);
   });
@@ -233,11 +186,9 @@ describe('an unreported field stays absent through the whole pipeline', () => {
     const [summary] = getRunSummaries(recorder).items;
     expect(summary?.usage.input).toBe(88 + 3084);
     expect(summary?.usage.cacheRead).toBe(0 + 2048);
-    // Reported by exactly one of the two, and not halved or zero-filled.
     expect(summary?.usage.cacheWrite).toBe(1024);
     expect(summary?.usage.cacheWrite1h).toBe(1000);
     expect(summary?.usage.neurons).toBeCloseTo(19.1999998, 5);
-    // Reported by NEITHER, so the turn total must not claim zero.
     expect('reasoning' in (summary?.usage ?? {})).toBe(false);
   });
 });

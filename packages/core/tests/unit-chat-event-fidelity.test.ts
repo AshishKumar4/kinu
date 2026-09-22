@@ -1,11 +1,4 @@
-// The ChatEvent seam is a projection of what the ai-SDK stream hands runChat,
-// and every field it drops is a signal nothing downstream can rebuild: the tool
-// success/error discriminator feeds the CLI's evolution signal (hadError,
-// outcome review), cached-prefix tokens are the whole of its cache telemetry,
-// and a usage flattened into three numbers gated on `> 0` turns a
-// provider-reported zero into "unreported" — which makes a cold prefix
-// indistinguishable from a provider that says nothing. These tests pin all of
-// it through the public runChat interface.
+// Every field the ChatEvent seam drops is unrecoverable downstream; a reported zero must stay distinct from unreported.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -29,9 +22,7 @@ function finishPart(reason: 'stop' | 'tool-calls', usage: FinishPart['usage'] = 
   return { type: 'finish', finishReason: { unified: reason, raw: undefined }, usage };
 }
 
-/** A model whose first step calls one tool, then answers with text. The first
- *  step's finish part carries the caller-supplied usage so a test can assert
- *  what the ChatEvent seam surfaces. */
+/** Calls one tool, then answers; the first step's finish carries the caller-supplied usage. */
 function toolThenTextModel(opts: {
   toolName: string;
   input?: string;
@@ -137,9 +128,7 @@ describe('ChatEvent tool success/error fidelity', () => {
   ])('native swarm $stage refusal fails the SDK invocation and remains branchable in codemode', async ({ input, reason, detail }) => {
     const { rt, db } = createTestRuntime();
 
-    // A real seat per node: each refusal below is raised BEFORE any node runs,
-    // but the seam has to be the production one or the refusal would be the
-    // fixture's rather than the run's.
+    // A production seat per node, so the refusal is the run's and not the fixture's.
     const deps = {
       mode: 'build',
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3() },
@@ -174,7 +163,6 @@ describe('ChatEvent tool success/error fidelity', () => {
     expect(result).toBeDefined();
     expect(result).toMatchObject({ type: 'tool-result', toolName: 'boom', success: false });
     expect(result?.type === 'tool-result' && result.error).toContain('kaboom');
-    // The extension seam still observes the round-trip — with the error text.
     expect(seenByExtension.some((r) => r.includes('kaboom'))).toBe(true);
   });
 
@@ -216,19 +204,14 @@ describe('ChatEvent tool success/error fidelity', () => {
     };
 
     const events = await collect(model, tools);
-    // 'tc1' is what the fake model's stream part declares — surfaces that
-    // report calls out of band (ACP tool_call/tool_call_update) pair on it.
+    // Out-of-band surfaces (ACP tool_call/tool_call_update) pair on this id.
     expect(events.find((e) => e.type === 'tool-call')).toMatchObject({ toolCallId: 'tc1' });
     expect(events.find((e) => e.type === 'tool-result')).toMatchObject({ toolCallId: 'tc1' });
   });
 });
 
 describe('the loop repairs a malformed tool call before it lands', () => {
-  // The repair is the loop's own (`experimental_repairToolCall`), so a call the
-  // SDK cannot parse reads the same on every backend: a case-drifted name is
-  // rewritten to the one tool it names, double-encoded arguments are decoded,
-  // and the call then executes as the model meant it. What each rewrite settles
-  // is pinned in unit-repair-tool-call; this pins that the loop asks for it.
+  // Per-rewrite behaviour is pinned in unit-repair-tool-call; this pins that the loop asks for it.
   function readFileTool(received: unknown[]) {
     return {
       readFile: tool({
@@ -260,11 +243,7 @@ describe('the loop repairs a malformed tool call before it lands', () => {
 });
 
 describe('ChatEvent tool-result completeness', () => {
-  // The result string is the call's durable record AND the turn steering's
-  // identity for it. A head slice made two different outputs sharing a long
-  // preamble hash identical (so the harness told the model "repeating cannot
-  // tell you anything new" about a call whose output had changed) and hid the
-  // tail of every large failure.
+  // The result string is the call's identity for steering: a head slice would make distinct outputs hash equal.
   const preamble = 'x'.repeat(4_000);
 
   test('a result far past the old 1000-char bound reaches the seam whole', async () => {
@@ -308,7 +287,6 @@ describe('ChatEvent usage fidelity', () => {
     ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
   };
 
-  /** The first step's normalized usage, or the fact that the seam omitted it. */
   async function firstStepUsage(firstUsage: FinishPart['usage']): Promise<Usage | undefined> {
     const model = toolThenTextModel({ toolName: 'ok', firstUsage });
     const events = await collect(model, okTool);
@@ -329,9 +307,6 @@ describe('ChatEvent usage fidelity', () => {
   });
 
   test('a provider-reported zero cache read stays 0, while an unreported reasoning split stays absent', async () => {
-    // The distinction this ticket exists for: a cold prefix on a working cache
-    // plan reports 0, and `0` must not read as "this provider never mentions
-    // cache reads" — which is what the old `> 0` gate made of it.
     const usage = await firstStepUsage({
       inputTokens: { total: 20, noCache: 20, cacheRead: 0, cacheWrite: undefined },
       outputTokens: { total: 5, text: 5, reasoning: undefined },

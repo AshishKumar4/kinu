@@ -1,19 +1,5 @@
-/**
- * SOUL.md — the agent's identity document, a real file in the workspace
- * filesystem.
- *
- * It is deliberately a FILE and not a row: the owner edits it through the
- * setSoul RPC, while `file`, `workspace.readFile` and `grep` all read that one
- * path. Hosted backends may supply an owner-only writer so the agent's shared
- * workspace tools cannot mutate its own governing identity.
- *
- * Its MISSION, separately, is a column on `workspace_identity`. That is not a
- * second copy of the document — it is the one line a listing needs, maintained
- * by {@link writeSoul} and by nothing else. The alternative was to boot a whole
- * filesystem to render `kinu list`, which both costs a filesystem per
- * workspace listed and MUTATES each one on the way past (the process-generation
- * counter advances on every open). A listing must not do either.
- */
+// SOUL.md is a file, edited via setSoul; its mission is mirrored onto `workspace_identity` by
+// {@link writeSoul} alone, so listings never open (and mutate) a filesystem.
 
 import * as v from 'valibot';
 import type { AgentSignal } from '../types/signals';
@@ -21,9 +7,7 @@ import type { SqlExecutor, VFS } from '../types/primitives';
 
 export const SOUL_PATH = 'SOUL.md';
 
-/** Missions the renderer writes when a workspace was created without one.
- *  They describe Kinu itself, so nothing workspace-specific — a title, a
- *  summary — can be derived from them. */
+/** Generic missions seeded when none was given; nothing workspace-specific derives from them. */
 const PLACEHOLDER_MISSIONS = [
   'Help the user by reading real context, using the available tools, saving durable facts and memory, and improving reusable capabilities over time.',
   'Help the user with the work they assign.',
@@ -39,9 +23,7 @@ export const DEFAULT_SOUL_MD = [
   PLACEHOLDER_MISSIONS[0],
 ].join('\n');
 
-/** True when the mission carries no workspace-specific intent: empty, or one
- *  of the generic missions seeded for a workspace created without one.
- *  Compared on a prefix because `summarizeSoul` truncates long missions. */
+/** Empty or a seeded placeholder; compared on a prefix because `summarizeSoul` truncates. */
 export function isPlaceholderMission(mission: string | null | undefined): boolean {
   const text = mission?.trim() ?? '';
 
@@ -55,26 +37,11 @@ function missionKey(mission: string): string {
   return mission.replace(/\s+/g, ' ').trim().slice(0, 40);
 }
 
-/** The `kinuEvent` a workspace's own first turn carries. */
 export const WORKSPACE_CREATED_EVENT = 'workspace_created';
 
 /**
- * The workspace's first turn — the agent answering its own soul, with nobody
- * having typed anything yet.
- *
- * The mission is NOT repeated in the text. It is a standing identity and it is
- * already the opening bytes of the system prompt (SOUL.md → `soulOverride`), so
- * quoting it back would both duplicate it and stage it as something the owner
- * said. What the turn adds is the one fact the prompt cannot carry: that the
- * workspace has just opened and the next move is the agent's.
- *
- * Sent when nothing is running, so it starts the first turn; if something
- * is running by then it rides that turn's next step as a fact, like any other
- * message. `yieldsToUserMessage` because it is also an OFFER: an operator message that lands before the offer
- * takes its slot answers "somebody is here" — the message is the turn now and
- * this offer is consumed, never replayed.
- * Null for a placeholder mission — there is nothing to act on, and a first turn
- * on one can only produce a greeting nobody asked for.
+ * The workspace's first turn. The mission is not quoted (it already opens the system prompt);
+ * an operator message arriving first consumes this offer. Null for a placeholder mission.
  */
 export function workspaceGenesisSignal(mission: string | null | undefined): AgentSignal | null {
   if (isPlaceholderMission(mission)) return null;
@@ -90,23 +57,18 @@ export function workspaceGenesisSignal(mission: string | null | undefined): Agen
   };
 }
 
-/** What a workspace is called before anything names it: its own documents'
- *  headings, and the From name on any mail it sends. The product, which is
- *  true of every workspace, rather than the slug it is addressed by — a slug
- *  is an ID and reads to a person and a model alike as a name. */
+/** The name before anything titles a workspace; never the slug, which reads as a name. */
 export const UNTITLED_WORKSPACE_NAME = 'Kinu';
 
 function normalizeName(name: string): string {
   const collapsed = name.trim().replace(/\s+/g, ' ');
 
-  // A name of nothing but whitespace names nothing.
   return collapsed === '' ? UNTITLED_WORKSPACE_NAME : collapsed;
 }
 
 function normalizeMission(mission?: string): string {
   const stated = mission?.trim();
 
-  // A mission of nothing but whitespace states nothing.
   return stated === undefined || stated === '' ? PLACEHOLDER_MISSIONS[1] : stated;
 }
 
@@ -146,8 +108,7 @@ function soulSummaryFromMarkdown(markdown: string): string {
   return firstContent ?? '';
 }
 
-/** Collapse, trim and clip one already-selected summary. The tail of both
- *  {@link summarizeSoul} and its streaming twin, so the two cannot drift. */
+/** Shared by {@link summarizeSoul} and its streaming twin so they cannot drift. */
 function clampSummary(text: string, maxLength: number): string {
   const summary = text.replace(/\s+/g, ' ').trim();
 
@@ -160,20 +121,9 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
   return clampSummary(soulSummaryFromMarkdown(markdown ?? ''), maxLength);
 }
 
-/** Bytes decoded per pass by {@link summarizeSoulBytes}. Only the pass is this
- *  size; what the scan REMEMBERS is a few hundred characters whatever the
- *  document weighs. */
 const SOUL_SCAN_CHUNK_BYTES = 64 * 1024;
 
-/**
- * {@link summarizeSoul} for a document that is still bytes, in bounded state.
- *
- * Same answer, same rules — the `## Mission` section if it has text, the first
- * content line otherwise — read by scanning the WHOLE document a chunk at a
- * time and keeping only what the answer can still depend on. A caller holding
- * one frame of a file therefore derives its mission without decoding that frame
- * into a second whole copy of it.
- */
+/** {@link summarizeSoul} over bytes, in bounded memory without decoding a whole copy. */
 export function summarizeSoulBytes(bytes: Uint8Array, maxLength = 220): string {
   const decoder = new TextDecoder();
   const scan = new SoulSummaryScan(maxLength);
@@ -188,16 +138,7 @@ export function summarizeSoulBytes(bytes: Uint8Array, maxLength = 220): string {
   return scan.summary();
 }
 
-/**
- * The line rules of {@link soulSummaryFromMarkdown}, fed a chunk at a time.
- *
- * Each line is NORMALIZED as it arrives — runs of whitespace become one space,
- * leading and trailing whitespace never enter — so classification sees exactly
- * what `line.trim()` would see however much whitespace precedes a heading. What
- * is REMEMBERED is capped just past the summary length, because the answer is
- * cut there: text beyond it cannot change the result, and `overflowed` records
- * that it existed for the one decision that depends on it.
- */
+/** {@link soulSummaryFromMarkdown}'s rules fed a chunk at a time; lines are normalized on arrival and capped past the summary length. */
 class SoulSummaryScan {
   private readonly cap: number;
   private line = '';
@@ -210,7 +151,6 @@ class SoulSummaryScan {
   private firstContent: string | null = null;
 
   constructor(private readonly maxLength: number) {
-    // Enough to decide "longer than the summary" and to cut the ellipsis in.
     this.cap = maxLength + 8;
   }
 
@@ -239,8 +179,6 @@ class SoulSummaryScan {
     return clampSummary(chosen, this.maxLength);
   }
 
-  /** One piece of the current line, normalized into it. The piece is bounded by
-   *  the caller's chunk, so this allocates a chunk at most. */
   private feed(piece: string): void {
     if (piece === '') return;
     const collapsed = piece.replace(/\s+/g, ' ');
@@ -296,9 +234,7 @@ class SoulSummaryScan {
       return;
     }
 
-    // Only the FIRST mission heading opens the section, exactly as the
-    // whole-document form's `findIndex` does. A line that ran past the cap
-    // carries more than the heading and is therefore not one.
+    // Only the first heading opens it, as `findIndex` does; an overflowed line is not a heading.
     if (!this.missionSeen && !overflowed && line.toLowerCase() === '## mission') {
       this.missionSeen = true;
       this.inMission = true;
@@ -312,17 +248,7 @@ class SoulSummaryScan {
   }
 }
 
-/**
- * The soul document, or null when the workspace has none.
- *
- * Reads the file, so it needs a filesystem — which every caller inside a turn
- * has. A read-only inspection (`kinu list`, `kinu status`) deliberately
- * does not call this: it reads {@link readMission} instead.
- *
- * "No soul" is asked, not caught: a workspace whose SOUL.md is unreadable for
- * any other reason — a broken VFS, a storage failure mid-turn — must not read
- * as an agent that simply has no purpose yet.
- */
+/** Null when absent; asked, not caught, so an unreadable SOUL.md is not mistaken for none. */
 export async function readSoul(vfs: VFS): Promise<string | null> {
   if (!await vfs.exists(SOUL_PATH)) return null;
   const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
@@ -330,28 +256,16 @@ export async function readSoul(vfs: VFS): Promise<string | null> {
   return text.trim() ? text : null;
 }
 
-/**
- * The workspace's mission, straight off its identity row.
- *
- * The one datum a listing needs, readable without opening a filesystem — and
- * therefore without writing to the database it is only reading.
- */
+/** The mission off the identity row, readable without opening a filesystem. */
 export function readMission(sql: SqlExecutor): string | null {
   const mission = sql<{ mission: string | null }>`
     SELECT mission FROM workspace_identity LIMIT 1
   `[0]?.mission?.trim();
 
-  // A mission of nothing but whitespace is no mission on record.
   return mission === undefined || mission === '' ? null : mission;
 }
 
-/**
- * Write the soul, and refresh the mission a listing reads.
- *
- * The single writer of both. Keeping the refresh here rather than at each call
- * site is what stops the row from drifting away from the document: there is no
- * path that changes one without the other.
- */
+/** The single writer of both the soul and its mirrored mission, so they cannot drift. */
 export async function writeSoul(
   vfs: VFS,
   sql: SqlExecutor,

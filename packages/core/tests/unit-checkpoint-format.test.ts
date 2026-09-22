@@ -1,12 +1,5 @@
-/**
- * Unit tests: the shadow-git checkpoint STORE FORMAT.
- *
- * This module is the wire contract between the cli-backend engine and the
- * dependency-free pc-agent daemon, which pins the same values as literals.
- * The cross-engine parity test round-trips a store through both engines but
- * never exercises the encoding's edge cases — a subject carrying a newline or
- * a pipe, an absent turn, or a ref that does not match the naming scheme.
- */
+/** Shadow-git checkpoint store format: the wire contract with the pc-agent daemon, which pins the same
+ *  values as literals. Covers encoding edge cases the parity test never exercises. */
 
 import { describe, test, expect } from 'bun:test';
 import {
@@ -76,8 +69,7 @@ describe('parseCheckpointSubject', () => {
   });
 
   test('an unrecognized subject keeps its raw text as the reason with no attribution', () => {
-    // Commits made outside this format (hand-made, or an older store) must not
-    // be silently attributed to whatever turn is running now.
+    // Commits made outside this format must not be attributed to the running turn.
     expect(parseCheckpointSubject('WIP: something else'))
       .toEqual({ turnId: null, sessionId: null, reason: 'WIP: something else' });
     expect(parseCheckpointSubject('turn=t1 session=s1'))
@@ -85,10 +77,7 @@ describe('parseCheckpointSubject', () => {
   });
 
   test('an id containing a space loses attribution rather than mis-attributing', () => {
-    // clean() strips newlines and pipes but not spaces, so a space-bearing id
-    // escapes the (\S+) fields. Real ids are ULIDs/nanoids; the point here is
-    // that the failure mode is "unattributed", never "attributed to the wrong
-    // turn" — the parse must not silently absorb the drift.
+    // A space-bearing id escapes the (\S+) fields; the failure must be "unattributed", never the wrong turn.
     const subject = checkpointSubject({ turnId: 'a b', sessionId: 's1' }, 'r');
     expect(parseCheckpointSubject(subject))
       .toEqual({ turnId: null, sessionId: null, reason: subject });
@@ -128,15 +117,7 @@ describe('store-format constants pinned by the pc-agent daemon mirror', () => {
   });
 });
 
-/**
- * The staging diagnosis, over git's own stderr.
- *
- * The engine test in cli-backend provokes the real git for the tolerated case;
- * what it cannot provoke deterministically is a staging failure that is NOT a
- * permission denial, and that is the half the distinction is made of. A parse
- * that called everything tolerable would swallow the failures this exists to
- * keep reporting.
- */
+/** The staging diagnosis over git's stderr: a non-permission staging failure must never read as tolerable. */
 describe('diagnoseStaging', () => {
   // Verbatim from `git add -A --ignore-errors` (git 2.53) over a work tree with
   // a mode-000 directory and a mode-000 file.

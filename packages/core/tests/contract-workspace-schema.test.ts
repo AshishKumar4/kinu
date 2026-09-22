@@ -1,38 +1,5 @@
-// One schema, one path — asserted by RUNNING it.
-//
-// `initWorkspaceSchema` only prevents the "which tables does a workspace have"
-// defect class while it is the ONLY answer. The previous attempt at this
-// deduplication — `cf-backend/src/actor-schema.ts` — was correct code that
-// nothing called: it was written, never wired, and deleted months later with
-// the four divergent copies still in place. Deduplication without enforcement
-// does nothing.
-//
-// WHAT ENFORCES IT HERE. Every initializer the entry point owns is run ALONE on
-// its own empty database, and its tables must already be present after the
-// entry point ran: an initializer that left the shared list fails by name. The
-// invariant is taken over the DDL, not over the entry point's source text,
-// because a source-text form goes red for a spelling rather than for a defect:
-// `initSearchTables`, `initScaffoldTables` and `initCraftedToolsTables` sit one
-// level down inside `initActorTables`, so a regex over the entry point's own
-// body does not see three names it still reaches, while every table they own is
-// created. A gate that reads call names measures the call names; this one
-// measures the schema.
-//
-// The two tiers are the second half. `initWorkspaceSchema` boots a workspace
-// ROOT; `initActorStateSchema` opens one ACTOR's state inside a database that
-// is not its own root (`cli-backend/src/open.ts` for a facet,
-// `cf-backend/src/subordinate-agent.ts` for a subordinate, whose own comment
-// says it has no ownership row and no root publication tables). What must hold
-// is that the actor tier is a SUBSET: an actor opened anywhere has every table
-// its readers need, and the difference is exactly the root's own surface.
-//
-// WHAT IS NOT HERE. Whether each composition root reaches one of these two
-// entry points at boot is observed where the roots actually boot, against
-// `conformance/manifest.ts`: `packages/cf-backend/tests/conformance.test.ts` and
-// `packages/cli/tests/conformance.test.ts` read the real `sqlite_master` of a
-// booted root and fail on any disagreement in either direction. Restating that
-// here as a scan for initializer NAMES in each root's source is how this file
-// came to fail on a call that moved.
+// One schema, one path: each initializer the entry point owns runs alone and its tables must exist
+// after `initWorkspaceSchema`. The actor tier must be a subset of the root tier.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -73,17 +40,7 @@ import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 import { makeSqlExec } from './helpers';
 
-/**
- * The initializers the shared entry point owns, each wrapped in the call its
- * owner module actually exposes — DDL takes `execRaw`, the CHECK-derived
- * tables read their own stored definition through `sql`, and the events hub
- * inspects results through `exec`, so a thunk per initializer rather than one
- * uniform signature.
- *
- * A NEW initializer added to the entry point is simply unmeasured here until
- * it is added; the direction that matters is the other one, which is a
- * regression: an initializer that stops being reached fails below by name.
- */
+/** Initializers the entry point owns, each wrapped in the call its module exposes (`execRaw`, `sql`, `exec`). */
 const OWNED = {
   initWorkspaceOwnershipTables: (db) => initWorkspaceOwnershipTables(db.execRaw),
   initWorkspaceActorTable: (db) => initWorkspaceActorTable(db.execRaw),
@@ -119,14 +76,7 @@ const OWNED = {
   initMemoryChunkTables: (db) => initMemoryChunkTables(db.sql),
 } satisfies Record<string, (db: WorkspaceSchemaSql) => void>;
 
-/**
- * The surface a workspace ROOT has and an actor scope does not: the ownership
- * row and its fork lineage, the actor DIRECTORY (a subordinate binds its one
- * actor from its own identity row instead — `conformance/manifest.ts` states
- * that per root), and the root's slate publication and sharing tables (a
- * blueprint's recipients, a live share's grant, its named viewers and its
- * viewer audit).
- */
+/** The surface a workspace root has and an actor scope does not. */
 const ROOT_ONLY_TABLES = [
   'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_deployment_reservations',
@@ -137,26 +87,21 @@ const ROOT_ONLY_TABLES = [
   'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity',
 ];
 
-/** The three dialects initWorkspaceSchema takes, over one bun:sqlite handle.
- *  Built here rather than imported from cli-backend, which core may not reach. */
+/** The three dialects initWorkspaceSchema takes, over one bun:sqlite handle; core may not import cli-backend. */
 function schemaSql(db: InstanceType<typeof Database>): WorkspaceSchemaSql {
   const wrapped = wrapDatabase(db);
 
   return { execRaw: wrapped.execRaw, sql: wrapped.sql, exec: makeSqlExec(db) };
 }
 
-/** The workspace's real table set, with SQLite's own bookkeeping and the FTS5
- *  shadow tables folded away — the same normalization the conformance observer
- *  applies to a booted root. */
+/** The real table set, with SQLite bookkeeping and FTS5 shadow tables folded away. */
 function tablesOf(db: InstanceType<typeof Database>): Set<string> {
   return normalizeObservedTables(db.query<{ name: string }, []>(
     `SELECT name FROM sqlite_master WHERE type = 'table'`,
   ).all().map((row) => row.name));
 }
 
-/** Every table with the columns it declares — what an idempotence claim is
- *  really about, since a second run that silently altered a column would leave
- *  the table set identical. */
+/** Every table with its columns: a second run that altered a column leaves the table set identical. */
 function declaredColumns(db: InstanceType<typeof Database>) {
   return [...tablesOf(db)].sort().map((table) => ({
     table,
@@ -182,10 +127,7 @@ describe('workspace schema is the only path', () => {
   const actorTier = initialized(initActorStateSchema);
 
   test('the entry point creates every table the initializers it owns create', () => {
-    // The floor: one entry point owns it, not a table list re-declared at each
-    // root. Read as tables, so an initializer reached through another
-    // initializer still counts — and an initializer that quietly left the
-    // shared set is named here with the tables it took with it.
+    // Read as tables, so an initializer reached through another initializer still counts.
     const missing = Object.entries(OWNED)
       .map(([name, init]) => ({
         name,
@@ -197,8 +139,7 @@ describe('workspace schema is the only path', () => {
   });
 
   test('every owned initializer really creates tables (guards the guard)', () => {
-    // An initializer that creates nothing makes its row above free, and a
-    // truncated map would make every row free.
+    // An initializer that creates nothing makes its row above free.
     expect(Object.keys(OWNED).length).toBeGreaterThanOrEqual(30);
 
     const empty = Object.entries(OWNED)
@@ -209,23 +150,16 @@ describe('workspace schema is the only path', () => {
   });
 
   test('an actor scope is the workspace tier minus the root\'s own surface', () => {
-    // Both directions. A table the actor tier has and the root does not would
-    // mean an actor opened in its own workspace loses a table it has when it is
-    // opened as a facet; a root-only table drifting into the actor tier would
-    // give a subordinate an ownership surface it must not have.
+    // Both directions: actor-only tables would vanish when opened as a facet; root-only tables would
+    // give a subordinate an ownership surface.
     expect([...actorTier].filter((table) => !workspaceTier.has(table))).toEqual([]);
     expect([...workspaceTier].filter((table) => !actorTier.has(table)).sort())
       .toEqual(ROOT_ONLY_TABLES);
   });
 
   test('the schema creates memory_chunks and its FTS index', () => {
-    // Created by the schema itself, not by whichever path constructs a
-    // MemoryStore: a workspace opened any other way (a fork target, an archive
-    // restore) would have readers and no table, and a reader that swallows
-    // "no such table" makes it indistinguishable from "indexed nothing" — the
-    // same hole an unindexed memory plane leaves. Named separately from the
-    // floor above because the FTS index is a VIRTUAL table the normalization
-    // folds its shadows away from.
+    // Created by the schema, not by MemoryStore: a fork target or archive restore would otherwise have
+    // readers and no table.
     const db = new Database(':memory:');
     initWorkspaceSchema(schemaSql(db));
 
@@ -238,9 +172,7 @@ describe('workspace schema is the only path', () => {
   });
 
   test('both entry points are safe on a workspace that already has a schema', () => {
-    // The module's own claim: idempotent, so it runs on every boot and every
-    // open. Column lists too — a second run that added a column would be a
-    // migration nobody declared.
+    // Idempotent: it runs on every boot and open, so a second run must change no column.
     const db = new Database(':memory:');
     const sql = schemaSql(db);
     initWorkspaceSchema(sql);
@@ -249,9 +181,7 @@ describe('workspace schema is the only path', () => {
     initWorkspaceSchema(sql);
     expect(declaredColumns(db)).toEqual(first);
 
-    // And the actor tier over a root: opening an actor's state inside a
-    // workspace that already booted must add nothing, which is what makes
-    // `open.ts` free to call either one.
+    // Opening an actor's state inside a booted workspace must add nothing.
     initActorStateSchema(sql);
     expect(declaredColumns(db)).toEqual(first);
     db.close();

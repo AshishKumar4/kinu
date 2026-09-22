@@ -1,8 +1,3 @@
-/**
- * The account read model: who needs the wizard, and what a display name may
- * be. Both are pure answers the gate and the naming surfaces share, so both
- * run on the same functions.
- */
 import { describe, expect, test } from 'bun:test';
 import {
   APP_ROUTES, DISPLAY_NAME_MAX, displayNameProblem, needsOnboarding,

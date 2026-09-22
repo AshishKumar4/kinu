@@ -1,12 +1,5 @@
-/**
- * Crafted-tool integration evidence: a stored tool is filtered by effective
- * score, materialised into the codemode map, and invoked through the platform
- * codemode-tool factory.
- *
- * The platform compiler itself belongs to each backend's suite. This test
- * keeps core independent of those downstream packages and pins the shared
- * storage-to-tool-map contract.
- */
+/** A stored tool is filtered by effective score, materialised into the codemode map and invoked through
+ *  the codemode-tool factory; the platform compiler is tested in each backend. */
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -39,10 +32,7 @@ const createTestCraftedExecute = (): CraftedToolExecute => (source) => async (ar
   throw new Error(`unexpected crafted tool ${source.name}`);
 };
 
-// Minimal Node eval builder — sandboxes LLM code with a `codemode`
-// binding holding pre-materialised crafted-tool executes. Mirrors
-// @kinu.run/cli-backend/createNodeCodemodeToolFactory at the level this test
-// needs.
+// Minimal Node eval builder mirroring cli-backend's createNodeCodemodeToolFactory as far as this test needs.
 interface CraftedToolsCapture {
   builder: CodemodeBuilder;
   taken: () => (() => CraftedToolSet) | undefined;
@@ -149,7 +139,7 @@ describe('crafted-tool execution integration', () => {
   test('tools.<name>(arg) round-trips a stored tool', async () => {
     const { rt } = createTestRuntime();
 
-    // Store the tool (simulates a successful workspace.createTool from an earlier turn)
+    // Store the tool, as an earlier turn's workspace.createTool would.
     rt.craftStore.create({
       name: 'double',
       description: 'doubles its arg',
@@ -241,8 +231,7 @@ describe('crafted-tool execution integration', () => {
     const capture = captureCraftedTools();
 
     actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
-    // Building resolves nothing — the sandbox asks per execute, which is what
-    // makes a tool crafted mid-turn callable on the next call.
+    // Building resolves nothing: the sandbox asks per execute, so a tool crafted mid-turn is callable next call.
     expect(factoryCalls).toBe(0);
 
     const resolve = capture.taken();

@@ -25,7 +25,6 @@ function fetchStub(
   return Object.assign(handler, { preconnect: fetch.preconnect });
 }
 
-/** The URL a fetch names, whichever of the three shapes the caller passed. */
 function requestedUrl(input: RequestInfo | URL): string {
   return input instanceof Request ? input.url : String(input);
 }
@@ -82,10 +81,7 @@ describe('provider model catalogs', () => {
   });
 
   test('the levels are the effort row models.dev records; a toggle, a budget or nothing offers none', async () => {
-    // A model that reasons through a toggle or a token budget takes no effort
-    // level, and the selector used to offer it three anyway. Only an `effort`
-    // row names levels, in the provider's order, and a spelling this build
-    // does not know drops without emptying the rest.
+    // Only an `effort` row names levels, in the provider's order; an unknown spelling drops without emptying the rest.
     const provider = createOpenAIProvider();
 
     const fetchFn = fetchStub(async () => Response.json({
@@ -138,9 +134,7 @@ describe('provider model catalogs', () => {
     const byId = new Map(models.map((m) => [m.id, m]));
 
     expect(byId.get('priced')?.cost).toEqual({ input: 5, output: 30, cacheRead: 1.25 });
-    // Free is a PRICE, not a missing one.
     expect(byId.get('free')?.cost).toEqual({ input: 0, output: 0 });
-    // One side of a token priced is no price at all — better to blend and say so.
     expect(byId.get('output-only')?.cost).toBeUndefined();
   });
 
@@ -176,9 +170,6 @@ describe('provider model catalogs', () => {
       capabilities: ['tools', 'streaming', 'reasoning', 'vision'],
       contextWindow: 272_000,
       inputModalities: ['text', 'image'],
-      // The model's OWN declaration, in its order, whether rows are bare
-      // levels or `{effort}` objects; a spelling this build does not know
-      // drops rather than emptying the list. No medium: it declared none.
       reasoningEfforts: ['low', 'high'],
     }]);
   });

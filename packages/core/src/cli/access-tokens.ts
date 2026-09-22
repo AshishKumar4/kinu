@@ -1,30 +1,12 @@
-/**
- * Long-lived CI access tokens (`pta_…`) — the scoped, non-interactive
- * counterpart to the interactive `ptc_…` CLI session tokens. Rows live in the
- * owning UserDO's SQLite, hashed at rest like every other bearer secret. This
- * module is the single home for the token format, the scope vocabulary, and
- * the SQL, kept free of `cloudflare:workers` imports so it unit-tests under
- * plain bun:sqlite.
- *
- * Caller-correctable failures are returned as `{ ok: false, error }` results
- * (never thrown) so they survive the Worker→DO RPC boundary with their
- * meaning intact; thrown errors are real infra failures.
- */
+/** CI access tokens (`pta_…`), hashed at rest in UserDO SQLite; free of `cloudflare:workers` for bun:sqlite tests.
+ *  Caller-correctable failures return `{ ok: false }` so they survive Worker→DO RPC; throws are infra failures. */
 import { nanoid } from '../utils/nanoid';
 import { type SqlExec } from '../types/primitives';
 import { sha256Hex } from '../safety/argument-digest';
 import * as v from 'valibot';
 
-// The scope vocabulary carries no back-compat aliases by design — pre-production,
-// tokens are reissued on redeploy, so a name this list drops is reminted rather
-// than translated (owner decision 2026-06-13).
-//
-// `ai.proxy` means "spend the owner's inference credentials", and that is now
-// ALL of them: the Cloudflare-pinned /api/user/ai/v1 proxy and the general
-// provider proxy, which also lets the holder enumerate which providers are
-// connected. It stays one scope because it is one capability — running models
-// on the owner's account — and the general proxy admits only inference
-// endpoints, never a provider's account-management routes.
+// No back-compat aliases: tokens are reminted on redeploy (owner decision 2026-06-13).
+// `ai.proxy` covers all of the owner's inference credentials, but never account-management routes.
 export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
 
 export type AccessTokenScope = (typeof ACCESS_TOKEN_SCOPES)[number];
@@ -61,16 +43,14 @@ export function initAccessTokenTable(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_access_tokens_name ON user_access_tokens (name, revoked_at)`);
 }
 
-/** Parse the userId embedded in a `pta_…` access token — the routing hint
- *  edge routes use to reach the owning UserDO before verification. */
+/** Routing hint for reaching the owning UserDO before verification. */
 export function parseAccessTokenUserId(token: string): string | null {
   const match = /^pta_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
 
   return match?.[1] ?? null;
 }
 
-/** Validate and canonicalize a requested scope list: deduped, every entry in
- *  the vocabulary, stable order. */
+/** Deduped, vocabulary-checked, stable order. */
 export function normalizeAccessTokenScopes(
   scopes: readonly string[],
 ): { ok: true; scopes: AccessTokenScope[] } | { ok: false; error: string } {
@@ -175,8 +155,7 @@ export function listAccessTokens(sql: SqlExec): AccessTokenRecord[] {
   });
 }
 
-/** Revoke by token name or token hash. Already-revoked or unknown refs report
- *  `revoked: false` so callers can give an honest 404. */
+/** Unknown or already-revoked refs report `revoked: false` so callers can 404. */
 export interface AccessTokenRevocation { ok: true; revoked: boolean }
 
 export function revokeAccessToken(sql: SqlExec, ref: string): AccessTokenRevocation {
@@ -200,10 +179,7 @@ export function revokeAccessToken(sql: SqlExec, ref: string): AccessTokenRevocat
   return { ok: true, revoked: true };
 }
 
-/** Scopes of the live (un-revoked) access token behind a bearer hash, or null
- *  when the hash matches no active access token — used by the connect-ticket
- *  validity checks alongside session tokens, and to pin the resulting agent
- *  websocket to the bearer's scopes. */
+/** Null when no active token matches; also pins the agent websocket to the bearer's scopes. */
 export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): AccessTokenScope[] | null {
   const row = v.parse(v.optional(v.object({ scopes: v.string() })), sql.exec(
     `SELECT scopes FROM user_access_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
@@ -216,12 +192,7 @@ export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): Acc
   return scopes.length > 0 ? scopes : null;
 }
 
-/** Decode a `scopes` column. This module is the only writer and it writes a
- *  JSON array of the closed vocabulary, so a column that is not one is
- *  corruption rather than a domain value: it throws instead of degrading the
- *  token to zero scopes, which reads identically to a revoked one. Names
- *  outside the current vocabulary are dropped — a retired scope grants
- *  nothing. */
+/** A non-array column is corruption and throws (zero scopes would read as revoked); retired names are dropped. */
 function parseScopeList(value: string): AccessTokenScope[] {
   const granted = v.parse(v.array(v.string()), JSON.parse(value));
 

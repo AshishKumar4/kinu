@@ -1,7 +1,3 @@
-// Subordinates — roster, identity, admission and the orchestration policy over
-// them. Moved here with the module it covers (core/src/subordinates/support.ts);
-// the tests that assert how the Cloudflare backend WIRES it stayed behind in
-// cf-backend, because those read that backend's source.
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -61,18 +57,9 @@ import {
 } from './helpers';
 import { dispatchReport } from '../src/delegation/report-tool';
 
-/** One fixed clock for every roster write these scenes make. */
 const NOW = 1_700_000_000_000;
 
-/**
- * One database's positional SQL port and the actor every store over it binds
- * to — both over the SAME `Database`.
- *
- * Returned as a pair rather than as a bare port: every table these scenes
- * touch is keyed by `actor_id` now, so a writer and a reader holding handles
- * from two databases would each see an EMPTY inbox and roster. That reads as
- * "nothing was delegated" rather than as the scoping fault it is.
- */
+/** Port and actor over ONE Database: stores key on actor_id, so handles from two databases read an empty roster. */
 function makeWorld(db: Database = new Database(':memory:')) {
   return {
     sql: makeSqlExec(db),
@@ -104,9 +91,7 @@ function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
     sequence_id: v.string(),
     task: v.optional(v.string()),
     content_path: v.optional(v.string()),
-    // Named here so this helper cannot become the thing that hides a drop:
-    // both this schema and the log's own strip what they do not list, so a
-    // handoff field missing from EITHER reads back as `undefined`.
+    // Both schemas strip unlisted fields, so a handoff field missing from either reads back undefined.
     concerns: v.optional(v.array(v.string())),
     deviations: v.optional(v.array(v.string())),
     findings: v.optional(v.array(v.string())),
@@ -152,9 +137,7 @@ describe('subordinate identity', () => {
     expect(identity.read()).toEqual(identityInput);
   });
 
-  // The depth is what the cap is enforced FROM, so retargeting it must be
-  // refused exactly as retargeting the owner is: a subordinate that could
-  // re-seed itself shallower would hand itself a fresh subtree.
+  // The cap is enforced from depth: a subordinate re-seeding itself shallower would get a fresh subtree.
   test('depth is part of the immutable identity, not a settable field', () => {
     const identity = makeIdentityStore();
     identity.ensureSchema();
@@ -165,10 +148,8 @@ describe('subordinate identity', () => {
     expect(identity.read()?.depth).toBe(3);
   });
 
-  // The correctness floor: a Durable Object is evicted routinely, so a depth
-  // held in memory would reset on resume and let a woken subordinate rebuild the
-  // whole tree beneath itself. A SECOND store over the SAME database is exactly
-  // what a resumed facet does — a fresh instance, no in-memory state.
+  // A Durable Object is evicted routinely, so depth must be durable; a second store over the same
+  // database is exactly what a resumed facet does.
   test('depth survives a resume: a fresh store over the same storage reads it back', () => {
     const db = new Database(':memory:');
     const first = makeIdentityStore(db);
@@ -182,9 +163,7 @@ describe('subordinate identity', () => {
     expect(resumed.delegationBudget()).toEqual({ depth: 3, maxDepth: 1 });
   });
 
-  // Fail CLOSED. "Nobody has told me where I am" must not come out as "I am the
-  // root" — that is the resumed-child bug with an unseeded facet in place of a
-  // stale option.
+  // Fail closed: an unseeded facet must not read as the root.
   test('an unseeded facet reads as exhausted rather than as the root', () => {
     const identity = makeIdentityStore();
     identity.ensureSchema();
@@ -196,9 +175,7 @@ describe('subordinate identity', () => {
 });
 
 describe('the child descriptor authority', () => {
-  // S2: displayName, nameOrigin, role selection and tier live ONLY in the
-  // child's actor_config. A rename or role switch must be visible on a COLD
-  // reopen of the config store — no parent-side mirror involved anywhere.
+  // S2: presentation fields live only in the child's actor_config and must survive a cold reopen.
   function makeConfig(db: Database): AgentConfigStore {
     return createTestActor(makeTagged(db), makeExecRaw(db), crypto.randomUUID(), 'descriptor-test').config;
   }
@@ -230,8 +207,7 @@ describe('the child descriptor authority', () => {
   });
 
 
-  // The identity row holds immutable lineage ONLY: mutable presentation
-  // changing around it must never touch it, and it can never be re-seeded.
+  // The identity row is immutable lineage: presentation changes never touch it.
   test('identity stays immutable lineage while presentation changes around it', () => {
     const db = new Database(':memory:');
     const identity = makeIdentityStore(db);
@@ -247,8 +223,7 @@ describe('the child descriptor authority', () => {
 });
 
 describe('the delegation depth cap', () => {
-  // Derivation, not a guard: the child's numbers are a function of the parent's,
-  // which is the HeadController shape (heads/types.ts deriveChildBudget).
+  // Derived from the parent's numbers (heads/types.ts deriveChildBudget).
   test('a child budget is derived from its parent and runs out at the cap', () => {
     expect(DELEGATION_MAX_DEPTH).toBe(4);
     let budget = ROOT_DELEGATION_BUDGET;
@@ -262,7 +237,6 @@ describe('the delegation depth cap', () => {
       chain.push(budget);
     }
 
-    // Depth 4 exists and is the deepest that can: it has no room below it.
     expect(chain.map((b) => b.depth)).toEqual([0, 1, 2, 3, 4]);
     expect(chain.map((b) => b.maxDepth)).toEqual([4, 3, 2, 1, 0]);
     expect(delegationExhausted(budget)).toBe(true);
@@ -275,31 +249,22 @@ describe('the delegation depth cap', () => {
     expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
     expect(refusal.error).toContain('depth 4');
     expect(refusal.error).toContain('depth 5');
-    // Names the move that IS available, which "denied" alone cannot.
     expect(refusal.error).toContain('swarm');
   });
 
-  // A row from a future, larger cap must not read as room. Clamping means a
-  // stored depth can only ever make an actor MORE restricted than this code.
+  // Clamping means a stored depth can only make an actor more restricted.
   test('a depth past the cap clamps to no room rather than to negative room', () => {
     expect(delegationBudgetAtDepth(9)).toEqual({ depth: 9, maxDepth: 0 });
   });
 
-  // Deriving past the cap must not go negative: a negative maxDepth still
-  // refuses, but it is a second representation of "no room" beside 0.
   test('a child derived at the cap clamps rather than going negative', () => {
     expect(deriveChildDelegationBudget(delegationBudgetAtDepth(4))).toEqual({ depth: 5, maxDepth: 0 });
   });
 
-  // A stored negative depth must not read as MORE room than the root: without
-  // the bound it inflates past the cap it exists to enforce.
   test('a stored negative depth reads as the root instead of inflating room', () => {
     expect(delegationBudgetAtDepth(-2)).toEqual({ depth: 0, maxDepth: DELEGATION_MAX_DEPTH });
   });
 
-  // The depth is the DIRECTORY's answer, walked up the rows, on both backends.
-  // The CLI kept a copy on the child's config that only it read; the number a
-  // hire's team is gated on is now the same row the roster is.
   test('an actor\'s depth is walked off its directory row, and a missing parent ends the walk as a floor', () => {
     const rows = new Map<string, { parentActorId: string | null }>([
       ['root', { parentActorId: null }],
@@ -343,7 +308,6 @@ describe('workspace subordinate roster', () => {
     roster.applyReport('researcher', 'completed', 'report_tool', NOW);
     expect(roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
 
-    // Progress without an assignment must not invent work in the roster.
     roster.applyReport('researcher', 'progress', 'report_tool', NOW);
     expect(roster.requireActive('researcher').status).toBe('idle');
 
@@ -355,7 +319,7 @@ describe('workspace subordinate roster', () => {
 
     const beforeDismiss = roster.requireActive('researcher');
     roster.dismiss('researcher', 200);
-    roster.dismiss('researcher', 300); // a storage-wipe retry preserves the original retirement time
+    roster.dismiss('researcher', 300);
     expect(roster.list()).toEqual([]);
     expect(roster.listAll()).toEqual([
       { ...beforeDismiss, status: 'dismissed', currentTask: null, dismissedAt: 200 },
@@ -370,9 +334,7 @@ describe('workspace subordinate roster', () => {
 
 describe('subordinate live status', () => {
   test('returns the latest activity and bounded recent step summaries', () => {
-    // The PRODUCTION `activity_log`, not a copy of it: the row key is
-    // `(actor_id, id)` now, and a hand-rolled table without that column would
-    // exercise a shape no workspace has.
+    // The production activity_log, keyed by (actor_id, id).
     const workspace = createTestWorkspace();
     const sql = makeSqlExec(workspace.db);
     const actors = createTestActors(workspace.sql, workspace.execRaw);
@@ -394,9 +356,7 @@ describe('subordinate live status', () => {
       insert(actors.main.actorId, index, index === 7 ? 'Integrated auth findings' : `detail-${index}`);
     }
 
-    // A SIBLING's newer step, in the same table. An unscoped read would report
-    // it as this subordinate's live status — a parent watching one child would
-    // be shown another child's work.
+    // A sibling's newer step in the same table: an unscoped read would report it as this child's.
     insert(actors.sibling('other').actorId, 9, 'someone else entirely');
 
     expect(readSubordinateLiveStatus(sql, actors.main)).toEqual({
@@ -425,18 +385,13 @@ interface TeamHarness {
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
   assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
-  /** Every identity seed the facet substrate was handed, whole — the naming
-   *  state a child is born with is only observable here. */
   seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
   broadcasts: number[];
-  /** Every broadcast event, whole — what proves the event's exact payload. */
   events: SubordinatesChangedEvent[];
   tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
   failures: Set<keyof SubordinateRuntime>;
 }
 
-/** The workspace mission this harness's actor holds — what an owner-created
- *  additional agent inherits when the owner supplies none. */
 const HARNESS_OWN_MISSION = 'Keep the release train moving.';
 
 function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarness {
@@ -542,13 +497,10 @@ describe('team action routing', () => {
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
       createdBy: 'user', status: 'idle', currentTask: null,
     });
-    // The title and role ride ONLY on the seed handed to the child — never
-    // onto any parent-side row.
     expect(h.seeds[0]).toMatchObject({
       displayName: 'Researcher', nameOrigin: 'auto',
       role: 'researcher',
-      // A hire seeds a DURABLE child, so the child keeps the selective relay
-      // policy — only a task child always reports.
+      // A hire seeds a durable child, which keeps selective relay; only task children always report.
       lifetime: 'durable',
     });
     expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Understand the domain.']);
@@ -557,9 +509,6 @@ describe('team action routing', () => {
     expect(h.broadcasts).toHaveLength(1);
   });
 
-  // The owner adding a second agent to a workspace has usually decided nothing
-  // about it. Every field is optional, and what fills the gaps is the workspace
-  // itself, never an invented default.
   test('an owner-created agent with nothing said about it inherits the mission and the general catalog role', async () => {
     const h = makeTeamHarness();
 
@@ -567,7 +516,6 @@ describe('team action routing', () => {
 
     expect(created.subordinate).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
     expect(created.displayName).toBe(codenameFor('researcher-a1b2c3'));
-    // The mission is the workspace's, read at create time.
     expect(h.seeds).toEqual([{
       creationId: expect.any(String), name: 'researcher-a1b2c3',
       displayName: codenameFor('researcher-a1b2c3'),
@@ -576,7 +524,6 @@ describe('team action routing', () => {
       role: 'task',
       lifetime: 'durable',
     }]);
-    // Idle: a mission defines it, and does not become a task.
     expect(h.assignments).toEqual([]);
     expect(h.tasks).toEqual([]);
   });
@@ -591,13 +538,10 @@ describe('team action routing', () => {
     expect(byRole.seeds[0]).toMatchObject({ displayName: 'Auditor', nameOrigin: 'auto' });
   });
 
-  // The model's rung is unchanged: it states a role and a mission or it gets
-  // nothing. The owner's defaults must not leak into it.
   test('a model hire still refuses to invent a role or a mission', async () => {
     const h = makeTeamHarness();
 
-    // A model's hire arrives as JSON, so this one does too: the input omits the
-    // required `role` and reaches the runtime refusal that guards the boundary.
+    // A model's hire arrives as JSON, so this omits `role` to reach the runtime refusal.
     await expect(h.team.spawn(JSON.parse(JSON.stringify({ mission: 'Do the thing.', mode: 'build' }))))
       .rejects.toThrow('role must be non-empty');
     await expect(h.team.spawn({ role: 'auditor', mission: '   ', mode: 'build' }))
@@ -613,10 +557,7 @@ describe('team action routing', () => {
     const renamed = await h.team.rename({ name: 'researcher-a1b2c3', displayName: '  Release Warden  ' });
 
     expect(renamed).toMatchObject({ ok: true, displayName: 'Release Warden' });
-    // `user` is what makes it permanent: planWorkspaceTitle refuses that origin.
     expect(h.calls).toContain('rename:researcher-a1b2c3:Release Warden:user');
-    // Exactly one refresh for the settled operation, and NO title copy on the
-    // parent row — the child descriptor is the only place the name lives.
     expect(h.broadcasts).toHaveLength(2);
     expect('displayName' in h.roster.requireActive('researcher-a1b2c3')).toBe(false);
   });
@@ -640,9 +581,6 @@ describe('team action routing', () => {
     expect(h.calls).not.toContain(expect.stringContaining('rename:'));
   });
 
-  // The child titles itself, because only the child sees its own owner-driven
-  // turns. The parent holds no mirror, so this only refreshes listeners —
-  // every reader re-projects from the child descriptor.
   test('a title the child settled on only refreshes the roster listeners', async () => {
     const h = makeTeamHarness();
     await h.team.create({});
@@ -680,17 +618,11 @@ describe('team action routing', () => {
 
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Repair the auth flow.' });
 
-    // A hire that named no context to inherit inherits none. The digest this
-    // used to build reached no reader on either backend once the reactor
-    // stopped rendering assignment rows, and the cf pin
-    // (`unit-hire-fork.test.ts`) requires a fresh hire's first message to BE
-    // its mission.
+    // The cf pin (`unit-hire-fork.test.ts`) requires a fresh hire's first message to be its mission.
     expect(h.assignments[0]?.inheritedContext).toBeUndefined();
     expect(h.assignments[0]?.body).toBe('Repair the auth flow.');
 
-    // The assignment rides its own ROW, and the row belongs to the delegation
-    // runner: `wakesADrain` excludes it, so no reactor may hand the child a
-    // summary of its own brief.
+    // `wakesADrain` excludes assignment rows, so no reactor hands the child a summary of its own brief.
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
@@ -706,8 +638,7 @@ describe('team action routing', () => {
     expect(buildDrainBatch(log.pending({ variant: 'subordinate_task' }))).toBeNull();
   });
 
-  // S22: an assignment fires exactly ONE roster refresh and ONE task event —
-  // the task rides its own event, never a duplicate payload on the roster one.
+  // S22: an assignment fires exactly one roster refresh and one task event.
   test('an assignment fires exactly one roster refresh and one task event', async () => {
     const h = makeTeamHarness();
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
@@ -717,7 +648,6 @@ describe('team action routing', () => {
     await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
     expect(h.broadcasts).toHaveLength(2);
     expect(h.tasks).toHaveLength(2);
-    // The dead duplicate payload is gone from every event, whole.
     expect(h.events.every((event) => !('assignedTask' in event))).toBe(true);
   });
 
@@ -731,9 +661,7 @@ describe('team action routing', () => {
       name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false,
       createdBy: 'orchestrator', status: 'working', currentTask: 'Map the market.',
       createdAt: 1_700_000_000_000, dismissedAt: null,
-      // A hire is DURABLE, and its mission is its first assignment — so the row
-      // names that assignment's event, which is the id its report will cite.
-      // One correlation for both lifetimes, written where the roster is.
+      // A durable hire's row names its mission's event id, which its report will cite.
       lifetime: 'durable', taskEventId: 'evt-starts_now',
     }]);
     expect(h.calls.slice(0, 2)).toEqual([
@@ -804,9 +732,7 @@ describe('team action routing', () => {
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
     const before = h.roster.get('researcher-a1b2c3');
     const broadcastsBefore = h.broadcasts.length;
-    // The write that names the assignment its report will cite runs after the
-    // rollback scope, so forcing it to throw proves the scope covers it: the
-    // row must read exactly as before, not assigned with nothing to cite.
+    // Forcing this write to throw proves the rollback scope covers it.
     const recordAssignmentEvent = h.roster.recordAssignmentEvent.bind(h.roster);
     h.roster.recordAssignmentEvent = () => { throw new Error('event write failed'); };
 
@@ -824,8 +750,7 @@ describe('team action routing', () => {
 
   test('the durable verbs refuse a task-lifetime row before trying anything', async () => {
     const h = makeTeamHarness();
-    // A temporary run in flight: its report resolves the port's waiter on this
-    // id, so a durable verb that retargeted the row would orphan that waiter.
+    // A temporary run's report resolves a waiter on this id; retargeting the row would orphan it.
     h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     const before = h.roster.get('ask-auditor-a1b2c3');
 
@@ -838,7 +763,6 @@ describe('team action routing', () => {
     for (const attempt of attempts) {
       const attempted = attempt();
       await expect(attempted).rejects.toBeInstanceOf(KinuError);
-      // The refusal leads with its class on the wire the tool answers on.
       await expect(attempted).rejects.toMatchObject({ code: 'bad_input' });
     }
 
@@ -937,10 +861,6 @@ describe('team action routing', () => {
   });
 
   test('EVICTION FIX: a completed subordinate stays in the roster and answers a follow-up task', async () => {
-    // The reported bug: subordinates disappeared after completing their task.
-    // Completion must land the subordinate at idle — still listed, still
-    // addressable — and a follow-up assignment must run on the SAME facet
-    // with its context intact (no respawn, no deletion anywhere).
     const h = makeTeamHarness();
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
 
@@ -953,7 +873,6 @@ describe('team action routing', () => {
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
       status: 'working', currentTask: 'One more comparison',
     });
-    // The follow-up reached the existing facet — no dismiss, no fresh spawn.
     expect(h.calls).toEqual([
       'spawn:researcher-a1b2c3:Map the market.',
       'assign:researcher-a1b2c3:Map the market.',
@@ -967,8 +886,7 @@ describe('team action routing', () => {
 
     expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
       .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });
-    // The runtime seam receives keepHistory=true → the orchestrator's
-    // deleteSubAgent branch (the storage wipe) is not taken.
+    // keepHistory=true skips the orchestrator's deleteSubAgent storage wipe.
     expect(h.calls.at(-1)).toBe('dismiss:researcher-a1b2c3:true');
   });
 });
@@ -1007,8 +925,6 @@ describe('subordinate event admission', () => {
     });
   });
 
-  // The sender is told what actually happened to the work, never a fixed
-  // sentence. Everything below is already known at admission.
   test('the sender is told the event id its report will cite', () => {
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
@@ -1040,9 +956,7 @@ describe('subordinate event admission', () => {
   });
 
   test('an admission the log rejected as a duplicate is queued, not claimed as a fresh start', () => {
-    // `admitted: false` means the event was already in the log, so this
-    // publish scheduled no drain of its own — it rides whatever is waiting.
-    // Busy or idle is irrelevant to that, hence both.
+    // `admitted: false`: the event was already logged, so this publish scheduled no drain.
     for (const turnInFlight of [true, false]) {
       expect(describeSubordinateHandoff({
         admission: { id: 'evt-existing', admitted: false },
@@ -1089,26 +1003,15 @@ describe('subordinate event admission', () => {
 });
 
 describe('the owner talking to a subordinate does not wake its parent', () => {
-  /**
-   * Both hops of the real path, composed in the order production runs them:
-   * the subordinate decides whether a finished turn owes the parent an answer
-   * (subordinate-agent `onChatResponse`), then the parent decides whether what
-   * arrives enters the rail that wakes it (orchestrator
-   * `receiveSubordinateEvent`). The assertions read the parent's event log,
-   * because that log IS the wake — a report that never lands there bills no
-   * turn and enters no context.
-   */
+  /** Both hops in production order; assertions read the parent's event log because that log is the wake. */
   function scenario() {
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const roster = makeRosterStore();
     roster.ensureSchema();
-    // Spawned with a mission, so the parent starts out waiting on an answer.
     roster.create(initialRosterEntry);
 
-    // Each arrival is a distinct report, so each names its own sequence — this
-    // scenario is about WHO may wake the parent, not about replay.
     let sequence = 0;
 
     const arrivesAtParent = (
@@ -1128,17 +1031,13 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
 
     return {
       roster,
-      /** A subordinate turn finishes. */
       turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
         if (!subordinateRelaysTurnEnd({ reportedThisTurn: false, ...input })) return;
         arrivesAtParent('turn_end', input.assistantText, 'progress');
       },
-      /** The subordinate chooses to speak, via the `report` tool. */
       reportTool: (content: string, status: SubordinateReportStatus = 'completed') =>
         arrivesAtParent('report_tool', content, status),
-      /** A detached background job settles (the subordinate's `notifyOwner`). */
       jobSettles: (content: string) => arrivesAtParent('turn_end', content, 'progress'),
-      /** What the parent was actually woken with. */
       woken: () => log.pending({ variant: 'subordinate_report' })
         .map((event) => reportPayload(event).content),
     };
@@ -1147,8 +1046,6 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
   test('the owner’s own conversation reaches the parent never, however long it runs', () => {
     const scene = scenario();
 
-    // Note the parent HAS an open assignment throughout: the answer is withheld
-    // because of who asked, not because the parent is idle.
     for (const reply of ['Hi — what do you need?', 'Here are three angles.', 'Done.']) {
       scene.turnEnds({ ownerDriven: true, assistantText: reply });
     }
@@ -1160,7 +1057,6 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     const scene = scenario();
 
     scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
-    // A turn that said nothing has no answer to relay.
     scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
 
     expect(scene.woken()).toEqual(['Mapped 14 competitors.']);
@@ -1181,9 +1077,7 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     const scene = scenario();
     scene.reportTool('Market mapped.', 'completed');
 
-    // A >30s tool the owner's chat turn detached: the job settles, and its wake
-    // drives a turn that IS programmatic — the discriminator the subordinate
-    // alone can read says "not the owner", and only the roster knows better.
+    // A detached >30s tool job's wake is programmatic; only the roster knows it was the owner's.
     scene.jobSettles('Background run job completed.');
     scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
 
@@ -1213,9 +1107,7 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
 });
 
 describe('oversize subordinate reports stay reachable', () => {
-  /** The parent's ingress, in the order orchestrator.receiveSubordinateEvent
-   *  runs it: normalize → spill (async, outside the storage transaction) →
-   *  admit with the citation. */
+  /** Parent ingress in orchestrator.receiveSubordinateEvent order: normalize, spill, admit. */
   async function admitFromSubordinate(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
     const content = normalizeReportContent(raw);
     const spilled = await spillEventContent(vfs, content);
@@ -1242,13 +1134,10 @@ describe('oversize subordinate reports stay reachable', () => {
     const { vfs } = createMemoryVfs();
     const content = 'seam found in the auth module; '.repeat(60).trim();
 
-    // The wire text carries the trailing newline a model's report usually has.
     expect((await admitFromSubordinate(log, vfs, `${content}\n`)).admitted).toBe(true);
 
     const event = log.pending({ variant: 'subordinate_report' })[0];
     const path = reportPayload(event).content_path;
-    // Normalized before spilling: the cited file is byte-for-byte the content
-    // the brief truncates, never the untrimmed wire text.
     expect(path).toBe(eventContentPath(content));
 
     if (!path) throw new Error('expected spilled report path');
@@ -1275,14 +1164,10 @@ describe('oversize subordinate reports stay reachable', () => {
   });
 });
 
-/** One parent, with an open assignment out to `researcher` — the scene both
- *  the ingress-order tests and the handoff tests run against. Named rather
- *  than inferred so the two describes below share ONE harness. */
 interface ParentScene {
   log: EventLog;
   roster: SubordinateRosterStore;
   files: MemoryVfs['files'];
-  /** The ordered trace of ingress side effects, for the ordering assertions. */
   seen: string[];
   announced: Array<{ id: string; content: string }>;
   deps: SubordinateIngressDeps;
@@ -1324,9 +1209,7 @@ describe('the parent ingress, in the order it runs', () => {
     const scene = parentScene();
     const content = 'seam found in the auth module; '.repeat(60).trim();
     const spilled = eventContentPath(content);
-    // The VFS write is async and the transaction body is not: observing the
-    // file already on the plane when the transaction opens is what proves the
-    // ordering, not the shape of the source.
+    // The VFS write is async and the transaction body is not: the file must exist when the transaction opens.
     const transaction = scene.deps.transaction.bind(scene.deps);
     scene.deps.transaction = <T,>(body: () => T): T => {
       expect(scene.files.has(spilled)).toBe(true);
@@ -1340,19 +1223,16 @@ describe('the parent ingress, in the order it runs', () => {
     }, 11);
 
     expect(result.disposition).toBe('admitted');
-    // Normalized before spilling: the cited file is the content the brief
-    // truncates, never the untrimmed wire text.
     expect(await scene.files.get(spilled)).toBe(content);
     const event = scene.log.pending({ variant: 'subordinate_report' })[0];
     expect(reportPayload(event).content_path).toBe(spilled);
-    // …and the roster write shares the transaction the admit opened.
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
     expect(scene.roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
   });
 
   test('drops what the parent is not waiting on before the spill, leaving no file behind', async () => {
     const scene = parentScene();
-    scene.roster.applyReport('researcher', 'completed', 'report_tool', NOW);   // no open assignment left
+    scene.roster.applyReport('researcher', 'completed', 'report_tool', NOW);
 
     const result = await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'progress', content: 'x'.repeat(4000),
@@ -1367,9 +1247,7 @@ describe('the parent ingress, in the order it runs', () => {
 
   test('a report from a subordinate this parent does not have is not awaited, not admitted', async () => {
     const scene = parentScene();
-    // An unknown name is a decision the roster has already forgotten, not a
-    // delivery failure: throwing made the child retry a report nobody awaits,
-    // so its terminal sequence never converged.
+    // An unknown name is a forgotten decision, not a delivery failure: throwing made the child retry forever.
     expect(await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'ghost', status: 'progress', content: 'hello',
       origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
@@ -1378,9 +1256,7 @@ describe('the parent ingress, in the order it runs', () => {
     expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
   });
 
-  // The child's report is replayable durable work: its ledger re-runs the
-  // delivery until the parent holds it. Before the sequence was the key, the
-  // second delivery published a second event and billed a second parent turn.
+  // A report is replayed until the parent holds it; the sequence is the dedupe key.
   test('one sequence delivered twice wakes the parent once, and says the second was already held', async () => {
     const scene = parentScene();
 
@@ -1395,8 +1271,6 @@ describe('the parent ingress, in the order it runs', () => {
     expect(first.disposition).toBe('admitted');
     expect(replay).toEqual({ id: first.id, disposition: 'already_held' });
     expect(scene.log.pending({ variant: 'subordinate_report' })).toHaveLength(1);
-    // The replay did NOTHING else either: no second announce, no second wake,
-    // no second roster transition, and no file written for it.
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
     expect(scene.announced).toHaveLength(1);
   });
@@ -1417,9 +1291,7 @@ describe('the parent ingress, in the order it runs', () => {
       .toEqual(['Mapped 8 so far.', 'Mapped 14 now.']);
   });
 
-  // A cold replay settles long after the child's live turn metadata is gone.
-  // The mode therefore travels with the report: re-deriving it at either end
-  // turned a Plan report into a Build one.
+  // The mode travels with the report: a cold replay outlives the child's turn metadata.
   test('the report carries the mode its sender stated', async () => {
     const scene = parentScene();
     await receiveSubordinateEvent(scene.deps, {
@@ -1433,18 +1305,7 @@ describe('the parent ingress, in the order it runs', () => {
   });
 });
 
-/**
- * The whole spine a real report crosses, composed in production's order: the
- * model's tool call → the one dispatcher → the destination a backend wires
- * (`buildReport` in the cli host, `hostedTaskProfile` in the cloud one) → the
- * parent's ingress → the parent's event → the brief its next turn reads.
- *
- * Composed rather than asserted piecewise BECAUSE this feature's failure mode
- * is a field accepted at one hop and dropped at the next: valibot's `v.object`
- * strips what it does not name, so a handoff missing from the stored payload's
- * schema would be written to the row, accepted by every unit around it, and
- * gone by the time the parent read it back.
- */
+/** The full report spine in production order: valibot `v.object` strips unnamed fields, so a dropped handoff only shows end to end. */
 describe('the structured handoff a report carries', () => {
   function childReportingTo(scene: ParentScene): ReportToolDeps {
     return {
@@ -1469,9 +1330,6 @@ describe('the structured handoff a report carries', () => {
     await dispatchReport(childReportingTo(scene), {
       status: 'completed',
       content: 'Rate limiter landed behind the existing flag.',
-      // The blank entry is what a model leaves behind when it starts a list
-      // and thinks better of it; it must not reach the parent as an empty
-      // bullet, and the surrounding space must not reach it either.
       concerns: ['  the 429 budget is a guess — no production trace to size it from ', '  '],
       findings: ['the gateway already limits per-account, so per-IP double-counts'],
     });
@@ -1480,7 +1338,6 @@ describe('the structured handoff a report carries', () => {
       concerns: ['the 429 budget is a guess — no production trace to size it from'],
       findings: ['the gateway already limits per-account, so per-IP double-counts'],
     });
-    // The payload is not what the parent reads — this is.
     expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief).toBe(
       'completed [re: Map the market.]: Rate limiter landed behind the existing flag.'
       + '\nconcerns:\n  - the 429 budget is a guess — no production trace to size it from'
@@ -1496,8 +1353,7 @@ describe('the structured handoff a report carries', () => {
     });
 
     const payload = reportOn(scene);
-    // Not `{concerns: [], …}`: an optional field is ABSENT when unused, or
-    // every reader has to learn to tell an empty list from a silent one.
+    // An optional field is absent when unused, not an empty list.
     expect(payload.concerns).toBeUndefined();
     expect(payload.open_work).toBeUndefined();
     expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief)
@@ -1507,8 +1363,7 @@ describe('the structured handoff a report carries', () => {
   test('a handoff over the shared budget is refused in words, and nothing reaches the parent', async () => {
     const scene = parentScene();
 
-    // Refused rather than truncated: the handoff has no spill file, so a
-    // shortened list of open work is a list the parent believes it has read.
+    // Refused rather than truncated: the handoff has no spill file.
     const oversize = dispatchReport(childReportingTo(scene), {
       status: 'completed',
       content: 'Done.',
@@ -1529,18 +1384,11 @@ describe('the structured handoff a report carries', () => {
       concerns: ['this should not travel to a destination that never declared it'],
     });
 
-    // The search node's captured report is graded on `content` alone; a field
-    // it was never offered must not arrive at it by the back door either.
     expect(reportOn(scene).concerns).toBeUndefined();
   });
 });
 
-/**
- * The delegation runner. B10: one assignment row, one runner, one turn.
- *
- * The reactor no longer sees these rows (`wakesADrain` excludes them), so the
- * properties that used to be split across a drain and a sweep are all here.
- */
+/** The delegation runner. B10: one assignment row, one runner, one turn. */
 describe('drainAssignments', () => {
   function assignedWorld(inheritedContext?: SerializedMessage[]) {
     const { sql, actor } = makeWorld();
@@ -1572,23 +1420,17 @@ describe('drainAssignments', () => {
       onFailure: (cause) => { throw cause; },
     };
 
-    // Both sweeps select before either resolves — the shape a re-woken
-    // activation racing its predecessor has. The binding is synchronous, so the
-    // second one's `pending()` read must already be empty.
+    // Both sweeps select before either resolves; binding is synchronous, so the second's `pending()` is empty.
     const first = drainAssignments(log, sweep);
     const second = drainAssignments(log, sweep);
     held.resolve();
     const [a, b] = await Promise.all([first, second]);
 
-    // The brief is the turn's input, verbatim — never a rendered summary of it.
     expect(ran.map((task) => task.body)).toEqual(['Audit the auth flow.']);
     expect(a.consumed + b.consumed).toBe(1);
 
-    // …and the turn it was bound to is the one that carries the birth context,
-    // which is the whole reason the runner is handed the id it minted.
     expect(subordinateTurnContext(log, ran[0]?.turnId ?? '')).toEqual(forked);
 
-    // A turn that ran closes its lease: nothing re-pends it.
     expect(log.hasOpenDrainLease()).toBe(false);
     expect(log.pending({ variant: 'subordinate_task' })).toEqual([]);
   });
@@ -1606,9 +1448,7 @@ describe('drainAssignments', () => {
     expect(swept).toEqual({ consumed: 1, truncated: false });
     expect(failures).toHaveLength(1);
 
-    // Neither completed nor handed back: the OPEN LEASE is the retry. Closing it
-    // here would drop the assignment silently, and re-pending it immediately
-    // would spin on whatever just failed.
+    // The open lease is the retry: closing it drops the assignment; re-pending spins on the failure.
     expect(log.hasOpenDrainLease()).toBe(true);
     expect(log.pending({ variant: 'subordinate_task' })).toEqual([]);
   });

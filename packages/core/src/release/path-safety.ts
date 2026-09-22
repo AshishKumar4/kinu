@@ -5,11 +5,7 @@ export interface ReleasePathValidation {
   ok: boolean;
   path?: string;
   error?: string;
-  /** The rejection was a secret/config path rather than a traversal or an
-   *  absolute path. Carried as a field so `isSecretReleasePath` reads the
-   *  decision instead of recovering it by running /secret|config/ over this
-   *  record's human-readable `error`, where rewording that sentence would
-   *  silently change the predicate. */
+  /** Carried as a field so `isSecretReleasePath` never parses the human-readable `error`. */
   secret?: boolean;
 }
 
@@ -21,12 +17,9 @@ const SECRET_PATH_PATTERNS: RegExp[] = [
   /(^|\/)\.aws(\/|$)/i,
   /(^|\/)\.ssh(\/|$)/i,
   /(^|\/)credentials(?:\.json)?$/i,
-  // Both spellings. Every manifest in this repository — the one carrying the
-  // account id, the routes and the binding set — is `wrangler.jsonc`, so a rule
-  // that named only `wrangler.toml` would name a file that is not here.
+  // Both spellings: this repository's manifests are `wrangler.jsonc`.
   /(^|\/)wrangler\.(?:toml|jsonc?)$/i,
-  // A patch that writes into `.git` is not a code change: hooks there run on
-  // the next git command, with whatever authority the release step holds.
+  // Hooks under `.git` run on the next git command with the release step's authority.
   /(^|\/)\.git(\/|$)/i,
 ];
 
@@ -81,19 +74,8 @@ export function validateReleasePatchPath(rawPath: string): ReleasePathValidation
   return { ok: true, path };
 }
 
-/**
- * Every path a unified diff would touch, refused as a SET. Null when the whole
- * diff is allowed; otherwise the reason, naming each refused path.
- *
- * A set rather than a path at a time, because a patch is not partially
- * applicable: `git apply` is handed one file and writes many, so the authority
- * has to be spent over the whole diff before any of it lands.
- *
- * `+++ b/<path>` is the write target and `--- a/<path>` is read as well, because
- * a pure deletion names its victim only there. `/dev/null` is neither. A diff
- * that declares no file at all is refused rather than passed: "validated
- * nothing" must not read as "found nothing wrong".
- */
+/** Refuses the whole diff's path set (git apply writes many files at once); `--- a/` is read because a
+ *  pure deletion names its victim only there. A diff declaring no file is refused. */
 export function validateReleasePatchTargets(diff: string): string | null {
   const refusals: string[] = [];
   let declared = 0;
@@ -102,8 +84,7 @@ export function validateReleasePatchTargets(diff: string): string | null {
     const header = /^(?:\+\+\+|---) (.+)$/.exec(line);
 
     if (!header) continue;
-    // `git diff` writes `+++ b/path`, and appends a tab-separated timestamp in
-    // some dialects. Both are stripped before the path is judged.
+    // Some dialects append a tab-separated timestamp.
     const raw = header[1].replace(/\t.*$/, '').trim().replace(/^[ab]\//, '');
 
     if (!raw || raw === '/dev/null') continue;
@@ -120,21 +101,11 @@ export function validateReleasePatchTargets(diff: string): string | null {
   return `patch touches paths a release may not write:\n${[...new Set(refusals)].join('\n')}`;
 }
 
-/** Hosts a `kind: 'github'` binding may name. Exact hostnames, not a suffix
- *  match: `github.com.attacker.example` ends with the string and is not GitHub. */
+/** Exact hostnames: `github.com.attacker.example` ends with the string and is not GitHub. */
 const GITHUB_HOSTS: readonly string[] = ['github.com', 'www.github.com'];
 
-/**
- * Refuse a `kind: 'github'` repository URL that would send a GitHub credential
- * somewhere that is not GitHub. Throws with the reason; returns nothing.
- *
- * The release engine resolves ONE ambient credential for the binding's kind and
- * installs it as an HTTP authorization header before cloning this URL, so the
- * URL is the destination of a secret rather than merely the location of some
- * code. `https` only, because the header is the credential and a plaintext hop
- * publishes it; no userinfo, because `https://x:y@github.com/...` puts a second
- * credential in the ledger and a `@` also relocates the host for naive readers.
- */
+/** A GitHub credential is installed as an auth header before cloning this URL, so require https,
+ *  no userinfo, and a GitHub host. Throws with the reason. */
 export function assertGithubRepoUrl(rawUrl: string): void {
   const url = URL.parse(rawUrl.trim());
 

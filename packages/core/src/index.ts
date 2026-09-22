@@ -1,15 +1,11 @@
-// @kinu.run/core — barrel export
-
-// Identity system
+// Identity
 export { initActorTables, initAllTables, initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
 
 export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
-// The once-only lifecycle of one settled response, and the per-effect ledger it
-// wraps. Backend-neutral: the Durable Object and the CLI drive the same state
-// machine over the same table and supply only effect bodies and a wake.
+// Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
   declareTerminalRoster, owesShadowTrial,
   type TerminalTurnFacts, type TerminalTurnParts,
@@ -35,8 +31,7 @@ export {
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
 
-// The durable record that a keyed piece of work already happened, kept after the
-// row that did it has been retired.
+// Records that keyed work happened, kept after its row is retired.
 export {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from './identity/effect-tombstones';
@@ -45,8 +40,7 @@ export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './iden
 
 export { ChatHistoryEntrySchema } from './types/chat';
 
-// The one answer to "which tables a workspace has" — every composition root
-// calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
+// Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
 export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
@@ -119,7 +113,7 @@ export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
 } from './identity/fork-driver';
 
-// Workspace archive — one portable backup format for both backends.
+// Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
@@ -153,7 +147,7 @@ export {
 
 export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
-// Evolution engine (3-timescale auto-evolution)
+// Evolution
 export {
   EvolutionEngine, buildScaffoldProposalPrompt,
   type ProposalArchiveContext,
@@ -171,15 +165,13 @@ export {
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
 
-// K_align — the correction rate per 100 graded turns, per scaffold version,
-// with 95% Wilson intervals. Pure telemetry: no benchmark, no judge, no LLM.
+// K_align: corrections per 100 graded turns per scaffold version, with 95% Wilson intervals.
 export {
   alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
   type AlignmentTrend, type RateInterval,
 } from './evolution/alignment';
 
-// Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
-// every evolution surface reads (audit R3: the measurable loss).
+// Turn outcomes and lessons: the ledgers every evolution surface reads.
 export {
   outcomeToFeedback, outcomeQuality, feedbackToQuality, isTrivialTurn,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, takePickOutcome,
@@ -199,16 +191,12 @@ export {
 
 export { buildOutcomeEvalSplit, type AdvisorNegativeRow } from './evolution/eval-split';
 
-// The step clock's knowledge channel — execution recoveries observed by the
-// turn's own failure ledger, injected for the rest of the episode.
 export {
   recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
   MAX_RECOVERY_FINDINGS, type RecoveryFinding,
 } from './evolution/recovery';
 
-// C8/C11 — the hand-labeled calibration set, and the bias-corrected view of
-// every rate the classifier feeds. Uncalibrated is reported as such, never
-// approximated away.
+// C8/C11 calibration: uncalibrated rates are reported as such, never approximated.
 export {
   sampleForLabeling, renderLabelingFile, parseLabelingFile, allocateLabelBudget,
   ingestOutcomeLabels, type LabelIngestResult,
@@ -224,8 +212,7 @@ export {
   type MeasuredProportion, type PredictionStratum,
 } from './evolution/ppi';
 
-// The LLM panel that re-judges the hand-labeled turns, and the pre-registered
-// bar it must clear before a recalibration may lean on it instead of the owner.
+// The panel must clear STAND_IN_THRESHOLDS before a recalibration may lean on it.
 export {
   runEnsemble, ensembleReport, renderEnsembleReport, describeEnsembleGap,
   buildEnsembleJudgePrompt, panelVerdict, STAND_IN_THRESHOLDS,
@@ -233,10 +220,7 @@ export {
   type EnsembleReport, type EnsembleMember, type StandInCondition,
 } from './evolution/ensemble';
 
-// Behavioural weak labels — turns judged by what the user DID (interrupts,
-// refusals, re-asks, approvals), and the harness that scores the classifier and
-// the panel against them. Complements the on-distribution calibration above; it
-// never replaces it.
+// Behavioural weak labels complement the calibration set; they never replace it.
 export {
   BEHAVIOR_RULES, weakLabel, corpusStats, runCorpusEval, renderCorpusReport,
   type BehaviorRule, type CorpusTurn, type TurnSignals, type WeakLabel,
@@ -244,15 +228,12 @@ export {
   type RaterCost,
 } from './evolution/behavior-labels';
 
-// Replay-eval harness — outcome-labeled turns re-run against the current
-// config; the persisted loss curve.
 export {
   initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
 
-// Every completed turn still owed evolution work — the durable window plus its
-// typed review obligation, ONE row per turn, owned by EvolutionEngine.
+// One row per turn, owned by EvolutionEngine.
 export {
   initCompletedTurnTable, createCompletedTurnStore, CompletedTurnSchema,
   MAX_TURN_REVIEWS_PER_OPEN,
@@ -261,8 +242,6 @@ export {
   type EnqueueOutcome, type DeferredReviewDrain, type AppendTurnOpts,
 } from './evolution/session-window';
 
-// Evolution Changelog — the "what I changed about myself" digest over the
-// durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
@@ -276,8 +255,6 @@ export { DEFAULT_CONFIG } from './config';
 
 export { UNBOUNDED_STEPS } from './chat';
 
-// Typed accessors over the `actor_config` key/value table — collapses ~23
-// raw-SQL sites into a deep module with known-key getters/setters.
 export {
   createAgentConfigStore, initAgentConfigTable,
   canonicalConversationId,
@@ -309,11 +286,8 @@ export type * from './types/craft';
 
 export type * from './types/evaluation';
 
-// The SQLite-backed slate stores live behind `@kinu.run/core/slates`, not
-// here: every one of them imports the vendored agent-core runtime, which
-// touches `node:util` at module scope and cannot load in a browser. Client
-// code value-imports this barrel, so anything exported here executes in the
-// client graph — keep worker-only modules off it.
+// Slate stores live in `@kinu.run/core/slates`: they touch `node:util`, and client
+// code value-imports this barrel. Keep worker-only modules off it.
 export {
   parseSlateProject, describeBindings, credentialedBindings,
   type SlateProject, type SlateBinding, type SlateBindingKind, type SlateBindingDeclaration,
@@ -359,15 +333,14 @@ export {
 
 export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
 
-// The host↔client slate vocabulary: browser-safe — strings, bounds and one
-// valibot schema — so it belongs on the value-imported barrel.
+// Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
   buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateInlineHeight, slateLinkId,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   SlateFrameMessageSchema, type SlateHostContext,
 } from './slates/host-context';
 
-// Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
+// Release lane (separate from scaffold evolution)
 export {
   assertReleaseTransition,
   RELEASE_STATUSES,
@@ -412,11 +385,7 @@ export {
   type RunChecksResult,
 } from './release/index';
 
-// Cross-workspace experience transfer (owner-scoped library + gated imports).
-// The gate, the staging ledger and the settle path are driven from inside core
-// (runExperienceAction and EvolutionEngine), so what crosses the package
-// boundary is the library a backend hosts, the two schema initializers, the
-// read surfaces, and the action dispatcher the owner's RPC drives.
+// Cross-workspace experience transfer
 export {
   createExperienceLibrary,
   findPublishable,
@@ -444,13 +413,13 @@ export {
   type PublishableCandidate,
 } from './experience/index';
 
-// Chat engine (shared between server and CLI)
+// Chat engine
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
   type ChatEvent, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
 } from './chat';
 
-// Extension seam (public plugin API — observe + extend a turn)
+// Extension seam (public plugin API)
 export {
   ExtensionHost,
   type KinuExtension,
@@ -521,18 +490,16 @@ export {
   type OverflowRecoveryDecision,
 } from './turn-failure';
 
-// LLM (Vercel AI SDK wrapper — shared across backends)
+// LLM
 export {
   createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens,
-  // The chars-per-token estimate, exported so a surface that shows one imports
-  // the policy instead of retyping the number beside it.
+  // Surfaces import this instead of retyping the number.
   CHARS_PER_TOKEN,
 } from './llm';
 
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm';
 
-// The ONE normalized provider usage report, and the absence-preserving
-// arithmetic over it. Every surface that counts tokens speaks this.
+// Every surface that counts tokens speaks this usage report.
 export {
   USAGE_FIELDS,
   UsageSchema,
@@ -556,8 +523,7 @@ export {
   type SpillTrip,
 } from './context-budget';
 
-// The cumulative, label-scoped spend governor — the outer integral over every
-// call-scoped budget. Opt-in: no label, no cap, no storage traffic.
+// Label-scoped spend governor. Opt-in: no label, no cap, no storage traffic.
 export {
   MissionGovernor,
   MissionBudgetExhausted,
@@ -565,14 +531,9 @@ export {
   readMissionLabels,
   readMissionLimits,
   localMissionPort,
-  // The ONE catalog pricing of a usage report. Exported because a surface that
-  // prices a call must price it exactly as the ledger debits it — two
-  // implementations would make the same call cost different amounts depending
-  // on who asked.
+  // A surface that prices a call must use this, exactly as the ledger debits it.
   priceCall,
   localMissionScope,
-  // Every label's cumulative spend, for a read-only surface that holds no
-  // governor: the CLI's `kinu spend`, the workspace cost panel.
   listMissionSpend,
   type MissionBudgetPort,
   type MissionScope,
@@ -592,7 +553,7 @@ export {
   type CompactionSummaryPromptInput,
 } from './compaction';
 
-// Canonical tool registry + factories (shared across CF and CLI)
+// Tool registry
 export {
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
@@ -614,13 +575,8 @@ export {
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
   renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
-  // The reach axis — which surfaces each capability is projected onto, and the
-  // codemode namespace it owns. Read by both surface builders and by the Tools
-  // panel, so none of them has to guess it from ToolSet keys.
   TOOL_REACH,
   isBuiltinToolName,
-  // Role narrowing over BOTH surfaces from ONE merged allowed-tool set: the
-  // native ToolSet and the codemode namespaces `eval` binds.
   narrowToolSurface,
   codemodeCapabilitiesFor,
   type ToolSurfaceNarrowing,
@@ -669,9 +625,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
-// open-38: ONE physical workspace SQLite for every logical actor. The host that
-// binds an issued actor's runtime objects over that one database, and the loop
-// origin every created actor is seeded with.
+// open-38: one physical workspace SQLite for every logical actor.
 export {
   createActorHost, recoverActorTurns, childContextResolver,
   type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
@@ -704,17 +658,13 @@ export {
   type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
 } from './tools/local-peer';
 
-// The same delegation dispatch, projected into the codemode sandbox.
 export { createAgentsCodemodeProvider } from './delegation/agents-codemode';
 
-// `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
-// background jobs, compaction) over one host seam both backends implement.
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
 
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
-// Subordinate roster, identity, admission and the orchestration policy over
-// them — platform-neutral, so a backend supplies only SubordinateRuntime.
+// Platform-neutral: a backend supplies only SubordinateRuntime.
 export { SubordinateRosterStore } from './subordinates/roster';
 
 export {
@@ -737,7 +687,6 @@ export {
   type SubordinatesChangedEvent,
 } from './subordinates/support';
 
-// The temporary rung — one full child agent per question, in the ONE roster.
 export {
   SUBORDINATE_LIFETIMES,
   TEMPORARY_LIFETIME,
@@ -754,7 +703,7 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-// The subordinate tree's depth cap — derived per child, never stated by one.
+// The depth cap is derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
@@ -773,9 +722,7 @@ export {
   type ReportToolDeps,
 } from './tools/builtins';
 
-// An actor's surface is buildBuiltinTools plus `agents` — the one tool whose
-// implementation is the search engine, so the factory that emits a node's own
-// surface cannot hold it. See tools/actor-tools.ts.
+// An actor surface is buildBuiltinTools plus `agents`; see tools/actor-tools.ts.
 export {
   buildActorTools, PEER_REPLY_TOPIC,
   type ActorToolsetDeps,
@@ -786,28 +733,22 @@ export {
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './tools/actor-tools';
 
-// The durable once-only boundary in front of a tool whose effects leave the
-// process — applied inside `buildActorTools`, so both backends supply its deps
-// and neither wraps tools itself. See tools/effect-claim.ts.
+// Applied inside buildActorTools; backends never wrap tools themselves.
 export {
   initToolEffectClaimTable, claimToolEffect, settleToolEffect, releaseTurnEffectClaims,
   withEffectClaims,
   type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
 
-// Web search + fetch — provider seam + key-less default + codemode provider.
+// Web search + fetch
 export * from './web/index';
 
-// The release lane — codemode-only (release.* inside eval). No
-// native tool: see tools/builtins.ts's header for why.
+// Codemode-only, no native tool: see tools/builtins.ts.
 export {
   createReleaseCodemodeProvider, runReleaseAction,
   type ReleaseToolDeps, type ReleaseActionInput,
 } from './tools/release-codemode';
 
-// memory.* / tasks.* / report.* — codemode projections of the same-named
-// native tools, sharing one dispatcher each (memory-tool.ts / tasks-tool.ts /
-// the native `report` tool's ReportToolDeps).
 export { createMemoryCodemodeProvider } from './tools/memory-codemode';
 
 export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool';
@@ -818,13 +759,8 @@ export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool';
 
 export { createReportCodemodeProvider } from './delegation/report-codemode';
 
-// The file plane's dispatcher, shared by the native `file` tool and
-// workspace.editFile (execution/inline.ts) — see tools/file-tool.ts.
 export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';
 
-// Tool-call rendering vocabulary, shared by the web chat card and the CLI
-// transcript. It was a cf-backend component and the CLI therefore printed raw
-// argument values; see tools/tool-call-summary.ts.
 export {
   summarizeToolCall, describeToolCall, describeCommand,
   toolCallEffect, clip,
@@ -870,8 +806,6 @@ export {
   type SystemPromptOptions,
 } from './prompt';
 
-// The boundaries of an assembled request — shared by the renderers that write
-// them and the meter that measures against them.
 export {
   splitPromptSections,
   DYNAMIC_CONTEXT_OPEN_TAG,
@@ -879,8 +813,7 @@ export {
   type PromptSection,
 } from './prompting/sections';
 
-// What one request was locally measured to be made of — an estimate, carried
-// next to the provider's authoritative totals rather than reconciled into them.
+// A local estimate, carried beside the provider totals, never reconciled into them.
 export {
   TurnContextMeter,
   measureContext,
@@ -988,7 +921,7 @@ export {
 
 export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './prompts/evidence-window';
 
-// Runtime builder (shared across backends)
+// Runtime builder
 export { buildRuntime } from './runtime-builder';
 
 export type { RuntimeComponents } from './runtime-builder';
@@ -1001,7 +934,7 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
-// MCTS engine
+// MCTS
 export { runMCTS, SEARCH_FIBER_NAME, BranchExplorationSchema, BranchReflectionSchema } from './mcts/engine';
 
 export { selectNode } from './mcts/uct';
@@ -1016,10 +949,8 @@ export { converge } from './mcts/convergence';
 
 export { pruneLowValueBranches } from './mcts/pruning';
 
-// Sibling diversity at expansion — backends render this into the explore prompt.
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity';
 
-// The one question a branch is asked, whatever substrate runs it.
 export {
   explorePrompt, reflectionPrompt,
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
@@ -1032,13 +963,11 @@ export {
   type FencedBlock, type ProposalCode,
 } from './execution/code-fence';
 
-// Whole-message branch context inheritance (shared by every explore() backend).
 export {
   formatInheritedContext, DEFAULT_INHERITED_MESSAGES,
   type InheritedMessage,
 } from './mcts/inherited-context';
 
-// Test-based convergence tie-break over near-tied candidates.
 export { selectWinnerByTest, type TestSelectionDeps } from './mcts/test-selection';
 
 export {
@@ -1050,7 +979,7 @@ export type { EvaluationGrounding } from './types/evaluation';
 
 export { estimateCost } from './mcts/cost';
 
-// Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
+// Alternate Takes
 export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
@@ -1060,8 +989,7 @@ export {
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
 
-// Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
-// into the Alternate Takes pipeline against the live turn's answer.
+// Steer-as-Branch
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
   newBranchId, isSteerBranchRunId, branchHeadId,
@@ -1071,10 +999,7 @@ export {
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
-// The inbox — the one way anything reaches an agent, and the user kind's
-// vocabulary: a message spliced into the running turn's next step as a
-// durable user row that persists verbatim, comes back on interrupt, and reruns
-// as a user-origin turn.
+// Inbox: the one way anything reaches an agent.
 export {
   Inbox, readSignalId, PromptFileSchema,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
@@ -1084,8 +1009,6 @@ export {
   type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
 
-// Where a steer sits in the transcript — the read side of the same drain, and
-// pure, so both backends place it identically.
 export {
   buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
   EMPTY_TRANSCRIPT_FOLD,
@@ -1107,7 +1030,7 @@ export {
 
 export { initScaffoldTables } from './scaffold/schemas';
 
-// Scaffold management
+// Scaffolds
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
 
 export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify';
@@ -1116,23 +1039,20 @@ export { rollbackScaffold } from './scaffold/rollback';
 
 export { createScaffoldSurface, type ScaffoldSurfaceOpts } from './scaffold/surface';
 
-// Misevolution gate — fixed safety criteria over every evolution surface
-// (scaffold acceptance + promotion, extracted tools, agent-authored tools,
-// imported experience).
+// Misevolution gate: fixed safety criteria over every evolution surface.
 export {
   checkMisevolution, checkMisevolutionForSurface, recordMisevolutionVeto,
   type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
 } from './scaffold/misevolution';
 
-// Variant archive — DGM-style lineage + branch-base selection over the
-// existing scaffold_versions/scaffold_evaluations rows (no parallel store).
+// Variant archive over scaffold_versions/scaffold_evaluations (no parallel store).
 export {
   listScaffoldArchive, listRejectedProposals, selectEvolutionBase,
   type ScaffoldArchiveEntry, type EvolutionBaseSelection,
   type RejectedProposal, type RejectionKind,
 } from './scaffold/archive';
 
-// scaffold execution + shadow-mode rollout
+// Shadow-mode rollout
 export {
   runScaffold,
   scaffoldEventText,
@@ -1144,10 +1064,6 @@ export {
 } from './scaffold/executor';
 
 export { pumpScaffoldEvents } from './scaffold/event-pump';
-
-
-// The two backend inference seams: the DO's UI message stream and a local
-// turn's ChatEvent stream. Same decision, same delegation contract.
 
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
@@ -1162,9 +1078,7 @@ export {
   decidePromotion,
   applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG,
-  // The trial queue — what a turn contributes to the promotion gate before
-  // anything expensive runs, kept out of scaffold_evaluations so unrun trials
-  // can never walk the calibrated ladder.
+  // Kept out of scaffold_evaluations so unrun trials can never walk the calibrated ladder.
   queueShadowTrial,
   listQueuedShadowTrials,
   countQueuedShadowTrials,
@@ -1182,10 +1096,7 @@ export {
   type ShadowTrialVerdict,
 } from './scaffold/shadow';
 
-// auto-judge shadow evaluation — ONE queued trial, executed: runs the pending
-// scaffold against the recorded task, asks a judge LLM to compare, records the
-// result, optionally auto-applies promotion/rollback once the gate is
-// conclusive.
+// Auto-judge shadow evaluation
 export {
   runAutoShadowEval,
   createStructuredJudge,
@@ -1213,7 +1124,7 @@ export { periodicCraftConsolidation } from './craft/consolidation';
 
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
 
-// Execution layer
+// Execution
 export {
   DefaultExecutionRouter,
   createInlineExecutor,
@@ -1271,10 +1182,8 @@ export {
 
 export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
-// Client-safe workspace addressing and VFS contracts. The embedded Nimbus
-// workspace host is exported separately from `@kinu.run/core/workspace` so a
-// browser import of the main barrel cannot pull the server runtime into its
-// bundle.
+// Client-safe only: the Nimbus workspace host is exported from
+// `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
   workspacePath, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
@@ -1295,7 +1204,6 @@ export type {
 export {
   writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
 } from './vfs/workspace-planes';
-
 
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
@@ -1329,7 +1237,7 @@ export {
   type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
 } from './vfs/mounts';
 
-// File checkpoints — the shadow-git snapshot seam (backends implement it)
+// File checkpoints
 export {
   DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, CHECKPOINTS_UNCONFIGURED, summarizeRestorePlan,
   checkpointAvailability, fileCheckpointListing,
@@ -1341,15 +1249,14 @@ export {
 
 export { deviceFileCheckpoints, type DeviceRpcHub, type DeviceCheckpointsInput } from './checkpoints/device';
 
-// Shadow-git store format — the cross-engine contract (cli-backend imports
-// it; the zero-dep pc-agent daemon pins it, enforced by the parity test).
+// Shadow-git store format: cross-engine contract, pinned by the pc-agent parity test.
 export {
   CHECKPOINT_REF_PREFIX, CHECKPOINT_WORKDIR_MARKER, CHECKPOINT_EXCLUDES,
   checkpointSubject, parseCheckpointSubject, checkpointRefTimestampMs,
   checkpointReason, diagnoseStaging, type StagingDiagnosis,
 } from './checkpoints/format';
 
-// Vectorize-backed semantic memory (Workers AI embeddings + hybrid retrieval)
+// Semantic memory
 export {
   reciprocalRankFusion,
   createCloudflareVectorStore,
@@ -1375,23 +1282,18 @@ export {
   type HybridSearchOptions,
 } from './memory/hybrid-search';
 
-// Memory write primitive — single canonical "save a note to MEMORY.md".
-// Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
-// readMemoryTail is the shared bounded-tail read both backends weave per turn.
+// Memory writes
 export { memoryBytes } from './memory/note';
 
 export { appendMemoryNote, parseMemoryNotes, readMemoryTail, MEMORY_TAIL_MAX_CHARS, type MemoryNote } from './memory/note';
 
-// Zero-LLM transcript search over the actor's conversation authority.
-// Backs the `memory` tool's `conversations` action on both backends.
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,
   type ConversationSearchHit, type ConversationScrollMessage,
   type ConversationScrollResult, type ConversationSummary,
 } from './memory/conversation-search';
 
-// agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
-// Top-K recent facts are auto-rendered into the system prompt every turn.
+// Top-K recent agent_facts render into the system prompt every turn.
 export {
   initFactsTable, createFactsStore, renderFactsBlock, searchFacts, normalizeFactKey,
   type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult,
@@ -1403,8 +1305,7 @@ export {
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
-// Sleep-time compute — between-turn background memory compression
-// (Letta-style; ~50% test-time token reduction reported), on a cadence.
+// Sleep-time compute
 export {
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema,
@@ -1413,10 +1314,7 @@ export {
   type SleepTimeInput, type SleepTimeUpdate, type SleepTimeTrigger, type SleepTimeTurn, type SleepTimeWindow,
 } from './memory/sleep-time-compute';
 
-// durable run-event log (Flue-style, SSE-resumable) — its own `run_events`
-// table. The EventsHub's `agent_log` is a separate ledger (ingress events,
-// phases, reactor decisions); the two coexist rather than one fronting the
-// other, and the per-step telemetry sample reads this one.
+// Run-event log (`run_events`), separate from the EventsHub `agent_log`.
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepCost,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
@@ -1464,9 +1362,7 @@ export {
   type BoundedRunEventQuery,
 } from './events/index';
 
-// The one durable retry outbox — write-ahead intent, backoff, per-key
-// ordering, dedupe and a dead-letter state, over `@nimbus-sh/fabric`.
-// Spec: `events/outbox.ts`.
+// Durable retry outbox; spec: `events/outbox.ts`.
 export {
   scheduledOutbox,
   type Outbox,
@@ -1477,44 +1373,30 @@ export {
   type ScheduledOutboxPolicy,
 } from './events/index';
 
-// EventsHub — events / triggers / turn runner / reply channels.
-// Builds the agent_log ledger plus the trust, channel, trigger and budget
-// primitives around it. Spec: docs/ARCHITECTURE.md — "Events and ingress".
+// EventsHub. Spec: docs/ARCHITECTURE.md "Events and ingress".
 export * from './events/hub/index';
 
-// Ingress — the gated paths external signals take into that ledger: webhook
-// auth + rate limiting, timer registration and firing, the inbound-email
-// trust gate, the peer outbox, subordinate reports.
+// Ingress
 export * from './events/ingress/index';
 
-// The swarm engine and the pieces a backend reaches it through.
+// Swarm
 export * from './strategy/index';
 
-// Eval harness — A/B test arbitrary strategies/loops on a corpus of tasks.
+// Eval harness
 export * from './eval/index';
 
-// Bench harness — machine-scored, sealed-split, paired-statistics measurement
-// of whether a variant (scaffold, memory, evolved state) actually helps. Pure
-// math + report shapes; the executing runner lives in scripts/bench.ts.
+// Bench harness: pure math; the runner lives in scripts/bench.ts.
 export * from './bench/index';
 
-// Voyager-style automatic curriculum + Absolute Zero learnability filter.
-// Proposes next tasks at the "barely succeeds" sweet spot.
+// Curriculum
 export * from './curriculum/index';
 
-// provider abstraction — single registry for resolving model specs across
-// Workers AI, AI Gateway, Codex (ChatGPT subscription), OpenAI, OpenRouter,
-// and generic OpenAI-compatible upstreams. Auth resolution flows through
-// the AuthResolver callback in ProviderDeps — secrets stay inside UserDO
-// (cf-backend) and never enter the provider layer.
+// Providers. Secrets stay inside UserDO and never enter the provider layer.
 export * from './providers/index';
 
-// Credential value shape (still exported for UserDO + tests; the previous
-// CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store';
 
-// Credential store policy: at-rest sealing, header projection, and the
-// request validators that keep bad payloads out of the store.
+// Credential store policy
 export {
   createCredentialCipher,
   type CredentialCipher,
@@ -1531,7 +1413,7 @@ export {
   validateCredentialKey,
 } from './credentials/validate';
 
-// Durable plan review — shared domain and the submit_plan edit contract.
+// Plan review
 export {
   MAX_PLAN_ANNOTATIONS_BYTES,
   MAX_PLAN_CONTENT_BYTES,
@@ -1568,9 +1450,7 @@ export {
   ORCHESTRATOR_AGENT_SLUG,
 } from './cloud-wire';
 
-// The one record of what the Cloudflare platform does, and how we know. Every
-// platform number in this repo is derived from an entry here; prose cites an
-// entry by its stable id and never restates the number.
+// Platform facts: prose cites an entry by its id and never restates the number.
 export {
   PLATFORM_CATALOG,
   PLATFORM_FACT_IDS,
@@ -1589,8 +1469,7 @@ export {
   type PlatformQuantity,
 } from './platform-catalog';
 
-// The terminal chrome vocabulary — shared by the CLI's TUI and every surface
-// that depicts it (the landing page's terminal demo), so mocks cannot drift.
+// Terminal chrome vocabulary, shared so depictions of the TUI cannot drift.
 export {
   CHANGE_KIND_GLYPH,
   composerVisibleRows,
@@ -1601,7 +1480,7 @@ export {
   TUI_MARKS,
 } from './tui-presentation';
 
-// safety — approval gating for shell exec + digest-bound approvals
+// Safety
 export {
   reviewCommand,
   formatApproval,
@@ -1734,20 +1613,14 @@ export { fnv1a64, Fnv1a64 } from './utils/fnv1a';
 
 export { nanoid } from './utils/nanoid';
 
-// An abort's reason as an Error, so a cancelled run is attributable to whoever
-// cancelled it. Exported because the hosted-node transport evicts off the same
-// reason the search records.
 export { abortCause } from './utils/abort';
 
 export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
 
 export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 
-// One POSIX quoting rule for every command this system composes, on either
-// backend — the shells the executors talk to are the same shells.
 export { shellQuote } from './utils/shell';
 
-// Confidence intervals — every score this system reports travels with one.
 export {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
@@ -1755,11 +1628,7 @@ export {
 
 export { isoDate, today, nowMs } from './utils/date';
 
-// ── branching heads (parallel reasoning streams with merge) ──
-// A head is a divergent reasoning thread that sees the WHOLE conversation
-// context, accumulates EPHEMERAL interim context, and merges back via LLM
-// synthesis. Distinct from sub-agents (isolated context, structured return)
-// and MCTS branches (single short LLM call for evaluation).
+// Branching heads
 export type {
   HeadId, HeadBudget, HeadInput, HeadReport, HeadReportStatus, HeadUnsettledStatus,
   HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
@@ -1784,8 +1653,7 @@ export {
   type SplitPhaseEvent,
   type HeadJournalPort,
   MergeOutputSchema, DecisionSchema, type MergeOutput,
-  // The head merge's model/effort/spend policy — resolved here so both backends
-  // resolve it identically
+  // Resolved here so both backends resolve it identically.
   headMergeLLM,
   type HeadMergeModelBinder, type HeadMergeModelBinding, type HeadMergePolicyDeps,
   extractFinalText, synthesizeHeadSummary, headProducedFindings,
@@ -1797,13 +1665,11 @@ export {
   HeadFileChanges,
 } from './heads/index';
 
-// Background-job system — auto-background long tool calls + wake-on-completion.
+// Background jobs
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
-  // Per-invocation device-request ownership: the tool reports each durable
-  // identity it issues, and the job that detaches the call takes them over.
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   invocationBackgroundPolicy,
@@ -1813,8 +1679,7 @@ export {
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim, type DeviceRequestChannel,
 } from './jobs/index';
 
-// The agent's own task list — what the `tasks` tool writes and the Tasks
-// surface reads.
+// Tasks
 export {
   TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
   type AgentTask, type AgentTaskTree, type TaskStatus,
@@ -1823,20 +1688,17 @@ export {
 
 export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
-// The stop-time reminder a turn owes when it settles with open tasks.
 export {
   TaskReminders, TASK_REMINDER_EVENT,
   taskReminderIdempotencyKey,
 } from './tasks/reminder';
 
-// Backend-agnostic orchestration — per-turn accounting shared by both backends.
+// Orchestration
 export {
   TurnAccumulator,
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
 
-// The workspace's work across every actor — the read model behind
-// `listWorkspaceWork` on both backends.
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle } from './read-models/workspace-work';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
@@ -1852,7 +1714,6 @@ export {
   ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
-
 
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
@@ -1936,12 +1797,7 @@ export {
   inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
-// ── skills (Claude-Code / Hermes-compatible SKILL.md workflow store) ──
-// VFS-backed under /workspace/skills/. A skill is natural-language workflow
-// instructions + a tool-surface restriction (allowed_tools). Distinct from
-// CraftedTools (executable JS): a skill steers the LLM; a crafted tool runs.
-// No LLM-facing tool and no codemode namespace — read/create/edit/delete are
-// ordinary workspace.readFile/writeFile/readdir/exec calls over the same VFS.
+// Skills
 export {
   parseSkillFile, stringifySkillFile, skillNameProblem,
   discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames, skillBodyChars,
@@ -1960,16 +1816,7 @@ export type {
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 
-// ── GEPA (Genetic-Pareto Prompt Evolution) ──
-// Offline batch optimisation of any string-addressable agent artifact —
-// scaffold sources, crafted tool implementations, system-prompt sections.
-// Complementary to the runtime mutable-scaffold loop. Paper: Agrawal et
-// al., ICLR 2026 (arxiv 2507.19457).
-// Only the entry points + persistence + types are public; the algorithm
-// internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
-// The scaffold evolution CONTROL PLANE — the drivers over those primitives.
-// Plain module functions rather than backend methods, so every composition
-// root calls the same drivers and GEPA is runnable from the CLI.
+// GEPA (Agrawal et al., ICLR 2026, arxiv 2507.19457)
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, shadowTrialPlan, runQueuedShadowTrials,
@@ -1982,10 +1829,7 @@ export {
   type PromptSectionLaneStep, type MeasuredSectionProposal,
 } from './evolution/control';
 
-// CONTINUAL REFINEMENT — `/refine` and the automatic evolution-debt trigger.
-// The refiner is the read-only temporary rung; every typed edit it proposes is
-// routed to the authority that already owns that artifact, and only those
-// authorities apply anything.
+// Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
   REFINEMENT_DISPOSITIONS, REFINEMENT_EDIT_KINDS, REFINEMENT_SCOPES,
   REFINEMENT_STAGES, REFINEMENT_TRIGGERS, RefinementProposalSchema,
@@ -2013,7 +1857,6 @@ export {
   runGepa, runScaffoldGepa, runSectionGepa,
   PROMPT_SECTION_TARGETS, findPromptSectionTarget,
   DEFAULT_GEPA_BUDGET,
-  // SQL persistence — needed by the orchestrator to create tables + run.
   initGepaTables, startGepaRun, finishGepaRun,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
 } from './evolution/gepa/index';
@@ -2028,21 +1871,14 @@ export type {
   GepaParetoEntry,
 } from './evolution/gepa/index';
 
-// Evolved prompt sections. A backend needs two things: the promoted wording to
-// hand `buildSystemPromptSync` as `sectionOverrides`, and the type of that map.
-// Everything else — the gates, the trial ledger, the archive — is reached
-// through the control-plane drivers above, which is where the discipline lives.
+// Evolved prompt sections
 export {
   activePromptSectionOverrides, firstPendingPromptSection,
 } from './prompting/section-store';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
-// ── Layer gate ──
-// Deterministic, no-LLM per-layer regression scoring over the turn pipeline.
-// The tier between the structural scaffold gates and the LLM judge: it gives a
-// self-change a per-layer effect size instead of one aggregate that a single
-// user's traffic can never resolve. Uncovered layers report null, never 100%.
+// Layer gate
 export {
   LAYERS, FAULTS, LOCKED_BASELINE,
   LOCALIZATION_OWN_MIN_PP, LOCALIZATION_OTHER_MAX_PP,
@@ -2056,11 +1892,7 @@ export type {
   Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
 } from './layergate/index';
 
-// Backend conformance gate — the manifest of which composition root wires
-// which capability (or why deliberately not), plus the comparator the
-// per-backend harnesses run their observed surfaces through. Kills the
-// "X never worked on Y backend" class: a forgotten wire cannot look like a
-// design decision.
+// Backend conformance gate
 export {
   BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_PRODUCERS, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
   compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,
@@ -2072,11 +1904,7 @@ export type {
   ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
 } from './conformance/index';
 
-// ── Read models ──
-// The folds an operator surface asks for: what the workspace is, what a run
-// did, what changed on disk, what work is detached, what the knobs are set to.
-// Every one reads storage the agent already owns, so none of them is
-// backend-shaped — a backend supplies its transport and nothing else.
+// Read models
 export {
   classifyEvolutionType, getRunTimeline, runEventToSpan, safeJsonParse, toolKindFor,
   RUN_TIMELINE_DEFAULT, RUN_TIMELINE_MAX,
@@ -2084,15 +1912,10 @@ export {
 
 export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline';
 
-// The one bound a caller-supplied row count passes through before it reaches
-// SQL. Exported because the CLI's local read models bind their own `LIMIT` and
-// need the same policy as their cloud peers.
+// The one bound a caller-supplied row count passes before SQL; CLI read models import it.
 export { boundedInt } from './utils/bounds';
 
-// The pace every durable recovery lane retries at — the notice carrier, the
-// maintenance tick's re-arm and the job runner's deferral. Exported because two
-// of those three live in the backends, and a second copy of the curve is the
-// drift this export exists to prevent.
+// The retry curve of every durable recovery lane; backends import it, never copy it.
 export { recoveryBackoffMs } from './utils/recovery-backoff';
 
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs';
@@ -2172,15 +1995,7 @@ export type {
   RecordCellSummary, RecordObjectiveSummary,
 } from './read-models/exploration-records';
 
-// The store's own digest handles, on the surface because they are what an RPC's
-// request carries: a surface holds the opaque pair and passes it back, and deriving
-// the type from a read's signature is how a type stops having a name.
-//
-// The WRITER is here for one reason: a leaderboard RPC can only be proven over a
-// workspace whose rows the real writer wrote, and `cf-backend`'s suite is in another
-// package. Seeding with a hand-written INSERT would test the reads against rows nothing
-// in production produces — including the identity columns, whose whole value is that the
-// writer fills them from the identity it hashed.
+// The real writer is exported so cf-backend tests seed rows production would write.
 export { initExplorationRecordsTable, recordExploration } from './strategy/records';
 
 export type {
@@ -2250,8 +2065,7 @@ export type {
   EvolutionConfigView, MctsConfigView, SetModelDeps,
 } from './read-models/config-plane';
 
-// The advisor — one severity-tagged note per turn, the rules that keep it quiet,
-// and the turn-end lane both backends call. Delivery itself is the Inbox's.
+// Advisor
 export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
@@ -2293,8 +2107,7 @@ export {
 
 export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views';
 
-// Profile catalogs — tier/role configuration from an authority, resolved once
-// per turn into the frozen profile the turn runs under.
+// Profile catalogs
 export {
   TIER_IDS, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
@@ -2330,8 +2143,6 @@ export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './strategy/effort
 
 export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 
-// Rendered from the preset table in the same module, so a surface reading this cannot
-// describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 
 export { fmtPct, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';

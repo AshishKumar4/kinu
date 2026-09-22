@@ -1,8 +1,5 @@
-// The chunked file-transfer seam behind the files HTTP route: an actor-side
-// upload that assembles ordered chunks and a download buffer that serves
-// ranges from one plane read. No single chunk ever approaches the catalogued
-// RPC payload ceiling, and nothing here trusts a caller-supplied offset or
-// length.
+// Chunked file transfer behind the files route: no chunk approaches the catalogued RPC payload ceiling,
+// and no caller-supplied offset or length is trusted.
 import { describe, expect, test } from "bun:test";
 import { present } from "@kinu.run/test-utils";
 import {
@@ -12,9 +9,7 @@ import {
 
 const MiB = 1024 * 1024;
 
-/** One workspace executor whose file view records what it is given, plus how
- *  many times its bytes were actually read — the number a multi-range
- *  download must hold at one. */
+/** A workspace executor recording what it is given and how many times its bytes were read. */
 function makePlane(seed: Record<string, Uint8Array> = {}) {
   const files = new Map<string, Uint8Array>(Object.entries(seed));
   const revisions = new Map<string, number>(Object.keys(seed).map((path) => [path, 1]));

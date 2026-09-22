@@ -1,15 +1,5 @@
-// Provider contract tests — verify each provider sends the right HTTP shape.
-//
-// What we assert per provider:
-//   1. URL (base path + endpoint)
-//   2. Auth header (Authorization: Bearer vs x-api-key)
-//   3. Special headers (originator/User-Agent/X-Title/anthropic-version/etc.)
-//
-// Strategy: build the provider's LanguageModel with a mocked fetch + an
-// inline AuthResolver. Call generateText() through the AI SDK, inspect what
-// was sent. The AI SDK's request shape is implementation detail of the SDK,
-// so we only assert on the things THE PROVIDER controls (URL, headers,
-// auth scheme).
+// Provider contract: each provider's URL, auth scheme and special headers, via a mocked fetch. The SDK's
+// request body is its own detail, so only what the provider controls is asserted.
 import { describe, test, expect } from 'bun:test';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { normalizeCodexResponsesRequest } from '../src/providers/codex';
@@ -55,18 +45,11 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   };
 }
 
-/**
- * Drive one completion through the SDK. The mock bodies are complete, so this
- * is awaited rather than absorbed: a provider that sends the right request and
- * then cannot read the answer back fails here instead of passing every
- * assertion below.
- */
+/** Drive one completion, awaited, so a provider that cannot read the answer back fails here. */
 async function call(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
   const { text } = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
   expect(text).toBe('ok');
 }
-
-// ── OpenAI direct ──────────────────────────────────────────────────────
 
 describe('OpenAI provider contract', () => {
   test('sends Authorization: Bearer <key> to api.openai.com', async () => {
@@ -94,9 +77,7 @@ describe('OpenAI provider contract', () => {
     const deps = makeDeps({}, mock.fetch);
     const provider = createOpenAIProvider();
     const model = provider.createModel('gpt-5.5', deps);
-    // The 401 is the assertion, not an inconvenience: a provider that silently
-    // returned an empty completion here would send an uncredentialed request
-    // the moment the short-circuit regressed.
+    // The 401 is the assertion: an empty completion here would hide an uncredentialed request.
     await expect(call(model)).rejects.toThrow();
     expect(mock.requests.length).toBe(0);
   });
@@ -123,8 +104,6 @@ describe('OpenAI provider contract', () => {
     expect(calls).toBe(2);
   });
 });
-
-// ── OpenRouter ─────────────────────────────────────────────────────────
 
 describe('OpenRouter provider contract', () => {
   test('sends Bearer + HTTP-Referer + X-Title to openrouter.ai/api/v1', async () => {
@@ -153,8 +132,6 @@ describe('OpenRouter provider contract', () => {
   });
 });
 
-// ── OpenAI-compatible ─────────────────────────────────────────────────
-
 describe('OpenAI-compat provider contract', () => {
   test('rewrites placeholder URL to credential.baseURL', async () => {
     const mock = createMockFetch([
@@ -181,8 +158,6 @@ describe('OpenAI-compat provider contract', () => {
   });
 });
 
-// ── Anthropic direct ──────────────────────────────────────────────────
-
 describe('Anthropic provider contract', () => {
   test('sends x-api-key + anthropic-version to api.anthropic.com', async () => {
     const mock = createMockFetch([
@@ -206,8 +181,6 @@ describe('Anthropic provider contract', () => {
     expect(req.headers['anthropic-version']).toBe('2023-06-01');
   });
 });
-
-// ── Codex via ChatGPT subscription ────────────────────────────────────
 
 describe('Codex provider contract', () => {
   test('attaches every WAF-bypass header returned by getAuth', async () => {
@@ -334,9 +307,8 @@ describe('Codex provider contract', () => {
   });
 
   test('a refresh the resolver refuses up front surfaces as the named remedy', async () => {
-    // The local store's shape: its own proactive refresh hit invalid_grant and
-    // it throws out of getAuth BEFORE any request exists. The user-visible
-    // answer must be the reconnection remedy, not a raw thrown chain.
+    // The local store's refresh hit invalid_grant and throws from getAuth before any request; the answer is the
+    // reconnect remedy.
     let wireCalls = 0;
 
     const deps: ProviderDeps = {
@@ -392,8 +364,7 @@ describe('Codex provider contract', () => {
     }
 
     expect(failure).toContain('Your ChatGPT login is no longer valid');
-    // The bare upstream word is what the owner was shown for the Cloudflare
-    // credential; it must not survive here either.
+    // The bare upstream word must not survive here either.
     expect(failure).not.toMatch(/(^|\W)Unauthorized(\W|$)/);
   });
 
@@ -409,8 +380,6 @@ describe('Codex provider contract', () => {
     expect(mock.requests.length).toBe(0);
   });
 });
-
-// ── Codex OAuth client ────────────────────────────────────────────────
 
 describe('Codex OAuth client', () => {
   test('a rejected refresh token surfaces as a typed invalid_grant error', async () => {
@@ -449,8 +418,6 @@ describe('Codex OAuth client', () => {
     throw new Error('expected OAuthTokenError');
   });
 });
-
-// ── Catalog caches keyed by credential ────────────────────────────────
 
 describe('listModels cache invalidation on credential change', () => {
   interface SwappableDeps {

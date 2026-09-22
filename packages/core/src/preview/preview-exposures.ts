@@ -1,81 +1,17 @@
-/**
- * The sandbox previews this deployment has published, as state the WORKER owns.
- *
- * ── Why this exists ──────────────────────────────────────────────
- * A sandbox preview hostname is `<port>-<sandbox>-<token>.<suffix>`, and the
- * Sandbox SDK's `proxyToSandbox` resolves the sandbox id into a Durable Object
- * stub — `getContainer` is `idFromName` then `get`, which is the act that
- * CREATES one — before the port token is looked at; the token travels onward as
- * a header for the object to validate. The preview host is also the first step
- * of the route table, ahead of authentication. So without a check here, one
- * anonymous GET to a guessed hostname instantiates a `KinuSandbox` object and
- * its SQLite (Devbox writes storage from its constructor's init gate), and each
- * distinct guess creates another.
- *
- * The check has to prove the label names an exposure THIS deployment published,
- * and it has to do so without touching any per-name Durable Object — asking the
- * object whether it minted the label would create exactly the object the
- * question is about. So the proof reads a projection: one KV record per exposed
- * port, written when the port is exposed, deleted when it is unexposed, and
- * cut off wholesale by a watermark when the workspace is destroyed. KV has no
- * object behind a key, so a lookup for a label nobody minted allocates nothing.
- *
- * ── Why the token is hashed and not stored ───────────────────────
- * The token in the hostname IS the preview's credential — the same value the
- * container object compares. Keeping only its SHA-256 means a dump of this
- * namespace hands out no working preview URL, which is the rule `auth/store.ts`
- * already applies to session tokens.
- *
- * ── What this is NOT ─────────────────────────────────────────────
- * Not a second authority over previews. The container object still validates
- * the port token and its runtime activation on every forward, and still answers
- * 404/410 when its own state disagrees. This record only decides whether the
- * SDK is handed the request at all, which is the only decision that has to be
- * made before an object exists.
- *
- * ── Residuals, stated ────────────────────────────────────────────
- *   1. KV is eventually consistent. A preview is published before the URL is
- *      handed back, so the write precedes any click; a read in a colo that has
- *      never seen the key still crosses to central storage, and Cloudflare
- *      bounds that at 60 seconds. The failure direction is a refusal, never an
- *      admission, and a reload resolves it.
- *   2. One record per (sandbox, port) rather than one per sandbox: distinct keys
- *      cannot lose each other's writes, and KV's same-key write limit (one per
- *      second) is never reached by exposing several ports at once.
- *   3. A record lives {@link PREVIEW_EXPOSURE_TTL_MS} and is refreshed whenever
- *      an authenticated path observes the port as still exposed
- *      (`getExposedPorts`, or a re-expose). An exposure nothing has observed
- *      for that long stops resolving at the edge until the owner lists or
- *      re-exposes the port. The refusal is the same one a forged label gets, so
- *      it is not an existence oracle either.
- */
+// KV projection of published sandbox previews: `proxyToSandbox` creates the Durable Object before checking the
+// token, so the edge must prove the label was published without touching any per-name object. Tokens stored hashed.
 
 import * as v from 'valibot';
 import { timingSafeEqual } from '../utils/crypto';
 import { sha256Hex } from '../safety/argument-digest';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 
-/**
- * How long a published exposure resolves without being observed again.
- *
- * Thirty days is longer than any container lifetime — a recycle re-exposes each
- * port on its stored token, so a live preview is re-observed long before this —
- * and short enough that an abandoned record cannot outlive its workspace by a
- * season. It is a bound on the projection's staleness, not a rate limit.
- *
- * `SESSION_TTL_MS` (cf-backend auth/store.ts) shares the number, not the
- * policy: a session's life is bounded for credential hygiene, an exposure's
- * for projection staleness. Neither bounds the other, so the two are stated
- * rather than shared.
- */
+/** Staleness bound, longer than any container lifetime; equal to `SESSION_TTL_MS` by coincidence, not policy. */
 const PREVIEW_EXPOSURE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** Half a life: past this, an observation refreshes the record, so a preview in
- *  use is never refused for age and a busy Ports panel writes ~nothing. */
 const REFRESH_AFTER_MS = PREVIEW_EXPOSURE_TTL_MS / 2;
 
 const EXPOSURE_SCHEMA = v.object({
-  /** SHA-256 of the port token this preview URL carries. */
   tokenHash: v.string(),
   publishedAt: v.number(),
 });
@@ -90,25 +26,13 @@ function revocationKey(sandboxId: string): string {
   return `sandbox-preview-revoked:${sandboxId.toLowerCase()}`;
 }
 
-/** The label a preview request carries, as the edge parsed it. */
 export interface SandboxPreviewClaim {
   readonly sandboxId: string;
   readonly port: number;
   readonly token: string;
 }
 
-/**
- * Whether this deployment published the exposure a preview hostname claims.
- *
- * Both reads are issued together: the record proves the exposure, the watermark
- * withdraws every record of a workspace that has since been destroyed.
- *
- * A record stamped in the SAME millisecond as the watermark reads as revoked.
- * That is the fail-closed side of the tie: an exposure published as its
- * workspace was being destroyed must not survive the destruction, and the cost
- * is that a workspace re-exposing a port inside the same millisecond has to
- * publish again.
- */
+/** A record stamped in the same millisecond as the revocation watermark reads as revoked (fail closed). */
 export async function sandboxPreviewExposed(
   kv: KvStore,
   claim: SandboxPreviewClaim,
@@ -125,35 +49,15 @@ export async function sandboxPreviewExposed(
   return timingSafeEqual(exposure.tokenHash, await sha256Hex(claim.token));
 }
 
-/**
- * The writer for one container's exposures.
- *
- * Held by the executor lane the workspace's own Durable Object runs, so every
- * write is on an authenticated path: nothing reachable from the preview host
- * publishes anything.
- *
- * Every write consults the watermark, because the lane outlives the moment its
- * workspace is destroyed: `destroyAgent` writes the watermark and then spends
- * several awaits tearing the container object down, and a Ports listing or an
- * expose whose container call was already in flight runs in those gaps on the
- * same object. A record either would put back proves an exposure whose object
- * is gone, and the SDK's forward would create an empty one to answer it.
- */
+/** Authenticated-path writer. Every write checks the watermark: in-flight calls during `destroyAgent` must
+ *  not restore a record whose object is gone. */
 export interface SandboxPreviewExposures {
-  /** Record a port as exposed on `token`, replacing whatever it held. Throws
-   *  once this writer's workspace has been destroyed: the URL the caller is
-   *  about to hand out is one the edge refuses. */
+  /** Throws once this writer's workspace has been destroyed. */
   publish(port: number, token: string): Promise<void>;
-  /** Re-observe an exposure the container still reports, writing only when the
-   *  record is missing or halfway through its life, and never when the
-   *  watermark has withdrawn it. */
+  /** Writes only when missing or past half-life, never under a withdrawing watermark. */
   refresh(port: number, token: string): Promise<void>;
-  /** Withdraw one port. The edge refuses it from the next read. */
   withdraw(port: number): Promise<void>;
-  /** Withdraw every exposure of this container, without enumerating them: the
-   *  watermark outranks every record published before now. For workspace
-   *  destruction, where the object's own token store is about to be deleted and
-   *  a surviving record would let a held URL re-create it. */
+  /** Watermark outranking every earlier record; used on workspace destruction. */
   revokeAll(): Promise<void>;
 }
 
@@ -161,12 +65,7 @@ export function sandboxPreviewExposures(
   kv: KvStore,
   sandboxId: string,
 ): SandboxPreviewExposures {
-  // When this writer came to be. A revocation stamped at or after it was
-  // written by this writer's own workspace being destroyed, since only that
-  // workspace's object writes one: every later write from here belongs to an
-  // incarnation that no longer exists. A recreated same-name workspace builds a
-  // new writer after the destroy finished, so it publishes again. The tie is
-  // fail-closed, the same side `sandboxPreviewExposed` takes.
+  // A revocation at or after `born` means this writer's own workspace was destroyed (tie fails closed).
   const born = Date.now();
 
   const readRevocation = (): Promise<{ revokedBefore: number } | null> =>
@@ -198,10 +97,7 @@ export function sandboxPreviewExposures(
         readRevocation(),
       ]);
 
-      // Under a watermark, the only record worth keeping alive is one
-      // published after it. A withdrawn record, or none at all, means the
-      // exposure the container reports is not one this projection vouches
-      // for, and re-observing it must not make it so.
+      // Under a watermark, re-observation must not vouch for a withdrawn or missing record.
       if (revocation !== null
         && (revocation.revokedBefore >= born
           || held === null

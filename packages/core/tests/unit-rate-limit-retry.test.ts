@@ -4,15 +4,8 @@ import { ProviderPacer } from '../src/providers/pacing';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 
 /**
- * The layer under test, on a clock the suite owns.
- *
- * THE PACER SHARES THAT CLOCK, and it has to. The layer now declares each wait
- * into the isolate's provider pacer so siblings honour it, and the pacer holds
- * the next request until the declared deadline passes — measured on the pacer's
- * own clock. Left on the real one, every wait this suite fakes would be taken for
- * real on the way back in, which is a genuine seam rather than a test detail: a
- * caller controlling time must control all of it, or the two clocks disagree and
- * the layer waits twice.
+ * The layer under test on a clock the suite owns. The pacer must share it: it holds requests until declared
+ * deadlines pass on its own clock, so two clocks would make the layer wait twice.
  */
 function retryHarness(
   responses: Response[],
@@ -35,8 +28,7 @@ function retryHarness(
     now,
     random: () => 0.5,
     sleep,
-    // Its own pacer, not the isolate's: a suite that declared waits into the
-    // shared one would leave cooldowns behind for whatever ran next.
+    // Its own pacer: declaring waits into the isolate's would leave cooldowns for later tests.
     pacer: new ProviderPacer({ now, sleep: async (ms) => { nowMs += ms; } }),
     warn: (message) => warnings.push(message),
     ...overrides,

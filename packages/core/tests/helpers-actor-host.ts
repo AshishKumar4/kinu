@@ -1,25 +1,5 @@
-/**
- * A REAL hosted actor per head and per node, over the caller's ONE workspace
- * database.
- *
- * A head's and a node's turn is a CLAIMED actor turn on the common
- * `ActorSession` (open-41): the session pins the program, admits the durable
- * claim naming that program's version and source digest, records the exact
- * array each step consumed, and owns the abort. So a fixture cannot hand a bare
- * `AgentRuntime` to `runHeadInference` or to a node's own run — it has to
- * supply the actor those turns belong to.
- *
- * This is that fixture, and it is deliberately the PRODUCTION path: the
- * production directory issues the actor, the production `createActorHost` binds
- * its handle, stores, runtime and session, the production `seedActorLoop` seeds
- * its loop pointer, and every one of them lands in the SAME database the
- * caller's runtime already holds. Nothing here is mocked, because a mocked
- * session would let a head's turn pass every assertion while writing no claim.
- *
- * ONE helper rather than a copy per suite: fifteen suites need a hosted actor,
- * they all need the same one, and fifteen copies of an orchestration seam is
- * fifteen places for the shape to drift from the host's.
- */
+/** A real hosted actor per head and node over the caller's one workspace database, via the production
+ *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
 import { KinuError } from '../src/obs/error';
@@ -42,9 +22,7 @@ import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrat
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
 
-/** The one role a hosted fixture actor resolves under. No `allowedTools`, so
- *  the role never narrows the surface a suite assembled — a suite testing the
- *  narrowing declares its own catalog. */
+/** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
   description: 'Runs one hosted turn under test.',
   instructions: 'Answer the task.',
@@ -65,79 +43,48 @@ function envelope(): ProfileCatalogEnvelope {
 
 const ENVELOPE = envelope();
 
-/** Every hosted actor of one workspace, and the seats their turns run on. */
 export interface HostedSeats {
   readonly host: ActorHost;
   readonly directory: WorkspaceActorDirectory;
-  /** Every event a hosted actor's turn published — the fixture's client. */
+  /** Every event a hosted actor's turn published. */
   readonly broadcasts: readonly BroadcastEvent[];
-  /** Every turn a hosted actor's orchestration asked the host to inject. */
   readonly enqueued: readonly ProgrammaticTurn[];
-  /**
-   * The seat ONE logical actor's turn runs on, by name. Idempotent per name, so
-   * a node re-hosted mid-run gets the actor it already had rather than a second
-   * one wearing its id.
-   */
+  /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
   seat(name: string, kind: Exclude<WorkspaceActor['kind'], 'main' | 'branch'>): Promise<HostedNodeSeat>;
-  /** `NodeAgentDeps.hostNode` / `SwarmRunDeps.hostNode` over these seats: one
-   *  actor per node id, all of them over the one database. */
+  /** `hostNode` over these seats: one actor per node id, all over the one database. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
 }
 
-/**
- * Host logical actors as CHILDREN of the caller's own runtime, over the caller's
- * own database.
- *
- * `db` as well as `rt` because the retirement purge reads its table list off
- * the live schema and therefore needs the positional SQL port, which
- * `AgentRuntime.storage` does not carry.
- */
+/** Host logical actors as children of the caller's runtime. `db` is needed because the retirement
+ *  purge reads the live schema through the positional SQL port, which `AgentRuntime.storage` lacks. */
 export function hostedSeatsOver(input: {
   readonly rt: AgentRuntime;
   readonly db: Database;
   /** The activation every seat's claims are attributed to. */
   readonly runId?: string;
-  /**
-   * Build every seat's engine with auto-evolution ON — the shape both backends
-   * host an actor under (`cf-backend/src/actor-hosting.ts`,
-   * `cli-backend/src/agent-host/host.ts`). Off by default: most suites want the
-   * ledgers the orchestrator reads and none of the writes an enabled engine
-   * makes, and a suite asserting what a hosted actor's turn DOES record must say
-   * so, because that claim is only worth making against the production shape.
-   */
+  /** Build every seat's engine with auto-evolution on, as both backends host an actor. Off by default:
+   *  most suites want the ledgers without an enabled engine's writes. */
   readonly autoEvolve?: boolean;
 }): HostedSeats {
   const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
   const { sql, execRaw } = rt.storage;
   const exec = makeSqlExec(db);
-  // Idempotent, and needed either way: `createTestRuntime` seeds the actor
-  // directory but not the claim ledger a hosted turn writes into.
+  // `createTestRuntime` seeds the actor directory but not the claim ledger.
   initWorkspaceSchema({ execRaw, sql, exec });
   initEventsHubTables(exec);
 
   const directory = new WorkspaceActorDirectory(sql, { workspaceId: rt.actor.workspaceId, ownerUserId: '' });
-  // The caller's main actor, re-issued by THIS directory. A directory only
-  // accepts handles it minted itself, so passing `rt.actor` — bound by whatever
-  // directory `createTestRuntime` built — is refused as belonging to another
-  // directory. Same row, same workspace, this instance's binding.
+  // Re-issued by this directory: a directory refuses handles minted by another.
   const parent = directory.main();
   const broadcasts: BroadcastEvent[] = [];
   const enqueued: ProgrammaticTurn[] = [];
-  /** Drain timers the orchestration scheduled. Held rather than fired: a
-   *  fixture that ran them would start work no assertion here asked for. */
+  /** Timers the orchestration scheduled, held rather than fired. */
   const timers: Array<{ readonly fn: () => Promise<void>; readonly ms: number }> = [];
   const seats = new Map<string, HostedNodeSeat>();
 
-  /**
-   * The hosted actor's runtime: the caller's, re-addressed.
-   *
-   * The same database, the same file plane, the same executor and model — one
-   * physical workspace is the whole claim. What changes is the handle every
-   * store re-validates and the SCAFFOLD path, which is per actor because
-   * `seedActorLoop` writes this actor's own version file and two actors sharing
-   * one path would each read the other's program.
-   */
+  /** The caller's runtime, re-addressed: same database and executor, but its own handle and SCAFFOLD path,
+   *  since `seedActorLoop` writes a per-actor version file. */
   const runtimeFor = (bound: BoundActor): AgentRuntime => {
     const identity: Identity = {
       id: bound.record.actorId,
@@ -152,7 +99,6 @@ export function hostedSeatsOver(input: {
   };
 
   const orchestrationFor = (bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps => ({
-    // This actor's OWN client, queue and timers — never the caller's.
     host: {
       broadcast: (event) => { broadcasts.push(event); },
       enqueueTurn: async (turn) => {
@@ -163,13 +109,9 @@ export function hostedSeatsOver(input: {
       turnInFlight: () => host.hosted(bound.reference)?.session.inFlight ?? false,
       setTimer: (fn, ms) => { timers.push({ fn, ms }); },
     },
-    // The REAL engine over this actor's runtime. Auto-evolution off unless the
-    // suite opted in above: a hosted head or node under test then records no
-    // evolution state, and every ledger the orchestrator reads is the one the
-    // engine owns.
+    // The real engine; auto-evolution off unless the suite opted in.
     engine: new EvolutionEngine(bound.runtime, bound.stores.history, { enabled: input.autoEvolve === true }),
-    // This actor's OWN log, bound to the handle the host bound: a child that
-    // published into the root's rows would be one actor's turn moving another's.
+    // This actor's own log: publishing into the root's rows would move another actor's turn.
     eventLog: new EventLog(exec, bound.handle),
   });
 
@@ -187,14 +129,10 @@ export function hostedSeatsOver(input: {
     directory,
     installedBuild: 'test-build',
     runtimeFor,
-    // BUILTIN, so a hosted head or node runs the shared chat loop its suite
-    // scripts a model for. `inherit` would copy the parent's source in as this
-    // actor's v1 and select the SCAFFOLD arm, which is a different program and
-    // a different suite's subject.
+    // BUILTIN: `inherit` would copy the parent's source in as v1 and select the SCAFFOLD arm.
     loopFor: () => ({ origin: { kind: 'builtin' }, parent: null }),
     orchestrationFor,
-    // This fixture publishes no run events, which is the honest answer rather
-    // than a default: a suite asserting context-edit audit rows binds its own.
+    // No run events published; a suite asserting context-edit audit rows binds its own.
     contextEvents: () => null,
   });
 
@@ -206,10 +144,8 @@ export function hostedSeatsOver(input: {
 
     if (known) return known;
 
-    // A head lives in the EXPLORATION address space, which the
-    // directory enforces for every non-subordinate kind — a raw node id is
-    // refused. The creation id is the caller's name, so re-seating one node is
-    // the same admitted creation rather than a second actor.
+    // A head lives in the exploration address space, so a raw node id is refused; the creation id is
+    // the caller's name, so re-seating a node is the same admitted creation.
     const handle = directory.create({
       parent,
       name: kind === 'subordinate' ? name : explorationActorKey(name),
@@ -225,8 +161,7 @@ export function hostedSeatsOver(input: {
     const seated: HostedNodeSeat = {
       actor,
       runId,
-      // The REAL resolver over a real catalog envelope, so the role narrowing
-      // every full kind now runs under is actually applied rather than assumed.
+      // The real resolver over a real catalog envelope, so role narrowing is applied, not assumed.
       profile: async ({ availableTools, workMode }) => ({
         profile: resolveTurnProfile({
           envelope: ENVELOPE, provider: PROVIDER, roleId: 'tester',
@@ -234,8 +169,6 @@ export function hostedSeatsOver(input: {
         }),
         inputs: { envelope: ENVELOPE, provider: PROVIDER },
       }),
-      // No live block: this actor holds no background job, task or approval, so
-      // there is nothing for a step to render. Stated, not defaulted.
       dynamic: () => ({}),
     };
 
@@ -254,13 +187,7 @@ export function hostedSeatsOver(input: {
   };
 }
 
-/**
- * A `hostNode` for a fixture that genuinely runs NO node.
- *
- * REFUSES rather than answers, and that is the point: a stub seat would let a
- * suite that quietly grew a node run one under a fabricated actor, and the
- * refusal names which fixture was asked instead.
- */
+/** A `hostNode` for a fixture that runs no node: refuses, naming the fixture, rather than seating a fabricated actor. */
 export function refuseHostNode(reason: string): (node: NodeIdentity) => Promise<HostedNodeSeat> {
   return (node) => {
     throw new KinuError('unavailable', `${reason} (asked for node ${node.nodeId})`);

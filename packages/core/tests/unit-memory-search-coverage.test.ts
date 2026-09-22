@@ -24,17 +24,14 @@ const emptyIndex: VectorStore = {
   search: async () => [],
 };
 
-/** Both semantic-index postures the tool ships under: none wired (the CLI
- *  path), an unwired-capable index (noop), a wired-but-down one, and a live
- *  empty one that forces the RRF branch. */
+/** The semantic-index postures the tool ships under: none (CLI), noop, wired-but-down, and live-empty (forces RRF). */
 const BACKENDS: ReadonlyArray<readonly [string, VectorStore | null]> = [
   ['cli', null],
   ['cf unavailable', unavailableIndex],
   ['cf live empty', emptyIndex],
 ];
 
-/** A note index with one hit: the query `needle` answers one chunk carrying
- *  `snippet`, and every other query answers nothing. */
+/** A note index where the query `needle` answers one chunk carrying `snippet`; other queries answer nothing. */
 function needleIndex(snippet: string): AgentRuntime['memory']['search'] {
   return async (query) => query === 'needle'
     ? [{ path: 'memory.md', startLine: 1, endLine: 1, score: 1, snippet }]
@@ -87,7 +84,7 @@ describe('memory search coverage across backend capabilities', () => {
       const native = toolExecute<MemoryToolInput, string>(
         buildBuiltinTools({ rt, vectorStore, facts, history }).memory);
 
-      // The first-run defect: remember landed, search never saw it.
+      // remember landed but search never saw it: the failure this guards.
       await native({ action: 'remember', key: 'every-tool probe', value: 'ok' });
 
       const result = await native({ action: 'search', query: 'every-tool probe' });
@@ -171,8 +168,7 @@ describe('memory search coverage across backend capabilities', () => {
   }
 
   test('no FactsStore: the lexical-only render is byte-identical to before', async () => {
-    // The pre-change path pinned verbatim: no facts wired means search still
-    // answers from the note index alone, with the same header and row shape.
+    // No facts wired: search answers from the note index alone, same header and row shape.
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
     rt.memory.search = needleIndex('needle');

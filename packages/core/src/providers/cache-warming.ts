@@ -1,51 +1,6 @@
 /**
- * Prompt-cache warming — keeping a SHORT provider cache entry alive across an
- * idle gap by re-sending the request that wrote it, with no completion.
- *
- * WHY IT EXISTS. Anthropic's default entry lives five minutes. An owner who
- * reads the answer, thinks, and replies eight minutes later pays the whole
- * prefix again at the cache-WRITE rate; the alternative sold by the vendor for
- * that shape is the 1-hour entry, which costs 2x per write on every turn
- * whether or not a pause follows. The measured third option is to re-send the
- * last request with `max_tokens: 0` before the entry expires: "Keeping the
- * 5-minute cache warm cost 13% to 20% less per session than the 1-hour cache
- * whenever pauses ran for minutes; only with pauses near 45 minutes did the
- * 1-hour cache win, by about 12 cents a session."
- * (docs/research/harness/anthropic-sources.md §2, read 2026-09-13.)
- *
- * WHAT THE VENDOR REQUIRES of such a request, verbatim from the same source:
- * "send the previous request again with `max_tokens` set to 0 within 4 minutes
- * of the previous request's start, and every 4 minutes after that … Count from
- * the request's start, not its response's end … Do not change a byte of the
- * prefix, and do not use `max_tokens: 1` … Re-send the request's headers as
- * well as its body." And from the pre-warming rules (§23): "Use the same
- * thinking configuration and `output_config.effort` as your follow-up requests
- * too: those values are rendered into the prompt", plus "A pre-warm request
- * incurs a cache write charge if the prefix is not already cached … Zero output
- * tokens are billed."
- *
- * WHOSE RULE THIS IS. The eligibility and the cadence mirror oh-my-pi's
- * shipped implementation (`packages/ai/src/stream.ts`, read 2026-09-17):
- * `supportsAnthropicCacheRefresh` (:1292) admits only `api ===
- * 'anthropic-messages'` on `provider === 'anthropic'` with a non-pi-native
- * transport and an official endpoint; `:1435` additionally requires the
- * resolved retention to be `short`; `ANTHROPIC_CACHE_TTL_MS`,
- * `ANTHROPIC_CACHE_REFRESH_LEAD_MS` and `ANTHROPIC_CACHE_REFRESH_LIMIT`
- * (:1209-1211) are the five minutes, the fifteen-second lead and the three
- * refreshes below; `:1426` cancels a pending refresh the moment a real request
- * starts; `:1393` continues the chain only while the answer read the cache and
- * wrote none.
- *
- * ONE DECLARED DIVERGENCE from that source, and it is the owner-facing rule:
- * oh-my-pi ARMS on `cacheRead + cacheWrite > 0` (:1462) and only CONTINUES on
- * read-and-no-write, so its first refresh can follow a turn that merely wrote
- * the entry. Here one predicate governs both — a warm is armed only when the
- * last real request read the cache and wrote nothing — so a workspace whose
- * prefix is still being rewritten every turn never starts a refresh chain it
- * would only pay cache writes for.
- *
- * NO MODEL LIST. Eligibility is the provider, the endpoint, the retention and
- * what the last answer reported. Nothing here reads a price or a model SKU.
+ * Prompt-cache warming: re-send the last request with `max_tokens: 0` before Anthropic's five-minute entry
+ * expires (docs/research/harness/anthropic-sources.md §2). Armed only after a read with no write.
  */
 
 import type { ModelSpec, CacheRetention } from './types';
@@ -57,41 +12,23 @@ import { toKinuError } from '../obs/index';
 import * as v from 'valibot';
 import { isJsonObject, JsonObjectSchema, parseJsonObject, type JsonObject } from '../utils/json';
 
-/** The provider id whose endpoint, wire API and cache semantics this policy is
- *  about. A Claude model reached through a gateway (`ai-gateway`,
- *  `my-gateway`, `openrouter`, an `openai-compat` route) is NOT it: the entry
- *  belongs to whatever the gateway did with the prefix, and the 5-minute
- *  expiry this refreshes is Anthropic's own. `providers/anthropic.ts` builds
- *  the model against the official base URL with no redirect, which is what
- *  makes the id sufficient here. */
+/** Only the direct provider: through a gateway the cache entry is not Anthropic's to refresh. */
 const WARMABLE_PROVIDER = 'anthropic';
 
 /** Anthropic's default (short) entry lifetime. */
 const CACHE_WARM_TTL_MS = 5 * 60_000;
 
-/** How far before expiry a refresh is sent. Fifteen seconds is oh-my-pi's
- *  lead; the vendor's own guidance is more conservative still (every four
- *  minutes), and the difference is one refresh's worth of margin on a request
- *  that takes a second to reach the API. */
+/** Lead before expiry; the vendor's guidance (every four minutes) is more conservative. */
 const CACHE_WARM_LEAD_MS = 15_000;
 
-/** Refreshes per idle stretch. Three carries a pause to about twenty minutes
- *  and then stops: past that the workspace is not pausing, it is closed, and
- *  an unbounded chain would keep a prefix alive for a session nobody returns
- *  to. A real request re-arms from zero. */
+/** Refreshes per idle stretch (about twenty minutes); a real request re-arms from zero. */
 const CACHE_WARM_LIMIT = 3;
 
-/** What the vendor's pre-warm request asks for, and the value it explicitly
- *  rules out: "do not use `max_tokens: 1`". Zero output tokens are billed. */
+/** The vendor rules out `max_tokens: 1`; zero output tokens are billed. */
 const CACHE_WARM_MAX_TOKENS = 0;
 
-/** The last real answer, as the policy reads it. `requestSentAt` is when the
- *  request that earned this answer was SENT, not when the answer arrived:
- *  "Count from the request's start, not its response's end."
- *
- *  `cacheRead`/`cacheWrite` keep {@link Usage}'s absence contract — an absent
- *  field is a provider that said nothing, which this reads as no evidence of a
- *  cache read and therefore no warm. */
+/** The last real answer. `requestSentAt` is when the request was sent, not answered;
+ *  absent cache fields are no evidence of a read, so no warm. */
 interface WarmedResponse extends Pick<Usage, 'cacheRead' | 'cacheWrite'> {
   readonly requestSentAt: number;
   readonly retention: CacheRetention;
@@ -105,64 +42,31 @@ interface WarmingPlanInput {
   readonly now: number;
 }
 
-/** When the next warm is due. `at` may be at or before `now` — an obligation
- *  that came due while the object was evicted is late, not void, and the
- *  scheduler that arms it is the one place that decides how to run a past-due
- *  wake. */
+/** When the next warm is due; a past `at` is late, not void. */
 interface WarmingPlan {
   readonly at: number;
 }
 
-/**
- * When to warm this prefix, or null for "never, on this evidence".
- *
- * Pure: every refusal is a fact about the arguments, so the suite can state
- * each one (provider, retention, usage, cap) without a provider, a clock or a
- * database.
- */
+/** When to warm this prefix, or null for never on this evidence. Pure. */
 function warmingPlan(input: WarmingPlanInput): WarmingPlan | null {
   const { lastResponse: last } = input;
 
   if (input.modelSpec.provider !== WARMABLE_PROVIDER) return null;
 
-  // `long` buys an hour from the provider and needs no refresh; `none` wrote no
-  // entry at all. Only the five-minute default expires soon enough to be worth
-  // a request, and it is the only retention the TTL below describes.
+  // Only the five-minute default expires soon enough to be worth a request.
   if (last.retention !== 'short') return null;
 
   if (input.idleRefreshes >= CACHE_WARM_LIMIT) return null;
 
-  // The prefix is worth keeping only when the provider just proved it is there:
-  // a read with no write. A write means the prefix moved, so the entry this
-  // would refresh is already the wrong one, and the next real turn writes again
-  // whatever this does.
+  // Worth keeping only after a read with no write; a write means the prefix moved.
   if ((last.cacheRead ?? 0) <= 0 || (last.cacheWrite ?? 0) !== 0) return null;
 
   return { at: last.requestSentAt + CACHE_WARM_TTL_MS - CACHE_WARM_LEAD_MS };
 }
 
 /**
- * The warm request: the last request's own body, with no completion.
- *
- * The body is the provider body the SDK already sent (ai v6 hands it back on
- * every step as `StepResult.request.body`), so the prefix — tools, system,
- * messages, every `cache_control` breakpoint, `output_config.effort` — is
- * byte-identical by construction rather than by a second assembly pass that
- * could drift. Two keys change, and both are the documented pre-warm shape
- * rather than prefix bytes: `max_tokens` becomes 0, and `stream` is dropped
- * because the replay is a non-streaming request (oh-my-pi
- * `packages/ai/src/types.ts:483`, "a replay-only Anthropic request that must
- * use non-streaming `max_tokens: 0`").
- *
- * Null when the body carries an explicit thinking BUDGET: Anthropic requires
- * `max_tokens` to exceed `thinking.budget_tokens`, so zero is not a legal
- * request for one. oh-my-pi handles that case by replaying with the caller's
- * own `max_tokens` and aborting the stream at the first generated token
- * (`stream.ts:1370-1376, 1397-1401`); a non-streaming replay cannot abort, so
- * it would bill a whole thinking pass for a cache touch. Kinu's Anthropic
- * requests carry `output_config.effort` (strategy/effort.ts) and no budget, so
- * this is the guard for a body shape a future provider option could produce,
- * not a path the current one takes.
+ * The warm request: the last request's own body with `max_tokens: 0` and no `stream`, so the prefix is byte-identical.
+ * Null for an explicit thinking budget: Anthropic requires `max_tokens` above `budget_tokens`.
  */
 function warmRequestBody(body: JsonObject): JsonObject | null {
   const thinking = body.thinking;
@@ -179,15 +83,7 @@ function warmRequestBody(body: JsonObject): JsonObject | null {
   return warm;
 }
 
-/**
- * Anthropic's `usage` block, in the one normalized vocabulary.
- *
- * `input` is the CACHE-INCLUSIVE total, summed exactly as the SDK sums it
- * (@ai-sdk/anthropic dist/index.mjs:1870 — `inputTokens + cacheCreationTokens
- * + cacheReadTokens`), so a warm's hit rate is a share of the same base a
- * step's is and the two are comparable. The fields are read as reported: a
- * number the block omits stays absent rather than becoming a zero.
- */
+/** Anthropic's `usage` block normalized; `input` is cache-inclusive as the SDK sums it, omitted fields stay absent. */
 const WarmUsageSchema = v.looseObject({
   input_tokens: v.optional(v.number()),
   output_tokens: v.optional(v.number()),
@@ -217,17 +113,8 @@ export function warmUsage(usage: JsonObject): Usage {
 }
 
 /**
- * The warm obligation, durably.
- *
- * ONE row per actor, because one actor has one live prefix: the newest request
- * is the only one whose entry can still be read, so a second pending warm
- * would be a refresh of a prefix nothing will ask for again.
- *
- * `requests` is the provider-request counter the fire decision compares
- * against. It is durable for the case that motivates the whole row: a Durable
- * Object hibernates within seconds of going idle, so the object that arms a
- * warm is almost never the object that runs it, and an in-memory counter would
- * read zero in the second life and fire a warm on top of a turn in flight.
+ * The warm obligation, one row per actor. `requests` is durable because the Durable Object that arms a warm
+ * has usually hibernated before it fires, and an in-memory counter would read zero.
  */
 export function initCacheWarmTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS cache_warm (
@@ -243,8 +130,7 @@ export function initCacheWarmTable(execRaw: RawSqlExec): void {
   )`);
 }
 
-/** A warm that is due and still owed: the frozen request to re-send, and how
- *  many refreshes this idle stretch has already had. */
+/** A due warm: the frozen request and the refreshes already spent this idle stretch. */
 interface DueWarm {
   readonly modelSpec: ModelSpec;
   readonly retention: CacheRetention;
@@ -263,16 +149,8 @@ interface CacheWarmRow {
   readonly body: string | null;
 }
 
-/**
- * A stored body this large is not re-sent.
- *
- * SQLite-backed Durable Objects cap a string, BLOB or row at 2,000,000 bytes
- * (developers.cloudflare.com/durable-objects/platform/limits, read
- * 2026-09-17), and the write that would exceed it fails the turn that was
- * merely trying to arm a warm. Half the cap leaves room for the rest of the
- * row and still covers a request far larger than any this repository's
- * step-prune budget admits; a body above it arms nothing and says so.
- */
+/** Half the SQLite-backed Durable Object 2,000,000-byte row cap (developers.cloudflare.com/durable-objects/platform/limits);
+ *  a larger write would fail the arming turn. */
 const CACHE_WARM_MAX_BODY_BYTES = 1_000_000;
 
 export class CacheWarmStore {
@@ -287,17 +165,8 @@ export class CacheWarmStore {
   }
 
   /**
-   * A real provider request is starting.
-   *
-   * Bumps the counter, and NOTHING else — the counter is what voids a pending
-   * warm, which is the same collapse oh-my-pi makes when a new request finds an
-   * armed refresh (`stream.ts:1426-1428`): the request about to run reads and
-   * rewrites the prefix itself, so the warm behind it has nothing left to keep
-   * alive. Expressed as the counter rather than as a second write of `due_at`
-   * because the two would be two answers to one question, and the one that has
-   * to be right is the one read in the frame the PLATFORM woke — a wake
-   * delivered while this turn is still streaming must find the mismatch. The
-   * turn that ends re-arms from its own last request, resetting both.
+   * A real provider request is starting: bump the counter, which voids any pending warm.
+   * A counter rather than a `due_at` write, so a wake delivered mid-stream still sees the mismatch.
    */
   noteRequest(): void {
     this.actor.assertCurrent();
@@ -306,9 +175,7 @@ export class CacheWarmStore {
       ON CONFLICT(actor_id) DO UPDATE SET requests = cache_warm.requests + 1, refreshes = 0`;
   }
 
-  /** Arm the warm this turn's last request earned. Answers false when the
-   *  frozen body is too large to store (see {@link CACHE_WARM_MAX_BODY_BYTES}),
-   *  so the caller reports an unarmed warm rather than a silent one. */
+  /** Arm the warm this turn earned; false when the frozen body is too large to store. */
   arm(input: { at: number; modelSpec: ModelSpec; retention: CacheRetention; body: JsonObject }): boolean {
     this.actor.assertCurrent();
     const body = JSON.stringify(input.body);
@@ -326,16 +193,7 @@ export class CacheWarmStore {
     return true;
   }
 
-  /**
-   * When the next warm is owed, for a backend folding every durable wake into
-   * one. Null when nothing is armed — or when a real request has since voided
-   * what was.
-   *
-   * ASKS THE SAME QUESTION {@link due} ASKS, which is the rule for this chain:
-   * a fold that answered "owed" while the fire refused would arm a wake at
-   * `now` on every tick and never take the work, which is the one-second loop
-   * the orchestrator's own wake fold documents.
-   */
+  /** When the next warm is owed, or null. Must ask exactly what {@link due} asks, or the wake fold loops. */
   dueAt(): number | null {
     const row = this.row();
 
@@ -344,14 +202,7 @@ export class CacheWarmStore {
     return row.due_at;
   }
 
-  /**
-   * The warm to send now, or null.
-   *
-   * Two conditions beyond the clock, and the second is the one the counter
-   * exists for: `armed_requests` must still equal `requests`. A real request
-   * that started after the arm has read the prefix itself — and may still be
-   * streaming — so the warm is neither needed nor safe to add beside it.
-   */
+  /** The warm to send now, or null; also null once a later real request bumped `requests`. */
   due(now: number): DueWarm | null {
     const row = this.row();
 
@@ -380,8 +231,7 @@ export class CacheWarmStore {
       WHERE actor_id = ${this.actor.actorId}`;
   }
 
-  /** Stop warming this prefix, keeping the counter: the chain is over, the
-   *  actor's request history is not. */
+  /** Stop warming this prefix, keeping the counter. */
   retire(): void {
     this.actor.assertCurrent();
     void this.sql`
@@ -396,32 +246,19 @@ export interface WarmOutcome {
   readonly usage: Usage;
 }
 
-/** The backend's half of warming: where the row lives, how a wake is armed,
- *  how a request reaches the provider, and where its spend is recorded. */
+/** The backend's half of warming: storage, wake arming, provider access, spend recording. */
 export interface CacheWarmSeams {
   readonly store: CacheWarmStore;
-  /** Arm the backend's DURABLE wake for `at` — the Durable Object's alarm
-   *  chain, the local session's process timer. Never a bare `setTimeout` in a
-   *  Durable Object: nothing survives the hibernation that follows going idle,
-   *  which is the whole interval a warm waits out. */
+  /** Arm the backend's durable wake for `at`; never a bare `setTimeout` in a Durable Object (lost to hibernation). */
   wake(at: number): void;
-  /** Send one warm through the provider that served the frozen request.
-   *  Null when this workspace cannot reach it (no credential, no such
-   *  provider, no warm support), which retires the chain. */
+  /** Send one warm through the frozen request's provider; null (unreachable) retires the chain. */
   send(input: { modelSpec: ModelSpec; body: JsonObject }): Promise<WarmOutcome | null>;
-  /** Record the warm's own spend. Never a turn: `source: 'warming'` is its own
-   *  producer, so a refresh neither reads as a step of the conversation nor
-   *  lands in the conversation's cache-hit distribution. */
+  /** Record the warm's spend under `source: 'warming'`, never as a turn. */
   spend(report: ModelCallReport): void;
   now(): number;
 }
 
-/**
- * The warm lifecycle: arm after a turn, fire on a wake, re-arm or stop.
- *
- * The POLICY, the durable row and the accounting are here so both backends
- * carry one implementation of them and differ only in the four seams above.
- */
+/** The warm lifecycle: arm after a turn, fire on a wake, re-arm or stop. */
 export class CacheWarmingLane {
   constructor(private readonly seams: CacheWarmSeams) {}
 
@@ -436,19 +273,8 @@ export class CacheWarmingLane {
   }
 
   /**
-   * Consider a warm for the request this turn ended on.
-   *
-   * Answers the armed time, or null when the policy declined — a caller that
-   * wants to say why asks {@link warmingPlan} itself. A declined turn also
-   * RETIRES whatever was armed before it: the request that just ran is the
-   * newest evidence, and it says this prefix is not worth refreshing.
-   *
-   * `lastRequest` is the accumulator's own value (orchestrator's
-   * `TurnAccumulator.lastRequest`), so the caller hands over what it has
-   * rather than three fields it has to keep in step. Its body arrives as
-   * `unknown` because a provider adapter reports whatever shape it sends; a
-   * body that is not a JSON object cannot be stored or replayed, and warms
-   * nothing.
+   * Consider a warm for the request this turn ended on; null when the policy declined.
+   * A declined turn also retires whatever was armed before it.
    */
   armAfterTurn(input: {
     readonly modelSpec: ModelSpec;
@@ -490,12 +316,7 @@ export class CacheWarmingLane {
     return plan.at;
   }
 
-  /**
-   * Run the warm this wake was armed for, if it is still owed.
-   *
-   * Answers what was sent, so a caller can trace the phase: null when nothing
-   * was due (the common case on a wake armed for something else).
-   */
+  /** Run the warm this wake was armed for, if still owed; null when nothing was due. */
   async runDue(now: number): Promise<{ readonly usage: Usage } | null> {
     const due = this.seams.store.due(now);
 
@@ -514,13 +335,8 @@ export class CacheWarmingLane {
     try {
       outcome = await this.seams.send({ modelSpec: due.modelSpec, body });
     } catch (cause) {
-      // A FAILED WARM IS NOT RETRIED, and the row is retired BEFORE the throw
-      // leaves. The chain is opportunistic — the vendor's own reading of a
-      // missed refresh is one cache write on the next real turn, never a
-      // retry — and a row left armed with a past `due_at` is the shape that
-      // turns a rotated key or a 429 into one request per second: the fold
-      // would answer due, the phase would fail, and the tick would re-arm from
-      // the same fold. Retire first, then let the caller diagnose it once.
+      // A failed warm is not retried, and the row is retired before the throw: a row left armed
+      // with a past `due_at` turns a 429 into one request per second.
       this.seams.store.retire();
 
       throw toKinuError({ doing: 'warming the prompt-cache prefix', cause, otherwise: 'unavailable' });

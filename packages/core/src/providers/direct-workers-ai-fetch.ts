@@ -1,42 +1,5 @@
-/**
- * OpenAI-compatible fetch over Cloudflare's direct Workers AI binding.
- *
- * Development and the eval identity have no user OAuth credential, so the
- * binding is their inference boundary. This adapter turns an AI SDK chat-completions
- * request into one `binding.run()` call and turns the answer back into the
- * OpenAI wire shape the SDK and the CLI proxy both parse.
- *
- * Three facts about `Ai.run` decide the whole design. All three are read from
- * the shipped implementation, workerd v1.20260820.1
- * `src/cloudflare/internal/ai-api.ts`:
- *
- *  1. `shell` streams. With `inputs.stream = true` the upstream answers
- *     `text/event-stream` and `shell` returns the untouched `res.body`, so bytes
- *     reach the caller as the model produces them. There is no reason to buffer
- *     a completion and replay it as one synthetic frame.
- *  2. `options.returnRawResponse` is the only way to get the HTTP envelope.
- *     Without it `shell` throws `InferenceUpstreamError` for any non-ok status and
- *     the status code is lost, and it decides JSON by comparing the content type
- *     for EQUALITY with `application/json`, so a `charset` parameter alone makes
- *     it hand back a raw body instead of a parsed object. The envelope carries
- *     the status and the content type, which is what a fetch seam needs.
- *  3. `shell` stores its options on the BINDING (`this.#options = options`) and
- *     reads them again AFTER awaiting the upstream fetch, to choose between
- *     returning the `Response`, the parsed JSON and the raw body. One binding
- *     instance serves every concurrent turn, so a second call in flight can
- *     decide the first call's return shape. Per-call values that are read before
- *     that await, `extraHeaders` and `signal`, are safe.
- *
- * Fact 3 is why this adapter accepts every shape `shell` can return rather than
- * the one it asked for. Trusting the requested shape is how a parallel turn
- * turns into an empty stream.
- *
- * When streaming was requested and the upstream answered one whole completion,
- * that model does not stream over this binding and the request is refused with
- * that reason. It is never buffered into a synthetic stream: a stream that only
- * arrives once the answer is finished is a lie about latency, and it hid this
- * defect for as long as it was the fallback.
- */
+// OpenAI-compatible fetch over the direct Workers AI binding. `Ai.run` stores its options on the shared binding and
+// rereads them after awaiting upstream, so a concurrent call can pick this call's return shape: accept every shape.
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { asFetchFunction } from './fetch-shim';
 import { toolCallIdFor } from './tool-call-id';
@@ -46,11 +9,7 @@ import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
 
-/** The route this adapter reads off a chat-completions request: the model the
- *  binding takes as its own argument, whether the caller asked to stream, and
- *  the transcript, typed here so {@link bindingInputs} can rewrite one spelling
- *  in it without re-establishing what a message is. Everything else travels
- *  through untouched. */
+/** Only the fields this adapter reads; everything else travels through untouched. */
 const ChatCompletionRequestSchema = v.looseObject({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
   stream: v.optional(v.boolean(), false),
@@ -59,9 +18,7 @@ const ChatCompletionRequestSchema = v.looseObject({
 
 type ChatCompletionRequest = v.InferOutput<typeof ChatCompletionRequestSchema>;
 
-/** A native text-generation payload: one whole answer when the request was not
- *  streamed, one delta when it was. `response` and `tool_calls` are nullable
- *  because a streamed delta that carries only usage sets neither. */
+/** `response` and `tool_calls` are nullable because a usage-only streamed delta sets neither. */
 const NativeOutputSchema = v.looseObject({
   response: v.optional(v.nullable(v.string()), ''),
   tool_calls: v.optional(v.nullable(v.array(v.looseObject({
@@ -72,11 +29,7 @@ const NativeOutputSchema = v.looseObject({
   usage: v.optional(JsonObjectSchema),
 });
 
-/** An OpenAI-shaped streamed chunk, as far as this adapter reads one: whether a
- *  finish reason has already gone out, whether the frame has a live choice at
- *  all, and the usage it reports. `choices` is REQUIRED — its presence is what
- *  tells the two dialects apart — and an empty one is a usage report rather
- *  than a delta. The payload itself is forwarded verbatim. */
+/** `choices` is required: its presence tells the two dialects apart; an empty one is a usage report. */
 const ChunkSchema = v.looseObject({
   choices: v.array(v.looseObject({
     finish_reason: v.optional(v.nullable(v.string())),
@@ -84,8 +37,7 @@ const ChunkSchema = v.looseObject({
   usage: v.optional(JsonObjectSchema),
 });
 
-/** The Workers AI error envelope, in the two shapes `ai-api.ts` `_parseError`
- *  itself reads: `{internalCode, description}` and `{errors: [{code, message}]}`. */
+/** The two error shapes `ai-api.ts` `_parseError` reads. */
 const UpstreamErrorSchema = v.looseObject({
   internalCode: v.optional(v.number()),
   description: v.optional(v.string()),
@@ -102,9 +54,7 @@ interface DirectWorkersAIRunOptions {
   returnRawResponse?: boolean;
 }
 
-/** The one binding method this adapter calls, typed by every shape workerd's
- *  `shell` can hand back. The union is not caution: each arm is reachable, and
- *  which one arrives is decided by binding state a concurrent call also writes. */
+/** Every arm is reachable: the returned shape depends on binding state a concurrent call also writes. */
 interface DirectWorkersAIRunner {
   run(
     model: string,
@@ -113,15 +63,7 @@ interface DirectWorkersAIRunner {
   ): Promise<Response | ReadableStream<Uint8Array> | JsonObject>;
 }
 
-/**
- * The binding is an inference boundary like the OAuth fetch is, so a rate
- * limit it answers is waited out the same way (`withRateLimitRetry`): the
- * upstream's 429 is kept as the adapter's own status, and the retry follows
- * Retry-After until the completion arrives or the caller cancels. Measured
- * 2026-09-06 on staging: without this, the SDK's two retries surrendered a
- * `3021: rate limiting` answer as `Failed after 3 attempts` and the turn ended
- * with no reply.
- */
+/** Rate limits are waited out via Retry-After, as on the OAuth fetch; the SDK's own retries give up too soon. */
 export function createDirectWorkersAIFetch(
   binding: DirectWorkersAIRunner,
   retry: RateLimitRetryOptions = {},
@@ -131,10 +73,7 @@ export function createDirectWorkersAIFetch(
 
 function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
-    // `input` is narrowed to a string URL rather than passed as-is: ambient
-    // `Request` declarations that name a narrower first parameter (the
-    // workers-types one takes `Request | string`) reject the `string | URL`
-    // union this signature carries.
+    // Narrowed to a string URL: workers-types `Request` rejects a `string | URL` union.
     const request = input instanceof Request ? input : new Request(input instanceof URL ? input.href : input, init);
     const body = v.parse(JsonObjectSchema, JSON.parse(await request.text()));
     const route = v.parse(ChatCompletionRequestSchema, body);
@@ -160,8 +99,7 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
         otherwise: 'io',
       });
 
-      // A cancelled call is the caller's own decision, not a provider failure.
-      // Reporting it as one would turn every aborted turn into an error frame.
+      // A cancelled call is the caller's decision, not a provider failure.
       if (failure.code === 'cancelled') throw caught;
       diagnostics.failure('workers_ai.direct_call_failed', failure, { model: route.model });
 
@@ -174,47 +112,15 @@ function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis
   });
 }
 
-/** The binding takes the model separately and the rest of the OpenAI body as
- *  its inputs.
- *
- *  The replayed transcript inside `messages` travels as it came, tool-call ids
- *  included. Their one requirement here is EQUALITY between an assistant
- *  message's `tool_calls[].id` and the `tool_call_id` of the `tool` message
- *  answering it, which is what the upstream pairs on, and forwarding preserves
- *  it exactly. Re-keying them could not: the call sits at a position inside its
- *  assistant message's array while its result is alone on a message of its own,
- *  so a position-derived key would differ between the two sites and split a
- *  pair that currently matches. Nothing between here and the wire re-encodes
- *  the string either — the body is serialized as JSON, which carries any id
- *  losslessly. Minting is where the id has to be made unique and portable
- *  ({@link toolCallIdFor}), and that happens on the way out.
- *
- *  One spelling is rewritten. The binding validates `messages[].content` as a
- *  string or an array of text parts — the "Messages" branch of every text
- *  model's input schema — and an OpenAI chat request writes `null` there for
- *  an assistant turn that only called tools: `@ai-sdk/openai-compatible` emits
- *  `content: text || null` beside `tool_calls`, and OpenAI's own endpoint
- *  accepts it. The binding refuses the whole request instead, AiError 5006
- *  "Type mismatch of '/messages/1/content', 'string' not in 'null'", the same
- *  on @cf/qwen/qwen3-30b-a3b-fp8 and @cf/openai/gpt-oss-20b (staging,
- *  2026-09-05), so every replay of a tool-calling turn over this binding was
- *  refused. `null` and `''` both say the turn carried no text; the empty string
- *  is that message in the spelling the schema admits, with its `tool_calls`
- *  and `reasoning_content` untouched. Text-part arrays are accepted as they
- *  are and stay as they are. */
+/** Tool-call ids are forwarded as-is: the upstream pairs on equality and re-keying would split pairs.
+ *  Null `content` becomes `''` because the binding's message schema rejects null (AiError on tool-only turns). */
 function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
 
   if (route.messages) inputs.messages = route.messages.map(withoutNullContent);
 
-  // @ai-sdk/openai-compatible asks for stream usage only when its `includeUsage`
-  // config is set, and workers-ai.ts does not set it. A buffered completion
-  // always carries usage; a real stream carries it only when asked, so without
-  // this a streamed turn would report no tokens at all.
-  // `stream_options.include_usage` is declared on the chat-completions input
-  // the binding accepts (@cloudflare/workers-types `ChatCompletionsStreamOptions`),
-  // and a caller that states its own keeps it.
+  // The SDK only requests stream usage via `includeUsage`, which workers-ai.ts does not set; without this no tokens are reported.
   if (route.stream && inputs.stream_options === undefined) {
     inputs.stream_options = { include_usage: true };
   }
@@ -237,9 +143,7 @@ async function completedResponse(
     return openAICompletion(answer, model);
   }
 
-  // A `Response` carries the whole completion. A raw body reaches here through
-  // the content-type equality quirk of fact 2, never because anything streamed,
-  // so reading it whole is what was asked for.
+  // A raw body arrives only because `shell` matches `application/json` by equality (a charset defeats it), never from streaming.
   const text = await (answer instanceof Response ? answer : new Response(answer)).text();
 
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
@@ -264,17 +168,10 @@ async function streamedResponse(
 
   if (answer instanceof ReadableStream) return sseResponse(answer, model, startedAt);
 
-  // A parsed object is one whole completion for a request that asked to stream.
   return unstreamable(model, 'a JSON completion');
 }
 
-/** Forward the upstream event stream, translated into OpenAI chunks.
- *
- *  The first read is awaited here so the head of the stream can be checked
- *  before any byte is promised to the caller: an empty stream and a JSON body
- *  under an event-stream content type are both refusals, and refusing them
- *  before the response exists gives the caller a status code instead of a
- *  stream that dies. It is one read, so the rest still arrives incrementally. */
+/** The first read is awaited before responding so an empty or JSON head is refused with a status code, not a dying stream. */
 async function sseResponse(
   body: ReadableStream<Uint8Array>,
   model: string,
@@ -286,16 +183,13 @@ async function sseResponse(
   try {
     first = await reader.read();
   } catch (cause) {
-    // A refused head is not a stream to hold: release the lock before the
-    // error propagates so the binding body never stays locked behind it.
+    // Release the lock so the binding body never stays locked behind the error.
     reader.releaseLock();
 
     throw cause;
   }
 
-  // Both early refusals cancel upstream — the request is over either way —
-  // and release in `finally`, so even a cancel rejection cannot leave the
-  // lock held.
+  // Release in `finally` so even a cancel rejection cannot leave the lock held.
   const refuseEarly = async (reason: string): Promise<Response> => {
     try {
       await reader.cancel();
@@ -334,10 +228,7 @@ async function sseResponse(
       if (next.done) controller.close();
       else controller.enqueue(next.value);
     },
-    // A cancelled reader is what stops the upstream request, so an abandoned
-    // turn stops costing neurons. Downstream cancellation is its OWN terminal
-    // path: it releases the lock in `finally` too, so it cannot bypass the
-    // terminal callback's cleanup and leave the binding body locked.
+    // Cancelling the reader stops the upstream request; release in `finally` so the binding body is never left locked.
     async cancel(reason) {
       try {
         await reader.cancel(reason);
@@ -347,15 +238,8 @@ async function sseResponse(
     },
   });
 
-  // One pass over the bytes. The translation below already splits every line
-  // and parses every `data:` payload, so the cached-usage repair applies inside
-  // it as a rule rather than as a second transform doing the same work again.
   return new Response(
-    // The terminal frame has gone out: stop the upstream request so the
-    // turn ends at [DONE] instead of at producer close — including a
-    // producer that never closes behind it. Awaited inside the transform's
-    // own lifecycle, so a rejection reaches the consumer's error path
-    // instead of floating; the lock releases either way, in `finally`.
+    // After the terminal frame, stop upstream so the turn ends at [DONE] even if the producer never closes.
     source.pipeThrough(openAIChunkTransform(model, async () => {
       try {
         await reader.cancel();
@@ -367,47 +251,23 @@ async function sseResponse(
   );
 }
 
-/**
- * Byte to byte: upstream event-stream frames in, OpenAI `chat.completion.chunk`
- * frames out.
- *
- * Two upstream dialects reach here, the same two the non-streamed path already
- * handles. A payload with a live choice is already an OpenAI chunk and is
- * forwarded verbatim, so reasoning fields, annotations and incremental tool-call
- * deltas survive untouched. Everything else is translated: a native payload
- * carrying `response`, `tool_calls` and `usage`, and — from either dialect — a
- * usage report with no live choice, which the platform spells `choices: []` and
- * the native runtime spells with no `choices` at all. The two converge because
- * such a frame carries nothing but the report, so both are absorbed rather than
- * forwarded and the final usage leaves with the finish state, once.
- *
- * Framing is rebuilt rather than forwarded. Only `data:` lines carry anything
- * this transport needs, so comments and keep-alives are dropped and every
- * emitted frame is one `data:` line and a blank line.
- */
+/** Upstream event-stream frames in, OpenAI chunk frames out. A frame with a live choice is forwarded verbatim;
+ *  native payloads and choice-less usage reports are translated, with usage leaving once with the finish state. */
 function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const id = `chatcmpl-${crypto.randomUUID()}`;
-  /** Minted once per RESPONSE — every frame carries it — so it is also the
-   *  scope that keeps a tool-call id unique across the responses of one turn. */
+  /** Per response, so tool-call ids stay unique across the responses of one turn. */
   const toolCallScope = `call-${id}`;
   const created = Math.floor(Date.now() / 1000);
   const repairCachedUsage = createCachedUsageRepair();
   let buffer = '';
-  /** An assistant delta has gone out, so `role` has been announced. */
   let opened = false;
-  /** Tool calls seen, which is the next delta's `index` and the finish reason. */
   let toolCalls = 0;
-  /** A finish reason has gone out, upstream's or ours. */
   let finished = false;
-  /** `data: [DONE]` has gone out. */
   let closed = false;
-  /** The stream has been errored, so nothing more may be enqueued on it. */
   let failed = false;
-  /** The response's latest usage report, repaired, until a frame carries it to
-   *  the caller. A frame that reports usage itself clears it, so one report
-   *  never leaves twice and a later report supersedes an earlier one. */
+  /** Latest usage report not yet sent; a frame that reports usage clears it so a report never leaves twice. */
   let owedUsage: JsonObject | undefined;
 
   const frame = (choices: JsonObject[], usage?: JsonObject): Uint8Array => {
@@ -421,11 +281,7 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
   const finalize = async (controller: TransformStreamDefaultController<Uint8Array>): Promise<void> => {
     if (closed) return;
 
-    // The final state leaves in exactly ONE frame. A finish reason that has not
-    // gone out yet takes the usage with it. When the upstream already announced
-    // one, the usage travels on a chunk with no choice, which is the OpenAI wire
-    // shape for a usage report: `choices[0]` is what carries a finish state, so
-    // this adds no second one, and `usage` is read off any chunk.
+    // The final state leaves in one frame; if upstream already sent a finish reason, usage goes on a choice-less chunk.
     if (!finished) {
       controller.enqueue(frame(
         [{ index: 0, delta: {}, finish_reason: toolCalls > 0 ? 'tool_calls' : 'stop' }],
@@ -442,8 +298,6 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     await onTerminal?.();
   };
 
-  /** The frames this adapter translates rather than forwards: a native delta,
-   *  and a usage report with no live choice in either dialect. */
   const translate = (
     payload: JsonObject,
     controller: TransformStreamDefaultController<Uint8Array>,
@@ -496,9 +350,7 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
       return;
     }
 
-    // A `data:` line that is not a JSON object cannot be forwarded as a chunk
-    // and cannot be dropped without losing whatever it said, so it ends the
-    // stream loudly.
+    // A non-object `data:` line can be neither forwarded nor dropped silently, so it ends the stream.
     const decoded = tolerate<unknown>(() => JSON.parse(payload), 'malformed-input');
     const object = v.safeParse(JsonObjectSchema, decoded);
 
@@ -510,11 +362,7 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
       return;
     }
 
-    // Either the frame is not OpenAI-shaped, or it has no live choice — and a
-    // frame with no live choice is a usage report and nothing else, whichever
-    // dialect spelled it. One path for both: forwarding one would end the
-    // response a second time, and the AI SDK's own chunk schema requires
-    // `choices`, so the dialect that omits it cannot be forwarded at all.
+    // A choice-less frame is only a usage report: forwarding it would end the response twice, and the SDK requires `choices`.
     const chunk = v.safeParse(ChunkSchema, object.output);
 
     if (!chunk.success || chunk.output.choices.length === 0) {
@@ -530,8 +378,6 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
     }
 
     const usage = chunk.output.usage;
-    // This frame reports its own usage, so nothing is owed after it. Its bytes
-    // are rebuilt only when the cache repair has a maximum to restore.
     const repaired = usage ? repairCachedUsage(usage) : undefined;
 
     if (usage) owedUsage = undefined;
@@ -567,14 +413,11 @@ function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): 
   });
 }
 
-/** Both dialects of a whole answer, as one OpenAI completion. An answer that is
- *  already OpenAI-shaped is passed through. */
 function openAICompletion(raw: JsonObject, requestedModel: string): Response {
   if (Array.isArray(raw.choices)) return jsonResponse(raw);
 
   const output = v.parse(NativeOutputSchema, raw);
-  // Minted once per RESPONSE and used twice: as the completion's own id, and as
-  // the response-unique scope of every tool-call id below.
+  // Also the response-unique scope of every tool-call id below.
   const responseId = `chatcmpl-${crypto.randomUUID()}`;
 
   const toolCalls = (output.tool_calls ?? []).map((call, index) => ({
@@ -604,15 +447,11 @@ function openAICompletion(raw: JsonObject, requestedModel: string): Response {
   return jsonResponse(completion);
 }
 
-/** A native tool call's arguments, as the OpenAI wire spells them: the native
- *  field is either an already-serialized string or a JSON object, and the two
- *  sites that emit a tool call have to agree on the encoding. One encoding one
- *  way and one the other is a tool call the model cannot parse. */
+/** Both emitting sites must encode arguments the same way or the model cannot parse the tool call. */
 function toolArguments(value: string | JsonObject): string {
   return v.is(v.string(), value) ? value : JSON.stringify(value);
 }
 
-/** Streaming was requested and the upstream answered something else. */
 function unstreamable(model: string, saw: string): Response {
   diagnostics.event('workers_ai.direct_stream_unsupported', { model, saw });
 
@@ -621,8 +460,7 @@ function unstreamable(model: string, saw: string): Response {
     + 'buffered completion.');
 }
 
-/** An upstream failure, with its status kept and its own message extracted. The
- *  raw Cloudflare envelope is never forwarded. */
+/** The raw Cloudflare envelope is never forwarded. */
 async function upstreamRefusal(response: Response, model: string): Promise<Response> {
   const body = await response.text();
   diagnostics.event('workers_ai.direct_call_refused', { model, status: response.status });
@@ -632,8 +470,7 @@ async function upstreamRefusal(response: Response, model: string): Promise<Respo
     upstreamMessage(body) ?? `Workers AI refused ${model} with HTTP ${String(response.status)}.`,
   );
 
-  // The provider's mandated wait travels with its refusal, so the retry above
-  // follows it instead of guessing a backoff.
+  // Forward the mandated wait so the retry follows it instead of guessing.
   const retryAfter = response.headers.get('retry-after');
 
   if (retryAfter !== null) refusal.headers.set('retry-after', retryAfter);

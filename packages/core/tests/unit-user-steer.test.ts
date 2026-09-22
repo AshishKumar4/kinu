@@ -1,13 +1,6 @@
 /**
- * The user kind of signal — the user's own message — sent through the ONE
- * inbox like everything else, but kept under its own three load-bearing
- * semantics: it
- * persists as a verbatim user row (so the walk-back fork can cut at it), an
- * interrupt HANDS IT BACK rather than eating it, and a leftover reruns as a
- * user-origin turn. Those were properties of `LocalAgentSession.pendingSteers`
- * and existed nowhere the cloud backend could reach; they are pinned here
- * against the shared seam rather than only against the CLI that happened to
- * own them.
+ * The user kind of signal through the one inbox: it persists as a verbatim user row (the walk-back fork cuts at
+ * it), an interrupt hands it back, and a leftover reruns as a user-origin turn.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -19,8 +12,7 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, PromptFile,
 } from '../src/types/backend-host';
 import type { AgentSignal, SignalCardEvent, UserSignalIdentity } from '../src/types/signals';
-// The user kind's wire name — the production constant, so a rename breaks the
-// import instead of quietly leaving this file asserting the old one.
+// The production constant, so a rename breaks the import.
 import { USER_MESSAGE_SIGNAL_KIND as USER_MESSAGE_KIND } from '../src/types/signals';
 import { JsonObjectSchema } from '../src/utils/json';
 import type { WorkMode } from '../src/types/turn';
@@ -146,10 +138,7 @@ describe('Inbox — the user kind, accepted', () => {
       steerIds: ['s1'],
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
-    // The idle path matches a steer the caller sends itself: NO idempotency
-    // key, and nothing was ever queued mid-turn. What IS owed is where the
-    // words went — a turn of their own — because the surface that sent them
-    // to a running turn learns their landing from this broadcast alone.
+    // The idle path: no idempotency key and nothing queued, but the broadcast still owes where the words went.
     expect(queued[0].idempotencyKey).toBeUndefined();
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'turn', steerId: 's1', text: 'nothing is running' },
@@ -164,16 +153,14 @@ describe('Inbox — the user kind, accepted', () => {
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'queued', steerId: 's1', text: 'also check staging' },
     ]);
-    // The wire shape a surface parses: the event's own key order, not the
-    // schema's.
+    // The wire shape a surface parses: the event's key order, not the schema's.
     expect(Object.keys(raw[0])).toEqual(['type', 'status', 'steerId', 'text']);
   });
 
   test('durable reset state replaces the process-local user queue in its stored order', async () => {
     const { inbox, drained } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
-    // An event still pending keeps its place rather than being dropped by the
-    // restore — the restored users land AHEAD of it.
+    // A pending event keeps its place; the restored users land ahead of it.
     await inbox.send(event('still pending'));
     inbox.restorePending([
       { id: 's1', text: 'first' },
@@ -213,8 +200,7 @@ describe('Inbox — the user kind, landing in the step', () => {
 
     const rewritten = await inbox.prepareStep(step(0, HISTORY));
 
-    // At the TAIL: after the latest tool results, which is what keeps role
-    // alternation provider-safe.
+    // At the tail, after the latest tool results, which keeps role alternation provider-safe.
     expect(rewritten).toEqual([
       ...HISTORY,
       { role: 'user', content: 'also check staging\n\nand the logs' },
@@ -233,9 +219,7 @@ describe('Inbox — the user kind, landing in the step', () => {
   });
 
   test('the landed broadcast reports WHICH step it landed in, not just that it landed', async () => {
-    // A turn is one assistant message, so "it landed" places a steer before or
-    // after the whole turn and nowhere else. The step index is the only thing
-    // that can put the operator's words where the model actually read them.
+    // Only the step index places the operator's words where the model read them.
     const { inbox, broadcasts, drained } = setup({ turnInFlight: true });
     inbox.beginTurn(false);
     await inbox.prepareStep(step(0, HISTORY));
@@ -256,8 +240,7 @@ describe('Inbox — the user kind, landing in the step', () => {
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
 
-    // streamText rebuilds each step's messages from scratch, so a steer that is
-    // not re-applied simply vanishes from the conversation after one step.
+    // streamText rebuilds each step's messages, so a steer not re-applied vanishes after one step.
     const laterStep = [...HISTORY, { role: 'assistant' as const, content: 'ran a tool' }];
     expect(await inbox.prepareStep(step(1, laterStep))).toEqual([
       ...HISTORY,
@@ -273,8 +256,7 @@ describe('Inbox — the user kind, landing in the step', () => {
     await inbox.prepareStep(step(0, HISTORY));
     expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'first turn steer' }]);
 
-    // Typed while the previous turn was finishing: it belongs to the turn that
-    // is about to run, not to the one that just ended.
+    // Typed while the previous turn finished: it belongs to the next turn.
     await inbox.send(steer('s2', 'typed as the turn ended'));
     inbox.beginTurn(false);
     expect(inbox.recordedMessages()).toEqual([]);
@@ -369,9 +351,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     await inbox.send(steer('s2', 'and the logs'));
     await inbox.prepareStep(step(1, HISTORY));
 
-    // Per STEER, not per drain: the walk-back fork pivot matches an individual
-    // user message, so a merged "staging\n\nlogs" row would make one of them
-    // unforkable.
+    // One row per steer: the walk-back fork pivots on an individual user message.
     expect(drained).toEqual([
       { steers: [{ id: 's1', text: 'also check staging' }], atStep: 0 },
       { steers: [{ id: 's2', text: 'and the logs' }], atStep: 1 },
@@ -387,13 +367,12 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     inbox.beginTurn(false);
     await inbox.send(steer('s1', 'change of plans'));
 
-    // Returned, not swallowed: the surface already rendered it as sent, so it
-    // goes back to the composer rather than vanishing.
+    // Returned to the composer, not swallowed: the surface already rendered it as sent.
     expect(inbox.interrupt()).toEqual([{ id: 's1', text: 'change of plans' }]);
     expect(steerStatuses(broadcasts).at(-1)).toEqual({
       type: 'steer_status', status: 'returned', steerId: 's1', text: 'change of plans',
     });
-    // And it must NOT then reappear in the next step.
+    // And it must not reappear in the next step.
     expect(await inbox.prepareStep(step(1, HISTORY))).toBeUndefined();
   });
 
@@ -403,8 +382,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
 
-    // Interrupting after the drain cannot un-send it: the model acted on it, so
-    // it stays in the history the next turn inherits.
+    // After the drain the model acted on it, so it stays in the history.
     expect(inbox.interrupt()).toEqual([]);
     expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'also check staging' }]);
   });
@@ -413,8 +391,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     const { inbox, queued, broadcasts } = setup({ turnInFlight: true, turnId: 'turn-9' });
     inbox.beginTurn(false);
     await inbox.prepareStep(step(0, HISTORY));
-    // Typed while the model was writing its final answer — there is no further
-    // step for them to land on.
+    // Typed during the final answer: no further step for them to land on.
     await inbox.send(steer('s1', 'one more thing'));
     await inbox.send(steer('s2', 'and this'));
 
@@ -428,10 +405,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
       idempotencyKey: 'steer-rerun:turn-9:build:s1',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     }]);
-    // Each steer's landing is announced under its own id: it is a turn now,
-    // not a bubble the running turn owes a step to. A surface that only
-    // admitted the words — the composer's call answers admission, not the
-    // landing — has no other way to learn which happened.
+    // Each steer's landing is announced under its own id; admission alone does not tell the surface.
     expect(steerStatuses(broadcasts).map((status) => [status.status, status.steerId])).toEqual([
       ['queued', 's1'], ['queued', 's2'], ['turn', 's1'], ['turn', 's2'],
     ]);
@@ -443,8 +417,7 @@ describe('Inbox — the user kind, the three load-bearing semantics', () => {
     await inbox.send(steer('s1', 'also check staging'));
     await inbox.prepareStep(step(0, HISTORY));
 
-    // The durable-history merge: base coordinates are the step-0 count, so the
-    // steer lands ahead of the assistant work that followed it.
+    // Base coordinates are the step-0 count, so the steer lands ahead of the assistant work after it.
     const response: ModelMessage[] = [
       { role: 'assistant', content: 'checked staging' },
     ];
@@ -470,9 +443,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       { role: 'user', content: 'the user said this' },
       { role: 'user', content: 'an event arrived' },
     ]);
-    // The user message is durable history; the event is model-visible for the
-    // turn and gone at replay, exactly like the dynamic-context block it
-    // rides beside.
+    // The user message is durable; the event is model-visible for the turn and gone at replay.
     expect(inbox.replayInto([{ role: 'assistant', content: 'a1' }])).toEqual([
       { role: 'user', content: 'the user said this' },
       { role: 'assistant', content: 'a1' },
@@ -493,23 +464,19 @@ describe('Inbox — the user kind beside the event kind', () => {
   test("neither a user steer's composer mode nor an event's is a reason to refuse the splice", async () => {
     const { inbox, queued } = setup({ turnInFlight: true });
 
-    // The user typed it in plan mode — metadata.kinuMode and all — and it
-    // lands in the running turn: the mode rides the USER identity, as a fact.
+    // Plan-mode metadata rides the user identity as a fact; it lands in the running turn.
     expect(await inbox.send(steer('s1', 'typed in plan mode', {
       mode: 'plan', metadata: { kinuMode: 'plan' },
     }))).toBe('mid-turn');
 
-    // The SAME kinuMode on an event is a fact too: where the result came from,
-    // not a reason to open a second turn behind the one the user is watching.
+    // The same kinuMode on an event is a fact too, not a reason to open a second turn.
     expect(await inbox.send(event('plan result', { metadata: { kinuMode: 'plan' } }))).toBe('mid-turn');
     expect(await inbox.send(event('other mission', { metadata: { missionLabels: ['gamma'] } }))).toBe('mid-turn');
     expect(queued).toEqual([]);
   });
 
   test('a user message is reserved with the backend before it is announced as queued', async () => {
-    // The durable row exists before the client hears 'queued': the accept
-    // hook runs in the same synchronous slice as the routing read, ahead of
-    // the broadcast, and a hook that refuses buffers nothing.
+    // The durable row exists before 'queued' is broadcast; a refusing accept hook buffers nothing.
     const { inbox, accepted, broadcasts } = setup({ turnInFlight: true });
     expect(await inbox.send(steer('s1', 'reserve me', { mode: 'plan' }))).toBe('mid-turn');
     expect(accepted).toEqual(['s1']);
@@ -538,9 +505,8 @@ describe('Inbox — the user kind beside the event kind', () => {
     inbox.settle({ completed: false });
     await Promise.resolve();
 
-    // Users first: the pending steer reruns as a user-origin turn. The absorbed
-    // user is never requeued — its durable row already exists. Then events:
-    // the absorbed one the dead turn had already seen, then the leftover one.
+    // Users first (the absorbed user is never requeued: its row exists), then the absorbed event, then the
+    // leftover.
     expect(queued.map((turn) => turn.text)).toEqual([
       'typed too late', 'absorbed event', 'leftover event',
     ]);
@@ -586,8 +552,7 @@ describe('Inbox — the user kind beside the event kind', () => {
 
     const preparing = inbox.prepareStep(step(0, HISTORY));
     await Promise.resolve();
-    // Delivered while the drain is in flight — it queues BEHIND the restored
-    // prefix, not beside it.
+    // Delivered mid-drain: it queues behind the restored prefix.
     await inbox.send(steer('s2', 'second'));
 
     landing.reject(new Error('storage unavailable'));
@@ -614,9 +579,8 @@ describe('Inbox — the user kind beside the event kind', () => {
     inbox.settle({ completed: true });
     await Promise.resolve();
 
-    // One turn, the words in the order they were typed. Plan is the narrower
-    // grant, so a plan-mode message anywhere in the group makes the turn plan:
-    // merging never widens what a message was typed under.
+    // One turn, in typed order; a plan-mode message anywhere makes the turn plan, since merging never widens a
+    // grant.
     expect(queued.map((turn) => ({
       text: turn.text,
       kinuMode: turn.metadata?.kinuMode,
@@ -632,9 +596,7 @@ describe('Inbox — the user kind beside the event kind', () => {
   });
 
   test('three user messages at an idle agent are one turn whose first step sees all three', async () => {
-    // The host's enqueue is held open — the window between a turn's
-    // admission and its opening. The first message starts the turn; the other
-    // two are buffered for its first step, never queued as turns behind it.
+    // The enqueue is held open: the first message starts the turn, the rest ride its first step.
     let open = (): void => {};
 
     const heldEnqueue = new Promise<void>((resolve) => { open = resolve; });

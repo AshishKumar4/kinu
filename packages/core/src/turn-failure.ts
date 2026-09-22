@@ -1,45 +1,14 @@
 /**
- * Provider turn-failure classification + overflow recovery — ONE shared
- * policy both backends apply when a turn's model request fails.
- *
- * `context_length` failures arm force-compaction: the request cannot be
- * replayed as-is, so the NEXT turn assembly must run the context transform
- * with trigger:'force' (the compaction extension's forceRebuild), and ONE
- * retry turn is enqueued to resume the interrupted work. `rate_limit`
- * failures do NOT force-compact — throughput exhaustion is not a size
- * problem (production-proven on workspace-1a4e20: a 429 after 1.5M
- * CUMULATIVE input tokens across 33 uncached steps whose individual
- * requests were each ~40-60k tokens, well inside the window).
- *
- * The one exception is the size heuristic: a rate-limit-shaped error on a
- * request whose measured PER-REQUEST prompt (the last provider-reported
- * step, never the turn's cumulative total) exceeded half the window is
- * treated as context-class — at that size the request itself is the
- * problem, whatever the provider called it.
+ * Turn-failure classification and overflow recovery shared by both backends.
+ * `context_length` arms force-compaction plus one retry; `rate_limit` does not, unless the last per-request prompt exceeded half the window.
  */
 
-/** Closed classification of a failed turn's provider error.
- *
- *  `auth` is a credential the provider refused — revoked, expired, or never
- *  connected. It is not `transient`: retrying without re-authenticating can
- *  only fail again, so nothing may read it as a blip worth another turn. The
- *  remedy is the re-auth path the error text names.
- *
- *  `admission_refused` is OUR OWN gate declining to submit a request that does
- *  not fit a measured window (orchestrator/turn-context.ts), and it is a class
- *  of its own for the same reason: the history was already compacted and
- *  re-measured, so neither a retry nor a second forced rebuild can change the
- *  answer. It used to fall through to `transient`, which said "a blip, try
- *  again" about a turn that could only refuse again — the wedge #20 was
- *  reported as. The remedy is the person's: a new conversation, or less in
- *  this one, and the refusal's own text says so. */
+/** `auth` and `admission_refused` (our own pre-submission gate, #20) are never `transient`: a retry can only fail again. */
 export type TurnFailureClass = 'context_length' | 'rate_limit' | 'auth' | 'admission_refused' | 'transient';
 
-/** Marker metadata value stamped on the ONE enqueued retry turn — a retry
- *  turn that fails again never enqueues another (never loop). */
+/** Stamped on the single retry turn; a failing retry never enqueues another. */
 export const OVERFLOW_RETRY_EVENT = 'overflow_retry';
 
-/** The retry turn's user-visible text. */
 export const OVERFLOW_RETRY_TEXT =
   "The previous turn failed because the request exceeded the model's context window. " +
   'The history has been compacted — continue the interrupted work from where it stopped.';
@@ -64,16 +33,10 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /quota exceeded/i,
 ];
 
-/** The sentence a pre-submission refusal leads with, verbatim in the message
- *  `refuseOversizedRequest` (orchestrator/turn-context.ts) raises. Declared
- *  beside the policy that answers it so the refusal and its classification
- *  cannot drift into two spellings of one sentence. */
+/** Leads the message `refuseOversizedRequest` (orchestrator/turn-context.ts) raises. */
 export const ADMISSION_REFUSAL_MARK = 'Request refused before submission';
 
-/** A credential the provider refused: the HTTP status, the OAuth rejection
- *  code, the upstream plain text, or the remedy sentence our own wire layer
- *  answers with. Kept in step with the texts `cloudflare-ai-fetch.ts` and
- *  `providers/codex.ts` emit. */
+/** Kept in step with the texts `cloudflare-ai-fetch.ts` and `providers/codex.ts` emit. */
 const AUTH_PATTERNS: readonly RegExp[] = [
   /\b401\b/,
   /unauthorized/i,
@@ -84,18 +47,13 @@ const AUTH_PATTERNS: readonly RegExp[] = [
 ];
 
 export interface TurnFailureSignals {
-  /** The last provider-reported PER-REQUEST prompt size of the failed turn
-   *  (TurnAccumulator.lastPromptTokens) — NOT the turn's cumulative input. */
+  /** Per-request prompt size (TurnAccumulator.lastPromptTokens), not the turn's cumulative input. */
   lastPromptTokens?: number;
-  /** The resolved model's context window, in tokens. */
   contextWindow?: number;
 }
 
-/** Classify a failed turn's provider error text. */
 export function classifyTurnFailure(error: string, signals: TurnFailureSignals = {}): TurnFailureClass {
-  // Matched FIRST: the refusal names both a context window and a token count,
-  // so every context-length pattern below would claim it and arm a recovery
-  // that cannot help.
+  // First: the refusal text also matches the context-length patterns.
   if (error.includes(ADMISSION_REFUSAL_MARK)) return 'admission_refused';
 
   if (CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error))) return 'context_length';
@@ -117,24 +75,17 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
 }
 
 export interface OverflowRecoveryInput extends TurnFailureSignals {
-  /** The failed turn's provider error text, when one was reported. */
   error: string | undefined;
-  /** Whether the failed turn WAS the enqueued overflow retry — a second
-   *  failure must never enqueue a third turn. */
   turnWasOverflowRetry: boolean;
 }
 
 export interface OverflowRecoveryDecision {
   failureClass: TurnFailureClass | null;
-  /** Arm the session's force-compaction flag: next assembly runs the
-   *  context transform with trigger:'force'. */
+  /** Next assembly runs the context transform with trigger:'force'. */
   forceCompaction: boolean;
-  /** Enqueue the ONE overflow retry turn (OVERFLOW_RETRY_TEXT, stamped
-   *  kinuEvent: OVERFLOW_RETRY_EVENT). */
   enqueueRetry: boolean;
 }
 
-/** The shared recovery decision for a non-completed turn. */
 export function planOverflowRecovery(input: OverflowRecoveryInput): OverflowRecoveryDecision {
   if (!input.error) return { failureClass: null, forceCompaction: false, enqueueRetry: false };
   const failureClass = classifyTurnFailure(input.error, input);

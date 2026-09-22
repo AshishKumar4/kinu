@@ -1,10 +1,4 @@
-// Behavior tests for the public extension seam (extension.ts + its wiring into
-// runChat). Two levels:
-//   1. Through a real runChat turn: registered hooks fire in order around the
-//      turn (start → tool-call → tool-result → end) and a registerTools tool is
-//      folded into the ToolSet the model actually sees.
-//   2. Direct ExtensionHost unit: tool merge + collision, prepareStep chaining,
-//      and emit ordering across multiple extensions.
+// The public extension seam: hooks and tools through a real runChat turn, then ExtensionHost directly.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -21,9 +15,6 @@ import {
 } from '../src/index';
 import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
 
-/** A v2 language-model stub that requests the `ping` tool on step 1, then
- *  answers with text on step 2. Captures the tool names it was handed so a test
- *  can assert an extension-contributed tool reached the model. */
 /** One text answer, streamed the way the SDK delivers it. */
 function textStream(text: string): ReadableStream<LanguageModelV3StreamPart> {
   return new ReadableStream<LanguageModelV3StreamPart>({
@@ -253,8 +244,7 @@ describe('transformContext through runChat', () => {
     }
 
     expect(sawTokens).toBe(123_456);
-    // promptCapturingModel reports a 1-token prompt and a 1-token completion and
-    // no cache or reasoning split, so those fields stay absent rather than 0.
+    // The stub reports no cache or reasoning split, so those fields stay absent rather than 0.
     expect(stepUsage).toEqual([{ input: 1, output: 1 }]);
     expect(Object.keys(stepUsage[0] ?? {}).sort()).toEqual(['input', 'output']);
   });
@@ -326,8 +316,7 @@ describe('composePrepareStep (the shared step pipeline)', () => {
     const out = await composePrepareStep({ extensions: host, cache: { strategy: { kind: 'anthropic' } } }, { stepNumber: 0, messages: base, steps: [] });
     expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
 
-    // The marker rides the injected tail message — proof the markers were
-    // applied AFTER the extension rewrite.
+    // The marker rides the injected tail message, so markers were applied after the rewrite.
     const tail = v.parse(v.object({
       providerOptions: v.object({
         anthropic: v.object({ cacheControl: v.object({ type: v.literal('ephemeral') }) }),
@@ -429,9 +418,7 @@ describe('ExtensionHost', () => {
       onTurnStart: () => { throw new KinuError('cancelled', 'injected abort'); },
     });
 
-    // The caller's own abort is not the plugin's failure: it must propagate
-    // with its class intact, never read as a silent skip. (The message names
-    // the seam's `doing`; the class rides on `code`, the detail on `cause`.)
+    // The caller's own abort is not the plugin's failure: it propagates with its class (on `code`) intact.
     let abortPropagated = false;
 
     try {
@@ -462,8 +449,7 @@ describe('ExtensionHost', () => {
 
     expect(oomPropagated).toBe(true);
 
-    // A plain Error stays fail-open: an unclassified plugin failure is the
-    // plugin's fault, and the turn continues past it.
+    // A plain Error stays fail-open: the turn continues past an unclassified plugin failure.
     const clumsy = new ExtensionHost().register({
       name: 'clumsy',
       onTurnStart: () => { throw new Error('clumsy exploded'); },
@@ -523,10 +509,8 @@ describe('ExtensionHost', () => {
   });
 
   test('a hook that never settles stops holding the turn once the turn is cancelled', async () => {
-    // Without the host's own abort race, both awaits below would hang, and
-    // the hang is the failure: it is killed with the suite at the ladder's
-    // deadline, which names this gate. A clock beside the host's race would
-    // be a second race, and under load the second one loses first.
+    // Without the host's abort race both awaits hang until the suite deadline; a second clock here would lose
+    // under load.
     const never = (): Promise<never> => new Promise(() => undefined);
 
     const host = new ExtensionHost()
@@ -540,8 +524,7 @@ describe('ExtensionHost', () => {
       sessionKey: 's', messages: [], system: 'sys', contextWindow: 1000, trigger: 'auto', abortSignal: controller.signal,
     });
 
-    // Each outcome is caught at its own lexical boundary BEFORE the abort, so
-    // neither rejection is ever unhandled while the other is being read.
+    // Each outcome is caught before the abort, so neither rejection is ever unhandled.
     const refused = (pending: Promise<ModelMessage[] | undefined>): Promise<KinuError> => (async () => {
       try {
         await pending;

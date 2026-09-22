@@ -1,15 +1,5 @@
-// Prompt-cache markers ON THE WIRE — the load-bearing proof for the
-// cache-breakpoint layer: drive runChat through each real provider with a
-// mocked fetch and assert the HTTP body carries the provider's cache
-// addressing (Anthropic cache_control at system + tail + last tool, budgeted
-// to the 4-block limit and ROLLED forward across steps; prompt_cache_key /
-// promptCacheKey for the OpenAI-compatible family; nothing for no-op
-// providers).
-//
-// Live readback: the provider's report normalizes to `Usage.cacheRead`, which
-// the turn accumulator sums per step — the `cacheRead=` field of the
-// step_finish activity-log line. cacheRead/input is the cache-read ratio these
-// markers exist to raise.
+// Prompt-cache markers on the wire: runChat through each real provider with a mocked fetch, asserting
+// the HTTP body carries that provider's cache addressing.
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -45,7 +35,7 @@ function chatTools(retention?: CacheRetention): ToolSet {
     }),
   };
 
-  // Both backends mark the tool surface at build time; mirror that here.
+  // Both backends mark the tool surface at build time.
   markLastToolForAnthropicCache(tools, retention);
 
   return tools;
@@ -57,14 +47,7 @@ const HISTORY = [
   { role: 'user' as const, content: 'second question' },
 ];
 
-/**
- * Drain runChat. Nothing is absorbed here: the Anthropic block answers with
- * real SSE and this resolves, while the OpenAI/OpenRouter/compat blocks answer
- * 400 on purpose and assert the rejection at the call site. Swallowing it made
- * "the request reached the wire and the provider refused it" indistinguishable
- * from "the turn died before sending anything", which is the one thing every
- * assertion in this file depends on.
- */
+/** Drain runChat without absorbing errors: the non-Anthropic blocks answer 400 and assert the rejection. */
 async function drain(opts: Parameters<typeof runChat>[0]): Promise<void> {
   for await (const _ of runChat(opts)) { /* consume */ }
 }
@@ -108,10 +91,7 @@ const OpenAiMessagesSchema = v.array(v.object({
   cache_control: v.optional(CacheControlSchema),
 }));
 
-// ── Anthropic: full breakpoint layout, rolled across steps ────────────────
-
-/** Minimal Anthropic SSE stream ending in a tool_use, so streamText runs a
- *  second step (and a second HTTP request) with the tool result appended. */
+/** Ends in a tool_use, so streamText issues a second request. */
 const ANTHROPIC_TOOL_USE_SSE = [
   'event: message_start',
   `data: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } })}`,
@@ -190,23 +170,19 @@ describe('Anthropic cache breakpoints on the wire', () => {
     expect(mock.requests.length).toBeGreaterThanOrEqual(1);
     const body = bodyOf(mock, 0);
 
-    // System prompt is a cache-eligible block with the end-of-system breakpoint.
     const system = field(body, 'system', SystemBlocksSchema);
     expect(system[system.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
     expect(system.map((block) => block.text).join('')).toBe('You are Kinu.');
 
-    // The tool-surface breakpoint (fold of the old cf-backend anthropic-cache.ts).
     const tools = field(body, 'tools', ToolBlocksSchema);
     expect(tools[tools.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
 
-    // Rolling tail: the last 2 messages end with a cache_control block.
     const messages = field(body, 'messages', AnthropicMessagesSchema);
     const last = messages[messages.length - 1]?.content ?? [];
     const prev = messages[messages.length - 2]?.content ?? [];
     expect(last[last.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
     expect(prev[prev.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
 
-    // Anthropic hard limit: at most 4 cache_control blocks per request.
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
   });
 
@@ -216,8 +192,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const step2 = bodyOf(mock, 1);
 
     const messages = field(step2, 'messages', AnthropicMessagesSchema);
-    // Step 2 appends the assistant tool_use + the tool_result — the tail
-    // markers must now sit on those newest messages, not the old tail.
+    // Step 2: the tail markers move to the newest messages.
     const last = messages[messages.length - 1];
     expect(last?.content.some((part) => part.type === 'tool_result')).toBe(true);
     expect(last?.content[last.content.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
@@ -239,7 +214,6 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const messages = field(body, 'messages', AnthropicMessagesSchema);
     const last = messages[messages.length - 1]?.content ?? [];
     expect(last[last.length - 1]?.cache_control).toEqual(long);
-    // A longer TTL must not buy more breakpoints.
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
   });
 
@@ -247,13 +221,10 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const mock = await runAnthropicTurn('none');
     const body = bodyOf(mock, 0);
     expect(countCacheControl(body)).toBe(0);
-    // The system prompt falls back to the plain (uncached) block.
     const system = field(body, 'system', SystemBlocksSchema);
     expect(system.every((block) => block.cache_control === undefined)).toBe(true);
   });
 });
-
-// ── OpenAI family: prompt_cache_key routing ───────────────────────────────
 
 describe('OpenAI prompt_cache_key on the wire', () => {
   test('openai (responses API): promptCacheKey serializes as prompt_cache_key', async () => {
@@ -337,7 +308,6 @@ describe('OpenRouter cache addressing on the wire', () => {
     const body = await runOpenRouterTurn('meta-llama/llama-4-maverick');
     expect(body.prompt_cache_key).toBe('kinu-or');
     expect(countCacheControl(body)).toBe(0);
-    // System stays a plain string message.
     const messages = field(body, 'messages', OpenAiMessagesSchema);
     expect(messages[0]).toEqual({ role: 'system', content: 'sys' });
   });
@@ -373,7 +343,7 @@ describe('openai-compat + no-op providers', () => {
     }, mock.fetch);
 
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
-    // workers-ai resolves to the `none` strategy — affinity headers, not body fields.
+    // workers-ai resolves to the `none` strategy: affinity headers, not body fields.
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6', sessionKey: 'kinu-x' },

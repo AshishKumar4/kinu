@@ -1,7 +1,4 @@
-// Every package's suite asserts it, because the failure it catches is silent:
-// a checkout whose node_modules points at another one runs green while testing
-// the other tree's source. Imported by relative path on purpose — see the
-// guard's own header.
+// A checkout whose node_modules points at another tree runs green on the wrong source. Relative import on purpose.
 import { test } from 'bun:test';
 import { assertWorkspaceResolution } from '../../test-utils/src/workspace-resolution';
 

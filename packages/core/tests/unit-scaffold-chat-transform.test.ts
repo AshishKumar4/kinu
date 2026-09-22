@@ -1,16 +1,4 @@
-/**
- * The evolved scaffold on the LOCAL turn seam — scaffold/chat-transform.ts.
- *
- * The peer of unit-scaffold-inference-transform.test.ts. Same contract, the
- * other stream vocabulary (`runChat`'s ChatEvent):
- *   - un-evolved agent (version <= 0): the default turn passes through
- *     UNTOUCHED (same object — zero overhead, no wrapper).
- *   - promoted scaffold: it DRIVES the turn — a custom scaffold's output
- *     replaces the default turn's, and the default turn is never started
- *     (runChat is lazy, so no model request is made).
- *   - delegating scaffold: the default turn's events pass through verbatim,
- *     and its responseMessages survive onto this seam's single `done`.
- */
+/** Local-seam peer of unit-scaffold-inference-transform.test.ts, over `runChat`'s ChatEvent vocabulary. */
 import { describe, test, expect } from 'bun:test';
 import { scaffoldChatTransform, prepareActorProgram, type ChatEvent } from '../src/index';
 import type { ScaffoldRunOptions } from '../src/scaffold/executor';
@@ -80,7 +68,6 @@ async function selected(version: number, scaffoldCode: string,
   return { program, run };
 }
 
-/** A default turn, plus a flag recording whether anything ever started it. */
 function defaultTurn(events: ChatEvent[]) {
   let started = false;
 
@@ -123,7 +110,7 @@ describe('scaffoldChatTransform', () => {
     const text = events.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []).join('');
     expect(text).toBe('scaffold answer for: the task');
     expect(text).not.toContain('default answer');
-    // runChat is lazy — a scaffold that never delegates never fires a request.
+    // runChat is lazy, so a scaffold that never delegates never fires a request.
     expect(started()).toBe(false);
 
     const done = events.at(-1);
@@ -131,7 +118,6 @@ describe('scaffoldChatTransform', () => {
 
     if (done?.type !== 'done') throw new Error('unreachable');
     expect(done.text).toBe('scaffold answer for: the task');
-    // The reply the user saw must survive into the durable history.
     expect(done.responseMessages).toEqual([
       { role: 'assistant', content: [{ type: 'text', text: 'scaffold answer for: the task' }] },
     ]);
@@ -142,7 +128,6 @@ describe('scaffoldChatTransform', () => {
     const events = await collect(scaffoldChatTransform({ chat, ...await selected(2, DELEGATING_SCAFFOLD) }));
 
     expect(started()).toBe(true);
-    // Every non-done default event, verbatim and in order; exactly one done.
     expect(events.slice(0, 3)).toEqual(DEFAULT_EVENTS.slice(0, 3));
     expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
 
@@ -150,14 +135,11 @@ describe('scaffoldChatTransform', () => {
 
     if (done?.type !== 'done') throw new Error('expected a trailing done');
     expect(done.text).toBe('default answer');
-    // The delegated turn's response messages are what the caller persists.
     expect(done.responseMessages).toEqual([{ role: 'assistant', content: 'default answer' }]);
   });
 
   test('a delegated narrated turn answers with the answer its done carries, not every delta', async () => {
-    // The runner's `done` already applies the one answer rule (the final
-    // step's text). A seam that preferred the deltas it relayed rebuilt the
-    // narration-plus-answer concatenation the rule exists to prevent.
+    // The runner's `done` already applies the one-answer rule; preferring relayed deltas would re-concatenate narration.
     const narrated: ChatEvent[] = [
       { type: 'text-delta', delta: 'Looking at the workspace first.' },
       { type: 'tool-call', toolName: 'search', toolCallId: 'call-1', args: { q: 'x' } },
@@ -173,7 +155,6 @@ describe('scaffoldChatTransform', () => {
     const done = events.at(-1);
 
     if (done?.type !== 'done') throw new Error('expected a trailing done');
-    // The deltas still stream, in order; the answer is the done's.
     expect(events.filter((e) => e.type === 'text-delta').map((e) => e.type === 'text-delta' ? e.delta : ''))
       .toEqual(['Looking at the workspace first.', 'FAIL']);
     expect(done.text).toBe('FAIL');
@@ -223,22 +204,15 @@ describe('scaffoldChatTransform', () => {
     expect(call).toEqual({
       type: 'tool-call', toolName: 'search', toolCallId: expect.any(String), args: { q: 'the task' },
     });
-    // The rendering for readers that render; the VALUE for the ledger — a
-    // scaffold-authored call's row records what the tool returned, not a
-    // string of it, exactly as the builtin loop's row does.
+    // The ledger row records the returned value, not its rendering, as the builtin loop does.
     expect(result).toEqual({
       type: 'tool-result', toolName: 'search', toolCallId: expect.any(String),
       result: '{"hits":2}', output: { hits: 2 }, success: true,
     });
-    // The pair carries the dispatch's own call id, so a surface reporting the
-    // call out of band can settle the right one.
     expect(result?.toolCallId).toBe(call?.toolCallId);
   });
 
   test('a tool result relayed as an authored chunk keeps its value and its duration', async () => {
-    // A scaffold that relays a delegated tool result as a JSON `ui_chunk`
-    // crosses the wire schema; a schema that dropped `output` or `durationMs`
-    // would hand the ledger a rendering and a row with no cost.
     const relaying = `async function run() {
       await host.emit({ type: 'ui_chunk', chunk: { type: 'tool-result', toolName: 'search', toolCallId: 'c1',
         result: '{"hits":2}', output: { hits: 2 }, durationMs: 7, success: true } });
@@ -266,8 +240,7 @@ describe('scaffoldChatTransform', () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
     const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, 'this is not javascript {') }));
 
-    // ONE: the run reports its own failure as it returns, and the transform
-    // adds nothing for the same failure — a client used to see it twice.
+    // The run reports its own failure; the transform must not add a second one.
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
     expect(events.at(-1)?.type).toBe('done');
   });

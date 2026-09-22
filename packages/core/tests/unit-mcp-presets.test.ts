@@ -1,8 +1,4 @@
-// The preset catalog is the one source the UI and the UserDO both resolve
-// against — these pin what makes a preset a preset: the id set is the three
-// the feature shipped with, every endpoint is a parseable https URL (the add
-// path stores it verbatim), and a token preset cannot render its one field
-// without a label.
+// The one preset catalog the UI and UserDO resolve against; endpoints are stored verbatim, so each must be https.
 import { describe, expect, test } from 'bun:test';
 import { MCP_PRESETS, mcpPresetById } from '../src/mcp/presets';
 
@@ -32,16 +28,13 @@ describe('MCP_PRESETS', () => {
   });
 
   test('an oauth-app preset answers its deploy fallback and its scope', () => {
-    // Core owns the catalog shape, never the env names — those are typed keys
-    // on `Env`, which cf-backend's MCP_APP_ENV maps each oauth-app id onto.
+    // Env names are typed keys on `Env`, mapped by cf-backend's MCP_APP_ENV.
     const oauthApps = MCP_PRESETS.filter((preset) => preset.auth === 'oauth-app');
 
     for (const preset of oauthApps) {
       expect(preset.scope).toBeTruthy();
     }
 
-    // GitHub carries a token fallback so the card works without the app;
-    // Gmail has none — the card renders only when the app is configured.
     expect(oauthApps.find((p) => p.id === 'github')?.tokenFallback).toBeTruthy();
     expect(oauthApps.find((p) => p.id === 'google')?.tokenFallback).toBeUndefined();
   });

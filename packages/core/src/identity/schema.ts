@@ -1,11 +1,4 @@
-/**
- * Unified schema — ALL workspace tables in one place.
- * Idempotent: every statement uses IF NOT EXISTS.
- *
- * This is the single source of truth for what constitutes a workspace:
- * About twenty tables in one SQLite file make one workspace: the file plane,
- * one conversation per agent, evolution state, and the default orchestrator.
- */
+/** Every workspace table, in one place. Idempotent: every statement uses IF NOT EXISTS. */
 
 import { initSearchTables } from '../mcts/schemas';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
@@ -14,7 +7,6 @@ import { initCodemodeStateTable } from './program-state';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
-  // ── Workspace identity — the ownership root ────────────────────
   `CREATE TABLE IF NOT EXISTS workspace_identity (
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
@@ -27,20 +19,9 @@ export const WORKSPACE_IDENTITY_DDL =
 
 /** Durable state owned by every full-loop actor, including facet actors. */
 const ACTOR_DDL = [
-  // ── MCTS search tree ───────────────────────────────────────────
-  // Canonical DDL owned by mcts/schemas.ts (initSearchTables, run below). A
-  // second copy here drifted once and left a live workspace without a column
-  // every reader named.
+  // mcts/schemas.ts and scaffold/schemas.ts own their DDL (run below): one owner per table.
 
-  // ── Scaffold management + task history ─────────────────────────
-  // Canonical DDL owned by scaffold/schemas.ts (initScaffoldTables, run below),
-  // for the same reason: one owner per table.
-
-  // ── Durable fibers (CLI equivalent of cf_agents_runs) ──────────
-  // ACTOR-SCOPED: a fiber is a lane of ONE actor's work, and its name is minted
-  // per lane ('advisor-lane', 'reactor', …) — so every actor in a workspace
-  // presents the same fiber names, and a shared table would let a subordinate's
-  // recovery sweep resume the root's lane.
+  // Actor-scoped: fiber names ('advisor-lane', 'reactor', …) repeat across actors.
   `CREATE TABLE IF NOT EXISTS fibers (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL,
@@ -51,19 +32,7 @@ const ACTOR_DDL = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_fibers_actor_name ON fibers(actor_id, name)`,
 
-
-  // ── Memory chunks — schema owned by MemoryStore (agent-utils) ──
-  // NOT created here. MemoryStore.ensureSchema() creates the table
-  // with its own schema (id TEXT, path, start_line, end_line, hash,
-  // text, updated_at) plus FTS5 virtual table. Creating the table
-  // here with a different schema would cause a conflict.
-  //
-  // For CLI (which uses inline memory, not MemoryStore), the test
-  // helpers create their own simplified schema.
-
-  // ── Evolution event log ────────────────────────────────────────
-  // ACTOR-SCOPED: each actor evolves its own scaffold, prompt and facts, and
-  // the timeline read model renders THIS actor's history.
+  // memory_chunks is owned by MemoryStore (agent-utils), not created here.
   `CREATE TABLE IF NOT EXISTS evolution_events (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
@@ -76,7 +45,6 @@ const ACTOR_DDL = [
   `CREATE INDEX IF NOT EXISTS idx_evolution_events_actor
      ON evolution_events(actor_id, created_at DESC, id DESC)`,
 
-  // ── Executor output log ────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS executor_output (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
@@ -91,7 +59,6 @@ const ACTOR_DDL = [
   `CREATE INDEX IF NOT EXISTS idx_executor_output_actor
      ON executor_output(actor_id, created_at DESC, id DESC)`,
 
-  // ── Activity log — real-time turn-level tracing ────────────────
   `CREATE TABLE IF NOT EXISTS activity_log (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL DEFAULT (lower(hex(randomblob(9)))),
@@ -105,9 +72,7 @@ const ACTOR_DDL = [
      ON activity_log(actor_id, created_at DESC, id DESC)`,
 ];
 
-// ── Fork lineage — single-row table populated when this workspace is a
-// fork. Empty otherwise. Written once by forkWorkspaceStorage and read by
-// the getForkLineage RPC for the UI lineage chip.
+// Single row, present only on a fork; written once by forkWorkspaceStorage.
 const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     id                            INTEGER PRIMARY KEY,
     source_workspace_id           TEXT    NOT NULL,
@@ -117,15 +82,7 @@ const FORK_LINEAGE_DDL = `CREATE TABLE IF NOT EXISTS fork_lineage (
     forked_at                     INTEGER NOT NULL
   )`;
 
-/**
- * Fork transfer staging — the state of the ONE unpublished fork transfer this
- * workspace is receiving. Empty on every workspace that is not mid-fork.
- *
- * A single row, because a target receives one transfer at a time: a second
- * `begin` replaces the first rather than racing it. Its columns are what
- * `identity/fork-staging.ts`'s `ForkStagingState` reads and writes; the reason
- * they are a TABLE rather than instance fields is written down there.
- */
+/** The one unpublished fork transfer being received; a second `begin` replaces it (identity/fork-staging.ts). */
 const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     id                              INTEGER PRIMARY KEY CHECK (id = 1),
     head_declared                   INTEGER NOT NULL DEFAULT 0,
@@ -159,33 +116,18 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     published                       INTEGER NOT NULL DEFAULT 0
   )`;
 
-/** The files an unpublished transfer has already published into the target's
- *  plane. A replacement `begin` removes exactly these paths, so an abandoned
- *  attempt cannot leave a file behind — and the list survives the activation
- *  that wrote it, which is the whole point of it being a table. */
+/** Files an unpublished transfer already published; a replacement `begin` removes exactly these. */
 const FORK_STAGED_FILES_DDL = `CREATE TABLE IF NOT EXISTS fork_staged_files (
     path TEXT PRIMARY KEY
   )`;
 
-/** Initialize state local to one full-loop actor without materializing a
- * workspace ownership root or independent fork lineage. */
+/** Actor-local state, without a workspace ownership root or fork lineage. */
 export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   for (const ddl of ACTOR_DDL) execRaw(ddl);
   initSearchTables(execRaw);
   initScaffoldTables(execRaw);
-  // NOT actor-local, and deliberately so — the one table in this function that
-  // is not. `crafted_tools` is keyed `name TEXT PRIMARY KEY` and holds ONE
-  // catalog per workspace: PRODUCT-SPEC.md:371 admits crafted tools as
-  // additional tools whose availability "is intersected with the actor's role",
-  // so eligibility is a filter on the tool SURFACE, not a predicate on storage.
-  // Scoping the rows would give each actor a private catalog and silently
-  // change what crafting means. It is created here because every actor's
-  // runtime reads the catalog and no arm of the boot is guaranteed to have run
-  // the full workspace schema first.
+  // Workspace-wide by design: role eligibility filters the tool surface, not storage (PRODUCT-SPEC.md:371).
   initCraftedToolsTables(sql);
-  // The `state.*` sandbox namespace: what an eval program saved for
-  // the next one. Actor-local: a program's saved state belongs to the actor
-  // that ran it.
   initCodemodeStateTable(execRaw);
 }
 
@@ -196,35 +138,12 @@ export function initWorkspaceOwnershipTables(execRaw: RawSqlExec): void {
   execRaw(FORK_STAGED_FILES_DDL);
 }
 
-/** Initialize a workspace ownership root and its actor state. */
 export function initAllTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   initWorkspaceOwnershipTables(execRaw);
   initActorTables(execRaw, sql);
 }
 
-/**
- * Whether a table exists in this workspace database.
- *
- * Exists so "the table is absent" is a VALUE a caller can branch on rather
- * than an exception it has to catch. A `catch` around a query cannot tell a
- * missing table from a syntax error, a locked database or a constraint
- * violation, and conflating them is how `workspace_capability` stayed invisible
- * for months. Portable across both backends — DO SQLite and bun:sqlite both
- * expose `sqlite_master`.
- */
-/**
- * The `fibers` table and its index, alone.
- *
- * ONE OWNER PER TABLE. A second, UNSCOPED copy of this DDL lets whichever
- * `CREATE TABLE IF NOT EXISTS` runs first decide the shape, and neither
- * outcome says so: when the unscoped copy wins its unscoped writes are
- * self-consistent and nothing complains, and when the workspace schema wins
- * every unscoped insert violates `actor_id NOT NULL` — a runtime failure that
- * typechecks clean. Exported for the same reason
- * `initAgentConfigTable` and `initScaffoldTables` are: a runtime can be built
- * without running the whole workspace schema, and it must then reach the
- * canonical DDL rather than carry a copy of it.
- */
+/** The canonical `fibers` DDL, for runtimes built without the whole workspace schema. */
 export function initFiberTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS fibers (
     actor_id   TEXT NOT NULL,
@@ -237,14 +156,14 @@ export function initFiberTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_fibers_actor_name ON fibers(actor_id, name)`);
 }
 
+/** Absence as a value: a catch cannot tell a missing table from other SQL errors. */
 export function tableExists(sql: SqlExecutor, table: string): boolean {
   return sql<{ name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}
   `.length > 0;
 }
 
-/** The quoted, comma-joined form of a declared vocabulary for a DDL CHECK
- *  constraint, so a table's CHECK derives from the same list its type does. */
+/** A vocabulary quoted for a DDL CHECK, so the CHECK derives from the same list as the type. */
 export function sqlCheckList(values: readonly string[]): string {
   return values.map((value) => `'${value}'`).join(',');
 }

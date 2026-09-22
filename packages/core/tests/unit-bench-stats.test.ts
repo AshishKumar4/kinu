@@ -31,7 +31,6 @@ describe('binomialTwoSidedP (exact McNemar null)', () => {
     expect(binomialTwoSidedP(1, 10)).toBeCloseTo((2 * 11) / 1024, 10);
     // All 6 discordant pairs favour one side: 2 * (1/64).
     expect(binomialTwoSidedP(6, 6)).toBeCloseTo(2 / 64, 10);
-    // Perfectly balanced is maximally unsurprising.
     expect(binomialTwoSidedP(5, 10)).toBe(1);
   });
 
@@ -78,9 +77,7 @@ describe('pairedBootstrapCI', () => {
 });
 
 describe('minimumDetectableEffect', () => {
-  // The calibration anchor stated in the harness docs: at ~157 paired tasks
-  // with 20% dispersion (= 20% discordance at one attempt per task),
-  // alpha=0.05 and power=0.8, the design resolves ~10pp.
+  // Calibration anchor from the harness docs: ~157 pairs, 20% discordance, alpha 0.05, power 0.8 → ~10pp.
   test('157 pairs at 20% dispersion resolves ~10pp', () => {
     const mde = minimumDetectableEffect({ pairs: 157, dispersion: 0.2 });
     expect(mde).toBeCloseTo(0.1, 3);
@@ -88,7 +85,6 @@ describe('minimumDetectableEffect', () => {
 
   test('3pp at that dispersion needs far more pairs than the corpus has', () => {
     expect(requiredPairs(0.03, { dispersion: 0.2 })).toBe(1745);
-    // Round-trip: the pairs required for delta must actually resolve delta.
     const n = requiredPairs(0.1, { dispersion: 0.2 });
     expect(minimumDetectableEffect({ pairs: n, dispersion: 0.2 })).toBeLessThanOrEqual(0.1);
   });
@@ -188,19 +184,13 @@ describe('pairedBinaryComparison', () => {
     expect(stats.canReachSignificance).toBe(false);
     expect(stats.significant).toBe(false);
     expect(stats.verdict).toContain('UNDECIDABLE');
-    // One more pair and it becomes possible.
     const six = pairedBinaryComparison(outcomes([...spec, { a: false, b: true }]), { seed: 1, iterations: 500 });
     expect(six.canReachSignificance).toBe(true);
     expect(six.significant).toBe(true);
   });
 
   test('the floor counts DIFFERING pairs, so a big corpus that barely disagreed is undecidable', () => {
-    // 40 tasks, 2 of which differed. Every prior test in this file used
-    // all-discordant specs, where pairs === discordant and the two possible
-    // denominators are indistinguishable — so the case that actually matters was
-    // the one nothing covered. Reading the floor off `pairs` here reports
-    // canReachSignificance=true on a design whose smallest achievable p is 0.5,
-    // which is the exact shape of the first live CL-Bench verdict.
+    // 40 tasks, 2 differing: the floor comes from discordant pairs, not `pairs` (smallest p is 0.5).
     const spec = [
       ...Array.from({ length: 2 }, () => ({ a: false, b: true })),
       ...Array.from({ length: 38 }, () => ({ a: true, b: true })),
@@ -214,7 +204,6 @@ describe('pairedBinaryComparison', () => {
     expect(stats.pValue).toBeCloseTo(0.5, 10);
     expect(stats.verdict).toContain('UNDECIDABLE');
     expect(stats.verdict).toContain('2 of 40');
-    // And the whole point: 40 tasks is not what makes a contrast decidable.
     expect(floorPValue(stats.pairs)).toBeLessThan(0.05);
   });
 
@@ -262,9 +251,7 @@ describe('pairedBinaryComparison', () => {
 
 describe('repeats — the unit of pairing stays the task', () => {
   test('naive per-attempt pairing would call this significant; per-task pairing does not', () => {
-    // Four tasks, three repeats each. The candidate sweeps every repeat of
-    // every task and the baseline fails every one of them — as clean a win as
-    // the design can produce, and STILL only four independent pairs.
+    // Four tasks, three repeats, a clean sweep: still only four independent pairs.
     const spec = Array.from({ length: 4 }, () => ({ a: [false, false, false], b: [true, true, true] }));
     const stats = pairedBinaryComparison(repeated(spec), { seed: 1, iterations: 2000 });
 
@@ -277,9 +264,7 @@ describe('repeats — the unit of pairing stays the task', () => {
     expect(stats.significant).toBe(false);
     expect(stats.canReachSignificance).toBe(false);
 
-    // What pseudoreplication would have produced: the same 12 attempts fed in
-    // as 12 independent pairs. 2·0.5^12 = 0.00049 — "significant", from four
-    // tasks, purely by counting the same task three times.
+    // Pseudoreplication: 12 attempts as independent pairs gives 2·0.5^12, "significant" from four tasks.
     const naive = pairedBinaryComparison(
       spec.flatMap((s, t) => s.a.map((a, r) => ({ taskId: `t${t}-r${r}`, a: [a], b: [s.b[r]] }))),
       { seed: 1, iterations: 2000 },
@@ -308,7 +293,6 @@ describe('repeats — the unit of pairing stays the task', () => {
     expect(stats.passAllA).toBeCloseTo(0.5, 10);
     expect(stats.passAllB).toBeCloseTo(0.25, 10);
     expect(stats.effectAll).toBeCloseTo(-0.25, 10);
-    // Single-shot says B is ahead; reliability says B is behind. Both reported.
     expect(stats.effect).toBeGreaterThan(0);
     expect(stats.effectAll).toBeLessThan(0);
   });
@@ -341,8 +325,7 @@ describe('repeats — the unit of pairing stays the task', () => {
     expect(stats.flakyA).toBe(2);
     expect(stats.flakyB).toBe(2);
     expect(stats.flakyEither).toBe(3);
-    // The both-unstable tie is neither a clean pass nor a clean fail, and is
-    // counted as neither rather than being rounded into one.
+    // A both-unstable tie counts as neither pass nor fail.
     expect(stats.tiedPartial).toBe(1);
     expect(stats.bothPass).toBe(1);
     expect(stats.bothFail).toBe(0);
@@ -350,9 +333,7 @@ describe('repeats — the unit of pairing stays the task', () => {
   });
 
   test('repeats shrink dispersion, so the reported resolution reflects them', () => {
-    // Same four tasks, same true per-task rates. At one attempt the sampled
-    // difference is ±1 on the noisy tasks; at three attempts it is ±1/3, and
-    // the design's detectable effect follows the dispersion down.
+    // Same per-task rates: the detectable effect follows dispersion down as attempts grow.
     const noisy = pairedBinaryComparison(repeated([
       { a: [true, true, false], b: [true, true, true] },
       { a: [true, false, true], b: [true, true, true] },
@@ -416,8 +397,7 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(g.statelessReward).toBe(0.5);
     expect(g.gain).toBeCloseTo(0.5, 10);
     expect(g.normalizedGain).toBeCloseTo(1, 10); // captured all the headroom
-    // Two of four tasks differed, and two differing pairs bottom out at p=0.5,
-    // so the arithmetic is right and the design still cannot decide.
+    // Two differing pairs floor at p=0.5: the arithmetic is right and the design cannot decide.
     expect(g.pairsWithDifference).toBe(2);
     expect(g.canReachSignificance).toBe(false);
     expect(g.verdict).toContain('UNDECIDABLE');
@@ -432,9 +412,7 @@ describe('computeGain (stateful vs stateless)', () => {
     ], { seed: 4, iterations: 2000 });
 
     expect(g.gain).toBe(0);
-    // An empty denominator is vacuous per task and a failure per design: no task
-    // differed, so this contrast measured nothing and must not read as a neutral
-    // "no effect". That is what an inert mechanism looks like from the outside.
+    // No task differed, so this contrast measured nothing and must not read as "no effect".
     expect(g.pairsWithDifference).toBe(0);
     expect(g.canReachSignificance).toBe(false);
     expect(g.verdict).toContain('measured nothing at all');
@@ -450,9 +428,7 @@ describe('computeGain (stateful vs stateless)', () => {
 
     expect(g.gain).toBeCloseTo(-1, 10);
     expect(g.pValue).toBeCloseTo(2 / 16, 10);
-    // Four differing pairs floor at p=0.125, above alpha, so the direction is
-    // withheld: "the stateful arm did WORSE" on four pairs is the same
-    // over-reading as calling a null a finding.
+    // Four differing pairs floor at p=0.125, above alpha, so the direction is withheld.
     expect(g.canReachSignificance).toBe(false);
     expect(g.verdict).toContain('UNDECIDABLE');
   });
@@ -470,11 +446,7 @@ describe('computeGain (stateful vs stateless)', () => {
   });
 
   test('the design floor is 2^(1-k) in DIFFERING pairs, and k>=6 is exact', () => {
-    // Three separate readers got this wrong in one evening, each by taking the
-    // denominator to be total pairs. The sign test drops ties, so the only
-    // denominator that exists is the number of pairs that DIFFERED: floor
-    // two-sided p = 2^(1-k), which is 0.5 at k=2 and 0.0625 at k=5, and
-    // 2^(1-k) <= 0.05 first holds at k=6. Total n bounds k and decides nothing.
+    // The sign test drops ties: floor two-sided p = 2^(1-k) over differing pairs k, first <= 0.05 at k=6.
     for (const k of [1, 2, 3, 4, 5, 6, 7, 10]) {
       expect(floorPValue(k)).toBeCloseTo(2 ** (1 - k), 12);
     }
@@ -483,8 +455,7 @@ describe('computeGain (stateful vs stateless)', () => {
     expect(floorPValue(5)).toBeGreaterThan(DEFAULT_ALPHA);
     expect(floorPValue(6)).toBeLessThanOrEqual(DEFAULT_ALPHA);
 
-    // And computeGain divides by that set, not by the set it ran: twenty tasks
-    // where only five differ still cannot decide.
+    // computeGain divides by the differing set: five of twenty cannot decide.
     const g = computeGain([
       ...Array.from({ length: 5 }, (_, i) => ({ taskId: `d${i}`, stateful: 1, stateless: 0 })),
       ...Array.from({ length: 15 }, (_, i) => ({ taskId: `t${i}`, stateful: 1, stateless: 1 })),
@@ -497,9 +468,7 @@ describe('computeGain (stateful vs stateless)', () => {
   });
 
   test('an unbounded reward scale gets no normalized gain', () => {
-    // CL-Bench's poker rewards are signed chip counts. "Fraction of remaining
-    // headroom" assumes rewards in [0,1]; on that scale it is not a quantity,
-    // and the first real run would otherwise have reported -25% of headroom.
+    // Poker rewards are signed chip counts, so "fraction of headroom" is undefined outside [0,1].
     const g = computeGain([
       { taskId: 'hand1', stateful: -1.0, stateless: -1.0 },
       { taskId: 'hand2', stateful: -0.5, stateless: 2.0 },

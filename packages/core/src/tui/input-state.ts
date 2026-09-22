@@ -1,20 +1,13 @@
-/**
- * The TUI chat input state machine owns turn lifecycle, interrupt and
- * walk-back, queueing, branching, and queued-draft editing. Keyboard and
- * client events both dispatch semantic events through this reducer.
- */
+// Keyboard and client events both dispatch through this reducer.
 
 /** Esc pressed again within this window of the arming Esc opens walk-back. */
 export const ESC_ESC_BEAT_MS = 750;
 
 export interface InputState {
-  /** Open turns (turn-start minus turn-end); > 0 means processing. */
+  /** turn-start minus turn-end; > 0 means processing. */
   activeTurns: number;
-  /** Timestamp of the Esc that armed walk-back, or null. */
   escArmedAt: number | null;
-  /** Drafts queued by the queue action or /queue, in FIFO order. */
   queue: string[];
-  /** Walk-back picker overlay visibility. */
   walkbackOpen: boolean;
   /** A walk-back request waiting for every interrupted turn to settle. */
   walkbackPending: boolean;
@@ -126,8 +119,7 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
       }
 
       if (busy) {
-        // Interrupt means stop — queued drafts must not auto-fire when the
-        // aborted turn settles; they return to the composer for editing.
+        // Interrupt means stop: queued drafts return to the composer instead of auto-firing.
         const restored = [event.draft.trim(), ...state.queue].filter(Boolean).join('\n');
 
         return {
@@ -171,7 +163,6 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
         };
       }
 
-      // Nothing running — a queued message just sends.
       return { state, effects: [{ kind: 'send-queued', text }] };
     }
 
@@ -188,7 +179,6 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
         return { state, effects: [{ kind: 'send-branch', text }, { kind: 'clear-input' }] };
       }
 
-      // Nothing running — there is no live turn to branch from; just send.
       return { state, effects: [{ kind: 'send-queued', text }, { kind: 'clear-input' }] };
     }
 

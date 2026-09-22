@@ -1,36 +1,6 @@
 /**
- * `NODE_BUILTIN_TOOLS` survives every entry order — the behavioural half of the
- * import-cycle gate.
- *
- * A value cycle through
- *
- *   heads/head-tools -> tools/builtins -> delegation/agents-tool
- *                    -> strategy/swarm-run -> strategy/node-agent -> heads/head-tools
- *
- * would expose the module-scope spread in `strategy/node-agent.ts`
- * (`[...HEAD_BUILTIN_TOOLS, 'report']`) to a temporal-dead-zone read. Keep
- * `HEAD_BUILTIN_TOOLS` in `heads/types`, and exercise each entry order in its
- * own process so a module-load failure is reported rather than hidden by
- * another entry order.
- *
- * `import/no-cycle` (.oxlintrc.json) catches the cycle statically. This catches
- * the initialisation behaviourally, and the two fail for different reasons: the
- * lint rule cannot see a TDZ read, and this cannot see a cycle that nothing reads
- * at module scope yet.
- *
- * Two design rules, both learned from the incident:
- *
- *   Subprocesses, because entry order is a property of a module registry and a
- *   registry is per PROCESS. Static imports here would measure whichever order
- *   some earlier test file in the same `bun test` run already established — a
- *   check that cannot fail. Each case gets its own `bun` process whose FIRST
- *   import is the module under test.
- *
- *   This file imports NOTHING from `../src`, on purpose. A test that statically
- *   imports the constant it is guarding fails the same way the incident did — the
- *   file stops loading and its cases vanish from the count instead of failing.
- *   Every value here arrives as subprocess output, so a temporal-dead-zone read
- *   is reported as a failing test that names the ReferenceError.
+ * `NODE_BUILTIN_TOOLS` survives every entry order: each case is a fresh `bun` process (the registry is
+ * per process), and this file imports nothing from `../src` so a TDZ read fails a case instead of the file.
  */
 
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -47,10 +17,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const srcUrl = (relative: string): string =>
   pathToFileURL(join(here, '..', 'src', relative)).href;
 
-/**
- * Every listed module and barrel is a possible first import, so each must
- * initialise the shared constants correctly in a fresh process.
- */
 const ENTRY_POINTS: ReadonlyArray<readonly [label: string, specifier: string]> = [
   ['the heads barrel', 'heads/index.ts'],
   ['heads/head-tools', 'heads/head-tools.ts'],
@@ -63,8 +29,7 @@ const ENTRY_POINTS: ReadonlyArray<readonly [label: string, specifier: string]> =
   ['strategy/node-agent — the reader itself, first', 'strategy/node-agent.ts'],
 ];
 
-/** What the probe prints. Parsed rather than asserted: unreadable probe output is
- *  a broken experiment, and a cast would have reported it as an empty surface. */
+/** Parsed rather than cast: unreadable probe output is a broken experiment, not an empty surface. */
 const ObservedSchema = v.object({
   head: v.array(v.string()),
   node: v.array(v.string()),
@@ -76,8 +41,7 @@ function observeAfterLoading(specifier: string): Observed {
   const dir = scratchDir('init-order');
 
   const probe = join(dir, 'probe.mjs');
-  // The first import is the whole experiment; the two below it read constants
-  // out of an already-populated registry and cannot change the order.
+  // Only the first import sets the order; the two below read an already-populated registry.
   writeFileSync(
     probe,
     [
@@ -101,10 +65,7 @@ function observeAfterLoading(specifier: string): Observed {
 }
 
 describe('module initialisation order', () => {
-  // The reference every case is measured against. It loads through the core
-  // barrel in its own process and must itself initialise successfully, so a
-  // broken reference fails explicitly instead of making the comparisons below
-  // vacuously true.
+  // The reference must itself initialise, or every comparison below is vacuous.
   const [, referenceSpecifier] = ENTRY_POINTS[3];
   const reference = observeAfterLoading(referenceSpecifier);
 

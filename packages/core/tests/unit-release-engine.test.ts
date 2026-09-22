@@ -1,11 +1,4 @@
-/**
- * ReleaseEngine — behavior tests, grounded at the exec seam.
- *
- * The ledger is the REAL ReleaseStore over bun:sqlite (so lifecycle,
- * redaction, and approval rules stay authoritative); only the sandbox exec
- * seam is scripted. Every pass/fail below comes from a scripted exit code,
- * never from an asserted string.
- */
+/** ReleaseEngine over the real ReleaseStore (bun:sqlite); only the sandbox exec seam is scripted. */
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -27,8 +20,6 @@ import {
 } from '../src/index';
 import { makeSqlExec } from './helpers';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
-
-// ── Fake sandbox exec seam ─────────────────────────────────────────────────
 
 type ExecResult = { stdout?: string; stderr?: string; exitCode?: number };
 
@@ -68,8 +59,7 @@ class FakeSandbox implements ReleaseExec {
       }
     }
 
-    // Unmatched commands succeed (exit 0); emulate the pathExists probe's
-    // `test -e … && echo yes || echo no` so success reads as existing.
+    // Unmatched commands succeed; emulate the pathExists probe so success reads as existing.
     return { stdout: command.includes('echo yes') ? 'yes' : '', stderr: '', exitCode: 0 };
   }
 
@@ -83,8 +73,6 @@ class FakeSandbox implements ReleaseExec {
     return this.exposeResult;
   }
 }
-
-// ── Real ledger over bun:sqlite ────────────────────────────────────────────
 
 function makeStore(): ReleaseStore {
   const db = new Database(':memory:');
@@ -156,7 +144,6 @@ function setup(opts?: {
   return { store, engine, sandbox, changeId: change.id, workdir: `/workspace/releases/${change.id}` };
 }
 
-/** Script a healthy local git workdir: fresh init, apply/commit succeed. */
 function scriptLocalGit(sandbox: FakeSandbox, sha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'): void {
   sandbox
     .on(/test -e .*\.git/, { stdout: 'no' })
@@ -173,8 +160,6 @@ async function applyAndPass(s: Setup): Promise<void> {
   if (!checks.ok || !checks.allPassed) throw new Error('expected passing checks');
 }
 
-// ── Apply ──────────────────────────────────────────────────────────────────
-
 describe('engine.apply', () => {
   test('applies the stored patch for real: workdir git flow, commit sha, check row, status=validating', async () => {
     const s = setup();
@@ -188,9 +173,7 @@ describe('engine.apply', () => {
       status: 'validating',
     });
 
-    // The patch bytes actually landed at the exec seam...
     expect(s.sandbox.files.get(`/tmp/${s.changeId}.patch`)).toBe(`${PATCH}\n`);
-    // ...and were applied + committed via real git commands in the workdir.
     expect(s.sandbox.commands.some((c) => c.includes('init -b main'))).toBe(true);
     expect(s.sandbox.commands.some((c) => c.includes(`apply --whitespace=nowarn '/tmp/${s.changeId}.patch'`))).toBe(true);
     expect(s.sandbox.commands.some((c) => c.includes(`commit -m 'release change ${s.changeId}'`))).toBe(true);
@@ -255,9 +238,8 @@ describe('engine.apply', () => {
     scriptLocalGit(s.sandbox);
     expect((await s.engine.apply(s.changeId)).ok).toBe(true);
 
-    // The secret is in NO command string (argv is world-readable via /proc)…
+    // argv is world-readable via /proc, so the secret must be in no command string.
     expect(s.sandbox.commands.every((c) => !c.includes('dGVzdA=='))).toBe(true);
-    // …it landed at the file seam, locked down, and was cleaned up.
     const authFile = `/tmp/${s.changeId}.gitauth`;
     expect(s.sandbox.files.get(authFile)).toBe('[http]\n\textraheader = AUTHORIZATION: Basic dGVzdA==\n');
     expect(s.sandbox.commands.some((c) => c.includes(`chmod 600 '${authFile}'`))).toBe(true);
@@ -271,7 +253,7 @@ describe('engine.apply', () => {
     });
 
     s.sandbox
-      .on(/test -e .*\.git/, { stdout: 'yes' })  // clone already present
+      .on(/test -e .*\.git/, { stdout: 'yes' })
       .on(/rev-parse HEAD~1/, { stdout: 'ba5eba5eba5e0000000000000000000000000000' })
       .on(/rev-parse HEAD/, { stdout: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' });
 
@@ -284,7 +266,6 @@ describe('engine.apply', () => {
     const checkoutIdx = cmds.findIndex((c) => c.includes('checkout -B'));
     expect(fetchIdx).toBeGreaterThanOrEqual(0);
     expect(checkoutIdx).toBeGreaterThan(fetchIdx);
-    // The fetch is a network command — it carries the credential file too.
     expect(cmds[fetchIdx]).toContain(`GIT_CONFIG_GLOBAL='/tmp/${s.changeId}.gitauth'`);
   });
 
@@ -341,8 +322,6 @@ describe('engine.apply', () => {
   });
 });
 
-// ── Checks ─────────────────────────────────────────────────────────────────
-
 describe('engine.runChecks', () => {
   test('pass/fail comes from real exit codes; a failing check blocks preview_ready', async () => {
     const s = setup();
@@ -370,11 +349,10 @@ describe('engine.runChecks', () => {
     }
 
     const detail = s.store.detail(s.changeId);
-    expect(detail.change.status).toBe('validating'); // blocked — never asserted forward
+    expect(detail.change.status).toBe('validating');
     const tests = detail.checks.find((c) => c.name === 'tests');
     expect(tests).toMatchObject({ status: 'failed', stdout: '3 pass 1 fail', stderr: 'FAIL util.test.ts' });
 
-    // Rerun with the failure fixed → advances to preview_ready.
     const rerun = await s.engine.runChecks(s.changeId, [{ name: 'tests', command: 'bun run test:fixed' }]);
     expect(rerun.ok).toBe(true);
 
@@ -399,8 +377,6 @@ describe('engine.runChecks', () => {
   });
 });
 
-// ── Preview ────────────────────────────────────────────────────────────────
-
 describe('engine.preview', () => {
   test('exposes the port and binds the REAL preview URL to the change', async () => {
     const s = setup();
@@ -424,8 +400,6 @@ describe('engine.preview', () => {
     expect(s.store.getChange(s.changeId)?.previewUrl).toBeNull();
   });
 });
-
-// ── Deploy ─────────────────────────────────────────────────────────────────
 
 describe('engine.deploy', () => {
   async function approve(s: Setup, type: 'deploy_staging' | 'deploy_production' | 'apply' | 'rollback'): Promise<void> {
@@ -471,22 +445,19 @@ describe('engine.deploy', () => {
     expect(detail.checks.find((c) => c.name === 'deploy (staging)')?.status).toBe('passed');
   });
 
-  // ── Digest-bound approvals (SPEC §7.3): the approval commits to the exact
-  //    patch + declared command; a swap after approval fails closed. ──────────
+  // Approvals bind the exact patch and declared command (SPEC §7.3); a swap fails closed.
   test('rejects a deploy whose patch was mutated after approval (TOCTOU patch swap)', async () => {
     const s = setup({ binding: { deployTarget: 'bunx wrangler deploy' } });
     await applyAndPass(s);
     await approve(s, 'deploy_staging');
     s.sandbox.on(/wrangler deploy/, { stdout: 'Current Version ID: 0b1d2f3a-4c5e-6789-abcd-ef0123456789' });
 
-    // The agent rewrites the diff the owner reviewed, then deploys.
     s.store.updateChange(s.changeId, { patch: `${PATCH}\n+<script>steal()</script>` });
     const result = await s.engine.deploy(s.changeId, { environment: 'staging' });
 
     expect(result.ok).toBe(false);
 
     if (!result.ok) expect(result.error).toContain('different arguments');
-    // Fail-closed: the deploy command never ran, status stays pre-deploy.
     expect(s.sandbox.commands.some((c) => c.includes('wrangler deploy'))).toBe(false);
     expect(s.store.getChange(s.changeId)?.status).toBe('awaiting_approval');
   });
@@ -588,16 +559,12 @@ describe('engine.deploy', () => {
   });
 });
 
-// ── Rollback ───────────────────────────────────────────────────────────────
-
 describe('engine.rollback', () => {
   const APPLY_SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
   const BASE_SHA = 'ba5eba5eba5e0000000000000000000000000000';
 
   async function deployedSetup(opts?: { deployTarget?: string }): Promise<Setup & { head: () => string }> {
     const s = setup({ binding: { deployTarget: opts?.deployTarget } });
-    // Mutable git state: init flips the .git probe, and `git reset --hard
-    // <sha>` really moves HEAD, which verification reads back via rev-parse.
     let head = APPLY_SHA;
     let hasGit = false;
     s.sandbox
@@ -618,7 +585,6 @@ describe('engine.rollback', () => {
       .on(/rev-parse HEAD~1/, { stdout: BASE_SHA })
       .onDynamic(/rev-parse HEAD/, () => ({ stdout: head }))
       .on(/wrangler deploy/, { stdout: 'Current Version ID: 0b1d2f3a-4c5e-6789-abcd-ef0123456789' });
-    // Walk to deployed through the real ledger + engine.
     expect((await s.engine.apply(s.changeId)).ok).toBe(true);
     expect((await s.engine.runChecks(s.changeId, [{ name: 'build', command: 'true' }])).ok).toBe(true);
 
@@ -648,7 +614,7 @@ describe('engine.rollback', () => {
 
     const result = await s.engine.rollback(s.changeId);
     expect(result).toMatchObject({ ok: true, restored: BASE_SHA, verified: true, status: 'rolled_back' });
-    expect(s.head()).toBe(BASE_SHA); // the working copy really moved
+    expect(s.head()).toBe(BASE_SHA);
     expect(s.sandbox.commands.some((c) => c.includes(`reset --hard '${BASE_SHA}'`))).toBe(true);
 
     const detail = s.store.detail(s.changeId);
@@ -656,7 +622,7 @@ describe('engine.rollback', () => {
     expect(detail.checks.find((c) => c.name === 'rollback')?.status).toBe('passed');
     expect(detail.deployments[0]).toMatchObject({
       workerVersionId: BASE_SHA,
-      rollbackTarget: APPLY_SHA, // the version we rolled back FROM
+      rollbackTarget: APPLY_SHA,
     });
   });
 
@@ -676,9 +642,8 @@ describe('engine.rollback', () => {
     const s = await deployedSetup();
     const approval = s.store.requestApproval(s.changeId, 'rollback');
     s.store.decideApproval(approval.id, 'approved', 'owner-1');
-    // Sabotage: reset "succeeds" but HEAD never moves.
-    s.sandbox.on(/nothing/, {}); // keep rule list non-empty semantics explicit
-    const sBadHead = s.head; // HEAD stays at APPLY_SHA unless reset rule fires
+    s.sandbox.on(/nothing/, {});
+    const sBadHead = s.head;
     s.sandbox.removeRulesMatching('reset --hard');
 
     const result = await s.engine.rollback(s.changeId);
@@ -687,15 +652,13 @@ describe('engine.rollback', () => {
     if (!result.ok) expect(result.error).toContain('NOT verified');
     expect(sBadHead()).toBe(APPLY_SHA);
     const detail = s.store.detail(s.changeId);
-    expect(detail.change.status).toBe('deployed'); // no ledger flip without verification
+    expect(detail.change.status).toBe('deployed');
     expect(detail.checks.find((c) => c.name === 'rollback')?.status).toBe('failed');
   });
 
   const PLATFORM_TARGET = '0b1d2f3a-4c5e-6789-abcd-ef0123456789';
 
-  /** Deployed change whose latest deployment rolls back to a PLATFORM version
-   *  id (a wrangler UUID), not a git sha — e.g. the second deploy of a
-   *  wrangler-deployed change. */
+  /** A deployed change whose rollback target is a platform version id (wrangler UUID), not a git sha. */
   async function platformDeployedSetup(
     opts: { approvedCommand?: string } = {},
   ): Promise<Setup & { head: () => string }> {
@@ -706,8 +669,6 @@ describe('engine.rollback', () => {
       rollbackTarget: PLATFORM_TARGET,
     });
 
-    // A platform rollback runs a command, so the approval binds THAT command —
-    // an approval that named nothing is not authority to run anything.
     const approval = opts.approvedCommand === undefined
       ? s.store.requestApproval(s.changeId, 'rollback')
       : s.store.requestApproval(s.changeId, 'rollback', { command: opts.approvedCommand });
@@ -752,7 +713,7 @@ describe('engine.rollback', () => {
     expect(detail.checks.find((c) => c.name === 'rollback')?.status).toBe('passed');
     expect(detail.deployments[0]).toMatchObject({
       workerVersionId: PLATFORM_TARGET,
-      rollbackTarget: 'ffffffff-1111-2222-3333-444444444444', // the version rolled back FROM
+      rollbackTarget: 'ffffffff-1111-2222-3333-444444444444',
     });
   });
 
@@ -772,8 +733,7 @@ describe('engine.rollback', () => {
 
   test('refuses when no rollback target was recorded', async () => {
     const s = setup();
-    // Manufacture a deployed change whose deployment has no rollback target:
-    // HEAD~1 is unresolvable (registered FIRST — first matching rule wins).
+    // First matching rule wins, so the unresolvable HEAD~1 rule is registered first.
     s.sandbox.on(/rev-parse HEAD~1/, { exitCode: 128, stderr: 'fatal: bad revision' });
     await applyAndPass(s);
     expect((await s.engine.preview(s.changeId, { port: 8080 })).ok).toBe(true);
@@ -789,8 +749,6 @@ describe('engine.rollback', () => {
     if (!result.ok) expect(result.error).toContain('no rollback target');
   });
 });
-
-// ── Parsers ────────────────────────────────────────────────────────────────
 
 describe('deploy output parsing', () => {
   test('extracts wrangler version + deployment ids', () => {
@@ -811,8 +769,6 @@ describe('deploy output parsing', () => {
     expect(deployTargetAsCommand(null)).toBeNull();
   });
 });
-
-// ── Sandbox exec adapter ───────────────────────────────────────────────────
 
 describe('createSandboxReleaseExec', () => {
   function makeHandle(execImpl: SandboxHandle['exec']): SandboxHandle {
@@ -854,8 +810,7 @@ describe('createSandboxReleaseExec', () => {
 
     const res = await exec.exec('bun test', { cwd: '/workspace/pc' });
     expect(res).toEqual({ stdout: 'output-field out', stderr: 'boom', exitCode: 3 });
-    // No `timeout` reaches the handle: an absent one is the process lane, and a
-    // release command that outlives a wall clock is a command still running.
+    // No `timeout` reaches the handle: absent is the process lane.
     expect(calls).toEqual([{ command: 'bun test', opts: { cwd: '/workspace/pc' } }]);
   });
 
@@ -900,12 +855,6 @@ describe('createSandboxReleaseExec', () => {
     expect('error' in noPortSurface).toBe(true);
   });
 });
-
-// ── release dispatcher ← engine wiring (governance gates) ────────────
-// Drives runReleaseAction directly — the same dispatcher the release.*
-// codemode namespace calls (tools/release-codemode.ts) — rather than through
-// a native tool; release left the model's top-level surface for codemode,
-// but the gate behavior this describes did not move.
 
 describe('release dispatcher with an engine wired', () => {
   interface BuiltReleaseTool {
@@ -983,7 +932,6 @@ describe('release dispatcher with an engine wired', () => {
     const { s, execute } = buildTool({ engine: false });
     const result = await execute({ action: 'apply', changeId: s.changeId });
     expect(result).toMatchObject({ error: expect.stringContaining('execution engine') });
-    // The pure-ledger backend keeps full manual power (no engine to defer to).
     const moved = await execute({ action: 'transition', changeId: s.changeId, status: 'planning' });
     expect(moved).toMatchObject({ status: 'planning' });
   });

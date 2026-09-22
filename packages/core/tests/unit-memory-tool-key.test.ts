@@ -1,14 +1,4 @@
-/**
- * One fact, one name — the spelling the STORE wrote it under.
- *
- * The defect this locks: the tool answered `remember` with the caller's raw
- * key while the store had folded it on write, so the model was told a fact is
- * "every-tool probe" and a search rendered it as `[fact: every-tool_probe]`.
- * Two names for one row — and a caller that checks its own echo (the
- * first-run every-tool case did) misses what it just wrote. Post-publish
- * f1da0985f measured exactly that: remember answered `{"ok":true,"key":
- * "every-tool probe"}` and the following search named `every-tool_probe`.
- */
+/** The tool answers with the key the store wrote under, so a caller checking its own echo finds the row. */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';

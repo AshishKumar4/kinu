@@ -1,6 +1,5 @@
-// models.dev catalog widening — any catalog provider with a stored
-// `<id>.bearer` key resolves through the openai-compat wire path, while
-// bespoke (statically registered) providers stay authoritative for their ids.
+// models.dev catalog widening: a catalog provider with a stored `<id>.bearer` key resolves via
+// openai-compat, while bespoke static providers stay authoritative for their ids.
 import { describe, test, expect } from 'bun:test';
 import { generateText, jsonSchema, streamText, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -37,15 +36,13 @@ const CATALOG = {
     api: 'https://api.openai.com/v1',
     models: { 'gpt-5.5': { id: 'gpt-5.5', name: 'GPT-5.5', tool_call: true } },
   },
-  // Bespoke-SDK provider with no API endpoint and no known compat endpoint
-  // — not key-satisfiable.
+  // Bespoke SDK, no API endpoint and no known compat endpoint: not key-satisfiable.
   'sap-ai-core': {
     id: 'sap-ai-core', name: 'SAP AI Core', doc: 'https://help.sap.com',
     env: ['SAP_AI_CORE_KEY'], npm: '@jerome-benoit/sap-ai-provider-v2',
     models: { 'sap-model': { id: 'sap-model', name: 'SAP Model', tool_call: true } },
   },
-  // Bespoke-SDK provider with no `api` but a documented OpenAI-compatible
-  // endpoint pinned in the supplement.
+  // Bespoke SDK, no `api`, but a documented compat endpoint pinned in the supplement.
   mistral: {
     id: 'mistral', name: 'Mistral', doc: 'https://docs.mistral.ai',
     env: ['MISTRAL_API_KEY'], npm: '@ai-sdk/mistral',
@@ -93,12 +90,7 @@ function staticProvider(id: string, modelId: string, onCreate: () => void = () =
   };
 }
 
-/**
- * Drive one completion through the resolved model. Awaited, not absorbed: the
- * catalog path exists to make an uncredentialed id reachable, and a swallowed
- * rejection made "resolved and answered" indistinguishable from "resolved and
- * failed on the way back".
- */
+/** Drive one completion through the resolved model, awaited so a failed answer cannot pass as resolved. */
 async function call(model: Parameters<typeof generateText>[0]['model']): Promise<void> {
   const { text } = await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
   expect(text).toBe('ok');
@@ -124,8 +116,7 @@ describe('models.dev provider metadata', () => {
   });
 
   test('nullable effort values from another provider do not discard the catalog', async () => {
-    // models.dev sarvam/sarvam-105b, measured 2026-09-19: null is a declared
-    // effort value. The menu exposes only Kinu's recognized string levels.
+    // models.dev sarvam/sarvam-105b declares null as an effort value; the menu exposes only string levels.
     const mock = createMockFetch([{ match: 'models.dev/api.json', respond: { status: 200, body: {
       ...CATALOG,
       sarvam: {
@@ -222,8 +213,7 @@ describe('registry with dynamic catalog source', () => {
   }
 
   test('a model SDK override selects Responses while its sibling stays on Chat Completions', async () => {
-    // models.dev, 2026-09-19: opencode's Muse entries override the provider's
-    // openai-compatible SDK with @ai-sdk/openai, whose default is Responses.
+    // models.dev: opencode's Muse entries override the SDK with @ai-sdk/openai, whose default is Responses.
     const mock = createMockFetch([
       { match: 'models.dev/api.json', respond: { status: 200, body: {
         mixed: {
@@ -357,8 +347,7 @@ describe('registry with dynamic catalog source', () => {
     const groq = models.filter((m) => m.provider === 'groq');
     expect(groq.map((m) => m.id)).toEqual(['llama-3.3-70b-versatile']); // no-tools-model filtered
     expect(groq[0].contextWindow).toBe(131072);
-    // The answer allowance context admission reserves against — dropped here
-    // before KINU-045, which left the allocator nothing to reserve.
+    // The answer allowance context admission reserves against (KINU-045).
     expect(groq[0].modelOutputLimit).toBe(32768);
     expect(groq[0].capabilities).toContain('tools');
   });

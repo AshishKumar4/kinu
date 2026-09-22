@@ -1,14 +1,6 @@
 /**
- * The long-running-process contract of the Nimbus executor.
- *
- * Regression lock for the production transcript where a hello-world preview
- * burned ~20 tool calls: every server start came back looking like a
- * successful exec that had already `exited(0)`, so the agent could neither
- * keep a server alive nor learn on the first attempt that it couldn't.
- * Since @nimbus-sh/sdk 0.2.0 a started process is still running when
- * `startProcess` returns; the tool output must say so, must hand the agent
- * the observe/stop calls, and must name unavailability outright when the
- * handle cannot start one.
+ * Nimbus long-running processes: a started process is still running when `startProcess` returns, the output
+ * names the observe/stop calls, and a handle that cannot start one says so.
  */
 import { describe, expect, test } from "bun:test";
 import { createNimbusExecutor, type NimbusSandboxHandle, type NimbusStartResult } from "../src/index";
@@ -90,9 +82,7 @@ describe("nimbus startProcess — the process is alive when the call returns", (
     Reflect.deleteProperty(box, "startProcess");
     const nimbus = createNimbusExecutor({ box });
     const out = await nimbus.tools.startProcess?.execute('node server.js');
-    // `unsupported`, not `unavailable`: retrying cannot grow a method onto this
-    // deployment's handle, and the two codes exist to keep a permanent gap apart
-    // from a cold start. It lands in the census as a correct refusal.
+    // `unsupported`, not `unavailable`: retrying cannot add a method to this handle.
     expect(out).toEqual({
       reason: "unsupported",
       error: "Nimbus SDK handle does not expose startProcess",

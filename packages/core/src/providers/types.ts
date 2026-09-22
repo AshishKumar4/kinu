@@ -1,13 +1,5 @@
-// Provider abstraction — a plugin that knows how to build a LanguageModel for
-// a given model id, given env bindings + an auth resolver. Credentials never
-// pass through this layer in raw form: providers ask the resolver for
-// ready-to-attach HTTP headers (and a baseURL where relevant). All secret
-// material stays inside the implementation that owns it (UserDO in production,
-// stub callbacks in tests).
-//
-// createModel is SYNCHRONOUS — async work (auth resolution, token refresh)
-// happens inside the customFetch wrappers each provider passes to the
-// underlying SDK, so model construction never blocks the chat loop.
+// Provider abstraction: providers get ready-to-attach headers from a resolver, never raw
+// secrets; createModel is sync, with auth resolved inside customFetch.
 import type { LanguageModel } from 'ai';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
 import type { ReasoningEffort } from './reasoning-effort';
@@ -17,23 +9,8 @@ import type { Usage } from '../usage';
 /** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
 
-/**
- * What one model charges, in USD per 1M tokens — the models.dev `cost` block
- * verbatim (its own units, so nothing is rescaled on the way in and a reader
- * can check a number against the catalog page).
- *
- * `cacheRead`/`cacheWrite` are absent for providers with no prompt cache.
- *
- * FOUR FIELDS IS THE WHOLE CONTRACT, and there is no fifth to add. models.dev
- * publishes ONE `cache_write` rate per model and never one per retention tier:
- * over the whole live catalog (https://models.dev/api.json, fetched
- * 2026-09-09) its 7181 models carry `input` 7181x, `output` 7181x,
- * `cache_read` 4672x and `cache_write` 1492x, and no key naming a tier. So a
- * 1h-retention write (`Usage.cacheWrite1h`, which `cache-breakpoints.ts` really
- * does ask Anthropic for) is priced at the 5m rate and `priceCall` returns a
- * FLOOR, saying how many tokens made it one. A `cacheWrite1h` rate here would
- * be a number this catalog does not publish.
- */
+/** USD per 1M tokens, the models.dev `cost` block verbatim. It publishes one cache-write
+ *  rate per model, so a 1h-retention write prices at that rate and `priceCall` is a floor. */
 export interface ModelPricing {
   input: number;
   output: number;
@@ -43,21 +20,9 @@ export interface ModelPricing {
 
 /**
  * How long a provider should keep the prefix a request writes.
- *
- *   none   don't address the provider's cache at all — no breakpoints, no
- *          cache key. The escape hatch for a turn that must not write a cache
- *          entry (and not pay a cache-write premium for one read).
- *   short  the provider's default TTL (Anthropic/OpenRouter 5m, OpenAI
- *          in-memory). Sends nothing extra, so the request bytes are exactly
- *          what a caller with no opinion produced.
- *   long   the extended TTL — Anthropic `ttl: '1h'`, OpenAI
- *          `prompt_cache_retention: '24h'`. Costs more per cache WRITE and
- *          pays for itself only when turns are minutes-to-hours apart.
- *
- * A PROVIDER fact, beside the rates and the capabilities, because two platform
- * readers need it: `prompting/cache-breakpoints.ts` renders it onto the wire,
- * and `providers/cache-warming.ts` decides whether an idle prefix is worth a
- * refresh at all (only a short entry expires soon enough to be).
+ *   none   no breakpoints or cache key at all.
+ *   short  the provider's default TTL; sends nothing extra.
+ *   long   the extended TTL; costlier writes.
  */
 export type CacheRetention = 'none' | 'short' | 'long';
 
@@ -73,37 +38,22 @@ export interface ModelInfo {
   label?: string;
   capabilities?: ModelCapability[];
   contextWindow?: number;
-  /** The largest answer the model will produce, as its catalog reports it
-   *  (models.dev `limit.output`). It is a per-request maximum out of the SAME
-   *  window `contextWindow` names, not capacity beside it — context admission
-   *  reserves against it (prompting/step-prune.ts). Absent means the catalog
-   *  has not answered. */
+  /** models.dev `limit.output`: a per-request maximum inside `contextWindow`, not beside it. */
   modelOutputLimit?: number;
-  /** Per-1M-token USD rates, when the catalog publishes them. Absent means
-   *  unknown — never zero (a free model is `input: 0`). */
+  /** Absent means unknown, never zero (a free model is `input: 0`). */
   cost?: ModelPricing;
-  /** Input modalities the model itself accepts (models.dev vocabulary).
-   *  Absent when the catalog doesn't know — consumers fall back to a
-   *  conservative provider-class default (attachment-sanitizer.ts). */
+  /** Absent when the catalog doesn't know; consumers fall back to a provider-class default. */
   inputModalities?: ModelInputModality[];
-  /** The reasoning-effort levels THIS model accepts, in the provider's
-   *  documented low-to-high order. Every catalog entry that names them cites
-   *  the provider page it read. Empty means the model takes no effort setting;
-   *  absent means the catalog could not say. A settings control renders exactly
-   *  this list after "model default", never a hardcoded three. */
+  /** Levels this model accepts, low to high. Empty: takes none; absent: unknown. */
   reasoningEfforts?: readonly ReasoningEffort[];
 }
 
-/** The input-modality vocabulary (models.dev `modalities.input`). Feeds the
- *  attachment sanitizer's capability policy; a runtime const so catalog
- *  responses can be narrowed without casts. */
+/** models.dev `modalities.input` vocabulary, as a runtime const for narrowing. */
 export const MODEL_INPUT_MODALITIES = ['text', 'image', 'pdf', 'audio', 'video'] as const;
 
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
-/** The one capability vocabulary — provider catalogs populate it, prompt
- *  shaping (prompting/model-profile.ts) consumes it. A runtime const so
- *  trust boundaries (HTTP model menus) can narrow without casts. */
+/** The capability vocabulary, as a runtime const so trust boundaries can narrow. */
 export const MODEL_CAPABILITIES = [
   'tools',
   'vision',
@@ -124,16 +74,13 @@ export interface ProviderInfo {
   unavailableReason?: string;
 }
 
-/** Resolved auth for one credential key. Headers are ready to inject into
- *  a fetch; baseURL is set for providers whose endpoint is part of the
- *  credential (openai-compat). */
+/** baseURL is set when the endpoint is part of the credential (openai-compat). */
 export interface AuthResolution {
   headers: Record<string, string>;
   baseURL?: string;
 }
 
-/** Auth resolver. Implementations: UserDO stub in production, test fixtures
- *  in unit tests. Returns null when no credential is configured for `key`. */
+/** Returns null when no credential is configured for `key`. */
 export type AuthResolver = (
   key: string,
   opts?: { forceRefresh?: boolean },
@@ -147,44 +94,28 @@ export interface GatewayRunRequest {
   query: unknown;
 }
 
-/** Cloudflare's Workers AI binding (`env.AI`), structurally — the one call a
- *  platform-billed transport makes on it. Core never invokes it; the type exists
- *  so a Cloudflare provider can reach `deps.env.AI` without an assertion, and so
- *  the compiler checks the runtime `Ai` against this shape wherever an env is
- *  built. */
+/** Structural `env.AI`: the one call a platform-billed transport makes. */
 export interface WorkersAIBinding {
   gateway(id: string): {
     run(data: GatewayRunRequest, options?: { signal?: AbortSignal }): Promise<Response>;
   };
 }
 
-/** The fields any provider may read from the Worker env. All optional —
- *  providers narrow at the read site. Structurally compatible with
- *  wrangler-generated `Env` types. */
+/** Structurally compatible with wrangler-generated `Env` types. */
 export interface ProviderEnv {
   AI?: WorkersAIBinding;
   AI_GATEWAY_URL?: string;
   DEV_USER_EMAIL?: string;
 }
 
-/** What a wait imposed by the provider (or the lane sharing it) looks like
- *  to a surface. Emitted through {@link ProviderDeps.onProviderWait} the moment
- *  a request is told to sleep, so a turn that is waiting reads as waiting —
- *  the alternative is a stream that is simply silent while the retry layer
- *  holds it.
- *
- *  `source` says WHO mandated the wait: the provider's own `Retry-After`
- *  (`header`), this layer's backoff when no header arrived (`backoff`), or the
- *  shared pacer's join onto a cooldown a sibling already declared (`cooldown`).
- *  `status` is the upstream status that caused it when a response exists —
- *  absent on a `cooldown` join, which has no response of its own. */
+/** A provider-imposed wait, emitted as a request is told to sleep. `source`: `header`
+ *  (Retry-After), `backoff`, or `cooldown` (a sibling's; no `status`). */
 export interface ProviderWaitInfo {
   readonly provider: string;
   readonly modelId?: string;
   /** How long the request will sleep, in ms. */
   readonly waitMs: number;
-  /** Which attempt (1-based) was refused — 0 when the wait precedes any
-   *  request of its own, as a `cooldown` join does. */
+  /** 1-based refused attempt; 0 for a `cooldown` join. */
   readonly attempt: number;
   readonly status?: number;
   readonly source: 'header' | 'backoff' | 'cooldown';
@@ -196,20 +127,12 @@ export interface ProviderDeps {
   sessionAffinity?: string;
   /** Returns auth headers + baseURL for `key`, or null if not configured. */
   getAuth: AuthResolver;
-  /** Synchronous-friendly "is there a credential for this key" check used by
-   *  isAvailable(). Implementations can be cached for cheap repeated reads. */
+  /** Credential presence check used by isAvailable(). */
   hasCredential: (key: string) => Promise<boolean>;
-  /** Enumerate stored credential keys (no secret material). Lets the dynamic
-   *  catalog source discover connected providers in one call instead of
-   *  probing hasCredential per catalog entry. Optional — without it the
-   *  dynamic source lists nothing (resolution still works). */
+  /** Stored credential keys; without it the dynamic source lists nothing. */
   listCredentialKeys?: () => Promise<string[]>;
   fetch?: typeof fetch;
-  /** Called the moment a request is about to sleep on a provider-mandated or
-   *  backoff wait (rate-limit-retry), including joins onto a sibling's
-   *  declared cooldown. Optional — a deps object without it reports waits
-   *  nowhere, which is what leaves a rate-limited turn looking like a
-   *  thinking one. */
+  /** Called before each rate-limit sleep, including joined sibling cooldowns. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
@@ -217,57 +140,27 @@ export interface ModelProvider {
   readonly id: string;
   readonly label?: string;
   readonly defaultModel?: string;
-  /** This vendor's small, cheap tier — what the MECHANICAL work runs on
-   *  (outcome classification, pathology labels, short reflections, pattern
-   *  extraction, sleep-time compression: schema-constrained jobs where the
-   *  flagship buys nothing). Same vendor and same credential as the chat
-   *  model, so it introduces no new provider path — only a cheaper tier of the
-   *  one already connected. Omitted where the vendor has no meaningfully
-   *  smaller tier, or where the id set is user-supplied (openai-compat) or an
-   *  entire catalog (openrouter) and naming one would be arbitrary; the chat
-   *  model is then used, exactly as before. */
+  /** The vendor's cheap tier for mechanical work, same credential; omitted where no
+   *  meaningful smaller tier exists. */
   readonly fastModel?: string;
 
   isAvailable(deps: ProviderDeps): Promise<boolean> | boolean;
   unavailableReason?(deps: ProviderDeps): Promise<string | undefined> | string | undefined;
   listModels(deps: ProviderDeps): Promise<ModelInfo[]> | ModelInfo[];
 
-  /** Build a LanguageModel SYNCHRONOUSLY. Auth/refresh happens in customFetch. */
+  /** Synchronous; auth/refresh happens in customFetch. */
   createModel(modelId: string, deps: ProviderDeps): LanguageModel;
 
-  /**
-   * Count what an assembled request costs BEFORE it is submitted, using this
-   * provider's own documented pre-request count endpoint.
-   *
-   * Optional because most vendors publish no such endpoint: absent means
-   * exactly that (see `NO_COUNT_ENDPOINT`), and admission then runs ungated
-   * rather than on a number nobody measured. An implementation may also report
-   * `unsupported` for a REQUEST it cannot represent in its count body — a
-   * dropped part would under-report by that part's whole cost, which is the one
-   * error admission cannot survive.
-   */
+  /** Pre-request token count via the provider's documented endpoint; absent means none.
+   *  Report `unsupported` rather than drop an unrepresentable part. */
   countInputTokens?(
     modelId: string,
     deps: ProviderDeps,
     request: CountableRequest,
   ): Promise<InputTokenCount>;
 
-  /**
-   * Re-send one already-sent request body with no completion, to keep the
-   * prompt-cache entry it wrote alive across an idle gap.
-   *
-   * Optional, and the ONE structural half of the warm's eligibility rule: a
-   * provider without this method cannot be warmed, however the policy in
-   * `cache-warming.ts` reads its id. Only the direct Anthropic Messages
-   * provider implements it — the vendor documents the `max_tokens: 0` refresh
-   * for its own endpoint, and a Claude model behind a gateway is a prefix that
-   * endpoint never saw.
-   *
-   * `body` is the frozen body of the request being refreshed, already shaped by
-   * `warmRequestBody`. The answer is the provider's usage report for the warm
-   * and nothing else; a failure THROWS, and the caller's chain retires rather
-   * than the turn failing for a refresh it did not need.
-   */
+  /** Re-send a frozen body with no completion to keep its cache entry alive; only direct
+   *  Anthropic implements it. Failure throws. */
   warmCache?(modelId: string, deps: ProviderDeps, body: JsonObject): Promise<Usage>;
 }
 

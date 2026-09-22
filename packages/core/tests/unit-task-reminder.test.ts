@@ -58,8 +58,7 @@ test('an empty open list owes nothing and resets the count', () => {
   const reminders = new TaskReminders();
   decideAt(reminders, [tree({ title: 'x' })]);
   decideAt(reminders, []);
-  // The list went empty: the count parked, so a fresh list starts over rather
-  // than inheriting the old attempts.
+  // An emptied list parks the count, so a fresh list starts over.
   const decision = present(decideAt(reminders, [tree({ title: 'y' })]), 'the reminder decision');
   expect(decision.text).toContain('(Reminder 1/2)');
 });

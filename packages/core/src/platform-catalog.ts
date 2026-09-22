@@ -1,96 +1,6 @@
 /**
- * What the Cloudflare platform actually does, and how we know.
- *
- * This is a MODULE and not a document because the failure it replaces is
- * documentary. `~/Nimbus/packages/worker/src/constants.ts` justifies a
- * load-bearing 128 MiB production ceiling with "per
- * a gitignored internal research note (§6, invariant I1)". That file lived under
- * a gitignored `docs/research/`, was never committed, and is gone. The citation
- * shipped, in ten worktree copies, and the evidence did not — and the number it
- * defended turns out to be wrong, which no reader could have discovered.
- *
- * Its sibling a second such note was compiled from Cloudflare's INTERNAL
- * repository. Neither is to be reconstructed here, and nothing in this file
- * cites a `cf-*-dossier` section: entries cite the MEASUREMENT. The same
- * shape bit this repo from the other direction: `lean/Kinu/Execution/
- * ToolSystem.lean` still proves completeness over a five-tool surface the code
- * does not have. Prose beside code drifts from code; prose generated FROM code
- * cannot.
- *
- * So there is exactly one copy of every number here, production constants
- * import it, and `scripts/platform-catalog.ts --report` renders the human
- * catalog on demand. Nothing in `docs/` restates it.
- *
- * ## Reading an entry
- *
- * `evidence` is the whole point. "Cloudflare documents 128 MB" and "we measured
- * 128 MB" are different facts and must read differently — an unlabelled number
- * is precisely what produced a dangling `§6 invariant I1`. The labels are the
- * ones `~/Nimbus/scratchpad/jit-limits-verification.md` used, which is the
- * methodology this file copies: probe the claim on a real deployed Worker, read
- * workerd's C++ when the probe needs explaining, and let the write-up refute
- * the claims it set out to confirm.
- *
- *   proven-by-probe        ran against a real Workers runtime and observed it
- *   proven-by-source       read in workerd / a dependency's own source
- *   observed-in-production incident or log evidence, not a designed probe
- *   documented             Cloudflare publishes it; `provenance` is the URL
- *   inferred               follows from something proven, not itself observed
- *   speculative            plausible, unverified — never act on one
- *
- * `origin` separates the platform's number from ours. Nimbus's 28 MiB RPC
- * payload cap is `self-imposed` beneath a `platform` 32 MiB ceiling, and
- * conflating the two is how a self-imposed budget becomes folklore about the
- * runtime.
- *
- * `trigger` is the machine-checkable predicate, `observable` the VERBATIM
- * string the application sees, and `firstPartySignal` whether we get told at
- * all. A fault with no signal must be modelled as silent disappearance; a
- * simulator that invents its own error string tests nothing.
- *
- * ## If you add an entry by probing
- *
- * Five rules, each of which exists because breaking it already produced a false
- * published claim in this ecosystem.
- *
- *   1. PIN THE CONFIG TO PRODUCTION. A probe whose `compatibility_date` or flag
- *      set differs from what we ship measures a different platform. One
- *      one-month compat-date difference in a Nimbus probe produced a confident,
- *      false, table-generating claim that request-time wasm compilation is
- *      blocked even at module top level — false for every date Nimbus ships.
- *      Record the date and flags in the entry.
- *   2. STATE THE LABEL PER CLAIM, NOT PER WRITE-UP. A probe usually establishes
- *      a behaviour while a threshold comes from reading source; those are two
- *      labels. `do.storage.sync_kv` is `proven-by-source` for that reason.
- *   3. RECORD THE WORDING. If you watched it fail, copy the string. The gate
- *      refuses a `proven-by-probe` entry that claims a first-party signal and
- *      supplies no verbatim observable.
- *   4. NEVER FILL IN A MISSING HALF. `facet.module_text_bytes` was a two-point
- *      boots/fails bracket whose lower bound was edited out of the Nimbus
- *      source; an earlier draft of that entry GUESSED it, in this file, while
- *      building the gate against exactly that. A gap is a legitimate value.
- *   5. A PROBE THAT EXCEEDS A DOCUMENTED LIMIT MEANS THE DOCUMENTATION IS
- *      CONSERVATIVE, NOT THAT THE LIMIT MOVED. `do.storage.bytes` is the worked
- *      example: the published 10 GB is 10^10 bytes, a deployed bisect put the
- *      wall between 10.58 GB and 11.6 GB, and 10 GiB (10,737,418,240) sits
- *      inside that window. So 10 GiB describes where the wall is and is not a
- *      number anyone may design to. Keep `limit` at the published figure and put
- *      the measurement in `measurements`.
- *   6. `wrangler dev` IS NOT PRODUCTION. It does not enforce the isolate memory
- *      cap (a probe isolate reached 822 MiB unkilled) and it collects no traces
- *      (`tracing.inert_locally`). A local run measures bytes and API surface,
- *      never an enforcement point.
- *
- * Deploying a throwaway Worker is the right tool and the pattern is proven:
- * account-pinned, `workers.dev` only, `preview_urls: false`, deleted at the end,
- * with the deletion recorded. Propose it before spending the account's
- * resources.
- *
- * ## What this file is not
- *
- * It is not a budget. Nothing here caps the agent — the entries with
- * `origin: 'self-imposed'` are recorded because they are frequently mistaken
- * for platform facts, not because this file endorses them.
+ * The single copy of every Cloudflare platform number and how it was established; `scripts/platform-catalog.ts --report` renders it.
+ * Probing rules: pin compat date/flags to production, label each claim, copy failure strings verbatim, never fill a missing half, and never trust `wrangler dev` for enforcement.
  */
 
 /** How a claim was established. Additive: never re-purpose an existing value. */
@@ -102,12 +12,7 @@ export type EvidenceLabel =
   | 'inferred'
   | 'speculative';
 
-/**
- * Labels a fault injector may treat as real behaviour. `documented` is
- * deliberately absent: a published number tells you the threshold, not what the
- * runtime does at it, and injecting a documented-but-unobserved failure makes a
- * simulation easier than production rather than harder.
- */
+/** Labels a fault injector may treat as real; `documented` gives a threshold, not the runtime's behaviour at it. */
 export const PROVEN_LABELS: readonly EvidenceLabel[] = [
   'proven-by-probe',
   'proven-by-source',
@@ -116,40 +21,19 @@ export const PROVEN_LABELS: readonly EvidenceLabel[] = [
 
 export type LimitUnit = 'bytes' | 'ms' | 'count';
 
-/** A threshold in its base unit. Never a human spelling: call sites must not
- *  convert, and "128 MB" vs "128 MiB" is a real unresolved ambiguity recorded
- *  in `notes` rather than hidden in a multiplier. */
+/** Base unit only; call sites must not convert. */
 export interface PlatformQuantity {
   readonly value: number;
   readonly unit: LimitUnit;
 }
 
-/** A verbatim signature the application sees. Copied, never paraphrased — the
- *  difference between a retryable reset and an OOM that must surface is the
- *  exact wording. */
+/** Copied verbatim, never paraphrased. */
 export interface PlatformObservable {
   readonly context: string;
   readonly message: string;
 }
 
-/**
- * What a threshold actually protects — the axis this catalog was missing.
- *
- * A METRIC IS ONLY AS REAL AS THE SCOPE IT IS LABELLED WITH. A correct value
- * with the wrong scope reads as evidence and is not, which is strictly MORE
- * dangerous than a missing one because it survives review. `read-models/files.ts`
- * caps a response at 512 KiB AFTER the whole file is resident;
- * `read-models/workspace-diff.ts` bounds 400 files at 256 KiB each, a product of
- * 102.4 MiB under a ceiling it never mentions; `do.storage.size_is_per_object`
- * returns a true byte count for one object against a quota shared by dozens.
- * Every one of those looks like memory protection and none of it is.
- *
- * So the rule generalises past this union: IF A NUMBER HAS A SCOPE, THE TYPE
- * MUST CARRY IT. Naming the axis makes "this constant cannot protect an isolate,
- * it only truncates a reply" a statement the type system participates in, and
- * `bounds` is non-nullable whenever `limit` is present so a threshold cannot be
- * declared without one.
- */
+/** What a threshold actually protects; a number with a scope must carry it in the type. */
 export type BoundsKind =
   | 'peak-resident'
   | 'wire'
@@ -169,38 +53,25 @@ export interface PlatformMeasurement {
 }
 
 export interface PlatformFact {
-  /** The thing being bounded or described, in one line. */
   readonly subject: string;
-  /** The threshold, or null when the entry is a behaviour rather than a bound. */
   readonly limit: PlatformQuantity | null;
   readonly origin: 'platform' | 'self-imposed';
-  /** What the threshold protects, or null when the entry bounds nothing. */
   readonly bounds: BoundsKind | null;
   readonly evidence: EvidenceLabel;
-  /** A URL for `documented`; otherwise `path:line` in this repo, `~/Nimbus`, or
-   *  a named transcript locator. Never empty. */
+  /** A URL for `documented`; otherwise a `path:line` or transcript locator. */
   readonly provenance: string;
-  /** ISO date the evidence was obtained, not the date it was written down. */
+  /** When the evidence was obtained, not written down. */
   readonly date: string;
-  /** The machine-checkable predicate that fires this fault. */
   readonly trigger: string;
-  /** What the runtime does. Observable consequence, not a warning. */
   readonly onBreach: string;
-  /** FAILURE signatures only, verbatim. Not return values, not log lines a
-   *  healthy path emits: a fault injector reads this, and anything in here that
-   *  is not what breaching looks like makes the simulation wrong. */
+  /** Failure signatures only, verbatim: a fault injector reads this. */
   readonly observable: readonly PlatformObservable[];
-  /** False when the platform terminates us with nothing we can catch or read. */
   readonly firstPartySignal: boolean;
   readonly notes?: string;
   readonly measurements?: readonly PlatformMeasurement[];
-  /** Named allocation sources, for a ceiling that can only be estimated. */
   readonly contributors?: readonly string[];
-  /** Entries whose sources disagree with this one. Never silently reconciled. */
   readonly conflictsWith?: readonly string[];
-  /** A path in THIS repo already on course to breach this entry. Present means a
-   *  live defect has been located, not that one is suspected — the value names
-   *  the file and the mechanism so it can be closed rather than remembered. */
+  /** A located live defect in this repo, not a suspected one. */
   readonly knownBreachPath?: string;
 }
 
@@ -208,13 +79,7 @@ const KiB = 1024;
 
 const MiB = 1024 * 1024;
 
-/**
- * Cloudflare writes storage sizes in decimal — "1 GB = 1,000,000,000 bytes and
- * not a gibibyte", footnote 2 of the Durable Objects limits page — so a
- * documented `MB` is taken as 10^6. Nimbus's own comments write the same
- * ceilings in `MiB`. Where the two readings differ the SMALLER is used, because
- * over-reading a ceiling is the direction that fails in production.
- */
+/** Cloudflare's documented sizes are decimal (DO limits page, footnote 2); where readings differ the smaller is used. */
 const MB = 1000 * 1000;
 
 const GB = 1000 * 1000 * 1000;
@@ -227,12 +92,9 @@ const CF_WORKER_LIMITS = 'https://developers.cloudflare.com/workers/platform/lim
 
 const NIMBUS_JIT_PROBE = '~/Nimbus/scratchpad/jit-limits-verification.md';
 
-/** Every documented entry was read from the live docs on this date. */
 const DOCS_READ = '2026-08-17';
 
 export const PLATFORM_CATALOG = {
-  // ── Memory ────────────────────────────────────────────────────────────
-
   'container.instance.vcpu': {
     subject: 'vCPU allocated to each Kinu sandbox container',
     limit: { value: 2, unit: 'count' },
@@ -537,8 +399,6 @@ export const PLATFORM_CATALOG = {
       + 'simulated heap — which is what makes a deterministic DO lifecycle lane possible.',
   },
 
-  // ── The activation gate ───────────────────────────────────────────────
-
   'do.block_concurrency.cancel_ms': {
     subject: 'blockConcurrencyWhile() held too long is cancelled and the Durable Object is reset',
     limit: { value: 30_000, unit: 'ms' },
@@ -622,8 +482,6 @@ export const PLATFORM_CATALOG = {
       + 'busy object is a cold start or an activation gate, never "the DO is single-threaded '
       + 'and busy talking to the model".',
   },
-
-  // ── CPU and wall clock ────────────────────────────────────────────────
 
   'do.cpu_ms_per_invocation': {
     subject: 'Active CPU time per Durable Object invocation (HTTP request, WebSocket message, or alarm)',
@@ -801,8 +659,6 @@ export const PLATFORM_CATALOG = {
       + 'Anything that renders elapsed time to the model is measuring awaits, not work.',
   },
 
-  // ── RPC and structured clone ──────────────────────────────────────────
-
   'rpc.arg_bytes': {
     subject: 'Largest byte payload carried as an ordinary Workers RPC argument or return value',
     limit: { value: 32 * MiB, unit: 'bytes' },
@@ -920,8 +776,6 @@ export const PLATFORM_CATALOG = {
       + 'not thereby a value it can return.',
   },
 
-  // ── Code generation ───────────────────────────────────────────────────
-
   'isolate.codegen_blocked': {
     subject:
       'eval, new Function(source) and WebAssembly compilation from bytes are all blocked at '
@@ -1002,8 +856,6 @@ export const PLATFORM_CATALOG = {
       + 'pointless rather than merely slow: one isolate on one thread with no concurrent '
       + 'mutator, and date_now.frozen_between_io means the loop cannot even observe time.',
   },
-
-  // ── Durable Object storage ────────────────────────────────────────────
 
   'do.sqlite.row_bytes': {
     subject: 'Maximum size of a string, BLOB or table row in a SQLite-backed Durable Object',
@@ -1287,11 +1139,7 @@ export const PLATFORM_CATALOG = {
     limit: { value: 2_200_000, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
-    // proven-by-SOURCE, not by probe, and the distinction is not pedantry: the
-    // probe established that sync KV WORKS, and the 2.2 MB figure was read in
-    // workerd's own bounds check. Labelling it probed would claim we watched a
-    // value get rejected and neglected to write down what it said — and the gate
-    // rejects exactly that claim, which is how this label got corrected.
+    // The probe showed sync KV works; the threshold was read in workerd's bounds check, hence proven-by-source.
     evidence: 'proven-by-source',
     provenance:
       'workerd util/sqlite.c++:1362-1380 and api/sync-kv.h:15-16; behaviour probed at '
@@ -1313,8 +1161,6 @@ export const PLATFORM_CATALOG = {
       + 'cap that the second lost dossier asserted — the one lost claim that now has a probe '
       + 'behind it.',
   },
-
-  // ── Throughput, eviction, connections ─────────────────────────────────
 
   'do.requests_per_second_soft': {
     subject: 'Soft request throughput for a single Durable Object instance',
@@ -1437,8 +1283,6 @@ export const PLATFORM_CATALOG = {
       + 'probed — they came out of production, not a designed experiment.',
   },
 
-  // ── WebSockets ────────────────────────────────────────────────────────
-
   'websocket.message_bytes': {
     subject: 'Maximum size of a WebSocket message a Durable Object can RECEIVE',
     limit: { value: 32 * MiB, unit: 'bytes' },
@@ -1502,21 +1346,8 @@ export const PLATFORM_CATALOG = {
   },
 
 
-  // ── Durable Object facets ─────────────────────────────────────────────
-  //
-  // Kinu spawns NO facets. Every logical actor — hired subordinate, ask-by-role
-  // temporary, branching head, swarm node, MCTS branch — is bound over the ONE
-  // workspace object's SQLite by `packages/core/src/state/actor-host.ts`, and
-  // `ctx.facets` has no call site in this repo.
-  //
-  // The entries below are KEPT, and kept deliberately. They are measurements of
-  // the facet substrate, and three of them are why the exploration topology does
-  // not run on it: a facet buys a storage boundary and a teardown verb, not
-  // parallelism (`do.facet.cpu_shared`), its abort frees nothing
-  // (`do.isolate.abort_keeps_isolate`), and its id space is exhausted an order
-  // of magnitude before its bytes are (`do.facet.count`). Deleting
-  // them would delete the reason, and would leave the next author to rediscover
-  // it by shipping the same topology.
+  // Kinu spawns no facets (actors share one workspace SQLite via state/actor-host.ts); these entries record why:
+  // `do.facet.cpu_shared`, `do.isolate.abort_keeps_isolate`, `do.facet.count`.
 
   'do.facet.memory_independent': {
     subject: 'A facet\'s memory ceiling is independent of its parent\'s residency',
@@ -1827,8 +1658,6 @@ export const PLATFORM_CATALOG = {
   },
 
 
-  // ── Observability, and the shape of the tracing API we actually have ──
-
   'tracing.scoped_spans_only': {
     subject:
       'The native Workers tracer at our pin offers only SCOPED spans: tracing.enterSpan exists, '
@@ -1971,8 +1800,6 @@ export const PLATFORM_CATALOG = {
       + 'fan-out is invisible in exactly the direction being investigated. Deployed probe, both '
       + 'directions, before anything is built on the tree\'s shape.',
   },
-
-  // ── Bundle and startup ────────────────────────────────────────────────
 
   'worker.script_bytes': {
     subject: 'Deployed Worker size after gzip compression',
@@ -2139,47 +1966,25 @@ export const PLATFORM_CATALOG = {
 
 export type PlatformFactId = keyof typeof PLATFORM_CATALOG;
 
-/** One entry, addressed by its id — the shape generic consumers work in. */
 export interface PlatformFactEntry {
   readonly id: string;
   readonly fact: PlatformFact;
 }
 
-/**
- * One entry, read generically.
- *
- * `PLATFORM_CATALOG` is `as const`, which is what lets a named call site write
- * `PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value` with no null check — the
- * literal type carries the fact that this particular entry has a threshold. The
- * cost is that indexing by a VARIABLE yields a union of fifty-odd literal object
- * types, on which an optional field like `measurements` is not addressable. So
- * code that names an entry reads the const, and code that iterates comes through
- * here. One object, two ways in, no second copy.
- */
+/** For iteration: indexing the `as const` catalog by a variable yields a union where optional fields are unaddressable. */
 export function platformFact(id: PlatformFactId): PlatformFact {
   return PLATFORM_CATALOG[id];
 }
 
-/** The whole catalog as entries, in declaration order. */
 export function platformFactEntries(): readonly PlatformFactEntry[] {
   return PLATFORM_FACT_IDS.map((id) => ({ id, fact: platformFact(id) }));
 }
 
-/** Every catalog id, in declaration order. The predicate is what makes this a
- *  narrowing rather than a cast: `Object.keys` loses the key union, and the
- *  gate, the report and the fault filter all need it back. */
+/** The predicate narrows rather than casts, restoring the key union `Object.keys` loses. */
 export const PLATFORM_FACT_IDS: readonly PlatformFactId[] = Object.keys(PLATFORM_CATALOG)
   .filter((id): id is PlatformFactId => id in PLATFORM_CATALOG);
 
-/**
- * The faults a deterministic-simulation lane may inject as real behaviour.
- *
- * Exported as a function rather than left to each consumer's own filter so that
- * "the fault set is the catalog, filtered to proven evidence" is one definition
- * with one place to change. The deliberately-excluded set is the complement:
- * `documented`, `inferred` and `speculative` entries describe a threshold
- * without anyone having watched the runtime cross it.
- */
+/** The faults a deterministic-simulation lane may inject: the catalog filtered to proven evidence. */
 export function injectableFaults(): readonly PlatformFactId[] {
   return PLATFORM_FACT_IDS.filter((id) => PROVEN_LABELS.includes(platformFact(id).evidence));
 }

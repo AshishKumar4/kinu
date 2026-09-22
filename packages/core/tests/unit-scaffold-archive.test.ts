@@ -57,8 +57,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     const rt = setupRt();
     await seedV0(rt);
 
-    // v1 branches from v0 (default base = current), then loses a shadow trial
-    // and is rolled back — it becomes an archived stepping stone.
+    // v1 branches from v0, loses a shadow trial and is rolled back: an archived stepping stone.
     const v1 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
     expect(v1.ok).toBe(true);
 
@@ -89,8 +88,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     expect(archivedV2.status).toBe('pending');
     expect(present(byVersion.get(0), 'the archived v0 row').parentVersion).toBeNull();
 
-    // The branch base's code is still recoverable from the single source of
-    // truth (the agent.js.vN file) — the full DGM round-trip.
+    // The branch base's code is still recoverable from its agent.js.vN file.
     expect(await readScaffoldVersion(rt, v1Version)).toBe(scaffoldSrc('v1'));
 
     // And the v2 pending can win + promote like any trunk proposal.
@@ -143,9 +141,7 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
   });
 
   test('explore weighting favors high win-rate and novel (untried) variants', () => {
-    // Weight = (winRate ?? 0.5) + 1/(1+trials):
-    //   v2 (0.75 + 0.2 = 0.95), v1 (0 + 1/3 ≈ 0.33), v0 (0.5 + 1 = 1.5).
-    // Sample the policy's distribution with a deterministic LCG.
+    // Weight = (winRate ?? 0.5) + 1/(1+trials): v2 0.95, v1 ≈0.33, v0 1.5. Sampled with a deterministic LCG.
     let s = 7;
 
     const rng = () => {
@@ -161,18 +157,14 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
       picks.set(pick.version, (picks.get(pick.version) ?? 0) + 1);
     }
 
-    // The untried root (max novelty bonus) and the strong v2 must both beat
-    // the twice-beaten v1 — yet v1 stays reachable (DGM: no variant is dead).
+    // The untried root and the strong v2 beat the twice-beaten v1, yet v1 stays reachable.
     expect(picks.get(0) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
     expect(picks.get(2) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
     expect(picks.get(1) ?? 0).toBeGreaterThan(0);
   });
 
   test('the exploit path ignores lineage entirely — exploreShare still governs', () => {
-    // The live current is a proven dead end (its only child regressed hard).
-    // Outside the exploration share the policy must still branch from it:
-    // clade-metaproductivity ranks stepping stones, it does not decide whether
-    // to explore at all — that stays the exploreShare seam's job.
+    // The live current is a dead end, but outside the exploration share the policy still branches from it.
     const deadEndTrunk: ScaffoldArchiveEntry[] = [
       entry({ version: 2, parentVersion: 1, status: 'historical', trials: 9, wins: 0, losses: 9, winRate: 0 }),
       entry({ version: 1, parentVersion: 0, status: 'current', trials: 9, wins: 9, losses: 0, winRate: 1 }),
@@ -204,9 +196,10 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
     return () => rolls[i++] ?? 0;
   }
 
-  /** The own-score policy — weight a stepping stone by its OWN win rate plus
-   *  the novelty bonus. Kept here as the reference the cold-start path has to
-   *  reproduce exactly, and as the baseline the lineage signal must beat. */
+  /**
+   * The own-score policy: own win rate plus the novelty bonus. The reference the cold-start path must
+   * reproduce.
+   */
   function ownScorePick(archive: ReadonlyArray<ScaffoldArchiveEntry>, roll: number): number {
     const explorable = archive.filter((e) => e.status === 'historical' || e.status === 'rolled_back');
     const weight = (e: ScaffoldArchiveEntry): number => (e.winRate ?? 0.5) + 1 / (1 + e.trials);
@@ -222,9 +215,8 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
     return explorable[explorable.length - 1].version;
   }
 
-  // v1 is the archive's best-scoring variant (0.9 over 10 observations) and a
-  // dead end — its only child regressed to zero. v3 scored mediocre (0.4) but
-  // every good version descends from it. HGM's finding in one lineage.
+  // v1 scores best (0.9 over 10) but its only child regressed to zero; v3 scored 0.4 but every good version
+  // descends from it.
   const lineage: ScaffoldArchiveEntry[] = [
     entry({ version: 5, parentVersion: 4, status: 'current', trials: 10, wins: 10, losses: 0, winRate: 1 }),
     entry({ version: 4, parentVersion: 3, status: 'historical', trials: 10, wins: 10, losses: 0, winRate: 1 }),
@@ -234,8 +226,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
   ];
 
   test('a productive ancestor outranks a higher-scoring dead end', () => {
-    // The same roll that the own-score policy spends on the dead end buys the
-    // productive ancestor instead — the selection genuinely inverted.
+    // The roll the own-score policy spends on the dead end buys the productive ancestor.
     expect(ownScorePick(lineage, 0.7)).toBe(1);
     expect(selectEvolutionBase(lineage, { exploreShare: 1, random: seq(0, 0.7) }))
       .toEqual({ version: 3, mode: 'explore' });
@@ -267,8 +258,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
   });
 
   test('cold start: with no scored descendants the policy is the own-score one exactly', () => {
-    // Shape 1 — a pre-lineage archive (every parent_version null), i.e. what
-    // the table holds before the first generation of branching.
+    // Shape 1: a pre-lineage archive (every parent_version null).
     const flat: ScaffoldArchiveEntry[] = [
       entry({ version: 3, parentVersion: null, status: 'current', trials: 5, wins: 4, losses: 0, ties: 1, winRate: 1 }),
       entry({ version: 2, parentVersion: null, status: 'historical', trials: 4, wins: 3, losses: 1, winRate: 0.75 }),
@@ -276,8 +266,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
       entry({ version: 0, parentVersion: null, status: 'historical' }),
     ];
 
-    // Shape 2 — one generation deep, but the child has never been tried, so
-    // the clade carries no information its parent didn't already have.
+    // Shape 2: one generation deep, but the child is untried, so the clade adds nothing.
     const untriedChild: ScaffoldArchiveEntry[] = [
       entry({ version: 2, parentVersion: 1, status: 'current' }),
       entry({ version: 1, parentVersion: 0, status: 'historical' }),
@@ -308,8 +297,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     return () => rolls[i++] ?? 0;
   }
 
-  /** The policy WITHOUT the diversity term — clade + novelty only. The
-   *  reference a pathology-free archive has to reproduce exactly. */
+  /** The policy without the diversity term; a pathology-free archive must reproduce it exactly. */
   function noDiversityPick(archive: ReadonlyArray<ScaffoldArchiveEntry>, roll: number): number {
     return present(selectEvolutionBase(
       archive.map((e) => ({ ...e, pathology: null })),
@@ -331,8 +319,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
   });
 
   test('a thinly-covered cell outranks a crowded one at equal clade and trials', () => {
-    // Identical in every scored respect; they differ only in how many
-    // versions already target the cell each was written for.
+    // Identical except for how many versions already target each one's cell.
     const crowded: ScaffoldArchiveEntry[] = [
       entry({ version: 4, parentVersion: null, status: 'current', pathology: 'error/code', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
       entry({ version: 3, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
@@ -392,8 +379,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
   });
 
   test('a version that named no cell claims no coverage credit', () => {
-    // Two unlabelled versions do not form a "cell" that dilutes each other,
-    // and they earn nothing for being unlabelled.
+    // Unlabelled versions form no cell and earn nothing for being unlabelled.
     const archive: ScaffoldArchiveEntry[] = [
       entry({ version: 3, parentVersion: null, status: 'current', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
       entry({ version: 2, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),

@@ -1,22 +1,4 @@
-/**
- * A HEADLESS actor learns on the step clock and on nothing else.
- *
- * A head, a swarm node and a hosted subordinate all run `runHeadInference` over
- * a hosted actor whose engine is ENABLED — that is how both backends host them.
- * The loop registers the orchestrator's turn extension, so the in-episode
- * clock ticks (crafted-tool fitness, execution recoveries), and it records no
- * turn into the evolution window, so the turn review, the session reflection
- * and the lifetime pass are never entered. This suite is the guard on that
- * decision: the first test would fail the day the loop, or the session under
- * it, starts recording a headless turn.
- *
- * The negative half is checked against a POSITIVE CONTROL on the very same
- * turn: handed to the workspace root's `recordTurn` — what its
- * `turn_record` effect does — that turn is graded `corrected` by the execution
- * verdict and reflected into a lesson. So the assertion is not "the engine was
- * off" or "the turn carried nothing to learn from"; it is that the headless
- * loop declines to enter the channel a full actor would.
- */
+/** A headless actor learns only on the step clock; a positive control on the same turn shows the root would learn from it. */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -49,7 +31,6 @@ function headInput(): HeadInput {
   };
 }
 
-/** The reflection model call, counted: the one call turn-level learning spends. */
 function reflectingLlm() {
   let reflections = 0;
 
@@ -71,8 +52,6 @@ const usage = {
   outputTokens: { total: 7, text: 7, reasoning: undefined },
 };
 
-/** `calls` probe invocations, each with its own arguments, then one closing
- *  text step. */
 function probingHead(calls: number): LanguageModel {
   let step = 0;
 
@@ -183,21 +162,15 @@ describe('a headless actor runs the step clock only', () => {
 
     expect(report.status).toBe('completed');
 
-    // The evidence the root's own headless channel grades on IS on this turn:
-    // its last acting call failed, which `executionVerdict` reads as `failed`.
     const acc = seat.actor.session.orchestrator.acc;
     expect(executionVerdict({ hadError: acc.hadError, toolCalls: acc.toolCalls })).toBe('failed');
 
-    // And none of it reached the conversational ledgers, nor cost a model call.
     expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
     expect(listTurnOutcomes(rt.storage.sql, actor)).toHaveLength(0);
     expect(listLessons(rt.storage.sql, actor)).toHaveLength(0);
     expect(reflections()).toBe(0);
 
-    // CONTROL. The same turn, recorded as a full actor's `turn_record` effect
-    // records it, is graded by the execution verdict and reflected into a
-    // provisional lesson — so the zeros above are the loop's decision, not an
-    // engine that was off or a turn with nothing to learn from.
+    // Control: the same turn recorded as `turn_record` does yield a lesson, so the zeros above are the loop's decision.
     const turn = snapshotCompletedTurn(acc, {
       userMessage: 'probe the parser', assistantResponse: report.summary,
       turnId: 'h1', sessionId: 'default', origin: 'programmatic',
@@ -222,8 +195,6 @@ describe('a headless actor runs the step clock only', () => {
     const seat = await seats.seat('recovering-head', 'head');
     const actor = seat.actor.handle;
 
-    // A steer-worthy failure streak broken by a CHANGED call that ran clean —
-    // the execution recovery the step clock records mid-episode.
     const failing = CONSECUTIVE_FAILURES_BEFORE_STEER;
 
     const report = await runHeadInference(headInput(), {
@@ -243,16 +214,11 @@ describe('a headless actor runs the step clock only', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]).toContain('probe');
     expect(listLessons(rt.storage.sql, actor).map((lesson) => lesson.source)).toEqual(['execution_recovery']);
-    // Under the head's OWN actor id: the root holds none of it.
     expect(listLessons(rt.storage.sql, rt.actor)).toHaveLength(0);
-    // Still no conversational timescale: a clean ending is not an outcome row
-    // either, and no reflection was asked for.
     expect(listTurnOutcomes(rt.storage.sql, actor)).toHaveLength(0);
     expect(reflections()).toBe(0);
 
-    // Retirement is where a head's rows go. `keepHistory: false` is what every
-    // exploration retirement passes, and the purge walks every actor-scoped
-    // table — the lessons ledger included.
+    // `keepHistory: false` purges every actor-scoped table, the lessons ledger included.
     const main = seats.directory.main();
     await seats.host.retire(
       { actorId: main.actorId, workspaceId: main.workspaceId, parentActorId: main.parentActorId },

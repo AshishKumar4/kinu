@@ -1,14 +1,5 @@
-/**
- * Unit tests for forkWorkspaceStorage — the storage-layer fork helper.
- * Backend-agnostic: drives two bun:sqlite handles in-memory.
- *
- * Schema parity: the canonical initAllTables() DDL from
- * packages/core/src/identity/schema.ts, and the production workspace
- * filesystem — a fork carries FILES, so the test forks real ones. The source
- * conversation is seeded through the production session writers (see
- * `helpers/fork-conversation.ts`), because the rows a fork reads are the rows a
- * turn writes.
- */
+/** Unit tests for forkWorkspaceStorage over two in-memory bun:sqlite handles, seeded through the
+ *  production schema, filesystem and session writers. */
 
 import { describe, test, expect } from 'bun:test';
 import { forkWorkspaceStorage, readForkLineage, readSoul } from '../src/index';
@@ -35,8 +26,7 @@ function forkInto(src: TestWorkspace, tgt: TestWorkspace, opts: {
   });
 }
 
-/** Ids of everything the fork itself authored, so an assertion about inherited
- *  history does not have to spell the marker's generated id. */
+/** Ids of everything the fork authored, so assertions need not spell the marker's generated id. */
 const inherited = (ids: readonly string[]): string[] => ids.filter((id) => !id.startsWith('fork-marker-'));
 
 describe('forkWorkspaceStorage', () => {
@@ -52,8 +42,7 @@ describe('forkWorkspaceStorage', () => {
     const result = await forkInto(src, tgt, { untilMessageId: 'm2' });
 
     expect(result.forkPointMs).toBeGreaterThan(0);
-    // What a fork reports as copied is the PUBLIC chain it carried: two entries,
-    // not the three the source holds.
+    // A fork reports the public chain it carried: two entries, not the source's three.
     expect(result.messagesCopied).toBe(2);
     const chain = await readChain(tgt);
     expect(inherited(chain.ids)).toEqual(['m1', 'm2']);
@@ -158,8 +147,7 @@ describe('forkWorkspaceStorage', () => {
 
     expect(landed.length).toBe(stored.length);
     expect(landed.every((row) => row.content_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
-    // Read back through the production reader: it resolves each path on the
-    // TARGET's plane and refuses a payload whose digest differs.
+    // The production reader resolves each path on the target's plane and refuses a digest mismatch.
     expect((await readChain(tgt)).text[0]).toBe(spilled);
 
     const metadata = tgt.sql<{ metadata_path: string }>`
@@ -184,9 +172,8 @@ describe('forkWorkspaceStorage', () => {
   test('the staged rows satisfy the canonical foreign keys under enforcement', async () => {
     const src = fresh();
     const tgt = fresh();
-    // The hosted target enforces foreign keys statement by statement, and a
-    // streamed fork has no transaction spanning its sections — so the ORDER the
-    // writer stages in is the only thing that can satisfy them.
+    // The hosted target checks foreign keys per statement and a streamed fork has no spanning transaction,
+    // so staging order alone must satisfy them.
     src.db.exec('PRAGMA foreign_keys = ON');
     tgt.db.exec('PRAGMA foreign_keys = ON');
     await seedForkTarget(tgt);
@@ -202,9 +189,7 @@ describe('forkWorkspaceStorage', () => {
     expect(readForkLineage(tgt.sql)?.sourceMessageId).toBe('m2');
     expect(tgt.sql<{ table: string; rowid: number }>`PRAGMA foreign_key_check`).toEqual([]);
 
-    // A redelivery deletes a POPULATED canonical store before staging again, so
-    // the clearing order has to release the forward edge — an entry's parent —
-    // before the rows it names go.
+    // A redelivery clears a populated store first, so clearing must release an entry's parent edge first.
     await forkInto(src, tgt, { untilMessageId: 'm2' });
 
     expect(tgt.sql<{ table: string; rowid: number }>`PRAGMA foreign_key_check`).toEqual([]);
@@ -231,8 +216,7 @@ describe('forkWorkspaceStorage', () => {
     expect(marker).toEqual({ parent_id: 'm2', role: 'system' });
     expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
     expect(chain.text[chain.text.length - 1]).toContain('alpha');
-    // A copy the model never reads is not context: the marker is a node of the
-    // chain and not a member of the working context.
+    // The marker is a node of the chain, not a member of the working context.
     expect((await readWorkingContext(tgt, TARGET_ARTIFACTS)).entryIds).not.toContain(markerId);
   });
 
@@ -317,8 +301,7 @@ describe('forkWorkspaceStorage', () => {
 
     await forkInto(a, b, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
 
-    // B continues its own conversation: the entries land under B's actor, on
-    // the leaf the fork left — its marker.
+    // B's entries land under B's actor, on the leaf the fork left: its marker.
     const inB = new ForkConversation(b, TARGET_ARTIFACTS);
     await inB.say({ id: 'b3', role: 'user', text: 'in B' });
     await inB.say({ id: 'b4', role: 'assistant', text: 'from B' });
@@ -388,9 +371,7 @@ describe('forkWorkspaceStorage', () => {
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
-    // What the owner said "always" to in THIS workspace, and how much the gate
-    // asks here. Both are read live by `ShellApprovalPolicy` before it decides
-    // whether to put a command in front of the owner at all.
+    // Read live by `ShellApprovalPolicy` before it decides whether to ask the owner.
     chat.actor.config.setShellApprovalMode('allow_all');
     chat.actor.config.set('shell_approval_grants', 'rm -rf *@sandbox,curl *@sandbox');
 
@@ -398,8 +379,7 @@ describe('forkWorkspaceStorage', () => {
 
     const carried = tgt.sql<{ key: string }>`SELECT key FROM actor_config`.map((row) => row.key);
 
-    // The child asks the owner from scratch, and the preference it may inherit
-    // still arrives — this withholds authority, not configuration.
+    // The child asks from scratch yet inherits the preference: this withholds authority, not configuration.
     for (const key of SHELL_APPROVAL_AUTHORITY_KEYS) expect(carried).not.toContain(key);
     expect(carried).toContain('model');
   });
@@ -485,10 +465,7 @@ describe('the files a fork carries', () => {
   }
 
   test('a memory tree deeper and wider than the shared walk\'s guards is carried whole', async () => {
-    // Forty levels under memory/ with one file at the bottom, beside two
-    // hundred directories of sixty files: past both of walkRecursive's guard
-    // units. A fork that reused the walker's bounds would refuse or truncate
-    // here; a fork carries every file and no directory.
+    // Deep and wide enough to pass both of walkRecursive's guards; a fork reusing its bounds would truncate.
     let deep = 'memory';
 
     for (let i = 0; i < 40; i++) deep += `/d${i}`;

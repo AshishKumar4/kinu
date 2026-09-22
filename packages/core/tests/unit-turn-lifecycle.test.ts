@@ -1,7 +1,5 @@
-// Shared turn-lifecycle spine (orchestrator/turn-lifecycle.ts) — the run-event
-// bracket, the CompletedTurn snapshot, the measured compaction trigger, and the
-// applied overflow-recovery policy. Both backends delegate here, so these
-// payload shapes ARE the cross-backend contract.
+// Shared turn-lifecycle spine (orchestrator/turn-lifecycle.ts); both backends delegate here, so these
+// payload shapes are the cross-backend contract.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -277,12 +275,10 @@ describe('snapshotCompletedTurn', () => {
 describe('persistMeasuredPromptTokens', () => {
   test('persists a measurement and only a measurement, bound to the durable length', () => {
     const state = recordingState();
-    // No step reported a prompt size: there is nothing to persist, and the
-    // stale trigger from an earlier turn must be left alone.
+    // No step reported a prompt size: the stale trigger from an earlier turn must be left alone.
     persistMeasuredPromptTokens(state, 'k', undefined, 12);
     expect(state.saved).toEqual([]);
-    // A provider-reported 0 IS a measurement — an empty request is a real
-    // request, and it must overwrite whatever the last turn measured.
+    // A provider-reported 0 is a measurement and must overwrite the last turn's.
     persistMeasuredPromptTokens(state, 'k', 0, 12);
     persistMeasuredPromptTokens(state, 'k', 4321, 12);
     expect(state.saved).toEqual([['k', 0, 12], ['k', 4321, 12]]);
@@ -348,9 +344,7 @@ test('an earned overflow retry is recorded as one inline terminal effect', () =>
   expect(declareTerminalRoster(facts).some((effect) => effect.name === 'overflow_retry')).toBe(false);
 });
 
-// The credit decision — which id the work captured INSIDE a turn is attributed
-// to. Both backends attribute two capture kinds (alternate takes, steer
-// branches) to the same answer, so this is the cross-backend contract for both.
+// Which id work captured inside a turn is credited to; both backends share it for alternate takes and steer branches.
 describe('creditedTurnId', () => {
   test('a completed build turn credits its message id', () => {
     expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'build' })).toBe('msg-1');
@@ -368,10 +362,8 @@ describe('creditedTurnId', () => {
     expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'plan' })).toBeNull();
   });
 
-  // `hadError` is deliberately NOT an input: the accumulator raises it from the
-  // transport discriminator on ANY failed tool result, and a turn that ran the
-  // suite, saw it red, fixed it and answered has an answer. Reading that flag
-  // here drops the captures of every such turn.
+  // `hadError` is not an input: any failed tool result raises it, yet a turn that fixed a red suite and
+  // answered has an answer.
   test('a failed tool call inside a turn that still answered does not void the credit', () => {
     const acc = new TurnAccumulator();
     acc.reset(0);
@@ -382,15 +374,8 @@ describe('creditedTurnId', () => {
   });
 });
 
-// Escalation — a turn reaching past its own shell into a provisioned
-// environment. The row exists so "did escalating help" is answerable from the
-// durable log, so what matters is that the REASON and the OUTCOME survive
-// storage, not merely that something was emitted.
-//
-// `recorder()` is a real RunEventRecorder over SQLite and `read()` parses back
-// through `parseStoredRunEvent`, so every assertion here is a producer →
-// storage → parser round trip. A payload the valibot variant rejected would
-// fail these rather than being silently unreadable later.
+// Escalation rows round-trip through a real RunEventRecorder and `parseStoredRunEvent`: the reason
+// and outcome must survive storage.
 describe('the escalation row', () => {
   test('a turn that escalated writes one row that survives storage; one that did not writes none', () => {
     const rec = recorder();

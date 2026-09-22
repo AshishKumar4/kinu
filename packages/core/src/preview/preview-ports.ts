@@ -22,11 +22,7 @@ export interface PreviewPortState {
   error: string | null;
 }
 
-/**
- * Apply authoritative per-executor port results without discarding the last
- * known working preview when that executor could not be read. A successful
- * empty result is authoritative and removes its prior ports.
- */
+/** A failed executor read keeps its previous ports; a successful empty result removes them. */
 export function reconcilePreviewPorts(
   previous: readonly PinnedPreviewPort[],
   refreshes: readonly ExecutorPortRefresh[],

@@ -1,14 +1,5 @@
-// Layer gate — the deterministic, no-LLM regression gate over the turn
-// pipeline, plus the proof that its per-layer resolution is real:
-//
-//   1. the decomposition is dependency-closed (walked over the real imports),
-//   2. an injected single-layer fault craters its own slice and nothing else,
-//   3. an uncovered layer reports null, never 100%.
-//
-// (1) is what makes (2) trustworthy: a registry-level fault only intercepts
-// what the gate calls, so if one layer's production code reached another
-// layer's subject, the matrix would report isolation the pipeline does not
-// have. The import walk rules that out.
+// Layer gate: the no-LLM regression gate over the turn pipeline. The import walk proves the
+// decomposition dependency-closed, which is what makes single-layer fault isolation trustworthy.
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -22,8 +13,7 @@ import { createTestRuntime } from './helpers';
 
 const SRC = resolve(import.meta.dir, '../src');
 
-// The gate reads no storage: every prompt probe passes soulOverride, so the
-// runtime handle only satisfies buildSystemPromptSync's signature.
+// Every prompt probe passes soulOverride, so the runtime handle only satisfies the signature.
 const subjects = createPipelineSubjects(createTestRuntime().rt);
 
 const measuredLayers = LAYERS.filter((layer) => layer.probes.length > 0);
@@ -39,8 +29,6 @@ for (const layer of LAYERS) {
 function isSubjectName(value: string): value is SubjectName {
   return Object.hasOwn(SUBJECT_SOURCE, value);
 }
-
-// ── import-graph analysis ────────────────────────────────────────
 
 const IMPORT = /import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
 
@@ -77,10 +65,7 @@ function importsOf(file: string): Import[] {
 
 function resolveImport(from: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
-  // One spelling: a relative specifier under Bun names the module without an
-  // extension, so the module is `<spec>.ts` or the directory's barrel. Rewriting
-  // a trailing `.js` instead returns null for every extensionless specifier,
-  // which walks no edges and finds no subject reachable at all.
+  // Bun names a relative module without extension: resolve `<spec>.ts` or the directory's barrel.
   const base = resolve(dirname(from), spec);
 
   return [`${base}.ts`, `${base}/index.ts`].find((path) => existsSync(path)) ?? null;
@@ -112,8 +97,6 @@ function reachableSubjects(entry: string): Map<SubjectName, string> {
   return found;
 }
 
-// ── the decomposition itself ─────────────────────────────────────
-
 describe('layer gate — decomposition', () => {
   test('every subject is owned by exactly one layer', () => {
     const registry = Object.keys(SUBJECT_SOURCE).filter(isSubjectName);
@@ -126,18 +109,14 @@ describe('layer gate — decomposition', () => {
     for (const [subject, relative] of Object.entries(SUBJECT_SOURCE)) {
       const file = resolve(SRC, relative);
       expect(existsSync(file)).toBe(true);
-      // This checks the module graph. A moved subject fails here because the
-      // file no longer carries it. Dynamic import is the only form that works.
-      // The files are data in the map under test, and a static import per
-      // subject would restate that map by hand.
+      // Dynamic import: a static import per subject would restate the map under test by hand.
       expect(Object.hasOwn(await import(file), subject)).toBe(true);
     }
   });
 
   test('subjects sharing a module share a layer', () => {
-    // A call between two functions in one file is invisible to a registry
-    // swap, so splitting a module across layers would report isolation the
-    // code does not have.
+    // A call within one file is invisible to a registry swap, so a module split across layers would
+    // report false isolation.
     const byModule = new Map<string, Set<string>>();
 
     for (const [subject, module] of Object.entries(SUBJECT_SOURCE)) {
@@ -156,8 +135,7 @@ describe('layer gate — decomposition', () => {
   });
 
   test('the import walk actually resolves — the closure proof is not vacuous', () => {
-    // prompt.ts genuinely calls compilePromptSurface; if the walk found
-    // nothing, the cross-layer check above would pass for free.
+    // If the walk found nothing, the cross-layer check above would pass for free.
     const reached = reachableSubjects(resolve(SRC, SUBJECT_SOURCE.buildSystemPromptSync));
     expect(reached.has('compilePromptSurface')).toBe(true);
     expect(reached.has('renderAgentsMdSection')).toBe(true);
@@ -199,8 +177,6 @@ describe('layer gate — decomposition', () => {
     expect(new Set(LAYERS.map((layer) => layer.id)).size).toBe(LAYERS.length);
   });
 });
-
-// ── coverage honesty ─────────────────────────────────────────────
 
 describe('layer gate — coverage honesty', () => {
   test('observation digests use JSON wire semantics without collapsing root undefined', async () => {
@@ -294,8 +270,6 @@ describe('layer gate — coverage honesty', () => {
   });
 });
 
-// ── the gate ─────────────────────────────────────────────────────
-
 describe('layer gate — baseline', () => {
   test('the pipeline conforms to the locked baseline', async () => {
     const report = await runLayerGate({ subjects, baseline: LOCKED_BASELINE });
@@ -314,8 +288,6 @@ describe('layer gate — baseline', () => {
     expect([...second]).toEqual([...first]);
   });
 });
-
-// ── the validation of the gate ───────────────────────────────────
 
 describe('layer gate — fault localization', () => {
   test('every measured layer has a fault, and every fault stays inside its layer', () => {

@@ -1,57 +1,15 @@
-/**
- * ONE SHARED PROVIDER, PACED.
- *
- * A model provider is not per-agent: every swarm node, head, and actor drives
- * requests against one account credential. A live `ideate` run opened a whole
- * level at once, the account rate-limited every request together, and all
- * members entered backoff together.
- *
- * `withRateLimitRetry` declares the provider's wait before it sleeps.
- * {@link ProviderPacer.admit} makes sibling requests for that host respect the
- * same cooldown and connection-lane budget. Every cooldown comes from
- * `Retry-After` or the retry layer's backoff; none is an elapsed-work limit.
- * The concurrency limit comes from the platform catalog.
- *
- * The pacer is isolate-scoped because the account limit is isolate-scoped.
- * {@link ProviderPacer} remains constructible for tests; production shares
- * {@link providerPacer}.
- */
+/** Isolate-scoped pacer: sibling requests to one provider host share its
+ *  declared cooldown and connection-lane budget. */
 
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { abortCause } from '../utils/abort';
 
-/**
- * HOW MANY MODEL REQUESTS MAY BE AWAITING RESPONSE HEADERS AT ONCE, per provider
- * host.
- *
- * DERIVED, and from a limit the platform already enforces on us: Cloudflare
- * queues the seventh connection that is simultaneously waiting for headers
- * (`worker.simultaneous_connections`, and its note names this exact incident —
- * "N branches plus the orchestrator each opening a model call inside one
- * invocation serialise past six ... a plausible contributor to the delegation
- * rate-limit storm"). Read off the catalog rather than restated, so the number
- * lives in exactly one place.
- *
- * The GRANULARITY is what makes this the right bound rather than a coincidence.
- * A lane is held from the request going out until its headers arrive, and the
- * platform's own budget frees a connection at exactly that moment too — "once
- * headers arrive a connection stops counting". So a lane is not a cap on
- * concurrent STREAMS: five nodes stream their answers in parallel as before, and
- * only their request STARTS are spaced.
- *
- * What the pacing buys, given the platform queues past six anyway, is that the
- * queueing becomes OURS. A platform-queued request is invisible latency that
- * arrives at the provider the moment a slot frees, whatever the provider last
- * said; a lane-queued request waits behind {@link ProviderPacer.declareWait}, so
- * a `Retry-After` handed to one node is honoured by its siblings instead of
- * being raced past by five requests that never saw it.
- */
+/** Requests per host awaiting response headers; a lane frees when headers arrive,
+ *  matching the platform's `worker.simultaneous_connections` budget. */
 const PROVIDER_REQUEST_LANES =
   PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value;
 
-/** Sleep that an abort ends, rejecting with the signal's own reason. Shared with
- *  {@link withRateLimitRetry}, which waits under the same signal for the same
- *  provider — two copies of this would be two abort semantics. */
+/** Sleep that an abort ends, rejecting with the signal's reason. */
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(abortCause(signal));
   const { promise, resolve, reject } = Promise.withResolvers<void>();
@@ -75,11 +33,9 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> 
 interface HostLane {
   /** Requests currently holding a lane — out, and awaiting headers. */
   active: number;
-  /** Everyone queued for a lane. Woken as a set on release: with lanes in the
-   *  single digits a wake-all cannot starve anyone, and it has no lost-wakeup
-   *  case, which a hand-off queue does the moment a woken waiter aborts. */
+  /** Woken as a set on release: a hand-off queue loses a wakeup when a woken waiter aborts. */
   waiting: Array<() => void>;
-  /** The provider's own instruction, as a deadline. */
+  /** The provider's declared cooldown, as a deadline. */
   coolUntilMs: number;
 }
 
@@ -89,16 +45,8 @@ export interface ProviderPacerOptions {
   readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-/**
- * The isolate's view of its model providers: how many requests are out, and
- * whether any of them has been told to wait.
- *
- * Keyed by HOST rather than by credential. The rate limit being respected is the
- * account's at a provider, and the host is what every call site already has —
- * `providerHost(input)` in the retry layer, with no credential in reach. Two
- * accounts against one host share a lane budget, which is conservative in the
- * only direction that matters here.
- */
+/** Keyed by host, not credential: the retry layer has no credential in reach, and
+ *  two accounts sharing one host's budget is the conservative direction. */
 export class ProviderPacer {
   private readonly lanes: number;
   private readonly now: () => number;
@@ -111,23 +59,8 @@ export class ProviderPacer {
     this.sleep = opts.sleep ?? abortableSleep;
   }
 
-  /**
-   * Wait until this host will accept another request, then hold a lane until the
-   * returned release is called.
-   *
-   * Two gates in this order, and the order is the point: the provider's own
-   * instruction FIRST, because a lane that were granted during a cooldown would
-   * spend the cooldown holding capacity nobody may use, and only then the lane.
-   *
-   * `opts.onCooldown` fires each time a provider-declared cooldown is joined —
-   * the wait a request takes for a cooldown a SIBLING earned, which never
-   * passes through the caller's own retry path and would otherwise be invisible
-   * to any surface reporting why the stream is quiet. It is handed the
-   * remaining wait AND the cooldown's deadline so a request that declared this
-   * very cooldown can decline to hear it announced twice.
-   *
-   * The release MUST be called — every caller does it in a `finally`.
-   */
+  /** Wait out any cooldown, then take a lane (cooldown first, so no lane idles through it).
+   *  The returned release must be called; `onCooldown` gets the deadline to dedupe its own. */
   async admit(host: string, signal?: AbortSignal, opts?: { onCooldown?: (waitMs: number, untilMs: number) => void }): Promise<() => void> {
     const lane = this.laneFor(host);
 
@@ -157,17 +90,7 @@ export class ProviderPacer {
     }
   }
 
-  /**
-   * Wait to be woken by a release — or by the caller's own abort, whichever
-   * comes first.
-   *
-   * The abort arm is not a nicety. Without it a queued request whose turn is
-   * cancelled sits here until an unrelated release happens to wake it, which on
-   * a fully-occupied host is a cancelled node still counted as working. Resolving
-   * (rather than rejecting) hands the decision back to the loop, whose first act
-   * is to re-check the signal — so there is one place that turns an abort into a
-   * throw.
-   */
+  /** Resolves on release or abort; the loop re-checks the signal, so only it throws. */
   private queueForLane(lane: HostLane, signal?: AbortSignal): Promise<void> {
     const { promise, resolve } = Promise.withResolvers<void>();
     lane.waiting.push(resolve);
@@ -176,14 +99,7 @@ export class ProviderPacer {
     return promise;
   }
 
-  /**
-   * Record that this host has asked us to hold off for `ms`.
-   *
-   * The deadline only ever moves FORWARD (`Math.max`), so a peer that receives a
-   * shorter `Retry-After` cannot shorten a longer one already in force — the
-   * conservative direction, and the one that stops a fan-out from converging on
-   * the smallest number any of its members happened to be handed.
-   */
+  /** Record a host cooldown of `ms`; the deadline only moves forward. */
   declareWait(host: string, ms: number): void {
     if (!(ms > 0)) return;
     const lane = this.laneFor(host);
@@ -207,6 +123,5 @@ export class ProviderPacer {
   }
 }
 
-/** The isolate's pacer. One provider account, one clock — see the file header for
- *  why the scope is the isolate and not the turn. */
+/** The isolate's shared pacer. */
 export const providerPacer = new ProviderPacer();

@@ -1,10 +1,4 @@
-/**
- * The device-consent registry, through its public seam.
- *
- * The registry parks a device call on a promise until the owner answers or the
- * prompt expires. It was Durable Object state; the only platform-shaped piece
- * left is `announce`, which these tests record.
- */
+/** The device-consent registry through its public seam; `announce` is the only platform-shaped piece. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -22,8 +16,7 @@ const REQUEST: DeviceConsentRequest = {
   command: 'git status',
 };
 
-/** One registry's durable half over its own in-memory database — the same
- *  store shape the DO's workspace schema hands the real one. */
+/** One registry's durable half over an in-memory database, in the DO workspace schema's shape. */
 function consentStore(): DeviceConsentStore {
   const db = new Database(':memory:');
   initDeviceConsentRequestsTable(makeExecRaw(db));
@@ -65,9 +58,7 @@ describe('DeviceConsentRegistry', () => {
   });
 
   test('an unanswered prompt expires as `timeout`, never as `deny`', async () => {
-    // A refusal is policy the agent will remember; an absence is not. Telling
-    // the model it was refused turns the owner stepping away into a permanent,
-    // self-imposed capability loss.
+    // Telling the model it was refused turns the owner stepping away into a permanent capability loss.
     const { reg, notices } = registry(1);
     const decision = await reg.request(REQUEST);
     expect(decision).toBe('timeout');
@@ -113,13 +104,7 @@ describe('DeviceConsentRegistry', () => {
   });
 });
 
-/**
- * One logical grant is one card. A fresh consentId per call gives a retry
- * re-asking the identical question a second card, and no surface can collapse
- * the two: every surface dedups on consentId, and the two ids differ. So the
- * registry decides identity, rather than each caller carrying its own
- * check-then-act across two RPCs.
- */
+/** One logical grant is one card: the registry, not each caller, dedups a re-asked question. */
 describe('DeviceConsentRegistry identity', () => {
   test('an identical re-ask joins the waiting prompt: one id, one card, one answer', async () => {
     const { reg, notices } = registry();
@@ -177,9 +162,7 @@ describe('DeviceConsentRegistry identity', () => {
   });
 
   test('an answer arriving with the raised notice is accepted, not called unknown', async () => {
-    // A surface that resolves synchronously on the notice must not be told the
-    // id is unknown, which is what announcing before the id can be answered
-    // would do.
+    // Announcing before the id can be answered would tell a synchronous surface it is unknown.
     const answered: boolean[] = [];
 
     const reg = new DeviceConsentRegistry({
@@ -197,11 +180,7 @@ describe('DeviceConsentRegistry identity', () => {
   });
 });
 
-/**
- * "always" is a policy, and a policy decides more than the card it arrived on.
- * A prompt the new grant already covers, left waiting, asks the owner to decide
- * again what they just decided forever.
- */
+/** "always" is a policy: pending prompts the new grant covers settle with it. */
 describe('DeviceConsentRegistry always-grant coverage', () => {
   test('an always grant settles the other prompts on that device it covers', async () => {
     const { reg, notices } = registry();
@@ -222,10 +201,7 @@ describe('DeviceConsentRegistry always-grant coverage', () => {
   });
 
   test('an always grant settles every other prompt for that machine, whatever the command', async () => {
-    // ONE rule: same machine, same workspace, one answer — whatever the command
-    // or the method. There is no consent SCOPE to compare, so a `full_filesystem`
-    // prompt cannot be left waiting behind a base-tier grant, and a narrow
-    // prompt cannot be settled by a wide grant it never asked about.
+    // One rule: same machine and workspace, one answer, whatever the command; there is no consent scope.
     const { reg } = registry();
     const asked = reg.request(REQUEST);
     const wider = reg.request({ ...REQUEST, command: 'cat /etc/shadow' });

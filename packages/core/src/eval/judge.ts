@@ -1,18 +1,12 @@
-// Default LLM-judge implementation for the eval harness. Mirrors the
-// auto-judge pattern (winner-of-two with rationale) but accepts any LLM that
-// implements the StructuredJudgeFn shape from scaffold/auto-judge.
 import { VerdictSchema, type JudgeFn, type Verdict } from './types';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 
-/** A judge fn that calls a structured-output LLM via the AI SDK. */
 export type LLMJudgeFn = (
   prompt: string,
   schema: typeof VerdictSchema,
 ) => Promise<Verdict>;
 
-/** Default judge: builds a comparison prompt, calls the structured LLM,
- *  returns the Verdict. Caller supplies the structured-output adapter
- *  (typically generateObject from the AI SDK). */
+/** Caller supplies the structured-output adapter (typically AI SDK generateObject). */
 export function createLLMJudge(llmJudge: LLMJudgeFn): JudgeFn {
   return async (caseInput, runA, runB) => {
     const prompt = `You are judging two AI strategies on the same task.
@@ -35,5 +29,4 @@ Be terse — rationale should be under 30 words.`;
   };
 }
 
-// Re-export for callers
 export { VerdictSchema, type Verdict };

@@ -1,7 +1,4 @@
-// Behaviour tests for the `tasks` tool — the model-facing surface over
-// TaskListStore. The store's own semantics are pinned in unit-task-list.test.ts;
-// what is tested here is the contract the model sees: the argument names, what
-// a refusal says, and what comes back.
+// Behaviour tests for the `tasks` tool's model-facing contract; store semantics live in unit-task-list.test.ts.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -106,7 +103,6 @@ describe('tasks tool', () => {
     expect(closed.status).toBe('done');
     expect(closed.open_subtasks).toBe(1);
 
-    // Nothing left open ⇒ nothing said about it.
     await tasks({ action: 'update', id: 't3', status: 'done' });
 
     const clean = v.parse(v.object({
@@ -122,9 +118,7 @@ describe('tasks tool', () => {
     await expect(tasks({ action: 'update', status: 'done' })).rejects.toThrow('tasks.update requires `id`');
     await expect(tasks({ action: 'update', id: 't1', status: 'finished' })).rejects.toThrow('tasks.update requires `status` — one of open, active, done, dropped');
     await expect(tasks({ action: 'update', id: 't9', status: 'done' })).rejects.toThrow('no task t9');
-    // The refusal names the vocabulary AND echoes what arrived, which is the one
-    // wording every native dispatcher shares (registry.unknownActionError). A bare
-    // `unknown tasks action 'sort'` would name nothing the model could use next.
+    // The refusal names the vocabulary and echoes what arrived (registry.unknownActionError), like every native dispatcher.
     await expect(tasks({ action: 'sort' })).rejects.toThrow('tasks requires `action` — one of add, update, list, mode; got "sort"');
   });
 
@@ -141,8 +135,7 @@ describe('tasks tool', () => {
   });
 
   test('the documented example is a call this schema accepts', async () => {
-    // House rule: a spec's example is one REAL call. Parsing it and running it
-    // is what keeps that true as either side changes.
+    // A spec's example must be one real call, so it is parsed and run.
     const example = BUILTIN_TOOL_SPECS.tasks.example;
 
     const args = v.parse(v.object({
@@ -173,12 +166,7 @@ describe('tasks tool', () => {
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
   });
 
-  // The AI SDK does not validate a jsonSchema-declared tool input: `jsonSchema`
-  // leaves `Schema.validate` undefined and `safeValidateTypes` then returns the
-  // raw JSON untouched. So `action` is whatever the model emitted, and the
-  // declared literal union is a claim about it — which is how
-  // `{"action":"list\">"}` reached the dispatcher in production and was answered
-  // `unknown tasks action 'list">'`: true, and useless.
+  // The AI SDK does not validate jsonSchema-declared tool input, so `action` is whatever the model emitted.
   describe('a model-supplied action outside the vocabulary is answered WITH the vocabulary', () => {
     test('the exact production payload is refused by naming all four actions', async () => {
       const tasks = setup();
@@ -205,8 +193,7 @@ describe('tasks tool', () => {
     });
 
     test('titles of the wrong type are refused, not fed to `raw.trim()`', async () => {
-      // TaskListStore.add trims each title, so a non-string element threw a
-      // TypeError out of the tool instead of answering the model.
+      // TaskListStore.add trims each title: a non-string element must be refused, not thrown as a TypeError.
       const tasks = setup();
       await expect(tasks({ action: 'add', titles: [1, 2] })).rejects.toThrow('array of task titles');
     });
@@ -228,8 +215,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
 
     expect(added.added.length).toBe(2);
 
-    // The native tool's own dispatcher, over the SAME store, sees it —
-    // one implementation, two callers, not a shadow copy.
+    // The native tool's dispatcher over the same store sees it: one implementation, two callers.
     const executeNative = nativeTasks(rt);
     const listed = v.parse(TaskListSchema, await executeNative({ action: 'list' }));
     expect(listed.tasks.map((t) => t.title)).toEqual(['Reproduce the bug', 'Write the fix']);
@@ -255,8 +241,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
   });
 });
 
-// The wiring this axis stands on: what the agent sets through the tool is what
-// the next turn resolves from the catalog.
+// What the agent sets through the tool is what the next turn resolves from the catalog.
 describe('tasks action=mode — the agent\'s durable role', () => {
   function roleSetup() {
     const { rt, testSql } = createTestRuntime();

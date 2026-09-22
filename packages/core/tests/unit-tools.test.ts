@@ -1,26 +1,5 @@
-/**
- * Unit tests for the canonical tool surface.
- *
- * The agent's tool surface is deliberately SMALL (fewer tools → better LLM
- * selection). Always-on (no extra deps): eval, run, file, memory —
- * the ONE durable-state tool, whose keyed-fact actions are themselves gated
- * on `facts` — and tasks.
- * Conditional (needs a specific dep in BuiltinToolDeps):
- *   - agents           ← agents (swarm substrate and/or team + peers deps;
- *                        the ONE delegation tool, actions gated per group)
- *   - web              ← webSearch (WebSearchProvider; search/fetch actions)
- *   - report           ← report (subordinate → parent progress spine)
- *
- * `skills` and `release` are NOT part of BuiltinToolDeps at all — skills are
- * ordinary VFS files reachable via workspace.readFile/writeFile/readdir, and
- * release is reached ONLY through the release.* codemode namespace
- * (createReleaseCodemodeProvider, tested below against runReleaseAction
- * directly rather than through buildBuiltinTools).
- *
- * BUILTIN_TOOLS lists every canonical name so crafted-tool filtering
- * (BUILT_IN_TOOL_NAMES) excludes them all from craft suggestions, regardless
- * of whether the runtime happens to wire the conditional dep.
- */
+/** Unit tests for the canonical tool surface. `skills` and `release` are not BuiltinToolDeps:
+ *  release is reached only through the release.* codemode namespace. */
 
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -67,8 +46,7 @@ interface CircularValue {
   self?: CircularValue;
 }
 
-// v2.1(E): core has no in-process fallback. Tests wire the same Node
-// executor factory that cli-backend ships in production.
+// Core has no in-process fallback; tests wire cli-backend's Node executor factory.
 const nodeCraftedExecute: CraftedToolExecute = (t) => {
   let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
 
@@ -96,9 +74,7 @@ const nodeCodemodeBuilder: CodemodeBuilder = (surface) => {
     }),
     execute: async (a: { code: string }) => {
       try {
-        // Resolved per execute, exactly as the cli-backend builder does, and
-        // bound under the ONE namespace core declares. A double that also bound
-        // `codemode` would keep passing after the alias was removed.
+        // A double that also bound `codemode` would keep passing after the alias was removed.
         const crafted: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
 
         for (const [name, entry] of Object.entries(surface.craftedTools())) {
@@ -120,9 +96,7 @@ const nodeCodemodeBuilder: CodemodeBuilder = (surface) => {
   });
 };
 
-/** The builtin surface with a working sandbox: an actor's, minus delegation.
- *  The claim table is created by `initWorkspaceSchema`, which this runtime
- *  runs, so the effect-claim wrap is the one both backends give it. */
+/** The builtin surface with a working sandbox: an actor's, minus delegation. */
 function tools(
   rt: AgentRuntime,
   escalations: TurnEscalationLedger = new TurnEscalationLedger(),
@@ -137,8 +111,6 @@ function tools(
   });
 }
 
-// agents, web and report are conditional on their deps. Base = everything
-// else. Full surface = all canonical tools.
 const CONDITIONAL_TOOLS = ['agents', 'web', 'report'] as const;
 
 const CONDITIONAL_TOOL_NAMES = new Set<string>(CONDITIONAL_TOOLS);
@@ -147,8 +119,7 @@ const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (name) => !CONDITIONAL_TOOL_NAMES.has(name),
 );
 
-/** A FactsStore over one in-memory map: the keyed half of `memory`, and the
- *  map itself so a test can read what the tool actually wrote. */
+/** A FactsStore over one in-memory map, exposed so a test can read what the tool wrote. */
 function factsOverMap() {
   const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
 
@@ -251,9 +222,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       webSearch: stubWebSearch,
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
       report: stubReport,
-      // The claim table is created by `initWorkspaceSchema`, which this runtime
-      // already ran, so the once-only boundary is wired over the SAME SQL the
-      // backends give it rather than a stand-in that records nothing.
+      // Wired over the same SQL the backends use, not a stand-in that records nothing.
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     });
 
@@ -269,16 +238,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     for (const [, entry] of Object.entries(t)) {
       expect(entry.description).toMatch(/\S/);
-      // Every schema arrives as a JSON Schema object the provider validates arguments against.
       const schema = v.parse(v.object({ jsonSchema: v.object({ type: v.string() }) }), entry.inputSchema);
       expect(schema.jsonSchema.type).toBe('object');
     }
   });
 
   test('descriptions document the one tools.<name> namespace and the state store', () => {
-    // ONE namespace for every tool the program can call, native and crafted. No
-    // `codemode.*`: a refusing alias in the description is a name the model keeps
-    // reaching for. `state.*` is what outlives a program.
+    // No `codemode.*`: a refusing alias in the description is a name the model keeps reaching for.
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).not.toContain('codemode.*');
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`tools.<name>(input)`');
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`state.*`');
@@ -341,8 +307,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('the full durable-state surface renders the registry description verbatim', () => {
-    // The byte-stable cache prefix advertises BUILTIN_TOOL_DESCRIPTIONS.memory;
-    // the tool composes its own from the same spec, so the two must not drift.
+    // The cache prefix advertises BUILTIN_TOOL_DESCRIPTIONS.memory; the tool's own must not drift from it.
     const { rt } = createTestRuntime();
 
     const t = buildBuiltinTools({
@@ -365,17 +330,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     }), t.memory.inputSchema);
 
     expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'conversations']);
-    // ...and the docstring does not advertise what the runtime cannot do.
     expect(t.memory.description).not.toContain('remember');
   });
 
-  // ── release.* codemode (not a native tool — see file header) ─────────────
-  // The release lane has two halves and no actor has both: an engine EARNS
-  // apply/run_checks/preview/deploy/rollback from real command output and
-  // refuses the record_* twins as assertions; without one the record_* actions
-  // are the only way the ledger learns what the agent ran itself. The
-  // codemode member set gates on the same dep the runtime does, so neither
-  // actor reads the other's.
+  // An engine earns apply/run_checks/preview/deploy/rollback and refuses the record_* twins;
+  // without one, record_* is the only way the ledger learns what the agent ran.
   const releaseChange = {
     id: 'chg-1', agentName: 'jarvis', bindingId: 'src-1', status: 'draft' as const,
     userPrompt: 'ship it', plan: null, summary: null, patch: null, previewUrl: null,
@@ -472,8 +431,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     expect(result).toEqual(releaseCheck);
     expect(recorded).toEqual([{ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } }]);
-    // The dispatcher's own validation still applies — a missing changeId
-    // refuses cleanly rather than throwing.
     const refused = await runReleaseAction(deps, { action: 'apply' });
     expect(refused).toMatchObject({ error: expect.stringContaining('execution engine') });
   });
@@ -508,9 +465,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(called).toBe(0);
   });
 
-  // ── memory.* / tasks.* / report.* codemode (Part 2 — every remaining
-  // builtin reachable from eval, sharing its dispatcher with the
-  // native tool: one implementation, two callers) ──────────────────────────
+  // memory.* / tasks.* / report.* codemode share the native tool's dispatcher.
 
   test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
     const { rt } = createTestRuntime();
@@ -521,8 +476,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       transcriptFor: (sessionId) => history.transcript(sessionId),
     }));
 
-    // No facts wired: remember/recall/forget are absent, matching the native
-    // tool's own action-enum gating.
+    // No facts wired: remember/recall/forget are absent, as in the native tool.
     expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
     const saved = await codemodeExecute(provider, 'save')('Remember: prefer snake_case');
     expect(v.parse(v.string(), saved)).toContain('saved');
@@ -554,8 +508,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(store.has('user.tz')).toBe(false);
   });
 
-  // tasks.* codemode parity is tested in unit-tasks-tool.test.ts, next to the
-  // native tool's own tests (same table-init fixture).
+  // tasks.* codemode parity is tested in unit-tasks-tool.test.ts.
 
   test('report.* dispatches through the SAME ReportToolDeps.report the native `report` tool calls', async () => {
     let captured = {} satisfies { status?: string; content?: string };
@@ -596,9 +549,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       },
     }]);
 
-    // A name the sandbox invented is refused HERE rather than travelling as a
-    // key the stored payload's schema then strips in silence — and the
-    // refused call delivers nothing at all.
+    // An invented name is refused here rather than silently stripped by the payload schema.
     expect(await codemodeExecute(provider, 'send')('completed', 'Done.', { thoughts: ['nice task'] }))
       .toMatchObject({ error: expect.stringContaining('concerns, deviations, findings, open_work') });
     expect(delivered).toHaveLength(1);
@@ -615,15 +566,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const sink: ReportToolDeps['report'] = async () => ({ ok: true });
     expect(propertiesOf({ report: sink }))
       .toEqual(['status', 'content', 'concerns', 'deviations', 'findings', 'open_work']);
-    // The search node's captured candidate. A slot the destination drops must
-    // not be offered: the model spends tokens filling it and the parent — here,
-    // the engine grading `content` — never sees a word of it.
+    // A slot the destination drops must not be offered: the model fills it and the parent never sees it.
     expect(propertiesOf({ report: sink, bodyOnly: true })).toEqual(['status', 'content']);
   });
 
   test('run with no workspace shell REFUSES with a classification, not a bare string', async () => {
-    // `'Error: no workspace shell available in this runtime.'` is accurate prose
-    // carrying no class, so a reader cannot tell it apart from a timeout or an OOM.
     // `unsupported`: this runtime has no shell, and retrying cannot change that.
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
@@ -632,11 +579,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('run with an unprovisioned runtime returns structured runtime_not_provisioned', async () => {
-    // The UI parses this exact JSON shape (parseProvisionError in
-    // WorkspacePage.tsx) to render the amber install-card. Silent fallback to
-    // workspace would defeat the install-card flow, so the contract is:
-    // `{error:'runtime_not_provisioned', runtime, message}` — with the
-    // classification added AHEAD of it, which the UI's `v.object` ignores.
+    // The UI parses this JSON shape (parseProvisionError in WorkspacePage.tsx) to render the install card.
     const { rt } = createTestRuntime();
     const t = tools(rt);
     const shellTool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.shell) };
@@ -649,9 +592,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('escalating records the decision and the stated reason; staying in the workspace records nothing', async () => {
-    // The wiring, not the ledger: `shell` must call the ledger AT the dispatch, or
-    // the durable `execution_escalation` row is a feature that is declared and
-    // emitted by nothing — the exact defect this codebase keeps finding.
+    // `shell` must call the ledger at dispatch, or the escalation row is declared and emitted by nothing.
     const { rt } = createTestRuntime();
     const escalations = new TurnEscalationLedger();
     const t = tools(rt, escalations);
@@ -660,15 +601,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.shell),
     };
 
-    // Unprovisioned here, so this is the `refused` branch — which is itself the
-    // finding "the runtime was never there", not a failed command.
+    // Unprovisioned: the `refused` branch, not a failed command.
     await expect(shellTool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' })).rejects.toMatchObject({ code: 'unavailable' });
     expect(escalations.snapshot().escalations).toEqual([
       { runtime: 'sandbox', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
     ]);
 
-    // The workspace shell is the DEFAULT, not an escalation: running there — and
-    // naming it explicitly — must leave the ledger exactly as it was.
+    // The workspace shell is the default, not an escalation: the ledger stays unchanged.
     const before = escalations.snapshot().escalations;
     await shellTool.execute({ command: 'echo hi' });
     await shellTool.execute({ command: 'echo hi', runtime: 'workspace' });
@@ -676,22 +615,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {
-    // Regression: a gate message telling the model to call
-    // setShellApprovalMode('allow_all') names a backend RPC the model cannot
-    // reach. The actionable path is the owner deciding, and the words say so
-    // without spending a paragraph on it.
-    //
-    // The gate itself lives at the execution seam (`shell`/the ExecutionRouter —
-    // see execution/approval.ts), not inside `shell`'s own executor, so this needs a
-    // real (gated) shell to see the message — createTestRuntime() has none by
-    // default.
+    // The gate lives at the execution seam (execution/approval.ts), so this needs a real gated shell.
+    // The message must not name setShellApprovalMode, an RPC the model cannot reach.
     const { rt } = createTestRuntime();
     const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
     const t = tools({ ...rt, shell });
     const shellTool = { execute: toolExecute<{ command: string }, string>(t.shell) };
-    // A force-push: gated even on the agent's own workspace, because the harm
-    // lands on a remote. `sudo whoami` would run here now — that shell IS the
-    // agent's own machine.
+    // Force-push is gated even on the agent's own workspace: the harm lands on a remote.
     const pending = shellTool.execute({ command: 'git push --force origin main' });
     await expect(pending).rejects.toThrow('needs owner approval, nobody to ask');
     await expect(pending).rejects.toThrow('git-force-push');
@@ -780,31 +710,19 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(skipped.every((entry) => entry.code === 'bad_input')).toBe(true);
   });
 
-  // v2.1(E): same-turn `tools.<name>` for a NEW tool is not supported. The
-  // Proxy live-lookup path used host-side new Function and was removed. Tools
-  // created this turn become available next turn (getTools rebuilds).
+  // Same-turn `tools.<name>` for a new tool is unsupported; tools created this turn appear next turn.
 });
 
-/**
- * Role narrowing over BOTH surfaces from ONE merged set.
- *
- * Narrowing is applied to the merged set. Applied to the native ToolSet alone,
- * while `eval` builds its codemode providers from unfiltered deps, a role
- * that allows `eval` and denies `agents` still delegates, hires and writes
- * memory through `agents.*` and `memory.*` — decorative narrowing for any role that
- * keeps the sandbox, which is every role that can do real work.
- */
+/** Role narrowing applies to the merged set, so a role that keeps `eval` cannot reach
+ *  denied capabilities through its codemode providers. */
 describe('a role narrows the sandbox as well as the tool list', () => {
-  /** The shape a restricted role resolves to: it keeps the sandbox and the
-   *  workspace, and loses delegation, memory and the task list. */
+  /** A restricted role: keeps sandbox and workspace, loses delegation, memory and tasks. */
   const RESTRICTED = ['eval', 'shell', 'file'];
 
   test('an excluded capability loses its namespace, not just its tool', () => {
     const narrowing = narrowToolSurface(RESTRICTED);
 
-    // The pairs written out rather than re-derived from TOOL_REACH: the test
-    // states which namespace each excluded capability owns, so a table that
-    // silently re-pointed one would fail here instead of agreeing with itself.
+    // Written out, not derived from TOOL_REACH, so a silently re-pointed row fails here.
     for (const [capability, namespace] of [
       ['agents', 'agents'], ['memory', 'memory'], ['tasks', 'tasks'],
     ] as const) {
@@ -813,16 +731,13 @@ describe('a role narrows the sandbox as well as the tool list', () => {
       expect(narrowing.allowsNamespace(namespace)).toBe(false);
     }
 
-    // And the providers actually go, which is the form a backend consumes:
-    // handing this list to `eval` is what binds the namespaces.
     expect(narrowing.narrowProviders([
       { name: 'agents' }, { name: 'memory' }, { name: 'tasks' }, { name: 'workspace' },
     ])).toEqual([{ name: 'workspace' }]);
   });
 
   test('a namespace two capabilities reach survives while EITHER does', () => {
-    // `shell` and `file` both reach `workspace`. Losing one must not take the
-    // filesystem away, and losing both must.
+    // `shell` and `file` both reach `workspace`: losing one keeps the filesystem, losing both drops it.
     expect(narrowToolSurface(['eval', 'shell']).allowsNamespace('workspace')).toBe(true);
     expect(narrowToolSurface(['eval', 'file']).allowsNamespace('workspace')).toBe(true);
     expect(narrowToolSurface(['eval']).allowsNamespace('workspace')).toBe(false);
@@ -838,23 +753,18 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   });
 
   test('an EXTERNAL namespace follows eval, because no role list can name it', () => {
-    // Executor planes and backend-wired providers have no reach row, so there is
-    // no name an owner could write to keep them. Denying them per-namespace
-    // would silently take the machine away from every narrowed role — a worse
-    // failure than the one being fixed, and a much quieter one.
+    // Executor planes and backend-wired providers have no reach row; denying them would take the
+    // machine from every narrowed role.
     expect(narrowToolSurface(RESTRICTED).allowsNamespace('pc')).toBe(true);
     expect(narrowToolSurface(['shell', 'file']).allowsNamespace('pc')).toBe(false);
   });
 
   test('the codemode-only capabilities a role may name are the ones actually wired', () => {
-    // A role's list is intersected with the surface a backend declares, so a
-    // capability absent from that surface can never be named — and one present
-    // but unwired would let a role allow a lane that cannot run.
+    // A role's list is intersected with the surface the backend declares.
     expect(codemodeCapabilitiesFor([{ name: 'release' }, { name: 'agent' }])).toEqual(['release', 'agent']);
     expect(codemodeCapabilitiesFor([{ name: 'agents' }, { name: 'workspace' }])).toEqual(['slate']);
     expect(codemodeCapabilitiesFor([])).toEqual([]);
-    // Plan mode filters `release` out of its provider list, so a Plan turn's
-    // role list cannot name a lane that is physically absent — for free.
+    // Plan mode filters `release` out of its provider list.
     expect(codemodeCapabilitiesFor([{ name: 'agent' }, { name: 'web' }])).toEqual(['agent']);
   });
 
@@ -874,18 +784,13 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     expect(narrowToolSurface(['eval']).allowsNamespace('release')).toBe(false);
   });
 
-  /** A provider namespace as a backend hands it to the sandbox: a name and the
-   *  members bound under it. */
   const provider = (name: string, member: string, answer: string): CodemodeProvider => ({
     name,
     types: '',
     tools: { [member]: { description: `${name}.${member}`, execute: async () => answer } },
   });
 
-  /** Bind exactly the providers handed over, the way a codemode loader does:
-   *  one parameter per namespace. Nothing else is in scope, so a namespace that
-   *  was filtered out is an unbound name rather than an empty object — which is
-   *  the difference between "cannot be called" and "answers nothing". */
+  /** Binds only the providers handed over, so a filtered namespace is an unbound name, not an empty object. */
   function sandboxOver(providers: readonly CodemodeProvider[]): (code: string) => Promise<string> {
     const names = providers.map((p) => p.name);
 
@@ -893,9 +798,6 @@ describe('a role narrows the sandbox as well as the tool list', () => {
       Object.entries(p.tools).map(([member, entry]) => [member, entry.execute]),
     ));
 
-    // Parsed on the way out rather than asserted: every program below answers a
-    // string, and a program that stopped doing so should fail here by name
-    // instead of flowing on as an unchecked value.
     return async (code) => {
       const fn = new Function(...names, `return (async () => { ${code} })()`);
 
@@ -904,11 +806,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   }
 
   test('a namespace the role lost is not reachable from inside the sandbox', async () => {
-    // The end of the escape route: a role that keeps `eval` and loses
-    // `agents` would delegate and hire through `agents.*` anyway if the providers
-    // were built from unfiltered deps. `typeof` rather than a call,
-    // because an unbound name throws a ReferenceError while a bound-but-empty
-    // namespace would still be there to reach for.
+    // `typeof` rather than a call: an unbound name throws ReferenceError; a bound-but-empty namespace would not.
     const providers = [
       provider('agents', 'swarm', 'delegated'),
       provider('memory', 'save', 'remembered'),
@@ -922,7 +820,6 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     expect(await run('return typeof agents;')).toBe('undefined');
     expect(await run('return typeof memory;')).toBe('undefined');
     expect(await run('return typeof tasks;')).toBe('undefined');
-    // And what the role KEPT still works, which is the half a blunt fix breaks.
     expect(await run('return await workspace.readFile();')).toBe('bytes');
   });
 

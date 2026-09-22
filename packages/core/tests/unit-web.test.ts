@@ -1,16 +1,3 @@
-/**
- * Behavioral tests for the web search + fetch capability.
- *
- * Covers, on the SHARED core layer (both backends construct the same provider):
- *   - search returns ranked results (Tavily path + DuckDuckGo key-less path),
- *     capturing the injected fetch stub
- *   - fetch returns clamped markdown + a VFS restore path for big pages
- *   - the `web` builtin (search / fetch actions) is gated on the provider dep
- *   - codemode `web.search()` / `web.fetch()` reach the same provider
- *   - SSRF + secret-exfil URL guards
- *   - error mapping (rate-limit retriable, http errors)
- */
-
 import { describe, test, expect } from 'bun:test';
 import { handClock, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
@@ -40,8 +27,6 @@ const unusedCraftedExecute: CraftedToolExecute = () => async () => {
   throw new Error('This web-tool suite does not install crafted tools');
 };
 
-/** eval builder that wires every injected provider namespace into the
- *  sandbox by name (mirrors the cli-backend builder) so codemode `web.*` works. */
 function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): CodemodeBuilder {
   return (surface) => {
     const codemode = surface.craftedTools();
@@ -110,7 +95,6 @@ interface StubFetch {
   calls: Array<{ url: string; init?: RequestInit }>;
 }
 
-/** Build a fetch stub from a URL→response map, recording the calls. */
 function stubFetch(handler: (url: string, init?: RequestInit) => StubResponse): StubFetch {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
 
@@ -260,8 +244,7 @@ describe('web provider — fetch', () => {
     const provider = createDefaultWebSearchProvider({ fetch });
     const res = await provider.fetch('https://example.com/md');
     expect(res.markdown).toBe('# Already Markdown\n\nclean');
-    expect(res.title).toBe('Already Markdown'); // first heading when no HTML <title>
-    // Markdown-for-Agents Accept header is sent.
+    expect(res.title).toBe('Already Markdown');
     expect(new Headers(calls[0].init?.headers).get('accept')).toContain('text/markdown');
   });
 
@@ -308,9 +291,7 @@ describe('web provider — fetch', () => {
   });
 
   test('SECURITY: a redirect to a private/metadata address is refused before the second hop', async () => {
-    // The fake models the platform redirect contract: with redirect:'follow'
-    // the platform itself chases Location (so the fake performs that hop);
-    // with redirect:'manual' it hands the 302 back untouched.
+    // Models the platform: redirect:'follow' chases Location itself; 'manual' returns the 302.
     const calls: string[] = [];
 
     const fakeFetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -333,9 +314,8 @@ describe('web provider — fetch', () => {
     const provider = createDefaultWebSearchProvider({ fetch: fakeFetch });
     const attempt = provider.fetch('https://example.com/start');
     await expect(attempt).rejects.toMatchObject({ retriable: false });
-    // The refusal leads with the guard's reason, like the initial-URL check.
     await expect(attempt).rejects.toThrow(/169\.254\.169\.254/);
-    expect(calls).toEqual(['https://example.com/start']); // never left for the metadata host
+    expect(calls).toEqual(['https://example.com/start']);
   });
 
   test('a safe relative redirect succeeds and reports the final URL', async () => {
@@ -358,7 +338,7 @@ describe('web provider — fetch', () => {
     const { fetch, calls } = stubFetch(() => ({ status: 302, body: '', headers: { location: '/loop' } }));
     const provider = createDefaultWebSearchProvider({ fetch });
     await expect(provider.fetch('https://example.com/loop')).rejects.toThrow(/too many redirects/);
-    expect(calls.length).toBe(21); // the initial request plus 20 bound follows
+    expect(calls.length).toBe(21); // initial request + 20 follows
   });
 
   test('an oversize body stops at the cap instead of buffering everything', async () => {
@@ -392,9 +372,7 @@ describe('web provider — fetch', () => {
   });
 
   test('a trickling body past the timeout rejects as timed out', async () => {
-    // The budget's timer is the provider's own, handed in (D19): the body
-    // sends one chunk and then never another, and the test fires the budget
-    // once that chunk has been pulled. Nothing here races a real timer.
+    // The provider's timer is injected (D19); the test fires it after the first chunk, racing no real timer.
     const clock = handClock();
 
     const trickle = () => {
@@ -404,7 +382,6 @@ describe('web provider — fetch', () => {
         async pull(controller) {
           controller.enqueue(new TextEncoder().encode('hello '));
           pulled.resolve();
-          // The second chunk never comes; only the budget ends this read.
           await new Promise<void>(() => undefined);
         },
       });
@@ -426,10 +403,7 @@ describe('web provider — fetch', () => {
 
     const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40, clock });
 
-    // The rejection is caught at a lexical boundary before the budget fires
-    // (bun's `.rejects` spins until the promise settles, so it cannot be
-    // attached first); the fire waits for the first chunk to have been
-    // pulled, which is the state "trickling" names.
+    // Catch before firing the budget: bun's `.rejects` spins until settlement, so it cannot be attached first.
     const Refusal = v.object({ name: v.string(), retriable: v.boolean(), message: v.string() });
 
     const pastBudget = async (): Promise<v.InferOutput<typeof Refusal>> => {
@@ -460,9 +434,7 @@ describe('web provider — fetch', () => {
   });
 
   test('with no caller budget a fetch carries no abort signal, so no clock can end it', async () => {
-    // A 15s default here would arm one on every request, and its refusal reads as
-    // an origin that failed. A page the agent asked for is work the agent still
-    // wants at second sixteen.
+    // A default timeout would arm on every request, and its refusal reads as a failed origin.
     const { fetch, calls } = stubFetch(() => ({ body: '<html><body><p>slow but fine</p></body></html>' }));
     const provider = createDefaultWebSearchProvider({ fetch });
     const res = await provider.fetch('https://example.com/page');
@@ -501,40 +473,28 @@ describe('url safety (SSRF + exfil guards)', () => {
     expect(() => assertSafeUrl('https://evil.com/?leak=sk-abcdefghijklmnop')).toThrow(UnsafeUrlError);
   });
 
-  // The bypass this guard shipped with until the two SSRF classifiers were
-  // unified: the host judgment here matched IPv6 by string prefix
-  // (`fc`/`fd`/`fe80:`, substring `169.254.`), so every MAPPED spelling of a
-  // refused IPv4 address — the form `http://[::ffff:10.0.0.1]/` a page or a
-  // skill can hand the agent — walked straight through, while the backend's
-  // egress classifier had refused it all along. Each case below is one the
-  // string-prefix test answered `true` to.
+  // A string-prefix host check let every mapped IPv6 spelling of a refused IPv4 address through.
   test('SECURITY: an IPv4-mapped IPv6 literal is judged by its embedded address', () => {
     expect(isSafeUrl('http://[::ffff:10.0.0.1]/')).toBe(false);
     expect(isSafeUrl('http://[::ffff:169.254.169.254]/latest/meta-data')).toBe(false);
     expect(isSafeUrl('http://[::ffff:192.168.1.1]/')).toBe(false);
     expect(isSafeUrl('http://[::ffff:172.16.0.1]/')).toBe(false);
-    // The compatible (deprecated `::a.b.c.d`) spelling is the same rule.
     expect(isSafeUrl('http://[::10.0.0.1]/')).toBe(false);
-    // …and a mapped PUBLIC address stays reachable, so the rule is the
-    // embedded address rather than the mapped form.
     expect(isSafeUrl('http://[::ffff:93.184.216.34]/')).toBe(true);
   });
 
   test('the web guard refuses every family the destination classifier does', () => {
-    expect(isSafeUrl('http://[::1]/')).toBe(false); // loopback
-    expect(isSafeUrl('http://[fd00::1]/')).toBe(false); // RFC4193 ULA
-    expect(isSafeUrl('http://[fe80::1]/')).toBe(false); // link-local
-    expect(isSafeUrl('http://metadata/')).toBe(false); // bare metadata host
-    expect(isSafeUrl('http://100.64.0.1/')).toBe(false); // CGNAT
-    expect(isSafeUrl('http://0.0.0.0/')).toBe(false); // this-network
-    expect(isSafeUrl('http://api.service.localhost/')).toBe(false); // RFC6761
-    expect(isSafeUrl('http://svc.internal/')).toBe(false); // private-use TLD
-    // Fail-closed on a bracketed literal that is not IPv6 at all.
+    expect(isSafeUrl('http://[::1]/')).toBe(false);
+    expect(isSafeUrl('http://[fd00::1]/')).toBe(false);
+    expect(isSafeUrl('http://[fe80::1]/')).toBe(false);
+    expect(isSafeUrl('http://metadata/')).toBe(false);
+    expect(isSafeUrl('http://100.64.0.1/')).toBe(false);
+    expect(isSafeUrl('http://0.0.0.0/')).toBe(false);
+    expect(isSafeUrl('http://api.service.localhost/')).toBe(false);
+    expect(isSafeUrl('http://svc.internal/')).toBe(false);
     expect(isSafeUrl('http://[not-an-address]/')).toBe(false);
   });
 
-  // Both spellings of the metadata address: the refusal happens before the
-  // request, so nothing leaves the runtime either way.
   const refusedUrls = [
     { name: 'provider.fetch refuses the mapped form too — nothing leaves the runtime', url: 'http://[::ffff:169.254.169.254]/' },
     { name: 'provider.fetch refuses an unsafe URL', url: 'http://169.254.169.254/' },
@@ -549,8 +509,6 @@ describe('url safety (SSRF + exfil guards)', () => {
     });
   }
 });
-
-// ── Tool wiring ────────────────────────────────────────────────────────────
 
 type WebArgs = { action: 'search' | 'fetch'; query?: string; url?: string; limit?: number };
 
@@ -603,24 +561,18 @@ describe('web builtin', () => {
     expect(out).toContain('Source: https://example.com/big');
     expect(out).toContain('[truncated;');
     expect(out).toContain(`${TOOL_OUTPUT_DIR}/`);
-    // The provenance header is part of the clamped text, so it cannot buy
-    // room outside the cap.
     expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
 
-    // The full output is restorable from the VFS.
     const savedPath = /full result at (\S+)\]/.exec(out)?.[1];
     expect(savedPath).toContain(TOOL_OUTPUT_DIR);
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
     const saved = await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' });
     expect(String(saved).length).toBeGreaterThan(out.length);
-    // The spilled copy is what the model was shown a digest OF, header and all.
     expect(String(saved)).toStartWith('# ');
   });
 
   test('a page whose own header material is huge cannot buy room outside the budget', async () => {
-    // Title and URL come from the page, so they are untrusted input to the
-    // budget rather than a fixed cost the clamp could be asked to reserve.
     const { rt } = createTestRuntime();
     const title = 'T'.repeat(30_000);
     const body = `<html><head><title>${title}</title></head><body>${'word '.repeat(5_000)}</body></html>`;
@@ -634,7 +586,6 @@ describe('web builtin', () => {
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out.slice(-300)}`);
     const saved = String(await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' }));
-    // Whatever the header turned out to be, the spill holds the whole of it.
     expect(saved).toStartWith('# ');
     expect(saved.length).toBeGreaterThan(out.length);
   });
@@ -689,8 +640,6 @@ describe('web builtin', () => {
   });
 
   test('a codemode call with a number for its text is refused by parameter and type', async () => {
-    // A number is not an empty query: the refusal names what was wrong with
-    // the call instead of the provider reporting a search for nothing.
     const { rt } = createTestRuntime();
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: DDG_HTML })).fetch });
     const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(buildWithWeb(rt, provider).eval);

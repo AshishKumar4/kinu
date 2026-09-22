@@ -1,20 +1,5 @@
-// ONE SHARED PROVIDER, PACED.
-//
-// The incident this exists for, measured on the owner's live workspace
-// (my-personal-assistant-f0e4afa6): an `ideate` swarm started five nodes in one
-// expression, every one of them drove its own turn loop against the SAME
-// Cloudflare OAuth credential, and the account rate-limited them together.
-// Nothing spaced the request starts and nothing told the fifth node that the
-// first had just been handed a `Retry-After`, so five requests raced past an
-// instruction one of them had already received.
-//
-// WHAT IS UNDER TEST IS THE RELATIONSHIP, never a magnitude. `lanes` is a fixture
-// value here for the reason `stallTimeoutMs` is one in its own suite: the shipped
-// value is six, derived from `worker.simultaneous_connections`, and a suite that
-// has to finish cannot exercise it against a real provider. The properties
-// asserted — starts are bounded, a declared wait holds every sibling, a wait
-// declared by one caller is visible to a watchdog in another — are the ones
-// PROVIDER_REQUEST_LANES runs in production.
+// One shared provider, paced. `lanes` is a fixture value; production's PROVIDER_REQUEST_LANES derives from
+// `worker.simultaneous_connections`. Tested are the relationships, never a magnitude.
 import { describe, test, expect } from 'bun:test';
 import { ProviderPacer, abortableSleep } from '../src/providers/pacing';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
@@ -33,10 +18,7 @@ const HOST = 'api.cloudflare.com';
 
 describe('the lane bound is the platform\'s, not a number of ours', () => {
   test('a pacer nobody configured paces at the platform\'s connection limit', async () => {
-    // The catalog is this repository's single copy of every platform number.
-    // Read through a DEFAULT pacer — the one production builds — rather than by
-    // comparing the constant with the expression that defines it, which is the
-    // same statement twice and holds however wrong the number is.
+    // Read through a default pacer rather than comparing the constant with its own definition.
     const lanes = PLATFORM_CATALOG['worker.simultaneous_connections'].limit.value;
     expect(PLATFORM_CATALOG['worker.simultaneous_connections'].bounds).toBe('concurrency');
 
@@ -45,8 +27,7 @@ describe('the lane bound is the platform\'s, not a number of ours', () => {
 
     for (let i = 0; i < lanes; i++) held.push(await pacer.admit(HOST));
 
-    // One more than the platform allows is held, and admitted the moment a lane
-    // frees. Raise or lower the default and exactly one of these two fails.
+    // Raise or lower the default and exactly one of these two fails.
     let admitted = false;
 
     const extra = pacer.admit(HOST).then((release) => {
@@ -71,8 +52,7 @@ describe('request starts are paced against one provider', () => {
     const first = await pacer.admit(HOST);
     const second = await pacer.admit(HOST);
 
-    // A third caller is held. Proven by racing it against a resolved promise
-    // rather than by a timer, so the assertion is about ordering and not speed.
+    // Raced against a resolved promise, not a timer, so the assertion is about ordering, not speed.
     let admitted = false;
 
     const third = pacer.admit(HOST).then((release) => {
@@ -91,9 +71,7 @@ describe('request starts are paced against one provider', () => {
   });
 
   test('a release is idempotent, so a double `finally` cannot mint capacity', async () => {
-    // The failure this guards is silent and unbounded: a release called twice
-    // decrements a counter nobody re-checks, and the lane budget grows by one for
-    // the life of the isolate.
+    // A double release would grow the lane budget by one for the life of the isolate.
     const pacer = new ProviderPacer({ lanes: 1 });
     const release = await pacer.admit(HOST);
     release();
@@ -115,9 +93,7 @@ describe('request starts are paced against one provider', () => {
   });
 
   test('two hosts do not share a lane budget', async () => {
-    // The limit being respected is one account's at one provider. A fast provider
-    // queued behind a rate-limited one would be this pacer causing the stall it
-    // exists to prevent.
+    // Limits are per account per provider: a fast provider queued behind a rate-limited one would stall.
     const pacer = new ProviderPacer({ lanes: 1 });
     const held = await pacer.admit(HOST);
     const other = await pacer.admit('api.openai.com');
@@ -138,8 +114,7 @@ describe('a wait one caller was told to take holds its siblings', () => {
       sleep: async (ms) => { slept.push(ms); clock.advance(ms); },
     });
 
-    // Node A is handed `Retry-After: 30`. Nothing about node B changed, and that
-    // is the defect: B had a free lane and an instruction it could not see.
+    // B had a free lane and an instruction it could not see.
     pacer.declareWait(HOST, 30_000);
     const release = await pacer.admit(HOST);
 
@@ -148,9 +123,7 @@ describe('a wait one caller was told to take holds its siblings', () => {
   });
 
   test('a longer wait already in force is never shortened by a peer\'s smaller one', async () => {
-    // Five nodes are rate-limited within a moment of each other and are handed
-    // different `Retry-After` values. Taking the newest would converge the whole
-    // fan-out on the smallest number any member happened to receive.
+    // Taking the newest `Retry-After` would converge the fan-out on the smallest value any member received.
     const clock = fixedClock();
     const slept: number[] = [];
 
@@ -169,14 +142,8 @@ describe('a wait one caller was told to take holds its siblings', () => {
   });
 
   test('the provider\'s instruction is honoured BEFORE a lane is competed for', async () => {
-    // The ordering, and it is the whole reason a cooldown is not just a lane of
-    // its own: a caller that queued for a lane first would spend the cooldown
-    // holding capacity nobody may use, and would then issue its request the
-    // instant a lane freed — whatever the provider last said.
-    //
-    // Observable because the cooldown sleep happens even when NO lane is free: the
-    // single lane is already held here, so a lane-first implementation records no
-    // sleep at all.
+    // Cooldown before lane: a lane-first caller would hold capacity during the cooldown. The single lane is
+    // held here, so a lane-first implementation records no sleep.
     const clock = fixedClock();
     const slept: number[] = [];
 
@@ -211,9 +178,7 @@ describe('a wait one caller was told to take holds its siblings', () => {
 
 describe('a cancelled caller stops waiting', () => {
   test('an abort releases a request queued behind a full lane budget', async () => {
-    // Without this a cancelled node sits in the queue until an unrelated release
-    // happens to wake it, which on a busy host is a stopped agent still counted
-    // as working.
+    // Otherwise a cancelled node waits in the queue for an unrelated release to wake it.
     const pacer = new ProviderPacer({ lanes: 1 });
     const held = await pacer.admit(HOST);
     const controller = new AbortController();
@@ -240,8 +205,7 @@ describe('a cancelled caller stops waiting', () => {
     controller.abort(new Error('already gone'));
     await expect(pacer.admit(HOST, controller.signal)).rejects.toThrow('already gone');
 
-    // And the refusal cost no capacity, which is the half that matters: a lane
-    // leaked here would shrink the budget permanently.
+    // The refusal must cost no capacity: a leaked lane would shrink the budget permanently.
     const release = await pacer.admit(HOST);
     expect(release).toBeInstanceOf(Function);
     release();
@@ -250,8 +214,7 @@ describe('a cancelled caller stops waiting', () => {
 
 describe('the shared wait, without a signal', () => {
   test('abortableSleep resolves when nobody is cancelling it', async () => {
-    // The timer is the subject's own; what is asserted is that it settles by
-    // resolving, never by the rejection an abort would bring.
+    // The subject's own timer settles by resolving, never by an abort's rejection.
     await expect(abortableSleep(1)).resolves.toBeUndefined();
   });
 });

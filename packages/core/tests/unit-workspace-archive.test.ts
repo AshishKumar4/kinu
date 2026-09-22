@@ -1,14 +1,5 @@
-/**
- * Workspace archive — the portable backup format both backends produce.
- *
- * Driven against the REAL production schema (initAllTables + the canonical
- * conversation store + the FTS5 session index + a memory-store table), because
- * the properties that matter are all schema-shaped: BLOB fidelity through the
- * VFS chunk store, an external-content FTS index that must be rebuilt rather
- * than dumped, the capability secret that must never leave the workspace, and a
- * paged export reassembling into exactly the archive an unpaged one would have
- * written.
- */
+/** Workspace archive, driven against the real production schema: BLOB fidelity, FTS rebuilt not dumped,
+ *  the capability secret never exported, and a paged export equal to an unpaged one. */
 
 import * as v from 'valibot';
 import { describe, test, expect } from 'bun:test';
@@ -46,8 +37,7 @@ interface Workspace {
 
 function fresh(): Workspace {
   const db = new Database(':memory:');
-  // The filesystem is built on demand: a database used only as a RESTORE
-  // TARGET must stay genuinely empty, and building one creates tables.
+  // Built on demand: a restore-target database must stay empty, and building one creates tables.
   let vfs: WorkspaceVFS | null = null;
 
   return {
@@ -56,14 +46,12 @@ function fresh(): Workspace {
   };
 }
 
-/** Actor-local state PLUS the canonical conversation store, which the workspace
- *  schema mints beside the claim ledger rather than with the actor tables. */
+/** Actor-local state plus the canonical conversation store, minted beside the claim ledger. */
 function initSchema(ws: Workspace): void {
   initAllTables(ws.execRaw, ws.sql);
   initActorClaimTables(ws.execRaw);
 }
 
-/** The canonical conversation writer, over the file plane this workspace owns. */
 function historyOver(ws: Workspace, actor: ActorHandle): SessionHistory {
   return new SessionHistory({
     sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(),
@@ -71,8 +59,7 @@ function historyOver(ws: Workspace, actor: ActorHandle): SessionHistory {
   });
 }
 
-/** A transcript's text, oldest first — entry content lives in message parts,
- *  so only a projection can answer what a conversation says. */
+/** A transcript's text, oldest first; content lives in message parts, so only a projection answers. */
 async function transcriptText(transcript: SessionTranscriptReader): Promise<string[]> {
   const text: string[] = [];
 
@@ -90,9 +77,7 @@ async function transcriptText(transcript: SessionTranscriptReader): Promise<stri
 async function seeded() {
   const ws = fresh();
   initSchema(ws);
-  // The identity AND the actor directory row: an archive is restored into a
-  // database whose conversation rows name an actor, and the restore resolves the
-  // main actor out of the directory it just landed.
+  // The restore resolves the main actor out of the directory it just landed.
   const actor = createTestActor(ws.sql, ws.execRaw, 'w1', 'scout');
   const history = historyOver(ws, actor);
 
@@ -103,7 +88,7 @@ async function seeded() {
     });
   }
 
-  // Binary content through the canonical VFS writer — the chunked BLOB path.
+  // Binary content through the chunked BLOB path.
   const bytes = new Uint8Array(300);
 
   for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7) % 256;
@@ -111,7 +96,6 @@ async function seeded() {
   await ws.vfs.writeFile('artifacts/logo.bin', bytes);
   await ws.vfs.mkdir('notes', { recursive: true });
   await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
-  // The disposable search index is derived from the conversation authority.
   await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId)).search('sqlite');
 
   return { ...ws, bytes, actor, history };
@@ -165,8 +149,6 @@ describe('workspace archive', () => {
       'hello sqlite 0', 'hello sqlite 1', 'hello sqlite 2', 'hello sqlite 3', 'hello sqlite 4',
     ]);
 
-    // BLOB fidelity, asserted where it matters: the restored workspace opens
-    // its own files and gets the same bytes back, awkward ones included.
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
     expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' }))
       .toBe('a plan with a "quote" and a \\ backslash');
@@ -179,18 +161,14 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
 
-    // The restore landed the source's actor directory too, so the target's own
-    // main actor is who the restored transcript belongs to.
     const restored = openWorkspaceMainActor(target.sql);
     const history = historyOver(target, restored);
     const hits = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('sqlite');
     expect(hits.length).toBe(5);
-    // The FTS shadow tables are the index's private storage: rebuilt on the
-    // target, never carried as rows.
+    // FTS shadow tables are rebuilt on the target, never carried as rows.
     expect(lines.some((l) => l.includes('"table":"conversation_fts_data"'))).toBe(false);
 
-    // A local archive carries none of the disposable trigger/state pair; its
-    // next durable message mutation therefore remains valid after import.
+    // A local archive carries no disposable trigger/state pair, so the next durable mutation stays valid.
     await history.record(CHAT_SESSION_ID, {
       id: 'm5', parentId: 'm4', origin: 'input', message: { role: 'user', content: 'local post-import' },
     });
@@ -306,15 +284,12 @@ describe('workspace archive', () => {
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
     const blob = new ArrayBuffer(64 * 1024);
 
-    // ids start at 0 on purpose: with an INTEGER PRIMARY KEY the rowid IS the
-    // id, so the first row's key is 0 and a numeric "start here" sentinel
-    // would skip it.
+    // ids start at 0: with an INTEGER PRIMARY KEY the rowid is the id, and a numeric sentinel would skip it.
     for (let i = 0; i < 5; i++) {
       void ws.sql`INSERT INTO blobs (id, data) VALUES (${i}, ${blob})`;
     }
 
-    // One blob is far larger than the page budget, so every page must carry
-    // exactly one row — the export must never buffer a batch of them.
+    // One blob exceeds the page budget, so every page carries exactly one row; the export must not buffer a batch.
     let cursor: ArchiveCursor | null = null;
     const rowsPerPage: number[] = [];
 
@@ -340,8 +315,7 @@ describe('workspace archive', () => {
 
     for (let i = 0; i < 4; i++) void ws.sql`INSERT INTO blobs (data) VALUES (${blob})`;
 
-    // Record what each row query asks for. `notes` earns a large batch; the
-    // blob table must not inherit it — one such fetch is hundreds of megabytes.
+    // The blob table must not inherit `notes`' large batch: one such fetch is hundreds of megabytes.
     const asked: Array<{ table: string; limit: number }> = [];
 
     const spy = {
@@ -407,10 +381,7 @@ describe('workspace archive', () => {
   test('omits derived conversation revision triggers and restores a mutable transcript', async () => {
     const source = fresh();
     initSchema(source);
-    // The export carries the workspace identity and actor directory, and every
-    // transcript row names the actor that wrote it — so a restore files the
-    // conversation under that owner and not under whoever the archive's main
-    // actor turns out to be.
+    // Every transcript row names its writer, so a restore files it under that owner, not the archive's main actor.
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     const cloud = historyOver(source, cloudActor);
     await cloud.record(CHAT_SESSION_ID, {
@@ -428,9 +399,7 @@ describe('workspace archive', () => {
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
 
-    // Read UNSCOPED on purpose: a row filed under a different owner shows up
-    // here as a wrong `actor_id`, where an actor-predicated read would answer
-    // an empty set and pass for the wrong reason.
+    // Read unscoped: an actor-predicated read would answer an empty set and pass for the wrong reason.
     expect(target.sql<{ id: string; actor_id: string }>`
       SELECT id, actor_id FROM conversation_entries ORDER BY id`).toEqual([
       { id: 'a1', actor_id: cloudActor.actorId },
@@ -451,9 +420,7 @@ describe('the table set an export walks is pinned by its first page', () => {
   test('a table born mid-export never joins it, so the archive stays restorable', async () => {
     const source = fresh();
     initSchema(source);
-    // A bare bound handle, not a directory row: this test counts the rows an
-    // archive carries, and a fixture that registered an actor would add two of
-    // its own to the number under assertion.
+    // A bare bound handle: a registered actor would add its own rows to the count under assertion.
     const actor = testActorHandle(source.sql);
     const history = historyOver(source, actor);
 
@@ -464,9 +431,7 @@ describe('the table set an export walks is pinned by its first page', () => {
       });
     }
 
-    // Drive page by page with a budget that forces several pages, and between
-    // two pages create a lazily-created table a live workspace really mints —
-    // the shape `outbox_<name>` and `swarm_node_records` have.
+    // Between two pages, create a lazily-created table (the `outbox_<name>` / `swarm_node_records` shape).
     const pages: string[] = [];
     let cursor: ArchiveCursor | null = null;
     let page = 0;
@@ -486,15 +451,11 @@ describe('the table set an export walks is pinned by its first page', () => {
       page++;
     } while (cursor);
 
-    // The archive carries no row record for the late table, and no schema
-    // record either — the pair that would make the restore throw.
+    // No row or schema record for the late table: the pair that would make the restore throw.
     expect(pages.some((l) => l.includes('"table":"late_arrival"'))).toBe(false);
     expect(pages.some((l) => l.includes('"name":"late_arrival"'))).toBe(false);
 
-    // And the archive is RESTORABLE — the property the missing pin destroyed.
-    // The total is the seeded conversation exactly: five messages, five
-    // entries with their part references, and the one head pointer. The late
-    // table's row is not among them.
+    // The total is exactly the seeded conversation: five messages, five entries, one head pointer.
     const target = fresh();
     const result = await restoreWorkspaceArchive(target.archive, pages);
     expect(result.rows).toBe(16);
@@ -507,8 +468,7 @@ describe('the table set an export walks is pinned by its first page', () => {
     void ws.sql`INSERT INTO wr (k, v) VALUES (${'a'}, ${'1'})`;
     void ws.sql`INSERT INTO wr (k, v) VALUES (${'c'}, ${'3'})`;
 
-    // Walk to the page that carries the first row; the schema-only pages
-    // before it are part of the same export but carry no rows to compare.
+    // Schema-only pages before the first row carry no rows to compare.
     let cursor: ArchiveCursor | null = { phase: 'sql', table: 'wr', after: null, rows: 0, tables: ['wr'] };
 
     for (;;) {
@@ -519,7 +479,7 @@ describe('the table set an export walks is pinned by its first page', () => {
       const rows = page.lines.filter((l) => l.includes('"t":"row"'));
 
       if (rows.length > 0) {
-        // THE PAGE BOUNDARY: one row emitted, the cursor pointing at the next.
+        // Page boundary: one row emitted, the cursor pointing at the next.
         expect(rows).toHaveLength(1);
         expect(JSON.parse(rows[0]).values.k).toBe('a');
         cursor = page.next;
@@ -531,10 +491,7 @@ describe('the table set an export walks is pinned by its first page', () => {
       if (cursor === null) throw new Error('the export finished without emitting a row');
     }
 
-    // A row lands between the pages — exactly the concurrent write the old
-    // unordered LIMIT/OFFSET shifted offsets under. It sorts BEFORE every row
-    // the remaining pages will emit, so an offset walk shifted by it would
-    // duplicate 'b'.
+    // A row sorting before every remaining row lands between pages; an offset walk would duplicate 'b'.
     void ws.sql`INSERT INTO wr (k, v) VALUES (${'0'}, ${'0'})`;
 
     const rest: string[] = [];
@@ -554,10 +511,7 @@ describe('the table set an export walks is pinned by its first page', () => {
       .filter((l) => l.includes('"t":"row"'))
       .map((l) => v.parse(RowLine, JSON.parse(l)).values.k)];
 
-    // No duplicate, no skip: every row present exactly once regardless of the
-    // write that landed between pages. ('0' itself is the mid-export write —
-    // rows written after the page boundary are as invisible to this page's
-    // membership as they are to any other page.)
+    // Every row exactly once; '0' is the mid-export write, invisible to this page's membership.
     expect(keys).toEqual(['a', 'b', 'c']);
   });
 });

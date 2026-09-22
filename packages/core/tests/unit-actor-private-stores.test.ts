@@ -1,17 +1,6 @@
 /**
- * The five actor-private store families, over ONE real workspace database.
- *
- * Every case here runs against a single `initWorkspaceSchema` SQLite holding
- * TWO issued actors — a main and a real subordinate of it, both from the
- * production `WorkspaceActorDirectory`. That is the shape the scoping exists
- * for and the only shape that can falsify it: with a database per actor these
- * assertions all pass vacuously, because the rows were never in the same table.
- *
- * The keys collide ON PURPOSE. A fact key is model-authored prose, a task id is
- * `t{seq}` from a per-actor sequence, a job id is chosen by its caller, and a
- * head id is DERIVED from a branch point and slot rather than minted — so two
- * actors doing the same work really do present the same identifiers, and "the
- * ids happen to differ" is not available as a reason these rows stay apart.
+ * Actor-private stores over one real database holding two issued actors; a database per actor would pass
+ * vacuously. Keys collide on purpose: two actors doing the same work present the same ids.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -39,7 +28,6 @@ interface World {
   close(): void;
 }
 
-/** One production-schema database, two issued actors, one SQL handle. */
 function world(): World {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -55,9 +43,7 @@ function world(): World {
   };
 }
 
-/** A task list bound to one actor, over the world's real transaction seam —
- *  `transactionSync` stays required because a task and its plan link are one
- *  fact. */
+/** `transactionSync` stays required: a task and its plan link are one fact. */
 function tasks(w: World, actor: ActorHandle): TaskListStore {
   return new TaskListStore(w.sql, actor, (write) => w.db.transaction(write)());
 }
@@ -78,7 +64,6 @@ describe('two actors, one database: agent_facts', () => {
     const b = createFactsStore(w.sql, w.b);
 
     expect(a.upsert('deploy target', 'a.workers.dev')).toBe('created');
-    // 'created', not 'changed': B has never written this key, however loudly A did.
     expect(b.upsert('deploy target', 'b.workers.dev')).toBe('created');
 
     expect(a.recall('deploy_target')?.value).toBe('a.workers.dev');
@@ -99,7 +84,6 @@ describe('two actors, one database: agent_facts', () => {
     expect(a.recentTopK(10)).toHaveLength(2);
     expect(b.recentTopK(10)).toHaveLength(1);
 
-    // A forgets the colliding key. B's row is a different row and survives.
     a.forget('shared');
     expect(a.recall('shared')).toBeNull();
     expect(b.recall('shared')?.value).toBe('from-b');
@@ -115,7 +99,6 @@ describe('two actors, one database: agent_tasks', () => {
     const now = 1_000;
 
     expect(a.add(['ship it'], null, now).added.map((t) => t.id)).toEqual(['t1']);
-    // The sequence is the owner's, so B starts at t1 too rather than continuing A's.
     expect(b.add(['audit it'], null, now).added.map((t) => t.id)).toEqual(['t1']);
 
     expect(a.get('t1')?.title).toBe('ship it');
@@ -153,11 +136,9 @@ describe('two actors, one database: agent_tasks', () => {
     expect(nested.added.map((t) => t.parentId)).toEqual(['t1']);
     expect(a.list()[0]?.subtasks.map((t) => t.title)).toEqual(['child']);
     expect(a.countOpenSubtasks('t1')).toBe(1);
-    // B has a `t1` of its own with no children — A's subtask is not counted here.
     expect(b.countOpenSubtasks('t1')).toBe(0);
 
-    // B names `t2`, which exists — but only in A's list. Refused, with the same
-    // sentence an id nobody wrote would get, because to B it is the same fact.
+    // Refused with the same sentence an unknown id gets: to B it is the same fact.
     const foreign = b.add(['stolen'], 't2', 1_002);
     expect(foreign.added).toEqual([]);
     expect(foreign.rejected.map((r) => r.reason)).toEqual(['no task t2']);
@@ -192,8 +173,6 @@ describe('two actors, one database: background_jobs', () => {
 
     a.settle('job-1', 0, '"done"', now + 1);
     expect(a.get('job-1')?.status).toBe('completed');
-    // B holds the same id and a valid epoch. The write still misses: the row it
-    // would have settled is not B's.
     expect(b.get('job-1')?.status).toBe('running');
     w.close();
   });
@@ -206,21 +185,18 @@ describe('two actors, one database: background_jobs', () => {
     a.create({ id: 'a2', kind: 'agents', workMode: 'build', now: 2 });
     b.create({ id: 'b1', kind: 'agents', workMode: 'build', now: 3 });
 
-    // Two rosters, three process trees: this is the split, not a leak.
     expect(a.listRunning().items.map((j) => j.id)).toEqual(['a2', 'a1']);
     expect(a.listRunning().total).toBe(2);
     expect(b.listRunning().total).toBe(1);
     expect(a.countRunningInWorkspace()).toBe(3);
     expect(b.countRunningInWorkspace()).toBe(3);
     expect(a.hasUntimedLiveJobsInWorkspace()).toBe(true);
-    // A job waiting on an instant is the TIMED half of the same question.
     a.deferResume('a1', 5);
     expect(a.hasUntimedLiveJobsInWorkspace()).toBe(true);
     a.deferResume('a2', 5);
     b.deferResume('b1', 5);
     expect(a.hasUntimedLiveJobsInWorkspace()).toBe(false);
 
-    // The sweep is the actor's, because everything it can act through is.
     expect(a.runningIds()).toEqual(['a1', 'a2']);
     expect(b.runningIds()).toEqual(['b1']);
     w.close();
@@ -263,11 +239,9 @@ describe('two actors, one database: background_jobs', () => {
     b.create({ id: 'src', kind: 'agents', workMode: 'build', now: 1 });
     b.settle('src', 0, '"b done"', 2);
 
-    // A's `src` is still running, so A has nothing to retry — even though a row
-    // with that id is settled one actor over.
     expect(a.createRetry({ sourceId: 'src', id: 'retry-1', kind: 'agents', workMode: 'build', input: '{}', now: 3 })).toBe(false);
     expect(b.createRetry({ sourceId: 'src', id: 'retry-1', kind: 'agents', workMode: 'build', input: '{}', now: 3 })).toBe(true);
-    // Both actors may hold the same retry edge; the unique index is per owner.
+    // The unique index on retry edges is per owner.
     a.settle('src', 0, '"a done"', 4);
     expect(a.createRetry({ sourceId: 'src', id: 'retry-1', kind: 'agents', workMode: 'build', input: '{}', now: 5 })).toBe(true);
     w.close();
@@ -317,7 +291,7 @@ describe('two actors, one database: the head journal', () => {
     const w = world();
     const a = new HeadJournal(w.sql, w.a);
     const b = new HeadJournal(w.sql, w.b);
-    // The SAME rationale text — the whole key `findResumableRun` has.
+    // The same rationale text: the whole key `findResumableRun` has.
     a.recordSplit('root-a', 'design the algorithm', 100);
     b.recordSplit('root-b', 'design the algorithm', 100);
 
@@ -336,8 +310,7 @@ describe('two actors, one database: the head journal', () => {
     b.insertSpawn(headInput('root-1-h0', 'root-1', 'B branch', 100));
 
     expect(a.markInterrupted({ spawnedBefore: 200 }, 300).map((r) => r.rootId)).toEqual(['root-1']);
-    // `HeadJournalRow.status` is typed to the report statuses plus 'running';
-    // 'interrupted' is a stored value that union does not name, so compare as text.
+    // 'interrupted' is stored but not in `HeadJournalRow.status`'s union, so compare as text.
     expect(String(a.readHead('root-1-h0')?.status)).toBe('interrupted');
     expect(b.readHead('root-1-h0')?.status).toBe('running');
     expect(b.hasUnfinishedHeads()).toBe(true);
@@ -368,8 +341,6 @@ describe('two actors, one database: the head journal', () => {
     expect(page.status).toBe('more');
     const cursor = page.status === 'more' ? page.next.after : null;
     expect(cursor).toBe('h0-s1');
-    // The anchor names `h0-s1`, a row id B's trace also has a seq space for but
-    // no row of. The walk restarts rather than resuming in someone else's trace.
     expect(() => b.readStepsPage('h0', { cursor: { after: present(cursor, 'the page cursor') } })).toThrow(StaleCursorError);
     w.close();
   });
@@ -409,7 +380,6 @@ describe('two actors, one database: the head journal', () => {
 
     expect(a.readCachedMerge('root-1')?.mergedNarrative).toBe('a merged');
     expect(b.readCachedMerge('root-1')).toBeNull();
-    // A settled run is no longer reclaimable — for its owner alone.
     expect(a.findResumableRun('A branch')).toBeNull();
     w.close();
   });
@@ -497,14 +467,12 @@ describe('a fresh child actor', () => {
 
     expect(createFactsStore(w.sql, child).all()).toEqual([]);
     expect(tasks(w, child).count()).toBe(0);
-    // Its first task is t1, not t2: it did not inherit its parent's sequence.
     expect(tasks(w, child).add(['own work'], null, 2_000).added.map((t) => t.id)).toEqual(['t1']);
     expect(new BackgroundJobStore(w.sql, child).list()).toEqual([]);
     expect(new HeadJournal(w.sql, child).listRuns(10)).toEqual([]);
     expect(new HeadJournal(w.sql, child).hasUnfinishedHeads()).toBe(false);
     expect(new MctsSearchStore(w.sql, child).list(10)).toEqual([]);
 
-    // The parent's rows are still there — the child saw nothing, it removed nothing.
     expect(createFactsStore(w.sql, w.a).all()).toHaveLength(1);
     expect(new HeadJournal(w.sql, w.a).hasUnfinishedHeads()).toBe(true);
     w.close();
@@ -519,9 +487,7 @@ describe('a fresh child actor', () => {
     const ledger = new MctsSearchStore(w.sql, w.b);
     facts.upsert('k', 'v');
 
-    // The directory's own retirement column — the same one every handle's
-    // validate closure reads. The stores captured `actorId` at construction, so
-    // this is exactly the drift `assertCurrent` exists to catch.
+    // The stores captured `actorId` at construction; this is the drift `assertCurrent` catches.
     void w.sql`UPDATE workspace_actors SET retiring_at = ${Date.now()} WHERE actor_id = ${w.b.actorId}`;
 
     expect(() => facts.recall('k')).toThrow(/no longer present/);
@@ -530,7 +496,6 @@ describe('a fresh child actor', () => {
     expect(() => journal.listRuns(5)).toThrow(/no longer present/);
     expect(() => ledger.list(5)).toThrow(/no longer present/);
 
-    // The sibling is untouched: this is one actor's identity, not the database's.
     expect(createFactsStore(w.sql, w.a).all()).toEqual([]);
     w.close();
   });

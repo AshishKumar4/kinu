@@ -1,6 +1,4 @@
-// Runtime validator for credential payloads sent over HTTP. Mirrors the
-// `Credential` union from ./store but rejects unknown shapes so a bad request
-// can't write garbage into the credential store.
+// Rejects unknown shapes so a bad request can't write garbage into the credential store.
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
@@ -31,8 +29,7 @@ const OpenAICompatCredentialSchema = v.object({
 });
 
 export function validateCredential(input: { value: unknown }): Credential {
-  // Not `v.parse`: its message quotes the value it received, a credential's
-  // values are its secret, and a stored one that fails reaches logs as a cause.
+  // Not `v.parse`: its message quotes the received value, which is the secret.
   const part = <const TSchema extends v.GenericSchema>(schema: TSchema): v.InferOutput<TSchema> => {
     const parsed = v.safeParse(schema, input.value);
 
@@ -75,8 +72,6 @@ export function validateCredential(input: { value: unknown }): Credential {
   };
 }
 
-/** Credential keys must be `[a-zA-Z0-9._-]{1,128}` — alphanumerics, dot,
- *  underscore, dash. No path traversal characters, no slashes. */
 export function validateCredentialKey(key: string): void {
   if (!/^[a-zA-Z0-9._-]{1,128}$/.test(key)) {
     throw new Error('Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');

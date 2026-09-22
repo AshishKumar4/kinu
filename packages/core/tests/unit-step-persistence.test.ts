@@ -1,30 +1,5 @@
-// Every completed LLM step must be durable at the moment it completes.
-//
-// Before this, the model's own output first reached disk once per turn: the CLI
-// appended `done.responseMessages` to live history and wrote flat text at
-// `persist()`; the cf backend let Think save the transcript at turn end. So a
-// turn that never reached its end — a process kill, a DO eviction, a provider
-// throw — left every step it HAD finished nowhere on disk, while `run_events`
-// (which read-models/runs.ts calls "the only history of what a turn did")
-// carried step rows with token counts and no content at all.
-//
-// These tests drive the REAL turn engine against a local scripted provider (no
-// live model calls) wired to a REAL sqlite-backed RunEventRecorder through the
-// SAME `TurnAccumulator` sink both backends construct, and assert the four
-// things that make per-step durability real:
-//
-//   1. a step's assistant parts and its tool results are on disk before the
-//      next request is issued;
-//   2. they survive the process — re-read through a FRESH recorder over the
-//      same database file, which is what a restart actually does;
-//   3. pairing holds inside every row, so the durable rows concatenate into a
-//      request the SDK will assemble (the sibling ticket's invariant);
-//   4. nothing is written twice — not across steps of one turn, not when the
-//      same turn is re-driven.
-//
-// Cut the wire — drop `stepEvent.messages` in turn-accumulator.ts, or
-// `responseMessages` from the step-finish ChatEvent in chat.ts — and tests 1-4
-// fail naming the missing step.
+// Every completed LLM step must be durable when it completes: the real turn engine and a real
+// sqlite RunEventRecorder through the same `TurnAccumulator` sink both backends construct.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scratchPath, testActorHandle } from '@kinu.run/test-utils';
@@ -43,7 +18,6 @@ function sse(events: string[]): string {
   return events.map((e) => `data: ${e}\n\n`).join('');
 }
 
-/** One `shell` call, finishing on tool_calls — a step that continues the turn. */
 function toolStep(id: string, command: string): Response {
   return new Response(sse([
     JSON.stringify({ choices: [{ delta: { content: `about to ${command}` } }] }),
@@ -96,11 +70,9 @@ function scriptedProvider(script: ReadonlyArray<() => Response>) {
   };
 }
 
-/** A file-backed workspace database — a durability claim checked against an
- *  in-memory database proves nothing about surviving the process. */
+/** A file-backed database: durability against an in-memory database proves nothing. */
 function workspaceOnDisk() {
-  // A sqlite file also strands its -wal and -shm siblings, so it gets a
-  // directory of its own rather than a bare path under the temp root.
+  // A sqlite file strands its -wal and -shm siblings, so it gets its own directory.
   const path = scratchPath('step-persistence', 'store.sqlite');
   const db = new Database(path);
   initRunEventTables(makeExecRaw(db));
@@ -108,12 +80,7 @@ function workspaceOnDisk() {
   return { path, db, sql: makeSql(db) };
 }
 
-/**
- * The wiring a backend does, and nothing more: one accumulator whose
- * `onStepEvent` sink is the durable recorder. The CLI builds exactly this in
- * `local-session.ts` (`sinks.onStepEvent → recordRunEvent('step_finish')`) and
- * the cf DO in `actor-agent.ts` (`sinks.onStepEvent → eventRecorder.emit`).
- */
+/** The wiring each backend does: one accumulator whose `onStepEvent` sink is the durable recorder. */
 function backendWiring(recorder: RunEventRecorder, runId: string) {
   const acc = new TurnAccumulator({
     onStepEvent: (ev) => { recorder.emit(runId, { type: 'step_finish', ...ev }); },
@@ -124,9 +91,7 @@ function backendWiring(recorder: RunEventRecorder, runId: string) {
   return acc;
 }
 
-/** Drive one turn, feeding every step-finish to the accumulator exactly as the
- *  CLI's turn loop does. `cutAfterSteps` interrupts the turn once that many
- *  steps have finished — a stop press, or the shape a kill lands in. */
+/** Drive one turn as the CLI loop does; `cutAfterSteps` interrupts after that many finished steps. */
 async function drive({ model, acc, cutAfterSteps }: {
   model: LanguageModel;
   acc: TurnAccumulator;
@@ -164,7 +129,6 @@ async function drive({ model, acc, cutAfterSteps }: {
   return { events, threw, history };
 }
 
-/** Every tool call in a message array, and whether its result is present. */
 function pairing(messages: readonly ModelMessage[]): Array<{ id: string; name: string; settled: boolean }> {
   const settled = new Set<string>();
 
@@ -187,8 +151,6 @@ function pairing(messages: readonly ModelMessage[]): Array<{ id: string; name: s
   return calls;
 }
 
-/** The recorded steps, their messages read back through the one codec the
- *  recorder wrote them with. */
 function stepRows(recorder: RunEventRecorder, runId: string) {
   return recorder.read(runId, { limit: 100 })
     .flatMap((e) => e.type === 'step_finish' ? [{ ...e, messages: decodeModelMessageValues(e.messages ?? []) }] : []);
@@ -208,8 +170,6 @@ describe('a completed step is durable at the moment it completes', () => {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-1');
 
-      // Requests observed at each step boundary, against the rows already
-      // durable that actually carry the model's output.
       const witness: Array<{ requests: number; recordedSteps: number }> = [];
       const abort = new AbortController();
 
@@ -223,9 +183,6 @@ describe('a completed step is durable at the moment it completes', () => {
         witness.push({ requests: provider.requests(), recordedSteps });
       }
 
-      // Three steps, three requests, and at every boundary the step that just
-      // finished was already durable WITH its output — the write is not deferred
-      // to turn end.
       expect(witness.map((w) => w.recordedSteps)).toEqual([1, 2, 3]);
       expect(witness.map((w) => w.requests)).toEqual([1, 2, 3]);
     } finally {
@@ -248,14 +205,11 @@ describe('a completed step is durable at the moment it completes', () => {
       const acc = backendWiring(recorder, 'run-cut');
       const run = await drive({ model: provider.model, acc, cutAfterSteps: 2 });
 
-      // The turn did not finish, and says so.
       expect(run.threw).toBe('The turn was interrupted before it finished.');
 
       const rows = stepRows(recorder, 'run-cut');
       expect(rows.map((r) => r.stepIndex)).toEqual([1, 2]);
 
-      // Each row carries the step's OWN output: one assistant message with the
-      // step's tool call, and the tool message that answered it.
       for (const row of rows) {
         const calls = pairing(row.messages ?? []);
         expect(calls.length).toBe(1);
@@ -264,7 +218,6 @@ describe('a completed step is durable at the moment it completes', () => {
 
       expect(rows.flatMap((r) => pairing(r.messages ?? []).map((c) => c.id))).toEqual(['call_a', 'call_b']);
 
-      // And the whole durable record assembles: every call in it is settled.
       const transcript = recorder.transcript('run-cut');
       expect(pairing(transcript).every((c) => c.settled)).toBe(true);
       expect(transcript.length).toBe(4);
@@ -286,8 +239,7 @@ describe('a completed step is durable at the moment it completes', () => {
     try {
       const acc = backendWiring(new RunEventRecorder(sql, testActorHandle(sql)), 'run-killed');
       await drive({ model: provider.model, acc, cutAfterSteps: 2 });
-      // The process ends here: nothing in memory carries over, and nothing ever
-      // wrote the turn's messages to the backend's message store.
+      // The process ends here: nothing ever wrote the turn's messages to the backend's message store.
       db.close();
 
       const reopened = new Database(path);
@@ -310,8 +262,7 @@ describe('a completed step is durable at the moment it completes', () => {
   test('a provider throw mid-turn keeps the steps that finished', async () => {
     const provider = scriptedProvider([
       () => toolStep('call_a', 'git status'),
-      // A terminal provider failure: a 5xx would be retried by the SDK before
-      // it throws, which measures backoff, not what the turn keeps.
+      // Terminal failure: a 5xx would be retried by the SDK before it throws.
       () => new Response('{"error":{"message":"upstream refused the request"}}', { status: 400, headers: { 'content-type': 'application/json' } }),
     ]);
 
@@ -322,10 +273,8 @@ describe('a completed step is durable at the moment it completes', () => {
       const acc = backendWiring(recorder, 'run-threw');
       const run = await drive({ model: provider.model, acc });
 
-      // The turn failed, and `done` never ran — so nothing appended to history.
       expect(run.threw).not.toBeNull();
       expect(run.history).toEqual([]);
-      // The step that DID finish is still on disk, paired.
       const transcript = recorder.transcript('run-threw');
       expect(pairing(transcript).map((c) => c.id)).toEqual(['call_a']);
       expect(pairing(transcript).every((c) => c.settled)).toBe(true);
@@ -371,8 +320,7 @@ describe('the durable record and the history the caller persists are one constru
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-cut-tail');
-      // Cut once the SECOND tool call is announced: step 2 has not finished, so
-      // the SDK will never report it and it can never be a durable step row.
+      // Step 2 has not finished, so the SDK never reports it as a step row.
       const abort = new AbortController();
       const history: ModelMessage[] = [];
       let calls = 0;
@@ -397,11 +345,7 @@ describe('the durable record and the history the caller persists are one constru
       await expect(cutTurn()).rejects.toThrow(INTERRUPTED_TURN);
 
       const transcript = recorder.transcript('run-cut-tail');
-      // Step 1 completed and is durable; step 2 never completed and is not.
       expect(pairing(transcript).map((c) => c.id)).toEqual(['call_a']);
-      // The history the caller persists is the durable steps PLUS the cut step,
-      // whose call the sibling invariant settled — so the record and the history
-      // agree about step 1 and only differ by the step that never finished.
       expect(history.slice(0, transcript.length)).toEqual(transcript);
       expect(pairing(history).map((c) => c.id)).toEqual(['call_a', 'call_b']);
       expect(pairing(history).every((c) => c.settled)).toBe(true);
@@ -430,8 +374,6 @@ describe('ordering and idempotency', () => {
 
       const rows = stepRows(recorder, 'run-dedupe');
       expect(rows.map((r) => r.stepIndex)).toEqual([1, 2, 3, 4]);
-      // Each row's messages are disjoint and in order: concatenating them
-      // reproduces the turn exactly once, with no message repeated.
       expect(recorder.transcript('run-dedupe')).toEqual(run.history);
       const perRow = rows.map((r) => (r.messages ?? []).length);
       expect(perRow.reduce((a, b) => a + b, 0)).toBe(run.history.length);
@@ -453,9 +395,7 @@ describe('ordering and idempotency', () => {
       const one = await drive({ model: first.model, acc: backendWiring(recorder, 'run-x') });
       const two = await drive({ model: second.model, acc: backendWiring(recorder, 'run-y') });
 
-      // Each run's record is its own and complete: two steps each, and the
-      // accumulator's durable cursor reset with the turn rather than carrying
-      // the first run's four messages into the second run's first row.
+      // The accumulator's durable cursor resets with the turn.
       expect(stepRows(recorder, 'run-x').map((r) => r.stepIndex)).toEqual([1, 2]);
       expect(stepRows(recorder, 'run-y').map((r) => r.stepIndex)).toEqual([1, 2]);
       expect(recorder.transcript('run-x')).toEqual(one.history);
@@ -469,9 +409,7 @@ describe('ordering and idempotency', () => {
   });
 
   test('a step boundary reporting no response array cannot rewind the cursor', () => {
-    // The scaffold seam yields a step-finish for a scaffold-authored step, which
-    // has no SDK response array behind it. Treating that as "the turn has
-    // produced nothing" would make the next real step re-record everything.
+    // A scaffold-authored step has no SDK response array; treating it as empty would make the next step re-record everything.
     const recorded: Array<ReadonlyArray<ModelMessage> | undefined> = [];
     const acc = new TurnAccumulator({ onStepEvent: (ev) => { recorded.push(ev.messages); } });
     acc.reset(Date.now());

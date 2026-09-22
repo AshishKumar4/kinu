@@ -1,32 +1,15 @@
-// Transport for the PLATFORM AI Gateway provider (providers/ai-gateway.ts):
-// the AI SDK's OpenAI-compatible request, carried over the Workers AI binding
-// instead of over the wire.
-//
-// Why: the HTTPS path to the gateway needs a Cloudflare API token with Workers
-// AI permissions (docs/DEPLOYMENT.md) even though the Worker already runs INSIDE
-// the gateway's own account. `env.AI.gateway(id).run(...)` is pre-authenticated
-// in-account, so the platform provider needs no secret at all — same account,
-// same bill, one fewer credential to mint and rotate.
-//
-// Two measured constraints, both easy to undo by accident:
-//  * a request-supplied `authorization` header OVERRIDES the binding's
-//    in-account pre-authentication and the gateway answers 401. Auth headers are
-//    stripped here; nothing upstream may add one back.
-//  * `shell` is the only binding call that hands back a `Response`, which is what
-//    an AI SDK `fetch` seam consumes — `env.AI.run()` returns a parsed object and
-//    would force a hand-rolled SSE re-serializer. It carries the non-deprecated
-//    `v1/chat/completions` endpoint and streams incrementally (measured: headers
-//    at ~1s, then 390 chunks over the following second).
+// Transport for the platform AI Gateway: the SDK's OpenAI-compatible request over the Workers AI binding
+// (pre-authenticated in-account, so no API token).
+// Measured: a request `authorization` header overrides binding auth (gateway 401), so auth is stripped;
+// `shell` is the only binding call returning a `Response`, which the SDK `fetch` seam needs.
 import { asFetchFunction } from './fetch-shim';
 import type { GatewayRunRequest, WorkersAIBinding } from './types';
 import { renderThrownChain } from '../obs/index';
 import { copyHeaders } from './util';
 
-/** An AI Gateway HTTPS base parsed into what the binding addresses it by.
- *  `AI_GATEWAY_URL` is the single source of truth for both. */
+/** An AI Gateway HTTPS base parsed into what the binding addresses; `AI_GATEWAY_URL` is the source for both. */
 export interface GatewayTarget {
-  /** Gateway name. The binding resolves it in the Worker's OWN account, so a
-   *  URL naming a foreign account's gateway fails loudly at request time. */
+  /** Gateway name, resolved in the Worker's own account; a foreign account's gateway fails at request time. */
   id: string;
   /** Origin the SDK's requests must sit on. */
   origin: string;
@@ -34,8 +17,7 @@ export interface GatewayTarget {
   prefix: string;
 }
 
-/** A parsed target, or why the configured value is not one. The failure carries
- *  its cause so the provider can say which half of the config is wrong. */
+/** A parsed target, or why the configured value is not one. */
 export type GatewayTargetResult = GatewayTarget | { reason: string };
 
 /** Parse `AI_GATEWAY_URL` into the gateway the binding addresses. */
@@ -63,9 +45,7 @@ export function parseGatewayTarget(raw: string | undefined): GatewayTargetResult
   return { id, origin: url.origin, prefix: `/v1/${account}/${id}/` };
 }
 
-// Hop-by-hop and derived headers the binding must not re-send, plus gateway
-// auth: binding calls are pre-authenticated and a supplied credential is treated
-// as a BYOK override, which answers 401.
+// Hop-by-hop headers plus gateway auth: a supplied credential is a BYOK override and answers 401.
 const STRIPPED_HEADERS = ['authorization', 'cf-aig-authorization', 'content-length', 'host'];
 
 /** Any absolute URL; the Request wrapper below is only ever read, never sent. */
@@ -82,9 +62,7 @@ export function createGatewayBindingFetch(opts: {
     const rawURL = input instanceof Request ? input.url : input.toString();
     const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
 
-    // Anything this transport cannot express is a wiring bug, not passthrough
-    // traffic: forwarding it would send the request somewhere unintended and
-    // report a misleading upstream error instead of naming the real problem.
+    // Anything this transport cannot express is a wiring bug, not passthrough traffic.
     const reject = (why: string): never => {
       throw new Error(
         `ai-gateway binding transport cannot serve ${method} ${rawURL} (${why}). `
@@ -100,8 +78,7 @@ export function createGatewayBindingFetch(opts: {
       return reject(`unparseable URL: ${renderThrownChain({ cause: cause })}`);
     }
 
-    // Compare normalized origin + pathname, not raw strings, so a lexical
-    // variant cannot split provider/endpoint differently than the wire would.
+    // Compare normalized origin + pathname so a lexical variant cannot split provider/endpoint differently.
     if (url.origin !== target.origin || !url.pathname.startsWith(target.prefix)) {
       return reject('outside the configured gateway prefix');
     }
@@ -128,8 +105,7 @@ export function createGatewayBindingFetch(opts: {
 
     return binding.gateway(target.id).run({
       provider: rest.slice(0, slash),
-      // The query string belongs to the endpoint — it is part of what the wire
-      // would have carried.
+      // The query string belongs to the endpoint.
       endpoint: rest.slice(slash + 1) + url.search,
       headers: collectHeaders(request, init),
       query,
@@ -137,8 +113,7 @@ export function createGatewayBindingFetch(opts: {
   });
 }
 
-/** Read the request body as text through the platform's own Request parser, so
- *  every `BodyInit` shape is handled the way the wire would have handled it. */
+/** The request body as text, via the platform's Request parser so every `BodyInit` shape is handled. */
 async function readBodyText(
   request: Request | undefined,
   init: RequestInit | undefined,
@@ -153,9 +128,7 @@ async function readBodyText(
   return new Request(BODY_SINK_URL, { method: 'POST', body }).text();
 }
 
-/** Header names arrive lowercased from `Headers`, so case-variant duplicates
- *  collapse and stripping is uniform. Per the fetch spec `init.headers` replaces
- *  a Request's headers entirely rather than merging with them. */
+/** Header names arrive lowercased. Per the fetch spec `init.headers` replaces a Request's headers, not merges. */
 function collectHeaders(
   request: Request | undefined,
   init: RequestInit | undefined,

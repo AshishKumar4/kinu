@@ -9,10 +9,7 @@ import { recordTurnOutcome } from '../src/evolution/outcomes';
 
 function setup() {
   const { rt, db } = createTestRuntime();
-  // The production table set, not just `proposed_tasks`: the proposer reads the
-  // crafted-tool registry and the durable turn-outcome ledger, and a harness
-  // that creates fewer tables than a real workspace is what made tolerating
-  // their absence look reasonable in shipped code.
+  // The full production table set: a thinner harness hides code that tolerates missing tables.
   initWorkspaceSchema({ execRaw: rt.storage.execRaw, sql: rt.storage.sql, exec: makeSqlExec(db) });
 
   return { rt };

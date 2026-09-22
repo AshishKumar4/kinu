@@ -237,10 +237,8 @@ describe("executor lifecycle state", () => {
     if (!provided.supported) expect(provided.reason).toContain("not configured");
   });
 
-  // KINU-033. The signal MUST reach the SDK call: the adapter owns the
-  // container process id, so a signal stripped before it cannot kill anything,
-  // and core would answer `cancelled` over a command still writing to
-  // /workspace.
+  // KINU-033: the signal must reach the SDK call, which owns the container process; stripped earlier it kills
+  // nothing.
   test("sandbox exec hands the AbortSignal to the container, and no work deadline", async () => {
     const handle = sandboxHandle();
     const executor = createSandboxExecutor(handle, "kinu.example.test");
@@ -249,9 +247,7 @@ describe("executor lifecycle state", () => {
     const result = await executor.tools.exec.execute("echo ok", { signal });
 
     expect(result).toBe("ok");
-    // /workspace is the executor's own default cwd, passed explicitly. No
-    // `timeout`: this lane carries no work deadline, because a lane deadline
-    // outranks every detach window above it (see
+    // No `timeout`: a lane deadline outranks every detach window above it (see
     // unit-exec-detach-ceiling.test.ts).
     expect(handle.execOptions).toEqual([{ cwd: "/workspace", signal }]);
   });
@@ -297,12 +293,8 @@ describe("executor lifecycle state", () => {
   });
 
   test("a transient failure never starts a second supervised process", async () => {
-    // KINU-N031: the START was inside the transient retry. Creating the process
-    // and recording its durable spec are two steps inside the container, so a
-    // "network connection lost" between them left a live process with no spec —
-    // and the retry, which can only look for a spec, started a second one. Two
-    // servers then fought over one port and the unrecorded one could not be
-    // listed, stopped or restored.
+    // KINU-N031: creating the process and recording its spec are two container steps, so the start is never
+    // retried.
     const handle = sandboxHandle();
     let starts = 0;
     let readies = 0;
@@ -399,11 +391,8 @@ describe("sandbox transient error classification", () => {
     )).toBe(true);
   });
 
-  // Admission control has TWO refusals and they arrive as different statuses.
-  // Both are the platform saying "not now", so both must be retryable; the rate
-  // limit was missing, so a burst of parallel escalations reached the model as a
-  // hard failure while the ceiling beside it was quietly retried. Texts are the
-  // SDK's own (@cloudflare/containers/dist/lib/container.js:9 and :868).
+  // Admission control's two refusals are both the platform saying "not now", so both retry. Texts are the SDK's
+  // own (@cloudflare/containers/dist/lib/container.js:9 and :868).
   test("classifies both container admission refusals as retryable", () => {
     expect(isSandboxTransientError(new Error(
       'There is no Container instance available at this time.\n'
@@ -415,8 +404,7 @@ describe("sandbox transient error classification", () => {
   });
 
   test("a real fault is NOT retryable, so the classifier can say no", () => {
-    // A predicate that answered true for everything would make the two above
-    // meaningless.
+    // A predicate true for everything would make the two above meaningless.
     expect(isSandboxTransientError(new Error('command not found: nope'))).toBe(false);
   });
 });

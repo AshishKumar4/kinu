@@ -1,7 +1,4 @@
-// The turn's context budget — the per-turn ledger of bulk that crossed into
-// the root's stream, and the M1 trip counters that say how often real traffic
-// crosses the thresholds at all. Behavior contract only: counter accounting,
-// spill-address recognition, and the per-turn reset.
+// The per-turn context budget and M1 trip counters: counter accounting, spill-address recognition, per-turn reset.
 
 import { describe, expect, test } from 'bun:test';
 import {
@@ -31,9 +28,7 @@ describe('TurnContextBudget', () => {
   });
 
   test('a turn that only admitted small results is inactive in nothing but its spill counters', () => {
-    // `active` gates the durable row: a turn that ingested tool output wrote
-    // no spill, and dropping its admitted chars would lose the denominator
-    // every spill rate is measured against.
+    // `active` gates the durable row: dropping a no-spill turn's admitted chars would lose every spill rate's denominator.
     const budget = new TurnContextBudget();
     budget.admit(40);
     expect(budget.active).toBe(true);

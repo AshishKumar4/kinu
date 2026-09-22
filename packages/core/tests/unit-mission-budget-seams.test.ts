@@ -1,12 +1,5 @@
-/**
- * The two host seams the mission governor enforces at, exercised through the
- * surfaces the agent actually reaches them by.
- *
- * The point of the whole feature is that the stop is MECHANICAL: none of these
- * paths ask LLM-authored code to restrain itself. So the tests drive the real
- * dispatch (`agents.*` in the sandbox, the shared step pipeline, the shared turn
- * accumulator) with scripted strategies and no live model anywhere.
- */
+/** The mission governor's two host seams, driven through the real dispatch with scripted strategies:
+ *  the stop is mechanical, never asked of LLM-authored code. */
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -42,20 +35,16 @@ function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
 
   return new MissionGovernor({
     storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
-    // A mission cap is one actor's ledger, so the governor is bound to a real
-    // owner over the same database its rows land in.
+    // A mission cap is one actor's ledger, so the governor binds a real owner over the same database.
     actor: createTestActorsOver(db).main,
     onExhausted,
   });
 }
 
-/** One expansion's provider-reported usage: 5 in + 3 out. A run's total is then
- *  arithmetic over the expansion count rather than a number read back off the
- *  thing under test. */
+/** One expansion's provider-reported usage: 5 in + 3 out, so a run's total is arithmetic over expansions. */
 const PER_EXPANSION_TOKENS = 8;
 
-/** A model that answers once per expansion. `usage: 'silent'` is a provider that
- *  reported nothing, which is a different fact from reporting zero. */
+/** A model that answers once per expansion; `usage: 'silent'` reports nothing, which differs from zero. */
 function expandingModel(usage: 'reported' | 'silent' = 'reported') {
   return scriptedTurnModel({
     provider: 'fake',
@@ -77,10 +66,7 @@ function expandingModel(usage: 'reported' | 'silent' = 'reported') {
   });
 }
 
-/** The smallest real search: two sibling answers at one level, no score and no
- *  advance. Nothing in this file is about the search's shape — every token on the
- *  ledger below came from an expansion, so a movement observed here is the
- *  budget's. */
+/** The smallest real search: two sibling answers, no score, no advance; every ledger token came from an expansion. */
 const TWO_BRANCHES = { preset: 'ideate' as const, branches: 2, depth: 1 };
 
 const RUN_TOKENS = 2 * PER_EXPANSION_TOKENS;
@@ -106,8 +92,7 @@ function searchableDeps(opts: {
   const { rt, db } = createTestRuntime();
   const spawns = opts.spawns ?? [];
 
-  /** Both handoff verbs answer identically; the verb that ran is what a seam
-   *  test reads back. */
+  /** Both handoff verbs answer identically; the verb that ran is what a seam test reads back. */
   const recordHandoff = (verb: string) => async (input: { name: string }) => {
     spawns.push(`${verb}:${input.name}`);
 
@@ -118,9 +103,7 @@ function searchableDeps(opts: {
     mode: 'build',
     swarm: {
       rt,
-      // One actor per node, over the caller's own database: the spend these
-      // seams cap is charged per node, and a shared handle would bill a wave
-      // of nodes to one ledger.
+      // One actor per node: spend is charged per node, and a shared handle would bill a wave to one ledger.
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
       model: expandingModel(opts.usage),
     },
@@ -227,8 +210,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
       ['swarm', { task: 'x', ...TWO_BRANCHES }],
       ['hire', { role: 'r', mission: 'm' }],
       ['hire', { agent: 'helper', message: 'm' }],
-      // Both hire TARGETS spend, and both lifetimes: an exhausted label must
-      // not be able to mint a task-lifetime agent either.
+      // An exhausted label must not mint a task-lifetime agent either.
       ['hire', { lifetime: 'task', role: 'auditor', mission: 'm' }],
       ['msg', { agent: 'helper', message: 'm' }],
     ] as const) {
@@ -257,8 +239,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     const withGovernorNoScope = await sandbox(searchableDeps({ budget: governor })).swarm({ task: 'x', ...TWO_BRANCHES });
     const withoutGovernor = await sandbox(searchableDeps({})).swarm({ task: 'x', ...TWO_BRANCHES });
 
-    // Node ids are minted per run, so the runs are compared on everything else:
-    // an unscoped governor must add no key, no ledger row and no charge.
+    // Node ids are minted per run; an unscoped governor must add no key, ledger row or charge.
     expect(v.parse(SearchReportSchema, withGovernorNoScope))
       .toEqual(v.parse(SearchReportSchema, withoutGovernor));
     const keys = v.record(v.string(), v.unknown());
@@ -276,13 +257,8 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
   });
 
   test("a search's tokens land on the ledger exactly once, not once per accounting path", async () => {
-    // THE OVER-CHARGE THIS ASSERTS AGAINST. A search charges the ledger through its
-    // own port, per model call, as the calls happen; the spawn seam then records the
-    // spawn. Both paths see the SAME tokens — `report.tokens` is the sum of the calls
-    // the port already debited — so a seam that also billed the report would double
-    // every search. The failure is silent by construction: a run billed twice looks
-    // exactly like a cap that is working, which is why the total is asserted against
-    // the provider's own arithmetic rather than against the ledger's own claim.
+    // The search already debits each call through its own port; a seam that also billed the report would
+    // double every search, silently, so the total is checked against the provider's arithmetic.
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
@@ -294,8 +270,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
       await sandbox(deps).swarm({ task: 'explore', ...TWO_BRANCHES }),
     );
 
-    // The denominators first: two nodes really ran and really reported tokens, so a
-    // ledger of zero cannot pass this as "nothing was over-charged".
+    // Two nodes really ran and reported tokens, so a zero ledger cannot pass.
     expect(out.report.expansions).toBe(2);
     expect(out.report.tokens).toBe(RUN_TOKENS);
     expect(RUN_TOKENS).toBeGreaterThan(0);
@@ -303,18 +278,13 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     const [mission] = governor.snapshot('nightly');
     expect(mission?.spent.tokens).toBe(RUN_TOKENS);
     expect(mission?.spent.tokens).not.toBe(2 * RUN_TOKENS);
-    // ONE CALL PER STEP, and the count is what makes the arithmetic checkable: the
-    // ledger holds two calls of eight tokens rather than one opaque total, so a reader
-    // can see WHICH calls the number is made of.
+    // One call per step: the ledger holds two calls of eight tokens, not one opaque total.
     expect(mission?.calls).toBe(2);
     expect(mission?.spawns).toBe(1);
   });
 
   test('a run whose provider reported NO usage is charged none of it, and the spawn still records', async () => {
-    // An unmeasured search is not a free one. No reported usage means the run
-    // could not measure what it spent, so this seam charges nothing for it — the
-    // alternative readings are both wrong: billing a guess, or dropping the spawn
-    // row and pretending the work never happened.
+    // No reported usage charges nothing, but the spawn row is still recorded.
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
@@ -330,11 +300,8 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
   });
 
   test('a TOOLLESS node charges its one call too, so removing the lump under-charges nothing', async () => {
-    // THE MIRROR DEFECT. A toolless node has no loop to debit between steps: its whole
-    // spend is one `generateText`, made from the search's own model rather than the
-    // governed `rt.llm`. Charging the run through a per-call port and NOT charging that
-    // call would make a thought search free — the under-charge on the other side of the
-    // double bill, and just as silent.
+    // A toolless node's whole spend is one `generateText` on the search's own model, not `rt.llm`;
+    // leaving it uncharged would make a thought search free.
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
@@ -346,7 +313,6 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
       config: { unit: { kind: 'thought' } }, branches: 2, depth: 1,
     }));
 
-    // The denominator: two toolless nodes really answered and really reported tokens.
     expect(out.report.expansions).toBe(2);
     expect(out.report.tokens).toBe(RUN_TOKENS);
 
@@ -372,9 +338,7 @@ describe('model-call seam — the step pipeline declines the next request', () =
     const governor = newGovernor();
     governor.declare('nightly', { tokens: 5_000 });
     governor.activate(['nightly']);
-    // No extensions, prune, weave, cache or meter are wired here. An unchanged
-    // pipeline answers undefined, which means no step overrides. A budgeted
-    // turn that injected any would break the request it leaves alone.
+    // Nothing wired here, so an unchanged pipeline answers undefined: no step overrides.
     expect(composePrepareStep({ budget: governor }, ctx)).toBeUndefined();
     expect(composePrepareStep({}, ctx)).toBeUndefined();
   });
@@ -409,7 +373,6 @@ describe('model-call seam — the turn accumulator is the meter', () => {
     // input is the cache-inclusive total, so the cache read is not counted twice.
     expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(800);
     expect(governor.snapshot('nightly')[0]?.calls).toBe(2);
-    // The accumulator's own numbers are untouched by the governor.
     expect(acc.reportedUsage()).toEqual({ input: 600, output: 200, cacheRead: 500 });
   });
 

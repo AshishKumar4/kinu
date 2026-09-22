@@ -57,9 +57,7 @@ export function withOperationProfile(tools: ToolSet, context: OperationProfile):
   return bound;
 }
 
-/** Every continuation belongs to the issuer, even when another turn consumes it.
- *  A null context clears the consumer's ambient scope so unowned work resolves
- *  its own authority rather than inheriting whoever drained it. */
+/** Every continuation runs in the issuer's scope; a null context clears the consumer's. */
 export async function* operationProfileStream<Value>(events: AsyncIterable<Value>, context: OperationProfile | null): AsyncGenerator<Value> {
   const iterator = runOperationProfile(context, () => events[Symbol.asyncIterator]());
 

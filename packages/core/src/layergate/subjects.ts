@@ -1,18 +1,5 @@
-/**
- * Pipeline subjects — the production entry points the layer gate calls.
- *
- * The gate never imports the turn pipeline directly. Every probe reaches
- * production code through this record, so a fault injection can replace
- * exactly one function and the gate measures which layers actually depend on
- * it. That is what turns "the aggregate moved" into "layer X moved".
- *
- * A registry swap only intercepts calls the GATE makes — not calls production
- * modules make to each other. The decomposition therefore has to be
- * dependency-closed, and `unit-layergate.test.ts` proves it is by walking the
- * real import graph: no subject of one layer may be reachable from a subject
- * of another. `SUBJECT_SOURCE` is the map that check runs over, and the same
- * test verifies every entry really exports its symbol.
- */
+// Every probe reaches production code through this record so a fault can swap one function. Swaps
+// only intercept gate calls, so layers must be dependency-closed (proved by unit-layergate.test.ts).
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import { buildSystemPromptSync, type SystemPromptOptions } from '../prompt';
@@ -77,10 +64,7 @@ import {
 } from '../orchestrator/heads-support';
 
 export interface PipelineSubjects {
-  // ── context assembly ──
-  /** Bound to the caller's runtime handle. Every probe passes `soulOverride`,
-   *  so the handle is never read — but the gate still calls the exact function
-   *  both backends call, with the exact options they pass. */
+  /** Probes pass `soulOverride`, so the runtime handle is never read. */
   readonly buildSystemPromptSync: (opts: SystemPromptOptions) => string;
   readonly compilePromptSurface: typeof compilePromptSurface;
   readonly admitAgentsMd: typeof admitAgentsMd;
@@ -88,13 +72,11 @@ export interface PipelineSubjects {
   readonly renderActiveSkillsSection: typeof renderActiveSkillsSection;
   readonly resolveActiveSkills: typeof resolveActiveSkills;
 
-  // ── volatile context ──
   readonly renderDynamicContextBlock: typeof renderDynamicContextBlock;
   readonly turnLocalContextMessage: typeof turnLocalContextMessage;
   readonly DynamicContextLedger: typeof DynamicContextLedger;
   readonly renderFactsBlock: typeof renderFactsBlock;
 
-  // ── per-step pipeline ──
   readonly composePrepareStep: typeof composePrepareStep;
   readonly pruneStepToolOutputs: typeof pruneStepToolOutputs;
   readonly markCacheTail: typeof markCacheTail;
@@ -103,12 +85,10 @@ export interface PipelineSubjects {
   readonly cacheableSystem: typeof cacheableSystem;
   readonly promptCacheOptions: typeof promptCacheOptions;
 
-  // ── context budget ──
   readonly contextWindowForModel: typeof contextWindowForModel;
   readonly clampToolResult: typeof clampToolResult;
   readonly clampSerializedToolResult: typeof clampSerializedToolResult;
 
-  // ── backend turn driver (the hoisted shared spine) ──
   readonly classifyTurnFailure: typeof classifyTurnFailure;
   readonly planOverflowRecovery: typeof planOverflowRecovery;
   readonly openTurnRun: typeof openTurnRun;
@@ -117,57 +97,46 @@ export interface PipelineSubjects {
   readonly persistMeasuredPromptTokens: typeof persistMeasuredPromptTokens;
   readonly applyOverflowRecovery: typeof applyOverflowRecovery;
 
-  // ── subordinate runtime (the facet inherited-context digest) ──
   readonly serializeContentForHeads: typeof serializeContentForHeads;
   readonly inheritedContextFromHistory: typeof inheritedContextFromHistory;
   readonly narrowInheritedRole: typeof narrowInheritedRole;
 
-  // ── compaction ──
   readonly buildCompactionSummaryPrompt: typeof buildCompactionSummaryPrompt;
   readonly wrapCompactionSummary: typeof wrapCompactionSummary;
   readonly stripCheckpointPreamble: typeof stripCheckpointPreamble;
 
-  // ── event reactor ──
   readonly buildDrainBatch: typeof buildDrainBatch;
   readonly renderForLLM: typeof renderForLLM;
   readonly StepInjections: typeof StepInjections;
   readonly Inbox: typeof Inbox;
   readonly DrainScheduler: typeof DrainScheduler;
 
-  // ── safety gate ──
   readonly reviewCommand: typeof reviewCommand;
   readonly formatApproval: typeof formatApproval;
   readonly gateExec: typeof gateExec;
   readonly argumentDigest: typeof argumentDigest;
 
-  // ── evolution gate ──
   readonly checkMisevolution: typeof checkMisevolution;
   readonly decidePromotion: typeof decidePromotion;
   readonly selectEvolutionBase: typeof selectEvolutionBase;
 
-  // ── memory retrieval ──
   readonly hybridSearch: typeof hybridSearch;
   readonly reciprocalRankFusion: typeof reciprocalRankFusion;
 
-  // ── delegation ──
   readonly delegationFeatures: typeof delegationFeatures;
   readonly renderDelegationFeatures: typeof renderDelegationFeatures;
 
-  // ── in-episode craft fitness ──
   readonly craftInvocationSites: typeof craftInvocationSites;
   readonly craftFailureBlame: typeof craftFailureBlame;
   readonly craftInvocationError: typeof craftInvocationError;
 
-  // ── tool contract ──
   readonly renderToolSchemaDescription: typeof renderToolSchemaDescription;
 
-  // ── file plane ──
   readonly applyFileEdits: typeof applyFileEdits;
   readonly scanFileWindow: typeof scanFileWindow;
   readonly formatFileSlice: typeof formatFileSlice;
   readonly withMountTable: typeof withMountTable;
 
-  // ── execution signal ──
   readonly devicePresence: typeof devicePresence;
   readonly deviceChangeNotice: typeof deviceChangeNotice;
   readonly parseDevicePresence: typeof parseDevicePresence;
@@ -175,8 +144,7 @@ export interface PipelineSubjects {
 
 export type SubjectName = keyof PipelineSubjects;
 
-/** Where each subject is defined, relative to `packages/core/src`. The
- *  dependency-closure proof walks the import graph from these files. */
+/** Relative to `packages/core/src`; the dependency-closure proof walks imports from these files. */
 export const SUBJECT_SOURCE = {
   buildSystemPromptSync: 'prompt.ts',
   compilePromptSurface: 'prompting/surface.ts',
@@ -255,11 +223,7 @@ export const SUBJECT_SOURCE = {
   parseDevicePresence: 'execution/device-status.ts',
 } satisfies Record<SubjectName, string>;
 
-/**
- * Bind the live turn pipeline. `rt` satisfies `buildSystemPromptSync`'s
- * signature only — the gate passes `soulOverride` on every prompt probe, so
- * no storage is touched and the gate stays free of I/O, clocks and RNG.
- */
+/** `rt` only satisfies the signature: probes pass `soulOverride`, so the gate stays free of I/O, clocks and RNG. */
 export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
   return {
     buildSystemPromptSync: (opts) => buildSystemPromptSync(rt, opts),

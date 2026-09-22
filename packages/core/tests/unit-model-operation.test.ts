@@ -1,9 +1,5 @@
-// The model-operation lifecycle seam (events/model-call.ts) — the durable
-// start/end pair every direct model operation writes, so a process killed
-// mid-call leaves a row naming what was in flight instead of nothing at all.
-//
-// Behaviour tests through the public seams: beginModelOperation around real
-// provider stubs, projected onto a real RunEventRecorder over SQLite.
+// The model-operation lifecycle seam (events/model-call.ts): a process killed mid-call leaves a row
+// naming what was in flight.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -32,8 +28,7 @@ describe('beginModelOperation — the start row exists while the call runs', () 
   test('an operation that starts and never ends leaves a start row naming it', () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => 'run-1');
-    // The frame opens, the call is in flight, the frame's owner dies. Nothing
-    // else happens — which is exactly the incident shape the row exists for.
+    // The frame's owner dies mid-call: the incident shape the row exists for.
     const op = beginModelOperation({ source: 'fast', report: () => {}, operations: sink }, 'complete');
     void op;
 
@@ -45,7 +40,6 @@ describe('beginModelOperation — the start row exists while the call runs', () 
     expect(start.op).toBe('complete');
     expect(start.operationId).toMatch(/^op-/);
     expect(start.usage).toBeUndefined();
-    // And the read side answers the question the row was written for.
     expect(recorder.unterminatedModelOperations().map((event) => event.operationId))
       .toEqual([start.operationId]);
   });
@@ -175,9 +169,7 @@ describe('the production seams open the frame before the request', () => {
     expect(rows[1].usage).toEqual({ input: 41, output: 7 });
   });
   test('createVercelAILLM.complete closes the frame as failed when the endpoint dies', async () => {
-    // This factory really dials its baseURL, so the honest stub is an unroutable
-    // one — which makes this the transport-failure case: the pair must still
-    // close, naming the fault, and leave nothing unterminated.
+    // This factory really dials its baseURL, so an unroutable stub makes this the transport-failure case.
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
 

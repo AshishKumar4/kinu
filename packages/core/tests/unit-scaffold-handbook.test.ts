@@ -1,9 +1,5 @@
-// The Scaffold Handbook — the behaviour→site index the proposal prompt
-// navigates by (Harness Handbook, arXiv:2607.13285).
-//
-// What these pin: the handbook is DERIVED from the layer gate's taxonomy
-// (never a second copy of it), it is deterministic, and its scan of the live
-// scaffold source reads code rather than prose.
+// The Scaffold Handbook (Harness Handbook, arXiv:2607.13285): derived from the layer gate's taxonomy,
+// deterministic, and its scan reads code rather than prose.
 import { describe, expect, test } from 'bun:test';
 import { present } from '@kinu.run/test-utils';
 import { indexScaffoldSites, renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
@@ -49,8 +45,7 @@ describe('the handbook renders the layer gate’s taxonomy, not a second one', (
   });
 
   test('it makes no claim about which layers a bridge call reaches', () => {
-    // A hand-maintained reachability table would drift silently. The
-    // handbook indexes sites; it never asserts runtime reach.
+    // The handbook indexes sites; it never asserts runtime reach.
     expect(handbook).not.toMatch(/host\.\w+\(\)\s+reaches\s+(context-assembly|every layer)/);
   });
 });

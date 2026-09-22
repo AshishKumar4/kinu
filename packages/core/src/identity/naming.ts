@@ -8,15 +8,7 @@ import { nanoid } from '../utils/nanoid';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
 
-/** URL-safe slug for a stable id: lowercased, hyphenated, trimmed, capped at 24
- *  characters.
- *
- *  Module-private, because the 24 is a MECHANISM and not a contract. It had two
- *  external callers, both minting a subordinate name, and both wrote
- *  `.slice(0, 48)` after it in the belief that the cap was theirs to widen — a
- *  bound that had already been applied and could not be. {@link
- *  mintSubordinateName} is the seam those callers actually wanted, so the slug
- *  stops being something a caller can half-apply. */
+/** URL-safe slug capped at 24 chars. Private: callers mint names via {@link mintSubordinateName}. */
 function slugifyName(text: string): string {
   return text.toLowerCase().trim()
     .replace(/[^a-z0-9]+/g, '-')
@@ -25,27 +17,7 @@ function slugifyName(text: string): string {
     .replace(/-+$/, '');
 }
 
-/**
- * The name a newly created subordinate is addressed by: its slugified role, plus
- * a random suffix so two children of one role never collide.
- *
- * ONE rule and ONE entropy source, because there were two of each. Both backends
- * inlined this same slug-and-suffix shape and then disagreed on the suffix —
- * `nanoid(6)` over 36 characters on Cloudflare, six hex digits of a UUID
- * locally — so identical roles minted names of two different collision
- * strengths depending on where the agent happened to run, and the weaker of the
- * two was nobody's decision. `nanoid` is core's own generator and the stronger
- * suffix, so it is the one that survives.
- *
- * Both call sites also cut the slug at 48 AFTER {@link slugifyName} had already
- * cut it at 24, so that bound never bounded anything; it is gone rather than
- * reconciled, and the 24 the callers were really getting is the 24 they keep.
- *
- * The result satisfies the contract `spawnSubordinate` enforces on a name —
- * lowercase, URL-safe, at most 64 characters — because `nanoid`'s alphabet is
- * lowercase alphanumeric and a role that slugifies to nothing is named for what
- * it is instead of arriving as a bare suffix.
- */
+/** Slugified role plus a random suffix so children of one role never collide; stays within `spawnSubordinate`'s 64-char lowercase contract. */
 export function mintSubordinateName(role: string): string {
   return `${slugifyName(role) || 'subordinate'}-${nanoid(6)}`;
 }
@@ -155,7 +127,7 @@ export function resolveWorkspaceTitle(opts: {
   purpose?: string;
   slug: string;
 }): string {
-  // A blank title is no title at every level: the next source answers for it.
+  // A blank title at any level falls through to the next source.
   const explicit = opts.explicit?.trim();
 
   if (explicit !== undefined && explicit !== '') return explicit;
@@ -169,27 +141,12 @@ export function resolveWorkspaceTitle(opts: {
   return opts.slug;
 }
 
-/**
- * The longest workspace address a preview hostname carries.
- *
- * A DNS label holds 63 characters; the hosted preview label spends 32 of them on
- * the port, capability handle, token and their separators
- * (`preview/nimbus-preview-host.ts`), so the address is the remaining 31.
- * Every address {@link workspaceSlug} mints fits (adjective ≤ 11, noun ≤ 8, 8 hex
- * digits, two hyphens = 29). A chosen one is refused at creation rather than
- * truncated: a truncated address would name a different workspace.
- */
+/** DNS label (63) minus the 32 the preview label spends on port, handle and token (`preview/nimbus-preview-host.ts`). Refused, not truncated: a truncated address names a different workspace. */
 const WORKSPACE_ADDRESS_MAX = 31;
 
 const WorkspaceAddressSchema = v.pipe(v.string(), v.maxLength(WORKSPACE_ADDRESS_MAX), v.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/));
 
-/**
- * Why a name cannot be a workspace address, or null when it can. One grammar
- * for creation (cloud create, fork) and for the preview host that carries the
- * address: lowercase letters, digits and hyphens, at most
- * {@link WORKSPACE_ADDRESS_MAX} characters, no leading or trailing hyphen. DNS
- * folds case, so an address is lowercase or it is ambiguous.
- */
+/** Why a name cannot be a workspace address (and preview hostname label), or null. Lowercase only: DNS folds case. */
 export function workspaceAddressRefusal(name: string): string | null {
   if (v.safeParse(WorkspaceAddressSchema, name).success) return null;
 
@@ -197,15 +154,9 @@ export function workspaceAddressRefusal(name: string): string | null {
     + ` (a label holds lowercase letters, digits and hyphens, at most ${WORKSPACE_ADDRESS_MAX} characters, and carries no case)`;
 }
 
-
 /**
- * The workspace's permanent address: a neutral memorable pair and an id
- * suffix. Mission text belongs in the editable display name and SOUL.md, never
- * in URLs, Durable Object names, or logs.
- *
- * The suffix reads id digits the adjective and noun do not. Sharing them made
- * the whole slug a function of the first four hex digits and left only 65,536
- * possible addresses.
+ * Permanent address: memorable pair plus id suffix; mission text never goes in URLs, DO names or logs.
+ * The suffix uses id digits the words do not, or only 65,536 addresses exist.
  */
 export function workspaceSlug(id: string): string {
   const hex = id.replace(/-/g, '').toLowerCase();
@@ -214,8 +165,7 @@ export function workspaceSlug(id: string): string {
   return `${adjective}-${noun}-${hex.slice(4, 12)}`;
 }
 
-/** Deterministic title for a mission: a stated persona name wins, then the
- *  mission's own opening line. Empty when the mission yields neither. */
+/** A stated persona name wins, then the mission's opening line; empty when neither. */
 export function workspaceTitleFromMission(mission: string): string {
   const persona = extractPersonaName(mission);
   const named = persona === null ? '' : cleanTitle(persona);
@@ -225,8 +175,7 @@ export function workspaceTitleFromMission(mission: string): string {
   return cleanTitle(deriveWorkspaceTitle(mission));
 }
 
-/** Deterministic identity for a new workspace: a neutral permanent slug and
- *  the best title the mission yields. */
+/** Neutral permanent slug plus the best title the mission yields. */
 export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
   const { adjective, noun } = memorableWords(id.replace(/-/g, '').toLowerCase());
 
@@ -237,55 +186,30 @@ export function fallbackWorkspaceIdentity(mission: string, id: string): Suggeste
   };
 }
 
-/**
- * Who a shown title came from, and therefore who may replace it.
- *
- *   'user'  somebody typed it. No automatic path replaces it.
- *   'auto'  the system wrote it: the codename an actor is born with, the
- *           stand-in derived from what it was created for, or a model's name.
- *
- * Exactly the two values every account's `user_workspaces` CHECK admits. A
- * stand-in and a model's name are both 'auto'; what separates them is WHEN a
- * naming pass runs, which {@link WorkspaceTitleState.standIn} carries.
- */
+/** Who a shown title came from: 'user' is never replaced automatically; 'auto' is system-written. Matches the `user_workspaces` CHECK. */
 export type NameOrigin = 'user' | 'auto';
 
-/** A stored origin as the title policy reads it: the owner's only when it
- *  says 'user'. A value no current writer produces, which storage written by
- *  an earlier build can hold, was the system's title too. */
+/** Only 'user' is the owner's; unknown legacy values count as 'auto'. */
 export function nameOriginOf(stored: string): NameOrigin {
   return stored === 'user' ? 'user' : 'auto';
 }
 
-/** A workspace's naming state, as both backends keep it: the raw slug the
- *  workspace is addressed by, the shown title, how that title came about, and
- *  the mission to title from (the opening request, or SOUL.md's mission). */
 export interface WorkspaceTitleState {
   slug: string;
   displayName: string | null;
   nameOrigin: NameOrigin | null;
   mission: string;
-  /**
-   * The shown title is the stand-in a NEW actor was given until a model names
-   * it, so the model's name may replace it however un-placeholder it reads.
-   * Never stored: the caller knows it from where it runs, the cf root's
-   * genesis turn or a hosted actor's run of the message its stand-in came
-   * from. Every other pass replaces only a placeholder, which is what keeps a
-   * model's name from being asked for again on later turns.
-   */
+  /** Shown title is a new actor's stand-in, so the model's name may replace it. Never stored; the caller knows it from context. */
   standIn?: boolean;
 }
 
 export interface WorkspaceTitlePlan {
-  /** Deterministic title to persist immediately, or null when the shown title
-   *  is not a placeholder or the mission yields none, and only the model
-   *  names it. */
+  /** Title to persist immediately, or null when only the model names it. */
   provisional: string | null;
   mission: string;
 }
 
-/** FNV-1a over the slug, as eight hex digits: the one input the word tables
- *  need, for a slug that carries no hex of its own. */
+/** FNV-1a of the slug as eight hex digits, for the word tables. */
 function slugHex(slug: string): string {
   let hash = 0x811c9dc5;
 
@@ -294,19 +218,14 @@ function slugHex(slug: string): string {
   return hash.toString(16).padStart(8, '0');
 }
 
-/** The name an actor is born with when nobody named it: two memorable words
- *  fixed by its slug, so every surface shows the same one and a tab never
- *  reads "Untitled". A placeholder in the title policy's eyes, which is what
- *  lets the first message replace it. */
+/** Default actor name fixed by its slug; a placeholder, so the first message may replace it. */
 export function codenameFor(slug: string): string {
   const { adjective, noun } = memorableWords(slugHex(slug));
 
   return `${capitalize(adjective)} ${capitalize(noun)}`;
 }
 
-/** A title nobody chose: absent, an echo of the raw slug, or the slug's own
- *  codename — what an actor created with no purpose shows until its first
- *  message titles it. */
+/** Absent, the raw slug, or the slug's codename. */
 export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
   const shown = displayName?.trim() ?? '';
 
@@ -314,28 +233,14 @@ export function isPlaceholderWorkspaceTitle(displayName: string | null | undefin
 }
 
 /**
- * Whether an AUTOMATIC title may replace the current one: only a title the
- * system itself wrote.
- *
- * An owner's name is never touched. An origin nobody recorded is the owner's
- * too: a row written before origins existed was named by whoever created it,
- * and the cloud registry has always read such a row that way. The CLI read it
- * as "never titled" and titled it, so one workspace was renamed by one backend
- * and left alone by the other; this is the stricter reading, once.
- *
- * Asked twice per title — by the plan, and again by every `persist`, because a
- * manual rename can land while the model is thinking and the owner's choice
- * wins that race.
+ * Only a system-written title may be auto-replaced; an unrecorded origin counts as the owner's.
+ * Checked again on every `persist`: a manual rename can land while the model is thinking.
  */
 export function autoTitleMayReplace(currentOrigin: NameOrigin | null | undefined): boolean {
   return currentOrigin === 'auto';
 }
 
-/**
- * The `persist` effect for a backend whose naming state is its actor config:
- * the race check and the write, in one place, so no backend can spell the
- * check for itself. False says the owner claimed the title first.
- */
+/** Race check plus write for a config-backed actor; false means the owner claimed the title first. */
 export function persistAutoTitle(
   config: Pick<AgentConfigStore, 'getNameOrigin' | 'setDisplayNameOrigin'>, title: string,
 ): boolean {
@@ -346,18 +251,8 @@ export function persistAutoTitle(
 }
 
 /**
- * The shared plan/persist title policy for a backend whose actors are spoken to
- * without a chat session's `auto_title` terminal effect — a hosted subordinate,
- * whose first admitted message is its brief.
- *
- * Called twice for the message that names an actor. Admission calls it without
- * `suggest`, because a model call inside the request that hands the work over
- * delays the handoff, and lands the stand-in over the codename. The runner
- * calls it again with `suggest` once that turn is over, when the title shown is
- * exactly the stand-in THIS message yields, so the model's name replaces it. A
- * later message yields other text, so a name a model chose is not asked for
- * again. Answers whether the shown title changed, which is what the caller
- * announces on.
+ * Title policy for actors with no chat `auto_title` effect. Admission calls without `suggest` (a model call would delay handoff);
+ * the runner calls again with `suggest` once the turn ends. Returns whether the shown title changed.
  */
 export async function titleActorFromMessage(
   actor: Pick<ActorHandle, 'name' | 'config'>,
@@ -384,13 +279,7 @@ export async function titleActorFromMessage(
   return titled !== null;
 }
 
-/** Decide whether a workspace should be auto-titled, and from what.
- *
- *  `null` means leave it alone: the title is the operator's (or nobody's, see
- *  {@link autoTitleMayReplace}), there is no mission to title from, or it
- *  already carries a title and this pass is not the one that title's naming is
- *  owed by ({@link WorkspaceTitleState.standIn}). A placeholder gets the
- *  deterministic stand-in first; a stand-in gets only the model's name. */
+/** Null means leave the title alone. A placeholder gets the deterministic stand-in first; a stand-in gets only the model's name. */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
   if (!autoTitleMayReplace(state.nameOrigin)) return null;
 
@@ -404,21 +293,8 @@ export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePl
 }
 
 /**
- * Auto-title a workspace: persist the deterministic stand-in at once so a
- * placeholder never survives a failed model call, then write the model's name
- * over it.
- *
- * Both writes are 'auto', so nothing stored marks the stand-in as one. The pass
- * that writes it asks the model in the same breath; a pass that finds it later
- * replaces it only when its caller says it is one ({@link
- * WorkspaceTitleState.standIn}). Every other pass reads a title that is not a
- * placeholder as named and asks no model.
- *
- * A failed generation is not swallowed here. The deterministic title has
- * already landed by then, so it stands whatever happens next, and the caller
- * is the one that knows whether a titling failure is worth reporting — a
- * catch here reported "titled" for a dead review model, an unroutable
- * provider and a failing `persist` alike.
+ * Persist the stand-in first so a placeholder never survives a failed model call, then the model's name.
+ * Generation errors propagate: the caller decides whether a titling failure matters.
  */
 export async function applyWorkspaceTitle(
   state: WorkspaceTitleState,
@@ -451,8 +327,7 @@ export async function applyWorkspaceTitle(
   return title;
 }
 
-/** System prompt paired with workspaceTitlePrompt — shared by the CLI's
- *  local naming call and the server's cloud display-name generation. */
+/** System prompt paired with workspaceTitlePrompt. */
 export const WORKSPACE_TITLE_SYSTEM_PROMPT = 'You create short, useful names for persistent agent workspaces.';
 
 export function workspaceTitlePrompt(mission: string): string {
@@ -470,11 +345,8 @@ export function workspaceTitlePrompt(mission: string): string {
   ].join('\n');
 }
 
-/** The title out of a {@link workspaceTitlePrompt} response, or null when the
- *  model returned nothing usable. Only a title: the slug is not the model's to
- *  choose (see {@link workspaceSlug}). */
+/** Null when the model returned nothing usable. The slug is not the model's to choose. */
 export function parseWorkspaceTitle(raw: string): string | null {
-  // The one failure a title parse tolerates: the model did not return JSON.
   const parsed = tolerate(() => extractJsonObject(raw), 'malformed-input');
 
   if (parsed === undefined) return null;
@@ -485,24 +357,7 @@ export function parseWorkspaceTitle(raw: string): string | null {
   return cleanTitle(title.output.title) || null;
 }
 
-/**
- * Ask a model for a workspace title, and read its answer.
- *
- * The three pieces — the system prompt, the user prompt, and the parse — were
- * already core; the COMPOSITION of them was not, so each backend assembled the
- * same three in its own order and a fourth caller would have assembled them
- * again.
- *
- * `complete` takes the system half separately rather than this seam taking an
- * {@link LLM}, because `LLM.complete(prompt)` has no system channel: one
- * backend passes it as `generateText`'s `system`, the other through its routed
- * lane factory. That difference is genuinely per backend; which prompts to send
- * is not.
- *
- * Returns null when the model returned nothing usable. A model that THROWS is
- * not caught here — whether a failed title is fatal is the caller's policy, and
- * on both backends it is not.
- */
+/** `complete` takes the system prompt separately because `LLM.complete` has no system channel. Model errors propagate. */
 export async function suggestWorkspaceTitle(
   complete: (system: string, prompt: string) => Promise<string>,
   mission: string,
@@ -516,8 +371,6 @@ function extractPersonaName(mission: string): string | null {
   return match?.[1] ?? null;
 }
 
-
-/** The memorable pair a workspace with nothing to be named after gets. */
 function memorableWords(hex: string) {
   return {
     adjective: FALLBACK_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % FALLBACK_ADJECTIVES.length],
@@ -538,21 +391,14 @@ function cleanTitle(value: string): string {
     .trim();
 }
 
-/** The one workspace-name grammar. Named so the throwing gate and the
- *  predicate below cannot drift into two different ideas of a valid name. */
+/** Shared by the throwing gate and the predicate so they cannot drift. */
 const WORKSPACE_NAME = /^[a-zA-Z0-9._-]{1,64}$/;
 
-/** Whether a name COULD be a workspace's. For a caller that is asking a
- *  question rather than admitting a value — feedback attribution asks the
- *  registry only about names the registry could hold, so a malformed one is
- *  refused here instead of arriving as a thrown error from a Durable Object
- *  that no caller can tell apart from an outage. */
+/** Predicate form, so a malformed name is refused here instead of surfacing as a DO error indistinguishable from an outage. */
 export function isWorkspaceName(name: string): boolean {
   return WORKSPACE_NAME.test(name);
 }
 
-/** Agent names follow the same rule. The DO id system already restricts to
- *  printable ascii; this is an extra-strict guard at the API boundary. */
 export function validateWorkspaceName(name: string): void {
   if (!isWorkspaceName(name)) {
     throw new Error('Invalid workspace name. Use alphanumerics, dot, underscore and dash only (max 64 chars).');

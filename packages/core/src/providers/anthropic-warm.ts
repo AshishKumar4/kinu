@@ -1,19 +1,6 @@
 /**
- * One prompt-cache warm on Anthropic's Messages endpoint.
- *
- * The RAW POST, not the SDK, and for one reason: a warm must re-send the
- * previous request's own body ("Do not change a byte of the prefix",
- * docs/research/harness/anthropic-sources.md §2, read 2026-09-13), and that
- * body is exactly what ai v6 hands back as `StepResult.request.body`. Passing
- * it through a second SDK assembly would re-serialize tools, system and
- * messages from re-derived values and could only ever match by luck. The
- * credential and the retry policy still come from the provider's own authed
- * fetch, so the request carries the headers the turn's requests carry —
- * "Re-send the request's headers as well as its body."
- *
- * Shaped by {@link warmRequestBody}: `max_tokens: 0`, non-streaming. The
- * answer is read ONLY for its usage block; its content is discarded, which is
- * the point of a request that is allowed to generate nothing.
+ * One prompt-cache warm: a raw POST re-sending the previous request's exact body with `max_tokens: 0`,
+ * through the provider's authed fetch so the headers match too.
  */
 
 import * as v from 'valibot';
@@ -25,10 +12,7 @@ import type { ProviderDeps } from './types';
 import type { Usage } from '../usage';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 
-/** The one field a warm reads back. `looseObject` because the answer carries a
- *  whole message beside it and a warm has no business narrowing the vendor's
- *  reply; the usage block itself is loose for the same reason `Usage`'s
- *  normalizer is — a field the vendor adds tomorrow must not fail the parse. */
+/** The usage block a warm reads; loose so a field the vendor adds cannot fail the parse. */
 const WarmResponseSchema = v.looseObject({ usage: v.optional(JsonObjectSchema) });
 
 export async function warmAnthropicCache(input: {
@@ -54,10 +38,7 @@ export async function warmAnthropicCache(input: {
   });
 
   if (!response.ok) {
-    // The STATUS and the vendor's own words, carried as values: the refusal is
-    // a fact about this request, not a code to guess at. The caller retires the
-    // chain on it rather than retrying — a warm that failed costs one cache
-    // write on the next real turn, and a retry loop costs one request a second.
+    // Status and vendor text are carried as values; the caller retires the chain rather than retrying.
     throw new KinuError(
       'unavailable',
       `the cache warm answered ${response.status}: ${(await response.text()).slice(0, 400)}`,

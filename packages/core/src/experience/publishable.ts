@@ -1,33 +1,4 @@
-/**
- * What a workspace has EARNED the right to share.
- *
- * Publishing is not "copy my state somewhere else" — an unproven artifact
- * crossing into the owner's other workspaces is pollution, and Agent-KB's own
- * caveat (EvoAgentBench finds no automatic method sustains positive gain) is a
- * reason to move only what already carries local evidence. So each kind has one
- * bar, stated here and nowhere else, and every candidate carries the evidence
- * that cleared it:
- *
- *   craft  — a crafted tool with real usage and a time-decayed effective score
- *            at or above the injection threshold. Same number the injection
- *            filter uses, so "good enough to keep offering the model here" and
- *            "good enough to offer another workspace" are one judgement.
- *   lesson — a CORROBORATED lesson. Provisional lessons are self-scored prose
- *            with no user signal behind them; they are already kept out of this
- *            workspace's own MEMORY.md, and they stay out of the library.
- *   fact   — confidence at or above the publish bar. A fact carries no outcome
- *            grading (nothing marks a keyed value right or wrong), so its own
- *            confidence is the only honest local signal. The real protection
- *            for the receiver is on the import side: the misevolution gate and
- *            provisional-until-corroborated.
- *   scaffold — the LIVE version, promoted by this workspace's own shadow gate
- *            on a record that still clears `decidePromotion`, which has then
- *            served {@link EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS} graded turns
- *            with no misevolution flag against anything this workspace wrote in
- *            that window. Nothing else in the archive qualifies: a pending
- *            version is mid-trial, a rolled-back one lost, a historical one was
- *            superseded, and the v0 bootstrap was never judged at all.
- */
+// Publish bars per kind: only artifacts with local evidence cross into the owner's other workspaces.
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -46,40 +17,19 @@ import {
 } from '../scaffold/shadow';
 import type { ExperienceKind, PublishableCandidate } from './types';
 
-/** A fact below this confidence has not settled enough to be worth another
- *  agent's context. */
 export const EXPERIENCE_MIN_FACT_CONFIDENCE = 0.8;
 
-/** Graded turns a promoted scaffold must serve here before it may cross into
- *  another workspace.
- *
- *  Not a new number: it is `DEFAULT_SHADOW_CONFIG.minTrials`, the count of
- *  turns the promotion gate already demands as evidence before it will decide
- *  anything at all (shadow.ts, Monte-Carlo calibrated). A promoted version has
- *  won that many trials against the incumbent OFFLINE; this asks for the same
- *  quantity of evidence again from turns the user actually lived through, which
- *  is the one signal a shadow judge cannot supply. Sharing a loop that has run
- *  in anger fewer times than its own gate required to accept it would be
- *  exporting the judge's opinion, not experience. */
+/** Live graded turns required after promotion: the same evidence count the shadow gate demands offline. */
 const EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS = DEFAULT_SHADOW_CONFIG.minTrials;
 
-/** The stores a workspace publishes from. */
 export interface PublishSources {
   sql: SqlExecutor;
-  /** Whose artifacts these are. The scaffold pointer and its trial record are
-   *  per-actor, so "the version this workspace runs" is a question only an
-   *  actor-scoped read can answer. */
   actor: ActorHandle;
   craftStore: CraftStore;
   facts: FactsStore;
-  /** One scaffold version's source, as `scaffold/shadow.ts` reads it. A seam
-   *  rather than the whole runtime: publishing needs exactly this one read out
-   *  of the agent-writable VFS and nothing else from it. */
   readScaffoldVersion(version: number): Promise<string | null>;
 }
 
-/** Why a named artifact may not be published. Phrased for the agent reading a
- *  tool error, since that is the only place it surfaces. */
 export type PublishRefusal = { refused: string };
 
 function titleOf(text: string, maxChars = 90): string {
@@ -184,11 +134,7 @@ interface ScaffoldVersionRow { version: number; status: ScaffoldStatus; rational
 
 const VetoSurfaceSchema = v.object({ surface: v.optional(v.string()) });
 
-/** Misevolution vetoes recorded in `[from, to]` against something this
- *  workspace WROTE — a scaffold proposal, an extracted craft, a tool the model
- *  persisted. Vetoes on the `import` surface are excluded: those are another
- *  workspace's text refused at this boundary, which says nothing about the loop
- *  that was running when it arrived. */
+/** Vetoes in `[from, to]` on this workspace's own writes; `import`-surface vetoes are excluded. */
 function ownMisevolutionFlags(
   sql: SqlExecutor, actor: ActorHandle, from: number, to: number,
 ): number {
@@ -200,12 +146,7 @@ function ownMisevolutionFlags(
       AND created_at BETWEEN ${from} AND ${to}`;
 
   return rows.filter((row) => {
-    // `data` is recordMisevolutionVeto's own write, so a payload that will not
-    // parse is corruption in our row rather than a foreign format to shrug at —
-    // the same reading scaffold/archive.ts takes of these events. It still must
-    // not throw the publish check: one bad row counts as an own-surface flag
-    // (fail closed) and is reported, because a loop that may be evolving unsafe
-    // artifacts is not one to hand another workspace on a read error.
+    // An unparsable row is our own corruption: count it as a flag (fail closed) and report it.
     const decoded = tolerate(() => parseJsonValue(row.data ?? '{}'), 'malformed-input');
     const parsed = v.safeParse(VetoSurfaceSchema, decoded);
 
@@ -252,10 +193,7 @@ async function scaffoldCandidate(
     };
   }
 
-  // Promoted, but promoted on WHAT? Re-read the version's own trial record
-  // through the gate that decides promotions, rather than restating its rule:
-  // the v0 bootstrap (never tried) and a hand-forced promote (thin record) both
-  // carry status='current' and neither earned it.
+  // status='current' is not enough: the v0 bootstrap and forced promotes never earned it.
   const record = readShadowVerdict(src.sql, src.actor, version).summary;
 
   const gate = decidePromotion({
@@ -272,12 +210,7 @@ async function scaffoldCandidate(
     };
   }
 
-  // Probation: the graded turns this version SERVED. `turn_outcomes` stamps the
-  // live version on every verdict, and a version is only live after promotion,
-  // so these rows are exactly "turns since promotion" with no timestamp
-  // bookkeeping of their own. The veto window runs from the earliest served
-  // turn through now rather than ending at the Nth turn: a veto drawn after
-  // probation still says what is running here evolves unsafe artifacts.
+  // Rows stamped with this version are exactly the turns since promotion; the veto window runs to now.
   const turns = src.sql<{ created_at: number }>`
     SELECT created_at FROM turn_outcomes
     WHERE actor_id = ${src.actor.actorId} AND scaffold_version = ${version}
@@ -325,7 +258,6 @@ function isRefusal(value: PublishableCandidate | PublishRefusal): value is Publi
   return 'refused' in value;
 }
 
-/** Resolve one named artifact into a publishable candidate, or say why not. */
 export async function findPublishable(
   src: PublishSources,
   kind: ExperienceKind,
@@ -340,8 +272,6 @@ export async function findPublishable(
   }
 }
 
-/** Everything this workspace could share right now, newest evidence first
- *  within each kind. The agent's "what do I have to offer" view. */
 export async function listPublishable(
   src: PublishSources,
   options: { limit?: number; now?: number } = {},
@@ -363,9 +293,7 @@ export async function listPublishable(
     .map((f) => factCandidate(src, f.key))
     .filter((c): c is PublishableCandidate => !isRefusal(c));
 
-  // At most one scaffold: the live version is the only publishable one and
-  // there is exactly one of it. Listed first because it can never be crowded
-  // out of a limit by a workspace with many crafts.
+  // The single live scaffold goes first so crafts cannot crowd it out of the limit.
   const live = getCurrentScaffoldVersion(src.sql, src.actor);
   const scaffold = live === null ? null : await scaffoldCandidate(src, String(live), now);
   const scaffolds = scaffold !== null && !isRefusal(scaffold) ? [scaffold] : [];

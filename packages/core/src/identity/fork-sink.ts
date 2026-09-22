@@ -1,101 +1,51 @@
 /**
- * Workspace fork — the staged file plan.
- *
- * The wire (`identity/fork-transfer.ts`) carries a file as bounded byte ranges;
- * this module is where those ranges LAND before the file exists. It owns the
- * narrow native filesystem port a fork needs, the protected-destination
- * exception, and the sibling-temp plan that turns "a sequence of ranges" into
- * "one file, published atomically or not at all".
- *
- * Its own module because a fork's frames arrive on several activations of one
- * Durable Object, which makes the staging a thing with a LIFETIME rather than a
- * step inside one call: a plan adopts what an interrupted predecessor staged,
- * and the whole-file digest is read back out of that staging instead of folded
- * in memory. None of that is the wire's business.
+ * Workspace fork staged file plan: where streamed byte ranges land before a file exists.
+ * Frames arrive across several DO activations, so a plan adopts an interrupted predecessor's staging.
  */
 
 import { createHash } from 'node:crypto';
 import { FORK_FRAME_BYTES } from './fork-transfer';
 
-/** The five native operations a streamed fork needs. This deliberately is not
- * VFS: an ordinary caller must not receive raw range-write authority. */
+/** Native operations a streamed fork needs; deliberately not VFS (no raw range-write authority for ordinary callers). */
 export interface ForkNativeFilePort {
   truncate(path: string, size: number): Promise<void>;
   writeRange(path: string, offset: number, bytes: Uint8Array): Promise<void>;
-  /** One bounded range of a staged file. Required because the whole-file digest
-   *  is computed by reading the staging back: the isolate that wrote a range
-   *  may not be the one that finishes the file, so the check cannot be a hash
-   *  carried in memory. Ranged, so the read-back costs one range at a time. */
+  /** One bounded range of a staged file. The digest is read back from staging because
+     *  the isolate that wrote a range may not be the one that finishes the file. */
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
   rename(from: string, to: string): Promise<void>;
   unlink(path: string): Promise<void>;
 }
 
-/** Metadata produced when a sink commits one file. The protected SOUL sink
- * carries its mission here rather than letting the receiver decode a file. */
+/** Metadata from committing one file; the protected SOUL sink carries its mission here. */
 export interface ForkFileCommit {
   mission?: string;
 }
 
-/**
- * A destination that cannot be published by renaming a staged temp over it.
- *
- * A protected destination never gets a temp at all. Its bytes are handed over
- * exactly as they arrived, from the ONE frame it is allowed to occupy, so the
- * protected write costs no second copy and no read-back — and a protected file
- * too large for one frame is refused rather than quietly held whole.
- */
+/** A destination that cannot be published by renaming a temp over it: its bytes come from one
+ *  frame, with no temp; a file too large for one frame is refused. */
 export interface ForkProtectedPublisher {
   owns(targetPath: string): boolean;
   publish(targetPath: string, bytes: Uint8Array): Promise<ForkFileCommit>;
 }
 
-/** Fork-specific staged file port. This deliberately is not VFS: range writes
- * and atomic temp-to-destination commit are native capabilities. */
+/** Fork-specific staged file port; deliberately not VFS. */
 export interface ForkFileSink {
-  /**
-   * Open `path` for staging.
-   *
-   * `staged` is how many of its bytes the target already holds, which is zero
-   * for a file starting now and non-zero for one an interrupted activation left
-   * part-way through. A sink ADOPTS that staging rather than restarting it, so a
-   * fork evicted mid-file continues from the next byte instead of resending the
-   * file or failing.
-   */
+  /** Open `path` for staging. `staged` is bytes the target already holds; a sink adopts
+     *  that staging so a fork evicted mid-file continues from the next byte. */
   beginFile(path: string, staged: number): Promise<void>;
-  /** One range, and whether it completes the file — a sink that can only
-   *  publish whole content refuses a file that will span frames HERE, before
-   *  it holds anything. */
+  /** One range; a whole-content-only sink refuses a multi-frame file here, before holding anything. */
   writeRange(path: string, offset: number, bytes: Uint8Array, last: boolean): Promise<void>;
-  /**
-   * The SHA-256 of the `bytes` this sink has staged for `path`.
-   *
-   * The receiver checks it against the digest the source declared before it
-   * commits. Computed by the sink because only the sink knows where the staging
-   * lives, and computed from the STAGING rather than from a running hash so the
-   * answer does not depend on one activation having seen every range.
-   */
+  /** SHA-256 of the staged `bytes` for `path`, computed from staging rather than a running hash
+     *  so it does not depend on one activation seeing every range. */
   stagedDigest(path: string, bytes: number): Promise<string>;
   commitFile(path: string): Promise<ForkFileCommit | void>;
   abortFile(path: string): Promise<void>;
 }
 
 /**
- * One sibling-temp file plan, backed by a narrow native filesystem port.
- *
- * The destination does not change until `commitFile`; a failed range or digest
- * deletes only this private sibling.
- *
- * The temp's NAME is derived from the destination and the transfer, so it is the
- * same name in every activation of one transfer. That is what lets a plan adopt
- * a staging an interrupted predecessor left: `beginFile` with bytes already
- * staged trims the temp to exactly those bytes and writes on from there, rather
- * than truncating work the target has already durably counted.
- *
- * `protect` is the exception a protected destination needs. Such a destination
- * stages nothing on disk: its single frame is held for the length of that one
- * frame and published through the protected write, so there is no temp to
- * rename and none to clean up.
+ * One sibling-temp file plan. The destination is untouched until `commitFile`. The temp name derives
+ * from destination and transfer so every activation of one transfer adopts the same staging.
  */
 export class NativeSinkPlan implements ForkFileSink {
   private target: string | null = null;
@@ -113,9 +63,7 @@ export class NativeSinkPlan implements ForkFileSink {
     this.target = path;
 
     if (this.protect?.owns(path)) {
-      // A protected destination is one frame in one activation, so there is no
-      // staging of it to inherit. Bytes counted against one means the transfer
-      // and this sink disagree about which destination is protected.
+      // A protected destination is one frame in one activation; staged bytes mean transfer and sink disagree.
       if (staged > 0) {
         throw new Error(
           `fork protected destination ${JSON.stringify(path)} cannot adopt ${staged} staged bytes; `
@@ -132,9 +80,7 @@ export class NativeSinkPlan implements ForkFileSink {
     this.temp = `${dir}.${name}.fork-${this.tempSuffix}.tmp`;
 
     if (staged === 0) await this.files.writeRange(this.temp, 0, new Uint8Array(0));
-    // Trim rather than truncate to zero: `staged` is what the target durably
-    // counted, and a range the interrupted activation wrote but never got to
-    // count must not survive as a tail nobody will overwrite.
+    // Trim, not truncate: a range written but never counted must not survive as a stale tail.
     await this.files.truncate(this.temp, staged);
   }
 
@@ -142,9 +88,7 @@ export class NativeSinkPlan implements ForkFileSink {
     if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
 
     if (this.temp === null) {
-      // A protected destination is published from one frame. A file that will
-      // not fit one is refused on its FIRST range, so nothing is ever held for
-      // a transfer that cannot finish.
+      // Refuse on the first range so nothing is held for a protected file that cannot fit one frame.
       if (!last) {
         throw new Error(
           `fork protected destination ${JSON.stringify(path)} spans more than one frame; `
@@ -163,14 +107,8 @@ export class NativeSinkPlan implements ForkFileSink {
     await this.files.writeRange(this.temp, offset, bytes);
   }
 
-  /**
-   * The digest of the staging, read back one bounded range at a time.
-   *
-   * `FORK_FRAME_BYTES` is the read bound, so verifying a file costs the same
-   * peak as receiving one frame of it however large the file is. A protected
-   * destination has nothing on disk to read: its one frame is still held, and
-   * that is what is hashed.
-   */
+  /** Digest of the staging, read back one `FORK_FRAME_BYTES` range at a time.
+     *  A protected destination hashes its held frame. */
   async stagedDigest(path: string, bytes: number): Promise<string> {
     if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
     const hash = createHash('sha256');
@@ -221,8 +159,7 @@ export class NativeSinkPlan implements ForkFileSink {
     return {};
   }
 
-  /** Drop what this file staged. A protected destination staged nothing on
-   *  disk, so there is only the held frame to release. */
+  /** Drop what this file staged (for a protected destination, the held frame). */
   async abortFile(path: string): Promise<void> {
     if (path !== this.target) return;
     const temp = this.temp;

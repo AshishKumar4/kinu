@@ -2,10 +2,8 @@ import { DEFAULT_WORKERS_AI_MODEL_ID } from './workers-ai';
 import type { ModelInfo } from './types';
 import type { ReasoningEffort } from './reasoning-effort';
 
-// Prefix-cache pricing (verified 2026-08-15 against the account model catalog;
-// affinity behavior was separately confirmed with live two-shot probes):
-// deepseek-v4-pro-0813, kimi-k2.6, kimi-k2.7-code, and glm-5.2 bill a discounted
-// cached-input rate. llama-4-scout, gpt-oss-*, and nemotron list no cached rate.
+// deepseek-v4-pro-0813, kimi-k2.6, kimi-k2.7-code, and glm-5.2 bill a discounted cached-input
+// rate; llama-4-scout, gpt-oss-*, and nemotron list none.
 
 export const WORKERS_AI_PREFERRED_MODEL_IDS = [
   DEFAULT_WORKERS_AI_MODEL_ID,
@@ -18,13 +16,12 @@ export const WORKERS_AI_PREFERRED_MODEL_IDS = [
   '@cf/google/gemma-4-26b-a4b-it',
 ];
 
-/** `reasoning_effort` per model page (read 2026-09-10), for the offline list
- *  only; the live list reads models.dev. llama-4-scout does not reason.
- *  https://developers.cloudflare.com/workers-ai/models/<name>/ */
+/** Offline `reasoning_effort` per https://developers.cloudflare.com/workers-ai/models/<name>/;
+ *  the live list reads models.dev. */
 const LOW_MEDIUM_HIGH: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 
 export const WORKERS_AI_FALLBACK_MODEL_CATALOG: ModelInfo[] = [
-  // Label/window per developers.cloudflare.com/workers-ai/models/glm-5.3 (read 2026-08-31).
+  // Per developers.cloudflare.com/workers-ai/models/glm-5.3.
   { id: DEFAULT_WORKERS_AI_MODEL_ID,                   label: 'GLM 5.3',                 capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1_048_576, inputModalities: ['text'], reasoningEfforts: LOW_MEDIUM_HIGH },
   { id: '@cf/deepseek-ai/deepseek-v4-pro-0813',        label: 'DeepSeek V4 Pro 0813',    capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1_048_576, inputModalities: ['text'], reasoningEfforts: LOW_MEDIUM_HIGH },
   { id: '@cf/moonshotai/kimi-k2.6',                    label: 'Kimi K2.6',               capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 262_144, reasoningEfforts: LOW_MEDIUM_HIGH },

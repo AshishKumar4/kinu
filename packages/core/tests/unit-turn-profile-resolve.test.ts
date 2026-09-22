@@ -1,13 +1,6 @@
 /**
- * Turn-profile resolution — every fallback, every refusal, and the narrowing
- * guarantee, proved against the public resolver.
- *
- * The two failures this file exists to keep impossible: a resolver that
- * silently substitutes a model when the configured one is unavailable (spend
- * and reproducibility both lie afterwards), and a role that widens what a turn
- * may do. Everything else here pins the contract's small surface: one tier
- * fallback rule, intersection-only actions, normalized skills, plan-narrows-
- * only, and output that is frozen and deterministic.
+ * Turn-profile resolution: a resolver must never silently substitute an unavailable model, and a
+ * role must never widen what a turn may do.
  */
 import { describe, expect, test } from 'bun:test';
 import {
@@ -28,8 +21,7 @@ const SCOUT: RoleDefinition = {
   tier: 'fast',
   preset: 'research',
   allowedTools: ['search', 'read'],
-  // Catalog-grade names only: whitespace and empties are runtime-input
-  // concerns, normalized by the resolver, refused by the wire schema.
+  // Catalog-grade names only: the resolver normalizes whitespace and the wire schema refuses empties.
   skills: [' web-search ', 'deep-read'],
 };
 
@@ -103,8 +95,7 @@ describe('tier resolution', () => {
   });
 
   test("a workspace model overrides the role's tier model and reports source 'workspace'", () => {
-    // The composer's picker writes a per-workspace spec; the turn runs on it
-    // rather than on the account default the role's tier names.
+    // A per-workspace pin from the composer's picker overrides the role's tier default.
     const profile = resolve({
       roleId: 'scout', availableTools: [], workspaceModel: 'm-pinned',
       provider: provider(['m-default', 'm-fast', 'm-pinned']),
@@ -113,8 +104,7 @@ describe('tier resolution', () => {
     expect(profile.tier).toEqual({
       id: 'fast', source: 'workspace', model: 'm-pinned', reasoningEffort: 'low',
     });
-    // The catalog slots stay the account's: fixed-tier lanes route through
-    // them, never through the pin.
+    // Catalog slots stay the account's: fixed-tier lanes never route through the pin.
     expect(profile.tiers.fast.model).toBe('m-fast');
   });
 
@@ -177,9 +167,7 @@ describe('tier resolution', () => {
 
 describe('provider availability', () => {
   test('a configured but unavailable model is an error, never a silent swap', () => {
-    // The fast tier names m-fast; the provider lost it. The failure must name
-    // the model — resolving to m-default instead would spend money the caller
-    // did not configure.
+    // Resolving to m-default instead would spend money the caller did not configure.
     expect(() => resolve({ roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: provider(['m-default']) }))
       .toThrow(/m-fast/);
     expect(() => resolve({ roleId: 'scout', availableTools: [], provider: provider(['m-default']) }))
@@ -195,12 +183,8 @@ describe('provider availability', () => {
     expect(message).toContain('rev-7');
   });
 
-  // A LISTING FAILURE IS NOT AN ABSENCE. `availableModels` is a positive list,
-  // so a model missing from it means either "the provider answered and does not
-  // have it" or "nobody managed to ask". Treating the second as the first is how
-  // one vendor's 503 came to refuse every turn on the account — including turns
-  // whose own tier runs somewhere else entirely, because the resolver checks all
-  // three slots.
+  // A listing failure is not an absence: treating it as one let one vendor's 503 refuse every turn on
+  // the account.
   const degraded = (models: string[]): ProviderCatalogSnapshot => ({
     revision: 'rev-7-degraded',
     availableModels: models,
@@ -213,39 +197,31 @@ describe('provider availability', () => {
       provider: degraded(['m-default']),
     });
 
-    // The configured model stands: it was never looked up, so nothing about it
-    // was disproved, and substituting m-default would be the silent swap the
-    // test above forbids.
+    // Never looked up, so nothing disproved it; substituting m-default is the swap forbidden above.
     expect(profile.tier).toEqual({
       id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low',
     });
   });
 
   test('the SAME missing model refuses once the listing is complete', () => {
-    // The pair that makes the distinction observable: identical catalog,
-    // identical availableModels, and the only difference is whether the
-    // snapshot admits a listing failed.
+    // Identical catalog and availableModels; only the snapshot's listing-failure admission differs.
     const clean: ProviderCatalogSnapshot = { revision: 'rev-7', availableModels: ['m-default'] };
 
     const asking = (snapshot: ProviderCatalogSnapshot) => () => resolve({
       roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: snapshot,
     });
 
-    // Absent and empty are the SAME assertion — "I enumerated everything" — so
-    // a producer with no failure channel is not accidentally treated as
-    // degraded, which would disable the check for every caller that predates it.
+    // Absent and empty both mean "enumerated everything", so producers without a failure channel are
+    // not treated as degraded.
     expect(asking(clean)).toThrow(/m-fast/);
     expect(asking({ ...clean, unavailableProviders: [] })).toThrow(/m-fast/);
-    // A degraded listing keeps the configured model: it was never looked up, so nothing disproved it.
     expect(asking(degraded(['m-default']))().tier).toEqual({
       id: 'fast', source: 'explicit', model: 'm-fast', reasoningEffort: 'low',
     });
   });
 
   test('a degraded listing does not refuse a turn over an unrelated tier slot', () => {
-    // The composed failure: `tierSlot` validates every configured tier, so
-    // before this rule an account pinning ANY tier to a degraded provider's
-    // model refused every turn, whatever tier that turn itself ran at.
+    // tierSlot validates every configured tier, so a degraded pin on one tier must not refuse other tiers.
     const profile = resolve({
       roleId: 'task', availableTools: [], provider: degraded(['m-default']),
     });
@@ -287,9 +263,7 @@ describe('role validation', () => {
 
   test('malformed ids, tiers and work modes refuse before any lookup', () => {
     expect(() => resolve({ roleId: 'Not_Valid' })).toThrow(/role id/);
-    // A malformed id is refused as an id; a well-formed id the catalog does
-    // not hold is refused as unknown, naming what it does hold. The removed
-    // tiers (#7) are unknown now, not aliases of the ones that replaced them.
+    // Removed tiers (#7) are unknown now, not aliases of their replacements.
     expect(() => resolve({ explicitTier: 'Mega!' })).toThrow(/explicit tier/);
     expect(() => resolve({ explicitTier: 'tiny' })).toThrow(/unknown tier "tiny": known tiers are fast, default, deep/);
     expect(() => resolve({ explicitTier: 'slow' })).toThrow(/unknown tier/);

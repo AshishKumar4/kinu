@@ -1,19 +1,5 @@
-// C2 — a depth-2 head's journal rows and its step rows must live in ONE store,
-// so the surface can read them.
-//
-// The defect: a recursive split that runs its HeadController with a journal
-// built over the INTERMEDIATE facet's own SQLite. A depth-1 head then writes its
-// children's spawn/report rows into its own Durable Object while the root holds
-// the step rows — and `HeadJournal.assembleRun` reads head_journal on the ROOT
-// and joins head_steps to it by head_id. With the two halves one DO apart the
-// join can never match, so a depth-2 head is unreadable from anywhere: the root
-// has steps with no head row, the facet has a head row nobody queries, and the
-// run renders with the child heads missing.
-//
-// `HeadJournalPort` is why that cannot happen: the controller does not own a
-// journal, it is handed one, and the CF facet hands it an RPC-backed port aimed
-// at the root. These tests assert the property that buys, and the last one
-// asserts the defect itself so the others cannot pass vacuously.
+// A depth-2 head's journal rows and step rows must share one store (the root), or assembleRun's join finds
+// nothing. `HeadJournalPort` hands the controller a journal aimed at the root.
 
 import { describe, expect, test } from 'bun:test';
 import { createTestSql, createTestActorsOver, present } from '@kinu.run/test-utils';
@@ -35,12 +21,7 @@ const mergeOutput: MergeOutput = {
   blind_spots: [],
 };
 
-/**
- * A finished head report. The trace is NOT carried here — a head writes each
- * step to the ROOT's journal as it lands (`HeadInferenceDeps.reportStep` →
- * `OrchestratorAgent.recordHeadStep` → `HeadJournal.appendStep`), so the report
- * only states how many there were. `stepSink` below is that path.
- */
+/** A finished head report; steps go to the root journal as they land, so it carries only the count. */
 function report(id: string, stepCount: number): HeadReport {
   return {
     id,
@@ -62,25 +43,18 @@ function freshStore() {
   const { db, sql } = createTestSql();
   initHeadsTables((ddl) => db.exec(ddl));
 
-  // Each store is a SEPARATE database, so each gets its OWN actors — the
-  // directory a handle validates against lives in the database that issued it,
-  // and the last test here turns on the two stores being genuinely apart.
+  // Separate databases, each with its own actors: a handle validates against the database that issued it.
   return { sql, actor: createTestActorsOver(db).main };
 }
 
-/**
- * Drive a split whose FIRST child recursively splits again, and let the caller
- * decide where the nested (depth-2) split journals. That single choice is the
- * whole defect: `nestedJournal === rootJournal` is the fixed behaviour, a
- * separate store is what shipped.
- */
+/** Drive a split whose first child splits again; the caller picks where the depth-2 split journals. */
 async function runSplitWithNestedSplit(opts: {
   rootJournal: HeadJournalPort;
   nestedJournal: HeadJournalPort;
-  /** Where a head's steps land. Always the ROOT in production: a facet reports
-   *  each step over its parent stub, never into its own storage. Passing it
-   *  separately from `nestedJournal` is what lets the third test reproduce the
-   *  defect — head rows one store away from the steps that describe them. */
+  /**
+   * Where head steps land: always the root in production. Separate from `nestedJournal` so a test can split
+   * them.
+   */
   stepSink: (headId: string, seq: number, step: { text: string; toolCalls: [] }) => void;
   afterNested?: (parentId: string) => void;
 }): Promise<{ depth1Id: string; depth2Ids: string[] }> {
@@ -113,8 +87,7 @@ async function runSplitWithNestedSplit(opts: {
         id: input.id,
         async run() {
           if (isFirst) {
-            // The intermediate head splits again. Its controller journals
-            // wherever `nestedJournal` points — the one variable under test.
+            // The intermediate head's controller journals wherever `nestedJournal` points.
             await new HeadController(nestedRuntime, opts.nestedJournal).run({
               parentHeadId: input.id,
               parentDepth: input.depth,
@@ -182,7 +155,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
 
     const { depth2Ids } = await runSplitWithNestedSplit({
       rootJournal: journal,
-      nestedJournal: journal, // the fix: one place for the whole tree
+      nestedJournal: journal,
       stepSink: (id, seq, step) => journal.appendStep(id, seq, step),
     });
 
@@ -195,8 +168,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     expect(row).not.toBeNull();
     expect(row?.depth).toBe(2);
 
-    // ...and so do the step rows, which is what the surface joins to it. This is
-    // the assertion that was impossible before: steps and head row one DO apart.
+    // ...and so do the step rows the surface joins to it.
     const steps = journal.readSteps(depth2Id);
     expect(steps.length).toBe(2);
     expect(steps[0]?.text).toContain(depth2Id);
@@ -212,31 +184,23 @@ describe('C2 — a depth-2 head is readable from the root', () => {
       stepSink: (id, seq, step) => journal.appendStep(id, seq, step),
     });
 
-    // The denominator this whole file turns on: a run that never recursed would
-    // satisfy every assertion below vacuously, and "STEPS 0" is exactly what a
-    // vacuous pass looks like.
+    // The recursion happened; otherwise every assertion below passes vacuously.
     expect(depth2Ids.length).toBe(1);
     const depth2Id = depth2Ids[0];
 
-    // readRun is what the Exploration surface renders — the real reader, not a
-    // hand-rolled query, so this asserts the user-visible outcome.
+    // readRun is what the Exploration surface renders.
     const run = present(journal.readRun('root-run'), 'the root-run record');
     const rendered = present(run.heads.find((h) => h.id === depth2Id), 'the depth-2 head in the run');
 
     expect(journal.readSteps(depth2Id).length).toBe(2);
-    // `lastStepAt` is `MAX(head_steps.created_at)` over the LEFT JOIN in
-    // assembleRun. It is the field that reads null — and renders as "STEPS 0",
-    // no progress, a branch that looks dead — whenever the head row and its
-    // steps are in different stores. Non-null AND positive: a LEFT JOIN that
-    // matched nothing yields null here, never 0.
+    // `lastStepAt` is MAX(head_steps.created_at) over assembleRun's LEFT JOIN: null when the head row and steps
+    // are in different stores.
     expect(rendered.lastStepAt).not.toBeNull();
     expect(present(rendered.lastStepAt, 'the depth-2 head last step time')).toBeGreaterThan(0);
   });
 
   test('journalling the nested split elsewhere is what made a depth-2 head unreadable', async () => {
-    // The pre-fix wiring, reproduced exactly: the intermediate head keeps its own
-    // journal while its children's steps still go to the root. Without this test
-    // the two above could pass for reasons unrelated to where the rows land.
+    // Split stores: the intermediate head keeps its own journal while its children's steps go to the root.
     const root = freshStore();
     const intermediateFacet = freshStore();
     const rootJournal = new HeadJournal(root.sql, root.actor);
@@ -252,15 +216,13 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // Same denominator: the depth-2 head really was spawned and really did report.
     expect(depth2Ids.length).toBe(1);
 
-    // The steps DID arrive at the root — and are orphaned there, because the head
-    // row they belong to went to the facet. Nothing errored; the LEFT JOIN simply
-    // has no row to hang them on, so the head is absent from the rendered run.
+    // The steps reach the root but are orphaned: the head row is on the facet, so the head is missing from the
+    // run.
     expect(rootJournal.readSteps(depth2Id).length).toBe(2);
     expect(rootJournal.readHead(depth2Id)).toBeNull();
     expect(present(rootJournal.readRun('root-run'), 'the root-run record').heads.map((h) => h.id)).not.toContain(depth2Id);
 
-    // And the head row is not lost either, merely stranded one store away —
-    // which is why this never surfaced as an error.
+    // The head row is stranded one store away, not lost, so nothing errors.
     expect(new HeadJournal(intermediateFacet.sql, intermediateFacet.actor).readHead(depth2Id)).not.toBeNull();
   });
 });

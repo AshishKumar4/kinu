@@ -1,17 +1,5 @@
-// ONE SQL snapshot IS the workspace — for every actor, not only its main one.
-//
-// The claim open-38 rests on is that a workspace object's SQLite contains the
-// whole workspace. Give a hired subordinate, a head and a swarm node each their
-// own database and that export is an export of one agent out of N with nothing
-// saying so. With every actor's rows in one database the export already covers
-// them — but "already covers them" is exactly the kind of claim that rots, so the
-// archive DECLARES how many actors its roster carried and the restore refuses an
-// archive whose rebuilt roster disagrees.
-//
-// This suite deliberately depends on nothing but the archive, the directory,
-// the workspace schema and the canonical conversation writer: no event log, no
-// store bundle, no hosting. It proves the ARCHIVE's own property — every
-// actor's rows in, every actor's rows out.
+// One SQL snapshot is the workspace for every actor (open-38); the archive declares its roster's actor
+// count and restore refuses a rebuilt roster that disagrees.
 import { describe, test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
@@ -31,14 +19,7 @@ interface Workspace {
   readonly main: ActorHandle;
 }
 
-/**
- * A tagged-template `SqlExecutor` over a database this suite owns.
- *
- * Local rather than `@kinu.run/test-utils`' `sqlOver`, deliberately: that
- * package imports the `@kinu.run/core` barrel, the barrel re-exports the actor
- * host, and the host's own imports land with the context plane. This suite
- * proves a property of the ARCHIVE and must not drag that plane in to do it.
- */
+/** Local rather than test-utils' `sqlOver`: that pulls the core barrel and with it the context plane. */
 function sqlOver(db: Database): SqlExecutor {
   return <Row = unknown>(strings: TemplateStringsArray, ...values: readonly SqlValue[]): Row[] => {
     const query = strings.reduce((acc, part, index) => acc + part + (index < values.length ? '?' : ''), '');
@@ -59,14 +40,12 @@ function workspace(): Workspace {
   return { db, sql, directory, main: directory.createMain({ name: 'hosted' }) };
 }
 
-/** The seeds below are short enough to stay inline, so neither the writer nor
- *  the reader below ever reaches a file plane. */
+/** Short enough to stay inline, so neither writer nor reader reaches a file plane. */
 async function noFilePlane(): Promise<never> {
   throw new Error('an inline-payload conversation must never open a file plane');
 }
 
-/** What one actor said, read back over whichever database holds it — entry
- *  text lives in message parts, so only a projection can answer it. */
+/** Entry text lives in message parts, so only a projection can answer it. */
 async function spoken(sql: SqlExecutor, actorId: string): Promise<string | undefined> {
   const transcript: SessionTranscriptReader =
     readSessionTranscript(sql, { actorId, assertCurrent() {} }, CHAT_SESSION_ID, noFilePlane);
@@ -74,8 +53,6 @@ async function spoken(sql: SqlExecutor, actorId: string): Promise<string | undef
   return (await transcript.project(`m-${actorId}`))?.content;
 }
 
-/** One actor's conversation, claim and promoted-loop pointer — the three things
- *  a snapshot has to carry FOR EVERY actor, not for one. */
 interface SeededActorState {
   ws: Workspace;
   actor: ActorHandle;
@@ -115,7 +92,6 @@ describe('a workspace snapshot covers every actor', () => {
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local', now: 7 });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');
     expect(end.t).toBe('end');
-    // The DECLARED coverage is the roster, not just a row total.
     expect(end.actors).toBe(3);
 
     const target = new Database(':memory:');
@@ -138,7 +114,6 @@ describe('a workspace snapshot covers every actor', () => {
         .toBe(version);
     }
 
-    // No child database and no second object was needed to produce any of it.
     expect(there<{ n: number }>`
       SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'conversation_entries'`[0]?.n).toBe(1);
   });
@@ -158,8 +133,6 @@ describe('a workspace snapshot covers every actor', () => {
     const target = new Database(':memory:');
     const restored = await restoreWorkspaceArchive(makeSqlExec(target), lines);
     expect(restored.actors).toBe(2);
-    // Its history retained means its rows are workspace state, so losing them
-    // in a backup is data loss and not tidiness.
     expect(await spoken(sqlOver(target), gone.actorId)).toBe('beta said this before it was dismissed');
   });
 
@@ -172,10 +145,7 @@ describe('a workspace snapshot covers every actor', () => {
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local' });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');
 
-    // Drop the head's ROSTER row and repair the row total the way a truncation
-    // nobody noticed would leave it. Every other check this archive faces now
-    // passes; without the declared actor count it restores a workspace that is
-    // silently missing an agent.
+    // Drop a roster row and repair the row total: only the declared actor count catches the missing agent.
     const short = lines
       .filter((line) => !(line.includes('"workspace_actors"') && line.includes(`"actor_id":"${head.actorId}"`)))
       .map((line) => (JSON.parse(line).t === 'end'

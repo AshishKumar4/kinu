@@ -1,7 +1,6 @@
 import type { SandboxHandle } from '../../src/index';
 
-/** The lifecycle surface every fake handle must carry now that supervision is
- *  part of the contract. Suites that never touch processes spread this in. */
+/** Lifecycle surface every fake handle must carry; suites that never touch processes spread this in. */
 export const sandboxHandleLifecycle: Pick<
   SandboxHandle,
   | 'ensureReady' | 'startSupervisedProcess' | 'stopSupervisedProcess'

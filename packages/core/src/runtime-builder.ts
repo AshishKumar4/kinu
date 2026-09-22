@@ -1,11 +1,4 @@
-/**
- * Shared runtime builder — constructs an AgentRuntime from platform-specific
- * primitives. Both CF and CLI backends use this to avoid duplicating the
- * wiring logic for Memory, Identity, and other derived interfaces.
- *
- * The backend provides the raw primitives (sql, vfs, llm, executor, schedule).
- * This module composes them into a full AgentRuntime.
- */
+/** Composes a backend's raw primitives into a full AgentRuntime. */
 
 import type {
   SqlExecutor,
@@ -26,89 +19,45 @@ import { createScaffoldSurface } from './scaffold/surface';
 import type { ActorHandle } from './identity/actor-handle';
 import { createRoutedModelLane, type ModelLaneComponents } from './profiles/model-lane';
 
-/**
- * Where the fixed-tier producer lanes come from. The route POLICY is core's
- * (profiles/model-route.ts); this component supplies what only a backend
- * knows: how to read the current turn profile, and how to build an LLM for a
- * resolved tier. Read per call — never cached here — so a role or catalog
- * change lands on the next producer call without a rebuild.
- */
+/** Read per call, never cached, so a role or catalog change lands on the next producer call. */
 export type { ModelLaneComponents } from './profiles/model-lane';
 
 export interface RuntimeComponents {
   actor: ActorHandle;
-  /**
-   * Where THIS actor's promoted loop is installed, from
-   * {@link actorScaffoldPath}. Absent means the workspace's own
-   * `scaffold/agent.js` — correct for the root and wrong for everyone else,
-   * which is exactly the bug this field exists to make unrepresentable at a
-   * caller that hosts more than one actor.
-   */
+  /** From {@link actorScaffoldPath}; absent means `scaffold/agent.js`, correct only for the root. */
   scaffoldPath?: string;
   sql: SqlExecutor;
   transactionSync: <T>(write: () => T) => T;
   execRaw: RawSqlExec;
   vfs: VFS;
-  /** Where this agent's own state lives when `vfs` is a shared plane. The CLI
-   *  enters through this builder and can split the two. Cloudflare constructs
-   *  CFRuntime directly and sets AgentRuntime.agentStateVfs to workspaceVfs. */
+  /** This agent's own state when `vfs` is a shared plane. */
   agentStateVfs?: VFS;
   llm: LLM;
   executor: Executor;
   schedule: Schedule;
-  /** Platform-specific CraftStore */
   craftStore: CraftStore;
-  /** Platform-specific memory (wraps VFS + FTS5) */
   memory: Memory;
-  /** Fixed-tier producer lanes (judge/deep, fast/fast, advisor/deep),
-   *  composed through MODEL_ROUTE_POLICY from the live turn profile. This is
-   *  a buildRuntime input. CFRuntime wires the same three AgentRuntime getters
-   *  directly because its provider resolver needs the actor and environment. */
+  /** Judge/fast/advisor lanes routed through MODEL_ROUTE_POLICY from the live turn profile. */
   modelLanes?: ModelLaneComponents;
-  /** Branch lifecycle callbacks */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
-  /**
-   * Optional router for the runtime's registered execution environments. When
-   * provided, the canonical `shell` and `eval` factories in core will
-   * consume it for routing. Absent → tools degrade gracefully.
-   */
   executionRouter?: ExecutionRouter;
-  /**
-   * Optional POSIX shell bound to VFS. Required by the canonical `shell` tool
-   * for workspace-scoped commands (fast path, no router indirection) and by
-   * the `eval` new-Function fallback.
-   */
+  /** Required by the `shell` tool's workspace fast path and the `eval` new-Function fallback. */
   shell?: Shell;
-  /** Shadow-git file checkpoints over real filesystems (host backends only). */
+  /** Host backends only. */
   checkpoints?: FileCheckpoints;
-  /** See AgentRuntime.setShellApprovalChannel. Only a backend that owns a
-   *  live interactive surface (the CLI's ACP channel) supplies this. */
+  /** Only a backend with a live interactive surface (the CLI's ACP channel) supplies this. */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
   setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
 }
 
-/**
- * A pinned client per producer lane.
- *
- * The lanes are DERIVED — read fresh from the live turn profile on every access
- * — but `AgentRuntime` declares them as ordinary mutable fields and callers
- * assign them: a harness scripting a judge, a caller pinning one client for a
- * runtime that has no profile yet. A derived getter with no setter turns that
- * assignment into `TypeError: Attempted to assign to readonly property`, which
- * is how four suites failed rather than being told anything. So an assignment
- * PINS, and a pin wins over routing for the rest of this runtime's life.
- */
+/** Lanes are derived getters but callers assign them; an assignment pins and wins over routing thereafter. */
 interface PinnedLanes {
   judge?: LLM;
   fast?: LLM;
   advisor?: LLM;
 }
 
-/**
- * Build a complete AgentRuntime from platform-specific components.
- * Constructs the Identity.scaffold interface from VFS + SQL.
- */
 export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const { sql, execRaw, vfs, llm, executor, schedule, memory, craftStore } = components;
   const agentStateVfs = components.agentStateVfs ?? vfs;

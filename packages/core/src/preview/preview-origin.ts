@@ -2,40 +2,13 @@ import { parseWorkspacePreviewLabel } from './nimbus-preview-host';
 import * as v from 'valibot';
 import type { JsonValue } from '../utils/json';
 
-/** The one DOM surface this module reads, declared locally: the file compiles
- *  under the Worker's DOM libs, under core's default lib set, and under the
- *  workerd-test project where `document` does not exist at all. Absence is the
- *  domain value — a server-side caller has no meta tag to read. */
+// Declared locally so this compiles with and without DOM libs; undefined server-side.
 declare const document: {
   querySelector(selectors: string): { content: string } | null;
 } | undefined;
 
-
-/**
- * Where previewed apps are served, and what they are allowed to do.
- *
- * A previewed app is HTML the agent wrote, and agents read repositories, web
- * pages and email — so it is hostile input. Served on the app's own origin it
- * runs *as* the app: it can call `/api/user/*` with the owner's session cookie,
- * read the owner's credentials, and reach into the parent frame.
- *
- * Sandbox-container previews therefore get a host of their own, one per
- * exposed port: `<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>`. That is the
- * @cloudflare/sandbox SDK's native scheme — `exposePort` mints the URL and
- * `proxyToSandbox` routes it back — so Kinu derives no hostnames itself.
- * Everything under the suffix except the app's own host serves previews and
- * nothing else: no SPA, no login, no OAuth callback, so no session cookie is
- * ever minted there for hostile HTML to steal, and `__Host-`-prefixed cookies
- * are host-only so the app's session is never sent to a preview either.
- *
- * Nimbus uses the same trust boundary with its own capability-host shape.
- * The pin is a response header, not just the iframe `sandbox` attribute: users
- * open preview URLs in new tabs, where the attribute does not exist. The
- * attribute and the header are built from the same token list so the two
- * cannot drift.
- */
-
-/** What a previewed app may do, wherever it is served. */
+// Previewed apps are hostile HTML, so each gets its own host under PREVIEW_HOST_SUFFIX, where no session
+// cookie is ever minted. The CSP header and iframe attribute share these tokens (new tabs lack the attribute).
 const PREVIEW_SANDBOX_TOKENS = [
   'allow-scripts',
   'allow-forms',
@@ -44,44 +17,28 @@ const PREVIEW_SANDBOX_TOKENS = [
   'allow-downloads',
 ];
 
-/**
- * Sandbox tokens for a preview on its own hostname — the `sandbox` iframe
- * attribute and the CSP `sandbox` directive's argument.
- *
- * `allow-same-origin` is present here and only here. It voids the sandbox for
- * same-origin content, which is why every preview gets a distinct hostname:
- * the app, its localStorage, and every other preview are different origins.
- * Cookie-site isolation additionally requires PREVIEW_HOST_SUFFIX itself to be
- * a Public Suffix List boundary; see the deployment configuration prerequisite.
- */
+/** `allow-same-origin` is safe only because every preview has a distinct hostname; cookie isolation
+ *  also needs PREVIEW_HOST_SUFFIX to be a Public Suffix List boundary. */
 export const PREVIEW_SANDBOX = [...PREVIEW_SANDBOX_TOKENS, 'allow-same-origin'].join(' ');
 
-/** The one var every preview reader needs: the zone previews are served under. */
 export interface PreviewSuffixEnv {
   PREVIEW_HOST_SUFFIX?: string;
 }
 
-/** The suffix plus the app's own origin — the one host under the suffix that is
- *  never preview territory. Both are deployment vars, so the reader below takes
- *  the deployment's own Env; nothing in this tree builds one by hand. */
+/** The app's own origin is the one host under the suffix that is never preview territory. */
 export interface PreviewHostEnv extends PreviewSuffixEnv {
   CLI_PUBLIC_ORIGIN?: string;
 }
 
 const PREVIEW_SUFFIX_META = 'kinu-preview-host-suffix';
 
-/** The host an origin var names, lowercased, or null when it names none. */
 export function hostOf(origin: string | undefined): string | null {
   if (!origin || !URL.canParse(origin)) return null;
 
   return new URL(origin).hostname.toLowerCase() || null;
 }
 
-/**
- * The zone previews are served under, or null when previews are not
- * configured. Requires a dot: a single-label suffix would claim a whole TLD
- * and take the app down with it.
- */
+/** Requires a dot: a single-label suffix would claim a whole TLD. */
 export function previewHostSuffix(env: PreviewSuffixEnv): string | null {
   const suffix = env.PREVIEW_HOST_SUFFIX?.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
 
@@ -105,12 +62,7 @@ function browserPreviewHostSuffix(): string | null {
   return previewHostSuffix({ PREVIEW_HOST_SUFFIX: configured });
 }
 
-/**
- * True when this request arrived on preview territory: any host under the
- * suffix other than the app's own. The whole subtree is claimed, not just
- * well-formed preview hostnames — a request that lands here and does not
- * resolve to an exposed port gets a 404, never the app.
- */
+/** Claims the whole subtree, not just well-formed preview hosts, so strays get a 404, never the app. */
 export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
   const suffix = previewHostSuffix(env);
 
@@ -122,24 +74,8 @@ export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
   return host.endsWith(`.${suffix}`);
 }
 
-/**
- * Pin a preview response to its isolated origin and reject server-supplied
- * Domain cookies.
- *
- * Host-only cookies are kept, which is what makes a previewed SPA's login
- * work. A `Domain=` cookie would span the whole suffix and reach other
- * previews, so it is dropped. This cannot intercept JavaScript's
- * `document.cookie`; complete cookie isolation also needs a PSL-backed suffix.
- *
- * `Referer` is muzzled because the port's secret token is part of the hostname
- * now: the browser's default policy sends the origin cross-origin, and the
- * origin is the credential.
- *
- * Container-supplied CSP headers are replaced rather than merged so the
- * sandbox directive is the one policy in effect. 101 responses are returned
- * untouched — a WebSocket handshake carries no document, and its headers are
- * immutable.
- */
+/** Drops `Domain=` cookies (they would reach other previews), replaces CSP, and suppresses Referer because
+ *  the hostname carries the port token. 101 responses have immutable headers and pass through. */
 export function containPreviewResponse(response: Response): Response {
   if (response.status === 101) return response;
   const keptCookies = response.headers.getSetCookie().filter(c => !/;\s*domain\s*=/i.test(c));
@@ -160,15 +96,7 @@ export function containPreviewResponse(response: Response): Response {
   });
 }
 
-/**
- * `<port>-<sandbox-id>-<token>` — the SDK's preview hostname label.
- *
- * Grouped, and greedy in the middle deliberately: `extractSandboxRoute`
- * (@cloudflare/sandbox/dist/index.js) splits at the FIRST hyphen for the port
- * and the LAST for the token, which is exactly what a greedy `[a-z0-9-]*`
- * reproduces — so a sandbox id containing hyphens, which every Kinu id does
- * (`kinu-<workspace>`), segments the same way here as it did in the SDK.
- */
+// Greedy middle matches the SDK's `extractSandboxRoute` split (first hyphen, last hyphen) for hyphenated ids.
 const PREVIEW_HOST_LABEL = /^(\d{1,5})-([a-z0-9][a-z0-9-]*)-([a-z0-9_]+)$/i;
 
 function validPort(value: string | undefined): boolean {
@@ -177,13 +105,7 @@ function validPort(value: string | undefined): boolean {
   return Number.isInteger(port) && port >= 1 && port <= 65_535;
 }
 
-/**
- * Whether a URL is a preview URL this app is willing to frame: an absolute
- * https URL whose leading hostname label is a complete
- * `<port>-<sandbox>-<token>` triple. Host allow-listing is the CSP's job
- * (`frame-src`), because only the server knows the configured suffix; this
- * rejects the shapes that never come from Kinu at all.
- */
+/** Shape check only; host allow-listing is the CSP `frame-src` job. */
 export function isPreviewUrl(value: string, configuredSuffix: string | null = browserPreviewHostSuffix()): boolean {
   if (!URL.canParse(value)) return false;
   const url = new URL(value);
@@ -206,21 +128,8 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
   return (sandbox !== null && validPort(sandbox[1])) || parseWorkspacePreviewLabel(label) !== null;
 }
 
-/**
- * The three parts a sandbox preview hostname carries, or null when the hostname
- * is not a well-formed sandbox preview label on the configured suffix.
- *
- * THE SAME SEGMENTATION `proxyToSandbox` PERFORMED, which is the whole
- * requirement for both readers: the edge gate has to judge the id, port and
- * token the SDK would resolve, and a stale-preview repair aimed at a different
- * workspace's container would be worse than no repair at all. The SDK splits
- * the label as the regex above does, checks the id with `sanitizeSandboxId` —
- * a pure validator that returns the id unchanged — and then calls
- * `getSandbox(ns, id, { normalizeId: true })`, which lowercases. A caller that
- * passes this id to `getSandbox` with the same option therefore addresses the
- * object that answered the request. Hostnames are already lower-case, so the
- * normalization is a no-op either way.
- */
+/** Must segment exactly as `proxyToSandbox` does, so `getSandbox(ns, id, { normalizeId: true })` addresses
+ *  the same object that answered the request. */
 export interface SandboxPreviewLabel {
   readonly port: number;
   readonly sandboxId: string;
@@ -248,15 +157,7 @@ export function sandboxPreviewLabelOf(url: URL, env: PreviewSuffixEnv): SandboxP
   return { port: Number(port), sandboxId, token };
 }
 
-/**
- * Pull a preview URL out of a tool result. Outputs are usually strings (e.g.
- * `https://8080-kinu-app-p8080_ab12cd34.example.com/`) but can also be
- * objects with a `url` field.
- *
- * The text being scanned is agent-writable — a command's stdout is a tool result
- * too — so candidates are parsed and checked against `isPreviewUrl` rather than
- * pattern-matched out of the surrounding prose.
- */
+/** Tool output is agent-writable, so each candidate is validated with `isPreviewUrl`. */
 export function extractPreviewUrl(
   output: JsonValue | undefined,
   configuredSuffix: string | null = browserPreviewHostSuffix(),

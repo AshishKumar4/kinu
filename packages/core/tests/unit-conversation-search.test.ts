@@ -1,8 +1,4 @@
-// Behaviour tests for ConversationSearchStore, the zero-LLM recall surface over
-// the canonical conversation store. Rows are seeded the way a runtime writes
-// them — `SessionHistory.record` publishes a message and its transcript entry
-// together — so the text these tests search for only exists in canonical
-// message parts, and reaches the index through `transcript.project`.
+// ConversationSearchStore, seeded through `SessionHistory.record` so text reaches the index only via `transcript.project`.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { ConversationSearchStore, invalidateConversationSearchIndex } from '../src/index';
@@ -125,8 +121,7 @@ describe('ConversationSearchStore.browse', () => {
     await record('old', 'user', 'old kickoff question');
     await record('old', 'assistant', 'old answer');
     await record('new', 'user', 'new kickoff question');
-    // `record` stamps wall-clock time, which does not separate writes landing
-    // in the same millisecond. The activity order under test does.
+    // `record` wall-clock time does not separate same-millisecond writes; activity order does.
     void rt.storage.sql`UPDATE conversation_entries SET recorded_at = 1000 WHERE session_id = 'old' AND role = 'user'`;
     void rt.storage.sql`UPDATE conversation_entries SET recorded_at = 2000 WHERE session_id = 'old' AND role = 'assistant'`;
     void rt.storage.sql`UPDATE conversation_entries SET recorded_at = 3000 WHERE session_id = 'new'`;
@@ -155,9 +150,7 @@ describe('the derived index', () => {
     const { rt, store, record } = setup();
     await record('chat', 'user', 'canonical subject matter');
     expect((await store.search('canonical')).length).toBe(1);
-    // A projection row no conversation entry backs: what a rewrite the rowid
-    // watermark cannot see leaves behind. Nothing about it is observable to
-    // the watermark, so only invalidation clears it.
+    // A projection row the rowid watermark cannot see; only invalidation clears it.
     void rt.storage.sql`INSERT INTO conversation_fts (content, msg_id, session_id, role, created_at)
       VALUES ('stale ghost text', 'ghost', 'chat', 'user', 1000)`;
     expect((await store.search('ghost')).map((hit) => hit.messageId)).toEqual(['ghost']);

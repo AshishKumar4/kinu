@@ -1,19 +1,12 @@
-// Step telemetry aggregates. The contract under test is that nothing here
-// invents a number: an absent rate stays absent, an unpriced step stays
-// unpriced, a field no step reported stays absent from the totals, and an empty
-// sample reports null rather than zero.
+// Step telemetry invents no number: absent stays absent, unpriced stays unpriced, an empty sample is null.
 import { describe, test, expect } from 'bun:test';
 import { summarizeSteps, type StepCost, type Usage } from '../src/index';
 
-/** A step whose provider reported `u`, priced at `usd` when given. */
 const step = (usage: Usage, usd?: number): StepCost =>
   (usd === undefined ? { usage } : { usage, usd });
 
 describe('the cache hit rate, through summarizeSteps', () => {
-  // The rate itself is private now — the distribution it feeds is the public
-  // surface, and one sample step pins every field of it: a rateable step is
-  // its own last/mean/p95/ema, an unrateable one leaves the whole
-  // distribution null rather than reading as a 0% miss.
+  // An unrateable step leaves the distribution null rather than reading as a 0% miss.
   const distribution = (usage: Usage) =>
     summarizeSteps([step(usage)], { windowLimit: 50 }).cacheHit;
 
@@ -35,10 +28,7 @@ describe('the cache hit rate, through summarizeSteps', () => {
   });
 
   test('an UNREPORTED cache read has no hit rate, where a reported zero has one', () => {
-    // The distinction this type exists for. Workers AI reports
-    // prompt_tokens_details.cached_tokens: 0 (a real cold prompt, rate 0), while
-    // a provider that mentions caching not at all has no rate to report — and
-    // rendering that as 0% would claim a total miss on absent evidence.
+    // Workers AI reports cached_tokens: 0 (a real cold prompt); a provider silent on caching has no rate.
     expect(distribution({ input: 1000, cacheRead: 0 }).mean).toBe(0);
     expect(distribution({ input: 1000 })).toMatchObject({
       samples: 0, last: null, mean: null, p95: null, ema: null,
@@ -73,7 +63,6 @@ describe('summarizeSteps', () => {
   test('a cache warm is counted, and moves no number the conversation earned', () => {
     const turns = [step({ input: 100, cacheRead: 40 }), step({ input: 100, cacheRead: 60 })];
     const bare = summarizeSteps(turns, { windowLimit: 100 });
-    // A warm reads the whole prefix and writes nothing, so its own rate is ~1.
 
     const warmed = summarizeSteps(turns, {
       windowLimit: 100,
@@ -143,7 +132,6 @@ describe('summarizeSteps', () => {
 
     expect(t.steps).toBe(3);
     expect(t.stepsWithoutUsage).toBe(2);
-    // The totals cover only the one reporting step, and the counter says so.
     expect(t.tokens).toEqual({ input: 100, output: 10 });
   });
 
@@ -154,8 +142,7 @@ describe('summarizeSteps', () => {
   });
 
   test('mean, last and nearest-rank p95 over the rate sample', () => {
-    // Ten steps, hit rates 0.1 … 1.0. Nearest-rank p95 of 10 samples is the
-    // ceil(0.95*10)=10th smallest, i.e. the maximum.
+    // Nearest-rank p95 of 10 samples is the ceil(0.95*10)=10th smallest, the maximum.
     const samples = Array.from({ length: 10 }, (_, i) =>
       step({ input: 100, cacheRead: (i + 1) * 10 }));
 
@@ -170,7 +157,6 @@ describe('summarizeSteps', () => {
     const cold = step({ input: 100, cacheRead: 0 });
     const warm = step({ input: 100, cacheRead: 100 });
     const { cacheHit } = summarizeSteps([cold, cold, cold, warm, warm], { windowLimit: 100, emaAlpha: 0.5 });
-    // Mean is 0.4; the EMA weights the two warm steps far higher.
     expect(cacheHit.mean).toBeCloseTo(0.4, 10);
     expect(cacheHit.ema).toBeCloseTo(0.75, 10);
     expect(cacheHit.emaAlpha).toBe(0.5);
@@ -194,8 +180,6 @@ describe('summarizeSteps', () => {
     ], { windowLimit: 10 });
 
     expect(t.steps).toBe(2);
-    // No rate is inferable from either, so the distribution is empty rather
-    // than two fabricated 0% misses.
     expect(t.cacheHit.samples).toBe(0);
     expect(t.cacheHit.mean).toBeNull();
     expect(t.cacheHit.ema).toBeNull();

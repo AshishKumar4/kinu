@@ -100,7 +100,6 @@ describe('evaluateGate', () => {
     const gate = evaluateGate(broken, 0.5);
     expect(gate.pass).toBe(false);
     expect(gate.reason).toContain('errored');
-    // Even a floor of zero cannot rescue it — there is nothing to floor.
     expect(evaluateGate(broken, 0).pass).toBe(false);
   });
 

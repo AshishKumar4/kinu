@@ -1,11 +1,4 @@
-// AgentConfigStore — typed accessors over the `actor_config` key/value table.
-//
-// Before this, 23 raw `SELECT ... FROM actor_config` / `INSERT OR REPLACE ...`
-// sites were scattered across orchestrator.ts, runtime.ts, head-runtime.ts,
-// fork.ts. Adding a new tunable meant editing schema + 5 different files.
-//
-// The store is a deep module (small interface, real behavior): typed getters
-// for known keys, generic get/set/delete for everything else, all() for fork.
+// AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
@@ -27,208 +20,141 @@ export function parseRoleChangePolicy(value: string | null): 'allow' | 'approval
   return value === 'approval' || value === 'locked' ? value : 'allow';
 }
 
-/** Known config keys. Adding one here forces a typed getter/setter — that
- *  catches typos at compile time. */
+/** Known config keys; each gets a typed getter/setter. */
 export const AGENT_CONFIG_KEYS = {
   model: 'model',
   reasoningEffort: 'reasoning_effort',
-  /** How long providers should keep this agent's prompt-cache prefix
-   *  (prompting/cache-breakpoints.ts). Unset = the provider default TTL. */
+  /** Prompt-cache prefix retention; unset means the provider default. */
   cacheRetention: 'cache_retention',
   displayName: 'display_name',
-  /** 'user' once the operator sets a name explicitly — suppresses auto-titling. */
+  /** 'user' once the operator names it explicitly; suppresses auto-titling. */
   nameOrigin: 'name_origin',
-  /** The ONE role authority row. It stores the bare catalog id. */
+  /** The single role authority row; stores the bare catalog id. */
   roleSelection: 'role_selection',
-  /** The owner's self-switch policy: 'allow' | 'approval' | 'locked'. */
   roleChangePolicy: 'role_change_policy',
-  /** The inference tier a PARENT pinned on this agent when it hired it. Unset
-   *  means no pin, so the turn boundary derives one from the role. A pin is
-   *  what a hire with an EXPLICIT tier leaves behind. */
+  /** Tier a parent pinned at hire; unset means derive from the role. */
   assignedTier: 'assigned_tier',
-  /** The shell-approval MODE the owner set (strict | allow_all | deny_all). */
   shellApprovalMode: 'shell_approval_mode',
-  /** Comma-separated `<rule>@<executor>` pairs the owner has said "always" to.
-   *  Sits beside the approval MODE deliberately: both are the same knob — how
-   *  much the gate asks — read live at exec time, revocable in one place. */
+  /** Comma-separated `<rule>@<executor>` grants; read live at exec time like the mode. */
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
   autoPromoteScaffold: 'auto_promote_scaffold',
   shadowSampleRate: 'shadow_sample_rate',
-  /** Fraction of scaffold proposals that branch from an archived variant
-   *  instead of the live current (DGM archive exploration). */
+  /** Share of scaffold proposals branching from an archived variant (DGM archive exploration). */
   scaffoldExploreShare: 'scaffold_explore_share',
   advisorMinSeverity: 'advisor_min_severity',
-  /** 'true' switches the turn reviewer on. Off by default: it is one more model
-   *  call per turn, and the owner pays for it. */
+  /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
   advisorEnabled: 'advisor_enabled',
-  /** Comma-separated list of skill names the operator wants always-on. */
   alwaysActiveSkills: 'always_active_skills',
-  /** The executor namespace the agent most recently ran a tool in — so the UI
-   *  (diff / file manager) defaults to where work actually happened. */
+  /** Executor namespace of the last tool run; UI defaults to it. */
   lastActiveExecutor: 'last_active_executor',
-  /** Run GEPA self-optimization after this many turns of new execution traces
-   *  (0 = off; unset = the autonomous default cadence). Trace-driven, not
-   *  clock-driven. */
+  /** Auto-GEPA cadence in turns of new traces (0 = off; unset = default). */
   autoGepaEveryNTurns: 'auto_gepa_every_n_turns',
-  /** Epoch ms of the operator's last Evolution Changelog view — entries newer
-   *  than this drive the unseen badge. */
+  /** Epoch ms of the last Evolution Changelog view; newer entries drive the unseen badge. */
   changelogSeenAt: 'changelog_seen_at',
-  /** Turn windows this agent has closed over its lifetime. The lifetime
-   * timescale runs replay evaluation and consolidation at this pace. */
   closedTurnWindows: 'closed_turn_windows',
-  /** Total outcome-labeled instances a GEPA run draws into its train/val
-   *  split (buildOutcomeEvalSplit) — see DEFAULT_GEPA_EVAL_BUDGET. */
+  /** See DEFAULT_GEPA_EVAL_BUDGET. */
   gepaEvalBudget: 'gepa_eval_budget',
-  /** Operator-tuned MCTS knobs (Settings UI / setMctsConfig). Unset = engine
-   *  defaults (DEFAULT_CONFIG.mcts) at the call site. */
+  /** Unset = engine defaults (DEFAULT_CONFIG.mcts). */
   mctsExplorationWeight: 'mcts_c',
   mctsBudget: 'mcts_iterations',
   mctsMaxDepth: 'mcts_depth',
   mctsBranches: 'mcts_branches',
   mctsJudgeSamples: 'mcts_judge_samples',
   mctsMaxEvalLLMCalls: 'mcts_eval_llm_calls',
-  /** 'false' silences owner emails (changelog digests, job completions).
-   *  Defaults on; sends only happen when the platform email pieces exist. */
+  /** 'false' silences owner emails; defaults on. */
   emailNotifications: 'email_notifications',
-  /** One-time semantic-memory backfill markers. Vectorize was added after FTS5,
-   *  so chunks indexed earlier are embedded lazily on boot. 'true' once the whole
-   *  memory_chunks table is embedded; the cursor pages a large table across boots
-   *  without re-embedding. Internal plumbing — accessed via generic get/set. */
+  /** Lazy Vectorize backfill of chunks indexed before embeddings existed; cursor pages across boots. */
   memoryVectorBackfillDone: 'memory_vector_backfill_done',
   memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
-  /** Constructions of this agent object, bumped once per activation. The span
-   *  attribute `kinu.isolate_gen` — persisted BECAUSE a boot-time counter
-   *  cannot see a reconstruction that reuses the isolate, which is how a Kinu
-   *  fork most commonly dies (`ctx.facets.abort()`). */
+  /** Persisted because a boot counter misses reconstructions that reuse the isolate (e.g. `ctx.facets.abort()`). */
   isolateGen: 'isolate_gen',
-  /** Canonical conversation id for this workspace's agent
-   *  (config/conversation.ts). Absent on first open, adopted as `default`. */
+  /** Canonical conversation id (config/conversation.ts); absent on first open, adopted as `default`. */
   conversationId: 'conversation.id',
 } as const;
 
-/**
- * The `actor_config` rows the shell-approval gate reads as live AUTHORIZATION
- * rather than as preference — `ShellApprovalPolicy.mode()` and `.granted()`
- * consult exactly these before deciding whether to ask the owner.
- *
- * Named as a set because one caller has to treat them as a class rather than as
- * two keys: a fork copies `actor_config` wholesale, and a remembered "always"
- * was granted against ONE workspace's history and one owner's reading of it.
- * The mode belongs in the same set — inheriting `allow_all` inherits the same
- * authority with the grants left implicit. A new key the gate learns to read
- * belongs here the day it is added.
- */
+/** Keys the shell-approval gate reads as authorization; a fork must not inherit them. Add any new gate key here. */
 export const SHELL_APPROVAL_AUTHORITY_KEYS: readonly string[] = [
   AGENT_CONFIG_KEYS.shellApprovalMode,
   AGENT_CONFIG_KEYS.shellApprovalGrants,
 ];
 
 export interface AgentConfigStore {
-  // ── Generic accessors ──
   /** Read a single config value. Returns null if unset. */
   get(key: string): string | null;
-  /** Write (upsert) a config value. */
   set(key: string, value: string): void;
-  /** Delete a config value. No-op if absent. */
   delete(key: string): void;
-  /** All config rows as a plain object. Used by fork.ts to copy state. */
+  /** All rows; used by fork.ts to copy state. */
   all(): Record<string, string>;
 
-  // ── Typed accessors for known keys ──
   getModel(): string | null;
   setModel(spec: string): void;
   getReasoningEffort(): ReasoningEffort | null;
   /** Null clears the setting: the tier's level applies again. */
   setReasoningEffort(effort: ReasoningEffort | null): void;
-  /** Prompt-cache retention for this agent's turns. Always answers — an unset
-   *  or malformed row reads as the `short` default, so the caching seam never
-   *  has to decide what a missing value means. */
+  /** Unset or malformed reads as the `short` default. */
   getCacheRetention(): CacheRetention;
   setCacheRetention(retention: CacheRetention): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
   getNameOrigin(): NameOrigin | null;
   setNameOrigin(origin: NameOrigin): void;
-  /** Persist the visible title and its ownership in one SQLite statement. */
+  /** Title and origin in one SQLite statement. */
   setDisplayNameOrigin(name: string, origin: NameOrigin): void;
-  /** The agent's current role id. An absent or invalid row reads as `task`. The read writes nothing. */
+  /** Absent or invalid reads as `task`; the read writes nothing. */
   getRoleSelection(): RoleId;
-  /** Store the role id in the ONE role row. */
   setRoleSelection(roleId: RoleId): void;
-  /** The tier a parent pinned at hire, or null when none was. Null derives
-   *  from the role at the child's turn boundary. */
+  /** Null derives the tier from the role at the child's turn boundary. */
   getAssignedTier(): TierId | null;
-  /** Pin the hired tier, or clear it with null. */
   setAssignedTier(tier: TierId | null): void;
-  /** The owner's self-switch policy for this agent. Unset reads as `allow`. */
+  /** Unset reads as `allow`. */
   getRoleChangePolicy(): 'allow' | 'approval' | 'locked';
   setRoleChangePolicy(policy: 'allow' | 'approval' | 'locked'): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
-  /** Standing (rule, executor) grants. Never widens what a command may reach;
-   *  it only stops the gate asking again about a kind of command the owner has
-   *  already blessed in one place. */
+  /** Standing (rule, executor) grants; they stop the gate asking, never widen reach. */
   getShellApprovalGrants(): ApprovalGrant[];
-  /** Remember one or more grants. Idempotent — granting twice is one grant. */
+  /** Idempotent. */
   grantShellApproval(grants: readonly ApprovalGrant[]): void;
-  /** Forget grants. An unknown grant is not an error: revoking twice is one
-   *  revocation, which is what a UI that can double-submit needs. */
+  /** Unknown grants are ignored so a double-submitting UI is safe. */
   revokeShellApproval(grants: readonly ApprovalGrant[]): void;
   getSleepTimeComputeEnabled(): boolean;
   setSleepTimeComputeEnabled(enabled: boolean): void;
   getAutoPromoteScaffold(): boolean;
   setAutoPromoteScaffold(enabled: boolean): void;
-  /** Fraction of turns that also run through the candidate scaffold for the
-   *  shadow verdict (0..1, default 0.25). */
+  /** Fraction of turns shadow-run through the candidate scaffold (default 0.25). */
   getShadowSampleRate(): number;
   setShadowSampleRate(rate: number): void;
-  /** Archive-exploration share for proposal base selection (0..1, default 0.2). */
+  /** Default 0.2. */
   getScaffoldExploreShare(): number;
   setScaffoldExploreShare(share: number): void;
-  /** Whether the turn reviewer runs. False unless the owner switched it on. */
   getAdvisorEnabled(): boolean;
   setAdvisorEnabled(enabled: boolean): void;
-  /** The lowest severity that reaches the conversation. Always answers: unset
-   *  or unknown reads as `concern`, so the delivery seam never has to decide
-   *  what a missing floor means. */
+  /** Unset or unknown reads as `concern`. */
   getAdvisorMinSeverity(): AdvisorSeverity;
   setAdvisorMinSeverity(severity: AdvisorSeverity): void;
-  /** Skills the operator has pinned as always-active for this agent. */
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
-  /** The executor namespace the agent last ran a tool in, or null. */
   getLastActiveExecutor(): string | null;
-  /** Record the last-active executor. Ignores values that aren't a plausible
-   *  executor namespace (defense against a poisoned config value). */
+  /** Ignores values that are not a plausible executor namespace. */
   setLastActiveExecutor(name: string): void;
-  /** Turns-of-new-traces between auto-GEPA passes (0 = disabled; unset
-   *  defaults to DEFAULT_AUTO_GEPA_EVERY_N_TURNS). */
+  /** 0 = disabled; unset defaults to DEFAULT_AUTO_GEPA_EVERY_N_TURNS. */
   getAutoGepaEveryNTurns(): number;
-  /** Set the auto-GEPA cadence (turns). 0 / negative explicitly disables. */
+  /** 0 or negative explicitly disables. */
   setAutoGepaEveryNTurns(n: number): void;
-  /** Epoch ms of the last changelog view (0 = never seen). */
+  /** 0 = never seen. */
   getChangelogSeenAt(): number;
   setChangelogSeenAt(ms: number): void;
-  /** Count one more closed turn window and return the new lifetime total. */
   countClosedTurnWindow(): number;
-  /** Count one more construction of this agent object and return the new
-   *  generation. Called once per activation, from `onStart`; the RETURNED value is
-   *  what every span carries, so a discontinuity between two spans on one
-   *  `selfPath` is a positive reset signal instead of an inferred one. */
+  /** Called once per activation; a gap between spans on one `selfPath` is a positive reset signal. */
   countIsolateGeneration(): number;
-  /** GEPA eval budget — labeled instances per run (train + val). See
-   *  DEFAULT_GEPA_EVAL_BUDGET / clampGepaEvalBudget. */
   getGepaEvalBudget(): number;
-  /** Set the GEPA eval budget. Clamped to the settable range rather than
-   *  rejected: the bounds are a cost policy, not a correctness constraint. */
+  /** Clamped, not rejected: the bounds are cost policy. */
   setGepaEvalBudget(n: number): void;
-  /** Operator MCTS overrides — only the explicitly-set, valid knobs. Spread
-   *  into runMCTS call sites so unset knobs keep engine defaults. */
+  /** Only explicitly set, valid knobs, so unset ones keep engine defaults. */
   getMctsOverrides(): MctsOverrides;
-  /** Persist MCTS overrides; undefined fields are left untouched. */
+  /** Undefined fields are left untouched. */
   setMctsOverrides(overrides: MctsOverrides): void;
-  /** Owner-email notifications (changelog digests, job completions). */
   getEmailNotificationsEnabled(): boolean;
   setEmailNotificationsEnabled(enabled: boolean): void;
 }
@@ -238,41 +164,23 @@ export interface MctsOverrides {
   budget?: number;
   maxDepth?: number;
   branches?: number;
-  /** Judge ensemble size per branch evaluation (median-aggregated). */
+  /** Median-aggregated. */
   judgeSamples?: number;
-  /** Per-branch evaluation LLM-call budget (assertions + judge samples). */
   maxEvalLLMCalls?: number;
 }
 
-/** Default auto-GEPA cadence when the agent has no explicit setting: one
- *  pass per 25 turns of new traces. Frequent enough to keep learning from
- *  fresh outcome labels, sparse enough that each pass sees a genuinely new
- *  eval split (the trace-driven counter pauses it on idle agents anyway). */
+/** Default auto-GEPA cadence: one pass per this many turns of new traces. */
 export const DEFAULT_AUTO_GEPA_EVERY_N_TURNS = 25;
 
-/**
- * Outcome-labeled instances one GEPA pass draws (train + val together).
- * Every instance in `val` costs a full scaffold execution plus a judge call
- * for EVERY candidate scored, so this is the dominant cost knob — and the
- * thing that decides whether the winner's score means anything. 24 draws ~12
- * failures (8 to reflect on, 4 held out) and ~12 accepted guards, putting ~16
- * instances under every candidate. 95% half-width at an aggregate of 0.5:
- * ±0.28 on the old 8-instance split, ±0.22 at 16, ±0.19 at 24, ±0.14 at 48 —
- * cost is linear in instances while the width falls off as 1/√n, so this is
- * the last doubling that buys much. The per-instance Pareto comparison is
- * paired across candidates and resolves finer than the absolute aggregate.
- */
+/** Instances per GEPA pass (train + val); the dominant cost knob. CI half-width falls as 1/√n while cost is linear. */
 export const DEFAULT_GEPA_EVAL_BUDGET = 24;
 
-/** The operator-settable range for the GEPA eval budget. The floor keeps a
- *  disjoint split possible at all (2 failures + 2 guards); the ceiling is the
- *  most an operator can spend on one pass. */
+/** Floor keeps a disjoint split possible (2 failures + 2 guards). */
 export function clampGepaEvalBudget(n: number): number {
   return Number.isFinite(n) ? Math.min(Math.max(Math.floor(n), 4), 64) : DEFAULT_GEPA_EVAL_BUDGET;
 }
 
-/** Validate a rate/share setting. Rejects rather than clamps: an out-of-range
- *  probability is a caller bug, and silently storing 1 for 100 would hide it. */
+/** Rejects rather than clamps: an out-of-range probability is a caller bug. */
 function unitInterval(key: string, value: number): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error(`invalid ${key}: ${value} (expected a fraction between 0 and 1)`);
@@ -308,27 +216,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
   };
 
-  /**
-   * The role id lives in ONE `role_selection` row as the bare id.
-   * An absent or invalid row reads as `task`.
-   * The read writes nothing, so an unread row stays distinguishable from a stored `task`.
-   */
+  /** The read writes nothing, so an unread row stays distinguishable from a stored `task`. */
   const readRoleSelection = (): RoleId => {
     const stored = get(AGENT_CONFIG_KEYS.roleSelection);
 
     return stored !== null && isValidRoleId(stored) ? stored : DEFAULT_ROLE_ID;
   };
 
-  /** One-statement bump of a monotone counter, returning the new value. Shared
-   *  by the two lifetime counters here — closed turn windows, and isolate
-   *  generations — because they differ only in their key and a byte-identical
-   *  second copy is what `gate:duplication` exists to reject. A single
-   *  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING`, so two stores over one
-   *  database cannot read the same value and mint it twice. An absent, empty
-   *  or unparseable row counts as 0, so a first bump answers 1: the caller
-   *  uses the RETURN value, and `null` would make it decide what an unwritten
-   *  counter means.
-   */
+  /** Single upsert-RETURNING so two stores cannot mint the same value; unparseable rows count as 0. */
   const increment = (key: string): number => {
     authorize();
 
@@ -342,9 +237,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     return Number(rows[0]?.value ?? 1);
   };
 
-  /** Reads in the parsed domain, so an unparseable token is not just ignored
-   *  on read but dropped on the next write — the row never accretes rubbish a
-   *  human has to look at when they go to revoke something. */
+  /** Parses on read so malformed tokens are dropped on the next write. */
   const storedGrants = (): ApprovalGrant[] => {
     const raw = get(AGENT_CONFIG_KEYS.shellApprovalGrants) ?? '';
 
@@ -421,9 +314,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getAssignedTier(): TierId | null {
       const stored = get(AGENT_CONFIG_KEYS.assignedTier);
 
-      // An unrecognised value reads as unpinned rather than throwing: the
-      // honest answer for a tier this build does not know is "no pin", and the
-      // role's own tier is a working turn instead of a dead agent.
+      // An unknown tier reads as unpinned so the role's tier still runs.
       return stored !== null && isTierId(stored) ? stored : null;
     },
     setAssignedTier(tier) {
@@ -464,10 +355,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       const dropped = new Set(grants.map(formatApprovalGrant));
       writeGrants(storedGrants().filter((g) => !dropped.has(formatApprovalGrant(g))));
     },
-    // Autonomy switches default ON (the "unleash, don't cap" flip): the
-    // Evolution Changelog makes every self-change visible and revertable,
-    // and the misevolution gate + shadow veto + archive are the safety net.
-    // Only an explicit 'false' opts out — stored values always win.
+    // Autonomy switches default on; only an explicit 'false' opts out.
     getSleepTimeComputeEnabled() {
       return get(AGENT_CONFIG_KEYS.sleepTimeCompute) !== 'false';
     },
@@ -520,9 +408,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
     setLastActiveExecutor(name) {
-      // Provider namespaces are short identifiers; reject anything else so a
-      // bad value can't poison the UI default. Not a fixed allow-list (executors
-      // are registered dynamically) — just a shape check.
+      // Shape check only: executors register dynamically.
       if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
     },
     getAutoGepaEveryNTurns() {
@@ -534,8 +420,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return Number.isFinite(n) && n > 0 ? n : 0;
     },
     setAutoGepaEveryNTurns(n) {
-      // Persist 0 explicitly — unset means "autonomous default", so a
-      // deliberate disable must stick as a stored value.
+      // Persist 0 explicitly: unset means the default cadence.
       const value = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
       set(AGENT_CONFIG_KEYS.autoGepaEveryNTurns, String(value));
     },
@@ -595,8 +480,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       return out;
     },
     setMctsOverrides(overrides) {
-      // Every requested knob is validated before any row is written, so a
-      // rejected call leaves the prior overrides untouched.
+      // Validate all before writing, so a rejected call changes nothing.
       const pending: Array<{ key: string; value: string }> = [];
 
       const check = (key: string, value: number | undefined, integer: boolean) => {

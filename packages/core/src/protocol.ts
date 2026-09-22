@@ -1,6 +1,4 @@
-/**
- * Shared UI domain types for the agent RPC surface (@callable methods).
- */
+/** Shared UI domain types for the agent RPC surface (@callable methods). */
 
 import type { ActivityLogEntry } from './identity/activity-log';
 import type { ContextComposition } from './context-meter';
@@ -11,49 +9,19 @@ import type { WorkspaceSpend } from './read-models/workspace-spend';
 import type { CommandResult } from './execution/exec-result';
 import type { MemoryNote } from './memory/note';
 
-/**
- * A journalled branch's lifecycle, in the JOURNAL's own closed vocabulary —
- * core's two head-status unions and nothing else.
- *
- * Held apart from {@link ForkNode.status} because the two answer different
- * questions. That field is the DRAWING vocabulary: `failed` decides a hollow
- * dot, `pruned` a dashed edge, `terminal` the winner's ring, and a search node's
- * own column really does hold those words. A head's column holds these, and the
- * fold that puts a head in the tree has to map one onto the other — so a
- * `completed` head was drawn (correctly) as `open` and then SAID "open", and
- * `budget_exceeded`, `aborted`, `errored` and `interrupted` all said "failed".
- * Four different endings under one invented word.
- */
+/** A journalled branch's lifecycle in the head journal's own vocabulary; distinct from the drawing vocabulary of {@link ForkNode.status}. */
 export type ForkNodeLifecycle = HeadReportStatus | HeadUnsettledStatus;
 
-/**
- * One branch of a fork, as the tree view draws it.
- *
- * A fork is a tree whatever produced it: a search (`action:'swarm'` with a
- * `depth`) is a deep tree whose branches were scored against each other, and a
- * merge (`action:'fork'`) is the same tree at depth 1 — the task at the root,
- * one head per child. One shape, one renderer, depth varying.
- *
- * `value` and `visits` are nullable BECAUSE of that: only a competition scores
- * its branches and counts rollouts. A merge has neither, and the encodings
- * that carry them (fill ramp, radius, the winning spine, the score in the
- * label) must be absent rather than drawn from a zero no branch earned.
- */
+/** One branch of a fork: a search is a deep scored tree, a merge is depth 1. `value`/`visits` are null when branches were not scored. */
 export interface ForkNode {
 	id: string;
 	parentId: string | null;
 	depth: number;
-	/** Branch score in [0,1] — null when the fork did not compete its branches. */
+	/** Branch score in [0,1]; null when the fork did not compete its branches. */
 	value: number | null;
-	/** Rollouts spent here — null for the same reason. */
+	/** Rollouts spent here; null for the same reason. */
 	visits: number | null;
-	/**
-	 * `running` is the one state a search node never reaches (search_nodes
-	 * constrains its column to the other four) and the one a head is in for
-	 * most of its life, so the view union is the superset of both mechanisms.
-	 * `terminal` means "the branch the fork settled on" and only a competition
-	 * has one.
-	 */
+	/** Drawing vocabulary: `running` is heads only; `terminal` is the branch a competition settled on. */
 	status: "open" | "pruned" | "terminal" | "failed" | "running";
 	action: string;
 	children: ForkNode[];
@@ -61,82 +29,36 @@ export interface ForkNode {
 	observation?: string;
 	codeUsed?: string | null;
 	createdAt?: number;
-	/**
-	 * What this branch's own store recorded, when the store was the head journal.
-	 * The word a reader is SHOWN; {@link status} stays the word the picture is
-	 * drawn from.
-	 *
-	 * Absent for a search node, and absent rather than defaulted: `search_nodes`
-	 * holds its own vocabulary, so {@link status} is already that node's honest
-	 * word and a second field restating it could only drift from it.
-	 */
+	/** The head journal's recorded word, shown to the reader; absent for a search node. */
 	lifecycle?: ForkNodeLifecycle;
 }
 
-/**
- * Whether the workspace HAS anything for the gated right-pane tabs to show
- * (server: `getWorkspaceTabPresence`, also seeded into
- * `getWorkspaceSnapshot`). Both facts ride data the client already carries —
- * the release ledger and the exploration run list — never a second fetcher:
- * a tab earns its place only when it has content, so its presence is a fact
- * about the ledger it renders, checked before it renders rather than after
- * it mounts.
- */
+/** Whether the gated right-pane tabs have content (`getWorkspaceTabPresence`, also seeded into `getWorkspaceSnapshot`). */
 export interface TabPresence {
-	/** The work lane holds renderable content — plans, tasks (retained
-	 *  history counts), pending actions, jobs, changes, or notes. */
+	/** Plans, tasks (retained history counts), pending actions, jobs, changes, or notes. */
 	work: boolean;
-	/** The release lane holds at least one change. */
+	/** At least one change. */
 	releases: boolean;
-	/** At least one exploration run exists in the run list. */
 	explorations: boolean;
 }
 
 export interface ToolInfo {
 	name: string;
-	/** The one-line headline — what a list row shows. For a builtin this is the
-	 *  registry's own `summary`; a crafted tool's description is already one
-	 *  line, so it is its own summary. Never derived by splitting
-	 *  `description`: the docstring's shape is the model's contract, not the
-	 *  UI's. */
+	/** One-line headline for a list row; never derived by splitting `description`. */
 	summary: string;
-	/** The full docstring the model sees — summary, when-to-use, doctrine,
-	 *  returns. Shown on demand, never as a list row's body. */
+	/** Full docstring the model sees; shown on demand. */
 	description: string;
-	/** Where the tool came from: shipped with the agent, or crafted by it. */
+	/** Crafted by the agent rather than shipped. */
 	learned: boolean;
-	/**
-	 * How the model reaches it, as the registry DECLARES it (`TOOL_REACH`):
-	 * `native` = a tool definition in the turn's ToolSet, `codemode` = only from
-	 * inside an `eval` program, `both` = both, over one dispatcher.
-	 *
-	 * Deriving this as `nativeNames.has(name) ? "native" : "codemode"` is a
-	 * binary with no way to say "neither" — the one deps-gated builtin
-	 * (`report`) then reads "code mode" on an orchestrator, which has it on no
-	 * surface at all. A crafted tool has no registry row and is codemode by
-	 * construction.
-	 */
+	/** Reach as declared by `TOOL_REACH`; a crafted tool is `codemode`. */
 	exposure: "native" | "codemode" | "both";
-	/**
-	 * Whether THIS agent actually wires it. Reach is what the capability is;
-	 * this is what this actor has. `report` is declared `both` and is wired only
-	 * on a subordinate (the orchestrator is the report sink), so its row reads
-	 * `both` + `wired: false` rather than a silent mislabel.
-	 */
+	/** Whether this agent actually wires it (e.g. `report` only on a subordinate). */
 	wired: boolean;
 	qualityScore: number;
 	usageCount: number;
 }
 
-/**
- * One row of the UI's memory pane: a note the file records, or a hybrid-search
- * hit, scored.
- *
- * The note half is {@link MemoryNote} rather than four fields repeated here,
- * because `memory/note.ts` owns the `### Note (<date>[ · <actor>])` heading
- * those fields are read out of. `matchScore` is this surface's own — a note
- * carries no score, and the pane shows every note at 1.
- */
+/** A memory-pane row: a note or a hybrid-search hit; plain notes score 1. */
 export interface MemoryEntry extends MemoryNote {
 	matchScore: number;
 }
@@ -151,12 +73,10 @@ export interface ExecutorCommandResult {
 
 export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismissed";
 
-/** Parent-owned product roster delivered by listSubordinates and the
- * subordinates_changed socket event. */
+/** Parent-owned roster from listSubordinates and the subordinates_changed socket event. */
 export interface SubordinateRosterEntry {
 	name: string;
-	/** The actor behind the name, which a kept conversation is paged by
-	 *  (`getChatHistoryPage({ actor })`); null until its birth confirms one. */
+	/** Actor whose conversation `getChatHistoryPage({ actor })` pages; null until birth confirms one. */
 	actorId: string | null;
 	displayName: string;
 	role: string;
@@ -180,12 +100,10 @@ export interface SubordinateActivityEvent {
 	timestamp: number;
 }
 
-/** Typed agent RPC. The single boundary cast (unknown → T) lives in the hook's
- *  wrapper, so call sites read `rpc<Foo>("getFoo", [])` cast-free. */
+/** Typed agent RPC; the one unknown → T cast lives in the hook's wrapper. */
 export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
 
-/** A background job (auto-detached >30s tool call). Mirrors core BackgroundJob;
- *  surfaced by listBackgroundJobs for the Jobs surface + chat event cards. */
+/** A background job (auto-detached >30s tool call), from listBackgroundJobs. */
 export interface BackgroundJob {
 	id: string;
 	kind: string;
@@ -197,12 +115,9 @@ export interface BackgroundJob {
 	createdAt: number;
 	settledAt: number | null;
 	retriedBy?: string | null;
-	/** How many times a platform interruption re-drove this job. Zero for work
-	 *  that has run once, which is most of it. */
+	/** Times a platform interruption re-drove this job. */
 	resumeAttempts?: number;
-	/** When the next attempt may start, for a job that is waiting for one.
-	 *  Null while nothing is owed — including while an attempt is running, once
-	 *  its claim has cleared the wait it served. */
+	/** When the next attempt may start; null while nothing is owed, including during a running attempt. */
 	resumeAfter?: number | null;
 }
 
@@ -278,11 +193,7 @@ export interface ReleaseBoard {
 	deployments: ReleaseDeployment[];
 }
 
-/** A pending device request — either an agent wants to act on a connected
- *  device, or (method `connect`) it is asking for a device to exist at all.
- *  The owner decides (Use <device> / Not now); `always` IS the per-workspace
- *  binding. It carries no tier: the device's own Sandbox switch decides what a
- *  command may reach. */
+/** A pending device request (method `connect` asks for a device to exist); `always` is the per-workspace binding. */
 export interface PendingConsent {
 	consentId: string;
 	deviceLabel: string;
@@ -293,50 +204,23 @@ export interface PendingConsent {
 	workspaceName?: string;
 }
 
-/**
- * The Activity surface's whole payload — one round trip, refreshed per step.
- *
- * The split down the middle is the point: `latest.usage` is what the provider
- * said the newest request cost, `latest.context` is what that request was
- * locally measured to be made of, and the two are carried separately because
- * they do not reconcile. Anything the agent could not source is null, never a
- * plausible-looking stand-in.
- */
+/** The Activity surface's payload. `latest.usage` and `latest.context` do not reconcile; unsourced values are null, never estimated. */
 export interface ActivitySnapshot {
-	/** The newest step the provider reported usage for. Null before the first
-	 *  measured step of the workspace's life. */
+	/** Newest step with provider usage; null before the first measured step. */
 	latest: {
 		at: number;
 		runId: string;
 		stepIndex: number;
-		/** What the provider said this step cost. Only the fields it actually
-		 *  reported are present, and a surface must render an absent one as
-		 *  unreported rather than showing an invented default — the same rule
-		 *  `context` below follows. `latest` is null when no step in the
-		 *  workspace's life reported anything, so this is never an empty report. */
+		/** Only fields the provider reported are present; render absent ones as unreported. */
 		usage: Usage;
-		/** Absent for steps recorded before the meter existed, or when the
-		 *  turn driver never measured. */
+		/** Null for steps recorded before the meter existed or never measured. */
 		context: ContextComposition | null;
 	} | null;
-	/** The resolved model's context window, or null when the catalog has not
-	 *  answered — a percentage against a guessed window would be fiction. */
+	/** Resolved model's context window; null when the catalog has not answered. */
 	contextWindow: number | null;
-	/** The orchestrator's OWN turns, over a window of `step_finish` rows: what a
-	 *  step cost, and how the prefix cache has behaved. Deliberately not widened
-	 *  to the whole workspace — a judge's cold prompt in this window would read
-	 *  as a cache regression the agent never had. `spend` below is the workspace. */
+	/** The orchestrator's own `step_finish` turns only; workspace-wide totals are `spend`. */
 	telemetry: StepTelemetry;
-	/** Every model call the workspace can account for, on both axes: grouped by
-	 *  the producer that spent it, and grouped by the mission it was spent on.
-	 *  This is the answer to "is this ALL of the usage": `spend.coverage.reported`
-	 *  says what share of known calls the providers measured, and
-	 *  `spend.coverage.silent` names the producers that measured none.
-	 *
-	 *  `spend.missions` is the ONE mission-spend figure the panel reads. It comes
-	 *  from `mission_budget`, the ledger the caps are enforced against, and it
-	 *  covers every declared label rather than only the ones the turn in flight
-	 *  happens to be running under. */
+	/** All accounted model calls, by producer and by mission; `spend.missions` comes from `mission_budget`, the enforced ledger. */
 	spend: WorkspaceSpend;
 	log: ActivityLogEntry[];
 }

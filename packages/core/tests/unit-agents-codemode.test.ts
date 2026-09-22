@@ -1,19 +1,5 @@
-// The `agents.*` codemode namespace — delegation projected into the sandbox,
-// which is what turns a workflow into an ordinary crafted tool.
-//
-// What is pinned here:
-//   - structural gating: members exist iff the deps wire the action, exactly
-//     like the tool's action enum (agentsActionsFor is the one gate);
-//   - it is a PROJECTION: every member lands in dispatchAgentsAction over the
-//     same deps object the top-level tool holds — no second spawn/join path;
-//   - the sandbox trust boundary: the member called decides the action, and a
-//     malformed field is a value the script can read rather than a throw —
-//     nothing here has the AI SDK's schema validation behind it;
-//   - the declaration the model reads, including the non-resumable warning
-//     that is the honest cost of searching from inside eval.
-//
-// Real sandbox execution (node `new Function`, cf `createCodeTool`) is covered
-// in the two backend suites; here the surface itself is the subject.
+// The `agents.*` codemode namespace: the delegation tool projected into the sandbox, gated by agentsActionsFor.
+// Real sandbox execution is covered in the two backend suites.
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { hostedSeatsOver, refuseHostNode } from './helpers-actor-host';
@@ -44,7 +30,6 @@ import {
   type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index';
-// The role/tier tests read the ONE field source and the resolver DIRECTLY, so
 import {
   AGENTS_ACTION_FIELDS as ACTION_FIELDS,
   agentsActionFieldsFor,
@@ -129,14 +114,10 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
   return { mode: 'build', ...deps };
 }
 
-/** The swarm substrate, with the tier-model seam wired.
- *
- *  `resolveModel` is required in effect wherever a profile catalog is: a run
- *  carrying a resolved snapshot and finding no resolver refuses rather than run
- *  the caller's model under a record naming the tier's. This fixture answers
- *  with one model for every spec because these tests are about the delegation
- *  surface; WHICH model a tier reaches is pinned in
- *  unit-swarm-profile-routing.test.ts. */
+/**
+ * The swarm substrate with `resolveModel` wired, which a profile catalog requires. Tier routing is pinned in
+ * unit-swarm-profile-routing.test.ts.
+ */
 function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
   const model = new MockLanguageModelV3();
@@ -266,14 +247,10 @@ function actionEnumOf(deps: TestAgentsToolDeps): string[] {
   return schema.jsonSchema.properties.action.enum;
 }
 
-// ── Structural gating: one gate, two surfaces ───────────────────────────────
-
 describe('agents.* codemode namespace — dep gating', () => {
   test('the exploration substrate (CLI / subordinate) exposes the search member alone', () => {
     const deps = withBuildMode({ swarm: swarmDeps() });
-    // `swarm` rides that substrate — a model to expand with and a workspace to
-    // measure in — so a sandbox with it can run a configured search, and the
-    // namespace says so structurally.
+    // `swarm` needs a model and a workspace; with both, the namespace exposes it.
     expect(Object.keys(namespaceOf(() => deps))).toEqual(['swarm']);
   });
 
@@ -307,8 +284,6 @@ describe('agents.* codemode namespace — dep gating', () => {
   });
 });
 
-// ── The projection reaches the same deps as the tool ────────────────────────
-
 describe('agents.* codemode namespace — dispatch', () => {
   test('a Plan provider keeps its trusted mode after the host advances to Build', async () => {
     const team = makeTeam();
@@ -325,9 +300,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   });
 
   test('Plan mode does not narrow the search surface', async () => {
-    // What the old settle-availability test was really guarding. Plan mode
-    // constrains what a helper may DO, never which rungs exist: a planning turn
-    // searches to investigate exactly as a build turn does, over the same members.
+    // Plan mode constrains what a helper may do, never which members exist.
     const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarm: swarmDeps() }));
     expect(await member(provider.tools, 'swarm').execute({ task: 'research' }))
       .toMatchObject({ reason: 'bad_input' });
@@ -336,10 +309,8 @@ describe('agents.* codemode namespace — dispatch', () => {
   });
 
   test('the search contract is the tool\'s, not re-implemented here', async () => {
-    // The projection funnels into the same dispatch, so the sandbox gets the
-    // same classified refusals a tool call does: a search with no preset is
-    // refused, and `settle` — which left the surface with the judged tree — is
-    // refused as the unknown field it now is, naming what swarm does take.
+    // Same dispatch, same classified refusals: no preset is refused, and `settle` is refused as an unknown
+    // field.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     expect(await member(ns, 'swarm').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
 
@@ -355,9 +326,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   });
 
   test('typed search fields reach the dispatch exactly as the tool sends them', async () => {
-    // The projection hands the SAME parsed input to the SAME dispatcher, so a
-    // legal call is answered by the engine and an illegal composition by the
-    // axis refusal — never by a second parse living in the sandbox bridge.
+    // The same parsed input reaches the same dispatcher; no second parse lives in the sandbox bridge.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
 
     const refused = v.parse(v.object({ reason: v.string(), error: v.string() }), await member(ns, 'swarm').execute({
@@ -370,9 +339,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     }));
 
     expect(refused.reason).toBe('bad_input');
-    // The nested objective arrived whole — the refusal is the AXIS one about a
-    // flat preset carrying a value signal, not a parse complaint about a field
-    // the bridge mangled on the way through.
+    // The axis refusal, not a parse complaint: the nested objective arrived whole.
     expect(refused.error).toMatch(/`ideate` is flat and has no value signal/);
   });
 
@@ -422,8 +389,7 @@ describe('agents.* codemode namespace — dispatch', () => {
       };
     });
 
-    // Each call rebuilds the deps, which is what the generation counter proves:
-    // two calls, two reads, and the second sees the later binding.
+    // Each call rebuilds the deps, so the second call sees the later binding.
     await member(ns, 'swarm').execute({ task: 'a' });
     await member(ns, 'swarm').execute({ task: 'b' });
     expect(generation).toBe(3);
@@ -443,8 +409,6 @@ describe('agents.* codemode namespace — dispatch', () => {
   });
 });
 
-// ── The sandbox trust boundary ──────────────────────────────────────────────
-
 describe('agents.* codemode namespace — sandbox input handling', () => {
   test('the member decides the action — a script cannot smuggle another one', async () => {
     const team = makeTeam();
@@ -458,9 +422,8 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('a zero-arg call on the node backend sees the exec context, not an input', async () => {
     const team = makeTeam();
     const ns = namespaceOf(() => ({ team: team.deps }));
-    // The node sandbox appends `{ signal }` to every call, so `agents.list()`
-    // arrives as list({ signal }). It must still be the roster, not a lookup
-    // of a subordinate named after the context.
+    // The node sandbox appends `{ signal }`, so `agents.list()` arrives as list({ signal }) and must still
+    // list.
     expect(await member(ns, 'list').execute({ signal: new AbortController().signal })).toEqual({ subordinates: [rosterEntry] });
     expect(team.calls).toEqual([]);
   });
@@ -481,10 +444,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('the exec context is not read as a field, even beside the script\'s own options', async () => {
     const team = makeTeam();
     const ns = namespaceOf(() => ({ team: team.deps }));
-    // Both shapes the node sandbox produces: the context alone (above), and the
-    // context appended AFTER the script's object. Neither may reach the parse —
-    // `signal` is the host's, and refusing it as unknown would refuse the call
-    // the script actually made.
+    // The host's `{ signal }` may also trail the script's object; it must never reach the parse.
     expect(await member(ns, 'list').execute(
       { agent: 'researcher' },
       { signal: new AbortController().signal },
@@ -494,20 +454,15 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('a malformed field is an inspectable error, never a throw into the script', async () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ peers: peers.deps }));
-    // Sandbox input carries none of the tool schema's validation, so a field of
-    // the wrong type has to come back as a value the script can read.
+    // Sandbox input has no schema validation, so a wrong-typed field comes back as a readable value.
     const result = v.parse(ErrorResultSchema, await member(ns, 'msg').execute({ agent: 'scout', message: 'hi', topic: 42 }));
     expect(result.error).toMatch(/Expected string/);
     expect(peers.calls).toEqual([]);
   });
 
   test('the trailing exec context carries cancellation into the search', async () => {
-    // The node sandbox appends `{ signal }` as a trailing argument. It is the
-    // HOST's object, found by the signal it carries and taken OUT of the input —
-    // so a search called with it is answered by the dispatcher's own refusal and
-    // never by "unknown field \"signal\"", which is what would happen the moment
-    // the bridge stopped recognising it. From there `runSwarmAction` reads
-    // `abortSignal` off that bag and hands it to the run.
+    // The trailing `{ signal }` is the host's and is taken out of the input; `runSwarmAction` reads
+    // `abortSignal` off it.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     const controller = new AbortController();
 
@@ -522,8 +477,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('a non-object argument is a classified refusal, not a deps call', async () => {
     const team = makeTeam();
     const ns = namespaceOf(() => ({ team: team.deps }));
-    // Reason first, like every other refusal on this surface: a script that
-    // branches on the class must not have to parse prose for these two.
+    // Reason first, so a script can branch on the class without parsing prose.
     expect(await member(ns, 'hire').execute('just a string'))
       .toEqual({ success: false, reason: 'bad_input', error: 'agents.hire: expects a single options object' });
     expect(await member(ns, 'dismiss').execute(['researcher']))
@@ -568,8 +522,6 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   });
 });
 
-// ── The declaration the model reads ─────────────────────────────────────────
-
 describe('agents.* codemode namespace — declared types', () => {
   test('declares exactly the gated members', () => {
     const searchOnly = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
@@ -590,10 +542,8 @@ describe('agents.* codemode namespace — declared types', () => {
   });
 
   test('the search docstring says what is measured and what a refusal names', () => {
-    // The declaration a script reads has to carry the two facts a caller gets
-    // wrong: that `verify` names a REGISTERED instrument rather than a path it
-    // invents, and that an illegal composition is refused by NAME rather than
-    // silently run under a different shape.
+    // The declaration says `verify` names a registered instrument and that an illegal composition is refused by
+    // name.
     const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
     expect(types).toContain('MEASURED rather than judged');
     expect(types).toContain('names a REGISTERED instrument');
@@ -606,11 +556,7 @@ describe('agents.* codemode namespace — declared types', () => {
   });
 
   test('the declared preset union is every preset the tool advertises, with the same doctrine', () => {
-    // Both unions were hardcoded literals and both had gone stale in the same
-    // direction: `prove` was absent, so a sandbox script naming the one preset
-    // with an exact checker was a TYPE ERROR — the declaration made a live
-    // capability unreachable rather than merely undescribed. Derived now, so the
-    // sandbox contract cannot come to offer a different set than the schema.
+    // Derived from the schema, so the sandbox declaration cannot offer a different preset set.
     const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
 
     for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
@@ -621,16 +567,13 @@ describe('agents.* codemode namespace — declared types', () => {
   });
 
   test('the same action set renders byte-identically whatever built the deps', () => {
-    // Two unrelated deps objects, same actions: the declaration the cf and node
-    // sandboxes show the model must not differ by a byte, because it is one
-    // literal per action rather than text derived from whatever is wired.
+    // One literal per action, so the cf and node declarations must not differ by a byte.
     const a = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types;
 
     const b = createAgentsCodemodeProvider(() => withBuildMode({
       swarm: {
         rt: createTestRuntime().rt, model: new MockLanguageModelV3(),
-        // This case reads the rendered DECLARATION and runs nothing, so a seat
-        // asked for here would be a node no assertion wanted.
+        // Reads the declaration and runs nothing, so no seat is asked for.
         hostNode: refuseHostNode('this case renders declarations and runs no node'),
       },
     })).types;
@@ -659,8 +602,7 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(teamOnly).toContain('role: string;');
     expect(teamOnly).toContain('mission: string;');
     expect(teamOnly).not.toContain('scope');
-    // `message` reaches this actor only on the existing-agent variant, never the
-    // create one.
+    // `message` reaches this actor only on the existing-agent variant.
     expect(teamOnly).toContain('agent: string;');
 
     const peersOnly = hireType(createAgentsCodemodeProvider(
@@ -681,8 +623,6 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(both).toContain('message: string;');
   });
 });
-
-// ── one field source: native schema, codemode declaration and the parse ─────
 
 describe('agents surface — one action-field source', () => {
   test('every codemode member declares EXACTLY its action’s fields, in order', () => {
@@ -725,9 +665,7 @@ describe('agents surface — one action-field source', () => {
       required: ['action', 'mission', 'scope', 'message'],
     }]);
 
-    // The existing-agent variant is ONE branch on a full actor, not one per
-    // transport: `agent` names whichever roster holds it, so the two gated
-    // surfaces above contribute the same branch and the union carries it once.
+    // The existing-agent variant is one branch, not one per transport, so the union carries it once.
     expect(hireVariants(fullDeps())).toEqual([teamOnly[0], teamOnly[1], peersOnly[1]]);
   });
 
@@ -810,15 +748,13 @@ describe('agents surface — one action-field source', () => {
     const swarm = types.slice(types.indexOf('swarm(input:'), types.indexOf('hire(input:'));
     expect(swarm).toContain('name?: string;');
     expect(swarm).toContain('role?: string;');
-    // A tier is any id the catalog holds, so the declaration is open: an owner's
-    // added tier is nameable from a script, and the tool's schema enum carries
-    // the catalog's list per call.
+    // A tier is any catalog id, so the declaration is open; the schema enum carries the catalog's list per
+    // call.
     expect(swarm).toContain('tier?: string;');
   });
 
   test('the native tool schema advertises the same per-action fields it parses', () => {
-    // Read RAW: the contract parse above narrows to the fields it names, and
-    // this test needs every advertised property.
+    // Read raw: the contract parse narrows to the fields it names.
     const schema = v.parse(
       ToolSchemaContract,
       createAgentsTool(withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps })).inputSchema,
@@ -830,7 +766,6 @@ describe('agents surface — one action-field source', () => {
       for (const field of ACTION_FIELDS[action]) expect(advertised.has(field)).toBe(true);
     }
 
-    // Direct model routing left the surface; tier replaced it.
     expect(advertised.has('model')).toBe(false);
     expect(advertised.has('tier')).toBe(true);
   });
@@ -842,8 +777,6 @@ describe('agents surface — one action-field source', () => {
       .toThrow(/model/);
   });
 });
-
-// ── role / tier / preset precedence through the one resolver ─────────────────
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
@@ -887,8 +820,8 @@ describe('agents delegation — role/tier/preset precedence', () => {
     const call = present(team.calls.find((c) => c.action === 'spawn'), 'the spawn call');
     const input = v.parse(SpawnCallInputSchema, call.input);
     expect(input.role).toBe('researcher');
-    // The ROLE-default tier is NOT stored — the child re-derives it from its
-    // roleId at its own turn boundary. Only an explicit override rides along.
+    // The role-default tier is not stored; the child re-derives it from its roleId. Only an explicit override
+    // rides along.
     expect(input.tier).toBeUndefined();
   });
 
@@ -942,9 +875,8 @@ describe('agents delegation — role/tier/preset precedence', () => {
   });
 
   test('a role-homogeneous swarm takes its preset from the role when omitted', async () => {
-    // The refusal path proves resolution ran: an ideate-shaped run without an
-    // objective but WITH the role's default preset passes preset validation and
-    // fails later (at expansion), never at `preset`.
+    // Resolution ran: with the role's default preset, an objective-less ideate run fails at expansion, not at
+    // `preset`.
     const deps = profileDeps();
     const tools = namespaceOf(() => deps);
     const noPreset = await member(tools, 'swarm').execute?.({ task: 'explore angles' });
@@ -988,8 +920,6 @@ describe('agents delegation — role/tier/preset precedence', () => {
   });
 });
 
-// ── durable snapshot round-trip ───────────────────────────────────────────────
-
 describe('swarm profile snapshot codec', () => {
   test('a resolved profile survives JSON round-trip through the ledger gate', () => {
     const resolved = resolveTurnProfile({
@@ -1001,8 +931,7 @@ describe('swarm profile snapshot codec', () => {
       activeSkills: [],
     });
 
-    // The ledger stores the one complete immutable profile. Re-drive never
-    // re-resolves work mode, role, tiers, skills, or actions.
+    // The ledger stores the one complete immutable profile; re-drive never re-resolves it.
     const snapshot = {
       profile: resolved,
       sources: { roleSource: 'caller', tierSource: 'role', presetSource: 'role_default' },

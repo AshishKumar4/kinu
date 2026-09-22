@@ -1,11 +1,5 @@
-/**
- * The in-episode fitness signal — the pure half.
- *
- * These pin the properties the signal's worth rests on: it is derived from
- * what the runtime saw (call sites in submitted code, an attribution stamp on
- * a real failure), a name that merely APPEARS in prose is not a call, and a
- * block that failed on its own account blames nobody.
- */
+/** The in-episode fitness signal, pure half: derived from what the runtime saw; prose mentions are not
+ *  calls, and a block that failed on its own account blames nobody. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -144,9 +138,8 @@ describe('the craft ledger — where an in-episode observation lands', () => {
       sql: makeSql(db),
     });
 
-    // `crafted_tools` belongs to the one workspace schema, so a store that
-    // cannot list is a broken database. Answered as an empty set, the agent
-    // re-crafts tools it already owns and every call to them goes unscored.
+    // `crafted_tools` is in the workspace schema, so a store that cannot list is broken; an empty answer
+    // would make the agent re-craft tools it owns.
     expect(() => ledger.names()).toThrow('not initialized');
   });
 
@@ -196,8 +189,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   });
 
   test('machine evidence never reaches the pole a person\'s verdict does', () => {
-    // Read from the human band itself, so the invariant cannot be voided by
-    // someone moving that band and leaving a stale literal here.
+    // Read from the human band itself, so moving that band cannot leave a stale literal here.
     expect(CRAFT_INVOCATION_QUALITY.returned).toBeLessThan(feedbackToQuality('positive'));
     expect(CRAFT_INVOCATION_QUALITY.raised).toBeLessThan(CRAFT_NEUTRAL_PRIOR);
   });

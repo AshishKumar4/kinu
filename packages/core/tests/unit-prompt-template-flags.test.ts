@@ -1,28 +1,7 @@
 /**
- * The typed-conditional contract, red-proven.
- *
- * `{{#if}}` was deliberately absent from `prompting/template.ts` for one reason,
- * written into its own docstring: an untyped template conditional "is an untyped
- * string lookup that renders empty when it misses — the failure mode that already
- * left two mode overlays dead in the live prompt." The conditional exists now
- * because a flag is a DECLARED boolean slot, so the miss is a compile error.
- *
- * That claim is worth exactly what the compiler enforces, so this suite runs the
- * SAME `tsc` the gate runs (`bun run check`) over a project of two fixtures and
- * reads the diagnostics:
- *
- *   fixtures/template-flags/violations.ts   seven ways to render the wrong bytes,
- *                                           each of which MUST fail to compile
- *                                           with a diagnostic naming the slot
- *   fixtures/template-flags/allowed.ts      the ordinary calls, which MUST
- *                                           compile — the false-positive guard
- *                                           over an intersection contract, which
- *                                           is easy to write too strictly
- *
- * Modelled on `unit-obs-log-ban.test.ts`, deliberately including its refusal to
- * use `@ts-expect-error`: that directive proves an error exists somewhere on the
- * next line and never says WHICH, so a fixture built from it keeps passing when
- * the contract breaks and a typo takes its place.
+ * Typed `{{#if}}` flags, red-proven: runs the gate's `tsc` over fixtures/template-flags, where
+ * violations.ts must fail naming the slot and allowed.ts must compile. Deliberately no
+ * `@ts-expect-error`: it never says which error fired.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -50,13 +29,8 @@ interface CompileReport {
 }
 
 /**
- * `tsc --noEmit` over the fixture project, parsed into diagnostics.
- *
- * The compiler is invoked through the repo's own `node_modules/.bin/tsc`, the
- * same binary `bun run check` uses, so this cannot pass against a compiler the
- * gate does not run. An assignability error reports its reason on INDENTED
- * continuation lines — which is where the slot name lives — so those are folded
- * into the diagnostic they belong to rather than dropped.
+ * `tsc --noEmit` via the repo's own binary. Indented continuation lines carry the slot name, so
+ * they fold into their diagnostic.
  */
 function compileFixtures(): CompileReport {
   const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
@@ -87,8 +61,7 @@ function compileFixtures(): CompileReport {
   return { status: run.status ?? -1, diagnostics };
 }
 
-/** Line numbers are read from the fixture's own `[N]` markers, so renumbering
- *  the file cannot silently detach an assertion from the line it is about. */
+/** Lines come from the fixture's `[N]` markers, so renumbering cannot detach an assertion. */
 function markedLines(file: string): ReadonlyMap<number, number> {
   const source = readFileSync(join(fixtureProject, file), 'utf8').split('\n');
   const byCase = new Map<number, number>();
@@ -110,17 +83,12 @@ const compiled = compileFixtures();
 
 describe('a prompt section rendered with the wrong flags does not compile', () => {
   test('the fixture project fails to compile at all', () => {
-    // The precondition for everything below. A zero exit here would mean the
-    // contract is gone and every per-case assertion is reading an empty list.
+    // A zero exit would mean the contract is gone and every assertion below reads an empty list.
     expect(compiled.status).not.toBe(0);
     expect(compiled.diagnostics.length).toBeGreaterThan(0);
   });
 
-  /**
-   * Every misuse, with the text the diagnostic must carry. A test that only
-   * asserted "line N errors" would pass on a typo; naming the slot asserts it is
-   * THIS contract that fired.
-   */
+  /** Each misuse with the slot its diagnostic must name, so a typo cannot pass as this contract. */
   const cases: readonly (readonly [number, string, string])[] = [
     [1, 'an undeclared flag', "'hasSandbox' does not exist in type"],
     [2, 'a declared flag omitted', "Property 'hasShell' is missing"],
@@ -145,10 +113,7 @@ describe('a prompt section rendered with the wrong flags does not compile', () =
   }
 
   test('every marked case is covered, and nothing else in the fixture errors', () => {
-    // Two directions. A misuse the fixture documents and this suite forgot to
-    // assert would be a silent gap; a diagnostic on an UNMARKED line means the
-    // fixture has an ordinary mistake in it and one of the assertions above may
-    // be passing for the wrong reason.
+    // Both directions: an unasserted documented misuse, or a diagnostic on an unmarked line, fails.
     expect([...lines.keys()].sort((a, b) => a - b)).toEqual(cases.map(([id]) => id));
     const expected = new Set(lines.values());
     const stray = violations.filter((d) => !expected.has(d.line));
@@ -156,10 +121,7 @@ describe('a prompt section rendered with the wrong flags does not compile', () =
   });
 
   test('the ordinary calls compile', () => {
-    // Not a formality. `TemplateSlots` is an INTERSECTION of a string map and a
-    // boolean map, and the shapes that break such a contract are exactly the
-    // ordinary ones: a slot object held in a variable, a flag from a comparison,
-    // a section whose contract is only flags or only slots, an empty-string value.
+    // TemplateSlots intersects a string map and a boolean map; ordinary shapes are what break it.
     const allowed = compiled.diagnostics.filter((d) => d.file.endsWith('allowed.ts'));
     expect(allowed.map((d) => `${String(d.line)}: ${d.text}`)).toEqual([]);
   });

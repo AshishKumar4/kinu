@@ -1,21 +1,5 @@
-// KINU-085. A turn cut at the provider's output limit is continued, and the
-// conversation it produced is then replayed to a DIFFERENT provider family.
-// Both halves cross an adapter boundary that owns the tool-call identifier, and
-// the pairing between a completed call and its result is the only thing keeping
-// the work done: a destination that reads the call as PENDING re-issues it, and
-// the tool runs twice.
-//
-// `unit-output-limit-continuation.test.ts` proves the continuation itself
-// against a mock LanguageModel, which converts nothing — the assertion there is
-// about `runChat`. This file is about the ADAPTERS: both turns run through the
-// real registered providers with a mocked fetch, so what is asserted is the
-// bytes @ai-sdk/anthropic and @ai-sdk/openai-compatible actually put on the
-// wire. Nothing here reads our source.
-//
-// The switch is the production one: a turn resolves ONE model, and the model a
-// conversation resolves can change between turns (the owner picks another, a
-// tier routes elsewhere). `normalizeReplayForDestination` exists for exactly
-// that hop, and until now it was measured only as a pure function.
+// KINU-085: a turn cut at the output limit is continued, then replayed to a different provider
+// family through the real adapters; an unpaired completed call would re-run the tool.
 import { describe, test, expect } from 'bun:test';
 import { tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -39,9 +23,7 @@ function replayingScripts(scripts: readonly string[]) {
   });
 }
 
-/** What the SOURCE provider named this call. Anthropic's own grammar, and
- *  nothing any other family would mint — which is what makes its presence or
- *  absence on the destination wire an unambiguous reading. */
+/** The source provider's id for this call: Anthropic's grammar, which no other family mints. */
 const ANTHROPIC_NATIVE_ID = 'toolu_01SourceMinted';
 
 const ANTHROPIC_REASONING = 'I should look this up.';
@@ -65,9 +47,7 @@ function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch):
   };
 }
 
-/** One side effect, counted across BOTH turns. A destination that mistakes the
- *  completed call for a pending one re-issues it, and this is where that shows
- *  up as a second execution rather than as a formatting difference. */
+/** One side effect counted across both turns: a re-issued completed call shows up here. */
 function countingTools() {
   let executions = 0;
 
@@ -86,9 +66,7 @@ function countingTools() {
   return { tools, executions: () => executions } as const;
 }
 
-/** Every event terminated, INCLUDING the last one. An unterminated tail is
- *  discarded by the SSE parser, and the `finish` frame carrying the provider's
- *  stop reason is what goes missing with it. */
+/** Every event terminated, including the last: the SSE parser drops an unterminated tail. */
 function sse(events: ReadonlyArray<readonly [string, JsonObject]>): string {
   return `${events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n')}\n`;
 }
@@ -109,9 +87,7 @@ const ANTHROPIC_TOOL_USE = sse([
   ['message_stop', { type: 'message_stop' }],
 ]);
 
-/** A text step with a chosen stop reason. `max_tokens` is the provider saying
- *  it cut the answer; the adapter maps it to the `length` the continuation
- *  reads. */
+/** A text step with a chosen stop reason; `max_tokens` maps to the `length` the continuation reads. */
 function anthropicText(id: string, text: string, stopReason: 'max_tokens' | 'end_turn'): string {
   return sse([
     ['message_start', { type: 'message_start', message: { id, type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: ANTHROPIC_USAGE } }],
@@ -176,8 +152,6 @@ function bodyOf(handle: MockFetchHandle, index: number): JsonObject {
   return parseJsonObject(v.parse(v.string(), request?.body));
 }
 
-// ── What each wire calls the pairing key ──────────────────────────────────
-
 const AnthropicMessagesSchema = v.array(v.object({
   role: v.string(),
   content: v.union([v.string(), v.array(v.object({
@@ -199,8 +173,7 @@ const CompatMessagesSchema = v.array(v.object({
   tool_calls: v.optional(v.array(v.object({ id: v.string() }))),
 }));
 
-/** Every `tool_use.id` and every `tool_result.tool_use_id` in an Anthropic
- *  request, in wire order. */
+/** Every `tool_use.id` and `tool_result.tool_use_id` in an Anthropic request, in wire order. */
 function anthropicPairing(body: JsonObject) {
   const messages = v.parse(AnthropicMessagesSchema, body.messages);
   const calls: string[] = [];
@@ -220,13 +193,8 @@ function anthropicPairing(body: JsonObject) {
 }
 
 /**
- * The same two halves on the openai-compatible wire: `tool_calls[].id` on the
- * assistant message, `tool_call_id` on the tool message.
- *
- * `order` is every id-bearing message in WIRE ORDER, because the endpoint's
- * requirement is positional as well as referential — a `tool` message that does
- * not follow the assistant message that opened its call is rejected, and a
- * rewrite that renumbered the two halves independently would still pair.
+ * `tool_calls[].id` and `tool_call_id` on the openai-compatible wire. `order` is wire order: a
+ * `tool` message must follow the assistant message that opened its call.
  */
 function compatPairing(body: JsonObject) {
   const messages = v.parse(CompatMessagesSchema, body.messages);
@@ -244,11 +212,8 @@ function compatPairing(body: JsonObject) {
 }
 
 /**
- * Turn one, on Anthropic: a tool call, then an answer the provider cuts at its
- * output limit, then the continuation `runChat` owes.
- *
- * Returns what a caller persists — the durable history — plus the wire the
- * continuation went out on.
+ * Turn one on Anthropic: a tool call, a cut answer, then the continuation. Returns the durable
+ * history and the continuation's wire.
  */
 async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
   mock: MockFetchHandle;
@@ -388,9 +353,7 @@ describe('an output-limit continuation, across two provider adapters', () => {
     expect(text).toBe('the tool said 41, and here is the rest');
     expect(executions()).toBe(1);
 
-    // On the CONTINUATION's wire, the completed call arrives with its result
-    // against the same key. That pairing is what tells the Messages API the
-    // call is finished; an unpaired `tool_use` is a request to run it.
+    // An unpaired `tool_use` asks the Messages API to run it; the completed call must arrive paired.
     const continuationBody = bodyOf(mock, 2);
     const pairing = anthropicPairing(continuationBody);
     expect(pairing.calls.length).toBe(1);
@@ -413,16 +376,11 @@ describe('an output-limit continuation, across two provider adapters', () => {
 
     expect(mock.requests.length).toBe(1);
     const pairing = compatPairing(bodyOf(mock, 0));
-    // The completed call is still one call joined to one result — on a wire
-    // that spells both halves differently from the one that minted them, and
-    // in the position that wire requires.
     expect(pairing.calls.length).toBe(1);
     expect(pairing.results).toEqual(pairing.calls);
     expect(pairing.order).toEqual([`assistant#${pairing.calls[0]}`, `tool#${pairing.calls[0]}`]);
 
     for (const id of pairing.calls) expect(isPortableToolCallId(id)).toBe(true);
-    // Nothing executed during the transformation: the replay is a request
-    // rewrite, and the work the first turn did stays done.
     expect(executions()).toBe(1);
   });
 
@@ -472,10 +430,8 @@ describe('an output-limit continuation, across two provider adapters', () => {
     const { tools } = countingTools();
     const first = await truncatedAnthropicTurn(tools);
 
-    // The same replay with nothing naming the destination. The ids are the
-    // Anthropic-native ones, which is what the assertions above would read if
-    // the normalization were removed — so they are not measuring a property
-    // the transport would have had anyway.
+    // Control: without a destination the ids stay Anthropic-native, so the assertions above measure
+    // the normalization.
     const mock = await replayOnCompat(first.responseMessages, tools, {});
     const pairing = compatPairing(bodyOf(mock, 0));
     expect(pairing.calls).toEqual([ANTHROPIC_NATIVE_ID]);

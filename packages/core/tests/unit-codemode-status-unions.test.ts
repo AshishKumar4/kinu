@@ -1,6 +1,4 @@
-// A codemode projection's TYPE text must not restate an enum its native tool
-// already owns — it interpolates the shared constant, so a status added there
-// arrives here instead of drifting into a second picklist.
+// The codemode type text must interpolate the native tool's shared status constant, not restate it.
 import { describe, test, expect } from 'bun:test';
 import { SUBORDINATE_REPORT_STATUSES } from '../src/events/hub/types';
 import { TASK_STATUSES, TaskListStore } from '../src/tasks/store';
@@ -18,10 +16,7 @@ describe('codemode declared status unions come from the shared constants', () =>
     }));
 
     const types = provider.types ?? '';
-    // The STATUS POSITION, not the whole parameter list: what this defends is
-    // that the union is interpolated from the shared constant, and pinning
-    // the parameters after it turns every signature change into a failure of
-    // a test about something else.
+    // Pins only the status position, so unrelated signature changes do not fail this test.
     expect(types).toContain(`send(status: ${unionOf(SUBORDINATE_REPORT_STATUSES)}, `);
   });
 

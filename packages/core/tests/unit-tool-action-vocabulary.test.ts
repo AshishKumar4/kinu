@@ -1,22 +1,5 @@
-// Every native tool that dispatches on a model-supplied discriminant must
-// refuse an unrecognised one BY NAMING THE VOCABULARY.
-//
-// The class, not the instance. `jsonSchema<T>({…})` from the AI SDK carries a
-// schema to the provider and leaves `Schema.validate` undefined, so
-// `safeValidateTypes` returns the model's raw JSON untouched and the declared
-// TypeScript union is a claim about the value, never a fact. Four dispatchers
-// then switched on that claim:
-//
-//   agents  guarded it and answered with the available actions   — correct
-//   tasks   fell out of a `default` into `unknown tasks action 'list">'`
-//   web     fell out of a `default` into `unknown web action '…'`
-//   memory  named the action back, but never the alternatives
-//   report  did not check `status` at all — a bogus status reached the
-//           orchestrator's inbox typed as one of the three
-//
-// A refusal the model cannot act on is how one malformed call becomes a loop,
-// which is what the owner saw. This gate makes the whole class impossible: add
-// a dispatcher that answers without its vocabulary and it goes red.
+// A refusal of an unrecognised discriminant must name the vocabulary: AI SDK `jsonSchema<T>` never validates, so
+// the TypeScript union is a claim, and an unactionable refusal turns one malformed call into a loop.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -29,14 +12,9 @@ import {
 import type { ToolSet } from 'ai';
 import { storesFor } from './helpers';
 
-/** The malformed argument the owner's model actually emitted. A `">` fragment
- *  inside a tool argument, kept verbatim so this gate is anchored to the real
- *  payload rather than a tidy stand-in. */
+/** The malformed argument a model actually emitted, kept verbatim. */
 const MALFORMED = 'list">';
 
-
-/** One dispatching tool: how to build it, which argument carries the
- *  discriminant, and the vocabulary a refusal has to name. */
 interface DispatchSurface {
   readonly tool: string;
   readonly field: string;
@@ -59,8 +37,7 @@ const SURFACES: readonly DispatchSurface[] = [
     build: (rt) => buildBuiltinTools({ rt, webSearch: noopWebSearch, history: storesFor(rt).history }),
   },
   {
-    // Facts NOT wired, deliberately: the refusal must name the reachable set,
-    // so offering `remember` here would be the drift memoryActionsFor prevents.
+    // Facts not wired: the refusal must name only the reachable set.
     tool: 'memory', field: 'action', vocabulary: memoryActionsFor(false),
     build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
   },
@@ -74,10 +51,7 @@ const SURFACES: readonly DispatchSurface[] = [
   },
 ];
 
-
-/** Arguments as a MODEL can send them: the discriminant plus enough of the
- *  other fields that a surface reaching its dispatch body would proceed, so a
- *  refusal proves the discriminant check ran and not a missing-argument guard. */
+/** Enough fields that a refusal proves the discriminant check ran, not a missing-argument guard. */
 interface ProbeArgs {
   action?: string;
   status?: string;
@@ -110,16 +84,13 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
       const pending = exec({ [surface.field]: MALFORMED, content: 'body', query: 'q', path: 'a.txt' });
       await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
 
-      // Every reachable value is offered, so one retry can succeed.
       for (const word of surface.vocabulary) await expect(pending).rejects.toThrow(word);
       await expect(pending).rejects.toThrow(surface.field);
     });
   }
 
   test('the surface list is the whole dispatching surface (guards the guard)', () => {
-    // A dispatcher added without an entry here would never be checked. Every
-    // native tool whose schema declares an enum'd discriminant must appear
-    // above.
+    // Every native tool whose schema declares an enum'd discriminant must appear above.
     const rt = runtime();
 
     const tools = buildBuiltinTools({
@@ -143,8 +114,6 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
       return Object.keys(properties).some((key) => {
         const enumerated = v.safeParse(v.object({ enum: v.array(v.string()) }), properties[key]);
 
-        // Only the DISCRIMINANT counts: `tasks.status`/`tasks.stance` are enum'd
-        // arguments of an action, not the choice of action itself.
         return enumerated.success && (key === 'action' || key === 'status');
       });
     });

@@ -1,37 +1,6 @@
-// Exhaustive model routing — the ONE table that says where every producer's
-// model comes from.
-//
-// A SpendSource names a producer; this file alone decides what that producer
-// runs on. The `satisfies Record<SpendSource, ModelRoutePolicy>` below makes
-// adding a producer without a routing decision a compile error, and
-// `resolveModelRoute` is the only read path — so a producer cannot grow a
-// private resolver beside it.
-//
-//   invocation  the turn's own resolved tier (the agent's active role decides)
-//   fixed       one named tier slot for every caller of this producer
-//   platform    an explicit fixed-platform binding outside profile resolution;
-//               resolveModelRoute refuses it rather than guessing
-//
-// Every model construction consumes a ResolvedTurnProfile through this table,
-// or declares itself `platform`.
-//
-// ONE DECLARED EXCEPTION, named here because a claim of exhaustiveness has to
-// carry its own counter-example. A judge PANEL — the outcome ensemble, which
-// puts one model per connected vendor family to the same hand-labelled turns —
-// files as `judge` and cannot route through `judge`'s fixed slot: one tier is
-// one model, and a panel of one model is not a weaker panel, it is the absence
-// of the instrument. Its whole point is that its members disagree for reasons
-// other than the turn.
-//
-// It stays off this table rather than growing a row, and its EFFORT stays on
-// the stage table (`REASONING_EFFORT_FOR_STAGE.judge`) rather than being taken
-// from the deep tier. That pairing is deliberate: a tier is a (model, effort)
-// pair, so applying the effort of a tier whose model was deliberately not used
-// would be half a tier — and a half-applied profile reads as routed while only
-// one axis is, which is worse than one that is plainly not.
-//
-// What it MUST NOT become is `resolveModelRoute('judge', …)`. That reads tidier
-// and silently makes every judge the same model.
+// The one table routing every SpendSource to a model; `satisfies` makes a missing row a compile error.
+// Declared exception: the judge panel files as `judge` but spans vendor families, keeping its effort on
+// REASONING_EFFORT_FOR_STAGE.judge; never route it through resolveModelRoute('judge', …).
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../strategy/effort';
 import type { TierId } from './catalog';
@@ -42,17 +11,11 @@ export type ModelRoutePolicy =
   | { readonly kind: 'fixed'; readonly tier: TierId }
   | { readonly kind: 'platform' };
 
-/** Routing per producer. Keyed by the full union so the compiler, not a test,
- *  holds the exhaustiveness invariant. */
 const MODEL_ROUTE_POLICY = {
-  // The turn's own work, and every delegation shape that carries the turn's
-  // immutable resolved tier with it.
   agent: { kind: 'invocation' },
   head: { kind: 'invocation' },
   mcts: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
-  // A slate's `ai` binding resolves its own profile — the call's tier becomes
-  // the profile's explicit tier, so `invocation` reads back the same model.
   slate: { kind: 'invocation' },
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },
@@ -60,12 +23,8 @@ const MODEL_ROUTE_POLICY = {
   compaction: { kind: 'fixed', tier: 'fast' },
   fast: { kind: 'fixed', tier: 'fast' },
   reflection: { kind: 'fixed', tier: 'fast' },
-  // Embeddings and other binding-bound calls: no profile route exists.
   platform: { kind: 'platform' },
-  // A cache warm re-sends a request that already ran, addressed by the spec
-  // frozen beside it (providers/cache-warming.ts). No profile is resolved for a
-  // refresh — it runs on a durable wake, outside every turn — and a tier lookup
-  // at wake time could only answer a model that did not write the entry.
+  // Replays the frozen spec that wrote the entry (providers/cache-warming.ts); no turn exists.
   warming: { kind: 'platform' },
 } as const satisfies Record<SpendSource, ModelRoutePolicy>;
 
@@ -74,16 +33,7 @@ export type ProfileRoutedSource = {
   [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'platform' } ? never : K
 }[SpendSource];
 
-/**
- * Producers whose model comes from ONE named tier slot, whatever the turn
- * resolved — the lanes a fixed-tier factory may be asked to build.
- *
- * Derived from the table because it was hand-mirrored: one backend declared
- * `'judge' | 'fast' | 'advisor'` beside its lane factory, which is a SUBSET of
- * the fixed rows and therefore both a duplicate and quietly wrong — moving a
- * producer to a fixed tier here left that union unable to name it, with nothing
- * failing to say so.
- */
+/** Producers routed to one named tier slot regardless of the turn. */
 export type FixedTierSource = {
   [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'fixed' } ? K : never
 }[SpendSource];
@@ -95,7 +45,6 @@ function isProfileRouted(source: SpendSource): source is ProfileRoutedSource {
 /** One producer's concrete model, as the immutable turn profile resolves it. */
 export interface ModelRouteResolution {
   readonly source: ProfileRoutedSource;
-  /** The tier slot the policy named — the turn's own for `invocation`. */
   readonly tier: TierId;
   readonly model: string;
   readonly reasoningEffort: ReasoningEffort;
@@ -114,9 +63,7 @@ function tierResolution(
   return assignment;
 }
 
-/** Resolve one producer's model from the immutable turn profile. Returns null
- *  only for the explicit platform exception — callers there construct their
- *  binding-bound client directly, and nowhere else may bypass this table. */
+/** Null only for `platform` producers, which build their binding-bound client directly. */
 export function resolveModelRoute(
   source: ProfileRoutedSource,
   profile: ResolvedTurnProfile,
@@ -132,10 +79,7 @@ export function resolveModelRoute(
   if (!isProfileRouted(source)) return null;
   const policy = MODEL_ROUTE_POLICY[source];
 
-  // Invocation lanes carry the TURN's resolved model, not the tier slot's. A
-  // workspace pin overrides the turn's tier model while the catalog slots stay
-  // the account's, and a lane that re-read the slot would run the turn's own
-  // work on the model the pin just displaced.
+  // Use the turn's model, not the slot's: a workspace pin overrides the former only.
   if (policy.kind === 'invocation') {
     return Object.freeze({
       source,

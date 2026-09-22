@@ -1,24 +1,6 @@
 /**
- * What the MODEL sees when a tool fails.
- *
- * The suite has always been good at "the tool failed" and blind to "and this is
- * what came back". Those are different assertions, and only the second one is
- * the contract: a failed tool result is not an error code the runtime consumes,
- * it is a message the model reads and acts on. If the payload is empty the turn
- * is over — the model has no way to know what broke, so it guesses, retries the
- * same command, or declares success.
- *
- * The defect these lock: `shell` reported ONLY stderr on a nonzero exit and threw
- * stdout away. Every test runner on earth prints its failures to stdout and
- * exits nonzero — `pytest`, `bun test`, `cargo test`, `make`. So the model ran
- * the suite, got back `Error (exit 1): ` with nothing after the colon, and had
- * to re-run it redirected to see anything. It survived the whole suite because
- * every existing test asserted only the `Error (exit N)` prefix.
- *
- * Three implementations of one contract, so all three are pinned here:
- *   - the `shell` builtin over the workspace shell (core/tools/builtins.ts)
- *   - the inline executor's `exec` (core/execution/inline.ts)
- *   - the local `device` executor's `exec` (cli-backend, covered in its own suite)
+ * A failed tool result is a message the model reads: stdout carries a test runner's diagnosis, so it must survive
+ * a nonzero exit in `shell` (core/tools/builtins.ts) and inline `exec` (core/execution/inline.ts).
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -33,8 +15,7 @@ import * as v from 'valibot';
 
 type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
-/** A shell whose command failed the way a test runner fails: the diagnosis on
- *  stdout, a bare summary line (or nothing at all) on stderr, nonzero exit. */
+/** Fails like a test runner: diagnosis on stdout, little or nothing on stderr. */
 function failingSuiteShell(stderr = ''): Shell {
   return {
     exec: async () => ({
@@ -65,8 +46,6 @@ describe('a failed `shell` tells the model what actually happened', () => {
     const tool = shellToolOver(failingSuiteShell());
     const pending = tool.execute({ command: 'bun test' });
 
-    // The diagnosis, not just the verdict. Without these the model is told only
-    // that something exited 1, which is the same information as no message.
     await expect(pending).rejects.toThrow('applies the discount before tax');
     await expect(pending).rejects.toThrow('Expected: 90');
     await expect(pending).rejects.toThrow('checkout.test.ts:41');

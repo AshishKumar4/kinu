@@ -1,5 +1,4 @@
-// Prompt-cache breakpoints — the pure provider-agnostic layer both backends
-// apply at their message-assembly seam (prompting/cache-breakpoints.ts).
+// Provider-agnostic prompt-cache breakpoints (prompting/cache-breakpoints.ts).
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -76,7 +75,6 @@ describe('resolvePromptCacheStrategy', () => {
   });
 
   test('no-cache-concept providers resolve to none', () => {
-    // workers-ai rides x-session-affinity headers; claude-cli owns its own context.
     expect(resolvePromptCacheStrategy('workers-ai', '@cf/moonshotai/kimi-k2.6')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy('claude-cli', 'claude-opus-4-7')).toEqual({ kind: 'none' });
     expect(resolvePromptCacheStrategy('something-new')).toEqual({ kind: 'none' });
@@ -90,7 +88,6 @@ describe('resolvePromptCacheStrategy', () => {
       .toEqual({ kind: 'openai-cache-key', ttl: '24h' });
     expect(resolvePromptCacheStrategy('openrouter', 'anthropic/claude-sonnet-4.6', 'long'))
       .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true, ttl: '1h' });
-    // No marker dialect ⇒ no TTL to send; the key-only strategies stay bare.
     expect(resolvePromptCacheStrategy('openrouter', 'meta-llama/llama-4-maverick', 'long'))
       .toEqual({ kind: 'openai-compat', bodyNamespace: 'openrouter', markers: false });
     expect(resolvePromptCacheStrategy('my-gateway', 'openai/gpt-5.5', 'long'))
@@ -107,7 +104,6 @@ describe('resolvePromptCacheStrategy', () => {
     ];
 
     for (const { provider, model, expected } of rows) {
-      // 'short' states the default explicitly, so it reads the same literal.
       expect(resolvePromptCacheStrategy(provider, model, 'short')).toEqual(expected);
       expect(resolvePromptCacheStrategy(provider, model)).toEqual(expected);
     }
@@ -119,7 +115,6 @@ describe('resolvePromptCacheStrategy', () => {
         .toEqual({ kind: 'none' });
     }
 
-    // …which means no markers AND no cache key — not just a shorter TTL.
     const off = resolvePromptCacheStrategy('anthropic', 'claude-opus-4-7', 'none');
     expect(hasCacheMarkers(off)).toBe(false);
     expect(promptCacheOptions(off, 'agent-1')).toBeUndefined();
@@ -170,8 +165,7 @@ describe('markCacheTail', () => {
   });
 
   test('rolls forward: stale markers deeper in the conversation are stripped', () => {
-    // Simulates the per-step re-roll — step N's markers must not accumulate
-    // with step N+1's, or the 4-breakpoint budget blows.
+    // Step N's markers must not accumulate with step N+1's, or the breakpoint budget is exceeded.
     const step1 = markCacheTail(history(4), anthropic);
     const step2 = markCacheTail([...step1, { role: 'assistant', content: 'tool step' }, { role: 'user', content: 'result' }], anthropic);
     expect(anthropicMarkerCount(step2)).toBe(2);
@@ -231,8 +225,7 @@ describe('markCacheTail', () => {
     ];
 
     const marked = markCacheTail(input, openrouterClaude);
-    // The @ai-sdk/openai-compatible converter only reads part metadata for
-    // tool results and single-text user messages — markers must sit there.
+    // @ai-sdk/openai-compatible reads part metadata only for tool results and single-text user messages.
     const toolParts = messageParts(marked[1]);
     expect(toolParts[0]?.providerOptions)
       .toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
@@ -241,7 +234,6 @@ describe('markCacheTail', () => {
       .toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
     expect(marked[0].providerOptions).toBeUndefined();
 
-    // Rolling strips part-level markers too — re-marking stays at 2 total.
     const rolled = markCacheTail([...marked, { role: 'user', content: 'next' }], openrouterClaude);
     const markerCount = JSON.stringify(rolled).match(/"cache_control"/g)?.length ?? 0;
     expect(markerCount).toBe(2);
@@ -307,10 +299,7 @@ describe('applyCacheBreakpoints', () => {
   });
 
   test('agrees with promptCachePlan on everything but the tail', () => {
-    // The two turn drivers reach caching through different entry points —
-    // runChat through applyCacheBreakpoints, Think's through promptCachePlan,
-    // which cannot carry messages. Only the tail may differ between them; a
-    // strategy, system or routing difference means the paths have drifted.
+    // runChat and Think reach caching through different entry points; only the tail may differ.
     for (const [providerId, modelId] of [
       ['anthropic', 'claude-opus-4-7'],
       ['openai', 'gpt-5.5'],
@@ -324,7 +313,6 @@ describe('applyCacheBreakpoints', () => {
   });
 });
 
-// Moved from cf-backend (providers/anthropic-cache.ts was folded into this module).
 describe('markLastToolForAnthropicCache', () => {
   test('sets an ephemeral anthropic cache breakpoint on the LAST tool only', () => {
     const tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b'), c: cacheTool('c') };
@@ -346,7 +334,6 @@ describe('markLastToolForAnthropicCache', () => {
   test('empty tool set is a no-op', () => {
     const tools: ToolSet = {};
     markLastToolForAnthropicCache(tools);
-    // No tool means no breakpoint to write: the set stays empty.
     expect(Object.keys(tools)).toEqual([]);
   });
 

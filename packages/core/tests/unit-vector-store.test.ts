@@ -1,7 +1,3 @@
-/**
- * Unit tests for VectorStore + Reciprocal Rank Fusion + Embedder adapters.
- */
-
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import {
   reciprocalRankFusion,
@@ -16,8 +12,6 @@ import {
   type VectorRecord,
 } from '../src/index';
 import { present } from '@kinu.run/test-utils';
-
-// ── Reciprocal Rank Fusion ───────────────────────────────────────────
 
 describe('reciprocalRankFusion', () => {
   test('returns empty for empty inputs', () => {
@@ -36,8 +30,6 @@ describe('reciprocalRankFusion', () => {
     const sem = [{ id: 'shared' }, { id: 'only-sem' }];
     const out = reciprocalRankFusion([lex, sem]);
     expect(out[0].id).toBe('shared');
-    // 'shared' has rrf = 1/(60+1) + 1/(60+1) = ~0.0328
-    // 'only-lex' has rrf = 1/(60+2) = ~0.0161
     expect(out[0].rrfScore).toBeGreaterThan(out[1].rrfScore);
     expect(out[0].sources.length).toBe(2);
   });
@@ -46,7 +38,6 @@ describe('reciprocalRankFusion', () => {
     const list = [{ id: 'a' }, { id: 'b' }];
     const k1 = reciprocalRankFusion([list], 10);
     const k2 = reciprocalRankFusion([list], 1000);
-    // Smaller k → larger raw rrf for top items.
     expect(k1[0].rrfScore).toBeGreaterThan(k2[0].rrfScore);
   });
 
@@ -59,8 +50,6 @@ describe('reciprocalRankFusion', () => {
     expect(x.sources.map((s: { kind: string }) => s.kind).sort()).toEqual(['lex', 'sem']);
   });
 });
-
-// ── CloudflareVectorStore w/ in-memory mocks ─────────────────────────
 
 function makeMockIndex() {
   const records = new Map<string, { values: number[]; metadata?: JsonObject }>();
@@ -77,7 +66,6 @@ function makeMockIndex() {
     async query(vector, options) {
       const topK = options?.topK ?? 10;
 
-      // Score by cosine similarity (assumes already-normalized — simplistic, but enough for tests).
       const scored = [...records.entries()].map(([id, rec]) => {
         let dot = 0;
 
@@ -116,7 +104,6 @@ function makeMockIndex() {
 const constEmbedder: Embedder = {
   dimensions: 3,
   async embed(text) {
-    // Deterministic toy embedding: length → 3-dim with simple character bucket counts.
     const buckets = [0, 0, 0];
 
     for (const c of text.toLowerCase()) {
@@ -154,8 +141,6 @@ describe('CloudflareVectorStore', () => {
   });
 
   test('a record whose metadata breaks the convention is not served as a hit with an invented location', async () => {
-    // One mistyped field used to blank every field: the hit came back under its
-    // storage id with path '' and lines 0, and fused with nothing.
     const { index, records } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
     await store.upsertChunk({ id: 'mem-1', path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' });
@@ -221,12 +206,10 @@ describe('CloudflareVectorStore', () => {
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
     const chunk: IndexedChunk = { id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hello' };
 
-    // Swallowing these is what let the backfill mark itself done over chunks
-    // it never embedded — a caller cannot tell an indexed chunk from a lost one.
+    // A swallowed failure lets the backfill mark never-embedded chunks as done.
     await expect(store.upsertChunk(chunk)).rejects.toThrow('vectorize down');
     await expect(store.upsertChunks([chunk])).rejects.toThrow('vectorize down');
     await expect(store.deleteChunks(['x'])).rejects.toThrow('vectorize down');
-    // Empty batches still short-circuit without touching the backend.
     await expect(store.upsertChunks([])).resolves.toBeUndefined();
     await expect(store.deleteChunks([])).resolves.toBeUndefined();
   });
@@ -257,11 +240,10 @@ describe('CloudflareVectorStore', () => {
     try {
       await expect(store.search('anything')).rejects.toThrow('vectorize down');
       expect(store.available).toBe(false);
-      // A latch here disabled semantic WRITES too, so everything indexed after
-      // one transient error was lost rather than merely unsearchable.
+      // Cooldown, not a latch: a latch also disabled writes, losing everything indexed after one error.
       down = false;
       setSystemTime(new Date(start + VECTOR_BACKEND_COOLDOWN_MS - 1));
-      expect(store.available).toBe(false);          // no retry storm meanwhile
+      expect(store.available).toBe(false);
       setSystemTime(new Date(start + VECTOR_BACKEND_COOLDOWN_MS));
       expect(store.available).toBe(true);
       await expect(store.upsertChunks([{ id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hi' }]))
@@ -272,11 +254,7 @@ describe('CloudflareVectorStore', () => {
   });
 });
 
-// ── Workspace isolation (namespaces) ─────────────────────────────────
-//
-// Models real Vectorize: a vector id is unique per *index* (not per namespace),
-// so the same upsert id in two namespaces would collide — the store must make
-// storage ids workspace-unique. A query filters to its namespace.
+// Vectorize ids are unique per index, not per namespace, so storage ids must be workspace-unique.
 function makeNamespacedIndex() {
   const records = new Map<string, { values: number[]; namespace?: string; metadata?: JsonObject }>();
 
@@ -324,16 +302,13 @@ describe('CloudflareVectorStore — workspace isolation', () => {
     const wsA = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-a' });
     const wsB = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'workspace-b' });
 
-    // SAME chunk id in both workspaces, DIFFERENT text.
     const id = 'memory/MEMORY.md:1-5';
     await wsA.upsertChunk({ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' });
     await wsB.upsertChunk({ id, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'zebras roam' });
 
-    // Both survive — storage ids are workspace-scoped (no collision on write).
     expect(records.size).toBe(2);
 
-    // Each workspace only sees its own vector, and the returned hit id is the
-    // verbatim chunk id (so RRF can fuse it with FTS5).
+    // The hit id is the verbatim chunk id so RRF can fuse it with FTS5.
     const aHits = await wsA.search('apples', 5);
     expect(aHits.length).toBe(1);
     expect(aHits[0].id).toBe(id);
@@ -353,7 +328,6 @@ describe('CloudflareVectorStore — workspace isolation', () => {
 
     await wsA.deleteChunks([id]);
     expect((await wsA.search('alpha', 5)).length).toBe(0);
-    // B's identically-keyed chunk is untouched.
     expect((await wsB.search('alpha', 5)).map((h) => h.id)).toEqual([id]);
   });
 
@@ -422,7 +396,7 @@ describe('createWorkersAIEmbedder', () => {
       async run(_model: string, input: { text: string | string[] }) {
         callCount++;
 
-        // First call (batch): return wrong length → triggers fallback.
+        // Wrong-length batch result forces the per-text fallback.
         if (Array.isArray(input.text)) return { data: [[0.1, 0.2]] };
 
         return { data: [[Number(callCount), 0]] };

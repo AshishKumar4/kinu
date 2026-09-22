@@ -1,20 +1,5 @@
-/**
- * The live-share hostname, encoded and decoded.
- *
- * One DNS label, three fields, fixed widths for the first two so the third
- * can be a workspace name that contains hyphens:
- *
- *   `<handle 10 hex>-<token 15 base32>-<workspace>`
- *
- * Parsing is positional for the same reason `nimbus-preview-host` is: with a
- * variable-length tail there is exactly one correct split, and arithmetic
- * finds it without a regex engine being free to find a different one.
- *
- * THE BUDGET. A DNS label holds 63 characters. Handle 10, token 15, two
- * separators: 27, leaving 36 — and the workspace grammar admits at most
- * `WORKSPACE_ADDRESS_MAX` (31), so every address fits inside 58 and none is
- * truncated: a truncated one would address a different workspace.
- */
+// One DNS label `<handle>-<token>-<workspace>`, parsed positionally; fixed-width fields leave room for
+// `WORKSPACE_ADDRESS_MAX`, so no workspace address is ever truncated.
 
 import { workspaceAddressRefusal } from '../identity/naming';
 
@@ -50,13 +35,7 @@ export function parseSlateShareLabel(label: string): SlateShareLabel | null {
   return { handle, token, workspace };
 }
 
-/**
- * The hostname for one live share, or null when the pieces cannot make a
- * legal one — a workspace whose name is too long for a DNS label is a
- * workspace whose shares cannot be addressed, the same "no URL" an
- * unconfigured share host reports. The handle and token are derived here and
- * a malformed one is a fault.
- */
+/** Null when the workspace name does not fit (reported as "no URL"); malformed handle or token throws. */
 export function buildSlateShareHost(parts: {
   handle: string;
   token: string;

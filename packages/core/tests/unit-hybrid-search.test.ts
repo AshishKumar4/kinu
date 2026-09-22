@@ -1,6 +1,4 @@
-/**
- * Unit tests for hybridSearch — FTS5 + Vectorize merge via RRF.
- */
+/** hybridSearch: FTS5 + Vectorize merged via RRF. */
 
 import { describe, test, expect } from 'bun:test';
 import { createTestFactsStore, present } from '@kinu.run/test-utils';
@@ -111,8 +109,7 @@ describe('hybridSearch', () => {
   });
 
   test('a semantic-only hit carries its text, rehydrated from the chunk it points at', async () => {
-    // What semantic search exists for: the lexical index missed it entirely, so
-    // there is no snippet to borrow — and a blank one is useless to the reader.
+    // The lexical index missed it, so there is no snippet to borrow, and a blank one is useless.
     const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
     const reads: string[] = [];
 

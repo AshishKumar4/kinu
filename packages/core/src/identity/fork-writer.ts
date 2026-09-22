@@ -1,10 +1,4 @@
-/**
- * Workspace fork — the write, and the accounting it publishes on.
- *
- * The target DB MUST already have been initialized (initWorkspaceSchema) — the
- * caller is responsible for that (typically via the boot path, which
- * auto-bootstraps a default identity that this helper then overwrites).
- */
+/** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { SOUL_PATH, summarizeSoul } from './soul';
@@ -26,9 +20,7 @@ import type {
   ForkSnapshotHead,
 } from './fork-rows';
 
-/** The revision the target's fresh context is published at. The fork's context
- *  is a restoration of the cut revision's membership, not a continuation of the
- *  source's revision history, so it starts at one revision of its own. */
+/** Revision of the target's fresh context: a restoration of the cut membership, not a continuation. */
 const FORK_CONTEXT_REVISION = 1;
 
 export interface ForkResult {
@@ -37,36 +29,22 @@ export interface ForkResult {
   craftedToolsCopied: number;
 }
 
-/** Where a fork lands, and how. */
 export interface ForkWriteTarget {
   workspaceId: string;
   workspaceName: string;
-  /** Where the TARGET actor's payload files live. Carried payload references
-   *  and carried payload FILES are re-rooted here, so the fork reads its own
-   *  plane rather than the workspace it came from. */
+  /** Target actor payload directory; carried payload references and files are re-rooted here. */
   artifactDirectory: string;
   now?: number;
-  /** Hosted workspaces establish their owner before the external VFS copy;
-   *  carry it through the identity rewrite so the row and file namespace
-   *  cannot diverge. Local backends omit it. */
+  /** Hosted owner, carried through the identity rewrite so row and file namespace cannot diverge. Local backends omit it. */
   ownerUserId?: string;
-  /** Hosted workspaces use their owner-only filesystem writer for SOUL.md;
-   *  every other inherited file remains an ordinary workspace write. */
+  /** Hosted owner-only writer for SOUL.md; other inherited files are ordinary workspace writes. */
   writeSoulFile?: (content: string) => Promise<void>;
-  /**
-   * Runs the PUBLICATION atomically.
-   *
-   * Staged rows and files are written outside it and cannot be inside it: a
-   * host transaction is synchronous, and the filesystem is not. What has to be
-   * atomic is the moment the target BECOMES the fork — identity, lineage,
-   * marker, display name — because that is the only state anything else
-   * observes. Everything before it is staging in a workspace nothing can reach.
-   */
+  /** Runs the publication atomically. Staging happens outside it: a host transaction is
+     *  synchronous and the filesystem is not. */
   transaction?: (rows: () => void) => void;
 }
 
-/** How much a writer has taken. The wire checks this against what the source
- *  declared before it publishes. */
+/** How much a writer has taken; checked against the source's declaration before publishing. */
 export interface ForkStagedCounts {
   agentConfig: number;
   craftedTools: number;
@@ -79,28 +57,10 @@ export interface ForkStagedCounts {
 }
 
 /**
- * The fork write, as stage-then-publish.
- *
- * A hosted fork arrives as bounded batches over a wire (see
- * `identity/fork-transfer.ts`), so the write cannot be one call over one value.
- * It is {@link ForkTargetWriter.begin}, a `stage` call per batch, then
- * {@link ForkTargetWriter.publish} — and the target is not a fork until
- * `publish` runs. Before it there is no lineage, no fork marker, no mission and
- * no display name, so `readForkLineage` answers null and nothing downstream
- * treats the workspace as forked.
- *
- * THE STAGE ORDER IS THE FOREIGN-KEY ORDER. Messages precede the entries that
- * reference them, entries precede their part references, and the context
- * membership lands last — so each statement commits against rows that already
- * exist. Nothing here relies on a deferred
- * constraint, because a hosted transfer stages one frame per RPC and has no
- * transaction spanning the sections.
- *
- * The in-process fork drives the same methods over a whole snapshot; see
- * {@link writeForkSnapshot}. There is one write, driven two ways.
+ * The fork write: `begin`, a `stage` per batch, then `publish`; the target is not a fork until publish.
+ * Stage order is foreign-key order (messages, entries, parts, context) since no transaction spans a hosted transfer.
  */
-/** The one system-role message a fork lands on its cut point: who owns it,
- *  what it says, and where in the chain it sits. */
+/** The one system-role message a fork lands on its cut point. */
 interface ForkMarker {
   readonly actorId: string;
   readonly markerId: string;
@@ -111,15 +71,7 @@ interface ForkMarker {
 
 export class ForkTargetWriter {
   private readonly now: number;
-  /**
-   * Everything this write remembers about the transfer in progress.
-   *
-   * A hosted fork's frames arrive on several activations of one Durable Object,
-   * so the accounting, the head and the mission are read back out of the target
-   * rather than held in fields — see {@link ForkStagingState}. Readable because
-   * the wire's receiver owns its own columns of the same row and there is one
-   * accessor onto it, not two.
-   */
+  /** Transfer state, read back from the target since frames arrive on several DO activations ({@link ForkStagingState}). */
   readonly staging: ForkStagingState;
 
   constructor(
@@ -131,33 +83,18 @@ export class ForkTargetWriter {
     this.staging = new ForkStagingState(target);
   }
 
-  /**
-   * The target's own main actor.
-   *
-   * Resolved on demand rather than captured in the constructor: {@link begin}
-   * is what CREATES this actor on a target that had no identity yet, so a field
-   * read at construction would name an actor that does not exist.
-   */
+  /** The target's main actor, resolved on demand: {@link begin} creates it on a target with no identity yet. */
   private get actorId(): string {
     return openWorkspaceMainActor(this.target).actorId;
   }
 
-  /** The target-side destination of one carried payload file. The receiver
-   *  resolves an artifact frame's relative path through this, so the staging
-   *  list, the sink and the SQL references all name one path. */
+  /** Target-side destination of one carried payload file, shared by staging list, sink and SQL references. */
   artifactPath(relative: string): string {
     return forkArtifactPath(relative, this.opts.artifactDirectory);
   }
 
-  /**
-   * Record which fork this is, and reset what this write has taken.
-   *
-   * One row, one statement. The destructive half is {@link clearStagedRows},
-   * and the two are separate because they belong at different moments:
-   * accounting has to be reset before the first FILE lands, and the rows a
-   * previous attempt left have to be deleted where the caller's transaction can
-   * still roll the deletion back.
-   */
+  /** Record which fork this is and reset accounting. Separate from {@link clearStagedRows} so row
+     *  deletion can run where the caller's transaction can roll it back. */
   begin(head: ForkSnapshotHead): void {
     const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
 
@@ -173,20 +110,9 @@ export class ForkTargetWriter {
   }
 
   /**
-   * Delete every row this write owns, so a retry self-heals: an abandoned
-   * staging state from an earlier attempt is gone before a row of this one
-   * lands, and nothing has to detect that it was there.
-   *
-   * Children before parents, and the one edge that points FORWARD — an entry's
-   * parent into another entry — is released first, so the deletion needs no
-   * deferred constraint either.
-   *
-   * `workspace_identity` is deliberately NOT cleared. On a hosted target the
-   * owner row is the precondition for the target's own file plane — the Nimbus
-   * namespace is derived from it — so it exists before staging and is rewritten
-   * in {@link ForkTargetWriter.publishRows}, the moment the target becomes a
-   * fork.
-   */
+     * Delete every row this write owns so a retry self-heals; children first, entry-parent edges released first.
+     * `workspace_identity` is kept: a hosted target's file namespace derives from its owner row.
+     */
   clearStagedRows(): void {
     const actorId = this.actorId;
     void this.target`DELETE FROM crafted_tools`;
@@ -195,9 +121,7 @@ export class ForkTargetWriter {
     void this.target`DELETE FROM fork_lineage`;
     void this.target`DELETE FROM conversation_heads WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM conversation_entry_parts WHERE actor_id = ${actorId}`;
-    // The chain is a tree of rows referencing each other, and one DELETE removes
-    // them in storage order: a parent can go before its child. Releasing the
-    // edges first is what makes the deletion legal without a deferred check.
+    // Release parent edges first; one DELETE may remove a parent before its child.
     void this.target`UPDATE conversation_entries SET parent_id = ${null} WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM conversation_entries WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM context_memberships WHERE actor_id = ${actorId}`;
@@ -228,9 +152,7 @@ export class ForkTargetWriter {
     this.staging.count({ craftedTools: rows.length });
   }
 
-  /** The FTS content table behind memory search. Part of every workspace's
-   *  schema, so a failure here means the fork lost the parent's memory index,
-   *  not that there was nothing to copy. */
+  /** FTS content table behind memory search; a failure means the fork lost the parent's index. */
   stageMemoryChunks(rows: readonly ForkMemoryChunkRow[]): void {
     for (const c of rows) {
       void this.target`
@@ -242,10 +164,7 @@ export class ForkTargetWriter {
     this.staging.count({ memoryChunks: rows.length });
   }
 
-  /** Carried messages, whole, under THIS target's actor. The execution
-   *  identity of the source turn does not cross: no request, no output slot, no
-   *  ingress id. A content path is re-rooted under the target's artifact
-   *  directory. */
+  /** Carried messages under this target's actor; request, output slot and ingress id do not cross. */
   stageSessionMessages(rows: readonly ForkSessionMessageRow[]): void {
     const actorId = this.actorId;
 
@@ -264,9 +183,7 @@ export class ForkTargetWriter {
     this.staging.count({ sessionMessages: rows.length });
   }
 
-  /** The public chain, root first — the tree carried verbatim under this
-   *  target's actor. The context columns stay null here; the publication points
-   *  the cut entry at the fork's own context. */
+  /** The public chain, root first; context columns stay null until publication. */
   stageConversationEntries(rows: readonly ForkConversationEntryRow[]): void {
     const actorId = this.actorId;
 
@@ -300,8 +217,7 @@ export class ForkTargetWriter {
     this.staging.count({ conversationEntryParts: rows.length });
   }
 
-  /** The restored working context: one revision of one fresh context, whose
-   *  membership is what the cut entry's revision selected, in its positions. */
+  /** The restored working context: one revision of a fresh context with the cut revision's membership. */
   stageContextMembers(rows: readonly ForkContextMemberRow[]): void {
     const actorId = this.actorId;
     const contextId = this.forkContext(actorId);
@@ -318,19 +234,8 @@ export class ForkTargetWriter {
     this.staging.count({ contextMembers: rows.length });
   }
 
-  /**
-   * One inherited file, whole.
-   *
-   * Whole rather than ranged because {@link VFS} has no append — `writeFile` is
-   * the only write there is. So the caller assembles ONE file at a time and the
-   * peak is that file, never the snapshot. SOUL.md also yields the fork mission
-   * here, taken while the content is in hand rather than by reading the file
-   * back at publish.
-   *
-   * `artifact` names a carried payload file, whose path is relative to the
-   * artifact directory that owns it — the same flag the wire's file frame
-   * carries, so one staging path serves both kinds.
-   */
+  /** One inherited file, whole ({@link VFS} has no append). SOUL.md yields the fork mission here.
+     *  `artifact` marks a payload file relative to its artifact directory. */
   async stageFile(path: string, content: string, artifact = false): Promise<void> {
     const destination = artifact ? this.artifactPath(path) : path;
     this.staging.addFile(destination);
@@ -345,13 +250,7 @@ export class ForkTargetWriter {
     this.staging.count({ files: 1 });
   }
 
-  /**
-   * Record an inherited file that a fork-specific native sink already published.
-   *
-   * The streamed receiver never materializes ordinary files merely to hand them
-   * back to this writer. SOUL is deliberately excluded: its protected writer
-   * returns the mission after it has accepted the file.
-   */
+  /** Record an inherited file a native sink already published. SOUL is excluded: its protected writer returns the mission. */
   stageCommittedFile(path: string, mission?: string): void {
     if (path === SOUL_PATH) {
       if (mission === undefined) throw new Error('fork transfer committed SOUL.md without its protected write');
@@ -362,14 +261,7 @@ export class ForkTargetWriter {
     this.staging.count({ files: 1 });
   }
 
-  /**
-   * Remove the exact files a prior unpublished transfer staged.
-   *
-   * The receiver calls this before a replacement `begin`. The list is the
-   * target's own `fork_staged_files` rows, so it survives the activation that
-   * wrote them: an abandoned attempt's files are removed by the transfer that
-   * replaces it, whichever isolate that one runs in.
-   */
+  /** Remove files a prior unpublished transfer staged, per the target's `fork_staged_files` rows. */
   async clearStagedFiles(): Promise<void> {
     for (const path of this.staging.files()) {
       if (await this.targetVfs.exists(path)) await this.targetVfs.unlink(path);
@@ -378,9 +270,7 @@ export class ForkTargetWriter {
     this.staging.dropFiles();
   }
 
-  /** How much has been taken, for the completeness check the wire performs
-   *  before it publishes. Read from the target, so it counts what LANDED rather
-   *  than what one activation happened to see. */
+  /** How much has landed, read from the target, for the wire's completeness check. */
   get staged(): ForkStagedCounts {
     return this.staging.read()?.staged ?? {
       agentConfig: 0, craftedTools: 0, memoryChunks: 0,
@@ -389,9 +279,7 @@ export class ForkTargetWriter {
     };
   }
 
-  /** The fork this target has ALREADY published, if it has. The wire answers a
-   *  re-delivered frame with this rather than refusing one that is already
-   *  correct — including on an activation that never saw the commit. */
+  /** The fork already published, if any; answers a re-delivered frame on any activation. */
   get published(): ForkResult | null {
     const staged = this.staging.read();
 
@@ -400,8 +288,6 @@ export class ForkTargetWriter {
       : forkResultOf(staged.head, staged.staged);
   }
 
-  /** Publish, atomically. Everything staged becomes a fork here and nowhere
-   *  else. */
   async publish(): Promise<ForkResult> {
     if (!this.opts.transaction) return this.publishRows();
     let result: ForkResult | null = null;
@@ -412,12 +298,7 @@ export class ForkTargetWriter {
     return result;
   }
 
-  /**
-   * The publication, as one synchronous unit — what a caller wraps in a host
-   * transaction. Public because the in-process write puts the staging AND the
-   * publication inside one transaction, which is what makes a mid-write failure
-   * there leave no fork at all.
-   */
+  /** The publication as one synchronous unit, for a caller's host transaction. */
   publishRows(): ForkResult {
     const staged = this.staging.read();
     const head = staged?.head ?? null;
@@ -429,11 +310,7 @@ export class ForkTargetWriter {
     const forkPointMs = head.cut.createdAtMs;
     const actorId = this.actorId;
 
-    // Every plan's carried chain ends in the cut entry, so a target that does
-    // not hold it received an incomplete transfer; publishing anyway would
-    // root the marker on nothing and leave the lineage naming an entry the
-    // fork cannot read. Asked before the first write, so a refusal leaves the
-    // target exactly as staged.
+    // A target without the cut entry got an incomplete transfer; refuse before the first write.
     const cut = this.target<{ id: string }>`
       SELECT id FROM conversation_entries
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
@@ -443,8 +320,7 @@ export class ForkTargetWriter {
       throw new KinuError('missing', `fork publication has no cut entry ${JSON.stringify(head.cut.messageId)} in the transferred chain`);
     }
 
-    // 1. Identity: new id, new name, fresh created_at. The owner carries through
-    //    so the row and the file namespace cannot diverge.
+    // Identity: new id, name, created_at; owner carries through.
     void this.target`DELETE FROM workspace_identity`;
 
     if (this.opts.ownerUserId) {
@@ -461,16 +337,12 @@ export class ForkTargetWriter {
 
     void this.target`UPDATE workspace_identity SET mission = ${staged.mission}`;
 
-    // 2. The derived search index keyed on the OLD rows is stale by
-    //    construction — purged and reseeded at equal counts is exactly what its
-    //    rowid watermark cannot see. Invalidate deterministically; the next
-    //    search rebuilds.
+    // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
     invalidateConversationSearchIndex(this.target);
 
-    // 3. display_name, so the UI shows the fork rather than the bootstrap.
     openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
 
-    // 4. Lineage — single row, and the thing that makes this workspace a fork.
+    // Lineage: what makes this workspace a fork.
     void this.target`
       INSERT INTO fork_lineage
       (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
@@ -479,23 +351,16 @@ export class ForkTargetWriter {
        ${head.cut.messageId}, ${forkPointMs}, ${this.now})
     `;
 
-    // 5. The working context this fork starts from. Always present: an actor
-    //    without a selected context has nothing to read, and a fork whose cut
-    //    recorded no context starts from an empty one rather than from none.
+    // The fork's working context; always present, empty if the cut recorded none.
     const contextId = this.forkContext(actorId);
 
-    // The cut entry names the fork's context, so a fork taken AT this
-    // boundary later restores the same membership rather than walking past it.
+    // The cut entry names the fork's context so a later fork at this boundary restores the same membership.
     void this.target`
       UPDATE conversation_entries SET context_id = ${contextId}, context_revision = ${FORK_CONTEXT_REVISION}
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
     `;
 
-    // 6. The fork marker: one system-role entry parented on the cut point, so
-    //    the chat shows a visible boundary between inherited history and the
-    //    fork's own future turns. It is a node of the public chain and nothing
-    //    else — it is deliberately not a context member, because a copy the
-    //    model never reads is not context, it is a row.
+    // Fork marker: a system entry on the cut point; a chain node only, deliberately not a context member.
     const syntheticText =
       `You were forked from workspace "${head.source.workspaceName}" at message ${head.cut.messageId} on `
       + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. `
@@ -506,27 +371,17 @@ export class ForkTargetWriter {
     this.writeForkMarker({
       actorId, markerId, parentId: cut, text: syntheticText, recordedAt: forkPointMs + 1,
     });
-    // The marker is the chain's end: the fork's first turn chains from it.
     void this.target`INSERT INTO conversation_heads (actor_id, session_id, entry_id) VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId})`;
 
-    // The staged files are the fork's files now, so the cleanup list is spent.
-    // The transfer row is NOT: it is what answers a frame re-delivered after the
-    // source lost the reply, and it is dropped by the next `begin`.
+    // Staged files are the fork's now. The transfer row stays to answer re-delivered frames until the next `begin`.
     this.staging.dropFiles();
     this.staging.markPublished();
 
     return forkResultOf(head, staged.staged);
   }
 
-  /**
-   * The marker, as canonical rows: one sealed message with one text part, and
-   * one entry referencing that part.
-   *
-   * Written through SQL rather than through the session stores because the
-   * publication is synchronous by contract — a host transaction cannot await —
-   * and the marker's text is small enough to be an inline payload, so nothing
-   * here needs the filesystem.
-   */
+  /** The marker as canonical rows, written via SQL because publication is synchronous;
+     *  its text is small enough to be an inline payload. */
   private writeForkMarker(marker: ForkMarker): void {
     const { actorId, markerId, parentId, text, recordedAt } = marker;
 
@@ -554,15 +409,8 @@ export class ForkTargetWriter {
     `;
   }
 
-  /**
-   * The fork's own context, created once and read back afterwards.
-   *
-   * Read back rather than remembered in a field: the membership arrives on one
-   * activation and the publication may run on another, and both have to name
-   * the same context. An existing selection that predates this transfer is
-   * adopted and given this revision, so a target whose boot initialized a
-   * context does not end up with two.
-   */
+  /** The fork's own context, created once and read back (membership and publication may run on different
+     *  activations). An existing selection is adopted so the target never has two. */
   private forkContext(actorId: string): string {
     const selected = this.target<{ context_id: string }>`
       SELECT context_id FROM actor_context_selection WHERE actor_id = ${actorId}
@@ -597,9 +445,7 @@ export class ForkTargetWriter {
   }
 }
 
-/** One transfer's result, from the state the target stored. The wire returns it
- *  at the publication and again for every frame re-delivered afterwards, so it
- *  is derived in ONE place from ONE authority. */
+/** One transfer's result from stored state; returned at publication and for every re-delivered frame. */
 function forkResultOf(head: ForkSnapshotHead, counts: ForkStagedCounts): ForkResult {
   return {
     forkPointMs: head.cut.createdAtMs,
@@ -608,16 +454,8 @@ function forkResultOf(head: ForkSnapshotHead, counts: ForkStagedCounts): ForkRes
   };
 }
 
-/**
- * Land a whole snapshot in the target workspace — the in-process fork, where
- * both databases are open at once and there is no wire to bound.
- *
- * The same {@link ForkTargetWriter} the streamed fork drives, in one call. Files
- * go first and outside any transaction the caller holds, because a host
- * transaction is synchronous and the filesystem is not; the staging and the
- * publication then go inside ONE transaction, so a mid-write failure here
- * leaves no fork rather than a half-copied one.
- */
+/** Land a whole snapshot in-process. Files go first, outside any transaction; staging and publication
+ *  then share one transaction so a mid-write failure leaves no fork. */
 export async function writeForkSnapshot(
   target: SqlExecutor,
   targetVfs: VFS,
@@ -625,10 +463,7 @@ export async function writeForkSnapshot(
   opts: ForkWriteTarget,
 ): Promise<ForkResult> {
   const writer = new ForkTargetWriter(target, targetVfs, opts);
-  // The head and the counters are established before the first staged FILE, so
-  // a file records its mission and its count against THIS transfer. The row
-  // deletion stays inside the caller's transaction below, where a failed
-  // publication rolls it back with everything else.
+  // Head and counters precede the first staged file; row deletion stays inside the transaction below.
   writer.begin({ source: snapshot.source, cut: snapshot.cut });
 
   for (const file of snapshot.files) await writer.stageFile(file.path, file.content);

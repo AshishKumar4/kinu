@@ -1,7 +1,4 @@
-/**
- * The canonical conversation store: the flat reads every grader, fork preflight
- * and recovery takes over `conversation_entries`.
- */
+/** Flat reads over `conversation_entries` for graders, fork preflight and recovery. */
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -10,16 +7,13 @@ import type { SessionTranscriptReader } from '../session/transcript';
 
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
-/** Cheap fork-cut preflight. It reads only the authority table primary key, so
- * the driver can refuse an unknown requested cut before it probes or reserves a
- * workspace without materialising the ancestry the transfer will stream. */
+/** Fork-cut preflight by primary key only, before any workspace is reserved or ancestry read. */
 export function forkPointExists(sql: SqlExecutor, actor: ActorHandle, messageId: string): boolean {
   actor.assertCurrent();
 
   return sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID} AND id=${messageId} LIMIT 1`.length > 0;
 }
 
-/** How many messages the workspace's default chat holds. */
 export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number {
   actor.assertCurrent();
 
@@ -28,7 +22,6 @@ export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number 
 
 /** The user→assistant pair behind a completed turn. */
 export interface ConversationTurnPair {
-  /** The conversation the turn lives in, as surfaces report it. */
   sessionId: string;
   /** Flattened plain text; null where the pair has no user row. */
   request: string | null;
@@ -38,23 +31,12 @@ export interface ConversationTurnPair {
   endedAtMs: number;
 }
 
-/** The one field a resumed reply reads off a queued drain turn's user row.
- *  Non-strict: every other stamp the enqueue seam writes is irrelevant here. */
+// Non-strict: the enqueue seam writes other stamps.
 const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()) });
 
 /**
- * The durable answer each named synthetic drain turn received, or nothing when
- * it never got one.
- *
- * What makes a recovery able to finish a reply the answering turn never sent.
- * The link is the store's own parent edge: a queued drain turn's USER entry
- * carries `drainTurnId` in its metadata, and the assistant entry whose
- * `parentId` is that user entry is the answer to it. This reads the durable
- * transcript rather than a live activation's hydrated message list — a recovery
- * has no such list, and that is the whole point of it.
- *
- * An empty answer is ABSENT from the result, never present as `''`. Replying
- * with nothing would close a delivery the sender is still waiting on.
+ * The durable answer to each drain turn, found via the assistant child of the user entry carrying `drainTurnId`.
+ * Empty answers are omitted: replying with nothing would close a delivery the sender still awaits.
  */
 export async function answersForDrainTurns(
   transcript: SessionTranscriptReader,
@@ -85,15 +67,7 @@ export async function answersForDrainTurns(
   return answers;
 }
 
-/**
- * The request/response pair behind a turn id — what outcome attribution, take
- * picks and explicit feedback grade a turn from.
- *
- * A turn is named by the id of the answer it produced, so an id that names
- * anything but an assistant entry is not a turn and has no pair. The parent
- * edge carries the ask: absent where the answer roots its own chain, which the
- * pair reports as a null request rather than as no pair at all.
- */
+/** The pair behind a turn, named by its assistant entry id; a root answer has a null request. */
 export async function conversationTurnPair(
   transcript: SessionTranscriptReader,
   messageId: string,

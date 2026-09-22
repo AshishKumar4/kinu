@@ -1,15 +1,5 @@
-// ProviderRegistry — resolves "<provider>/<modelId>" → LanguageModel.
-// resolve() is SYNCHRONOUS (model construction is sync everywhere). Async
-// methods (defaultSpec, listProviders, listAllModels) exist for cred-aware UI
-// queries and lazy default selection.
-//
-// Two registration tiers:
-//   - register(provider): static, bespoke providers. Always authoritative.
-//   - registerDynamic(source): one catalog-backed source serving provider ids
-//     that are not statically registered (models.dev). Its get() is sync and
-//     optimistic — catalog membership is enforced asynchronously (listIds for
-//     the cred-aware listings, and the provider's own fetch path at request
-//     time), keeping resolve() synchronous even with a cold catalog cache.
+// ProviderRegistry: resolves "<provider>/<modelId>" synchronously. Static providers
+// always win; the dynamic (models.dev) source is optimistic, validated at request time.
 import type { LanguageModel } from 'ai';
 import type {
   ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
@@ -18,20 +8,13 @@ import { parseModelSpec } from './types';
 import { diagnostics, renderThrownChain } from '../obs/index';
 
 export interface DynamicProviderSource {
-  /** Sync — build (or reuse) a provider for `providerId`, or undefined when
-   *  the id is out of this source's namespace. Must be optimistic: actual
-   *  catalog membership is validated at request time, not here. */
+  /** Must be optimistic: catalog membership is validated at request time. */
   get(providerId: string): ModelProvider | undefined;
-  /** Async — provider ids currently servable (stored credential ∩ catalog).
-   *  Used by the listing methods; ids shadowed by static providers are
-   *  filtered by the registry. */
+  /** Ids currently servable (stored credential ∩ catalog). */
   listIds(deps: ProviderDeps): Promise<string[]>;
 }
 
-/** A provider whose availability check or model listing threw — a revoked
- *  OAuth grant, an unreachable endpoint, a malformed stored credential. It is
- *  reported instead of thrown so ONE broken provider cannot empty a menu that
- *  every other provider is still able to fill. */
+/** A provider whose probe threw; reported, not thrown, so one broken provider cannot empty the menu. */
 export interface ProviderFailure {
   provider: string;
   label?: string;
@@ -46,36 +29,25 @@ export interface ModelMenu {
 
 export interface ProviderRegistry {
   register(provider: ModelProvider): void;
-  /** Register the (single) dynamic catalog source. Static providers always
-   *  take precedence for their ids. */
+  /** Register the single dynamic catalog source. */
   registerDynamic(source: DynamicProviderSource): void;
   get(providerId: string): ModelProvider | undefined;
-  /** Sync — whether `resolve()` would find a provider for this id (static
-   *  or dynamic). Dynamic acceptance is optimistic — see DynamicProviderSource. */
+  /** Dynamic acceptance is optimistic. */
   canResolve(providerId: string): boolean;
-  /** Sync — list registered providers in registration order. Use when you
-   *  only need the static set (no cred-aware availability check needed). */
+  /** Static providers in registration order. */
   list(): ModelProvider[];
-  /** Async — list providers with their current availability state. A provider
-   *  that throws while being probed lists as unavailable with the error as its
-   *  reason; it never fails the call. */
+  /** A provider that throws lists as unavailable with the error as reason. */
   listProviders(deps: ProviderDeps): Promise<ProviderInfo[]>;
-  /** Async — every available provider's models, plus the providers that could
-   *  not be listed. Never rejects because of one provider. */
+  /** Never rejects because of one provider. */
   listAllModels(deps: ProviderDeps): Promise<ModelMenu>;
   resolve(spec: string, deps: ProviderDeps): LanguageModel;
   defaultSpec(deps: ProviderDeps): Promise<string | null>;
 }
 
-/** The id the dynamic catalog source reports under when IT is what failed
- *  (the models.dev fetch, the stored-key enumeration) — no single provider
- *  owns that failure. */
+/** Id for a failure of the dynamic source itself. */
 export const CATALOG_SOURCE_ID = 'catalog';
 
-/** A provider failure's whole chain, and never the empty string: a catalog row
- *  reading "" is indistinguishable from one that did not fail. The chain, not the
- *  outermost message, because a 401 wrapped in "models.dev fetch failed" would
- *  otherwise arrive as the wrapper alone. */
+/** The whole cause chain, never empty. */
 export function providerFailureReason({ error }: { error: unknown }): string {
   return renderThrownChain({ cause: error }).trim() || 'unknown error';
 }
@@ -85,10 +57,7 @@ export function createProviderRegistry(): ProviderRegistry {
   const byId = new Map<string, ModelProvider>();
   let dynamic: DynamicProviderSource | null = null;
 
-  /** Static providers + currently-servable dynamic ones (static ids win).
-   *  A dynamic source that cannot enumerate (models.dev down, credential
-   *  store unreachable) is reported as one failure and costs only ITS
-   *  providers — the static ones are still returned. */
+  /** Static plus servable dynamic providers; a dynamic enumeration failure is one reported failure. */
   async function allProviders(deps: ProviderDeps): Promise<{
     providers: ModelProvider[];
     failures: ProviderFailure[];
@@ -122,25 +91,8 @@ export function createProviderRegistry(): ProviderRegistry {
     return byId.get(providerId) ?? dynamic?.get(providerId);
   }
 
-  /**
-   * Probe every provider AT ONCE, isolate each failure, and answer in
-   * REGISTRATION ORDER.
-   *
-   * Awaiting each provider in a `for` loop adds one slow vendor's whole latency to
-   * every provider behind it — and this call sits in front of a turn's first token,
-   * where that sum is time the user spends watching nothing. The probes are
-   * independent: no provider's availability or model list is an input to another's.
-   *
-   * ORDER COMES FROM THE INPUT, NEVER FROM COMPLETION. `Promise.all` resolves
-   * positionally, so the fast provider that finished first does not overtake
-   * the slow one in the menu. A menu that reordered itself by whichever vendor
-   * answered quickest would be a different list on every call, and callers
-   * compare these lists.
-   *
-   * NO DEADLINE, deliberately: a provider is slow or it is broken, and a clock
-   * here would convert "slow" into "absent", which downstream reads as a model
-   * that does not exist. Failures are reported as failures.
-   */
+  /** Probe all providers concurrently, answering in registration order. No deadline:
+   *  a clock would turn "slow" into "absent". */
   async function probeEach<T>(
     providers: readonly ModelProvider[],
     probe: (provider: ModelProvider) => Promise<T>,
@@ -204,10 +156,7 @@ export function createProviderRegistry(): ProviderRegistry {
       const models: Array<ModelInfo & { provider: string }> = [];
       const failures = [...sourceFailures];
 
-      // An UNAVAILABLE provider is not a failure — it is a provider nobody
-      // connected — so it contributes neither models nor a row, exactly as the
-      // sequential form did. `null` carries that "available: false" answer out
-      // of the probe without a second call.
+      // `null`: unavailable, which is not a failure.
       for (const probed of await probeEach(providers, async (p) => (
         await p.isAvailable(deps) ? await p.listModels(deps) : null
       ))) {
@@ -241,15 +190,7 @@ export function createProviderRegistry(): ProviderRegistry {
     },
 
     async defaultSpec(deps) {
-      // Preference order, first usable wins — a provider that throws is
-      // skipped so a broken credential cannot leave the agent with no model.
-      //
-      // SEQUENTIAL ON PURPOSE, unlike the two listing methods above. This is a
-      // first-match scan, not an enumeration: it stops at the first provider
-      // that can serve, so it already does the least work available. Probing
-      // them all at once would list models from providers whose answer is
-      // never read, which costs requests and credentials to save latency the
-      // short-circuit has usually already saved.
+      // Sequential first-match scan in preference order; a throwing provider is skipped.
       for (const p of (await allProviders(deps)).providers) {
         try {
           if (!(await p.isAvailable(deps))) continue;

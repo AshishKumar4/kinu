@@ -1,12 +1,6 @@
 /**
- * S4 — scaffold promotion is pointer-first and recoverable.
- *
- * The canonical source of every scaffold version is its `.vN` file; the
- * `scaffold_versions.status='current'` row is the single current pointer;
- * `scaffold/agent.js` is a rebuildable view. Every boundary here injects a
- * fault at the exact write whose ordering decides crash recoverability and
- * proves the invariant that survives it: exactly one current pointer, whose
- * version file is what a cold-reopened runtime executes.
+ * S4: scaffold promotion is pointer-first. The `.vN` file is canonical and the `current` row the single
+ * pointer; each fault leaves one current pointer whose file a cold reopen executes.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -186,8 +180,7 @@ describe('promotion boundary — one current pointer, executed source follows it
 
     // Cold reopen executes the pointer's version file, not the stale view.
     expect(await reopen(rt).identity.scaffold.read()).toBe(V1);
-    // The injected writer is still the one installed: a failed promotion puts
-    // nothing back behind the caller.
+    // A failed promotion leaves the injected writer installed.
     await expect(rt.identity.scaffold.write(V1)).rejects.toThrow('injected view-write failure');
     expect(viewWrites).toBe(2);
 

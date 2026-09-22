@@ -1,41 +1,5 @@
-/**
- * Encryption at rest for the credential store.
- *
- * Every token Kinu MINTS is stored as a SHA-256 hash — cli tokens, device
- * tokens, workspace capabilities, connect tickets. The third-party secrets
- * Kinu holds on the owner's behalf cannot be hashed, because they have to
- * be replayed outbound, so they were the one thing in the DO written in the
- * clear. This module is the missing half: a sealed envelope around
- * `user_credentials.value`, keyed from a Worker secret rather than from the
- * database it protects.
- *
- * Envelope format, chosen so a reader can tell at a glance what a row is:
- *
- *   pce1.<keyId>.<iv>.<ciphertext>      AES-256-GCM, base64url, no padding
- *
- * A value that does not carry that prefix is a row written before encryption
- * existed; `open` returns it unchanged so nothing is lost, and `rewrap` in
- * user-do.ts converts it. The caller's `aad` — which composes the owning
- * Durable Object's id with the record's own key — is the AEAD's additional
- * data, so a ciphertext moved to a different row, or into a different user's
- * store, fails to open rather than silently authenticating one provider with
- * another's secret.
- *
- * Keys and rotation. `CREDENTIAL_ENCRYPTION_KEY` is the current key; every
- * write uses it. `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` is a comma-separated
- * list of retired keys, used for reading only. `keyId` is a PRF of the secret
- * (never a digest of it), so a row names the key that sealed it without
- * carrying anything a guess could be checked against, and a rotation is:
- *
- *   1. move the current value into CREDENTIAL_ENCRYPTION_KEY_PREVIOUS
- *   2. put the new value in CREDENTIAL_ENCRYPTION_KEY
- *   3. the next credential access re-wraps every row under the new key
- *   4. drop the retired key from PREVIOUS once every UserDO has been touched
- *
- * There is no default key and no plaintext fallback: a deployment without the
- * secret cannot store a credential at all. A secret store whose key is
- * optional is a plaintext store with extra steps.
- */
+/** Sealed envelope `pce1.<keyId>.<iv>.<ciphertext>` (AES-GCM, AAD binds DO id + record key) around `user_credentials.value`.
+ *  No default key or plaintext fallback. Rotation: move current to `_PREVIOUS`, set new, drop old once every UserDO rewraps. */
 import { hmacSha256Hex } from '../utils/crypto';
 
 const ENVELOPE_PREFIX = 'pce1.';
@@ -48,26 +12,21 @@ const HKDF_INFO = 'kinu.credential-envelope.v1';
 
 const HKDF_SALT = 'kinu.credential-envelope.salt';
 
-/** The key id is a PRF of the secret, not a hash of it: every stored row
- *  carries the id in the clear, and a truncated digest of the secret itself
- *  would be an offline oracle for checking guesses against it. */
+/** A PRF, not a digest: the id is stored in the clear and a digest would be a guess oracle. */
 const KEY_ID_LABEL = 'kinu.credential-envelope.key-id';
 
-/** Below this a "secret" is a passphrase, and the envelope would be theatre.
- *  32 base64 characters is 24 bytes of a `openssl rand -base64 32` value. */
+/** Below this a "secret" is a passphrase. */
 const MIN_SECRET_LENGTH = 32;
 
 const CREDENTIAL_ENCRYPTION_KEY_HINT =
   'Set the CREDENTIAL_ENCRYPTION_KEY secret (openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY).';
 
 export interface CredentialCipher {
-  /** Key id every new write seals under — also the rewrap marker. */
+  /** Also the rewrap marker. */
   readonly keyId: string;
-  /** `aad` names the record: the caller composes it from whatever the value
-   *  must stay bound to (its store's identity and its own key), and the same
-   *  string must be presented to open it again. */
+  /** The same `aad` (store identity + record key) must be presented to open it again. */
   seal(aad: string, plaintext: string): Promise<string>;
-  /** Decrypt, or pass a pre-encryption plaintext row through unchanged. */
+  /** Passes a pre-encryption plaintext row through unchanged. */
   open(aad: string, stored: string): Promise<string>;
 }
 
@@ -76,15 +35,10 @@ export interface CredentialEncryptionEnv {
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
 }
 
-/** Derived keys, cached by secret. Derivation is a KDF over material the
- *  process already holds, so caching adds no exposure and removes an HKDF from
- *  every credential read. */
+/** Cached by secret: removes an HKDF from every read with no added exposure. */
 const derived = new Map<string, Promise<{ keyId: string; key: CryptoKey }>>();
 
-/**
- * The cipher for this deployment. Throws when no key is configured — callers
- * are credential reads and writes, and failing there is the point.
- */
+/** Throws when no key is configured. */
 export async function createCredentialCipher(env: CredentialEncryptionEnv): Promise<CredentialCipher> {
   const current = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
 
@@ -152,7 +106,6 @@ export async function createCredentialCipher(env: CredentialEncryptionEnv): Prom
   };
 }
 
-/** True for a value this module wrote — the reader's test for "already sealed". */
 function isSealedCredential(stored: string): boolean {
   return stored.startsWith(ENVELOPE_PREFIX);
 }

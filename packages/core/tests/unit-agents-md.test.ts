@@ -1,7 +1,4 @@
-// Behavior tests for the AGENTS.md prompt block — one admission policy and one
-// renderer, both backends discover their files and feed them here (root-most
-// first, nearest last). A file is admitted on its size before its bytes are
-// asked for, so the tests below prove what was READ, not only what rendered.
+// A file is admitted on its size before its bytes are read, so these tests prove what was read, not only rendered.
 import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import {
@@ -12,16 +9,10 @@ import {
 import type { VFS } from '../src/types/primitives';
 import type { ExecutorProvider, ExecutorStatus } from '../src/execution/types';
 
-/** A window whose answer reservation is its own declared maximum, so the
- *  instruction budget is the other half of it. */
 const WINDOW: ModelWindow = { contextWindow: 800, modelOutputLimit: 400 };
 
-/** Derived, never a literal: the same two facts the allocator is built from. */
 const BUDGET = stepContextLimit(WINDOW) * CHARS_PER_TOKEN;
 
-/** The owner's answer, stubbed both ways. Discovery asks per path and digest;
- *  these tests are about what was READ and how it renders, so each one states
- *  which answer it is standing on rather than reaching for a real store. */
 const APPROVED: InstructionTrustResolver = () => 'approved';
 
 const UNVERIFIED: InstructionTrustResolver = () => 'unverified';
@@ -43,8 +34,7 @@ describe('admitAgentsMd', () => {
     ];
 
     const admission = admitAgentsMd(candidates, WINDOW);
-    // The middle file cannot fit beside the nearest one; the root file can, and
-    // is not punished for being broader than the file that did not fit.
+    // The root file is not punished for being broader than the middle file that did not fit.
     expect(admission.admit.map((ref) => ref.path)).toEqual(['/AGENTS.md', '/pkg/app/AGENTS.md']);
     expect(admission.referenced.map((ref) => ref.path)).toEqual(['/pkg/AGENTS.md']);
   });
@@ -74,7 +64,6 @@ describe('admitAgentsMd', () => {
     const talkative: ModelWindow = { contextWindow: 800, modelOutputLimit: 100 };
 
     expect(admitted(wide)).toBeGreaterThan(admitted(narrow));
-    // Same window, bigger answer reservation → less room for instructions.
     expect(admitted(narrow)).toBeLessThan(admitted(talkative));
     expect(admitted(narrow)).toBe(fits(narrow));
     expect(admitted(talkative)).toBe(fits(talkative));
@@ -93,7 +82,7 @@ describe('renderAgentsMdSection', () => {
 
     expect(section).toContain('## Project instructions (AGENTS.md)');
     expect(section).toMatch(/closest to the working directory wins/);
-    // Root-most renders first, nearest last (later = higher precedence).
+    // Later renders take higher precedence.
     expect(section.indexOf('/repo/AGENTS.md')).toBeLessThan(section.indexOf('/repo/pkg/AGENTS.md'));
     expect(section).toContain('Use bun for everything.');
     expect(section).toContain('This package uses vitest.');
@@ -155,7 +144,6 @@ describe('buildSystemPromptSync — agentsMd option', () => {
 
 interface FakeVfs {
   vfs: VFS;
-  /** Paths the plane was asked to size — the discovery probe itself. */
   stats: string[];
   reads: string[];
 }
@@ -287,8 +275,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
     );
 
     expect(sources).toEqual({ admitted: [], referenced: [] });
-    // The canonical plane is still consulted; the idle sandbox is not asked
-    // anything at all, so discovery can never be what provisions a container.
+    // The idle sandbox is never asked, so discovery cannot provision a container.
     expect(workspace.stats).toEqual(['AGENTS.md']);
     expect(workspace.reads).toEqual([]);
     expect(sandbox.stats).toEqual([]);
@@ -319,8 +306,7 @@ describe('collectWorkspaceAgentsMd — cloud discovery', () => {
   });
 
   test('the owner\'s answer rides with the bytes it was asked about', async () => {
-    // Discovery does not decide placement, but it is what carries the decision:
-    // the same read, unapproved, reaches the model as reference material only.
+    // Unapproved, the same read reaches the model as reference material only.
     const workspace = fakeVfs({ 'AGENTS.md': 'Use bun for everything.' });
     const sources = await collectWorkspaceAgentsMd(workspace.vfs, WINDOW, UNVERIFIED);
     expect(sources.admitted.map((f) => f.trust)).toEqual(['unverified']);

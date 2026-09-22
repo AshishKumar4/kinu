@@ -1,12 +1,6 @@
 /**
- * `withSseTerminal` — end an SSE stream at `data: [DONE]` with the upstream
- * reader cancelled, instead of at producer close, and give up on a producer
- * that holds the socket open while sending no content. Every case drives the
- * public fetch-level entry with a scripted upstream, so the assertions pin
- * the shipped path including the content-type gate: the producer-open case
- * (content, [DONE], then silence with the producer holding the connection)
- * must still close the wrapper AND call the upstream cancel — that call is
- * the whole fix.
+ * `withSseTerminal`: end an SSE stream at `data: [DONE]` with the upstream reader cancelled, and give up on a
+ * producer that holds the socket open while sending no content.
  */
 import { describe, test, expect } from 'bun:test';
 import { handClock } from '@kinu.run/test-utils';
@@ -27,8 +21,7 @@ interface Scripted {
   close: () => void;
 }
 
-/** An upstream the test owns: scripted bytes, then whatever lifecycle
- *  the case leaves it in, with cancel calls counted. */
+/** An upstream the test owns: scripted bytes, then the case's lifecycle, with cancel calls counted. */
 function scripted(cancel?: () => Promise<void> | void): Scripted {
   const calls: string[] = [];
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -114,8 +107,7 @@ describe('withSseTerminal', () => {
 
     upstream.enqueue(sseData('{"content":"hello"}'));
     upstream.enqueue(sseData('[DONE]'));
-    // The producer stays open with the connection held behind the
-    // terminator — the case that wedged the turn awaiting stream end.
+    // The producer holds the connection open behind the terminator.
 
     const response = await through(upstream);
     const text = await drain(response.body ?? new ReadableStream<Uint8Array>());
@@ -177,8 +169,7 @@ describe('withSseTerminal', () => {
 
     expect(upstream.calls).toHaveLength(1);
 
-    // The lock is released, not just marked settled: acquiring a reader on
-    // the upstream would throw while it is still held.
+    // The lock is released: acquiring a reader would throw while it is held.
     const reader = upstream.stream.getReader();
 
     reader.releaseLock();
@@ -200,8 +191,7 @@ describe('withSseTerminal', () => {
       outcome = cause instanceof Error ? cause.message : String(cause);
     }
 
-    // The rejection propagates to the consumer instead of becoming success,
-    // and the lock is released either way — a second reader acquires cleanly.
+    // The rejection reaches the consumer, and the lock is released either way.
     expect(outcome).toBe('boom');
     expect(upstream.calls).toHaveLength(1);
 
@@ -239,8 +229,7 @@ describe('withSseTerminal', () => {
 
   test('a single frame larger than the engine argument limit passes through', async () => {
     const upstream = scripted();
-    // 300k in one chunk: spreading it into an argument list would blow the
-    // call stack, so the queue must move it by copy.
+    // 300k in one chunk: spreading it into an argument list would blow the call stack.
     const big = `data: {"content":"${'x'.repeat(300_000)}"}\n\n`;
     const body = big + sseData('[DONE]');
 
@@ -277,8 +266,7 @@ describe('withSseTerminal', () => {
       outcome = cause instanceof Error ? cause.message : String(cause);
     }
 
-    // The same rejection reaches the consumer — never swallowed, never
-    // wrapped — and the upstream body it read from is unlocked.
+    // The same rejection reaches the consumer unwrapped, and the upstream body is unlocked.
     expect(outcome).toBe('upstream broke');
     expect(upstream.locked).toBe(false);
   });
@@ -291,15 +279,10 @@ describe('withSseTerminal', () => {
   });
 });
 
-/** A producer that sends nothing at all — the case neither case below reaches —
- *  run to its stall, answering with the window it was given up after and what
- *  the upstream was asked.
- *
- *  The window is MEASURED here rather than imported: a stream's start counts as
- *  content, so the first deadline a reader arms is one whole window wide, and
- *  `tick()` steps the hand clock onto that deadline and fires it alone. A case
- *  that imported the number would agree with whatever the source says; this one
- *  reads what the terminal actually armed. */
+/**
+ * A producer that sends nothing, run to its stall. The window is measured, not imported, so this reads what the
+ * terminal actually armed.
+ */
 async function silentProducerStall(): Promise<{ window: number; calls: readonly string[] }> {
   const clock = handClock();
   const upstream = scripted();
@@ -331,9 +314,7 @@ describe('a producer that holds the socket open without sending content', () => 
     upstream.enqueue(sseData('{"content":"hello"}'));
     expect(await content).toBe(sseData('{"content":"hello"}'));
 
-    // A minute into the window, with the producer sending SSE framing only. A
-    // comment line is the keepalive every OpenAI-dialect gateway sends; it
-    // reaches the consumer, and it buys the producer no time at all.
+    // A keepalive comment line reaches the consumer but buys the producer no time.
     const keepalive = readMessage(reader);
 
     await clock.whenArmed(2);
@@ -346,9 +327,7 @@ describe('a producer that holds the socket open without sending content', () => 
     await clock.whenArmed(3);
     clock.tick();
 
-    // Fired one whole window after the CONTENT frame at 0, not one window after
-    // the keepalive: the deadline never moved, and the error names the instant
-    // it was measured from.
+    // Fired one window after the content frame at 0, not after the keepalive.
     expect(clock.now()).toBe(window);
     await expect(stalled).rejects.toMatchObject({
       code: 'timeout',
@@ -365,9 +344,7 @@ describe('a producer that holds the socket open without sending content', () => 
     const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
     let armed = 0;
 
-    // Four windows of wall clock, one content frame just inside each: a slow
-    // reasoning model is not a stalled one, and nothing here bounds how long
-    // the work may take.
+    // A slow reasoning model is not a stalled one: content inside each window keeps it alive.
     for (let frame = 0; frame < 4; frame += 1) {
       const next = readMessage(reader);
 

@@ -1,9 +1,4 @@
-/**
- * Judge-model selection — the self-preference guard. An unset review model
- * would otherwise mean the agent grades itself with itself; the policy here
- * prefers a different vendor whenever one is connected and names the
- * same-vendor case for what it is.
- */
+/** Judge-model selection: prefer a different vendor so the agent never grades itself with itself. */
 
 import { describe, test, expect } from 'bun:test';
 import { modelVendorFamily, selectEnsembleJudges, selectJudgeModel } from '../src/index';
@@ -25,8 +20,6 @@ describe('modelVendorFamily', () => {
       routes: [['openai/gpt-5.5', 'openai'], ['anthropic/claude-opus-4-7', 'anthropic']],
     },
     {
-      // Each route pinned to the literal family, so a provider-keyed reader that
-      // reports workers-ai for one route and openrouter for the other fails.
       name: 'two routes to the same build are the same family',
       routes: [
         ['workers-ai/@cf/moonshotai/kimi-k2.6', 'moonshotai'],
@@ -42,8 +35,7 @@ describe('modelVendorFamily', () => {
   }
 
   test('resellers report the vendor they resell, not their own id', () => {
-    // Codex is OpenAI's own OAuth endpoint — judging GPT with GPT is not a
-    // cross-family pair however the two are billed.
+    // Codex is OpenAI's own endpoint: GPT judging GPT is not cross-family however it is billed.
     expect(modelVendorFamily('codex/gpt-5.5')).toBe('openai');
   });
 });
@@ -81,8 +73,8 @@ describe('selectJudgeModel', () => {
       reviewSpec: null,
       chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
       candidates: async () => [
-        'workers-ai/@cf/moonshotai/kimi-k2.6', // same vendor — skipped
-        'openrouter/moonshotai/kimi-k3',       // same vendor via another route
+        'workers-ai/@cf/moonshotai/kimi-k2.6',
+        'openrouter/moonshotai/kimi-k3',
         'anthropic/claude-opus-4-7',
         'openai/gpt-5.5',
       ],
@@ -130,7 +122,7 @@ describe('selectEnsembleJudges', () => {
       chatSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       candidates: async () => [
         'anthropic/claude-fable-5',
-        'openrouter/anthropic/claude-fable-5', // same vendor by another route
+        'openrouter/anthropic/claude-fable-5',
         'codex/gpt-5.6-sol',
         'openai/gpt-5.5',
       ],
@@ -143,8 +135,6 @@ describe('selectEnsembleJudges', () => {
   });
 
   test('never draws a judge from the family the classifier runs on', async () => {
-    // The chat model IS the classifier's model, so a judge from its family
-    // would inherit the blind spots the panel exists to measure.
     const selection = await selectEnsembleJudges({
       specs: null,
       chatSpec: () => 'openai/gpt-5.5',
@@ -155,12 +145,7 @@ describe('selectEnsembleJudges', () => {
   });
 
   test('named judges win outright, without an availability query or a spec resolution', async () => {
-    // Both are credentialed reads: `candidates` lists the registry, and
-    // resolving the chat spec reaches the signed-in session and the stored keys.
-    // `kinu label ensemble --models <one-model>` printed "not authenticated"
-    // and exited 1 for a panel that was never going to run, because the caller
-    // computed `chatSpec` eagerly as an argument. A named panel must consult
-    // neither.
+    // Both are credentialed reads; a named panel must consult neither.
     let queried = false;
     let resolved = false;
 
@@ -187,10 +172,7 @@ describe('selectEnsembleJudges', () => {
   });
 
   test('resolves the chat spec exactly once when it does have to choose', async () => {
-    // The control for the test above: a thunk that is never called on the
-    // configured path must still be called on the path that needs the family,
-    // or the exclusion silently stops working and judges come from the
-    // classifier's own vendor.
+    // Control: the family thunk must still be called on the path that needs it.
     let calls = 0;
 
     const selection = await selectEnsembleJudges({
@@ -208,8 +190,7 @@ describe('selectEnsembleJudges', () => {
   });
 
   test('comes back short rather than inventing a second judge', async () => {
-    // No same-family fallback: a panel of one is not a weaker panel, and two
-    // models from one vendor agree for reasons that are not the turn.
+    // No same-family fallback: two models from one vendor agree for reasons that are not the turn.
     const selection = await selectEnsembleJudges({
       specs: null,
       chatSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',

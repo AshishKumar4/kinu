@@ -1,7 +1,3 @@
-/**
- * Unit tests: CraftStore conflict detection.
- */
-
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { checkConflictsBeforeAdding, upsertCraftedTool } from '../src/craft/conflict';
@@ -34,7 +30,6 @@ describe('CraftStore conflict detection', () => {
       code: 'other()', score: 0.9,
     });
 
-    // High word overlap → should detect conflict
     expect(result.conflicting.length).toBeGreaterThan(0);
   });
 
@@ -54,13 +49,7 @@ describe('CraftStore conflict detection', () => {
   });
 });
 
-/**
- * What both backends actually do with a stored tool: compile the source as an
- * expression and CALL what it produces (cli-backend/src/craft-executor.ts; the
- * CF sandbox splices the same expression). The shared test executor only
- * parses, which is precisely the half of the admission check every broken
- * production tool slipped through.
- */
+/** Compiles and calls the stored expression as both backends do (cli-backend/src/craft-executor.ts); the shared executor only parses. */
 function evaluatingExecutor(): Executor {
   return {
     languages: ['javascript'],
@@ -77,10 +66,7 @@ function evaluatingExecutor(): Executor {
 }
 
 describe('upsertCraftedTool — the admission check', () => {
-  // Seven tools were crafted in one production session; the two inspected were
-  // both non-functional, and both were stored, scored and offered to later
-  // turns. The only admission test was "has a name, and does not start with
-  // `//`" — nothing ever compiled the code the runtime would have to compile.
+  // Admission must compile the code the runtime will compile, not just check for a name.
   function runtime(): AgentRuntime {
     const { rt } = createTestRuntime();
     initCraftedToolsTables(rt.storage.sql);

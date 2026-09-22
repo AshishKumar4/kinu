@@ -1,9 +1,4 @@
-// Step-boundary tool-output pruning (prompting/step-prune.ts) + its seat in
-// the shared per-step pipeline (composePrepareStep). Invariants under test:
-// over-budget step contexts shrink OLD tool outputs while the recent-tool
-// budget stays verbatim; message count/order never change; truncation is
-// deterministic, byte-stable across growing step arrays, and idempotent;
-// cache markers still land LAST on the pruned array.
+// Step-boundary tool-output pruning (prompting/step-prune.ts) and its place in composePrepareStep.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage, ToolResultPart } from 'ai';
 import {
@@ -37,10 +32,8 @@ function toolExchange(i: number, outputChars: number): ModelMessage[] {
   ];
 }
 
-/** 6 tool exchanges with 40k-char outputs (~10k tokens each ≈ 60k total).
- *  Against a 64k window with a 20k answer allowance (budget 44k) the newest
- *  three results fill the 40k recent budget and the oldest three must shrink.
- *  Exchange i's tool message sits at array index 2+2i. */
+/** 6 exchanges of 40k chars against a 64k window / 20k allowance: the oldest three must shrink.
+ *  Exchange i's tool message sits at index 2+2i. */
 function bigTurn(): ModelMessage[] {
   const messages: ModelMessage[] = [{ role: 'user', content: 'go' }];
 
@@ -51,8 +44,6 @@ function bigTurn(): ModelMessage[] {
 
 const WINDOW = 64_000;
 
-/** Below half of every window used below, so the reserve is the allowance
- *  itself and each budget is `window - MAX_OUTPUT`. */
 const MAX_OUTPUT = 20_000;
 
 function budgetFor(contextWindow: number): ModelWindow {
@@ -86,11 +77,9 @@ describe('pruneStepToolOutputs', () => {
     const messages = bigTurn();
     const pruned = present(pruneStepToolOutputs(messages, budgetFor(WINDOW)), 'pruned step');
 
-    // Never remove or reorder: same count, same roles, same positions.
     expect(pruned.length).toBe(messages.length);
     expect(pruned.map((m) => m.role)).toEqual(messages.map((m) => m.role));
 
-    // Oldest three results (fall outside the 40k recent budget) truncated.
     for (const idx of [2, 4, 6]) {
       const part = resultPart(pruned[idx]);
       const text = outputText(part);
@@ -98,16 +87,14 @@ describe('pruneStepToolOutputs', () => {
       expect(text.startsWith('output-')).toBe(true);
       expect(text).toContain('…[truncated: full output was');
       expect(text).toContain('; re-run the tool if needed]');
-      // The marker reports the ORIGINAL serialized size.
+      // The marker reports the original serialized size.
       expect(text).toContain(`${outputText(resultPart(messages[idx])).length} chars`);
     }
 
-    // The newest three results (recent 40k-token budget) are the SAME objects.
     for (const idx of [8, 10, 12]) {
       expect(pruned[idx]).toBe(messages[idx]);
     }
 
-    // Non-tool messages untouched by identity; the input array never mutates.
     expect(pruned[0]).toBe(messages[0]);
     expect(pruned[1]).toBe(messages[1]);
     expect(outputText(resultPart(messages[2])).length).toBeGreaterThan(40_000);
@@ -119,16 +106,11 @@ describe('pruneStepToolOutputs', () => {
     const prunedN = present(pruneStepToolOutputs(stepN, budgetFor(WINDOW)), 'pruned step');
     const prunedN1 = present(pruneStepToolOutputs(stepN1, budgetFor(WINDOW)), 'pruned step');
 
-    // Parts truncated at step N are truncated to the SAME bytes at step N+1.
     for (const idx of [2, 4, 6]) {
       expect(outputText(resultPart(prunedN1[idx]))).toBe(outputText(resultPart(prunedN[idx])));
     }
 
-    // Growth is monotone. This 64k/20k fixture has a 44k allocation and an 11k
-    // batch, so one more 10k exchange is enough to cross a batch line and the
-    // boundary advances by one result here — the neighbouring test measures
-    // the steps that do NOT cross one. Whichever way it goes, no truncated
-    // part ever un-truncates.
+    // This fixture crosses a batch line, so the boundary advances; no truncated part ever un-truncates.
     expect(prunedN[8]).toBe(stepN[8]);
     expect(outputText(resultPart(prunedN1[8]))).toContain('…[truncated:');
     expect(prunedN1.length).toBe(stepN1.length);
@@ -136,7 +118,6 @@ describe('pruneStepToolOutputs', () => {
 
   test('idempotent: already-truncated outputs are never re-truncated', () => {
     const pruned = present(pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW)), 'pruned step');
-    // The pruned array is under budget now — nothing further to do.
     expect(pruneStepToolOutputs(pruned, budgetFor(WINDOW))).toBeUndefined();
   });
 
@@ -144,11 +125,8 @@ describe('pruneStepToolOutputs', () => {
     const pruned = present(pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW)), 'pruned step');
     const first = outputText(resultPart(pruned[2]));
     expect(first).toContain('…[truncated:');
-    // Grow the turn so the pruner must run again over the truncated parts.
     const grown = [...pruned, ...toolExchange(6, 40_000), ...toolExchange(7, 40_000), ...toolExchange(8, 40_000)];
     const repruned = present(pruneStepToolOutputs(grown, budgetFor(WINDOW)), 'pruned step');
-    // The already-truncated part passes through untouched — the marker still
-    // reports the ORIGINAL serialized size, not the truncated one.
     expect(outputText(resultPart(repruned[2]))).toBe(first);
     expect(first).toContain(`${outputText(resultPart(bigTurn()[2])).length} chars`);
   });
@@ -168,21 +146,8 @@ describe('pruneStepToolOutputs', () => {
     expect(outputText(part)).toContain('…[truncated:');
   });
 
-  // The measured cost defect this pins. The SDK rebuilds every step's array
-  // from the ORIGINAL history, so this pass never sees its own previous
-  // output: the total it measures grows for the whole turn and it re-decides
-  // the boundary on every step. Against a real Sonnet window (200k/64k →
-  // 136k) with 24k-char tool results the boundary used to move on every step
-  // from step 22 on — 18 of 40 steps rewrote 72-77% of the request rather
-  // than reading it from the provider's prefix cache, and a cache write is
-  // ~12x a cache read on Anthropic input rates. This module exists to stop
-  // exactly that: its own header cites a turn that billed 1.5M uncached input
-  // tokens across 33 steps.
-  //
-  // The contract is about BYTES, not about whether the pass ran: the pass has
-  // to run on every over-budget step (nothing carries its last answer
-  // forward), but its output must be byte-identical until a whole batch of
-  // new output has arrived.
+  // The SDK rebuilds every step from the original history, so the pass never sees its own output;
+  // its bytes must stay identical until a whole batch of new output arrives, or each step is a cache write.
   test('the boundary moves once per batch, not once per step', () => {
     const limits: ModelWindow = { contextWindow: 200_000, modelOutputLimit: 64_000 };
     const STEPS = 40;
@@ -194,10 +159,6 @@ describe('pruneStepToolOutputs', () => {
       turn.push(...toolExchange(step, 24_000));
       const request = JSON.stringify(pruneStepToolOutputs(turn, limits) ?? turn);
 
-      // A request whose predecessor is a literal prefix of it re-prefills
-      // nothing: the provider reads every shared byte from its cache. The
-      // closing bracket of the serialized array is the only byte that has to
-      // give way to the new tail.
       if (previous !== null && !request.startsWith(previous.slice(0, previous.lastIndexOf(']')))) {
         moved.push(step);
       }
@@ -205,9 +166,7 @@ describe('pruneStepToolOutputs', () => {
       previous = request;
     }
 
-    // ~6k tokens a step over 40 steps is ~240k against a 136k allocation, so
-    // the boundary has to move — but once per 34k batch (about every fifth
-    // step of this size), never on consecutive steps.
+    // The boundary must move once per batch, never on consecutive steps.
     expect(moved.length).toBeGreaterThan(0);
     expect(moved.length).toBeLessThanOrEqual(STEPS / 5);
 
@@ -217,11 +176,7 @@ describe('pruneStepToolOutputs', () => {
   });
 
   test('a pass frees a share of the allocation, so a larger window frees more per pass', () => {
-    // Not a fixed token count: a pass has to free a share of the allocation
-    // it is protecting, or the same number is a no-op on a 1M window and
-    // clears everything on a 32k one. Observable as how many results the
-    // FIRST over-budget pass truncates: the overage is at most one result,
-    // so everything past it is the quantum.
+    // The quantum is a share of the allocation, not a fixed token count.
     const truncatedByFirstPass = (limits: ModelWindow): number => {
       const turn: ModelMessage[] = [{ role: 'user', content: 'go' }];
 
@@ -255,24 +210,13 @@ describe('composePrepareStep with pruning', () => {
     expect(await composePrepareStep({}, { stepNumber: 3, messages, steps: [] })).toBeUndefined();
   });
 
-  // The pipeline prunes BEFORE it weaves — frozen block positions have to be
-  // coordinates in the array the model actually receives — so the blocks the
-  // weave is about to put back are absent from the array the pruner measures.
-  // Left unreserved, a turn whose ledger has grown sends a request OVER the
-  // budget the pruner just declared it was under. This test fails on that
-  // ordering: the bare history sits under the budget, the woven request does
-  // not, and only a pruner told about the ledger shrinks anything.
+  // Pruning precedes the weave, so the pruner must reserve room for the ledger blocks the weave adds back.
   test('the pruner is charged for the ledger blocks the weave adds back', async () => {
     const messages = bigTurn();
-    // ~60k tokens of history against an 84k budget: under it on its own.
-    // The allowance is stated here rather than taken from MAX_OUTPUT because
-    // the margin is what this test is about.
     const budget: ModelWindow = { contextWindow: 120_000, modelOutputLimit: 36_000 };
     expect(await composePrepareStep({ prune: budget }, { stepNumber: 3, messages, steps: [] }))
       .toBeUndefined();
 
-    // A busy turn's worth of frozen blocks — a block is appended whenever live
-    // state changes, and nothing bounds them mid-turn.
     const ledger = new DynamicContextLedger();
 
     for (let i = 0; i < 20; i++) {
@@ -290,16 +234,12 @@ describe('composePrepareStep with pruning', () => {
   });
 
   test('a caller-supplied prune reserve adds to the ledger overhead', async () => {
-    // Six 28k-char exchanges sit under the 44k budget on their own but over
-    // it with a 5k caller reserve — so only a pruner told about the reserve
-    // shrinks anything.
     const messages: ModelMessage[] = [{ role: 'user', content: 'go' }];
 
     for (let i = 0; i < 6; i++) messages.push(...toolExchange(i, 28_000));
     const callerReserve = { ...budgetFor(WINDOW), reservedTokens: 5_000 };
     const bare = present(await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages, steps: [] }), 'prepared step');
     expect(outputText(resultPart(bare.messages[2]))).toContain('…[truncated:');
-    // An empty ledger (zero overhead) must preserve the caller reserve, not erase it.
     const ledger = new DynamicContextLedger();
 
     const result = present(await composePrepareStep({
@@ -314,10 +254,9 @@ describe('composePrepareStep with pruning', () => {
     const messages = bigTurn();
     const result = present(await composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
     const out = result.messages;
-    // Pruning happened…
     expect(outputText(resultPart(out[2]))).toContain('…[truncated:');
 
-    // …and the tail breakpoints ride the FINAL two messages.
+    // Tail breakpoints ride the final two messages.
     const marked = out.filter((m) =>
       JSON.stringify(m.providerOptions ?? {}).includes('cacheControl'));
 
@@ -327,13 +266,9 @@ describe('composePrepareStep with pruning', () => {
   });
 });
 
-// KINU-045. The admission reserves the resolved model's own answer allowance,
-// bounded by the only split the window can guarantee both claimants — never a
-// flat share of the window, a number nobody can point at a fact for.
+// KINU-045: reserve the model's own answer allowance, bounded by the split the window can guarantee.
 describe('outputReserveTokens', () => {
-  // Pairs read from models.dev/api.json for the exact models this repo
-  // resolves: the first two publish an allowance well under half their window,
-  // the last two publish an allowance that IS their whole window.
+  // Pairs from models.dev/api.json; the last two publish an allowance equal to their whole window.
   const CATALOG: Array<[string, number, number, number]> = [
     ['anthropic/claude-opus-4-7', 1_000_000, 128_000, 128_000],
     ['deepseek/deepseek-v4-pro', 1_000_000, 384_000, 384_000],
@@ -349,10 +284,7 @@ describe('outputReserveTokens', () => {
   );
 
   test('a published allowance that fills the window still leaves half for the instruction', () => {
-    // The whole point of the bound: subtracting such an allowance verbatim
-    // admits nothing, and `pruneStepToolOutputs` reads a non-positive limit as
-    // "do not prune", so the pass would switch itself off for exactly the
-    // models that need it most.
+    // A non-positive limit reads as "do not prune", which would switch the pass off for these models.
     const shared: ModelWindow = { contextWindow: 262_144, modelOutputLimit: 262_144 };
     expect(stepContextLimit(shared)).toBe(131_072);
     expect(pruneStepToolOutputs(bigTurn(), shared)).toBeUndefined();
@@ -375,11 +307,7 @@ describe('outputReserveTokens', () => {
     expect(admitted).toBeGreaterThanOrEqual(reserved);
     expect(Number.isInteger(reserved)).toBe(true);
 
-    // The five above are all satisfied by reserving NOTHING, which a mutation
-    // run proved: replacing the body with `return 0` left this table green
-    // while eleven other tests went red. These two are the discriminator — a
-    // declared allowance always gets room, and an allowance the window can
-    // afford is reserved in full rather than shaved.
+    // These two reject a body that reserves nothing, which satisfies the five above.
     if (modelOutputLimit > 0 && contextWindow > 1) expect(reserved).toBeGreaterThan(0);
 
     if (modelOutputLimit <= Math.floor(contextWindow / 2)) expect(reserved).toBe(modelOutputLimit);
@@ -393,13 +321,10 @@ describe('outputReserveTokens', () => {
     const admitted = allowances
       .map((modelOutputLimit) => stepContextLimit({ contextWindow: window, modelOutputLimit }));
 
-    // Never increasing, whatever the allowance does.
     expect(admitted).toEqual([...admitted].sort((a, b) => b - a));
-    // Strictly decreasing while the allowance is the binding constraint.
     const bound = admitted.slice(0, allowances.indexOf(half) + 1);
 
     for (let i = 1; i < bound.length; i++) expect(bound[i]).toBeLessThan(bound[i - 1]);
-    // Past the bound the split is the constraint, so nothing moves further.
     expect(admitted.at(-1)).toBe(half);
     expect(admitted.at(-2)).toBe(half);
   });

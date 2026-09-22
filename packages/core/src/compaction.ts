@@ -1,21 +1,8 @@
-/**
- * Compaction content spec — the structured handoff template the summarizer
- * uses when the conversation prefix is compressed (hermes context_compressor
- * / Codex compact-prompt lineage). This module owns WHAT a compaction
- * summary must say; the boundary/prune/replay machinery is
- * @kinu.run/compaction (the better-compact ladder), whose last-resort prefix
- * summary builds its prompt here — one content spec, both backends.
- *
- * Tuning order is recall first, then precision: a successor that re-asks a
- * resolved question or re-reads a summarized file wastes more than a few
- * extra summary tokens cost.
- */
+/** Compaction content spec: what a summary must say. @kinu.run/compaction's last-resort prefix summary builds its prompt here. */
 
-/** First line of every stored summary — lets consumers and tests recognize a
- *  compaction checkpoint, and `stripCheckpointPreamble` recover the body for
- *  iterative updates. */
 import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window';
 
+/** First line of every stored summary; `stripCheckpointPreamble` recovers the body for iterative updates. */
 export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT — reference only]';
 
 const CHECKPOINT_PREAMBLE =
@@ -26,12 +13,10 @@ const CHECKPOINT_PREAMBLE =
   'available file tools when details matter. Use only context and compaction operations declared ' +
   'on your current tool surface; this summary grants no additional capability.';
 
-/** Wrap a fresh summary body in the checkpoint preamble before storage. */
 export function wrapCompactionSummary(summary: string): string {
   return `${CHECKPOINT_PREAMBLE}\n\n${summary.trim()}`;
 }
 
-/** Recover the summary body from a stored checkpoint (for iterative updates). */
 export function stripCheckpointPreamble(summary: string): string {
   if (!summary.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return summary.trim();
   const bodyStart = summary.indexOf('\n\n');
@@ -42,13 +27,10 @@ export function stripCheckpointPreamble(summary: string): string {
 export interface CompactionSummaryPromptInput {
   /** Rendered transcript of the messages being compressed (pruned first). */
   transcript: string;
-  /** The most recent user request across the FULL history (including the
-   *  protected tail) — handed in directly so "verbatim" is mechanical, not
-   *  a retrieval the summarizer can fumble. */
+  /** The most recent user request across the full history, handed in so "verbatim" is mechanical. */
   latestUserAsk?: string;
   /** Previous summary body for iterative updates (preamble stripped). */
   previousSummary?: string | null;
-  /** Target token budget for the summary. */
   budgetTokens: number;
 }
 
@@ -99,7 +81,6 @@ ${ask}
 `;
 }
 
-/** Build the summarizer prompt — first compaction or iterative update. */
 export function buildCompactionSummaryPrompt(input: CompactionSummaryPromptInput): string {
   const { transcript, previousSummary, budgetTokens } = input;
 
