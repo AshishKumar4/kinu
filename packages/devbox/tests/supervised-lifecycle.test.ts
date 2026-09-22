@@ -1,18 +1,5 @@
-// The supervised process lifecycle, driven through the real Devbox class.
-//
-// Both defects below are about ORDER — which of a durable row and a container
-// process happens first, and what the other one is allowed to do when its
-// partner failed. No pure decision can carry that, so the only way to pin
-// either is to run the shipped method against the platform stand-in in
-// `support/devbox-harness.ts`, which holds the one SDK substitution and explains
-// why it exists.
-//
-// The two defects have one shape: a durable row and a container process are two
-// steps, and only one order leaves the row agreeing with the world. Starting
-// records the row BEFORE the process, so a lost answer cannot hide a live
-// process from the next attempt and send it to start a second one. Stopping
-// keeps the row UNLESS THE KILL IS CONFIRMED, so a process that is still
-// running never loses the only thing that names it.
+// Supervised process lifecycle through the real Devbox: start records the row before the
+// process; stop keeps the row unless the kill is confirmed, so the row names a live process.
 import { beforeEach, describe, expect, test } from 'bun:test';
 
 import { Devbox, harness, SandboxFailure, type FakeSandbox } from './support/devbox-harness';
@@ -43,11 +30,8 @@ describe('starting a supervised process reserves its id before the process exist
 
   test('a reset between the reservation and the start never creates a second process',
     async () => {
-      // The window KINU-N031 lives in. The row and the process are two steps
-      // inside the container, and the caller retries on exactly the errors that
-      // can strike between them. With the row written second, the retry could
-      // only look for a row, found none, and started a second copy: two servers
-      // on one port, and the unrecorded one impossible to list, stop or restore.
+      // The caller retries on errors that strike between the row write and the process start;
+      // the row must come first so the retry reuses its id instead of starting a second copy.
       const first = harness(Devbox);
       first.container.startFaults.push({ error: new Error(LOST), created: false });
       await expect(first.box.startSupervised(COMMAND)).rejects.toThrow(LOST);
@@ -68,9 +52,6 @@ describe('starting a supervised process reserves its id before the process exist
     });
 
   test('a start whose answer was lost is adopted, not repeated', async () => {
-    // The container DID create the process and the reply never arrived. The
-    // retry asks about the reserved id, is told it is running, and hands that
-    // one back — so the retry costs nothing and creates nothing.
     const { box, container } = harness(Devbox);
     container.startFaults.push({ error: new Error(LOST), created: true });
     await expect(box.startSupervised(COMMAND)).rejects.toThrow(LOST);
@@ -83,10 +64,8 @@ describe('starting a supervised process reserves its id before the process exist
   });
 
   test('a container that cannot answer refuses rather than starting a second copy', async () => {
-    // Absence has to be POSITIVE. A query that failed says nothing about
-    // whether a process exists, and starting on it is the duplication the
-    // reservation exists to prevent — so the call refuses and the reservation
-    // stands for the next attempt.
+    // Absence must be positive: a failed query says nothing about whether the process exists,
+    // so starting on it would duplicate; the call refuses and the reservation stands.
     const { box, container } = harness(Devbox);
     await box.startSupervised(COMMAND);
     const reserved = await reservations(box);
@@ -124,9 +103,8 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
   });
 
   test('a kill that failed keeps the SAME spec, so a later stop can retry it', async () => {
-    // KINU-N011. The spec is the only thing that names the process, and the
-    // restoration walks specs — so deleting it on a kill that did not land
-    // leaves a live server the box can no longer list, stop or bring back.
+    // The spec alone names the process and restoration walks specs: dropping it on a failed kill
+    // leaves a live server the box cannot list, stop or bring back.
     const { box, container } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);
     container.killFaults.push(new Error('container transport reset'));
@@ -138,20 +116,16 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
     // The reason is durable too, so a box that keeps failing to stop stays
     // visible after the object is evicted.
     expect(state.incidents.total).toBe(1);
-    // The process really is still there, which is why the spec had to stay.
     expect(container.processes.has(processId)).toBe(true);
 
-    // The retry addresses the SAME id — no second record was ever created.
     expect(await box.stopSupervised(processId)).toEqual({ stopped: true });
     expect(container.kills).toEqual([processId, processId]);
     expect(await reservations(box)).toEqual([]);
   });
 
   test('a container answering PROCESS_NOT_FOUND is absence, and the spec goes', async () => {
-    // The ordinary post-recycle case: the spec was restarted under its own id
-    // and the caller is holding the previous one. The container ANSWERED, and
-    // its answer is that it holds no such id, so nothing is running and keeping
-    // the row would restore a process that does not exist.
+    // A restarted spec keeps its id, so a caller may hold the previous one. The container
+    // answered that it holds no such id; keeping the row would restore a nonexistent process.
     const { box, container } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);
     container.killFaults.push(new SandboxFailure({
@@ -167,14 +141,8 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
   });
 
   test('KINU-N011: prose saying "unknown" and "not found" is NOT absence', async () => {
-    // NOT A PROSE MATCH: `/not found|unknown/` over the rendered cause chain
-    // classifies both failures below as absence, and neither says the process
-    // is gone. The first is the container reporting a failure IT could not
-    // classify, which is the SDK's own `UNKNOWN_ERROR`; the second is a value
-    // the SDK never classified at all, which is what every platform and
-    // transport failure reaching this call from outside its error tree looks
-    // like. Dropping the spec on prose leaves a live server nothing names,
-    // lists, stops or restores.
+    // Neither fault means the process is gone: `UNKNOWN_ERROR` is unclassified by the container,
+    // the bare Error is an unclassified platform/transport failure; a prose match would drop it.
     const { box, container } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);
     container.killFaults.push(
@@ -185,12 +153,10 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
     for (const attempt of [1, 2]) {
       expect(await box.stopSupervised(processId)).toEqual({ stopped: false });
       const state = await box.devboxState();
-      // The SAME row, every time, and one filed reason per refusal.
       expect(state.supervised.map(spec => spec.processId)).toEqual([processId]);
       expect(state.incidents.total).toBe(attempt);
     }
 
-    // The process the box refused to forget really is still running.
     expect(container.processes.has(processId)).toBe(true);
   });
 });

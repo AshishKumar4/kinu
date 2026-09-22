@@ -3,19 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { candidateStoreFacts, envelopeBytes, envelopeIdOf } from '../bench/candidate-facts';
 import type { CandidateObjectReader, RootEnvelopeV1 } from '../bench/candidate-facts';
 
-// ── the closure proof resolves the envelope's mount-relative keys ───────────
-//
-// The runner writes `obj/<sha>` and `closure/<sha>` beneath the store mounted
-// at the payload prefix, and the envelope names them that way. Run
-// 20260905075659 failed bounded-layers' lifecycle proof on "146 objects
-// absent, 146 outside this arm's payload prefix" while every object was in
-// the bucket: the facts asked the store for the bare keys. The row carries
-// the joined key, and the driver's prefix check reads that address.
-//
-// PROVENANCE. First added in `4b2c25c76` (2026-09-05), deleted with its
-// module in `32fd27369` (2026-09-09). Restored 2026-09-10 against the
-// bench-local `bench/candidate-facts.ts`: the envelope helpers it imported
-// from `src/candidates/publication` now live in the bench module itself.
+// The envelope names `obj/<sha>` and `closure/<sha>` relative to the store's mount, so facts
+// must read them beneath the payload prefix and report the joined key.
 
 const sha = 'a'.repeat(64);
 
@@ -79,9 +68,6 @@ describe('candidate closure facts', () => {
   });
 
   test('a bare-key lookup reproduces the 146-absent false negative', async () => {
-    // The pre-`4b2c25c76` defect, pinned so it cannot return silently: ask
-    // the store for the envelope's mount-relative keys WITHOUT the payload
-    // prefix and every object reads absent, exactly the morning run's row.
     const envelope: RootEnvelopeV1 = {
       version: 1,
       format: 'bounded-layers/v1',

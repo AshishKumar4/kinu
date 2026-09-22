@@ -1,6 +1,5 @@
-/** Two bounded storage cells using the decisive bench's deployed Worker,
- * lifecycle, C3 writer and publication meter. This is not a strategy ranking
- * or a substitute for the full G1–G10 admission matrix. */
+/** Two bounded storage cells reusing the decisive bench's Worker, lifecycle, C3 writer and meter.
+ *  Not a strategy ranking and not a substitute for the full G1–G10 admission matrix. */
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -171,10 +170,8 @@ try {
   return row;
 }
 
-/** One destroy/create cycle of the `--lifecycle` run. A refused cycle keeps
- *  its observations, its last state reading and the incident reasons, and the
- *  loop goes on to the next cycle: the hang under study is intermittent, so
- *  one sample is not a measurement. */
+/** A refused cycle keeps its observations, last state and incident reasons, and the loop
+ *  continues: the hang is intermittent, so one sample is not a measurement. */
 interface LifecycleCycle {
   initial: StartupCompletion | null;
   exec: Awaited<ReturnType<typeof execInBox>> | null;
@@ -184,9 +181,6 @@ interface LifecycleCycle {
   incidents: IncidentReasonRow[] | null;
 }
 
-/** What the driver was invoked with: the cleanup credentials, the measured
- *  revision and the cell selector flags, checked before the run creates
- *  anything. */
 interface RunInvocation {
   accessKeyId: string;
   secretAccessKey: string;
@@ -225,16 +219,14 @@ function runInvocation(): RunInvocation {
   return { accessKeyId, secretAccessKey, revision, lifecycleOnly, c3Only, largeOnly };
 }
 
-/** The rows `observations.json` serializes while the run fills them: each
- *  observer writes through here so a mid-measurement save carries the
- *  partial row. */
+/** Observers write rows here as the run fills them, so a mid-measurement save of
+ *  `observations.json` carries the partial row. */
 interface RunObservations {
   c3: LiveC3Observation | null;
   large: LargeObservation | null;
   lifecycle: LifecycleCycle[];
 }
 
-/** What one cell body measures on, and where it records what it saw. */
 interface CellRun {
   readonly fixture: Fixture;
   readonly box: string;
@@ -243,7 +235,6 @@ interface CellRun {
   readonly errors: string[];
 }
 
-/** The `--lifecycle` body: ten destroy/create cycles on the one box. */
 async function runLifecycle({ fixture, box, observed, save, errors }: CellRun): Promise<void> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const observations: StartupObservation[] = [];
@@ -279,16 +270,12 @@ async function runLifecycle({ fixture, box, observed, save, errors }: CellRun): 
   }
 }
 
-/** The storage cells' run: the C3 box, the large-file box it hands over to,
- *  and which of the two the selector admits. */
 interface StorageCellRun extends CellRun {
   readonly largeBox: string;
   readonly runId: string;
   readonly selection: Pick<RunInvocation, 'c3Only' | 'largeOnly'>;
 }
 
-/** The single-cell body: the C3 cell unless `--large-only`, then the large
- *  cell unless `--c3-only`. */
 async function runCells(
   { fixture, box, largeBox, runId, selection, observed, save, errors }: StorageCellRun,
 ): Promise<void> {
@@ -354,10 +341,8 @@ async function run(): Promise<number> {
 
   const log = (message: string): void => { process.stderr.write(`[block-attach] ${message}\n`); };
 
-  // Abandoned runs first, before this run creates anything: a driver killed
-  // between its deploy and its teardown (`b20260914070552`, an observer
-  // ceiling on the driver's own process) leaves a manifest naming a live
-  // Worker, container application and bucket that only a later driver reads.
+  // Recover abandoned runs before this run creates anything: a driver killed mid-run leaves
+  // a manifest naming a live Worker, container application and bucket only a later driver reads.
   for (const earlier of await recoverAbandonedRuns(REPO, runId, orphanTeardownExecutor(residue), log)) {
     if (earlier.failures.length > 0 || !earlier.replayed) errors.push(`earlier run ${earlier.runId} still holds resources`);
     else cleanup.push(`earlier run ${earlier.runId}: abandoned resources deleted or absent`);
@@ -430,9 +415,8 @@ async function run(): Promise<number> {
         pending = lines.pop() ?? '';
 
         for (const line of lines) {
-          // Every tailed line is kept: `b20260914045438` filtered to the
-          // `devbox.` events alone and lost the console lines that named
-          // why its startup never settled.
+          // Every tailed line is kept, not only `devbox.` events: console lines explain a startup
+          // that never settles.
           appendFileSync(join(artifacts, 'tail.log'), line + '\n');
           const begin = line.indexOf('{"event":"devbox.');
 

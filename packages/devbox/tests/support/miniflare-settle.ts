@@ -1,28 +1,12 @@
-/**
- * Miniflare disposal that observes the platform rather than trusting the clock.
- *
- * `Miniflare.dispose()` calls `removeDir(tmpPath, { fireAndForget: true })` and
- * resolves while its workerd children are still writing — measured under strace
- * on this suite's own failure: `mkdir` calls for the child's cache and r2
- * directories land AFTER the test's dispose returned, which is the
- * "survived rmSync" survivor `releaseScratch` names when the suite's scratch
- * release wins the race against a dying child.
- *
- * Quiet is observed, not slept: the poll returns once no miniflare-prefixed
- * entry under the process temp directory has changed across one interval, so a
- * fast child costs ~100ms and a wedged one hits the cap and still lets the
- * release report it honestly. `process.env.TMPDIR` is the preload's scratch
- * root under `bun test`, so this watches the same directory the release deletes.
- */
+/** Waits for miniflare's workerd children to go quiet after `dispose()`, which resolves while
+ *  they still write; polls miniflare-prefixed temp entries until unchanged for one interval. */
 import { readdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Miniflare } from 'miniflare';
 
-/** Every path under each miniflare-prefixed root, with the mtime a writer
- *  bumps. An entry disappearing between readdir and stat is a writer racing
- *  the snapshot — that IS a change, so the entry reads ':gone' rather than
- *  being dropped. */
+/** An entry vanishing between readdir and stat is a racing writer, which counts as a change,
+ *  so it reads ':gone' rather than being dropped. */
 function miniflareFootprint(): string {
   const parts: string[] = [];
 
@@ -35,9 +19,8 @@ function miniflareFootprint(): string {
     try {
       entries = readdirSync(root, { recursive: true });
     } catch (cause) {
-      // ENOENT is the change being watched for: the root was removed between
-      // the two readdirs, and disappearance IS activity. Anything else means
-      // the snapshot cannot be trusted, so it propagates.
+      // ENOENT means the root vanished between the readdirs, and disappearance counts as activity.
+      // Any other error makes the snapshot untrustworthy, so it propagates.
       if (!(cause instanceof Error) || !('code' in cause) || cause.code !== 'ENOENT') throw cause;
       parts.push(`${root}:gone`);
       continue;

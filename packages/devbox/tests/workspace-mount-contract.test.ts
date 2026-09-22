@@ -1,43 +1,13 @@
-// What the workspace mount owes a process running in it, asked of the real
-// image.
-//
-// THE CONTRACT. The chain attaches `/workspace` as a fuse-overlayfs with a
-// fresh writable upper, and everything an agent runs writes into that upper. A
-// mapping is not a nicety there: SQLite's WAL mode keeps its shared-memory
-// index in a `-shm` file that it mmaps MAP_SHARED and writable, so an upper
-// that refuses such a mapping turns every WAL database in the workspace into
-// SQLITE_IOERR_SHMMAP — and a WAL database is what almost every agent tool
-// (bun:sqlite, better-sqlite3, Prisma, litestream) opens by default.
-//
-// WHY IT IS A TEST AND NOT A COMMENT. The capability belongs to the mount, not
-// to any code in this package, so no unit test can observe it: the only honest
-// question is whether the shipped image's fuse-overlayfs honours it. This suite
-// asks exactly that, in the image the product runs, through the same mount
-// command `src/snapshot-chain.ts` issues.
-//
-// AND IT IS PROVEN ABLE TO GO RED. A green assertion over a property nothing
-// can break is not evidence. `tests/support/workspace-mount-contract/` holds a
-// minimal FUSE filesystem that refuses ONE capability — its files are
-// direct-io, so the kernel answers every mmap with ENODEV — and the same two
-// probes run against it. The mapping half asserts the one name; the WAL half
-// asserts a closed set of two mapping-caused IOERRs, documented at the test.
-//
-// DOCKER-GATED. No docker, no evidence: the suite skips rather than passing
-// vacuously. `--privileged --device /dev/fuse` is what a FUSE mount inside a
-// container needs, which is the same reason the deployed container has it.
+// Contract: the `/workspace` fuse-overlayfs upper must allow writable MAP_SHARED mmap,
+// or SQLite WAL `-shm` fails; checked in the real image, docker-gated, vs a refusing fixture.
 import { spawnSync } from 'node:child_process';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 const FIXTURE_DIR = join(import.meta.dir, 'support', 'workspace-mount-contract');
 
-/** PER PROCESS, because the tag is machine-global while the fixture is not.
- *  `FIXTURE_DIR` is `import.meta.dir`-relative, so every worktree carries its
- *  own copy of the probe sources, and every agent here works in a worktree by
- *  mandate. One shared tag therefore means a lane's build of ITS fixture is
- *  what this tree's container starts from. Docker caches layers by content
- *  rather than by tag, so identical sources still reuse the apt and gcc steps
- *  and a re-run costs the COPY and the two compiles. */
+/** Per-process tag: the tag is machine-global but each worktree has its own fixture sources,
+ *  so a shared tag could start this tree's container from another tree's build. */
 const IMAGE = `kinu-workspace-mount-contract:${String(process.pid)}`;
 
 function dockerUsable(): boolean {
@@ -50,9 +20,8 @@ function dockerUsable(): boolean {
 
 const usable = dockerUsable();
 
-/** What one run of the fixture answered. `undefined` is a probe that never
- *  printed a verdict, which is a failure rather than a pass — an assertion
- *  against a name that is absent says so instead of matching loosely. */
+/** `undefined` is a probe that printed no verdict: a failure, not a pass, so assertions
+ *  compare exact values rather than matching loosely. */
 interface MountVerdicts {
   readonly mmap: string | undefined;
   readonly wal: string | undefined;
@@ -87,43 +56,25 @@ describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappin
 
   test('on the shipped fuse-overlayfs upper, a writable MAP_SHARED mmap and a WAL database both work', () => {
     const verdicts = probe('overlay');
-    // ONE ASSERTION OVER BOTH, so a failure names which half broke: the mapping
-    // itself, or the WAL that needs it. `wal OK` means a writer and a reader
-    // connection agreed through the shared-memory index AND the rows were still
-    // there after both connections closed and the database was reopened.
+    // One assertion over both, so a failure names which half broke: the mapping or the WAL.
+    // `wal OK` means writer and reader agreed via the shm index and rows survived a reopen.
     expect(verdicts).toEqual({ mmap: 'OK', wal: 'OK' });
   });
 
   test('on a direct-io FUSE mount the same case fails its WAL with a mapping-caused IOERR', () => {
     const verdicts = probe('direct-io');
-    // THE NAMES ARE THE POINT, and there are two of them. ENODEV is what the
-    // kernel answers for an mmap of a direct-io FUSE file — not EACCES (a
-    // read-only mount) and not ENOSYS (no such call) — and it never varies:
-    // the mapping is what this mount refuses, on every run.
+    // The kernel answers an mmap of a direct-io FUSE file with ENODEV, never EACCES (read-only)
+    // or ENOSYS; the mapping is what this mount refuses.
     expect(verdicts.mmap).toBe('ENODEV');
-    // THE WAL HALF IS A CLOSED SET OF TWO, and the set is the evidence. The
-    // common case is SQLITE_IOERR_SHMMAP: SQLite mapping the WAL shm index
-    // onto the unmappable file. The rare case — observed live under host
-    // contention and reproduced locally the same way — is SQLITE_IOERR_DELETE:
-    // SQLite's journal-mode-transition cleanup unlinking app.db-journal while
-    // the kernel answers that unlink with ENOSYS. Captured once with the
-    // failing call: `unlink /mnt/app.db-journal -> -1 errno=38` at the PRAGMA
-    // step. The fixture's own unlink op is wired — succeeding unlinks are
-    // observed in the same runs — and returns only success or ENOENT, so the
-    // ENOSYS came from below the fixture's code, not from a second capability
-    // it refuses. Either name is the missing mapping failing the WAL; what
-    // must never appear is OK (the mapping worked) or a permission class
-    // (EACCES, EPERM, EROFS — a different defect about writability, which this
-    // mount has). A future SQLite that fails this probe under a third name
-    // fails here loudly, and adding it means settling the same question again.
+    // Both names are the unmappable file failing the WAL (IOERR_DELETE is a rare ENOSYS unlink);
+    // OK or a permission class (EACCES, EPERM, EROFS) would be a different defect.
     expect(
       verdicts.wal === 'SQLITE_IOERR_SHMMAP' || verdicts.wal === 'SQLITE_IOERR_DELETE',
     ).toBe(true);
   });
 
-  // The tag this process minted, released with it. The image LAYERS stay in the
-  // cache — that is what keeps a re-run cheap — and only the name goes, so a
-  // machine running this suite for weeks does not accumulate one tag per run.
+  // Removes only this run's tag; image layers stay cached so re-runs stay cheap
+  // and repeated runs do not accumulate one tag each.
   afterAll(() => {
     const removed = spawnSync('docker', ['rmi', '-f', IMAGE], { encoding: 'utf8' });
 

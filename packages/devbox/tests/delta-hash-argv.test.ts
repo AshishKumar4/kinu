@@ -1,5 +1,4 @@
-/** Live b20260913105359: the 2GiB cell returned 0/131072 hashes. Exercise
- * the same generated shell above ARG_MAX with a smaller file and long paths. */
+/** Long `workDir` paths push the generated hash shell past ARG_MAX with a small file. */
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, rmSync } from 'node:fs';

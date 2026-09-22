@@ -1,12 +1,5 @@
-/**
- * Every decision a devbox makes, as a pure function.
- *
- * The class in devbox.ts holds the platform: schedules, storage, container
- * RPC. This file holds the reasoning. The split is not tidiness — a container
- * lifecycle is nearly impossible to test through the platform, and every rule
- * here has a boundary that has to be pinned by a table rather than by reading
- * it twice. Nothing in this file touches a container, a bucket or a clock.
- */
+/** Every devbox decision as a pure function, so lifecycle boundaries can be pinned by tables.
+ *  Nothing here touches a container, a bucket or a clock; devbox.ts holds the platform. */
 
 import * as v from 'valibot';
 
@@ -14,50 +7,26 @@ import {
   DEVBOX_WORKDIR, type CheckpointKind, type CheckpointOutcome, type StoredValue,
 } from './storage';
 
-// ── policy ──────────────────────────────────────────────────────────────────
-
-/**
- * The timings a devbox runs on. One override point for all of them.
- *
- * A subclass returns a whole policy, so a deployment that changes one number
- * still states the other three, and there is one place to read to know how a
- * box behaves.
- */
+/** A subclass returns a whole policy, never a partial override, so one place states every
+ *  timing a box runs on. */
 export interface DevboxPolicy {
-  /** How often the heartbeat runs, in seconds. Well under every platform idle
-   *  window, and cheap enough to leave armed for the container's whole life. */
+  /** Stays well under every platform idle window, and is cheap enough to leave armed
+   *  for the container's whole life. */
   readonly heartbeatSeconds: number;
   /** The last interaction must be at least this old before quiescing starts. */
   readonly idleMs: number;
   /** Quiescing also requires this much OBSERVED quiet — consecutive
    *  heartbeats that agreed — so one unlucky sample cannot stop a box. */
   readonly quietConfirmMs: number;
-  /** Minimum gap between two checkpoints, and the period the checkpoint
-   *  schedule ticks at. Both are this one number: a tick that fires early
-   *  (a container restart re-arms the schedule) must not double-commit. */
+  /** Minimum checkpoint gap and the schedule's tick period are one number, so an early tick
+   *  (a container restart re-arms the schedule) cannot double-commit. */
   readonly checkpointIntervalMs: number;
-  /** Whole onStart restore budget: identity, workspace attachment, workload
-   * resumption and durable settlement. A raced timer bounds every step; the
-   * control-listener proof happens before the SDK opens the block. */
+  /** Whole onStart restore budget: identity, attachment, workload resumption, durable settlement.
+   *  A raced timer bounds each step; control-listener proof precedes the SDK opening the block. */
   readonly attachBudgetMs: number;
-  /**
-   * The CAP on how long one restart keeps asking whether a restored server is
-   * listening, clamped by whatever is left of {@link attachBudgetMs}.
-   *
-   * A supervised process is reported STARTED the moment the container forked
-   * it, which is long before `npm run dev` or a Python app has bound its port.
-   * One instant probe therefore declares a healthy server silent, and the
-   * incident that follows reaches the agent as a blocker telling it not to hand
-   * out a URL that is about to work. This is the window silence has to last
-   * before it is a fact.
-   *
-   * A CAP AND NOT A TIMER OF ITS OWN. A whole window per port costs silence once
-   * per port with nothing bounding the sum. Whichever is smaller — this cap or
-   * the restoration's remaining budget — is what a port actually gets, so a box
-   * with many silent ports settles inside one budget instead of many windows.
-   */
+  /** Cap on waiting for a restored server to listen; a forked process is STARTED before it binds.
+   *  A cap, not a per-port timer: each port gets min(this, remaining `attachBudgetMs`). */
   readonly portWaitMs: number;
-  /** Gap between two listener probes inside that window. */
   readonly portProbeIntervalMs: number;
   /** A delivered checkpoint may join startup or explicit repair for this long.
    * Requests arriving during onStart are held by the platform's own gate. */
@@ -75,35 +44,20 @@ export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
   requestJoinMs: 5_000,
 };
 
-/** Durable keys the lease is read through. One namespace, so a host's own
- *  keys cannot collide with these and a reader can tell at a glance which
- *  rows belong to the box machinery. The names live beside the policy that
- *  decides them: they are the contract, not one module's internals. */
+/** The `devbox:` prefix keeps these rows apart from a host's own durable keys.
+ *  The names are a contract kept beside the policy, not one module's internals. */
 export const LAST_INTERACTION_KEY = 'devbox:last-interaction';
 
 export const QUIET_SINCE_KEY = 'devbox:quiet-since';
 
-// ── the container-start budget ──────────────────────────────────────────────
-
 /** What abandoned container-start work rejected with, if it ever settled.
- *
- *  JavaScript lets any value be thrown, so the field is `cause` and its type is
- *  `unknown`: that pairing is the one place a value with no contract is allowed
- *  to travel, and every reader narrows it before touching anything. */
+ *  Any value can be thrown, so `cause` is `unknown`; every reader narrows it before use. */
 export interface LateStartFailure {
   readonly cause: unknown;
 }
 
-/**
- * An attempt that ran past its budget and abandoned work inside the container.
- *
- * A TYPE, NOT A SENTENCE, because the recovery decision turns on it. Abandoned
- * work keeps running where no token in the Durable Object can reach it — it is
- * `exec` calls mounting and unmounting the same paths — so the recovery for
- * this one class is not a retry but the replacement of the container identity.
- * Reading that back out of a message would put a second authority beside the
- * throw that raised it.
- */
+/** A distinct type because abandoned `exec` work keeps mounting paths no DO token can reach;
+ *  recovery replaces the container identity instead of retrying, and must not parse messages. */
 export class ContainerStartOverrun extends Error {
   constructor(label: string, budgetMs: number) {
     super(
@@ -114,7 +68,6 @@ export class ContainerStartOverrun extends Error {
   }
 }
 
-/** A prior activation disappeared before its durable restore claim settled. */
 export class ContainerStartInterrupted extends Error {
   constructor() {
     super('the previous restoration was interrupted before settlement; its container work may still be running');
@@ -122,54 +75,26 @@ export class ContainerStartInterrupted extends Error {
   }
 }
 
-/**
- * The restoration's one clock, and the allowance it hands each step.
- *
- * ONE OWNER FOR THE WHOLE RESTORATION. Every phase after the attach —
- * restarting processes, proving a listener, exposing a port, stamping the boot
- * id — draws on this budget. Leave them outside it, with the listener proof
- * carrying its OWN window per port, and three silent ports add three full
- * windows, about ninety seconds, while every caller sits in the readiness gate;
- * nothing bounds the total, and adding a fourth port makes it worse.
- *
- * The allowance is what remains divided by the work still DECLARED, so every
- * step of the restoration is counted — each probe, each exposure and the boot
- * stamp, not the ports alone. Nothing is reserved and no share is invented: the
- * last step is welcome to the whole remainder, and a step that needs none leaves
- * it to the next.
- */
+/** Every post-attach step (restart, listener proof, expose, boot stamp) draws on this one budget;
+ *  each allowance is the remainder divided by the steps still declared, nothing reserved. */
 export interface StartBudget {
-  /** The whole window this budget was opened with. Carried rather than passed
-   *  alongside: a refusal has to name the budget it spent, and a second copy of
-   *  that number at the call site is a second authority on it. */
+  /** The window this budget was opened with; carried so a refusal names the budget it spent
+   *  and the call site holds no second copy of the number. */
   readonly budgetMs: number;
   /** The clock this budget is measured on; every race under it arms its
    *  timer on the same clock. */
   readonly clock: StartClock;
   /** Milliseconds left before the deadline, never negative. */
   remainingMs(): number;
-  /** Add to the work this budget must still cover. */
   declare(steps: number): void;
   /** The next step's allowance, which also counts that step as taken. */
   nextAllowanceMs(): number;
 }
 
-/**
- * The clock a start budget and its races are measured on.
- *
- * ONE CLOCK FOR THE BUDGET AND ITS TIMERS, handed in rather than read from
- * the platform, so a test can prove a budget property by advancing time
- * instead of by outrunning a real timer. `tests/lifecycle-generation.test.ts`
- * measured its 20 ms `TightBox` budget on the wall clock; under the deploy
- * wave's load the whole restore outran the hook budget before the exposure
- * it was parking was even reached, and the box settled as `[deadline →
- * repair]` instead of as the exposure that outran its own allowance
- * (2026-09-15, main `bea156897`). The box's production clock is
- * {@link REAL_START_CLOCK}.
- */
+/** One clock for a start budget and its timers, handed in so tests advance time (D19).
+ *  Production uses {@link REAL_START_CLOCK}. */
 export interface StartClock {
   now(): number;
-  /** Arm `fire` after `ms`; the answer disarms it. */
   after(ms: number, fire: () => void): () => void;
 }
 
@@ -208,33 +133,16 @@ export type StepOutcome<T> =
   | { readonly kind: 'late' }
   | { readonly kind: 'failed'; readonly cause: unknown };
 
-/**
- * Race one piece of work against a time allowance, and REPORT rather than throw.
- *
- * {@link withContainerStartDeadline} is the throwing policy, for work whose
- * abandonment leaves the container unfenceable. This is the reporting policy,
- * for the post-attach steps: a process that will not start, a listener that
- * never answers, a port that will not expose, a boot id that will not stamp.
- * Both sit on one race, `raceAllowance`, so they cannot drift apart.
- *
- * WHY THOSE REPORT INSTEAD OF THROWING. None of them mutates the mount, so an
- * abandoned one leaves nothing for a retry to collide with — where an abandoned
- * ATTACH is mid-mount and does. So a slow app costs the box its readiness and
- * nothing else: the container stays, its specs stay, `unready` says which
- * service did not come back, and an agent or an explicit readiness call can try
- * again. Replacing a healthy container because a dev server was slow to bind
- * would be the cure that destroys the patient.
- */
+/** Reporting counterpart of `withContainerStartDeadline`: post-attach steps never mutate the mount,
+ *  so a late one leaves no retry collision and costs only readiness, never the container. */
 export async function runRestoreStep<T>(
   allowanceMs: number,
   work: () => Promise<T>,
   onLate: (failure: LateStartFailure) => void,
   clock: StartClock = REAL_START_CLOCK,
 ): Promise<StepOutcome<T>> {
-  // A THROWN step is a value here too. Every caller wants a reason to report and
-  // a walk that continues, so handing the failure back is the contract rather
-  // than a convenience — and a caught binding is not a parameter, so nothing
-  // untyped travels through a `.catch` at each call site.
+  // A thrown step is returned as `failed`, not rethrown: every caller needs a reason to report
+  // and a walk that continues.
   try {
     return await raceAllowance(allowanceMs, work, onLate, clock);
   } catch (cause) {
@@ -242,13 +150,8 @@ export async function runRestoreStep<T>(
   }
 }
 
-/**
- * The ONE race, and the only place a timer bounds container work.
- *
- * Both policies above are built on it: {@link withContainerStartDeadline} throws
- * on the late arm, {@link runRestoreStep} reports it. Two copies of this race
- * drifted within a day of the second landing, which is why there is one.
- */
+/** The only place a timer bounds container work; `withContainerStartDeadline` and
+ *  `runRestoreStep` both build on it, so keep one copy of this race. */
 async function raceAllowance<T>(
   allowanceMs: number,
   work: () => Promise<T>,
@@ -257,18 +160,16 @@ async function raceAllowance<T>(
 ): Promise<StepOutcome<T>> {
   let late = false;
 
-  // Both arms ANNOTATED rather than asserted: `then`'s inference widens
-  // `{ kind: 'done' }` to `{ kind: string }`, and a cast to paper over that
-  // would be a caller-selected type standing where a constructed one belongs.
+  // `then` is annotated, not cast: inference widens `{ kind: 'done' }` to `{ kind: string }`,
+  // and a cast would put a caller-selected type where a constructed one belongs.
   const started = work().then<StepOutcome<T>, StepOutcome<T>>(
     (value) => ({ kind: 'done', value }),
     (cause: LateStartFailure['cause']) => {
       if (!late) throw cause;
       onLate({ cause });
 
-      // The race already answered `late`, so this branch has no value to
-      // produce. It exists so the late failure is reported rather than surfacing
-      // as an unhandled rejection.
+      // The race already answered `late`; this arm reports the failure instead of leaving
+      // an unhandled rejection, and returns a promise that never settles.
       return Promise.withResolvers<StepOutcome<T>>().promise;
     },
   );
@@ -287,26 +188,8 @@ async function raceAllowance<T>(
   }
 }
 
-/**
- * Run UNFENCEABLE start-path work under a hard budget: the container's own start,
- * and the filesystem attach.
- *
- * THE THROWING POLICY, and the only one that may be. Both of these are mid-mount
- * when abandoned — the attach unmounts and remounts the same paths — so work left
- * running after the deadline is work a retry would collide with, and no token in
- * the Durable Object can reach it. The recovery is therefore to replace the
- * container identity, which is what {@link ContainerStartOverrun} tells the
- * taxonomy. Every step AFTER the attach reports instead: see
- * {@link withStepAllowance}.
- *
- * The deployed September 13 probe proved timer delivery inside the block.
- * Control-port readiness must precede the block; a timer cannot make an
- * unproven listener safe.
- *
- * `onOverrun` receives the outcome of the abandoned work if it ever settles.
- * Abandoning a value is not the same as discarding an error, and that late
- * error is usually the only diagnostic there is.
- */
+/** Throws on overrun: an abandoned attach is mid-mount and unreachable, so a retry collides;
+ *  recovery replaces the container. `onOverrun` gets the late outcome, often the only diagnostic. */
 async function withContainerStartDeadline<T>(
   label: string,
   budget: StartBudget,
@@ -318,46 +201,31 @@ async function withContainerStartDeadline<T>(
 
   if (raced.kind === 'late') throw new ContainerStartOverrun(label, budgetMs);
 
-  // `raceAllowance` rethrows a real failure rather than reporting it, so the
-  // attach's own error reaches the taxonomy unchanged.
+  // A real failure is rethrown unwrapped so the attach's own error reaches the taxonomy
+  // unchanged.
   if (raced.kind === 'failed') throw raced.cause;
 
   return raced.value;
 }
 
-/**
- * HOW ONE RESTORATION BOUNDS ITS STEPS, as a value the restore is handed.
- *
- * The restore itself is one walk — attach, processes, listeners, exposures,
- * boot stamp — and {@link racedRestoreSteps} races every step against its
- * allowance and abandons a step that outruns one.
- *
- * IT IS A VALUE THE WALK IS HANDED rather than calls the walk makes directly,
- * because the two failure policies inside it — the attach throws, the
- * post-attach steps report — are the contract the phases are written against,
- * and inlining them would spread that decision over six call sites.
- */
+/** Handed to the restore walk so its two failure policies (attach throws, post-attach steps
+ *  report) stay one contract instead of spreading over six call sites. */
 export interface RestoreSteps {
-  /** One post-attach step: a process start, a listener proof, an exposure, the
-   *  boot stamp. Reports rather than throws — see {@link runRestoreStep} for
-   *  why none of them may throw. */
+  /** A post-attach step (process start, listener proof, exposure, boot stamp); reports,
+   *  never throws — see {@link runRestoreStep}. */
   run<T>(work: () => Promise<T>, onLate: (failure: LateStartFailure) => void): Promise<StepOutcome<T>>;
   /** The attach: the one step whose failure THROWS, because it is the only one
    *  that is mid-mount when it ends. */
   attach<T>(work: () => Promise<T>, onOverrun: (failure: LateStartFailure) => void): Promise<T>;
-  /** Add to the work the budget must still cover. */
   declare(steps: number): void;
-  /** A declared step that will NOT run, releasing its share to the ones after
-   *  it. The port whose listener never answered is never exposed, and the ports
-   *  behind it must not be charged for that silence. */
+  /** A declared step that will not run, releasing its budget share to the steps after it,
+   *  so ports behind an unanswered listener are not charged for its silence. */
   skip(): void;
-  /** Milliseconds this restoration may still spend. */
   remainingMs(): number;
 }
 
-/** The restore's step policy: every step raced against its allowance, and an
- *  abandoned attach classified `abandoned` so the ladder replaces the identity
- *  whose mount it left half-built. */
+/** Each step races its allowance; an abandoned attach is classified `abandoned` so
+ *  the ladder replaces the identity whose mount it left half-built. */
 export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
   return {
     run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate, budget.clock),
@@ -369,32 +237,14 @@ export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
   };
 }
 
-// ── the recovery taxonomy ───────────────────────────────────────────────────
-
-/**
- * What a failed lifecycle attempt IS, in the only terms recovery can act on.
- *
- * ONE TAXONOMY, and it is read from the SDK's own error registry rather than
- * from prose. A devbox reaches its container only through
- * `@cloudflare/sandbox`, every failure that package raises carries one of its
- * `ErrorCode`s, and the code is the classification its author already made.
- * Matching on messages would be a second opinion on the same question and the
- * one that rots first.
- *
- * The point of the split is that these need DIFFERENT things. One generic
- * retry policy spends a retry on a configuration that cannot change, repeats a
- * copy into a filesystem that is already full, treats work abandoned inside a
- * container as if asking the same container again were safe, and destroys a
- * healthy container for being slower than one activation may wait.
- */
+/** Classifies failures by the SDK's `ErrorCode`, never by message text; each class needs
+ *  a different recovery, so one generic retry policy is wrong for most of them. */
 export type RecoveryClass =
-  /** THIS attempt left work running inside the container. Nothing in the
-   *  Durable Object can stop it, so the identity has to go. Evidence against
-   *  the container, unlike `stale-owner`. */
+  /** This attempt left work running in the container that the Durable Object cannot stop,
+   *  so the identity must go. Evidence against the container, unlike `stale-owner`. */
   | 'abandoned'
-  /** The runtime under the work changed: the attempt is void and its successor
-   *  is not. Says NOTHING about the health of a container identity, so it must
-   *  never advance a ladder that ends in destroying one. */
+  /** The attempt is void, its successor is not; says nothing about the container's health,
+   *  so it must never advance a ladder that ends in destroying one. */
   | 'stale-owner'
   /** A resource ran out. Running the same work again spends it again. */
   | 'exhausted'
@@ -403,23 +253,12 @@ export type RecoveryClass =
   | 'permanent'
   /** The transport dropped, or the container was not up yet. */
   | 'transient'
-  /** Nothing classified it. The honest answer for an R2 rejection or a defect
-   *  in this package, and it is handled as the least destructive thing that can
-   *  still make progress. */
+  /** Nothing classified it, e.g. an R2 rejection or a defect in this package; handled as
+   *  the least destructive outcome that can still make progress. */
   | 'unclassified';
 
-/**
- * The SDK codes whose class is not in doubt, and nothing else.
- *
- * NARROW ON PURPOSE, in the same way `do-rpc`'s platform table is: a code
- * guessed into `permanent` refuses a box a retry would have fixed, and a code
- * guessed into `transient` retries work that cannot succeed. A code absent from
- * here is `unclassified`, which retries once and then escalates — the safe
- * default, and the behaviour every failure has today.
- *
- * This is an adapter at the SDK boundary, which is the one place a foreign
- * vocabulary may be named. The strings are verbatim from that registry.
- */
+/** Only SDK codes whose class is certain: a wrong `permanent` refuses a fixable box, a wrong
+ *  `transient` retries doomed work. Absent codes are `unclassified` (retry once, escalate). */
 const RECOVERY_BY_SDK_CODE: ReadonlyMap<string, RecoveryClass> = new Map([
   // The container's own disk and descriptor limits. Copying a base into a full
   // filesystem again is exactly the harmful repetition this class exists for.
@@ -436,31 +275,21 @@ const RECOVERY_BY_SDK_CODE: ReadonlyMap<string, RecoveryClass> = new Map([
   ['COMMAND_PERMISSION_DENIED', 'permanent'],
   ['PERMISSION_DENIED', 'permanent'],
   ['READ_ONLY', 'permanent'],
-  // The runtime was replaced, or the session died under the operation. The SDK
-  // says so itself, which is why no generation comparison is needed here.
+  // The runtime was replaced or the session died under the operation; the SDK code says so,
+  // so no generation comparison is needed.
   ['OPERATION_INTERRUPTED', 'stale-owner'],
   ['SESSION_TERMINATED', 'stale-owner'],
   ['SESSION_DESTROYED', 'stale-owner'],
-  // The socket dropped, or the container had not finished booting.
   ['RPC_TRANSPORT_ERROR', 'transient'],
   ['CONTAINER_UNAVAILABLE', 'transient'],
 ]);
 
-/** A value carrying an SDK error code. The code is a GETTER on the SDK's own
- *  error classes and none of them is exported, so the shape is what can be
- *  asked — the same boundary `ProcessAbsentSchema` in devbox.ts stands on. */
+/** The SDK's error classes are not exported and `code` is a getter on them, so match the
+ *  shape, not the class (same boundary as `ProcessAbsentSchema` in devbox.ts). */
 const CodedFailureSchema = v.object({ code: v.string() });
 
-/**
- * Classify a thrown value, and everything in its cause chain.
- *
- * THE WHOLE CHAIN, because this package wraps: the snapshot chain rethrows a
- * mount failure as its own sentence with the SDK's error as `cause`, so a
- * classifier that read only the outermost value would answer `unclassified` for
- * every wrapped failure — which is the single generic policy this taxonomy
- * exists to end. The outermost classified answer wins; an unclassified wrapper
- * is transparent rather than an answer.
- */
+/** Walks the whole cause chain: the snapshot chain wraps SDK failures as `cause`.
+ *  The outermost classified answer wins; an unclassified wrapper is transparent. */
 export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryClass {
   for (let value = thrown.cause; ;) {
     if (value instanceof ContainerStartOverrun || value instanceof ContainerStartInterrupted) return 'abandoned';
@@ -477,37 +306,14 @@ export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryC
   }
 }
 
-/**
- * How far this box has gone recovering ONE container identity.
- *
- * Two stages, and they are ACTIONS rather than counts: ask the same identity
- * again, then replace it. A third failure while `replace` is the stored stage
- * is terminal, so a box can never loop destroying containers.
- *
- * Durable, because the retry is a schedule row and the object that runs it is
- * often a fresh one: `onStart` is a CONTAINER hook, so a Durable Object woken
- * by an alarm beside a surviving container never runs it, and an in-memory
- * stage would reset before it could ever escalate.
- */
+/** Stages are actions: retry the same identity, then replace it; a failure at `replace` is
+ *  terminal. Stored durably: `onStart` is a container hook, so an alarm-woken object skips it. */
 export const RECOVERY_STAGES = ['retry', 'replace'] as const;
 
 export type RecoveryStage = (typeof RECOVERY_STAGES)[number];
 
-/**
- * The ladder row: WHO is attempting, and how far the ladder has gone.
- *
- * `owner` is the reason this row is the ladder's only authority. The
- * in-memory generation fences what an abandoned attempt writes to the OBJECT,
- * and it cannot fence what it writes to STORAGE: a Durable Object is evicted and
- * rebuilt with the counter back at zero, so two attempts from two isolates can
- * hold the same number. The owner is minted per attempt and claimed durably, and
- * every later write to this row is conditional on it still being there. An
- * attempt whose write races a newer attempt's success therefore changes NOTHING
- * instead of resurrecting a stage the success had cleared.
- *
- * `stage` is absent while an attempt is merely in flight; it appears when the
- * ladder advances. A successful attempt deletes the whole row.
- */
+/** `owner` is minted per attempt; every write is conditional on it, since an isolate reset
+ *  restarts the generation counter. `stage` appears only when the ladder advances. */
 const RecoveryRowSchema = v.strictObject({
   owner: v.string(),
   stage: v.optional(v.picklist(RECOVERY_STAGES)),
@@ -515,21 +321,15 @@ const RecoveryRowSchema = v.strictObject({
 
 export type RecoveryRow = v.InferOutput<typeof RecoveryRowSchema>;
 
-/** The stored ladder row. `malformed` is NOT `absent`: absent means no attempt
- *  has failed and leads to a retry, so reading an unreadable row as absent would
- *  restart the ladder every time and could destroy an identity repeatedly. */
+/** `malformed` is not `absent`: absent leads to a retry, so treating an unreadable row as
+ *  absent restarts the ladder every time and could destroy an identity repeatedly. */
 export type StoredRecovery =
   | { readonly kind: 'absent' }
   | { readonly kind: 'row'; readonly row: RecoveryRow }
   | { readonly kind: 'malformed' };
 
-/** Parse the ladder row STRICTLY, unknown keys included. There is no earlier
- *  shape to accept: this row is written by one code path, and a successful
- *  attempt deletes it.
- *
- *  The parameter is `StoredValue` — what durable storage can actually hand back
- *  — rather than a bare `unknown`: it is the same boundary
- *  `normalizeChainState` already stands on. */
+/** Strict parse, unknown keys included: one code path writes this row and a successful
+ *  attempt deletes it, so there is no older shape to accept. */
 export function parseRecoveryRow(stored: StoredValue): StoredRecovery {
   if (stored === undefined) return { kind: 'absent' };
   const parsed = v.safeParse(RecoveryRowSchema, stored);
@@ -537,33 +337,21 @@ export function parseRecoveryRow(stored: StoredValue): StoredRecovery {
   return parsed.success ? { kind: 'row', row: parsed.output } : { kind: 'malformed' };
 }
 
-/** What an attempt may do before it has attached anything. */
 export interface RecoveryAdmission {
-  /** May this attempt attach at all? */
   readonly admit: boolean;
   /** The stage the claim must carry: preserved for an admitted attempt, and the
    *  most conservative readable value for a refused one. */
   readonly stage: RecoveryStage | undefined;
 }
 
-/**
- * Admit one attempt, or refuse it on evidence it cannot read.
- *
- * A ROW THAT DOES NOT PARSE IS NOT A ROW TO ACT ON, and it is not an absent one
- * either. Refusing is the only safe answer: absent would restart the ladder and
- * could destroy an identity again. The refusal also NORMALISES the row to
- * `replace`, which is the terminal stage — so the box is left with a readable,
- * conservative ladder rather than an unreadable one that would refuse forever.
- * The next successful attach deletes it; `attachNow()` is the explicit
- * re-attempt, and it destroys nothing.
- */
+/** A malformed row is refused, not treated as absent: absent restarts the ladder and could
+ *  destroy an identity again; normalising to terminal `replace` keeps the ladder readable. */
 export function admissionStep(stored: StoredRecovery): RecoveryAdmission {
   if (stored.kind === 'malformed') return { admit: false, stage: 'replace' };
 
   return { admit: true, stage: stored.kind === 'row' ? stored.row.stage : undefined };
 }
 
-/** What the box does about one failed attempt. */
 export type RecoveryAction =
   /** A newer attempt owns the lifecycle. Change nothing, tell no one, arm
    *  nothing, destroy nothing. */
@@ -577,39 +365,22 @@ export type RecoveryAction =
   | 'refuse';
 
 export interface RecoveryInput {
-  /** Does the failed attempt still own the current lifecycle generation? */
   readonly owned: boolean;
   readonly failure: RecoveryClass;
-  /** The stage this attempt's own claim carries. Read once, at admission: the
-   *  claim is what proves the attempt owns the row, so re-reading it here would
-   *  be reading a value another attempt may have moved. */
+  /** Read once, at admission: the claim proves ownership of the row, and a re-read may see
+   *  a value another attempt has moved. */
   readonly stage: RecoveryStage | undefined;
 }
 
 export interface RecoveryDecision {
   readonly action: RecoveryAction;
-  /** The stage the row must carry after this failure. Equal to the incoming one
-   *  means the ladder did not move. NOTHING here deletes the row: only an
-   *  attempt that succeeded may do that, or a destructive stage would be reset
-   *  by the next eviction and the box could destroy an identity again. */
+  /** Never deletes the row: only a succeeded attempt may, or the next eviction resets a
+   *  destructive stage and the box could destroy an identity again. */
   readonly stage: RecoveryStage | undefined;
 }
 
-/**
- * One failure, one decision. No count, no timing, no budget.
- *
- * Read top to bottom, the rules are: a superseded attempt does nothing;
- * exhaustion and permanent configuration refuse without repeating the work,
- * destroying anything, or moving the ladder; a stale owner retries WITHOUT
- * advancing it, because an attempt that failed on an identity which is already
- * gone is no evidence against the identity that replaced it; a failure at
- * `replace` is terminal and STAYS at `replace`; and everything else walks the
- * ladder — retry the identity, then replace the identity. Abandoned work enters
- * at `replace`, since the only cancellation for it is the container's death.
- *
- * An unreadable row never reaches here: {@link admissionStep} refuses the
- * attempt before it attaches anything.
- */
+/** A stale owner retries without advancing: a failure on a gone identity says nothing of its successor.
+ *  Abandoned work enters at `replace`, since its only cancellation is the container's death. */
 export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (!input.owned) return { action: 'inert', stage: input.stage };
   const { stage } = input;
@@ -631,22 +402,16 @@ export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   return { action: 'retry', stage: 'retry' };
 }
 
-// ── the activity lease ──────────────────────────────────────────────────────
-//
-// While a devbox serves a caller it must not sleep: the disk is ephemeral, so
-// every idle expiry costs an attach. The lease is one durable timestamp plus
-// one scheduled heartbeat. The SDK calls `renewActivityTimeout()` on every RPC
-// interaction and every preview fetch; the class turns those calls into the
-// durable stamp, and the heartbeat reads it.
+// A devbox serving a caller must not sleep: the disk is ephemeral (P1), so idle expiry costs
+// an attach. `renewActivityTimeout()` calls become one durable stamp the heartbeat reads.
 
 export interface QuiesceInput {
   readonly now: number;
   readonly containerRunning: boolean;
   readonly lastInteractionAt: number;
-  /** When quiet was first observed on this stretch, or undefined. Carried
-   *  between ticks by the caller: the clock lives in durable state, not here. */
+  /** When quiet was first observed on this stretch; the caller carries it between ticks
+   *  because the clock lives in durable state, not here. */
   readonly quietSince: number | undefined;
-  /** Does the host still hold work bound to this container? */
   readonly backgroundWork: boolean;
   readonly idleMs: number;
   readonly quietConfirmMs: number;
@@ -661,26 +426,8 @@ export interface QuiesceDecision {
   readonly quietSince: number | undefined;
 }
 
-/**
- * One heartbeat's decision.
- *
- * Three gates must all hold — the container is up, the last interaction is old
- * enough, the host reports no background work — and then the quiet has to be
- * observed for the confirmation window before the answer flips to `quiesce`.
- * A single busy sample resets the stretch, which is why `quietSince` travels
- * out as well as in.
- *
- * A QUIET STRETCH CANNOT PREDATE THE LAST INTERACTION. The busy sample that
- * resets the stretch is only taken when a beat runs, and a beat cannot run
- * while a scheduled callback of the same object holds the one platform alarm:
- * a checkpoint tick of two minutes starves every beat due inside it.
- * Measured in run `20260914234711` (git/1/1): `quietSince` was stamped 1.5 s
- * before a caller's exec, the caller's checkpoint then ran 72 s inside an
- * alarm callback, and the first beat afterwards read a 73 s idle lease beside
- * the 97 s old `quietSince` and stopped the box under the next segment. A
- * stretch that began before the last interaction ended with it; the beat
- * that missed the interaction starts the confirmation over.
- */
+/** A quiet stretch cannot predate the last interaction: a long alarm callback starves beats,
+ *  so a busy sample can be missed; an older `quietSince` restarts the confirmation. */
 export function quiesceStep(input: QuiesceInput): QuiesceDecision {
   if (!input.containerRunning) return { action: 'hold', quietSince: undefined };
 
@@ -698,27 +445,14 @@ export function quiesceStep(input: QuiesceInput): QuiesceDecision {
   return { action: confirmed ? 'quiesce' : 'hold', quietSince };
 }
 
-// ── mount facts ─────────────────────────────────────────────────────────────
-
-/** One `/proc/mounts` entry. */
 export interface MountLine {
   readonly source: string;
   readonly fstype: string;
   readonly options: string;
 }
 
-/**
- * The `/proc/mounts` entry for `dir`, or undefined when nothing is mounted
- * there.
- *
- * Both strategies ask the kernel whether their work directory is really
- * attached, and they ask different follow-up questions of the answer — one
- * wants the overlay's upper directory, the other only the filesystem type — so
- * the parse is shared and the predicates are not.
- *
- * Field order is fstab's: source, mountpoint, fstype, options. fstab
- * octal-escapes spaces, so a path with a space has to survive the parse.
- */
+/** Fields follow fstab order; mountpoints octal-escape spaces (`\040`), so decode before
+ *  comparing. Shared by both strategies; each applies its own predicate to the entry. */
 export function findMount(procMounts: string, dir: string): MountLine | undefined {
   for (const line of procMounts.split('\n')) {
     const [source, mountpoint, fstype, options] = line.trim().split(/\s+/);
@@ -733,129 +467,25 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
   return undefined;
 }
 
-// ── work-directory holders, before a mount is released ──────────────────────
-
-/**
- * How long a holder gets to notice SIGTERM before SIGKILL answers for it.
- *
- * Bounded, because this runs inside a stop that a caller is waiting on: an
- * unbounded wait would make one rude process unstoppable, which is the exact
- * defect the signal order exists to repair. Five seconds is enough for a
- * process to flush on SIGTERM, and short enough that a box still stops inside
- * its own ceilings.
- */
+/** Bounded because a waiting caller's stop runs this; an unbounded wait makes one process
+ *  that ignores SIGTERM unstoppable. Long enough to flush, short enough to stop within ceilings. */
 const HOLDER_TERM_WAIT_MS = 5_000;
 
-/**
- * ONE bounded container command that releases every process holding the work
- * directory, so a mount can be unmounted underneath it.
- *
- * MEASURED DEFECT THIS REPAIRS. `quiesce` detached the mount before it
- * signalled anything, and s3fs refuses an unmount with an open fd — EBUSY —
- * so a box whose caller left one writer alive could neither stop nor be torn
- * down: the refusal landed before `stop()` was ever reached. The order has to
- * be: signal the holders, wait, kill the survivors, THEN detach.
- *
- * PROCFS, NOT `fuser`/`lsof`. `/proc` is guaranteed present in the container
- * image (both already read `/proc/mounts` through it), reports pid + comm in
- * the same read as the holding reference, and needs no tool the image may not
- * carry.
- *
- * BOTH `/proc/<pid>/fd/*` AND `/proc/<pid>/cwd` ARE SCANNED, and the second
- * half is a measured repair rather than symmetry. This scan matched fds alone,
- * on the stated ground that "a session shell holding its cwd under the work
- * directory does not block an s3fs unmount". That is false as a kernel claim: a
- * cwd inside a mount is a mount reference, and `umount` answers EBUSY for it
- * exactly as it does for an open fd. Measured twice —
- *
- *   - on a real mount with no container: a process whose ONLY reference is its
- *     cwd refuses the unmount, and an fd-only scan of it matches nothing;
- *   - in the deployed container (probe `hp0901170218`): six `node` children of
- *     the container server sitting at `cwd=/workspace` with zero fd matches,
- *     invisible to this command for as long as it looked only at fds.
- *
- * A cwd holder is therefore NAMED and never signalled. Naming it is the whole
- * point: these are the container server's own helpers and the session shell
- * this command speaks through, so a TERM would end the exec channel or the
- * container, while the one thing a caller needs is the name that explains a
- * refusal it can otherwise not account for.
- *
- * PID 1 IS EXCLUDED, for the same reason from the other end: it is the
- * container's init, holds the root of everything, and signalling it is a
- * container stop — this command's job is to release a mount, not to race the
- * platform's own shutdown. In the sandbox image pid 1 is the container server
- * itself (`ENTRYPOINT ["/container-server/sandbox"]`), which is the process
- * serving this very exec.
- *
- * AND SO IS EVERY ANCESTOR OF THIS COMMAND'S OWN SHELL, which pid 1 alone does
- * not cover. The scan runs INSIDE the session the SDK keeps for the box, so its
- * parent chain is the exec channel the stop is speaking through: signalling any
- * link of it kills the answer to the command doing the signalling, and every
- * command after it. An ancestor that really is holding the work directory is
- * still NAMED — it travels in the output, so the detach refusal can report it —
- * it is simply not signalled, because a refusal that names a holder is
- * recoverable and a dead session is not.
- *
- * TERMINATE, THEN KILL, inside the one command so the wait needs no second
- * round trip: a process that catches TERM and flushes is given the chance, and
- * one that does not is removed anyway.
- *
- * STDOUT IS WHO IS STILL HOLDING, RE-READ AFTER THE SIGNALS, and that is the
- * second measured repair. Echoing the list captured BEFORE signalling anything
- * makes the answer say "these were holding when I started" while every reader —
- * `#detachStorage`'s refusal above all — takes it to mean "these are holding
- * now". Deployed run `probe09011530` refused a stop with `these processes were
- * still holding it: 258 (bun)`, and the same shape reproduced in `hp0901170218`
- * naming `253 (bun)`: in both, the scan had ALREADY killed that writer
- * successfully, and the `/proc` report taken afterwards shows no such pid. The
- * name was residue of a list captured one `sleep` earlier, and it sent the
- * diagnosis after a process that had done nothing wrong — a survivor of
- * SIGKILL, which cannot exist. A second scan costs one `/proc` walk inside a
- * stop that has just spent five seconds sleeping, and it is the difference
- * between a refusal a caller can act on and a refusal that lies.
- *
- * The output is one line of `pid:comm` entries, or the word `none` — a distinct
- * token so an empty answer reads as "nothing is holding" rather than "the
- * command said nothing".
- *
- * IT IS ONE LINE, AND EVERY SEPARATOR IS WRITTEN HERE, which is the defect
- * this shape repairs. The command was composed as an array joined with a
- * SPACE, so the container received `… fi done if [ -z "$holders" ] …` — no
- * separator before `done`, no separator before `if`. `sh` answered `Syntax
- * error: "do" unexpected` and exited 2, and because every command runs inside
- * the SDK's ONE persistent session shell that exit ENDED THE SESSION: run
- * `e2e20260901140445` lost `stop-small` twice to `SessionTerminatedError:
- * Session 'sandbox-default' shell exited (exit code: 2)`, 2,362 ms and 785 ms
- * into stops that had already committed their checkpoint. A separator that
- * lives in the data is a separator somebody can
- * forget; the fakes now parse every composed command with `sh -n`, so this
- * class cannot pass a test again.
- *
- * AND IT MUST NOT SAY `exit`. An empty scan answering `echo none; exit 0` ends
- * the session shell exactly as the syntax error above does — the same defect the
- * chain's visibility probe carries a repair for. `if`/`else` answers both cases
- * and leaves the shell alive.
- *
- * `${name%%:*}` RATHER THAN `echo | cut`: POSIX parameter expansion, and two
- * fewer processes per holder inside a stop a caller is waiting on.
- */
+/** Frees the work directory for unmount: TERMs then KILLs fd holders; names cwd holders,
+ *  pid 1 and this shell's ancestors unsignalled. One line, no `exit`: shares the SDK session. */
 export function releaseWorkdirHoldersCommand(workdir: string): string {
   const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
   const termWait = String(Math.ceil(HOLDER_TERM_WAIT_MS / 1_000));
 
-  // The parent chain of this shell, walked once through /proc. The comm field
-  // can hold spaces and parentheses, so ppid is read AFTER the last `)` rather
-  // than by column number — `pid (comm) state ppid …`.
+  // This shell's parent chain. `comm` can hold spaces and parentheses, so ppid is read after
+  // the last `)` of `pid (comm) state ppid …`, never by column.
   const ancestorPids = 'mine=" $$ "; a=$$; '
     + 'while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do '
     + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
     + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
 
-  // ONE scan, defined once and run twice: before the signals to decide who to
-  // signal, and after them to answer who is still holding. A second copy of
-  // this walk is a second thing to keep in agreement, and the two runs must
-  // classify identically or the answer means nothing. The name is deliberately
-  // unusable by anything else in the shared session shell this defines it in.
+  // One scan function, run before signalling and after it; both runs must classify identically.
+  // The odd name keeps it from colliding with anything else in the shared session shell.
   const scan = '__devbox_hold() { fdh=""; cwdh=""; kin=""; '
     + `for pid in $(ls /proc | grep -E '^[0-9]+$' | grep -v '^1$'); do `
     + 'h=""; '
@@ -870,8 +500,6 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + 'done; }; ';
 
   return `${ancestorPids}${scan}__devbox_hold; `
-    // The pre-signal picture, on stderr, split by what this command is willing
-    // to do about each class. Only fd holders that are strangers are signalled.
     + 'if [ -n "$kin" ]; then echo "not signalled, this session\'s own:$kin" >&2; fi; '
     + 'if [ -n "$cwdh" ]; then echo "not signalled, cwd-only holders:$cwdh" >&2; fi; '
     + 'if [ -n "$fdh" ]; then echo "signalling:$fdh" >&2; '
@@ -879,20 +507,14 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + `sleep ${termWait}; `
     + 'for name in $fdh; do p="${name%%:*}"; '
     + 'if [ -d "/proc/$p" ]; then kill -KILL "$p" 2>/dev/null || true; fi; done; fi; '
-    // AND NOW ASK AGAIN. Everything above is what this command DID; the line
-    // below is the only thing a caller can act on, so it is measured, not
-    // remembered.
+    // The final stdout line comes from a fresh `__devbox_hold` scan after signalling, not from
+    // the pre-signal lists; it is the only output a caller acts on.
     + '__devbox_hold; still="$fdh$cwdh$kin"; '
     + 'if [ -z "$still" ]; then echo none; else echo "$still"; fi';
 }
 
-/**
- * The pids and names that are STILL holding the work directory after one
- * {@link releaseWorkdirHoldersCommand} run, parsed from its stdout. `none` —
- * the command's own word for a clear scan — is an empty answer rather than a
- * parse failure, because the caller's question ("is anything still holding?")
- * is answered either way.
- */
+/** Holders still present after one {@link releaseWorkdirHoldersCommand} run; `none` means a
+ *  clear scan and parses to an empty list, not a failure. */
 export function parseWorkdirHolders(
   stdout: string,
 ): readonly { readonly pid: string; readonly comm: string }[] {
@@ -911,12 +533,8 @@ export function parseWorkdirHolders(
   return holders;
 }
 
-/** Render a thrown value and its cause chain.
- *
- *  A rejection reason is whatever the thrower threw, so a value that is not an
- *  `Error` is stringified rather than assumed to carry a message. Shared,
- *  because every failure path in this package needs the same answer and a
- *  second version of it would eventually disagree. */
+/** A rejection reason is whatever was thrown, so a non-`Error` value is stringified.
+ *  Shared so every failure path renders thrown values the same way. */
 export function describeThrown(thrown: { readonly cause: unknown }): string {
   const { cause } = thrown;
 
@@ -929,14 +547,8 @@ export function describeThrown(thrown: { readonly cause: unknown }): string {
   return String(cause);
 }
 
-// ── supervised processes and ports ──────────────────────────────────────────
-
-/** A durably-recorded background process a devbox restarts after attach.
- *
- *  An arbitrary `nohup … &` child is NOT restorable: nothing captured its
- *  identity, so after the container is replaced there is no way to know it
- *  should exist. A spec is the only thing that survives, which is why starting
- *  a long-lived process goes through the supervised call. */
+/** A background process a devbox restarts after attach. A bare `nohup … &` child is not
+ *  restorable: only a durable spec survives container replacement, so use the supervised call. */
 export interface SupervisedProcessSpec {
   readonly processId: string;
   readonly command: string;
@@ -944,9 +556,8 @@ export interface SupervisedProcessSpec {
   readonly createdAt: number;
 }
 
-/** A durably-recorded port exposure. The token is generated once and reused,
- *  so a box's preview URLs survive restarts verbatim: forwarding is
- *  re-activated after attach by exposing the port with the same token. */
+/** The token is generated once and reused so preview URLs survive restarts verbatim;
+ *  forwarding is re-activated after attach by exposing the port with the same token. */
 export interface PortExposureSpec {
   readonly port: number;
   readonly name: string | undefined;
@@ -954,9 +565,8 @@ export interface PortExposureSpec {
   readonly createdAt: number;
 }
 
-/** The token alphabet the SDK accepts for preview URLs, which is 1 to 16
- *  characters of `[a-z0-9_]`. Sixteen gives the URL the same shape an
- *  auto-generated one has. */
+/** The SDK accepts preview-URL tokens of 1 to 16 chars of `[a-z0-9_]`; sixteen matches the
+ *  shape of an auto-generated one. */
 export const PORT_TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
 export function generatePortToken(random: (n: number) => Uint8Array): string {
@@ -968,17 +578,15 @@ export function generatePortToken(random: (n: number) => Uint8Array): string {
   return token;
 }
 
-/** Shell probe deciding whether anything listens on a container port. Any HTTP
- *  answer counts, 4xx and 5xx included: the question is whether a listener
- *  exists, not whether it is happy. curl exit 7 is connection refused. */
+/** Any HTTP answer, 4xx and 5xx included, proves a listener exists; health is not the question.
+ *  curl exit 7 is connection refused. */
 export function healthProbeCommand(port: number): string {
   return `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 `
     + `--head http://127.0.0.1:${port}/ 2>&1 || true`;
 }
 
-/** True when the probe says NOTHING is listening, or says nothing at all. An
- *  unparsable answer is not evidence of a listener, and exposing a port on that
- *  guess hands back a URL that answers 502. */
+/** An unparsable answer counts as silent: exposing a port on that guess hands back a URL
+ *  that answers 502. */
 export function healthProbeSilent(output: string): boolean {
   const [codeStr, exitStr] = output.trim().split('|');
 
@@ -988,35 +596,8 @@ export function healthProbeSilent(output: string): boolean {
   return !Number.isFinite(code) || code === 0;
 }
 
-/**
- * ONE container command that waits, bounded, for a listener to appear, and
- * answers with the LAST probe's output so {@link healthProbeSilent} stays the
- * only reader of that format.
- *
- * THE WAITING HAPPENS IN THE CONTAINER, and that is the shape of the proof,
- * not an optimisation. A Durable Object loop — probe, `scheduler.wait`, probe
- * again — pays a DO↔container round trip per probe, so a thirty-second window
- * over a two-second interval spends fifteen of them on one port, each under
- * the SDK's own connect and retry timers. The container's own `sleep` is not
- * the Durable Object's clock, so the same window costs ONE hop and returns.
- *
- * BOUNDED BY A COUNT, in the shape `snapshot-chain`'s own layer probe uses: the
- * loop runs at most `attempts` times, so the command's own duration is at most
- * `attempts × (one probe + intervalMs)` — a bound the container enforces rather
- * than one this object hopes to enforce from outside.
- *
- * IT BREAKS ON CURL'S OWN EXIT CODE, not on a second copy of
- * {@link healthProbeSilent}'s rule. The probe already writes `%{exitcode}` as
- * the answer's second field, and curl exits 0 exactly when it received an HTTP
- * response — which IS the question "does a listener exist", 4xx and 5xx
- * included. So the shell tests the same fact the parser tests, read from the
- * same field, and there is no policy here to drift from the one in TypeScript.
- *
- * NOT ONE `exit`, for the reason `snapshot-chain`'s probe gives at length: this
- * runs in the container's PERSISTENT session shell, and `exit` inside it
- * terminates the session for every later command. `break` answers the same
- * question and leaves the shell alive.
- */
+/** Waits in the container (one hop, not a round trip per probe); count-bounded; breaks on
+ *  curl's exit code; `break`, never `exit`, since `exit` kills the persistent session shell. */
 export function awaitListenerCommand(port: number, attempts: number, intervalMs: number): string {
   // Fractional seconds, because the cadence is expressed in milliseconds and
   // `sleep` in an Alpine image takes a decimal.
@@ -1028,25 +609,12 @@ export function awaitListenerCommand(port: number, attempts: number, intervalMs:
     + 'done; printf %s "$answer"';
 }
 
-/**
- * The work that turns a bare attached filesystem back into the box the caller
- * left behind, in TWO PHASES.
- *
- * The phases are the correctness. Processes serve the ports, so no port is
- * exposed until every process is back; and a port is exposed only after its own
- * listener answers, or the box publishes a preview URL for a server that is not
- * there. One flat list of three op kinds — start a process, probe a port, expose
- * a port — leaves the executor walking it, recording each failure and
- * continuing, straight past a silent probe into the exposure of that very port,
- * and then reporting the box ready. A shape that cannot express "expose without
- * a listener" is a better guard than an executor that remembers not to.
- */
+/** Two phases: every process starts before any port is exposed, and a port is exposed only
+ *  after its own listener answers, so the shape cannot express "expose without a listener". */
 export interface RestartPlan {
-  /** Every durably-recorded process, in the order the specs came back. */
   readonly start: readonly SupervisedProcessSpec[];
-  /** Each exposed port once, ascending, so a restart is the same restart every
-   *  time — which is what makes it reproducible when it goes wrong. A second
-   *  spec for one port is the storage's own last write. */
+  /** Ascending and deduplicated so every restart is identical and reproducible when it fails.
+   *  A second spec for one port resolves to the storage's last write. */
   readonly serve: readonly PortExposureSpec[];
 }
 
@@ -1062,36 +630,8 @@ export function restartPlan(
   };
 }
 
-/**
- * Does a callback still need a row armed?
- *
- * THE ROW BEING DISPATCHED IS STILL IN THE TABLE. `@cloudflare/containers`
- * deletes a fired row AFTER the callback returns, not before: in its `alarm()`
- * loop the callback is awaited and only then is the row deleted
- * (`await callback.call(...)` precedes `DELETE FROM container_schedules WHERE
- * id = ...` in the same iteration). So a callback that asks "is a row already
- * pending for me" sees ITSELF, decides it has nothing to do, and returns. The
- * SDK then deletes that row and the chain is dead with no error anywhere.
- *
- * Measured across two deployed probe runs: one died on the first idle tick, the
- * other had already died during an earlier phase, so the next phase found zero
- * rows before any idle had happened.
- *
- * So a DISPATCHING callback counts only rows scheduled STRICTLY IN THE FUTURE:
- * the firing row is due now or overdue and never counts, and a genuine pending
- * successor always does.
- *
- * ANY OTHER CALLER COUNTS EVERY ROW. A due row the alarm loop has not
- * delivered yet is pending work, and arming beside it is not idempotent: the
- * SDK's `schedule()` resets the object's one platform alarm a second out on
- * every call. A state poll faster than that second re-armed the overdue
- * startup row on every reading and moved the alarm out of reach each time,
- * so it never fired and the retry it carried never ran. Measured on
- * `b20260914070552`, cycles 2, 3, 5 and 6: one admission refusal each, then
- * 50 seconds of `running:true, restoration:unstarted` with the incident
- * undelivered, the heartbeat silent, and the platform reporting each alarm
- * delivery `Canceled`. Only the row's own dispatch may look past it.
- */
+/** The SDK deletes a fired row only after its callback returns, so a dispatching callback
+ *  counts only future rows; other callers count every row, since re-arming a due one is D14. */
 export function needsArming(
   rows: readonly { readonly time: number }[],
   nowSeconds: number,
@@ -1103,37 +643,19 @@ export function needsArming(
 }
 
 
-// ── one caller at a time, per resource ──────────────────────────────────────
-
-/**
- * A resource an operation touches, named the way the operation already names it.
- *
- * `path` carries its own namespace as a first segment — `file:/workspace/src`,
- * `port:3000`, `proc:sup-1` — so one lane orders three kinds of resource without
- * three tables. `subtree` widens the claim to everything beneath the path, which
- * is what a recursive listing reads and a directory removal changes.
- *
- * Segments are `/`-delimited and prefix comparison respects that boundary, so
- * `port:3000` does not overlap `port:30001` and `file:/a/bc` does not overlap
- * `file:/a/b`.
- */
+/** `path` leads with its namespace (`file:/workspace/src`, `port:3000`, `proc:sup-1`) so one
+ *  lane orders all kinds; `subtree` claims everything beneath, as recursive list/remove need. */
 export interface ResourceScope {
   readonly path: string;
   readonly subtree: boolean;
 }
 
-/** True when `inner` is `outer` or lies beneath it on a segment boundary. */
 function atOrUnder(outer: string, inner: string): boolean {
   return inner === outer || inner.startsWith(`${outer}/`);
 }
 
-/**
- * Do two operations touch a common resource?
- *
- * An exact scope conflicts only with the same path. A `subtree` scope conflicts
- * with everything at or beneath it, in either direction — a recursive delete of
- * `/a` and a write to `/a/b/c` are the same resource seen from two ends.
- */
+/** A `subtree` scope conflicts with every path at or beneath it, whichever side holds it:
+ *  a recursive delete of `/a` and a write to `/a/b/c` are the same resource. */
 function scopesTouch(left: ResourceScope, right: ResourceScope): boolean {
   if (left.subtree) return atOrUnder(left.path, right.path);
 
@@ -1150,55 +672,24 @@ export function scopesOverlap(
 }
 
 export interface ResourceLane {
-  /**
-   * Run `op` once nothing overlapping is in flight, and hold `scopes` until it
-   * settles.
-   *
-   * STRICT FIFO PER RESOURCE, and nothing wider. Two operations that name no
-   * common resource never wait for each other; two that do are ordered by
-   * arrival. There are no shared reads: admitting a second reader past a queued
-   * writer is how a writer starves, and ordering a repeated read of one path is
-   * cheap next to being wrong about which write won.
-   *
-   * The whole scope set is awaited and claimed in ONE step, so a multi-resource
-   * operation — a rename touches two paths and both their parents — cannot hold
-   * one resource while waiting for another. That removes deadlock by
-   * construction rather than by an acquisition order anyone has to maintain.
-   *
-   * `release` exists for the one operation whose resource outlives its own
-   * return: a read that hands back a stream still owns the file until those
-   * bytes are done. Everything else uses {@link run}.
-   */
-  /** Whether this lane currently holds any resource. A streamed read remains
-   *  busy until its body drains or is cancelled. */
+  /** A streamed read keeps the lane busy until its body drains or is cancelled. */
   busy(): boolean;
+  /** Strict FIFO per resource, no shared reads; the whole scope set is claimed in one step,
+   *  so a multi-resource operation cannot hold one resource while waiting for another. */
   run<T>(scopes: readonly ResourceScope[], op: () => Promise<T>): Promise<T>;
   /** Claim `scopes`, then hand back the release. The caller MUST call it on
    *  every path out, including cancellation. */
   hold(scopes: readonly ResourceScope[]): Promise<() => void>;
 }
 
-/**
- * The queue every caller of one container passes through.
- *
- * WHY IT LIVES IN THE OWNER. Each facet of a workspace is a separate Durable
- * Object with its own isolate and its own client, and all of them address ONE
- * container through this one object. A queue built beside any client orders only
- * that client's own calls, so two facets writing one path still interleaved —
- * the object every caller reaches is the only place a claim means anything.
- *
- * IN-FLIGHT ONLY. An entry exists while its operation runs and is dropped when
- * it settles, so this is a queue rather than a register of who owns what: there
- * is nothing to persist, nothing to reconcile after an eviction, and nothing to
- * keep in step with the durable spec tables.
- */
+/** Lives in the container's owner object: facets are separate isolates, so a per-client queue
+ *  orders only that client's calls. In-flight only, so nothing persists across eviction. */
 export function createResourceLane(): ResourceLane {
   const inFlight = new Set<{ scopes: readonly ResourceScope[]; settled: Promise<void> }>();
 
   const hold = async (scopes: readonly ResourceScope[]): Promise<() => void> => {
-    // Loop rather than one pass: waiting for today's conflicts can let a third
-    // operation claim an overlapping resource in the meantime, and admitting
-    // this one anyway would be the interleaving the lane exists to stop.
+    // Loop, not one pass: while waiting, a third operation can claim an overlapping resource,
+    // and admitting this one anyway is the interleaving the lane exists to stop.
     for (;;) {
       const blocking = [...inFlight].filter(entry => scopesOverlap(entry.scopes, scopes));
 
@@ -1231,27 +722,17 @@ export function createResourceLane(): ResourceLane {
   };
 }
 
-/** The one resource a port operation names: its number. Ports have no subtree
- *  and no membership — `port:3000` and `port:30001` share no segment boundary,
- *  so they never overlap. */
+/** Ports have no subtree: `port:3000` and `port:30001` share no segment boundary, so never overlap. */
 export function portScope(port: number): readonly ResourceScope[] {
   return [{ path: `port:${port}`, subtree: false }];
 }
 
-/** The one resource a supervised-process operation names: its id. */
 export function processScope(processId: string): readonly ResourceScope[] {
   return [{ path: `proc:${processId}`, subtree: false }];
 }
 
-/**
- * Hold a claim until a stream is DONE with it.
- *
- * A read that hands back a `ReadableStream` returns before a byte is consumed,
- * so releasing on return would let a sibling write rewrite the file underneath a
- * reader still pulling from it. This releases on the last chunk, on an error, and
- * on cancellation — every way a stream can end — and releases exactly once, so a
- * consumer that cancels a half-read body does not leave the file claimed forever.
- */
+/** A returned `ReadableStream` is unconsumed, so releasing on return lets a sibling write race
+ *  the reader; release once on last chunk, error, or cancel so a half-read body frees it. */
 export function heldUntilDrained<Chunk>(
   stream: ReadableStream<Chunk>,
   release: () => void,
@@ -1270,23 +751,8 @@ export function heldUntilDrained<Chunk>(
   }));
 }
 
-/**
- * The resources a path operation touches.
- *
- * TOPOLOGY, NOT JUST THE PATH. A listing of `/a` and a create of `/a/b` name
- * different paths and the same fact: what `/a` contains. So an operation that
- * can change a directory's membership claims that directory too, which is why
- * two creates in one directory are ordered while creates in different
- * directories are not. The cost is stated rather than hidden: a plain overwrite
- * of an existing file also claims its directory, because nothing here can tell
- * an overwrite from a create without asking the container, and guessing in the
- * cheaper direction would be exactly the sibling independence we must not
- * overclaim.
- *
- * `recursive` widens the claim to the subtree, for the operations whose effect
- * is the subtree: a recursive listing reads it, and a removal of a directory
- * changes all of it.
- */
+/** A membership-changing operation also claims its directory, so same-directory creates order;
+ *  an overwrite claims it too, since it cannot be told from a create without the container. */
 export function pathScopes(input: {
   readonly path: string;
   readonly membership?: boolean;
@@ -1296,11 +762,8 @@ export function pathScopes(input: {
   const path = canonicalPath(input.path);
   const scopes: ResourceScope[] = [{ path: `file:${path}`, subtree: input.recursive === true }];
   const above = ancestors(path);
-  // THE IMMEDIATE PARENT ONLY, unless the operation really can create the whole
-  // chain. Claiming every ancestor looks safer and is a global lock: two creates
-  // in unrelated directories both name `/workspace`, so every write in the
-  // workspace would order against every other. A create changes the membership
-  // of the directory it lands in, and of higher ones only when it makes them.
+  // Claim only the immediate parent unless the operation creates the whole chain: every
+  // ancestor would be a global lock, since unrelated creates all name `/workspace`.
   const claimed = input.ancestors === true ? above : above.slice(0, 1);
 
   if (input.membership === true || input.ancestors === true) {
@@ -1322,14 +785,8 @@ function ancestors(path: string): readonly string[] {
   return out;
 }
 
-/**
- * One spelling per file, so two names for one path are one resource.
- *
- * Relative paths resolve against the work directory the way the container does,
- * `.` and `..` collapse, and repeated and trailing slashes go. This is a
- * SPELLING, not an inode: a symlink or a bind mount can still name one file
- * under two paths, and no string comparison can see that.
- */
+/** One spelling per file, so two names for one path are one resource. A spelling, not an inode:
+ *  a symlink or bind mount can still name one file under two paths. */
 export function canonicalPath(path: string): string {
   const absolute = path.startsWith('/') ? path : `${DEVBOX_WORKDIR}/${path}`;
   const out: string[] = [];
@@ -1348,29 +805,10 @@ export function canonicalPath(path: string): string {
   return `/${out.join('/')}`;
 }
 
-// ── one checkpoint at a time ────────────────────────────────────────────────
-
 export interface CheckpointLane {
-  /**
-   * Run one strategy checkpoint under the instance-wide gate.
-   *
-   * A Durable Object interleaves requests at every container and store await,
-   * so two overlapping checkpoints would share the chain's staging directory,
-   * race its delta PUT against its state write, and stamp overlapping journal
-   * sequences — one batch object overwriting another under the same key while
-   * both blobs stay. The rules:
-   *
-   *   same kind already running → JOIN it: the callers share one operation and
-   *     one outcome.
-   *   a different kind is running → QUEUE behind it: a quiesce that joined an
-   *     in-flight tick could inherit a `skipped` answer and stop the container
-   *     over work that only just landed; it runs its own final commit instead.
-   *
-   * Rejections travel to every caller of the failed run; the gate itself
-   * survives and the next caller starts clean.
-   */
-  /** Whether a checkpoint has been admitted or is still running. */
   busy(): boolean;
+  /** Same kind in flight joins it; a different kind queues, so a quiesce never inherits a tick's
+   *  `skipped` and stops over just-landed work. Overlap would share staging and journal sequences. */
   run(kind: CheckpointKind, op: () => Promise<CheckpointOutcome>): Promise<CheckpointOutcome>;
 }
 
@@ -1405,28 +843,15 @@ export function createCheckpointLane(): CheckpointLane {
   };
 }
 
-// ── incidents ───────────────────────────────────────────────────────────────
 
-
-/**
- * Which part of the lifecycle failed. A host routing an incident cares about
- * this more than about the text.
- *
- * A RUNTIME LIST, not a bare type union, because the host that receives these
- * has to validate them: a stage the producer emits and the consumer's schema
- * rejects is an incident that never reaches anyone, and that is exactly what
- * happened when the two sides each kept their own list. There is one list, and
- * it is this one.
- */
+/** A runtime list, not a bare type union: the receiving host validates stages against it,
+ *  so producer and consumer share this one list or incidents get rejected unseen. */
 export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port'] as const;
 
 export type IncidentStage = (typeof INCIDENT_STAGES)[number];
 
-/** A lifecycle failure, recorded durably before anyone is told about it.
- *
- *  `reason` carries ids and stages only. No object key, no bucket name, no
- *  token, no presigned value ever lands in it: an incident is the one row most
- *  likely to be forwarded somewhere the container's own secrets should not go. */
+/** Recorded durably before anyone is told. `reason` carries ids and stages only: never an
+ *  object key, bucket name, token or presigned value, since incidents get forwarded. */
 export interface DevboxIncident {
   readonly incidentId: string;
   readonly stage: IncidentStage;
@@ -1436,26 +861,12 @@ export interface DevboxIncident {
   readonly at: number;
 }
 
-/**
- * What the host did with an incident.
- *
- * `queued` means the announcement LANDED, and delivery stops. `undelivered`
- * means the host took the incident but could not announce it, so the row stays
- * pending and the next delivery pass tries again — the distinction exists
- * because a host that answered `queued` for an announcement that never reached
- * anyone made the box stop retrying an incident nobody had seen, while the
- * host's own ledger still held it as re-deliverable. `rejected` means the host
- * refused the SHAPE, which is a defect in the caller rather than a transient
- * failure, so it is recorded and never retried. A thrown handler is treated as
- * `undelivered`: it is transient, and the schedule retries it.
- */
+/** `queued` only once the announcement landed; `undelivered` (or a throw) keeps the row pending
+ *  for retry; `rejected` is a caller shape defect, recorded and never retried. */
 export type IncidentDisposition = 'queued' | 'undelivered' | 'rejected';
 
-/** Backoff for delivering an incident: 5 s doubling to a 5-minute ceiling.
- *
- *  Delivery persists BEFORE the first attempt and retries by schedule until
- *  the host accepts, so an eviction between recording and delivering loses
- *  nothing. */
+/** Delivery persists before the first attempt and retries by schedule until the host accepts,
+ *  so an eviction between recording and delivering loses nothing. */
 export function incidentRetryDelayMs(attempt: number): number {
   return Math.min(5_000 * 2 ** Math.max(0, attempt), 300_000);
 }

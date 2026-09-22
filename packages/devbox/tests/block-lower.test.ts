@@ -1,5 +1,5 @@
-// Docker, 2026-09-13: indexed composition and opaque directory replacement;
-// the same probe image is built from the source pinned in block-lower/upstream.json.
+// Docker probe, 2026-09-13: indexed composition and opaque directory replacement.
+// The probe image builds from the source pinned in block-lower/upstream.json.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -18,9 +18,8 @@ const image = `kinu-block-lower:${process.pid}`;
 
 let built = false;
 
-/** One phase of a probe script in the image: privileged with `/dev/fuse`, the
- *  fixture writable and the script read-only. The shell differs per probe —
- *  the reseat probe needs bash. */
+/** Runs one probe phase privileged with `/dev/fuse`, fixture writable, script read-only.
+ *  The shell is per probe: the reseat probe needs bash. */
 function probeRunner(fixture: string, script: string, shell: string): (phase: string) => SpawnSyncReturns<string> {
   return (phase) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
     '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', shell, image, '/probe.sh', phase], { encoding: 'utf8' });

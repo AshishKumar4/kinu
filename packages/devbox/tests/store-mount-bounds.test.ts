@@ -1,18 +1,12 @@
-// KINU-038. The store mount ran on s3fs's own defaults: 300 s to connect, 120 s
-// of silence per request, five retries with backoff. A restoration abandons
-// its attach at `attachBudgetMs`, so a mount whose connection had died could
-// hold that abandoned attempt's s3fs on the container for minutes while the
-// retry mounted beside it. The bounds are stated by the box, and this reads
-// them off the one call the container's s3fs is configured from.
+// Checks that the store mount sets its own s3fs connect, silence and retry bounds.
+// s3fs defaults let an attach abandoned at `attachBudgetMs` linger beside its retry.
 import { describe, expect, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
 import { chainBox } from './support/chain-box';
 import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 
-/** The numeric value of one `key=value` s3fs option. A key the mount did not
- *  state leaves s3fs's own default in charge, which is the whole defect here,
- *  so its absence fails by name. */
+/** A key the mount omits leaves s3fs's own default in charge, so its absence fails by name. */
 function bound(options: readonly string[], key: string): number {
   const stated = options.find((option) => option.startsWith(`${key}=`));
 
@@ -46,14 +40,13 @@ describe('the store mount states its own s3fs bounds', () => {
     const silence = bound(options, 'readwrite_timeout');
     const retries = bound(options, 'retries');
 
-    // Each bound is a real number, and the connect bound sits inside the
-    // restoration budget: an attach that has already been abandoned must not
-    // still be waiting on its connect.
+    // The connect bound sits inside the attach budget: an abandoned attach must not still be
+    // waiting on its connect.
     expect(Number.isFinite(connect)).toBe(true);
     expect(Number.isFinite(silence)).toBe(true);
     expect(Number.isFinite(retries)).toBe(true);
     expect(connect * 1000).toBeLessThanOrEqual(DEFAULT_DEVBOX_POLICY.attachBudgetMs);
-    // Under s3fs's own defaults on every axis, which is the whole finding.
+    // Each bound sits below s3fs's own default for that option.
     expect(connect).toBeLessThan(300);
     expect(silence).toBeLessThan(120);
     expect(retries).toBeLessThan(5);

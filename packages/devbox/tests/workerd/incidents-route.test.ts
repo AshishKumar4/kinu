@@ -1,16 +1,8 @@
 import { SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
-// ── the incidents route's contract ──────────────────────────────────────────
-//
-// GET /incidents answers the ledger's reasons, oldest first, for the deployed
-// probe to archive after the ladder and after the wake but before teardown.
-// What the shapes MEAN is proved in `incident-reasons.test.ts`, which drives
-// the real method instead of the HTTP framing around it.
-//
-// Only guards are asserted here: this environment wires neither the
-// container-backed objects nor R2 (a box method answers 502 without them), so
-// the positive path runs on the deployed probe, where a failure is loud.
+// Only guards are asserted: this environment wires neither container-backed objects nor R2,
+// so the positive path runs on the deployed probe; `incident-reasons.test.ts` covers shapes.
 
 const auth = { authorization: 'Bearer test-token' };
 

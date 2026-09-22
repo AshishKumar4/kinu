@@ -1,22 +1,5 @@
-/**
- * The frozen durability contracts: shapes more than one program has to agree
- * on, byte for byte.
- *
- * They live in the product package, and are exported through
- * `@kinu.run/devbox/durability/contracts`, because the instruments that measure
- * durability must validate against the SHIPPED shapes rather than against
- * their own copies — `scripts/fixtures/payload-transport` and
- * `scripts/fixtures/fuse-probe` both say so where they import from here. A
- * second copy of one of these shapes is a copy that drifts silently, and the
- * drift lands in a measurement nobody can reproduce.
- *
- * An INTENT is what a box asks for, exactly: one key, one method, one byte
- * range, one digest, one expiry. A GRANT is what it is handed back, and it
- * carries the opaque credential material as ONE field so a caller can
- * fingerprint the grant without a report ever recording a live credential.
- * `Work` shapes are counted units: what one operation actually did, in the
- * units its bound is stated in.
- */
+/** Durability shapes shared byte for byte across programs; instruments must import these,
+ *  never copy them. A GRANT keeps credential material in one field so reports can fingerprint it. */
 
 import * as v from 'valibot';
 
@@ -41,10 +24,8 @@ const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/, 'Expected a lo
 
 const CountSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
-/** What one restore did, in the dimensions a readiness claim has to be
- * checked in: how many remote operations were unavoidably serial, how many
- * there were in total, the bytes each class moved, and the local work that
- * followed. */
+/** Work one restore did, in the dimensions a readiness claim is checked against.
+ *  `serialRemoteOps` counts the remote operations that were unavoidably serial. */
 export const RestoreWorkSchema = v.strictObject({
   serialRemoteOps: CountSchema,
   totalRemoteOps: CountSchema,
@@ -57,36 +38,20 @@ export const RestoreWorkSchema = v.strictObject({
 
 export type RestoreWork = v.InferOutput<typeof RestoreWorkSchema>;
 
-/** What one publish did: single PUTs of fresh bytes, and how many head CAS
- * transactions it took. */
 export const PublishWorkSchema = v.strictObject({
   objectsPut: CountSchema,
   bytesPut: CountSchema,
   casAttempts: CountSchema,
 });
 
-export type PublishWork = v.InferOutput<typeof PublishWorkSchema>;
-
-/**
- * The landmarks one restoration passes, in the order a cold start meets them.
- *
- * `containerStart` is the first container command that ANSWERED: the platform
- * admits the instance before the hook, but the RPC server inside it comes up
- * on its own clock, and the first command waits on that. `storeMount` and
- * `baseAttach` belong to the storage strategy, which alone knows which of its
- * commands was the mount; a fresh box with no chain never reaches either.
- * `attached` is the storage attach settled, `bootId` the identity settled —
- * stamped, or adopted from a matching read.
- */
+/** `containerStart` is the first command that answered: the RPC server comes up after admission.
+ *  `storeMount`/`baseAttach` are stamped by the storage strategy; a box with no chain skips them. */
 export type RestorePhase = 'containerStart' | StoragePhase | 'attached' | 'bootId';
 
-/** The phases a storage strategy stamps, see {@link RestorePhase}. */
 export type StoragePhase = 'storeMount' | 'baseAttach';
 
-/** Where a restoration was when each phase landed, in milliseconds after it
- *  opened. A phase the walk never reached is ABSENT, never zero: the bench
- *  fixture writes these as they land and the driver decodes them, so a start
- *  the platform reset still names its last phase. */
+/** Milliseconds after the restoration opened; an unreached phase is absent, never zero,
+ *  so a start the platform reset still names its last phase. */
 export type RestorePhaseStamps = { readonly [P in RestorePhase]?: number };
 
 export const RestorePhaseStampsSchema: v.GenericSchema<RestorePhaseStamps> = v.object({
@@ -135,9 +100,8 @@ export const PayloadGrantSchema = v.strictObject({
 
 export type PayloadGrant = v.InferOutput<typeof PayloadGrantSchema>;
 
-/** The phases one durable operation passes through, in order. A cell that
- * reports a phase reports one of these and nothing else, so an instrument can
- * assert which phase a fault was injected in. */
+/** Phases of one durable operation, in order; a cell reports only these, so an instrument
+ *  can assert which phase a fault was injected in. */
 export const DURABILITY_OPERATION_PHASES = [
   'intent', 'transferring', 'sealed', 'completion-pending', 'published', 'failed',
 ] as const;
