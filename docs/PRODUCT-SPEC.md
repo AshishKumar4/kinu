@@ -26,25 +26,25 @@
 
 ## 1. Purpose and reading rules
 
-This document defines the product the owner requested. It also compares that contract with the implementation and its evidence.
+This document defines the product the owner asked for and compares it with the implementation and its evidence.
 
-It has three kinds of statements:
+Statements come in three kinds:
 
-- **Required behavior** comes from the recorded user requests, including later corrections that supersede earlier instructions.
-- **Target design** explains how the required behavior fits together. It does not claim the code already implements it.
-- **Implementation evidence** states what a particular source revision or exercised product path proves. A passing test of one path does not prove a whole feature.
+- Required behavior comes from the recorded user requests, including later corrections that supersede earlier ones.
+- Target design explains how the required behavior fits together. It does not claim the code implements it.
+- Implementation evidence states what a given source revision or exercised product path proves. A passing test of one path does not prove a whole feature.
 
-The request snapshot contains 975 catalogued messages and 801 occurrences from the active OMP session. All 794 previously captured occurrences remain accounted for. The input audit contains 2,740 separate ask rows: 2,584 historical rows, 125 previously added rows, and 31 rows from messages 971 to 975. These are coverage counts, not a completion percentage. Imported handoffs, repeated instructions, questions and superseded requests are not counted as separate implemented features.
+The request snapshot holds 975 catalogued messages and 801 occurrences from the active OMP session; all 794 previously captured occurrences are still accounted for. The input audit has 2,740 ask rows: 2,584 historical rows, 125 previously added rows, and 31 rows from messages 971 to 975. These are coverage counts, not a completion percentage. Imported handoffs, repeated instructions, questions and superseded requests do not count as separate features.
 
-The source comparison starts from `9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a`. The independently checked production revision is `71479ace9`. Source-only or locally verified changes are labelled separately from deployed behavior. The full private message and evidence audit lives under the primary checkout's `docs/research/product-acceptance/`; this public document does not republish private transcripts or credentials.
+The source comparison starts from `9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a`. The independently checked production revision is `71479ace9`. Source-only and locally verified changes are labelled apart from deployed behavior. The full private message and evidence audit lives under the primary checkout's `docs/research/product-acceptance/`; this public document does not republish private transcripts or credentials.
 
-A criterion is complete only when its stated behavior and failure cases are exercised through the relevant surface. Compilation, a source symbol, a mock response, a retained proposal, or a method that returns `unsupported` is not that proof.
+A criterion is complete only when its behavior and failure cases are exercised through the relevant surface. Compilation, a source symbol, a mock response, a retained proposal, or a method that returns `unsupported` is not proof.
 
 ### What this document does not authorize
 
-The product contract does not authorize data loss, a production reset, unrestricted database access, or weakened security checks. A storage cutover preserves existing work and names any required operator decision before it changes production data.
+The contract does not authorize data loss, a production reset, unrestricted database access, or weaker security checks. A storage cutover preserves existing work and names any operator decision it needs before it changes production data.
 
-It also does not turn the earlier agent-core architecture investigation into a wholesale rewrite requirement. That request was a what-if investigation. The later request for shared workspace SQLite and editable agent state is an explicit target, and the comparison with the current design sits below.
+The earlier agent-core architecture investigation was a what-if and does not require a rewrite. The later request for shared workspace SQLite and editable agent state is an explicit target; the comparison with the current design is below.
 
 ## 2. Terms and ownership
 
@@ -72,63 +72,63 @@ It also does not turn the earlier agent-core architecture investigation into a w
 | **Workspace fork** | A new workspace ownership boundary created from a defined snapshot. |
 | **Context fork** | A new actor context derived from a particular parent context revision. It does not imply a new workspace or copied file plane. |
 
-One name keeps one meaning throughout the product. In particular, workspace, agent, conversation, run, search vertex and execution process never stand in for each other.
+Each name keeps one meaning across the product. Workspace, agent, conversation, run, search vertex and execution process never stand in for each other.
 
 ## 3. Product invariants
 
-These requirements govern every later feature and interaction.
+These rules govern every feature below.
 
-1. **One workspace file plane.** The workspace owns one canonical base filesystem. Agent-scoped homes and private temporary paths are views within that plane, not independent copies of the project.
-2. **Shared workspace state is explicit.** The requested cloud target has one workspace SQLite store for the main agent and its subordinate and exploration actors. Agent identity and access rules still partition the records.
-3. **Shared storage is not shared authority.** An actor gains no other actor private context, owner credentials or policy tables merely because their bytes share a database.
-4. **One core for full agents.** Main, persistent, temporary and tool-using exploration actors reuse the same core turn behavior. Their wrappers supply identity, role, lifetime, context seed and task-specific ports.
+1. **One workspace file plane.** The workspace owns one canonical base filesystem. Agent homes and private temporary paths are views inside it, not separate copies of the project.
+2. **Shared workspace state is explicit.** In the cloud product, the main agent and its subordinate and exploration actors share one workspace SQLite store. Agent identity and access rules still partition the records.
+3. **Shared storage is not shared authority.** Sharing a database gives an actor no access to another actor's private context, the owner's credentials or policy tables.
+4. **One core for full agents.** Main, persistent, temporary and tool-using exploration actors run the same core turn. Their wrappers supply identity, role, lifetime, context seed and task-specific ports.
 5. **Visible state is truthful.** Queued, running, waiting for approval, failed, cancelled, completed and missing are different states. A transport acknowledgement is not a completed task.
-6. **Native and codemode access agree.** Both enter the same capability policy and state owner. Code bypasses no native tool role, mode, consent or approval rule.
-7. **Results remain data.** Successful output containing `error`, `reason`, an exit number or similar text does not become a failure. Invocation status comes from the producer's declared result/error channel.
+6. **Native and codemode access agree.** Both go through the same capability policy and state owner. Code bypasses no native tool role, mode, consent or approval rule.
+7. **Results remain data.** Successful output that contains `error`, `reason`, an exit number or similar text is not a failure. Invocation status comes from the producer's declared result/error channel.
 8. **Unknown measurements stay unknown.** Missing usage, cost, outcomes or verification evidence never becomes zero, success or an inferred benchmark score.
-9. **Work survives the right boundaries.** Hosted work stands independent of an attached browser or terminal. A client disconnect is not cancellation.
-10. **Cancellation is explicit.** Cancellation reaches the admitted work and its children, stops new effects, and leaves a truthful terminal record. It discards no completed effect and no evidence of one.
-11. **Editing creates a new version.** Loop and working-context edits have an identity, validation result, activation point and rollback path. They do not silently overwrite the evidence of an earlier run.
-12. **Every limit has a reason.** Provider and platform limits, explicit user budgets, transport liveness and product policy stay separate. An arbitrary elapsed agent deadline never substitutes for correct lifecycle handling.
-13. **No hidden second implementation.** A new UI, tool, backend or adapter reuses existing state and policy where those contracts match. Different names never prove different responsibilities.
-14. **Completion is end to end.** A feature includes its reachable user and tool surface, persistence, failure behavior and verification. A scaffold or unused adapter is not a completed feature.
+9. **Work survives the right boundaries.** Hosted work does not depend on an attached browser or terminal. A client disconnect is not cancellation.
+10. **Cancellation is explicit.** Cancellation reaches the admitted work and its children, stops new effects, and leaves a truthful terminal record. It discards no completed effect or its evidence.
+11. **Editing creates a new version.** Loop and working-context edits have an identity, validation result, activation point and rollback path. They do not overwrite the evidence of an earlier run.
+12. **Every limit has a reason.** Provider and platform limits, user budgets, transport liveness and product policy stay separate. An arbitrary elapsed-time deadline on an agent does not replace correct lifecycle handling.
+13. **No hidden second implementation.** A new UI, tool, backend or adapter reuses existing state and policy where the contracts match. Different names do not prove different responsibilities.
+14. **Completion is end to end.** A feature includes its reachable user and tool surface, persistence, failure behavior and verification. A scaffold or unused adapter is not a finished feature.
 
 ## 4. Workspace architecture
 
 ### 4.1 Current hosted architecture
 
-The current hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite storage backs the canonical Nimbus workspace and every actor state: the main agent, its hires, its ask-by-role temporaries, its heads, its swarm nodes and its MCTS branches are logical actors bound by one `ActorHost` over that one database, with `actor_id` leading the key of every actor-owned row. A database export is therefore a snapshot of every retained actor, not of the main one alone.
+A hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite storage backs the canonical Nimbus workspace and every actor's state. The main agent, its hires, its ask-by-role temporaries, its heads, its swarm nodes and its MCTS branches are logical actors bound by one `ActorHost` over that database, with `actor_id` leading the key of every actor-owned row. A database export is therefore a snapshot of every retained actor, not only the main one.
 
 ![Current workspace ownership with one shared actor store](diagrams/product-workspace-current.svg)
 
-One root actor directory issues immutable actor and parent references. It separates logical aliases from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `subordinate_identity`. The root directory uses `workspace_actors`.
+One root actor directory issues immutable actor and parent references and keeps logical aliases apart from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state`, `actor_subordinates` and `subordinate_identity`. The root directory uses `workspace_actors`.
 
-On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases. These are local proofs. They claim no deployment.
+On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases. These are local proofs, not a deployment claim.
 
-Retained dismissal keeps the logical name reserved. Successful destructive retirement removes only the roster row that matches its captured actor reference. Interrupted retirement keeps its intent in the directory and roster.
+Retained dismissal keeps the logical name reserved. A successful destructive retirement removes only the roster row that matches its captured actor reference. An interrupted retirement keeps its intent in the directory and roster.
 
 ### 4.2 What the shared store does and does not promise
 
-For the cloud product, one workspace Durable Object owns:
+In the cloud product, one workspace Durable Object owns:
 
 - the workspace identity and canonical Nimbus file plane;
 - the main agent and the workspace's logical agent roster;
 - agent-scoped conversations, working contexts, loop versions and durable work;
 - memory, tools, evolution records and the state needed to recover admitted work.
 
-The workspace holds **N** subordinate or exploration actors. Their logical independence needs no separate authoritative databases. They keep distinct identities, contexts, roles, queues and records within the shared storage boundary.
+A workspace can hold any number of subordinate or exploration actors without separate databases. Each keeps its own identity, context, role, queue and records inside the shared store.
 
-Account-level services stay separate where their ownership differs. The user registry, provider credentials, operator control plane and external machines never become agent-editable workspace data.
+Account-level services stay separate where ownership differs. The user registry, provider credentials, operator control plane and external machines are never agent-editable workspace data.
 
-Execution uses isolated workers, containers or connected devices. Those execution resources never become a second owner of the agent durable conversation or the canonical workspace files.
+Execution happens in isolated workers, containers or connected devices. None of them becomes a second owner of an agent's durable conversation or of the canonical workspace files.
 
-The design promises no unlimited simultaneous CPU or memory inside one isolate. Concurrency is scheduled against real resources and declared budgets. Resource exhaustion stays observable. It never disguises itself as successful delegation.
+The design does not promise unlimited CPU or memory inside one isolate. Concurrency is scheduled against real resources and declared budgets, and resource exhaustion is reported as exhaustion, not as successful delegation.
 
 ### 4.3 Local adaptation
 
-A local workspace has no Cloudflare Durable Object. It preserves the same product concepts through local persistence and execution.
+A local workspace has no Durable Object. It keeps the same product concepts through local persistence and execution.
 
-The current local backend binds the project plane to a native directory while keeping agent state in SQLite-backed storage. That difference matters: a host shell path and a state-file path are not interchangeable. The specification claims no local and cloud storage parity where only their interfaces match.
+The local backend binds the project plane to a native directory and keeps agent state in SQLite-backed storage, so a host shell path and a state-file path are not interchangeable. This specification claims no local/cloud storage parity where only the interfaces match.
 
 ### 4.4 Workspace journeys
 
@@ -143,15 +143,15 @@ The current local backend binds the project plane to a native directory while ke
 | Export/import | The archive states its coverage and consistency boundary. It claims no actor histories or secrets it omits. Import validates before exposing a usable workspace. |
 | Delete | Destruction requires owner authority and clear confirmation. Associated resources and durable work have a defined teardown. Absence is verified, not inferred from the UI closing. |
 
-The mission never leaves a new workspace inert. A general mission lets the agent ask what to do next. An actionable initial request starts that work. An import or setup-only API states explicitly when it starts no turn. The UI never presents internal storage IDs as competing workspace identities.
+A new workspace is never left inert. A general mission lets the agent ask what to do next; an actionable request starts that work. An import or setup-only API says when it starts no turn. The UI never shows internal storage IDs as competing workspace identities.
 
 ## 5. Agent identity, creation and lifecycle
 
 ### 5.1 Shared core, narrow roles
 
-The target uses a common full-agent core. An actor instance supplies data and capabilities rather than copying the entire loop implementation.
+Every full agent shares one core. An actor instance supplies data and capabilities instead of copying the loop.
 
-Its descriptor must distinguish:
+Its descriptor distinguishes:
 
 - immutable identity and parent/workspace lineage;
 - display name and current role;
@@ -162,13 +162,13 @@ Its descriptor must distinguish:
 - task, deliverable, completion and reporting contract;
 - active loop/context revisions and durable run identifiers.
 
-A role is not a second agent class. A temporary lifetime is not a reduced text-only completion. An exploration assignment never justifies another copy of ordinary tool use, cancellation or history handling.
+A role is not a second agent class. A temporary lifetime is not a reduced text-only completion. An exploration assignment does not get its own copy of tool use, cancellation or history handling.
 
-The product has three inference tiers: `fast`, `default` and `deep` (`tiny` and `slow` overlapped them and were removed, #7). Every tier without an explicit override inherits the default-tier setting. A change to that default preserves explicit per-tier overrides. Roles and templates stay separate, and the main agent discovers and uses admitted subordinate templates. Message 614 and the current catalogue state this requirement.
+There are three inference tiers: `fast`, `default` and `deep` (`TIER_IDS` in `packages/core/src/types/profile.ts`). A tier without an explicit override inherits the default-tier setting, and changing the default keeps explicit per-tier overrides. Roles and templates stay separate; the main agent discovers and uses admitted subordinate templates (message 614).
 
-The requested default model for a new user or a user with no default override is **GLM 5.3 on Workers AI** (message 851; current model ID `@cf/zai-org/glm-5.3`). Existing user overrides stay in place. Missing credentials produce an actionable availability state, not an unannounced alternative model.
+A new user, or a user with no default override, gets **GLM 5.3 on Workers AI** (message 851; model ID `@cf/zai-org/glm-5.3`). Existing overrides stay. Missing credentials produce an actionable availability state, not a silent switch to another model.
 
-The current backend runs every full agent (main, subordinate, temporary and tool-using exploration actors) on shared `ActorAgent` and core code, with storage and lifecycle hosted as logical actors on the one workspace store (§4).
+The backend runs every full agent (main, subordinate, temporary and tool-using exploration actors) on shared `ActorAgent` and core code, as logical actors on the one workspace store (§4).
 
 ![Agent lifecycle and retained terminal state](diagrams/product-agent-lifecycle.svg)
 
@@ -183,33 +183,33 @@ The current backend runs every full agent (main, subordinate, temporary and tool
 | Swarm | Explore alternatives under a stated search configuration and objective. | Context initialization, tool use, scoring, settlement and resource budgets are explicit. A judged search and an unranked ideation sweep are not reported as measured optimization. |
 | Ask a workspace peer | Ask an authorized agent in another workspace. | Waits for the peer reply. Its workspace ownership boundary is preserved; this is not an implicit child or shared-filesystem grant. |
 
-`agent` and `role` are different `hire` targets. `role` creates the agent and `lifetime` states how long it lives. `agent` hands the workstream to one that exists. Invalid combinations and unknown fields are refused before work or spend begins.
+`agent` and `role` are different `hire` targets. `role` creates the agent and `lifetime` says how long it lives; `agent` hands the workstream to one that exists. Invalid combinations and unknown fields are refused before any work or spend.
 
-This target-dependent settlement is deliberate. Message 748 accepts immediate subordinate assignment and awaited peer replies. Native and codemode forms agree for each target. The specification never homogenizes them into a different return contract. `msg` retains its own message and event correlation at both of its targets.
+The return contract depends on the target on purpose: message 748 accepts immediate subordinate assignment and awaited peer replies. Native and codemode forms agree for each target. `msg` keeps its own message and event correlation at both of its targets.
 
-Naming a workspace path in a delegation brief points the receiver at context to read itself. Passing a path never proves the receiver read it. Acceptance inspects actual calls or resulting source-grounded evidence.
+A workspace path in a delegation brief points the receiver at context to read. It does not prove the receiver read it; acceptance inspects the actual calls or the source-grounded result.
 
 ![Delegation and fork distinctions](diagrams/product-delegation.svg)
 
 ### 5.3 Fresh, context-forked and workspace-forked
 
-These operations must remain separate:
+These operations stay separate:
 
-- **Fresh context:** initialize an actor from its role, assignment and explicitly supplied context. Never silently import the whole parent conversation.
-- **Context fork:** derive a new actor context from a named parent context revision. Later child edits never rewrite the parent context.
+- **Fresh context:** start an actor from its role, assignment and explicitly supplied context, without importing the whole parent conversation.
+- **Context fork:** derive a new actor context from a named parent context revision. Later child edits do not rewrite the parent context.
 - **Workspace fork:** create a new ownership and file-state boundary from a defined snapshot. This is a storage operation with its own consistency and merge contract.
 
-Sharing project files never shares a conversation. Forking a conversation never copies the project. The UI and tool descriptions state which operation happened.
+Sharing project files does not share a conversation, and forking a conversation does not copy the project. The UI and tool descriptions say which operation happened.
 
-The current hire path creates a new conversation with a bounded digest of recent parent messages. It is neither a verbatim conversation fork nor literally blank context.
+The hire path creates a new conversation seeded with a bounded digest of recent parent messages. That is neither a verbatim fork nor a blank context.
 
 ### 5.4 Settlement and inspection
 
-Completion pairs admitted work with one terminal outcome and its evidence. A child answer, its delivery to the parent, its retained records and its removal from the active roster are related but distinct facts.
+Completion pairs admitted work with one terminal outcome and its evidence. A child's answer, its delivery to the parent, its retained records and its removal from the active roster are related but separate facts.
 
-Dismissal never proves every durable effect settled. Retaining history grants the model no permission to send more work to a dismissed agent.
+Dismissal does not prove every durable effect settled. Retained history gives the model no permission to send more work to a dismissed agent.
 
-The owner inspects retained subordinate history and recursive lineage through an authorized read path. Missing actor storage returns an explicit missing result, not a fabricated empty history. A settled archive read bootstraps no new agent work. Genuine pre-existing recovery retains its normal behavior.
+The owner can inspect retained subordinate history and recursive lineage through an authorized read path. Missing actor storage returns an explicit missing result, not an empty history. Reading a settled archive starts no new agent work; genuine pending recovery behaves as usual.
 
 ## 6. State, contexts and editable files
 
@@ -229,11 +229,11 @@ The owner inspects retained subordinate history and recursive lineage through an
 
 ### 6.2 Required VFS editing model
 
-The agent reads and edits the **actual** loop and working-context source its runtime consumes. An exported text snapshot that changes nothing when edited never satisfies this requirement.
+The agent reads and edits the loop and working-context source its runtime actually consumes. An exported text snapshot whose edits change nothing does not meet this requirement.
 
-The preferred boundary is a VFS projection backed by the owning state store. It creates no two independent writable copies of context: one in SQL and another in a file.
+The preferred boundary is a VFS projection backed by the owning state store, so there are never two writable copies of context (one in SQL, one in a file).
 
-Logical agent-state areas should provide:
+The agent-state areas should provide:
 
 | Area | Required behavior |
 |---|---|
@@ -243,37 +243,37 @@ Logical agent-state areas should provide:
 | Rendered requests | Inspect what a particular step consumed, including the relevant context/loop revision identifiers. |
 | Change history | Inspect who or what changed a version, why, what evidence was used, whether it activated, and how to revert it. |
 
-The final file paths reuse the existing agent-home and VFS addressing conventions. The contract above defines their behavior. The current path map and implementation gaps sit in the source comparison.
+The final paths reuse the existing agent-home and VFS addressing conventions. The current path map and gaps are in §7.
 
 ![Context, loop versions and retained evidence](diagrams/product-context.svg)
 
 ### 6.3 Editing and activation rules
 
-1. A read identifies the version the editor observed.
-2. An edit validates authority, syntax and schema, and the expected prior version.
+1. A read identifies the version the editor saw.
+2. An edit checks authority, syntax, schema and the expected prior version.
 3. A stale or invalid edit fails clearly and leaves the active version intact.
-4. A valid edit creates a new revision and states when it takes effect.
-5. An in-flight model request retains the versions it started with.
-6. Activation occurs at a defined safe boundary. It never patches arbitrary live JavaScript closures.
+4. A valid edit creates a new revision and says when it takes effect.
+5. An in-flight model request keeps the versions it started with.
+6. Activation happens at a defined safe boundary, never by patching live JavaScript closures.
 7. The next relevant request demonstrably consumes the new revision.
 8. A failed activation or regression leaves a usable rollback path and a truthful failure record.
 
-Parent and owner management of a subordinate uses the same checks. It never overwrites a child newer context merely because the parent read an older snapshot.
+Parent and owner edits to a subordinate go through the same checks. A parent that read an older snapshot cannot overwrite the child's newer context.
 
 ### 6.4 Mutable working history and immutable evidence
 
-The requested editability applies to the context an agent uses. Historical evidence stays available to explain what happened.
+Editability applies to the context an agent uses. Historical evidence stays available to explain what happened.
 
-This preserves both capabilities. An agent improves its context, and a reviewer still determines which earlier request, tool result or decision produced an outcome. Replacing the active context never permits erasing failed runs, rewriting cost records, changing owner policy or fabricating a clean history.
+An agent can improve its context while a reviewer can still tell which earlier request, tool result or decision produced an outcome. Replacing the active context does not permit erasing failed runs, rewriting cost records, changing owner policy or fabricating a clean history.
 
-Owner-authorized retention or permanent deletion is a separate operation. The immutability rule stops ordinary context edits falsifying past evidence. It never overrides an explicit authorized data-deletion policy.
+Owner-authorized retention or deletion is a separate operation. The immutability rule stops ordinary context edits from falsifying past evidence; it does not override an authorized data-deletion policy.
 
-The current versioned scaffold provides part of this model. Full editable VFS access to actual per-agent working context and history is a separate requirement. Scaffold versioning alone never declares it complete.
+The versioned scaffold covers part of this model. Editable VFS access to each agent's actual working context and history is a separate requirement that scaffold versioning does not satisfy.
 
 
 ## 7. Where context and runtime state live today
 
-This is the source inventory for the reviewed revision, not a proposed schema and not a claim that every optional SDK table exists in every database.
+This is the source inventory for the reviewed revision. It is not a proposed schema, and it does not claim every optional SDK table exists in every database.
 
 | Family | Current records | Physical owner and significance |
 |---|---|---|
@@ -282,23 +282,22 @@ This is the source inventory for the reviewed revision, not a proposed schema an
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |
 | SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
-| Think lifecycle | `think_config`, tool-child runs, action ledgers, approvals, submissions and workflow notifications | State in the workspace database, keyed by actor. Session-scoping messages alone never partition these records or the in-memory queues. |
-| Kinu identity/roster | `workspace_identity`, `agent_config`, `subordinate_identity`, `workspace_subordinates` | Root or actor-local store. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
-| Program state | `codemode_state` | Actor-local JSON key/value state today. This is not a general SQLite binding. |
-| Admitted work/effects | `pending_steers`, `actor_turn_claims`, `actor_context_revisions`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
+| Kinu identity/roster | `workspace_identity`, `workspace_actors`, `actor_config`, `subordinate_identity`, `actor_subordinates` | Root directory or actor-scoped rows. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
+| Program state | `actor_program_state`; `db` tables (`app_*`, catalogued in `agent_data_tables`) | `actor_program_state` is actor-private JSON key/value state behind `state.*`. `db` tables are agent-declared structured data at actor or workspace scope (§9.1). |
+| Admitted work/effects | `pending_steers`, `actor_turn_claims`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
 | Compaction/prompt versions | `compaction_state`, `compaction_archive`, `prompt_section_versions`, `prompt_section_evaluations` | Actor/session-scoped context planning, recall locations and prompt trials. |
 | Scaffold/learning | `scaffold_versions`, regression fixtures, trials, evaluations, completed turns, evolution events, outcomes, lessons, labels and GEPA records | Actor-local version pointers and learning evidence. Source bytes and execution evidence have different owners. |
 | Exploration | `search_nodes`, `mcts_search_runs`, `swarm_node_records`, exploration records, head runs/journal/evidence/steps/merge results | Search/controller-owned durable results. Head, node and branch traces and model-operation outboxes are additional records; a search vertex is not a conversation. |
 | Memory/tasks/permissions | Memory chunks/FTS, `agent_facts`, `agent_tasks`, plan reviews and instruction approvals | The scope supplied by the actor/root adapter. An instruction's approval is not equivalent to permission to write its file. |
 | Nimbus file storage | `inodes`, `file_chunks`, content lifecycle and append receipt/writer/revocation records | Root Nimbus SQLite VFS. These tables store files; they do not automatically project arbitrary conversation tables as files. |
 
-Relevant implementations are `identity/conversation-store.ts`, `config/conversation.ts`, `subordinates/roster.ts`, `events/recorder.ts`, `scaffold/surface.ts`, and `prompting/volatile-context.ts`, the compaction stores, and the pinned Agents and Think session implementations. The full private source map records the individual symbols and paths.
+The main implementations are `orchestrator/chat-session.ts` (the `ChatSession` both backends drive), `identity/conversation-store.ts`, `config/conversation.ts`, `subordinates/roster.ts`, `events/recorder.ts`, `scaffold/surface.ts`, `prompting/volatile-context.ts`, the compaction stores, and the pinned Agents SDK. The private source map records individual symbols and paths.
 
 ### 7.1 State that is not a conversation table
 
 Nimbus keeps shell cwd and exported environment per shell identity. Runtime instances hold a per-actor turn accumulator, dynamic-context ledger, steering drain, message and leaf caches, queues, continuations and stream controllers.
 
-These never form one serializable prompt file. Each mutable runtime object is reconstructed for its actor. Reusing one object across actors mixes their contexts or authority even though their SQL rows stay correctly keyed.
+None of this forms one serializable prompt file. Each mutable runtime object is rebuilt per actor; sharing one object across actors would mix their contexts or authority even with correctly keyed SQL rows.
 
 ### 7.2 Current VFS paths and their actual effect
 
@@ -308,8 +307,7 @@ These never form one serializable prompt file. Each mutable runtime object is re
 | `SOUL.md` | Owner-editable workspace identity/purpose prose. | Permission for an agent to rewrite owner policy. |
 | `memory/MEMORY.md`, `memory/*` | Durable notes and indexed memory. | The exact active conversation. |
 | `scaffold/agent.js`, `scaffold/agent.js.vN` | Main scaffold view and version source. SQL selects the current/promoted version. | That any arbitrary file overwrite automatically changes an in-flight loop. |
-| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Subordinate scaffold source in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias. | That the scaffold file itself carries authority; the version decision lives in that actor's SQL rows. |
-| `.kinu/heads/<storage-key>/scaffold/agent.js`, `.kinu/nodes/<storage-key>/scaffold/agent.js` | Exploration runtime paths use the issued physical actor key. Graph IDs remain logical search identities. | Complete common-loop or consumed-version provenance acceptance. |
+| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Scaffold source for every non-main actor (subordinate, head, node, branch), in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias; graph IDs remain logical search identities. | That the scaffold file itself carries authority (the version decision lives in that actor's SQL rows), or complete consumed-version provenance for exploration actors. |
 | Actor homes and temporary roots | Credentialed homes/shell identities within the canonical workspace. | Unrestricted access to every actor's private state. |
 | `.kinu/compaction/<session>/<range>.md` | Recall text for a compacted range, cited by SQL archive records. | A writable projection of the current working conversation. |
 | Tool-output, attachment and event-content spill areas | Large content retained outside a prompt-sized response. | Permission to replace canonical event outcomes or claim every byte was included in the prompt. |
@@ -318,39 +316,31 @@ These never form one serializable prompt file. Each mutable runtime object is re
 
 ### 7.3 What the shared store required
 
-The design is **logical agents inside the one workspace state owner**. Hosted actors are acquired from one `ActorHost` over the workspace SQLite. No per-actor database exists, and no RPC stands in for synchronous SQL.
+Hosted actors are logical agents acquired from one `ActorHost` over the workspace SQLite. There is no per-actor database, and no RPC stands in for synchronous SQL.
 
-The cutover addressed all of these together:
-
-- actor keys for conversations, configuration, loop pointers, state keys and read models;
-- actor/session identity in queues, durable submissions, fibers and effect records;
-- per-actor mutable runtime objects, not one workspace-wide active-context singleton;
-- scoped cursor and index reads, including rejection of another actor's cursor;
-- one scheduler with explicit ownership of admitted work.
-
-What remains is proof, not design: complete export/restore of retained actor state and lineage (§15.2, §19.3), and a stated disposition for any state retained in pre-cutover facet-local stores.
+Two proofs remain: a complete export/restore of retained actor state and lineage (§15.2, §19), and a stated disposition for any state left in pre-cutover facet-local stores.
 
 ## 8. The common agentic turn
 
 ![Common turn, tool outcomes and state transitions](diagrams/product-turn.svg)
 
-The common pipeline must preserve the following order and ownership:
+Every turn follows this order:
 
-1. **Admit input.** Record its identity, trusted work mode, origin and target actor. Retried delivery creates no second copy of the same work.
-2. **Select actor state.** Use that actor queue, conversation, role, model configuration and active versions.
-3. **Prepare context.** Combine permitted instructions, working history, memory, task state, tool declarations and pending signals. Preserve stable cacheable material while updating volatile facts.
-4. **Apply context policy.** Pruning, compaction, replay normalization and cache markers operate on the messages that go out.
+1. **Admit input.** Record its identity, trusted work mode, origin and target actor. A retried delivery does not create a second copy of the work.
+2. **Select actor state.** Use that actor's queue, conversation, role, model configuration and active versions.
+3. **Prepare context.** Combine permitted instructions, working history, memory, task state, tool declarations and pending signals. Keep stable cacheable material stable and update volatile facts.
+4. **Apply context policy.** Pruning, compaction, replay normalization and cache markers operate on the outgoing messages.
 5. **Measure honestly.** Record exact provider counts where available. Label estimated or unavailable counts as such.
-6. **Call the model.** Use the selected provider and model and its supported settings. A UI selection that never reaches the request is not implemented configuration.
+6. **Call the model.** Use the selected provider, model and supported settings. A UI selection that never reaches the request is not implemented configuration.
 7. **Execute admitted tools.** Route through native or codemode bindings without widening authority.
 8. **Capture the outcome.** Store producer-owned status, error provenance and observed usage before display formatting or truncation.
-9. **Deliver progress.** Text, reasoning, tools, jobs and waiting states reach the correct user and parent surface and survive reconnect.
-10. **Continue or settle.** Useful work continues until completion, definitive failure or explicit cancellation. Outstanding background work never hides behind a completed label.
-11. **Retain evidence and learning inputs.** Completion and later feedback feed adaptation. Learning never delays delivery of the original terminal outcome.
+9. **Deliver progress.** Text, reasoning, tools, jobs and waiting states reach the right user and parent surface and survive reconnect.
+10. **Continue or settle.** Work continues until completion, definitive failure or explicit cancellation. Outstanding background work is never hidden behind a completed label.
+11. **Retain evidence and learning inputs.** Completion and later feedback feed adaptation. Learning never delays delivery of the terminal outcome.
 
-Known native failures reach the next model request with their classification. Unclassified errors stay unclassified. A successful tool returning error-shaped JSON stays successful data. The source snapshot implements this projection before extensions, pruning, dynamic context, replay normalization, cache marking and final-array measurement.
+Known native failures reach the next model request with their classification; unclassified errors stay unclassified. A successful tool that returns error-shaped JSON stays successful data. The source snapshot applies this projection before extensions, pruning, dynamic context, replay normalization, cache marking and final-array measurement.
 
-The backend wrapper differs where the hosting API differs. Hosted Think, local execution and exploration adapters invent no different meanings for tool failure, cancellation, context version or completion.
+The backend wrapper differs only where the hosting API differs. Hosted actors, local execution and exploration adapters give tool failure, cancellation, context version and completion the same meaning.
 
 ## 9. Codemode, tools and database capability
 
@@ -358,9 +348,9 @@ The backend wrapper differs where the hosting API differs. Hosted Think, local e
 
 ### 9.1 Current native and code surfaces
 
-The builtin registry defines `eval`, `shell`, `file`, `agents`, `memory`, `tasks`, `web` and `report`. Availability intersects the actor role and wired dependencies. MCP and crafted tools are additional admitted tools. Eight builtin names never mean every actor holds exactly eight total tools.
+The builtin registry defines eight native tools: `eval`, `shell`, `file`, `agents`, `memory`, `tasks`, `web` and `report`. Availability depends on the actor's role and wired dependencies. MCP and crafted tools are admitted on top, so an actor's total is not fixed at eight.
 
-The current hosted code program receives capability namespaces, not the trusted Worker's raw environment:
+A hosted code program receives capability namespaces, not the trusted Worker's raw environment:
 
 | Surface | Current meaning |
 |---|---|
@@ -369,31 +359,29 @@ The current hosted code program receives capability namespaces, not the trusted 
 | `sandbox.*`, `device.*`, `parent.*` | Actor-available execution adapters. Missing environments are not simulated. |
 | `agents.*`, `memory.*`, `tasks.*`, `web.*` | Their existing dependency-gated dispatch paths. |
 | Root/assignment control namespaces | Planning/release/report operations only where the actor's composition supplies them. A namespace named in a comment is not proof of availability. |
-| `state.*` / `env.state` | Durable actor-private JSON key/value state: get, set, delete and list. These research-state operations are explicitly Plan-allowed. |
+| `state.*` / `env.state` | Durable actor-private JSON key/value state: get, set, delete and list. All four are Plan-allowed. |
+| `db` | Structured data in agent-declared tables at `actor` or `workspace` scope. The host compiles typed operations (`createTable`, `select`, `count`, `insert`, `update`, `deleteRows`, `batch`, `dropTable`) into SQL; no operation accepts SQL text. Actor-scoped writes are Plan-allowed; workspace-scoped writes and `dropTable` need Build. Codemode only. |
 | `env` | A frozen program environment containing workspace identity, state and missing builtin names. It is not the trusted Worker Env. |
 | Hosted Node-compatible shims | Supported asynchronous filesystem and process operations over workspace capabilities. Unsupported synchronous/native operations refuse. They do not grant the trusted host filesystem. |
 | Hosted global `fetch` | The selected outbound capability. Plan receives no network capability; Build uses the shared destination policy. |
-| `db` or `env.db` | **Absent in the reviewed implementation.** `state.*` is not raw SQLite under a different name. |
 
-Hosted programs run in dynamic Worker isolation. The local factory implements it differently: `createNodeCodemodeToolFactory` evaluates normalized code in process with provider bindings and the local require path. The product never describes these as identical security boundaries merely because both carry the codemode name.
+Hosted programs run in dynamic Worker isolation. Locally, `createNodeCodemodeToolFactory` runs normalized code in process with provider bindings and the machine's own `require`. These are different security boundaries even though both are called codemode.
 
 ### 9.2 Required database contract
 
-The target uses one documented code-facing name, **`db`**, rather than introducing interchangeable aliases. This is a target capability, not an existing API claim.
-
-Before that capability is exposed, its scope must be implemented and tested:
+The code-facing name is `db` (`packages/core/src/tools/db-codemode.ts`), with no aliases. Its contract:
 
 - parameterized SQLite operations over admitted agent/application data;
-- explicit atomic batch/transaction semantics the host provides;
+- atomic batches, where every operation lands or none does;
 - shared workspace data where sharing is intended, actor-scoped state where it is private;
-- no arbitrary writes to credentials, owner identity, grants, approvals, active effect claims, tombstones or measured audit records;
+- no writes to credentials, owner identity, grants, approvals, active effect claims, tombstones or measured audit records;
 - no escape through schema operations, views, triggers, attached databases or other indirect SQL paths;
 - the same role and Plan/Build rules as other mutations;
 - classified errors and retained operation evidence.
 
-A physical shared database never implies an unrestricted `ctx.storage.sql` handle. The implementation uses a real enforceable SQL and capability boundary. A keyword filter or caller-supplied actor ID never counts as sufficient authority.
+In source, agent tables carry an `app_` prefix no host table uses, so host tables are unreachable by name rather than filtered by a keyword list. The host injects `actor_id` into every actor-scoped statement from the bound actor handle; a program cannot name that column. Each mutation's `db_op` run event is written in the same transaction as the data. A shared physical database never implies an unrestricted `ctx.storage.sql` handle, and a keyword filter or caller-supplied actor ID is not sufficient authority.
 
-Versioned context and loop edits enter through their managed VFS and state operations. The agent never updates internal message tables and lifecycle pointers by hand.
+Versioned context and loop edits go through their managed VFS and state operations. The agent does not update internal message tables or lifecycle pointers by hand.
 
 ### 9.3 Tool behavior
 
@@ -413,22 +401,22 @@ Versioned context and loop edits enter through their managed VFS and state opera
 
 ### 10.1 One view, explicit machines
 
-The workspace base tree is canonical. Mounted device and container paths extend that view through the owning executor file API. They retain consent, read-only and consistency rules.
+The workspace base tree is canonical. Device and container mounts extend that view through the owning executor's file API and keep their consent, read-only and consistency rules.
 
-A command runs on a named executor. A filesystem mount never makes the workspace shell run on the mounted machine. Local native project directories, the SQLite-backed state tree, container paths and device paths never substitute silently for each other.
+A command runs on a named executor. Mounting a machine's files does not make the workspace shell run on that machine. Local project directories, the SQLite-backed state tree, container paths and device paths never silently substitute for each other.
 
-Hosted Node execution has a real workerd compilation restriction. Version and help output never prove arbitrary Node programs run. The product directs workloads to a capable environment and shows the refusal when none is available. It never advertises a runtime from its catalogue entry alone.
+Hosted Node execution has a real workerd compilation restriction: version and help output do not prove arbitrary Node programs run. The product sends such workloads to a capable environment, shows the refusal when none is available, and does not advertise a runtime from its catalogue entry alone.
 
 ### 10.2 File interactions
 
 - Reads distinguish absent paths, denied access and failed storage or network operations.
 - Text, binary, range, directory and metadata operations use the same authoritative plane.
-- Edits need the appropriate prior read and version. Missing or repeated anchors fail instead of selecting an arbitrary match.
-- A stale edit never overwrites newer data from another agent or client.
-- Writes, rename, deletion, permissions and links have declared semantics and preserve the host real boundaries.
-- Memory and search indexes update from canonical content without creating a second writable copy.
+- Edits need the right prior read and version. Missing or repeated anchors fail instead of picking an arbitrary match.
+- A stale edit does not overwrite newer data from another agent or client.
+- Writes, renames, deletions, permissions and links have declared semantics and respect the host's real boundaries.
+- Memory and search indexes update from canonical content without a second writable copy.
 - File previews, downloads and editors agree on path identity and current revision.
-- An unreadable file or failed listing stays an error. It never reads as an empty successful result.
+- An unreadable file or failed listing is an error, never an empty successful result.
 
 ### 10.3 Device journeys
 
@@ -445,70 +433,70 @@ Hosted Node execution has a real workerd compilation restriction. Version and he
 | Revoke | New operations fail after revocation. Pending and running work follows the declared cancellation policy and the UI reflects it. |
 | Disable isolation explicitly | Full host access is an owner choice and reads as such. It never serves as a hidden fallback when restricted execution fails. |
 
-Native Windows support is a separate future scope. WSL2 support never silently counts as implementing it.
+Native Windows is separate future scope; WSL2 support does not count as implementing it.
 
 ## 11. Exploration, memory and evolution
 
 ### 11.1 Exploration behavior
 
-A search has a configured strategy, context policy, objective, scoring method and settlement contract. Every tool-using node has an identity, assignment and actual tool loop.
+A search has a configured strategy, context policy, objective, scoring method and settlement contract. Every tool-using node has an identity, an assignment and a real tool loop.
 
-The product must distinguish:
+The product keeps these apart:
 
-- measured verifier scores from model judgments;
-- ranked optimization from unranked ideation;
-- a reported candidate from completed/accepted work;
-- context inheritance from workspace copying;
-- branch creation limits from whether an existing leaf may finish its own work;
-- local mechanism tests from a measured improvement on a controlled benchmark.
+- measured verifier scores and model judgments;
+- ranked optimization and unranked ideation;
+- a reported candidate and completed/accepted work;
+- context inheritance and workspace copying;
+- limits on creating branches and whether an existing leaf may finish its own work;
+- local mechanism tests and a measured improvement on a controlled benchmark.
 
-Per-node tasks and optional models reach actual calls. Re-entry preserves their original assignment and provenance. Uneven-depth trees still settle and aggregate results correctly. A node final report and its parent delivery survive even when the execution host is reclaimed.
+Per-node tasks and optional models reach the actual calls. Re-entry keeps the original assignment and provenance. Trees of uneven depth still settle and aggregate correctly. A node's final report and its delivery to the parent survive the execution host being reclaimed.
 
-The exploration UI shows current and retained runs, relationships, text and reasoning and tools, scores and meaningful failure and waiting states. A static tree snapshot never proves live streaming or reconnect behavior.
+The exploration UI shows current and retained runs, their relationships, text, reasoning, tools, scores, and meaningful failure and waiting states. A static tree snapshot does not prove live streaming or reconnect.
 
 ### 11.2 Memory and instructions
 
-Notes, facts, skills, conversation retrieval and compaction recall are distinct capabilities:
+Notes, facts, skills, conversation retrieval and compaction recall are separate capabilities:
 
 - notes and skills have canonical content and meaningful edit/version behavior;
 - facts have keyed storage and explicit scope;
 - conversation search reads retained history without replacing it;
-- compaction preserves recall locations and the relationship to the compacted range;
-- changing approved instruction content never inherits an old digest trust automatically;
+- compaction keeps recall locations and the link to the compacted range;
+- changed instruction content does not inherit an old digest's trust;
 - shared learning follows the owner's policy and does not leak private contexts across workspaces.
 
 ### 11.3 Evolution
 
 ![Evidence, candidate changes, activation and rollback](diagrams/product-evolution.svg)
 
-Kinu improves tools, instructions, working context and loop versions through observable changes. The supporting mechanism states:
+Kinu improves tools, instructions, working context and loop versions through observable changes. For each change the mechanism records:
 
-1. What observation triggered a proposal.
-2. Which source/version the proposal changes.
-3. What verifier, replay or evaluation was used.
-4. Whether the change is provisional, under trial, promoted, rejected or rolled back.
+1. What observation triggered the proposal.
+2. Which source/version it changes.
+3. Which verifier, replay or evaluation was used.
+4. Whether it is provisional, under trial, promoted, rejected or rolled back.
 5. Which actor/owner authority permitted activation.
-6. Which later outcome supports or contradicts the proposed benefit.
+6. Which later outcome supports or contradicts the claimed benefit.
 
-Tool fitness updates, turn lessons, session reflection and lifetime search are different operations. Their presence never proves they improve task success.
+Tool fitness updates, turn lessons, session reflection and lifetime search are different operations. Having them does not prove they improve task success.
 
-Calibration never labels model agreement as human ground truth. The recovered approval for the ensemble calibration path was: a human reference pass, blind model second opinions, measured agreement and confusion, then recurring automation with a human audit. A transcript corpus alone never replaces that reference.
+Model agreement is never labelled human ground truth. The recovered approval for ensemble calibration was: a human reference pass, blind model second opinions, measured agreement and confusion, then recurring automation with a human audit. A transcript corpus alone does not replace the human reference.
 
 ## 12. Slates and authored applications
 
 ![Authored slate source, server, browser and capability bindings](diagrams/product-slate.svg)
 
-A slate is a real authored project under the workspace file plane. Its configuration belongs in `package.json`. Its UI is JS/JSX/TS/TSX that renders HTML/CSS/JavaScript in the browser. Server code serves routes and uses declared admitted bindings.
+A slate is an authored project in the workspace file plane. Its configuration lives in `package.json`. Its UI is JS/JSX/TS/TSX that renders HTML, CSS and JavaScript in the browser. Server code serves routes and uses declared admitted bindings.
 
-A custom JSON component vocabulary is not the required rendering model. A JSON response holds application data or an observation. It never defines the UI by itself.
+The UI is not defined by a custom JSON component vocabulary. A JSON response carries application data or an observation.
 
 ### 12.1 Implemented hosting boundary
 
-The reviewed hosted path compiles a Worker-style server and optional browser entry through the real bundler, boots a resident process, and exposes a separate preview origin. Source and versions persist. Compilation, processes, ports and URLs derive from them.
+The hosted path compiles a Worker-style server and optional browser entry with the real bundler, boots a resident process, and serves a separate preview origin. Source and versions persist; compilation, processes, ports and URLs are derived from them.
 
-This never proves arbitrary Node/Vite programs run inside hosted Nimbus. The original Node/Vite wording was an architecture question. The current answer is: hosted slate previews use Worker modules. Node workloads need a capable environment such as the sandbox. Neither local CLI slate hosting nor a Node slate host is claimed as implemented.
+Hosted slate previews use Worker modules, so this does not prove arbitrary Node/Vite programs run inside hosted Nimbus (the original Node/Vite wording was an architecture question). Node workloads need a capable environment such as the sandbox. Neither local CLI slate hosting nor a Node slate host is claimed.
 
-Likewise, agent-core Slate record and version reuse never proves universal adoption of agent-core Facet, Grant, Binding, RunCommit or deployment protocols. [AGENT-CORE-ALIGNMENT.md](AGENT-CORE-ALIGNMENT.md) records that boundary.
+Reusing agent-core Slate records and versions does not mean Kinu adopted agent-core's Facet, Grant, Binding, RunCommit or deployment protocols. [SLATE-SHARING.md](SLATE-SHARING.md) records that boundary.
 
 ### 12.2 Slate operations
 
@@ -524,24 +512,24 @@ Likewise, agent-core Slate record and version reuse never proves universal adopt
 
 ### 12.3 Binding and preview authority
 
-Namespace, read-model, MCP and app bindings reuse the existing operation policy. They invent no second consent ladder and recover no capability the caller lacks.
+Namespace, read-model, MCP and app bindings reuse the existing operation policy. They add no second consent ladder and cannot recover a capability the caller lacks.
 
-MCP `isError` is a protocol outcome. A successful MCP/read-model value that contains `reason` or `error` remains application data.
+MCP `isError` is a protocol outcome. A successful MCP or read-model value that contains `reason` or `error` is application data.
 
-Server outbound access uses the existing destination policy for its captured mode. A restrictive caller never reuses a permissive resident. Worker loader identity distinguishes the mediated runtime from a cached image built under an earlier configuration. A changed configuration never applies when a loader callback is skipped on a cache hit.
+Server outbound access uses the existing destination policy for its captured mode, and a restrictive caller never reuses a permissive resident. Worker loader identity distinguishes the mediated runtime from a cached image built under an earlier configuration, so a changed configuration cannot be skipped on a cache hit.
 
-Preview isolation stops the authored application gaining the parent UI origin or credentials. Literal-destination and redirect checks never prove every DNS resolution or networking API safe. Those residuals stay named.
+Preview isolation keeps the authored application away from the parent UI's origin and credentials. Literal-destination and redirect checks do not prove every DNS resolution or networking API safe; those gaps stay named.
 
-The current app-hop policy is an implementation policy, not a documented platform limit and not a proof of cycle detection. Its justification or replacement stays part of the bound audit. Neither an arbitrary value nor removal of the only protection passes without analysis.
+The app-hop limit is an implementation policy, not a documented platform limit or proof of cycle detection. Justifying or replacing it is part of the bound audit; neither an arbitrary value nor removing the only protection passes without analysis.
 
 
 ## 13. Web, terminal and everyday interactions
 
-The web app, CLI, TUI and programmatic client are views over the same product contracts. They share no required widget set, but they invent no different ownership, completion or failure semantics.
+The web app, CLI, TUI and programmatic client are views over the same contracts. They need not share widgets, but they share ownership, completion and failure semantics.
 
 ### 13.1 Conversation interaction
 
-The user-bubble alignment requirement differs by surface: right-aligned in web chat, left-aligned in the TUI (message 7). A shared renderer preserves that explicit distinction.
+User bubbles are right-aligned in web chat and left-aligned in the TUI (message 7). A shared renderer keeps that difference.
 
 | Action | Required result |
 |---|---|
@@ -555,24 +543,24 @@ The user-bubble alignment requirement differs by surface: right-aligned in web c
 | Edit/fork/undo | Conversation and context branching and file restoration state exactly what changed and retain their source revision. |
 | Reconnect | The client resumes the correct stream and history and refreshes failed reads without duplicate turns or stale selection. |
 
-Code blocks use the shared renderer with syntax colors, correct escaping, complete copying and horizontal scrolling. Unsupported grammars render as plain code and never corrupt the text. Light and dark appearance, long lines and streaming updates need verification on the actual surface.
+Code blocks use the shared renderer: syntax colors, correct escaping, complete copying and horizontal scrolling. Unsupported grammars render as plain code without corrupting the text. Light and dark themes, long lines and streaming updates need checking on the real surface.
 
 ### 13.2 Workspace navigation and work surfaces
 
-- The title reads human and stays consistent after a cold open.
-- Relative timestamps align at the row edge and never collide with hover or keyboard actions.
+- The title reads as a human title and stays the same after a cold open.
+- Relative timestamps align at the row edge and do not collide with hover or keyboard actions.
 - Workspace selection, agent selection and the current conversation stay distinguishable.
-- Files and Environment reflect the same real execution and file plane tools use.
-- Work exposes plans, jobs, waiting decisions and terminal results with usable actions.
-- Exploration displays actual search history and live node behavior.
-- Agent exposes identity, memory, tools, learning and loop changes without presenting every stored path as active execution.
-- Empty Releases and Exploration surfaces stay hidden when they hold no relevant content.
-- A slate preview is not automatically a release. The existing release workflow holds its own deliverable, approval and publication state. No agent-core deployment record silently replaces it.
-- An error state stays visible and recoverable. A success-looking placeholder never hides a failed loader, missing file or disconnected executor.
+- Files and Environment show the same execution and file plane the tools use.
+- Work shows plans, jobs, waiting decisions and terminal results with usable actions.
+- Exploration shows actual search history and live node behavior.
+- Agent shows identity, memory, tools, learning and loop changes without presenting every stored path as active execution.
+- Releases and Exploration stay hidden when empty.
+- A slate preview is not a release. The release workflow keeps its own deliverable, approval and publication state, and no agent-core deployment record replaces it.
+- Errors stay visible and recoverable. A success-looking placeholder never hides a failed loader, missing file or disconnected executor.
 
 ### 13.2.1 Workspace presentation requirements (2026-09-12)
 
-These requested targets supersede conflicting presentation proposals from the design report. They are acceptance requirements, not a claim of deployed completion.
+These targets supersede conflicting presentation proposals from the design report. They are acceptance requirements, not a claim that they are deployed.
 
 |ID|Required behavior|
 |---|---|
@@ -591,27 +579,27 @@ These requested targets supersede conflicting presentation proposals from the de
 |UX-13|Preserve explicit inspector choices without letting another workspace's open state override the new-workspace default. Passive updates must not steal focus.|
 |UX-14|Landing mocks use the same product components and interaction rules. Only disclosed sample data and demonstration controls differ.|
 
-Verify chronological and streaming transitions, failure presentation, empty and populated Supervise states, and inspector behavior across new and returning workspaces. Check both themes and desktop and mobile layouts. Readable screenshots alone never prove effect classification or persistence.
+Verify chronological and streaming transitions, failure presentation, empty and populated Supervise states, and inspector behavior in new and returning workspaces, in both themes at desktop and mobile widths. Screenshots alone do not prove effect classification or persistence.
 
 ### 13.3 Terminal-specific acceptance
 
-The TUI needs testing through a real PTY. Required cases include multiline input, cursor and selection editing, paste, Enter and Shift+Enter, command palette, external editor, stop and escape, workspace navigation, model and role changes, tool details, long lines and narrow terminal widths.
+Test the TUI through a real PTY. Cases include multiline input, cursor and selection editing, paste, Enter and Shift+Enter, the command palette, the external editor, stop and escape, workspace navigation, model and role changes, tool details, long lines and narrow terminals.
 
-Cell widths, non-ASCII device names and escape sequences never break layout and never display a false connected state. Tool and code wells, syntax colors and contrast follow the selected theme. A theme name or golden string never proves a usable terminal rendering.
+Cell widths, non-ASCII device names and escape sequences must not break layout or show a false connected state. Tool and code wells, syntax colors and contrast follow the selected theme. A theme name or golden string does not prove the terminal renders usably.
 
 ### 13.4 Landing and product explanation
 
-The public page preserves the owner authored message and design direction. It adds no unsupported claims, decorative labels or misleading mocked behavior.
+The public page keeps the owner's authored message and design direction, with no unsupported claims, decorative labels or misleading mocks.
 
-The rejected landing polish stays reverted for now. That pause never cancels the earlier request to explore a suitable vGPU-based effect or richer interactive mocks. It never authorizes repeating the rejected execution.
+The rejected landing polish stays reverted for now. The earlier request to explore a vGPU-based effect or richer interactive mocks still stands, but the rejected execution is not to be repeated.
 
-Mocks model the real protocol. For example, a failed SDK tool part is marked as failed. Successful data containing an error field never serves as an implicit failure flag.
+Mocks follow the real protocol: a failed SDK tool part is marked failed, and successful data with an error field is not treated as a failure.
 
 ### 13.5 Feedback and operator control
 
-Feedback submission retains the note and any approved screenshot as durable records. Known secret-bearing fields are obscured before screenshot bytes exist, not merely hidden in a later viewer.
+Feedback keeps the note and any approved screenshot as durable records. Known secret-bearing fields are obscured before the screenshot is captured, not hidden later in a viewer.
 
-The operator control plane holds separate authorization. It exposes users, workspaces, incidents, fleet metrics and audit records. It never turns the public product into an Access-gated admin site and never grants normal actors administrative authority.
+The operator control plane has its own authorization and shows users, workspaces, incidents, fleet metrics and audit records. It does not turn the public product into an Access-gated admin site or give ordinary actors administrative authority.
 
 ## 14. Identity, authority and trust
 
@@ -619,11 +607,11 @@ The operator control plane holds separate authorization. It exposes users, works
 
 ### 14.1 Authentication is not capability
 
-A valid identity, a workspace grant, an actor role and a tool availability answer different questions. Every operation passes the relevant checks.
+A valid identity, a workspace grant, an actor role and tool availability answer different questions, and every operation passes the relevant checks.
 
-For Cloudflare sign-in, the original granted login establishes Kinu identity and Workers AI authorization together. Stored credential refresh is the normal continuation. Interactive reauthentication is a fallback for genuine expiry, revocation or unavailable refresh, not a daily second-login ritual. Other sign-in providers grant no Cloudflare permissions by themselves. Message 7 states this requirement. It never claims all deployed credential lifetimes passed verification.
+For Cloudflare sign-in, the original login establishes both Kinu identity and Workers AI authorization. Refreshing the stored credential is the normal path; interactive reauthentication is for real expiry, revocation or unavailable refresh, not a daily second login. Other sign-in providers grant no Cloudflare permissions. This comes from message 7 and does not claim every deployed credential lifetime has been verified.
 
-The main agent never becomes the human owner. A subordinate widens no authority by changing a role string, editing a context file or constructing a different actor path.
+The main agent is never the human owner. A subordinate cannot widen its authority by changing a role string, editing a context file or constructing a different actor path.
 
 | Resource | Actor-facing access rule |
 |---|---|
@@ -636,31 +624,31 @@ The main agent never becomes the human owner. A subordinate widens no authority 
 | Run/effect/spend evidence | Host-written observations. Editable working history cannot alter them retroactively. |
 | Administrative resources | Explicit operator authority and required freshness/confirmation. |
 
-Homes are agent-scoped. Their actual read and write modes are stated. A directory described as an agent home is not automatically confidential when its mode permits sibling reads. Private temporary paths and protected context and control projections need their actual access rules.
+Homes are agent-scoped, and their read and write modes are stated. A directory called an agent home is not confidential if its mode lets siblings read it. Private temporary paths and protected context and control projections need their own access rules.
 
 ### 14.2 Plan and Build
 
-Plan inspects, reasons, creates admitted research state and delegates read-only work. Recording observations, progress and required lifecycle state never permits the model to modify a project.
+Plan inspects, reasons, creates admitted research state and delegates read-only work. Recording observations, progress and lifecycle state does not let the model modify a project.
 
-Plan gains no Build effects through native tools, codemode, filesystem shims, raw database operations, MCP, app bindings, queued jobs or child agents. A caller-supplied label never counts as trusted mode authority.
+Plan gets no Build effects through native tools, codemode, filesystem shims, `db`, MCP, app bindings, queued jobs or child agents. A caller-supplied label is not trusted mode authority.
 
-A later authorized Build turn regains its own permissions. It never inherits stale Plan restrictions from another queued or completed operation.
+A later authorized Build turn has its own permissions and does not inherit stale Plan restrictions from another queued or completed operation.
 
-Loop and context activation and release and publication need the authority of their actual operation. Automatic evolution stays subject to the declared policy. It never serves as a hidden Plan-write bypass.
+Loop and context activation, release and publication need the authority of the actual operation. Automatic evolution follows the declared policy and is not a Plan-write bypass.
 
 ### 14.3 Approval and consent
 
-A request for approval is a durable state transition, not successful execution. Repeated delivery duplicates no request and spends no authorization twice.
+A request for approval is a durable state transition, not successful execution. Repeated delivery does not duplicate the request or spend the authorization twice.
 
-When an operation is denied before dispatch, no external effect occurs. When it ran and failed, its actual effect and exit provenance stay recorded. A failed process never refunds or reuses a grant merely because its diagnostic text resembles a pre-dispatch refusal.
+If an operation is denied before dispatch, no external effect occurs. If it ran and failed, its actual effect and exit provenance are recorded. A failed process does not get its grant refunded or reused because its diagnostic text looks like a pre-dispatch refusal.
 
-Revocation affects subsequent calls and the UI. Uncertain external completion stays uncertain. Retrying an irreversible effect without idempotency or reconciliation is never a safe default.
+Revocation affects later calls and the UI. Uncertain external completion stays uncertain. Retrying an irreversible effect without idempotency or reconciliation is not a safe default.
 
 ### 14.4 Isolation limits must be honest
 
-Hosted Worker isolation, local in-process code, a Linux container and an explicitly granted host machine have different boundaries. Full native host access never equals a restricted workspace file adapter.
+Hosted Worker isolation, local in-process code, a Linux container and an explicitly granted host machine have different boundaries. Full native host access is not a restricted workspace file adapter.
 
-The acceptance contract requires hostile boundary tests where a guarantee is claimed. Source declarations, role labels and isolated unit tests never prove perfect security. DNS resolution, raw networking and platform-specific behavior stay unmeasured until their relevant checks run.
+Where a guarantee is claimed, acceptance requires hostile boundary tests. Source declarations, role labels and isolated unit tests do not prove perfect security. DNS resolution, raw networking and platform-specific behavior stay unmeasured until their checks run.
 
 ## 15. Durability, interruption and recovery
 
@@ -679,33 +667,33 @@ The acceptance contract requires hostile boundary tests where a guarantee is cla
 | Storage or transport fails | Report failure or indeterminate state. Never convert an I/O error into empty content, absent history or a successful no-op. |
 | Export/fork/restore | State the snapshot boundary, copied data, omitted secrets and retained lineage. Partial data never presents as a complete workspace. |
 
-An external service completes an effect before its response is lost in some cases. Kinu preserves that uncertainty and uses the service idempotency and reconciliation mechanism where available. It never promises universal exactly-once behavior over an arbitrary external API.
+An external service can complete an effect and then lose its response. Kinu keeps that uncertainty and uses the service's idempotency and reconciliation where available. It does not promise exactly-once behavior over an arbitrary external API.
 
 ### 15.2 Shared-store acceptance
 
-The shared SQLite design makes actor ownership explicit in both writes and reads. Pagination, counts, search, compaction, context selection and export never accidentally read every actor merely because they share a table.
+Actor ownership is explicit in both writes and reads. Pagination, counts, search, compaction, context selection and export must not read every actor just because they share a table.
 
-State retained in pre-cutover facet-local stores is preserved or explicitly excluded with its coverage stated. A root-only export is insufficient evidence when omitted actor state still lives elsewhere.
+State left in pre-cutover facet-local stores is either preserved or explicitly excluded, with coverage stated. A root-only export is not enough evidence while omitted actor state lives elsewhere.
 
-Export and restore cover every retained actor: how current and staged context and loop versions are reconstructed, how actor queues resume, how cancelled and terminal work stays terminal, and how a missing imported actor is reported. No RPC emulates synchronous SQLite, and no untracked copies stand in as a compatibility mechanism.
+Export and restore cover every retained actor: how current and staged context and loop versions are rebuilt, how actor queues resume, how cancelled and terminal work stays terminal, and how a missing imported actor is reported. No RPC emulates synchronous SQLite, and no untracked copies serve as a compatibility layer.
 
 ### 15.3 Devbox ships one storage strategy
 
-The workspace canonical Nimbus storage and the container snapshot-chain storage are not the same acceptance claim. On 2026-09-09 the container programme deleted every candidate but snapshot-chain (one immutable base plus one cumulative delta, both squashfs archives in R2), so no comparison is left to run. Only the shipped chain is left to prove.
+The workspace's canonical Nimbus storage and the container snapshot-chain storage are separate acceptance claims. On 2026-09-09 the container programme deleted every candidate except snapshot-chain (one immutable base plus one cumulative delta, both squashfs archives in R2), so there is nothing left to compare. Only the shipped chain remains to prove.
 
-The shipped chain preserves namespace and metadata and data semantics across restore, mutation, publication, interruption, restart and GC. A namespace index that pages lazily never proves the mounted filesystem reads file data lazily.
+The chain must preserve namespace, metadata and data semantics across restore, mutation, publication, interruption, restart and GC. A namespace index that pages lazily does not prove the mounted filesystem reads file data lazily.
 
-The real native path distinguishes absent bytes from sparse holes, cache fills from user writes, written bytes from resize coverage, observed completion from an unjudged cut, and an immutable origin from a mutable pathname.
+The native path distinguishes absent bytes from sparse holes, cache fills from user writes, written bytes from resize coverage, observed completion from an unjudged cut, and an immutable origin from a mutable pathname.
 
-Performance measurements cover metadata decoding, requests and bytes, staging and hashing, touched data and startup and restore work. Uploading a small delta never proves the entire operation is proportional to the change.
+Performance measurements cover metadata decoding, requests and bytes, staging and hashing, touched data, and startup and restore work. Uploading a small delta does not prove the whole operation scales with the change.
 
-Failed, missing, duplicate or malformed required cells prevent admission. Existing refused reports stay unchanged. A corrected interpretation is a separate record.
+Failed, missing, duplicate or malformed required cells block admission. Refused reports stay as they are; a corrected interpretation is a separate record.
 
 ## 16. Evals, service identities and acceptance evidence
 
 ### 16.1 Which identity runs the work
 
-An isolated **eval-service** account exists. Its supported resolver reads the eval environment or isolated service-session configuration, not the person normal Kinu configuration.
+An isolated **eval-service** account exists. Its resolver reads the eval environment or an isolated service-session configuration, not the person's normal Kinu configuration.
 
 The latest bounded check established:
 
@@ -716,11 +704,11 @@ The latest bounded check established:
 - one short GLM 5.3 inference request succeeded;
 - production build `71479ace9` rejects that staging bearer.
 
-The receipt is `service-auth-20260908/proof.json`, SHA-256 `c07f6309f602f75db0d3a9aae40ef060c0978be2152cacf48f45e4b591654295`, retained privately with the eval evidence. Secret values never belong in product-document content.
+The receipt is `service-auth-20260908/proof.json`, SHA-256 `c07f6309f602f75db0d3a9aae40ef060c0978be2152cacf48f45e4b591654295`, kept privately with the eval evidence. Secret values do not belong in this document.
 
-Personal sign-in is therefore **not** a general prerequisite for service-account evals or that inference-only comparison path. A staging service token never validates current production behavior by itself. Production acceptance needs legitimately issued authority for that deployment.
+Personal sign-in is therefore not a prerequisite for service-account evals or that inference-only comparison path. A staging service token does not validate production behavior; production acceptance needs authority legitimately issued for that deployment.
 
-Containerized comparison subjects receive only the required scoped credential. Host account and session and dev credentials stay on the trusted host. Service-account separation never justifies giving a container every service-account permission.
+Containerized comparison subjects get only the scoped credential they need. Host account, session and dev credentials stay on the trusted host. A separate service account does not justify giving a container all of its permissions.
 
 ### 16.2 Four different claims
 
@@ -731,108 +719,109 @@ Containerized comparison subjects receive only the required scoped credential. H
 | Product acceptance | A stated user interaction succeeds through the relevant client/backend, retains state correctly and rejects its negative cases. |
 | Performance improvement | Matched controlled trials on a sealed workload, retained settings/source/outcomes, sufficient repetitions and justified statistics. |
 
-An oracle pass is not an agent pass. A pilot score is not a broad benchmark result. A successful schema test is not a live operator journey.
+An oracle pass is not an agent pass. A pilot score is not a broad benchmark result. A passing schema test is not a live operator journey.
 
 ### 16.3 Evidence requirements
 
-Every measured attempt retains its source revision, target, actor and model settings, inputs or input identity, outcomes, relevant artifacts, usage and cleanup disposition.
+Every measured attempt keeps its source revision, target, actor and model settings, inputs or input identity, outcomes, relevant artifacts, usage and cleanup disposition.
 
-Opening and setup failure is still an attempted run. Its unavailable channels and unmeasured spend are recorded without fabricated zeroes. A failed assertion never erases the attempt and never counts its spend twice.
+A failure during opening or setup is still an attempted run. Its unavailable channels and unmeasured spend are recorded without invented zeroes. A failed assertion does not erase the attempt or count its spend twice.
 
-Tool success rates and failure classes come from recorded invocation outcomes. A diagnostic recorded without provenance fields stays a diagnostic. It never parses into provenance it never carried. Missing historical outcomes stay unmeasured.
+Tool success rates and failure classes come from recorded invocation outcomes. A diagnostic recorded without provenance fields stays a diagnostic and is not parsed into provenance. Missing historical outcomes stay unmeasured.
 
-Recovery checks verify the requested recovery behavior. Unrelated `false` and `true` commands never prove an authored test failed and ran again successfully.
+Recovery checks test the requested recovery behavior. Unrelated `false` and `true` commands do not prove an authored test failed and then passed.
 
-Data and source prerequisites stay explicit. A deterministic selection-only fixture tests the real sampler without an optional external corpus. Its expected sample still comes from the preserved preregistration. It invents no population and rewrites no historical seals.
+Data and source prerequisites stay explicit. A deterministic selection-only fixture tests the real sampler without an optional external corpus; its expected sample comes from the preserved preregistration, with no invented population and no rewritten historical seals.
 
 ### 16.4 Current benchmark boundary
 
-The retained official Kinu Terminal-Bench pilot is **0/1**. Positive and negative controls established the selected protocol path. They established no Kinu optimization win. The local DeepSWE controls are also compatibility evidence, not a general performance result.
+The retained official Kinu Terminal-Bench pilot is **0/1**. Positive and negative controls established the selected protocol path, not a Kinu optimization win. The local DeepSWE controls are also compatibility evidence, not a performance result.
 
-The merkle-pack/v3 cloud pilot was refused. Its journal-publication and measurement-completeness defects produced further local fixes, and the actual native demand path stays under development. No replacement storage default and no across-the-board winner is admitted.
+The merkle-pack/v3 cloud pilot was refused, and that candidate was deleted on 2026-09-09 (§15.3). No across-the-board storage winner was established.
 
-The service token availability removes one prerequisite. It completes no controlled comparison by itself.
+Service-token access removes one prerequisite. It does not complete a controlled comparison.
 
 
 
 ## 17. Cross-surface acceptance journeys
 
-These scenarios join features that read as correct in isolation. They are product acceptance, not a benchmark leaderboard.
+These scenarios join features that each look correct alone. They are product acceptance, not a benchmark leaderboard.
 
 ### A. Create, work, disconnect and reopen
 
-**Given** a legitimately authenticated owner and an initial mission/prompt, **when** the owner creates a workspace, **then** the agent takes the first turn without a reprompt. After a client disconnect and reopen, the same workspace identity, title, conversation and admitted work stay visible. Reconnection never duplicates the initial turn. Storage and connection failure stays distinct from an empty workspace.
+**Given** a legitimately authenticated owner and an initial mission/prompt, **when** the owner creates a workspace, **then** the agent takes the first turn without a reprompt. After a disconnect and reopen, the same workspace identity, title, conversation and admitted work are visible. Reconnecting does not duplicate the initial turn. Storage and connection failures stay distinct from an empty workspace.
 
-The shared-SQLite target adds a stronger check. Create multiple actors, write colliding logical state keys in their separate scopes, then snapshot and reopen the workspace. Every actor retains its own values inside the one authoritative store.
+For the shared store: create several actors, write colliding logical state keys in their separate scopes, then snapshot and reopen the workspace. Every actor keeps its own values inside the one store.
 
 ### B. Delegate a real recursive question
 
-**Given** a seeded workspace file whose nonce is absent from the task text, **when** one agent asks a temporary helper that asks one nested helper, **then** public retained evidence shows the actual calls and lineage. The leaf reads the declared context reference and returns the real value.
+**Given** a seeded workspace file whose nonce is absent from the task text, **when** one agent asks a temporary helper that asks one nested helper, **then** retained evidence shows the actual calls and lineage, and the leaf reads the declared context reference and returns the real value.
 
-A nonce in a model answer never suffices by itself. The owner inspects the retained children after settlement. The model never regains messaging authority over dismissed actors.
+A nonce in a model answer is not enough by itself. The owner inspects the retained children after settlement, and the model gets no messaging authority over dismissed actors.
 
 ### C. Edit the actual loop or context
 
 **Given** an active loop/context revision, **when** an authorized agent edits its managed VFS view, **then** a validated new revision takes effect at the declared boundary and the next relevant execution consumes it.
 
-An invalid edit, a stale parent edit, a sibling edit without authority and an attempted audit/policy rewrite each fail without changing the active version. Reverting restores a known usable version without erasing the failed attempt evidence.
+An invalid edit, a stale parent edit, a sibling edit without authority and an attempted audit/policy rewrite each fail without changing the active version. Reverting restores a known usable version and keeps the evidence of the failed attempt.
 
 ### D. Preserve truthful tool outcomes
 
 **Given** a command blocked before dispatch, an executed command that exits nonzero, and a successful command returning error-shaped data, **when** each crosses native, codemode, UI and retained-report boundaries, **then** their distinct outcomes stay intact.
 
-The blocked command writes no marker. The executed failure preserves observed execution facts. The successful data never turns into a denial, a refund or recovery steering.
+The blocked command writes no marker. The executed failure keeps its observed execution facts. The successful data does not turn into a denial, a refund or recovery steering.
 
 ### E. Author and use an interactive slate
 
 **Given** a fresh workspace and an admitted Build task, **when** the agent authors a JS-family client/server slate, **then** the browser renders the actual client and a real interaction reaches the authored server or admitted binding.
 
-Verify a source change, a version/fork/restore, an actual file or state effect, a denied capability and preview-origin isolation. A hand-authored example and a model-authored journey are recorded separately. A page that loads without its interaction working is not complete.
+Verify a source change, a version/fork/restore, a real file or state effect, a denied capability and preview-origin isolation. Record hand-authored examples and model-authored journeys separately. A page that loads while its interaction fails is not complete.
 
 ### F. Device work and revocation
 
 **Given** two named devices with different grants, **when** a workspace executes a real file/PTY operation on one and the owner revokes that grant, **then** the correct device handled the original request, the other stayed untouched, and a subsequent operation is denied.
 
-Reconnect, cancellation and a second workspace never cause slot flapping, duplicate commands or widened file scope.
+Reconnect, cancellation and a second workspace cause no slot flapping, duplicate commands or widened file scope.
 
 ### G. Timers, webhooks, email and background signals
 
-The product supports work arriving without an open interactive client. Each ingress needs a durable event identity, authenticated origin where required, target actor, trusted mode and explicit replay policy.
+Work can arrive with no interactive client open. Each ingress needs a durable event identity, an authenticated origin where required, a target actor, a trusted mode and an explicit replay policy.
 
-A timer or retried webhook never creates duplicate admitted work. A signal arriving during a turn reaches the appropriate next step or queued turn. Cancelling a trigger revokes its future use. A forged URL, sender or callback never gains owner authority.
+A timer or retried webhook does not create duplicate work. A signal arriving mid-turn reaches the next relevant step or queued turn. Cancelling a trigger revokes its future use. A forged URL, sender or callback gains no owner authority.
 
-Email functionality is live only when its routing and domain prerequisites are configured and the sender-authentication path is proven. Code and a documented address never establish live delivery. External ingress never reads as implemented across both backends when the local daemon or a platform setup is still required.
+Email is live only when its routing and domain prerequisites are configured and sender authentication is proven; code and a documented address do not establish live delivery. External ingress is not claimed on both backends while the local daemon or platform setup is still required.
 
 ### H. Change profiles without losing provenance
 
-Model, reasoning effort, role and inference tier are separate controls. Their activation boundary stays visible. Already-issued requests retain their recorded settings. Later requests use the newly effective settings.
+Model, reasoning effort, role and inference tier are separate controls with a visible activation boundary. Requests already issued keep their recorded settings; later requests use the new ones.
 
-A reduction in capability applies before a newly admitted effect. Cached tool declarations, queued turns or child work never invent broader authority. Per-node overrides hold explicit precedence and stay visible in actual request records.
+A reduction in capability applies before any newly admitted effect. Cached tool declarations, queued turns and child work cannot invent broader authority. Per-node overrides have explicit precedence and show up in the actual request records.
 
 ### I. Export and restore the whole declared scope
 
-An exporter omitting actor-scoped state, credentials or concurrent mutations states the omission. An export includes all actor-scoped state it claims to govern while re-establishing protected authority safely.
+An exporter that omits actor-scoped state, credentials or concurrent mutations says so. An export includes all actor-scoped state it claims to cover and re-establishes protected authority safely.
 
 
-### J. Recover and compare durable storage
+### J. Recover durable storage
 
-Run the real mounted filesystem with a published head, empty backing state where required, partial reads and writes, rename and hardlink and sparse cases, interruption and replacement. Verify exact data independently of cost.
+Run the real mounted filesystem with a published head, empty backing state where required, partial reads and writes, rename, hardlink and sparse cases, interruption and replacement. Verify exact data independently of cost.
 
-Every required cost cell retains its success or failure. Missing metadata channels, failed seeds, unjudged cuts and one-repetition results block the corresponding claim rather than disappearing from the comparison.
+Every required cost cell keeps its success or failure. Missing metadata channels, failed seeds, unjudged cuts and single-repetition results block the corresponding claim instead of disappearing.
 
 ## 18. Acceptance catalogue and current implementation comparison
 
-The 39 groups below organize the recorded product criteria. They never replace the exact asks. The private audit retains all 2,740 ask IDs, their source message and digest, later supersessions, reaffirmations and topic references.
+The 36 groups below organize the recorded criteria; they do not replace the exact asks. The private audit keeps all 2,740 ask IDs with their source message and digest, later supersessions, reaffirmations and topic references.
 
-**A group status never closes every historical bug mapped to it.** An individual fix still needs its own acceptance evidence. "Partial" and "source-defined" deliberately distinguish visible mechanisms from complete deployed journeys.
+A group status does not close every historical bug mapped to it; each fix still needs its own acceptance evidence. "Partial" and "source-defined" separate visible mechanisms from complete deployed journeys.
 
 | Criterion group | Required acceptance behavior | Current comparison | Source/evidence entry point |
-| <a id="accept-workspace-authority"></a>**workspace-authority** | Create main and multiple actors in one physical workspace SQLite; use colliding logical keys and verify isolation; snapshot and restore all actors together. | **Cut over in source.** Logical actors share the workspace's one SQLite under actor-led keys, with unit proof for colliding-key isolation. Snapshot/restore across all actors still owes its stated end-to-end proof, as does the disposition of pre-cutover facet-local state. | §4, §7; actor-host.ts; subordinate/exploration-hosting; messages 975, 818, 842 |
+|---|---|---|---|
+| <a id="accept-workspace-authority"></a>**workspace-authority** | Create main and multiple actors in one physical workspace SQLite; use colliding logical keys and verify isolation; snapshot and restore all actors together. | **Cut over in source.** Logical actors share the workspace's one SQLite under actor-led keys, with unit proof for colliding-key isolation. Snapshot/restore across all actors still owes its end-to-end proof, as does the disposition of pre-cutover facet-local state. | §4, §7; actor-host.ts; subordinate/exploration-hosting; messages 975, 818, 842 |
 | <a id='accept-workspace-identity'></a>**workspace-identity** | Start the first agent turn from the creation mission without reprompting; cold-open the generated title; rename without changing routing identity; reject invalid addresses before resource creation. | **Production proof, scoped**. Title/address cases passed. Initial-turn and complete creation-journey acceptance must be checked separately. | workspace-title and preview-address first-run receipts; messages 58, 186, 267, 972 |
-| <a id="accept-actor-core"></a>**actor-core** | Run the same status/cancellation/loop-version contract on main, persistent, temporary and tool-using exploration actors; vary only declared capabilities/lifetime. | **Partial**. One `ActorAgent` base and substantial shared core exist; no facet class remains. Promoted-loop execution and state hosting still diverge. | ActorAgent; runHeadInference/runNodeLoop; messages 97, 300, 387, 935, 975 |
+| <a id="accept-actor-core"></a>**actor-core** | Run the same status/cancellation/loop-version contract on main, persistent, temporary and tool-using exploration actors; vary only declared capabilities/lifetime. | **Partial**. One `ActorAgent` base; every kind is a logical actor on one `ActorHost`, run by the same claimed-turn runner, and no facet class remains. Heads read their own loop pointer each turn; search nodes start from the bootstrap loop origin. Cross-kind acceptance of the shared contract is not claimed. | ActorAgent; runHeadInference/runNodeLoop; messages 97, 300, 387, 935, 975 |
 | <a id="accept-delegation-contract"></a>**delegation-contract** | Ask an existing actor without spawning; ask by role as a real temporary actor; inspect actual nested context-reference reads and retained outcomes. | **Implemented paths; live acceptance incomplete**. Core behavior and owner inspection have local proof. A completed live recursive journey is not claimed. | temporary.ts; eval tier; owner inspection; messages 724, 741, 748, 749, 750 |
 | <a id="accept-fork-semantics"></a>**fork-semantics** | Compare fresh, inherited-prefix and workspace-fork cases; preserve lineage and task on re-entry; prove no unintended file copy or parent-context mutation. | **Source-defined; acceptance partial**. Hire uses a bounded parent digest. Swarm fork/fresh is a context choice. Workspace forks are separate. | subordinates/support.ts; swarm-expansion.ts; identity/fork-driver.ts; messages 282, 387, 724, 975 |
-| <a id="accept-context-editability"></a>**context-editability** | Read the actual active context/loop through VFS; edit with expected revision; observe the next request change; reject stale/invalid/unauthorized edits and retain prior evidence. | **Missing/partial target**. Scaffold versions cover part of loop editing. Canonical editable context/history projections and exploration-loop activation are missing. | §6–7; scaffold/surface.ts; conversation-store.ts; messages 41, 141, 491, 975 |
+| <a id="accept-context-editability"></a>**context-editability** | Read the actual active context/loop through VFS; edit with expected revision; observe the next request change; reject stale/invalid/unauthorized edits and retain prior evidence. | **Missing/partial target**. Scaffold versions cover part of loop editing. Canonical editable context/history projections are missing. | §6, §7; scaffold/surface.ts; conversation-store.ts; messages 41, 141, 491, 975 |
 | <a id="accept-context-engineering"></a>**context-engineering** | Preserve stable prefixes, update volatile facts at the next step, verify actual submitted requests/counters, and retain recall through compaction and context edits. | **Implemented parts; full target pending**. Preparation, typed-error projection, pruning and recall exist. Editable-context invalidation is not implemented as one contract. | prepare-step.ts; tool-error-feedback.ts; compaction stores; messages 35, 154, 164, 165, 724 |
 | <a id="accept-crafted-tools"></a>**crafted-tools** | Author a real callable tool, validate it, invoke it on the actual backend, rediscover it next step and reject malformed or failing source without poisoning other calls. | **Mechanisms present; model journey incomplete**. Persistence, invocation and fitness mechanisms exist. Curated fixtures do not establish every model-authored workflow. | craft/execution paths; codemode-craft first-run; messages 724, 904, 905, 906, 910 |
 | <a id="accept-filesystem"></a>**filesystem** | Cross actor/file/shell views, binary/range reads, private-write denial, mounted paths, stale edits and I/O failures; verify index/content agreement. | **Substantial implementation; scoped proof**. One canonical hosted base tree and gated mounts exist. Target context projections are separate unfinished work. | file-plane layer; VFS and workspace-plane proofs; messages 31, 92, 387, 617, 709, 975 |
@@ -842,84 +831,84 @@ The 39 groups below organize the recorded product criteria. They never replace t
 | <a id="accept-exploration"></a>**exploration** | Run configured tool-using nodes and declared toolless attempts, measured/judged/ideation cases, fan-in and uneven-depth settlement with actual outcomes. | **Implemented core; full acceptance incomplete**. Core searches and journals exist. No universal exploration quality or performance gain is established. | strategy and heads core; exploration contracts; messages 331, 345, 374, 377, 724 |
 | <a id="accept-node-routing"></a>**node-routing** | Assign distinct node tasks/models, inspect actual provider requests, resume the original identity/brief and preserve deeper parent-authored rationale. | **Repairs locally verified**. Specific routing/re-entry/cache-identity defects were repaired. Broad live multi-model coverage is not claimed. | unit-swarm-profile-routing; node-agent and swarm-level; messages 724, 822, 836 |
 | <a id="accept-exploration-visibility"></a>**exploration-visibility** | Observe concurrent and retained trees, live text/reasoning/tools, selection/navigation and reconnect without losing status or context. | **Source/UI proof partial**. A static or local frame does not close the entire deployed live-stream journey. | Exploration UI and head/node stream journals; messages 268, 312, 313, 465, 598, 839, 840 |
-| <a id="accept-self-evolution"></a>**self-evolution** | Propose/evaluate/promote/revert a real change; verify consumed version and outcome provenance; keep invalid candidates inactive across restart. | **Partial; benefit unproved**. Root/subordinate scaffold mechanisms exist. Full exploration-loop editability and measured improvement remain open. | scaffold/evolution stores; active inference paths; messages 140, 141, 220, 489, 490, 491, 626, 975 |
+| <a id="accept-self-evolution"></a>**self-evolution** | Propose/evaluate/promote/revert a real change; verify consumed version and outcome provenance; keep invalid candidates inactive across restart. | **Partial; benefit unproved**. Root/subordinate scaffold mechanisms exist. Editable exploration-loop projections and measured improvement remain open. | scaffold/evolution stores; active inference paths; messages 140, 141, 220, 489, 490, 491, 626, 975 |
 | <a id="accept-memory"></a>**memory** | Save/search/edit notes and keyed facts, verify scope/index consistency, and recall a compacted range without replacing the active conversation silently. | **Implemented stores; scoped acceptance**. Notes, facts, retrieval and recall exist. They are not writable canonical context/history projections. | MemoryStore, facts, conversation search and compaction stores; messages 35, 141, 164, 165, 267 |
 | <a id="accept-slates"></a>**slates** | Use real JS-family client/server source, interactive browser behavior, server/file effects, source commit/fork/restore and real preview HTTP. | **Hosted proof; journeys remain**. Hosted authored examples and 15 operator checks passed. Strict model-authored and outer browser-session journeys remain unverified. | LIVE-UI; production714 first-run receipts; messages 165, 171, 935, 942, 943, 947, 951 |
 | <a id="accept-slate-authority"></a>**slate-authority** | Deny missing capabilities and literal/redirect escapes; preserve MCP data; isolate Plan and Build; prevent reuse of authority cached under an earlier configuration, and parent-origin access. | **Local security fix; rollout pending**. Reviewed egress/cache fixes are in the source candidate, not production714. DNS/raw networking residuals stay unmeasured. | slate-egress Worker proofs; preview-origin evidence; messages 936, 943, 948 |
-| <a id="accept-agent-core-study"></a>**agent-core-study** | Identify real adopted implementations and unadopted contracts; distinguish SDK facets from agent-core facets; answer the Node/Vite question accurately. | **Investigation/notice completed, bounded**. The notice is deliberately uncommitted as requested. Broader composition remains a what-if, not automatic authorization to rewrite Kinu. | AGENT-CORE-ALIGNMENT; messages942/944/945/948; messages 944, 945, 948 |
+| <a id="accept-agent-core-study"></a>**agent-core-study** | Identify real adopted implementations and unadopted contracts; distinguish SDK facets from agent-core facets; answer the Node/Vite question accurately. | **Investigation/notice completed, bounded**. The notice is deliberately uncommitted as requested. Broader composition remains a what-if, not automatic authorization to rewrite Kinu. | SLATE-SHARING; messages 942, 944, 945, 948 |
 | <a id='accept-web-chat'></a>**web-chat** | Keep web user bubbles right-aligned and TUI user bubbles left-aligned; exercise send/steer/stop, long drafts/attachments, intentional scroll, streaming and code copy/colors in responsive themes. | **Specific fixes deployed; broader journey partial**. The latest title/timestamp/syntax fixes are deployed. Their proof does not close all historical chat/UI asks. | chat-and-files UX; workspace-title first-run; messages 1, 7, 181, 193, 267, 724, 972 |
 | <a id="accept-web-workspace"></a>**web-workspace** | Switch workspaces/agents, open files/environments, act on Work decisions, hide irrelevant tabs and recover failed reads after reconnect. | **Specific fixes deployed; broader journey partial**. Implemented surfaces and individual regressions exist; full end-to-end UI acceptance remains distinct. | WorkspacePage, Work/Files/Environment and reconnect tests; messages 193, 208, 210, 268, 724, 943, 972 |
 | <a id="accept-tui"></a>**tui** | Use a real PTY for LF/CR Enter, editing/paste, palette/navigation, streaming, tool details, error rendering and narrow/non-ASCII layouts. | **Specific fixes verified; full platform coverage open**. Known Enter, rendering and device issues have fixes. A complete current platform matrix is not claimed. | CLI/TUI behavior, display and daemon tests; messages 1, 7, 181, 609, 610, 949, 972 |
-| <a id="accept-landing"></a>**landing** | Preserve authored copy/layout, verify actual responsive mocks and only adopt new effects after visual acceptance. | **Rollback verified; new design paused**. The rejected polish was rolled back. The vGPU/richer-mock direction was paused, not cancelled. | Production rollback/browser proof; messages956/969; messages 581, 956, 969 |
-| <a id="accept-security"></a>**security** | Reject cross-owner/scope/role/cursor abuse, retain consent/revocation, protect secrets/audit from editable state, and test actual claimed sandbox boundaries. | **Layered mechanisms; specific proof only**. Substantial controls exist. Raw database and broader context-editing authority still need implementation; no perfect-security claim. | CLI/actor/RPC/capability tests; §14; messages 24, 162, 171, 292, 724, 861 |
+| <a id="accept-landing"></a>**landing** | Preserve authored copy/layout, verify actual responsive mocks and only adopt new effects after visual acceptance. | **Rollback verified; new design paused**. The rejected polish was rolled back. The vGPU/richer-mock direction was paused, not cancelled. | Production rollback/browser proof; messages 581, 956, 969 |
+| <a id="accept-security"></a>**security** | Reject cross-owner/scope/role/cursor abuse, retain consent/revocation, protect secrets/audit from editable state, and test actual claimed sandbox boundaries. | **Layered mechanisms; specific proof only**. Substantial controls exist, including the compiled `db` boundary. Broader context-editing authority still needs implementation; no perfect-security claim. | CLI/actor/RPC/capability tests; §14; messages 24, 162, 171, 292, 724, 861 |
 | <a id="accept-admin"></a>**admin** | Keep public access separate from operator control, paginate real records, redact before screenshot capture and require authority for destructive actions. | **Implemented surface; scoped verification**. Control/feedback paths exist. Their local tests are not a blanket deployed authorization audit. | ControlPlane, feedback and access-token route tests; messages 818, 842 |
 | <a id="accept-storage"></a>**storage** | Restore exact native namespace/metadata/data, preserve sparse/link/open-handle semantics and verify publication, interruption, restart and GC. | **One shipped strategy; acceptance open**. Snapshot-chain is the only container strategy since 2026-09-09. The refused v3 pilot (immutable pilot20260907120000) stays refused; the chain still owes the semantics, interruption, restart and GC proofs. | Snapshot-chain suite and conformance; messages 274, 292, 633, 634, 702, 712, 860 |
-| <a id="accept-storage-comparison"></a>**storage-comparison** | Compare equal successful durable work; measure metadata/payload/CPU/staging costs, retain failed cells and satisfy all repetitions/admission rules. | **Retired with the deleted arms**. The candidate comparison ended when the other strategies were deleted; no across-the-board winner was established. The shipped chain carries its own cost proofs. | Storage admission/decision tests; G0–G9 reports; messages 658, 665, 702, 719, 842, 891, 935, 960 |
 | <a id="accept-evals"></a>**evals** | Exercise actual adapters/oracles, retain setup and failed attempts, identify models/settings/source, and keep missing outcomes/usage unmeasured. | **Reliability repairs verified; runs still needed**. Major evidence defects were repaired. Protocol controls and one pilot are not a full benchmark campaign. | eval-run, public-session, bench adapters and retained records; messages 303, 448, 835, 965 |
 | <a id="accept-optimization"></a>**optimization** | Preregister a controlled alternative and compare matched settings/targets/tasks with retained results and appropriate uncertainty. | **No validated improvement**. Service inference access is now available. A controlled optimization win has not been demonstrated. | Service-auth receipt; sealed benchmark/comparison requirements; messages 965, 975 |
 | <a id="accept-quality"></a>**quality** | Prove gates fail in their claimed directions, keep measured/governed sets equal, reuse established packages and remove obsolete code without suppressions. | **Active controls; ongoing acceptance**. Strict gates exist and have exposed real defects. Their green result is bounded by the set they measure. | check, layergate, wiring/corpus and targeted negative fixtures; messages 422, 764, 782, 798, 807, 822, 835, 845, 956, 957, 964 |
 | <a id="accept-release"></a>**release** | Publish through normal gates/assets/health checks, preserve WIP and dependency patches, remove only completed merged work and verify cleanup. | **Verified release; ongoing work separate**. Production714 is verified; main/primary14ed adds guidance only. Further inspected fixes remain separate until deployed. | Deployment receipts; primary safety ref and archive index; messages 752, 769, 798, 803, 804, 942, 951, 962, 966 |
-| <a id="accept-operations"></a>**operations** | Give every source ask a disposition, respect later corrections, use focused owners, report precise blockers and never equate todo counts with product completion. | **Traceability established; completion ongoing**. All2,740 asks are mapped with no attribution gaps. Implementation closure remains evidence-specific. | Private product-requirements audit and canonical ledger; messages 743, 798, 930, 942, 955, 956, 961, 964, 966, 970, 971, 975 |
+| <a id="accept-operations"></a>**operations** | Give every source ask a disposition, respect later corrections, use focused owners, report precise blockers and never equate todo counts with product completion. | **Traceability established; completion ongoing**. All 2,740 asks are mapped with no attribution gaps. Implementation closure remains evidence-specific. | Private product-requirements audit and canonical ledger; messages 743, 798, 930, 942, 955, 956, 961, 964, 966, 970, 971, 975 |
 | <a id="accept-product-documentation"></a>**product-documentation** | Keep one readable contract, meaningful diagrams, source/target separation and a traceable acceptance comparison; update affected criteria when the product changes. | **This deliverable; review required**. The specification and diagrams are the documentation deliverable, not a declaration that the requested architecture is already built. | This file, SVGs and the full private source/ask audit; messages 374, 375, 519, 975 |
-| <a id='accept-actor-profiles'></a>**actor-profiles** | Provide five tiers inheriting default unless overridden; preserve explicit overrides; expose admitted templates to the main agent; apply role/model changes and per-node precedence to actual requests. | **Implemented source; precedence acceptance ongoing**. Catalogue declares the five-tier inheritance model. Full activation/re-entry behavior still needs its stated checks. | profiles/catalog.ts; model services/routing tests; messages 610, 614, 822 |
+| <a id='accept-actor-profiles'></a>**actor-profiles** | Provide three tiers (`fast`, `default`, `deep`) inheriting default unless overridden; preserve explicit overrides; expose admitted templates to the main agent; apply role/model changes and per-node precedence to actual requests. | **Implemented source; precedence acceptance ongoing**. `TIER_IDS` declares the three tiers and the catalogue their inheritance. Full activation/re-entry behavior still needs its stated checks. | profiles/catalog.ts; types/profile.ts; model services/routing tests; messages 610, 614, 822 |
 | <a id='accept-providers'></a>**providers** | Default new/no-override users to Workers AI GLM 5.3; preserve overrides; discover/connect/select providers; forward actual reasoning/affinity settings and isolate failures. | **Specific fixes verified; configured-provider coverage varies**. Source declares the GLM default and request-setting fixes. Account configuration and full new-user behavior still require real-surface proof. | providers/workers-ai.ts; model-resolver/request tests; messages 57, 59, 62, 75, 162, 171, 851, 965 |
-| <a id="accept-calibrated-ensemble"></a>**calibrated-ensemble** | Use a human reference, blind ensemble comparison/confusion and calibrated recurring audit; keep uncalibrated rates labelled and uncertainty visible. | **Required method; calibration result unverified**. Recorded approval resolves the method. This audit does not establish that the required reference/validation campaign completed. | Recovered messages110/111 and outcome label/ensemble records; messages 110, 111, 113 |
+| <a id="accept-calibrated-ensemble"></a>**calibrated-ensemble** | Use a human reference, blind ensemble comparison/confusion and calibrated recurring audit; keep uncalibrated rates labelled and uncertainty visible. | **Required method; calibration result unverified**. Recorded approval resolves the method. This audit does not establish that the required reference/validation campaign completed. | Recovered outcome label/ensemble records; messages 110, 111, 113 |
 
 ### 18.1 The five largest direct mismatches in the latest request
 
 | Latest requested target | Current implementation | Required change |
+|---|---|---|
 | All workspace agents share one SQLite | One workspace SQLite with actor-led keys, cut over in source. | Snapshot/restore proof across all actors; stated disposition of pre-cutover facet-local state. |
-| Explicit SQLite `db` code capability | FS/MCP and actor JSON state exist; no `db`/`env.db`. | Define and implement an enforceable admitted SQL/data scope, without exposing protected internal authority. |
+| Explicit SQLite `db` code capability | `db` exists in source: typed operations compiled by the host over agent-declared `app_*` tables at actor or workspace scope, with evidence in the same transaction (§9). | Exercised acceptance of the §9.2 contract through the product surface. |
 | Editable actual context/history through VFS | SQL conversation, readonly history inspection and recall files; no supported write-through working-context projection. | Revision-checked managed VFS views, ancestry/tool-pairing rules, safe activation and index/cache invalidation. |
-| Editable/evolving actual loop for every full agent kind | Root/subordinate promoted scaffold path exists; head/node inference does not use that transform. | One common full-agent loop/version contract, with appropriate narrow role/lifetime wrappers. |
-| Simple wrappers around one core | Substantial reuse exists, but hosting and mutable lifecycle state still diverge. | Separate workspace hosting from per-agent runtime state and keep genuine backend seams explicit. |
+| Editable/evolving actual loop for every full agent kind | Every non-main actor has its own scaffold path under `.kinu/agents/<storage-key>/`; heads read their own loop pointer each turn, and search nodes start from the bootstrap loop origin. | One common full-agent loop/version contract, with appropriate narrow role/lifetime wrappers. |
+| Simple wrappers around one core | Every kind is a logical actor on one `ActorHost`, run by the same claimed-turn runner. | Acceptance of the shared status, cancellation and loop-version contract across kinds; keep genuine backend seams explicit. |
 
 ### 18.2 Source interpretation corrections
 
-The comparison preserves these later decisions:
+The comparison keeps these later decisions:
 
 - Message 942 asks for an agent-core notice **left uncommitted**. The checked notice is `packages/agent-core/OWNER-NOTICE-VIEWS.md` in the separate agent-core checkout. Leaving it untracked is the requested outcome, not a missing publication task.
-- Message 944 asks how Node/Vite hosting and a broader agent-core composition work. It never authorizes a new Node host or a whole-product replacement by itself.
-- Messages 748 to 750 define recursive existing/temporary delegation and persistent hiring. Both are `agents.hire` (with `lifetime:'task'` for the temporary one, with `agent` for one that exists). The requirement never becomes a standalone `rlm.query`.
+- Message 944 asks how Node/Vite hosting and a broader agent-core composition work. It does not by itself authorize a new Node host or a whole-product replacement.
+- Messages 748 to 750 define recursive existing/temporary delegation and persistent hiring. Both are `agents.hire` (with `lifetime:'task'` for the temporary one, with `agent` for one that exists), not a standalone `rlm.query`.
 - Message 822 rejects doc-claim gates. This specification grants no permission to add one.
-- Message 969 reverses the rejected landing polish **for now**. It never cancels the underlying future design request.
-- Message 975 explicitly requests the shared-SQLite and editable actual context/loop target. The shared-SQLite half is cut over in source (§4). Only the rows this catalogue still marks open are claimed, never the whole target by relabelling.
-- The recovered calibration assent approves measured ensemble governance after a human reference, never AI-generated labels presented as human truth.
+- Message 969 reverses the rejected landing polish **for now**. It does not cancel the underlying design request.
+- Message 975 requests the shared-SQLite and editable actual context/loop target. The shared-SQLite half is cut over in source (§4). Only the rows this catalogue still marks open are claimed; relabelling does not close the whole target.
+- The recovered calibration assent approves measured ensemble governance after a human reference, not AI-generated labels presented as human truth.
 
 ### 18.3 Audit coverage and limits
 
-The final source audit has 2,740 unique ask rows with zero missing/extra rows and zero unresolved predecessor-attribution gaps. It retains 73 superseded rows with later-source references, 85 duplicate/context rows, 539 operating instructions, 3 explicitly answered rows and 2,040 product-topic rows.
+The source audit has 2,740 unique ask rows with zero missing or extra rows and zero unresolved predecessor-attribution gaps. It keeps 73 superseded rows with later-source references, 85 duplicate/context rows, 539 operating instructions, 3 explicitly answered rows and 2,040 product-topic rows.
 
-Imported handoff and system material stays identified. Repeated "continue" and completion instructions never create fictitious new features. Previous DONE labels stay historical metadata rather than automatic proof at the current source revision.
+Imported handoff and system material stays identified. Repeated "continue" and completion instructions do not create new features. Earlier DONE labels are historical metadata, not proof at the current source revision.
 
-The current-source map checks the cited runtime paths and distinguishes SQL, KV, VFS and in-memory state. It never proves every optional SDK table is populated and never proves every platform configuration ran. The diagrams show these same current and target distinctions.
+The current-source map checks the cited runtime paths and distinguishes SQL, KV, VFS and in-memory state. It does not prove every optional SDK table is populated or every platform configuration ran. The diagrams show the same current and target distinctions.
 
 ## 19. Completion sequence and approval boundaries
 
-1. **Keep the contract and audit complete.** Maintain the source-to-criterion map, record later corrections and keep each known gap visible. Reduce no list by renaming unfinished work.
-2. **Finish the already implemented release fixes.** Deploy owner inspection and slate egress and cache enforcement through the normal release path, then run the relevant owner-client and product journeys. Use the correct deployment identity.
-3. **Prove the shared-store cutover end to end.** Snapshot and restore every retained actor together, and state the disposition of any pre-cutover facet-local state. Imitate no synchronous SQL over asynchronous RPC and introduce no permanent dual-owner mode.
-4. **Implement managed loop/context VFS operations.** Choose the precise paths and revision schemas using existing addressing conventions. Prove actual activation, stale-write refusal, authority and rollback across full agent kinds.
-5. **Complete native storage semantics before normal lazy restore.** Finish demand, mutation, capture, crash, restart and GC ownership. Keep cost failures and missing channels visible. Review any G5 criterion correction against actual units before a new admitted comparison.
+1. **Keep the contract and audit complete.** Maintain the source-to-criterion map, record later corrections and keep each known gap visible. Do not shorten the list by renaming unfinished work.
+2. **Finish the release fixes already implemented.** Deploy owner inspection and slate egress and cache enforcement through the normal release path with the correct deployment identity, then run the relevant owner-client and product journeys.
+3. **Prove the shared-store cutover end to end.** Snapshot and restore every retained actor together, and state the disposition of any pre-cutover facet-local state. Do not imitate synchronous SQL over asynchronous RPC or add a permanent dual-owner mode.
+4. **Implement managed loop/context VFS operations.** Choose paths and revision schemas using existing addressing conventions. Prove activation, stale-write refusal, authority and rollback across full agent kinds.
+5. **Prove the snapshot-chain semantics.** Finish demand, mutation, capture, crash, restart and GC ownership, and keep cost failures and missing channels visible (§15.3).
 6. **Run controlled evaluation and calibration.** Use isolated service authority and preregistered inputs and settings. Distinguish a system comparison from a single-variable optimization. Report rejected ideas and negative results as well as improvements.
-7. **Close remaining surface and operating criteria.** Finish the real browser/terminal/device journeys, source-grounded documentation/history work and authorized cleanup. Preserve the paused design boundary and existing user work.
+7. **Close the remaining surface and operating criteria.** Finish the real browser, terminal and device journeys, source-grounded documentation and history work, and authorized cleanup. Keep the paused design boundary and existing user work.
 
-A production data reset, cross-owner sharing design, unrestricted database capability or change to an acceptance criterion is a material decision. It needs explicit evidence and authority before implementation or rollout. A general instruction to finish the project never hides data loss and never weakens a gate.
+A production data reset, a cross-owner sharing design, unrestricted database capability or a change to an acceptance criterion is a material decision that needs explicit evidence and authority before implementation or rollout. A general instruction to finish the project does not license data loss or a weaker gate.
 
 ## 20. Maintaining this specification
 
-This is the canonical product/acceptance document. Detailed subsystem documents stay useful implementation references, but a stale description there never overrides the requested contract here.
+This is the canonical product and acceptance document. Subsystem documents are implementation references; a stale description there does not override the contract here.
 
 When a feature changes:
 
 - update the relevant criterion and interaction, not an unrelated prose checklist;
-- state whether the change is a new target, an implemented behavior or a newly exercised result;
+- say whether the change is a new target, an implemented behavior or a newly exercised result;
 - update the relevant diagram when ownership or flow changes;
-- preserve source IDs and supersession history;
-- name the source revision, actual check and limitations for a completion claim;
+- keep source IDs and supersession history;
+- name the source revision, the check that ran and its limits for any completion claim;
 - keep private transcripts and credential material out of public documentation.
 
-This stays maintained through source-grounded review. No prose-shape or doc-claim CI gate comes from this document.
+The document is maintained through source-grounded review. It creates no prose-shape or doc-claim CI gate.
 
 ### References
 
@@ -930,11 +919,9 @@ This stays maintained through source-grounded review. No prose-shape or doc-clai
 - [CONTEXT-BUDGET.md](CONTEXT-BUDGET.md): context preparation and measurement.
 - [EXPLORATION.md](EXPLORATION.md), [MCTS.md](MCTS.md): configured exploration and journals.
 - [EVOLUTION.md](EVOLUTION.md), [CRAFT-ARCHITECTURE.md](CRAFT-ARCHITECTURE.md): learning, trials and tool versions.
-- [LIVE-UI.md](LIVE-UI.md), [AGENT-CORE-ALIGNMENT.md](AGENT-CORE-ALIGNMENT.md): authored slates and actual adoption boundaries.
+- [LIVE-UI.md](LIVE-UI.md): authored slates and adoption boundaries.
 - [USER-GUIDE.md](USER-GUIDE.md), [CLI.md](CLI.md), [CONFIG.md](CONFIG.md): user entry points and configuration.
 - [OBSERVABILITY.md](OBSERVABILITY.md): outcome and diagnostic evidence.
 - [EMAIL-INGRESS.md](EMAIL-INGRESS.md): email prerequisites and ingress authority.
 - [BENCH.md](BENCH.md), [TESTING.md](TESTING.md): evaluation runners, evidence and test boundaries.
 - [DEPLOYMENT.md](DEPLOYMENT.md), [BRANCH-ARCHIVE.md](BRANCH-ARCHIVE.md): release and preservation procedures.
-
-
