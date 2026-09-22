@@ -19,20 +19,49 @@ export interface JsonArray extends Array<JsonValue> {}
 
 export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 
+const StringSchema = v.string();
+
+const NumberSchema = v.number();
+
+const BooleanSchema = v.boolean();
+
+/** Whether a value typed JSON is an object whose every member is JSON too. A
+ *  value can carry the type without the content (an optional field left
+ *  `undefined`), so this walks it. */
 export function isJsonObject(value: JsonValue): value is JsonObject {
   return !Array.isArray(value) && v.is(JsonObjectSchema, value);
 }
 
-export const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([
-  v.string(),
-  v.pipe(v.number(), v.finite()),
-  v.boolean(),
+/** The object arm of a value that is JSON by construction: parsed from text,
+ *  or produced by a codec. One step, never a walk, so only such a value may
+ *  be asked; a typed value of unknown making goes to {@link isJsonObject}. */
+export function isParsedJsonObject(value: JsonValue): value is JsonObject {
+  return value !== null && !Array.isArray(value)
+    && !v.is(StringSchema, value) && !v.is(NumberSchema, value) && !v.is(BooleanSchema, value);
+}
+
+/** The elements of a parsed JSON array of objects; null when it is not one. */
+export function jsonObjectElements(value: JsonValue | undefined): JsonObject[] | null {
+  if (value === undefined || !Array.isArray(value)) return null;
+  const objects = value.filter(isParsedJsonObject);
+
+  return objects.length === value.length ? objects : null;
+}
+
+export const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => JsonValueOptions);
+
+/** Built once. A getter that built the union allocated nine schemas at every
+ *  node it validated, a sixth of a long transcript's per-step cost. */
+const JsonValueOptions: v.GenericSchema<JsonValue> = v.union([
+  StringSchema,
+  v.pipe(NumberSchema, v.finite()),
+  BooleanSchema,
   v.null(),
   v.array(JsonValueSchema),
-  v.record(v.string(), JsonValueSchema),
-]));
+  v.record(StringSchema, JsonValueSchema),
+]);
 
-export const JsonObjectSchema = v.record(v.string(), JsonValueSchema);
+export const JsonObjectSchema = v.record(StringSchema, JsonValueSchema);
 
 export const JsonArraySchema = v.array(JsonValueSchema);
 
