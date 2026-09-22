@@ -1,40 +1,8 @@
 /**
- * The egress secret vault — the owner's secrets, encrypted, in their own DO,
- * spent on their behalf without ever entering the container.
- *
- * WHY THIS IS A TABLE AND NOT A `user_credentials` KEY. `user_credentials` is
- * the authoritative store for PROVIDER credentials, and its shape is a
- * `Credential` discriminated union (`bearer | oauth | openai-compat`) whose key
- * SPELLING carries policy: `credential-headers.ts` decides model-tier reach by
- * matching `<name>.bearer` / `openai-compat.*`, and its own comment warns that
- * "a future non-model credential must not be stored under that suffix, or it
- * would silently inherit model-tier reach". An egress secret is a different
- * entity — it is bound to a HOST and carries a PLACEHOLDER, neither of which
- * the `Credential` union has room for — so giving it its own table keeps both
- * shapes honest instead of widening a union every consumer must then handle.
- *
- * WHAT IS REUSED, which is everything that matters: the same Durable Object,
- * the same `createCredentialCipher` (AES-256-GCM, HKDF-derived, `pce1.`
- * envelope), the same AAD discipline, the same `CREDENTIAL_ENCRYPTION_KEY` and
- * its rotation list, and the same `requireTier` caller gate. There is no second
- * cipher, no second key and no second store.
- *
- * WHAT THE CONTAINER CAN OBSERVE. A placeholder, and nothing else. The
- * placeholder is 32 bytes of CSPRNG output, generated here at bind time and
- * never derived from the secret — no hash, no prefix, no truncation — so
- * holding it tells the container nothing about the value it stands for, and
- * comparing two placeholders tells it nothing about whether two secrets are
- * equal. It is also not a bearer instrument: {@link resolveEgressInjection}
- * re-checks the destination on every single request, so lifting a placeholder
- * out of one request and posting it somewhere else yields a refusal.
- *
- * WHERE PLAINTEXT EXISTS. Exactly two places: inside this module while a seal
- * or an open is in flight, and in the outbound handler that attaches it to the
- * upstream request. The handler runs in the Workers runtime, OUTSIDE the
- * container — the same trust boundary `getAuthHeaders` already hands
- * ready-to-attach provider headers across. It is never written to the
- * container's environment, filesystem, process arguments, or any response the
- * container reads.
+ * Egress secret vault: owner secrets sealed in their own DO with the shared credential cipher, key and rotation.
+ * Separate from `user_credentials` because that key spelling carries model-tier reach policy.
+ * The container only sees a random placeholder, never derived from the secret; the destination is re-checked
+ * per request. Plaintext exists only here and in the outbound handler, outside the container.
  */
 
 import * as v from 'valibot';
@@ -52,12 +20,10 @@ import {
   type EgressSecretBinding,
 } from './egress-gate';
 
-/** A binding id is owner-authored and lands in a rule name and a SQL key, so
- *  it is held to the same shape as a credential key. */
+/** Lands in a rule name and a SQL key, so held to the credential-key shape. */
 const BINDING_ID_RE = /^[a-zA-Z0-9._-]{1,128}$/;
 
-/** A host pattern may be a hostname or a `*` glob. Anything with a scheme,
- *  path, port or whitespace is a mistake that would silently never match. */
+/** Hostname or `*` glob; a scheme, path, port or whitespace would silently never match. */
 const HOST_PATTERN_RE = /^[a-zA-Z0-9.*_-]{1,253}$/;
 
 export interface EgressSecretSummary extends EgressSecretBinding {
@@ -72,9 +38,7 @@ export interface PutEgressSecretInput {
   readonly secret: string;
 }
 
-/** What the outbound handler gets back. `substitutions` carries the plaintext
- *  because the substitution is POSITIONAL inside an HTTP request this DO does
- *  not own; see the module header on where plaintext is allowed to be. */
+/** `substitutions` carries plaintext: substitution is positional inside a request this DO does not own. */
 export type EgressInjectionResult =
   | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[] }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
@@ -85,16 +49,13 @@ export interface EgressInjection {
 }
 
 
-/** What every vault operation needs: this DO's storage, the deployment cipher,
- *  and the AAD that binds a ciphertext to one binding in one user's store. */
+/** `aad` binds a ciphertext to one binding in one user's store. */
 export interface EgressVaultDeps {
   readonly sql: SqlExec;
   readonly cipher: CredentialCipher;
   readonly aad: (id: string) => string;
 }
 
-/** DDL owner for the vault. Called from `initUserTables`, which is the UserDO's
- *  only boot hook. */
 export function initEgressVaultTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_egress_secrets (
@@ -107,21 +68,16 @@ export function initEgressVaultTables(sql: SqlExec): void {
       updated_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
-  // The placeholder is how an intercepted request is resolved back to a
-  // binding, so that lookup is indexed rather than a scan per request. UNIQUE
-  // in the CREATE above is the property that matters: two bindings sharing a
-  // placeholder would let one secret be spent where the other was approved.
+  // Placeholder UNIQUE is load-bearing: a shared placeholder would spend one secret where another was approved.
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_egress_secrets_placeholder
             ON user_egress_secrets (placeholder)`);
 }
 
-/** A fresh placeholder. Independent of the secret by construction — this
- *  function never sees one. */
+/** Independent of the secret by construction. */
 function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
-/** One listed binding as the table declares it. */
 const EgressSecretRowSchema = v.object({
   id: v.string(),
   label: v.string(),
@@ -131,7 +87,7 @@ const EgressSecretRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** What the owner and the UI may see: every binding, no secret material. */
+/** Every binding, no secret material. */
 export function listEgressSecrets(sql: SqlExec): EgressSecretSummary[] {
   return sql.exec(
     `SELECT id, label, host, placeholder, created_at, updated_at
@@ -150,14 +106,7 @@ export function listEgressSecrets(sql: SqlExec): EgressSecretSummary[] {
   });
 }
 
-/**
- * Add or replace a secret.
- *
- * Replacing one KEEPS its placeholder. That is deliberate: a rotated key must
- * not require the container to be told a new dummy, and re-minting would leave
- * the old placeholder live in whatever config the agent already wrote. The
- * placeholder identifies the binding; the secret behind it is what rotates.
- */
+/** Add or replace a secret. Replacing keeps the placeholder, so rotation needs no container change. */
 export async function putEgressSecret(
   deps: EgressVaultDeps,
   input: PutEgressSecretInput,
@@ -175,8 +124,6 @@ export async function putEgressSecret(
   if (input.secret.length === 0) throw new Error('An egress secret cannot be empty.');
 
   if (isEgressPlaceholder(input.secret)) {
-    // Storing a placeholder AS a secret would make the substitution a no-op
-    // and leave the container believing it holds a working credential.
     throw new Error('That value is a placeholder, not a secret.');
   }
 
@@ -199,20 +146,14 @@ export async function putEgressSecret(
   return { id: input.id, label: input.label, host: input.host, placeholder };
 }
 
-/** Revoke a secret. Returns whether a row went away, so a caller can tell
- *  "revoked" from "was never there" instead of reporting success either way. */
+/** Returns whether a row went away ("revoked" vs "was never there"). */
 export function revokeEgressSecret(sql: SqlExec, id: string): boolean {
   return sql.exec(`DELETE FROM user_egress_secrets WHERE id = ? RETURNING id`, id).toArray().length > 0;
 }
 
 /**
  * Decide one intercepted request and open only the secrets it may spend.
- *
- * `active` is the caller's view of which bindings the workspace has been
- * granted — the approval gate's answer, not this module's. The vault decides
- * DESTINATION; the approval gate decided CONSENT. Both must hold, and they are
- * enforced in different places on purpose: consent is a slow question asked of
- * the owner once, destination is a fast check made on every request.
+ * `active` is the approval gate's consent; this checks destination on every request.
  */
 export async function resolveEgressInjection(
   deps: EgressVaultDeps,
@@ -231,10 +172,7 @@ export async function resolveEgressInjection(
     const row = readOne(SecretRow, deps.sql, `SELECT secret FROM user_egress_secrets WHERE id = ?`, bindingId);
 
     if (!row) {
-      // The binding was in the handler's configured view but is gone from the
-      // vault — revoked between configuration and this request. Fail closed:
-      // forwarding the dummy would spend nothing but would look like a
-      // working request that the upstream simply rejected.
+      // Revoked since configuration: fail closed rather than forward the dummy.
       return {
         kind: 'refuse',
         status: 403,
@@ -249,16 +187,8 @@ export async function resolveEgressInjection(
 }
 
 /**
- * Re-seal every row under the current key. Called by the UserDO's one rewrap
- * pass, beside the `user_credentials` and `user_mcp_servers.headers` loops.
- *
- * Load-bearing: the single marker `user_schema_meta.credential_envelope_key_id`
- * asserts the WHOLE store is sealed under the current keyId, and the documented
- * rotation drops `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` on the strength of that
- * assertion. A sealed column left out of the pass would be orphaned by the
- * next rotation, permanently.
- *
- * Returns false when any row failed, so the caller withholds the marker.
+ * Re-seal every row under the current key; false when any row failed, so the caller withholds
+ * `credential_envelope_key_id` (rotation drops the previous key on the strength of that marker).
  */
 export async function rewrapEgressSecrets(
   deps: EgressVaultDeps,
@@ -289,10 +219,6 @@ export async function rewrapEgressSecrets(
   return clean;
 }
 
-/** Row readers. Validated rather than asserted, the same way
- *  `createWebhookSecretStore` reads its one column: a shape mismatch here means
- *  the table is not what this module thinks it is, and that must not be
- *  discovered by a downstream `undefined`. */
 const PlaceholderRow = v.object({ placeholder: v.string() });
 
 const SecretRow = v.object({ secret: v.string() });

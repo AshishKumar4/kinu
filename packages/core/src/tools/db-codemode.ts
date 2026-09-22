@@ -1,52 +1,8 @@
 /**
- * `db` — the workspace's structured data capability, as a program reaches it
- * inside `eval`.
- *
- * WHAT THIS IS NOT: a SQL handle. No operation here accepts SQL text, and
- * nothing a program passes is ever concatenated into a statement. Every
- * statement is COMPILED by this module from typed arguments against the table's
- * own catalogued declaration, with every value bound positionally and every
- * identifier both validated against {@link IDENTIFIER} and quoted at the one
- * function that writes it. That is the enforceable boundary the product spec
- * asks for (§9.2): "A keyword filter or caller-supplied actor ID is not
- * sufficient authority." There is no keyword filter here because there are no
- * keywords to filter — a name that is not in the catalogue resolves to nothing,
- * so `conversation_entries`, `workspace_capability` and `sqlite_master` are not denied by a
- * list, they are unreachable by construction.
- *
- * The three walls, in the order an attempt meets them:
- *
- *   1. NAMESPACE. An agent table's physical name is `app_` + its logical name,
- *      and the logical name matches `^[a-z][a-z0-9_]{0,47}$`. No table this
- *      workspace's own schema creates carries that prefix, and the catalogue
- *      itself deliberately does not either ({@link AGENT_DATA_CATALOG}), so no
- *      logical name can address a host table, a view, a trigger, an index or
- *      the catalogue. There is no operation for `PRAGMA`, `ATTACH`, `CREATE
- *      VIEW`, `CREATE TRIGGER` or `ALTER`, so there is no indirect path either;
- *      `createTable` additionally refuses a physical name that already exists
- *      OUTSIDE the catalogue, which is what keeps a future host table called
- *      `app_*` — or a leftover of one — from being adopted as agent data.
- *
- *   2. AUTHORITY. Every operation calls `ActorHandle.assertCurrent()` before
- *      its statement, so a retired, re-parented or re-pathed actor stops
- *      writing at exactly the point its other stores stop serving. For a
- *      `scope: 'actor'` table the host injects `actor_id` from that validated
- *      handle into the DDL, into every predicate and into every inserted row.
- *      The program cannot name the column: `actor_id` is rejected as a declared
- *      column, and any column not in the table's declaration is `bad_input`.
- *
- *   3. SHAPE. Columns, types, predicates, ordering, projection and limits are
- *      parsed with valibot before compilation, and a value is decoded to the
- *      declared column type — so a `blob` column holds bytes, a `json` column
- *      holds a JSON document, and neither is a string that happens to look like
- *      one.
- *
- * Evidence and atomicity are one mechanism. A mutation's `db_op` run event is
- * INSERTed on the same connection inside the same `transactionSync` as the
- * mutation itself, and its live fan-out is deferred until after the commit — so
- * a rolled-back batch leaves neither rows nor a record of rows, a failing
- * evidence write rolls the data back with it, and no subscriber is ever told
- * about a mutation that did not happen.
+ * `db`: structured workspace data for `eval`. Never a SQL handle: every statement is compiled
+ * from typed arguments against the catalogued declaration, values bound, identifiers validated
+ * and quoted (spec §9.2). Uncatalogued names are unreachable by construction. A mutation's
+ * `db_op` evidence is written in the same `transactionSync`; fan-out waits for commit.
  */
 
 import * as v from 'valibot';
@@ -67,37 +23,19 @@ export {
   type AppMutation, type AppTableScope, type DbOpRecord,
 } from '../types/app-store';
 
-/** The physical prefix of every agent-created data table. */
 const APP_TABLE_PREFIX = 'app_';
 
-/**
- * The catalogue of agent data tables.
- *
- * DELIBERATELY OUTSIDE {@link APP_TABLE_PREFIX}. A catalogue named `app_tables`
- * would be addressable as the logical name `tables`, which is the one physical
- * table an agent must never reach — every authority decision in this module is
- * read out of it. Sitting outside the prefix makes that structural rather than
- * a name on a deny list.
- */
+/** Deliberately outside `app_`, so no logical name can address the catalogue. */
 const AGENT_DATA_CATALOG = 'agent_data_tables';
 
-/**
- * The column the host owns on a `scope: 'actor'` table.
- *
- * Injected from the bound {@link ActorHandle}, never from an argument, and
- * rejected as a declared column name on either scope — so no program can
- * shadow it, filter on it, write it, or read it back.
- */
+/** Host-injected from the bound handle; rejected as a declared column on either scope. */
 const ACTOR_COLUMN = 'actor_id';
 
-/** Column types a declaration may use. */
 const APP_COLUMN_TYPES = ['text', 'integer', 'real', 'blob', 'json'] as const;
 
 export type AppColumnType = (typeof APP_COLUMN_TYPES)[number];
 
-/** What each declared type is in SQLite. A JSON document is TEXT that this
- *  module encodes and decodes at the boundary — declaring it `JSON` in the DDL
- *  would name an affinity SQLite does not have. */
+/** `json` is TEXT encoded at the boundary; SQLite has no JSON affinity. */
 const SQLITE_TYPE = {
   text: 'TEXT',
   integer: 'INTEGER',
@@ -106,14 +44,9 @@ const SQLITE_TYPE = {
   json: 'TEXT',
 } satisfies Readonly<Record<AppColumnType, string>>;
 
-/** Comparisons a predicate may name. */
 const APP_COMPARISONS = ['=', '!=', '<', '<=', '>', '>=', 'like'] as const;
 
-/**
- * Bounds. Each one is a refusal that names its own limit, never a silent clamp:
- * a program that asked for 5,000 rows and received 1,000 would draw a
- * conclusion from a truncation it was never told about.
- */
+/** Bounds refuse with their limit, never silently clamp. */
 const MAX_TABLES = 64;
 
 const MAX_COLUMNS = 32;
@@ -130,30 +63,13 @@ const SELECT_LIMIT_DEFAULT = 100;
 
 const SELECT_LIMIT_MAX = 1000;
 
-/** Bound values per compiled INSERT. SQLite's own ceiling is far higher; this
- *  keeps one multi-row insert inside a statement every driver prepares
- *  comfortably, and the compiler chunks a longer run rather than refusing it. */
+/** Bound values per INSERT; longer runs are chunked, not refused. */
 const MAX_BINDINGS_PER_STATEMENT = 800;
 
-/**
- * The one identifier grammar, applied twice: when a declaration is parsed, and
- * again inside {@link quoted} at the moment a name is written into SQL. The
- * second application is the load-bearing one — `quoted` is the only function in
- * this module that emits an identifier, so the check being there is what makes
- * "no unvalidated name reaches SQL" a property of the code rather than of every
- * call site remembering.
- */
+/** Re-applied in {@link quoted}, the only function that emits an identifier. */
 const IDENTIFIER = /^[a-z][a-z0-9_]{0,47}$/u;
 
-/**
- * `SQLITE_CONSTRAINT` and `SQLITE_MISMATCH`, by the only signature the drivers
- * expose: their message. Both backends surface SQLite failures as plain
- * `Error`s carrying no code, so this is the same mechanism
- * `obs/expected-failure.ts` uses for the sqlite messages IT has to recognise.
- * It CLASSIFIES rather than catches: the caught error stays the `cause`, its
- * text is carried into the refusal, and anything unrecognised is reported as
- * `io` rather than quietly re-labelled as the caller's fault.
- */
+/** Drivers expose SQLite failures only by message; unrecognised errors stay `io`. */
 const SQLITE_REJECTED_VALUE = /\b(constraint failed|constraint|datatype mismatch)\b/iu;
 
 const IdentifierSchema = v.pipe(
@@ -171,12 +87,7 @@ const ColumnNameSchema = v.pipe(
   ),
 );
 
-// `v.readonly()` on the declaration, not a second hand-written interface
-// beside it: a table spec is data a CALLER holds — a program's argument, a
-// test's `as const` fixture, a later owner surface's record — and a mutable
-// array in the public type refuses every readonly one of those. Deriving the
-// type from the schema keeps one declaration; adding the action is what makes
-// that one declaration usable.
+// `v.readonly()` so readonly caller specs (e.g. `as const` fixtures) type-check.
 const ColumnSchema = v.pipe(v.strictObject({
   name: ColumnNameSchema,
   type: v.picklist(APP_COLUMN_TYPES),
@@ -200,9 +111,7 @@ const TableSpecSchema = v.pipe(v.strictObject({
   ),
 }), v.readonly());
 
-/** A predicate that names an operator. Parsed on its own inside the compiler,
- *  so `{ op: 'drop' }` is reported as a bad predicate rather than falling
- *  through to be compared as a JSON value. */
+/** Parsed separately so `{ op: 'drop' }` is a bad predicate, not a JSON value. */
 const PredicateOperationSchema = v.union([
   v.strictObject({ op: v.picklist(APP_COMPARISONS), value: JsonValueSchema }),
   v.strictObject({
@@ -212,9 +121,7 @@ const PredicateOperationSchema = v.union([
   v.strictObject({ op: v.picklist(['isNull', 'notNull']) }),
 ]);
 
-/** JsonValue comes LAST, and the order is the contract: an object carrying an
- *  `op` property is a predicate, so a whole JSON document compared for equality
- *  is written `{ op: '=', value: { … } }`. The declaration says so. */
+/** Order is the contract: an object with `op` is a predicate; compare documents via `{ op: '=', value }`. */
 const PredicateSchema = v.union([PredicateOperationSchema, JsonValueSchema]);
 
 const OperatorCarrierSchema = v.object({ op: v.string() });
@@ -277,78 +184,45 @@ export type AppSelect = v.InferOutput<typeof SelectSchema>;
 
 export type AppOp = v.InferOutput<typeof OpSchema>;
 
-/** One row as a program sees it: `blob` columns as base64 text, `json` columns
- *  as the decoded document, everything else as its SQLite value. */
+/** `blob` columns as base64, `json` columns decoded. */
 export type AppRow = Record<string, JsonValue>;
 
-/** A catalogued table: its declaration, who declared it, and when. */
 export interface AppTableRecord extends AppTableSpec {
   readonly createdBy: string;
   readonly createdAt: number;
 }
 
-/** What one mutation changed. */
 export interface AppOpResult {
   readonly op: AppOp['op'];
   readonly table: string;
   readonly rowsAffected: number;
 }
 
-/**
- * The host-side data API. SQL lives here and nowhere above it: a caller — the
- * codemode provider, a test, a later owner surface — states an operation and
- * this store compiles it.
- */
 export interface AppDataStore {
-  /** Declare a table. Idempotent for an identical declaration; a different
-   *  shape under a name that already exists is `denied` and writes nothing. */
+  /** Idempotent for an identical declaration; a different shape is `denied`. */
   createTable(spec: AppTableSpec): AppTableRecord;
-  /** Retire a table this actor declared, with its rows. Refused while another
-   *  actor holds rows in it. */
+  /** Refused while another actor holds rows in it. */
   dropTable(name: string): void;
-  /** Every catalogued table of this workspace, with its scope and declarer. */
   listTables(): readonly AppTableRecord[];
-  /** One catalogued table's declaration. `missing` when there is none. */
   schema(name: string): AppTableRecord;
   select(table: string, query?: AppSelect): AppRow[];
   count(table: string, where?: AppWhere): number;
-  /** One mutation in one transaction. */
   apply(op: AppOp): AppOpResult;
-  /** Several mutations in ONE transaction: every one lands or none does. */
+  /** All mutations land or none do. */
   batch(ops: readonly AppOp[]): AppOpResult[];
 }
 
 export interface AppDataStoreDeps {
-  /**
-   * The actor's own SQL handle — for the compiled statements AND for this
-   * store's DDL.
-   *
-   * One handle rather than `sql` plus a {@link RawSqlExec}, because DDL through
-   * the tag reaches the same engine call `execRaw` does on both backends (cf's
-   * `execRaw` IS `ctx.storage.sql.exec(ddl)`; bun's `all()` "executes any
-   * statement and returns its rows — DDL and plain writes simply have none",
-   * cli-backend/src/runtime.ts) — and using the one handle is what makes a
-   * `createTable`'s DDL and its catalogue row provably the same connection, and
-   * therefore the same transaction.
-   */
+  /** Also carries DDL, so `createTable`'s DDL and catalogue row share one transaction. */
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
   readonly transactionSync: <T>(write: () => T) => T;
-  /** Where a mutation's evidence goes. A function because the recorder is
-   *  memoised per actor and must not be forced when this store is built. */
+  /** Lazy: the recorder is memoised per actor and must not be forced at build. */
   readonly events: () => RunEventRecorder;
-  /** The run a mutation belongs to: the run of the turn it happened under. */
   readonly runId: () => string;
 }
 
-/**
- * A batch operation's failure, carrying WHICH operation failed.
- *
- * A `KinuError` subclass rather than a second failure vocabulary: it
- * classifies, chains and refuses exactly like every other refusal in the repo,
- * and the index rides beside the refusal the way `execution` does on a
- * branchable tool call (tools/outcome.ts).
- */
+/** A batch failure carrying the failing operation's index. */
 class AppBatchError extends KinuError {
   override readonly name = 'AppBatchError';
   constructor(readonly failedIndex: number, cause: KinuError) {
@@ -356,8 +230,7 @@ class AppBatchError extends KinuError {
   }
 }
 
-/** The catalogue. Created with every workspace's schema, so a reader that finds
- *  no table is a fault rather than a workspace with no agent data. */
+/** Created with every workspace schema; a missing table is a fault. */
 export function initAgentDataTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS ${AGENT_DATA_CATALOG} (
     name TEXT PRIMARY KEY,
@@ -368,14 +241,7 @@ export function initAgentDataTables(execRaw: RawSqlExec): void {
   )`);
 }
 
-/**
- * Quote a validated identifier.
- *
- * The grammar is re-applied here rather than trusted from the caller, for the
- * reason {@link IDENTIFIER} gives. The grammar admits no quote character, so
- * quoting cannot be escaped out of — and a name that somehow arrived
- * unvalidated is a fault, not a query.
- */
+/** Re-validates: the grammar admits no quote character. */
 function quoted(identifier: string): string {
   if (!IDENTIFIER.test(identifier)) {
     throw new KinuError('bad_input', `${identifier} is not a usable table or column name`);
@@ -384,22 +250,7 @@ function quoted(identifier: string): string {
   return `"${identifier}"`;
 }
 
-/**
- * A statement being compiled: SQL text in fragments, values beside them.
- *
- * `SqlExecutor` is a tagged template because nearly every statement in this
- * repository is a literal. A compiled data operation is the exception — its
- * projection, its predicate and its parameter count are built per call — so
- * this class assembles the template object the tag is called with. Every
- * implementation of that tag (Durable Object `ctx.storage.sql`, bun:sqlite, the
- * test fixture) joins the strings and binds the values positionally, which is
- * what a prepared statement IS; building the template is therefore the same
- * operation as writing a literal one, and it needs no second SQL handle
- * threaded through every composition root.
- *
- * Text and values can only be appended through the two methods, so a value can
- * never land in the text and text can never be bound as a value.
- */
+/** Builds the tagged-template object for `SqlExecutor`; values can never land in the text. */
 class Statement {
   private readonly parts: string[] = [''];
   private readonly values: SqlValue[] = [];
@@ -424,17 +275,6 @@ class Statement {
   }
 }
 
-/** Run a compiled statement, classifying what SQLite says about it. */
-/**
- * A statement whose ROWS are never read — a DDL, an insert, a delete.
- *
- * Named, rather than the previous spelling at three sites, which voided the
- * call. That was misleading twice over: the `void` operator is this tree's
- * marker for a promise deliberately not awaited, and {@link execute} is
- * synchronous and throws, so there was never a rejection to discard — only a
- * result set. Errors propagate exactly as they do for a read, because this is
- * the same call with the array dropped.
- */
 function runStatement(sql: SqlExecutor, statement: Statement, doing: string): void {
   execute<unknown>(sql, statement, doing);
 }
@@ -464,16 +304,13 @@ const StoredScopeSchema = v.picklist(APP_TABLE_SCOPES);
 
 const CountSchema = v.pipe(v.number(), v.integer());
 
-/** A table resolved from the catalogue: what the compiler is allowed to write. */
 interface Resolved {
   readonly record: AppTableRecord;
   readonly physical: string;
   readonly columns: ReadonlyMap<string, AppColumn>;
 }
 
-/** Two declarations are the same declaration, column ORDER included: the order
- *  is part of the physical shape, so accepting a reordering as identical would
- *  make the catalogue disagree with the table it describes. */
+/** Column order counts: it is part of the physical shape. */
 function sameDeclaration(left: AppTableSpec, right: AppTableSpec): boolean {
   if (left.scope !== right.scope || left.columns.length !== right.columns.length) return false;
 
@@ -489,8 +326,6 @@ function sameDeclaration(left: AppTableSpec, right: AppTableSpec): boolean {
   });
 }
 
-/** A declaration in the words the refusal needs, so a rejected redeclaration
- *  tells the model what the existing table actually is. */
 function renderDeclaration(spec: AppTableSpec): string {
   return spec.columns
     .map((column) => [
@@ -502,15 +337,6 @@ function renderDeclaration(spec: AppTableSpec): string {
     .join(', ');
 }
 
-/**
- * What each declared column ADMITS from a program, and what it says when the
- * value is not that.
- *
- * One schema per column type rather than a chain of runtime shape checks: the
- * column type IS the contract, so the boundary parses against it and the branch
- * below is on the domain — which is also what makes the refusal message a
- * statement about the column rather than about a JavaScript representation.
- */
 const ADMITTED = {
   text: { schema: v.string(), takes: 'a string' },
   integer: { schema: v.pipe(v.number(), v.safeInteger()), takes: 'a safe integer (booleans are 0 and 1)' },
@@ -519,29 +345,21 @@ const ADMITTED = {
   json: { schema: JsonValueSchema, takes: 'any JSON document' },
 } satisfies Readonly<Record<AppColumnType, { readonly schema: v.GenericSchema; readonly takes: string }>>;
 
-/** The bound-value vocabulary, as a schema: what a compiled statement may
- *  carry for a non-blob, non-json column once the column's own schema has
- *  admitted it. */
 const SqlPrimitiveSchema = v.union([v.string(), v.number(), v.boolean(), v.null()]);
 
-/** What a driver hands back for one column: the portable value vocabulary plus
- *  the `Uint8Array` bun:sqlite answers a BLOB with, and `undefined` for a
- *  column a projection did not select. */
+/** bun:sqlite returns BLOBs as `Uint8Array`; `undefined` for unselected columns. */
 type StoredValue = SqlValue | Uint8Array | undefined;
 
-/** What a column of each type must read back as. A stored value outside it is
- *  corruption, which is named rather than coerced. */
+/** Stored values outside these are corruption, named not coerced. */
 const STORED = {
   text: v.string(),
   integer: v.number(),
   real: v.number(),
-  // Both are real: a Durable Object answers BLOBs as ArrayBuffer, bun:sqlite as
-  // Uint8Array.
+  // Durable Object BLOBs are ArrayBuffer, bun:sqlite Uint8Array.
   blob: v.union([v.instance(ArrayBuffer), v.instance(Uint8Array)]),
   json: v.string(),
 } satisfies Readonly<Record<AppColumnType, v.GenericSchema>>;
 
-/** Encode one program value for one declared column. */
 function encodeValue(column: AppColumn, value: JsonValue, where: string): SqlValue {
   if (value === null) {
     if (column.notNull === true) {
@@ -562,15 +380,13 @@ function encodeValue(column: AppColumn, value: JsonValue, where: string): SqlVal
 
   if (column.type !== 'blob') return v.parse(SqlPrimitiveSchema, parsed.output);
   const bytes = base64ToBytes(v.parse(v.string(), parsed.output));
-  // A fresh ArrayBuffer of exactly the decoded length: handing over
-  // `bytes.buffer` would pass whatever else its backing store holds.
+  // Copy: `bytes.buffer` may hold more than the decoded bytes.
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
 
   return buffer;
 }
 
-/** Decode one stored value back into the program's vocabulary. */
 function decodeValue(column: AppColumn, stored: StoredValue): JsonValue {
   if (stored === null || stored === undefined) return null;
   const parsed = v.safeParse(STORED[column.type], stored);
@@ -601,7 +417,6 @@ function decodeValue(column: AppColumn, stored: StoredValue): JsonValue {
   }
 }
 
-/** One applied mutation and the scope its evidence records. */
 interface AppliedOp {
   readonly result: AppOpResult;
   readonly scope: AppTableScope;
@@ -621,25 +436,19 @@ function createTableDdl(spec: AppTableSpec, physical: string): string {
   const declaredKey = spec.columns.filter((column) => column.primaryKey === true).map((column) => column.name);
 
   if (declaredKey.length > 0) {
-    // The actor LEADS the key on an actor-scoped table, so two agents holding
-    // the same logical key are two rows and neither can reach the other's.
+    // Actor leads the key so agents sharing a logical key get separate rows.
     columns.push(`PRIMARY KEY (${[...(scoped ? [ACTOR_COLUMN] : []), ...declaredKey].map(quoted).join(', ')})`);
   }
 
   for (const column of spec.columns) {
     if (column.unique !== true || column.primaryKey === true) continue;
-    // Uniqueness is scoped for the same reason the key is, and for one more: a
-    // workspace-wide UNIQUE over private rows would let one agent's value
-    // refuse another agent's insert, and that refusal is itself a disclosure.
+    // Scoped UNIQUE: a workspace-wide one would disclose other agents' private values.
     columns.push(`UNIQUE (${[...(scoped ? [ACTOR_COLUMN] : []), column.name].map(quoted).join(', ')})`);
   }
 
   return `CREATE TABLE IF NOT EXISTS ${quoted(physical)} (\n  ${columns.join(',\n  ')}\n)`;
 }
 
-/** An actor-scoped table with no declared key still gets its scan scoped: the
- *  index states ownership in the physical schema rather than leaving it to
- *  every statement's predicate. */
 function ownerIndexDdl(spec: AppTableSpec, physical: string): string | null {
   if (spec.scope !== 'actor') return null;
 
@@ -648,7 +457,6 @@ function ownerIndexDdl(spec: AppTableSpec, physical: string): string | null {
   return `CREATE INDEX IF NOT EXISTS ${quoted(`idx_${physical}_owner`)} ON ${quoted(physical)} (${quoted(ACTOR_COLUMN)})`;
 }
 
-/** Parse one argument, reporting the issue and its path rather than the schema. */
 function parseInput<Schema extends v.GenericSchema>(
   schema: Schema,
   input: { readonly value: unknown; readonly where: string },
@@ -666,7 +474,6 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   const actorId = actor.actorId;
   const catalog = quoted(AGENT_DATA_CATALOG);
 
-  /** Re-validate the binding before every statement. */
   const authorize = (): void => {
     actor.assertCurrent();
   };
@@ -720,27 +527,12 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     return column;
   };
 
-  /**
-   * Plan authority, per operation, from the resolved SCOPE rather than from the
-   * member's name: an actor-scoped write is this agent's own research state,
-   * which Plan explicitly permits (spec §9.1, the same status `state.*` has),
-   * while a workspace-scoped write is a mutation other agents observe and Plan
-   * does not. `currentWorkMode()` is the invocation's mode —
-   * `providersInWorkMode` binds it around every codemode call — so the decision
-   * is made where the scope is known and cannot be lost on the way there.
-   */
+  /** Plan permits actor-scoped writes (spec §9.1) but not workspace-scoped ones. */
   const requirePermission = (scope: AppTableScope, operation: string): void => {
     requireWorkModePermission(currentWorkMode(), scope === 'actor', operation);
   };
 
-  /**
-   * The actor predicate, and the reason it is compiled rather than passed: a
-   * `scope: 'actor'` statement is not "filtered by an actor id the caller
-   * supplied", it is built around the id of the handle this store was bound to.
-   * No argument can change it and no operation omits it.
-   *
-   * Returns whether the statement still needs its first `WHERE`.
-   */
+  /** Scope predicate from the bound handle, never an argument. Returns whether `WHERE` is still needed. */
   const compileScope = (resolved: Resolved, statement: Statement): boolean => {
     if (resolved.record.scope !== 'actor') return true;
     statement.text(` WHERE ${quoted(ACTOR_COLUMN)} = `).value(actorId);
@@ -752,9 +544,6 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     const name = quoted(column.name);
 
     if (!v.is(OperatorCarrierSchema, predicate)) {
-      // Re-parsed rather than leaned on the guard's negative narrowing: what a
-      // bare value may be is `JsonValue`, and that is a statement this reads
-      // off the schema instead of off the compiler's arithmetic on a union.
       const bare = parseInput(JsonValueSchema, { value: predicate, where: where });
       statement.text(`${name} = `).value(encodeValue(column, bare, where));
 
@@ -763,9 +552,6 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
     const operation = parseInput(PredicateOperationSchema, { value: predicate, where: where });
 
-    // A switch on the discriminant, so every operator is accounted for and the
-    // comparison arm is reached with a variant that HAS a value — an `if`
-    // chain leaves the compiler holding a wider union than the code can meet.
     switch (operation.op) {
       case 'isNull':
       case 'notNull':
@@ -774,8 +560,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         return;
       case 'in': {
         if (operation.values.length === 0) {
-          // An empty set matches nothing, and says so in SQL rather than by
-          // being dropped: a dropped predicate would WIDEN the statement.
+          // Empty set compiles to `0 = 1`; dropping it would widen the statement.
           statement.text('0 = 1');
 
           return;
@@ -825,8 +610,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   };
 
   const readRows = (resolved: Resolved, query: AppSelect | undefined, doing: string): AppRow[] => {
-    // Never `SELECT *`: the projection IS the declaration, so an actor-scoped
-    // table's injected `actor_id` is not a column any read can return.
+    // Never `SELECT *`: injected `actor_id` must not be readable.
     const columns = query?.columns === undefined
       ? resolved.record.columns
       : query.columns.map((name) => columnOf(resolved, name, doing));
@@ -861,14 +645,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     });
   };
 
-  /**
-   * One `INSERT` per consecutive run of rows sharing a column signature.
-   *
-   * The ordinary uniform insert is therefore one statement, rows that omit
-   * different nullable columns are still accepted, and row ORDER is preserved
-   * exactly — SQLite assigns rowids in statement order, so grouping
-   * non-adjacent rows would silently reorder them.
-   */
+  /** One INSERT per consecutive run of same-signature rows; preserves rowid order. */
   const insertRows = (resolved: Resolved, rows: readonly AppRow[], doing: string): number => {
     const scoped = resolved.record.scope === 'actor';
     let written = 0;
@@ -919,9 +696,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         index += 1;
       }
 
-      // `RETURNING` is how a row count crosses the `SqlExecutor` seam: the tag
-      // hands back rows, never a change count, and both backends run RETURNING
-      // writes (cli-backend/src/runtime.ts documents exactly this).
+      // `RETURNING` carries the row count; `SqlExecutor` returns no change count.
       statement.text(' RETURNING 1');
       written += execute<unknown>(sql, statement, doing).length;
     }
@@ -962,15 +737,6 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     };
   };
 
-  /**
-   * One transaction, with the evidence inside it and the fan-out after it.
-   *
-   * The `db_op` rows are written on this connection within the same
-   * `transactionSync` as the data, so they roll back with it and a failure to
-   * write them rolls the data back too. Their live notification is held until
-   * the transaction has RETURNED, so no subscriber is ever told about a
-   * mutation that was undone.
-   */
   const commit = <T>(work: (record: (event: DbOpRecord) => void) => T): T => {
     const pending: DeferredRunEvent[] = [];
     let runId: string | undefined;
@@ -1001,15 +767,11 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         const record = recordOf(existing);
 
         if (!sameDeclaration(record, declared)) {
-          // Nothing has been written on this path, so a rejected redeclaration
-          // cannot leave the catalogue describing a table that disagrees with
-          // it — the refusal happens before the transaction opens.
           throw new KinuError('denied', `table \`${declared.name}\` already exists as ${record.scope}-scope (${renderDeclaration(record)}) and re-declaring it does not migrate it; use another name`);
         }
 
         return commit(() => {
-          // Idempotent, and self-healing: the catalogue's promise is that a
-          // catalogued table exists physically.
+          // Self-healing: a catalogued table must exist physically.
           runDdl(createTableDdl(record, physical), doing);
           const index = ownerIndexDdl(record, physical);
 
@@ -1039,8 +801,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       );
 
       if (claimed.length > 0) {
-        // The indirect-escape guard: a physical object under an agent name that
-        // the catalogue does not know is NOT adopted as agent data.
+        // Never adopt an uncatalogued physical object as agent data.
         throw new KinuError('denied', `\`${physical}\` already exists in this database outside the agent-data catalogue, so it is not agent data and this will not adopt it as such`);
       }
 
@@ -1071,9 +832,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     dropTable(name) {
       const resolved = resolve(name);
       const doing = `db.dropTable(${resolved.record.name})`;
-      // Build-only on either scope: dropping retires a physical table the whole
-      // workspace can see, which is not private research state whatever the
-      // rows in it are.
+      // Build-only on either scope: dropping affects the whole workspace.
       requireWorkModePermission(currentWorkMode(), false, doing);
 
       if (resolved.record.createdBy !== actorId) {
@@ -1173,9 +932,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
             results.push(applied.result);
           }
           catch (cause) {
-            // Rethrown, never absorbed: the throw is what rolls the whole
-            // transaction back — the rows of the operations that had already
-            // succeeded AND their `db_op` evidence with them.
+            // Rethrown: the throw rolls back the whole batch, evidence included.
             throw cause instanceof KinuError ? new AppBatchError(index, cause) : cause;
           }
         }
@@ -1186,16 +943,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   };
 }
 
-/**
- * The `db` namespace declaration the model reads.
- *
- * The doctrine lives HERE and not in a prompt section, for the reason
- * `CODE_EXECUTION_SECTION` records about `agent.*`: a section is unconditional
- * while a namespace is wired per root and per role, so prose in a section would
- * advertise `db.*` to an actor that does not have it. This block ships exactly
- * when the provider does, through the one `renderCodemodeDescription` both
- * backends compose.
- */
+/** Lives here, not in a prompt section, so it ships only where the provider is wired. */
 const DB_TYPES = `type DbValue = null | boolean | number | string | DbValue[] | { [key: string]: DbValue };
 type DbColumnType = 'text' | 'integer' | 'real' | 'blob' | 'json';
 type DbColumn = { name: string; type: DbColumnType; notNull?: boolean; primaryKey?: boolean; unique?: boolean };
@@ -1264,14 +1012,7 @@ export declare const db: {
   dropTable(table: string): Promise<{ ok: true }>;
 };`;
 
-/**
- * The `db` namespace as the sandbox binds it.
- *
- * `planAllowed` marks the members that CAN run on a Plan turn; which ones
- * actually may is decided per call from the resolved table scope inside the
- * store, because that answer depends on whose rows they are and not on the
- * member's name. `dropTable` is the one member with no Plan-safe form at all.
- */
+/** `planAllowed` marks members that can run on Plan; the store decides per call by scope. */
 export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider {
   return {
     name: TOOL_REACH.db.codemode,
@@ -1333,15 +1074,8 @@ export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider 
           })).rowsAffected,
         })),
       },
-      // NOT `delete`. `@cloudflare/codemode` sanitizes a tool name that is a
-      // JavaScript reserved word before it registers the host dispatcher
-      // (`sanitizeToolName` appends `_`), while the sandbox proxy dispatches
-      // whatever the program typed — so a member called `delete` is registered
-      // as `delete_` and every hosted call to it answers `Tool "delete" not
-      // found`. Measured on the real runtime by
-      // `cf-backend/tests/workerd/db-capability.test.ts`, which is the only
-      // layer that can see it: the local factory binds the name verbatim and is
-      // perfectly happy with `delete`. One name has to work on both backends.
+      // Not `delete`: codemode registers reserved words as `delete_`, breaking hosted calls
+      // (see `cf-backend/tests/workerd/db-capability.test.ts`).
       deleteRows: {
         planAllowed: true,
         description: 'Delete matching rows: db.deleteRows(table, where).',
@@ -1361,9 +1095,7 @@ export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider 
               .map((result) => ({ rowsAffected: result.rowsAffected }));
           }
           catch (cause) {
-            // `failedIndex` is why this member does not go through
-            // `branchableToolCall`: the index is part of the refusal a program
-            // branches on, and the shared helper carries reason/error only.
+            // Not `branchableToolCall`: that helper cannot carry `failedIndex`.
             if (cause instanceof AppBatchError) return { ...refusalOf(cause), failedIndex: cause.failedIndex };
 
             if (cause instanceof KinuError) return refusalOf(cause);

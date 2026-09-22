@@ -1,15 +1,6 @@
 /**
- * The contract between a living picture and the renderers that draw it.
- *
- * Two simulations draw through it: the landing hero's search tree
- * (`hero-art.ts`) and the signed-in shell's connectome (`connectome.ts`).
- * Each emits an `ArtFrame` — strokes, points and pulses as flat float
- * arrays at the strides below — and the same two renderers (Canvas2D in
- * `hero-canvas.ts`, WebGPU in the cf-backend's `renderer-webgpu.ts`) draw
- * whichever frame they are handed. Neither knows which picture it came from.
- *
- * Coordinates are view-normalised: x and y run 0..1 across the drawn box,
- * x left to right, y top to bottom. Radii and widths are CSS pixels.
+ * Frame contract between the art simulations and the Canvas2D/WebGPU renderers.
+ * Coordinates are view-normalised (0..1, y down); radii and widths are CSS pixels.
  */
 
 export const STROKE_STRIDE = 12;
@@ -20,8 +11,7 @@ export const NODE_STRIDE = 8;
 /** A pulse is four vec4 attributes: the curve it rides, its span on it, its look, and its identity. */
 export const PULSE_STRIDE = 16;
 
-/** The tones a renderer resolves through the palette: an ordinary stroke,
- *  cooler the weaker its glow; the kept path's gold; ash; a cooling ember. */
+/** Tones resolved through the palette: accent, kept-path gold, ash, cooling ember. */
 export const TONE_ACCENT = 0;
 
 export const TONE_BRIGHT = 1;
@@ -30,10 +20,7 @@ export const TONE_ASH = 2;
 
 export const TONE_EMBER = 3;
 
-/** Every colour recedes this far toward the page's ground before it is
- *  drawn, on the GPU and on the CPU alike: the art sits behind the copy.
- *  Measured 2026-09-14 on the dark ground: the kept path's gold reads 8.9:1
- *  against the ground unmixed and 4.6:1 at this mix. */
+/** Fraction every colour recedes toward the page ground before drawing (CPU and GPU alike). */
 export const RECESS = 0.32;
 
 /** mulberry32: small, fast, and identical on every engine. */
@@ -66,8 +53,7 @@ export interface ViewSpan {
   readonly y1: number;
 }
 
-/** The distance between two view points in view widths: `aspect` scales y so a
- *  length reads the same in both directions. */
+/** Distance in view widths; `aspect` scales y so lengths match in both directions. */
 export function viewDistance(span: ViewSpan): number {
   const dx = span.x1 - span.x0;
   const dy = (span.y1 - span.y0) * span.aspect;
@@ -83,14 +69,12 @@ export interface ArtFrame {
   readonly nodes: Float32Array<ArrayBuffer>;
   readonly nodeCount: number;
   /** `pulseCount` pulses of PULSE_STRIDE floats: x0 y0 cx cy | x1 y1 tail head | width glow tone alpha | id layer direction pad.
-   *  The curve is the edge's whole quadratic in view units; the pulse occupies
-   *  it from `tail` to `head` (either may be the larger), bright at the head. */
+   *  The pulse spans the edge's quadratic from `tail` to `head` (either may be larger), bright at the head. */
   readonly pulses: Float32Array<ArrayBuffer>;
   readonly pulseCount: number;
   readonly time: number;
 }
 
-/** A float buffer that doubles when a write would pass its end. */
 export function grown(buffer: Float32Array<ArrayBuffer>, needed: number): Float32Array<ArrayBuffer> {
   if (needed <= buffer.length) return buffer;
   const wider = new Float32Array(new ArrayBuffer(buffer.byteLength * 2));
@@ -99,9 +83,7 @@ export function grown(buffer: Float32Array<ArrayBuffer>, needed: number): Float3
   return grown(wider, needed);
 }
 
-/** A box in view units a picture keeps out of: the copy's, so no stroke
- *  sits behind text. The tree turns its growth away from one; the
- *  connectome fades whatever of its tissue lies under any of many. */
+/** A box in view units the art keeps out of, so no stroke sits behind copy. */
 export interface KeepOut {
   readonly left: number;
   readonly top: number;
@@ -111,10 +93,7 @@ export interface KeepOut {
 
 export type Rgb = readonly [red: number, green: number, blue: number];
 
-/** The theme's own tokens, read from the document: accent is the gold,
- *  bright is `--c-accent-fg` (silk on dark, deep gold on paper), ash is the
- *  dim text role a pruned branch fades into, ground is the page behind the
- *  art, which every tone recedes toward by RECESS. No colour is invented here. */
+/** Theme tokens read from the document; no colour is invented here. */
 export interface ArtPalette {
   readonly mode: 'dark' | 'light';
   readonly accent: Rgb;
@@ -123,25 +102,19 @@ export interface ArtPalette {
   readonly ground: Rgb;
 }
 
-/** The CSS colour string a Canvas2D fill or stroke takes. */
 export function cssRgba(rgb: Rgb, alpha: number): string {
   const [red, green, blue] = rgb;
 
   return `rgba(${String(Math.round(red))},${String(Math.round(green))},${String(Math.round(blue))},${String(alpha)})`;
 }
 
-/** What a mount asks of whichever renderer it picked: both draw the same
- *  `ArtFrame`, and neither knows how the frame came to be. */
 export interface ArtRenderer {
   readonly kind: 'canvas' | 'webgpu';
-  /** CSS pixel size of the box and the device pixel ratio to draw at. */
   resize(width: number, height: number, ratio: number): void;
   setPalette(palette: ArtPalette): void;
   render(frame: ArtFrame): void;
-  /** A renderer that can die after it has started — the GPU half — takes one
-   *  fault handler; a fault that landed before the call replays at subscribe.
-   *  The renderer has already disposed itself by then. A renderer that cannot
-   *  fault leaves this absent. */
+  /** Only renderers that can fail after start (GPU) implement this; an earlier fault replays at subscribe,
+   *  after the renderer has already disposed itself. */
   onFault?(handler: (error: Error) => void): void;
   dispose(): void;
 }

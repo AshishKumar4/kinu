@@ -1,11 +1,4 @@
-/** Number formatting shared by the surfaces that report token spend. */
-
-/** Compact token counts: 1.2M / 200k / 4.5k / 812. A round figure drops its
- *  trailing zero — "200k" is the window, "200.0k" is false precision.
- *
- *  Undefined in, dash out, on the same rule as {@link fmtPct}: a `Usage` field
- *  the provider never reported is a silence, and printing "0" for it would
- *  claim a measurement nobody made. */
+/** Compact token counts: 1.2M / 200k / 4.5k / 812. Undefined renders a dash, never "0". */
 export function fmtTokens(n: number | undefined): string {
 	if (n === undefined) return "—";
 
@@ -19,11 +12,7 @@ export function fmtTokens(n: number | undefined): string {
 	return String(n);
 }
 
-/**
- * USD at a precision that does not round a real cost to "$0.00". Sub-cent
- * spend is the normal case for a single step, and showing it as zero would
- * read as free.
- */
+/** USD without rounding sub-cent spend to "$0.00". */
 export function fmtUsd(n: number): string {
 	if (n === 0) return "$0";
 
@@ -39,15 +28,7 @@ export function fmtPct(rate: number | null, digits = 0): string {
 	return rate === null ? "—" : `${(rate * 100).toFixed(digits)}%`;
 }
 
-/**
- * How long ago, in the one wording the app uses.
- *
- * There were two of these — the jobs card counted seconds, the changelog said
- * "just now" and fell back to a date — and they render in the SAME feed,
- * where one row reading "8s ago" beside another reading "just now" is two
- * clocks, not one. Kept out of any surface file: `shared.tsx` pulls in the
- * markdown renderer, which a roster row has no business loading.
- */
+/** The one relative-time wording the app uses. Kept out of `shared.tsx` to avoid loading the markdown renderer. */
 export function timeAgo(at: number): string {
 	const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
 
@@ -60,9 +41,7 @@ export function timeAgo(at: number): string {
 	return new Date(at).toLocaleDateString();
 }
 
-/** The compact age a narrow column carries — "4h", not "Active 4h ago" —
- *  running on past the day into days, months and years, so a list never
- *  switches to a calendar date mid-column. Null for a moment never recorded. */
+/** Compact column age ("4h"); never switches to a calendar date. Null for an unrecorded moment. */
 export function shortAge(at: number): string | null {
 	if (!at) return null;
 	const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
@@ -80,7 +59,6 @@ export function shortAge(at: number): string | null {
 	return `${Math.floor(s / 31_536_000)}y`;
 }
 
-/** Sizes at a glance, in the unit that keeps a column scannable. */
 export function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
 

@@ -1,19 +1,9 @@
 /**
- * The landing walkthrough's public contract: the cue table, its end, and the
- * handle the plan frame installs on `window`.
- *
- * This module deliberately imports nothing — no fixtures, components, browser
- * code or backend types — and lives in core so every reader shares it: the
- * plan frame under cf-backend, the recorder (scripts/plan-demo-film.ts) and
- * the public-page gate (scripts/public-pages.test.ts), which typecheck
- * against it under the scripts program where reaching into the timeline's
- * component-land imports would drag the product's DOM types under a
- * different lib. Story text, cursor geometry and the discrete-build logic
- * stay in `landing-movie-timeline.ts`, which reads its timing from here.
+ * The landing walkthrough's public contract: cue table, end, and the `window` handle. Imports nothing,
+ * so scripts typecheck against it without the timeline's DOM types; story logic is in `landing-movie-timeline.ts`.
  */
 
-/** Named beats, in absolute movie milliseconds. Order is the story. Spacing
- *  follows the deleted demo's `DEMO_CUES` calibration (`CURSOR_ENTER_AT` kept). */
+/** Named beats, in absolute movie milliseconds. Order is the story. */
 export const MOVIE_CUES = {
   typeStart: 300,
   sent: 2_600,
@@ -41,19 +31,14 @@ export const MOVIE_CUES = {
 
 export const MOVIE_END = MOVIE_CUES.end;
 
-/** A beat name from the published table — what evidence stamps and test
- *  seeks name instead of an unverified string. */
+/** A beat name from the published table. */
 export type MovieCue = keyof typeof MOVIE_CUES;
 
-/** The movie's deterministic drive, installed on `window` by the plan frame.
- *  The public-page tests drive the SAME timeline through it — never a second
- *  copy of the story. */
+/** The movie's deterministic drive, installed on `window`; tests drive the same timeline through it. */
 export interface LandingMovieHandle {
   readonly duration: number;
   readonly cues: typeof MOVIE_CUES;
-  /** Jump the timeline. Resolves once the beat's DOM is settled — the plan
-   *  chunk mounted, the approve click decided where the beat expects it — so
-   *  a caller can assert immediately. */
+  /** Jump the timeline; resolves once the beat's DOM is settled, so callers can assert immediately. */
   seek(at: number): Promise<void>;
   play(): void;
   pause(): void;

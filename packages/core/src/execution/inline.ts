@@ -1,18 +1,4 @@
-/**
- * InlineExecutor — the "workspace" provider inside the codemode sandbox.
- *
- * Wraps the agent's own resources — the Nimbus filesystem and shell, memory,
- * the craft store — as workspace.* APIs callable from LLM-generated JS:
- *
- *   workspace.readFile("/src/main.ts")
- *   workspace.writeFile("/src/util.ts", code)
- *   workspace.editFile("/src/util.ts", [{old_text, new_text}])
- *   workspace.exec("grep -rn TODO /src")
- *   workspace.searchMemory("how to handle errors")
- *   workspace.saveNote("User prefers TypeScript strict mode")
- *   workspace.listTools()
- *   workspace.slate({ op: 'list' })
- */
+/** InlineExecutor: the `workspace.*` codemode provider over the agent's own filesystem, shell, memory and craft store. */
 
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
@@ -71,70 +57,28 @@ export interface InlineExecutorDeps {
   memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
-  /** The measured limits of wherever `shell` really runs. The workspace shell
-   *  runs inside the Worker/process and declares none unless the host measured
-   *  one (the CLI passes its own cgroup's). */
+  /** Measured limits of where `shell` really runs; none unless the host measured one. */
   resourceLimits?: ResourceLimits;
-  /** Optional — used to look up crafted-tool quality columns for listTools(). */
+  /** Used to look up crafted-tool quality columns for listTools(). */
   sql?: SqlExecutor;
-  /** Whose executor. Present exactly when `sql` is: the misevolution veto this
-   *  writes lands in `evolution_events`, which is actor-scoped, so a veto with
-   *  no owner would be filed against whoever read the stream next. */
+  /** Present exactly when `sql` is: vetoes land in actor-scoped `evolution_events`. */
   actor?: ActorHandle;
   /**
-   * The turn's read/edit ledger, read live — SHARED with the native `file`
-   * tool, so workspace.writeFile/editFile's read-before-write enforcement
-   * is the SAME gate the native tool enforces (createFileDispatcher, tools/
-   * file-tool.ts) over the SAME state, not a second implementation: a native
-   * `file` edit never refuses a path this turn already read or wrote through
-   * workspace.*, and vice versa.
-   *
-   * A THUNK, not a value, because this executor is registered once per
-   * runtime construction — often the first thing a DO/session builds, ahead
-   * of the per-turn accumulator that owns the real ledger — while the ledger
-   * itself is reset per turn. Reading it lazily, at call time rather than
-   * construction time, means construction order never matters: by the time
-   * any tool here actually runs, a turn has always already begun.
-   *
-   * Returns `undefined`, not omitted, for an actor that has no turn-scoped
-   * ledger at all (a hosted head or swarm node): the caller can supply
-   * the thunk unconditionally without itself touching whatever lazily-built
-   * state decides the answer, which is what keeps this safe to wire from
-   * inside another lazy getter's own construction. Undefined (from the
-   * thunk, or the whole field omitted) → a private fresh ledger (tests, the
-   * identity bootstrap path, heads) — every caller still gets a working
-   * ledger, just not a turn-shared one.
+   * The turn's read/edit ledger, shared with the native `file` tool so both enforce one read-before-write gate.
+   * A thunk because the ledger resets per turn and this executor is built earlier; undefined → private ledger.
    */
   ledger?: () => TurnFileLedger | undefined;
-  /** Same sharing rule and reason as ledger. editFile's small ack payload
-   *  never spends it (only file-tool.ts's own `read` does); required because
-   *  the shared dispatcher's deps shape asks for one. */
+  /** Shared like `ledger`; required by the shared dispatcher's deps shape. */
   budget?: () => TurnContextBudget | undefined;
-  /**
-   * Toolchain this workspace's shell can actually reach beyond the coreutils,
-   * as the capability names for it.
-   *
-   * Declared by the host because the host is what supplies the bytes: the local
-   * CLI ships runtime packages and gets `python`, a Worker does not and must not
-   * claim one. Derived rather than written out — see
-   * `workspaceToolchainCapabilities` in vfs/workspace-runtimes.ts, which reads
-   * the same list that decides which commands get registered.
-   */
+  /** Toolchain capabilities the shell can reach beyond coreutils, declared by the host (see `workspaceToolchainCapabilities`). */
   toolchain?: readonly ExecutorCapability[];
-  /** What the host can neither claim nor rule out (`docker`, `gpu` on a bare
-   *  PATH probe). Declared rather than dropped: an omission reads to the
-   *  model exactly like a measured absence. */
+  /** Capabilities the host can neither claim nor rule out; declared, since an omission reads as a measured absence. */
   unmeasured?: readonly ExecutorCapability[];
   /** The owning workspace's slate operations; absent when this backend has no slate host. */
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
 
-/**
- * Every VFS error out of `workspace.*` carries the correction the model needs
- * (vfsAddressingHint — shared with the `file` tool, which addresses the same
- * plane). The error keeps its code, errno and path; only what a reader sees
- * changes.
- */
+/** Every VFS error out of `workspace.*` gets vfsAddressingHint; code, errno and path are kept. */
 function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
   const guided: ExecutorProvider['tools'] = {};
 
@@ -157,9 +101,7 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
   const { vfs, memory, craftStore, shell, sql, actor, resourceLimits } = deps;
-  // Private fallback for callers that share no turn-scoped ledger (tests, the
-  // identity bootstrap path) — stable across calls, so it still behaves like
-  // ONE ledger for THIS executor's lifetime even though it is not turn-shared.
+  // Fallback for callers with no turn-scoped ledger; stable for this executor's lifetime.
   const fallbackLedger = new TurnFileLedger();
   const fallbackBudget = new TurnContextBudget();
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
@@ -185,9 +127,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
         const content = await vfs.readFile(p, { encoding: 'utf8' });
         const text = v.parse(v.string(), content);
-        // The caller now has the WHOLE file, exactly like a native `file`
-        // action=write's read-before-overwrite check would record — a
-        // subsequent native `file` edit on this path is not refused as blind.
+        // The caller now has the whole file, so a later `file` edit on this path is not blind.
         currentLedger().observeWhole(p, text);
 
         return text;
@@ -217,18 +157,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
 
-        // `refusalOf`, not `refusalText`: this tool's declared result is already an
-        // OBJECT carrying `reason` then `error`, so the classification travels as
-        // the field the dispatcher's own refusals use rather than as JSON in a
-        // string. A bare `{ error }` would carry no reason at all.
+        // `refusalOf`, not `refusalText`: the declared result is an object carrying `reason`.
         if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
         const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
 
-        // Built per call: the SAME dispatcher and ledger the native `file`
-        // tool's edit action uses (createFileDispatcher, tools/file-tool.ts),
-        // read live so an edit gated here refuses identically to a
-        // native-tool edit over the SAME turn's read state — cheap
-        // (closures only, no I/O), the same cost ConversationSearchStore accepts.
+        // Same dispatcher and ledger as the native `file` edit, read live per call.
         return branchableToolCall(() => currentFileDispatch()({ action: 'edit', path, edits: list }));
       },
     },
@@ -239,9 +172,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const path = parseInput(OptionalPathSchema, { value: args[0] });
 
-        // `[]` claimed the directory was empty. Nothing was read, so nothing is
-        // known about the directory (AGENTS.md: an empty read stays
-        // distinguishable from a failed one).
+        // Nothing was read, so do not report empty (AGENTS.md: empty read ≠ failed read).
         if (args[0] !== undefined && path === undefined) {
           return refusalOf(new KinuError('bad_input', 'workspace.readdir: path must be a string'));
         }
@@ -257,7 +188,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
 
-        // `false` claimed the path was absent — the same lie one line up.
+        // A failed check is not an absence.
         if (path === undefined) {
           return refusalOf(new KinuError('bad_input', 'workspace.exists: path must be a string'));
         }
@@ -317,12 +248,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       planAllowed: true,
       description: 'List crafted tools as an array of { name, description, qualityScore }.',
       execute: async () => {
-        // Return a real array so LLM code like `const tools = await workspace.listTools(); tools.filter(...)` works.
-        // A joined markdown string has no .filter/.map and would break that call.
+        // A real array, so model code can `.filter`/`.map` it.
         const crafted = craftStore.list();
-        // Pull quality scores. The columns live on the crafted_tools row the
-        // store just wrote (state/workspace-schema.ts ensures the shape),
-        // so a read that fails is a broken database, not an unscored tool.
+        // The columns exist on the crafted_tools row, so a failed read is a broken database.
         const scoreByName = new Map<string, number>();
 
         if (sql) {
@@ -372,10 +300,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
         }
 
-        // Admission precedes every write: normalize the source to one
-        // expression and prove that it parses. The per-tool loader checks that
-        // the expression evaluates to a function and attributes a load failure
-        // to that tool.
+        // Admission precedes every write: normalize to one expression and prove it parses.
         const admitted = admitCraftedSource(code, toolName);
 
         if (!admitted.ok) {
@@ -384,19 +309,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
 
         try {
-          // Exact-name update is an upsert. A different name that matches
-          // case-insensitively is a collision — reject with an actionable
-          // error so the LLM picks a distinct identity.
+          // Exact-name update is an upsert; a case-insensitive match on another name is a collision.
           const existing = craftStore.get(toolName);
           const desc = description;
           const codeStr = admitted.code;
-          // The misevolution gate, before any write, on the `craft_tool`
-          // surface — the safety-machinery criteria in full, deliberately
-          // without `network-egress` (the same fetch runs unrestricted in an
-          // ephemeral eval call, so vetoing only its persisted form
-          // buys nothing; see SURFACE_CRITERIA). What IS refused is a stored,
-          // reusable, publishable tool that names the promotion tables, the
-          // rollout knobs, the gate entry points, or the consent settings.
+          // Misevolution gate on the `craft_tool` surface, without `network-egress` (see SURFACE_CRITERIA).
           const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
 
           if (!misevolution.ok) {
@@ -407,24 +324,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
               });
             }
             else {
-              // REPORTED, never dropped. `evolution_events` is actor-scoped, so
-              // recording a veto needs both the store and the actor whose row it
-              // is; an executor built with one and not the other cannot write it.
-              // Silence here would be the worst arm available: the gate fires,
-              // the tool is refused, and the workspace's own audit of what its
-              // gates refused has a hole in it that nothing reports. The refusal
-              // below is unaffected — this says only that the RECORD is missing.
+              // Reported, never dropped: recording a veto needs both the store and the actor.
               diagnostics.failure('misevolution.veto_unrecorded', new KinuError(
                 'unavailable',
                 'a misevolution veto fired with no actor-scoped store to record it against',
               ), { surface: 'craft_tool', criterion: misevolution.criterionId, tool: toolName });
             }
 
-            // `denied`, which is the one code that exists for this: a GATE
-            // refused and the work correctly never ran. It reached the census as
-            // an unreasoned `{ ok: false, error }` — `returned_error`, filed under
-            // `broke` — so the misevolution gate working was counted as a defect
-            // in the tool it protected.
+            // `denied`: a gate refused and the work correctly never ran.
             return {
               ok: false,
               ...refusalOf(new KinuError('denied',
@@ -462,13 +369,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             params: null,
           });
 
-          // The column defaults seed the neutral prior inside the same INSERT,
-          // so the decay + injection floor can see the new tool at all — one
-          // statement, no second write to race it.
+          // Column defaults seed the neutral prior in the same INSERT, so decay and injection floor see the tool.
           return { ok: true, name: toolName, action: 'created' };
         } catch (err) {
-          // The craft store is SQLite in this agent's own object, so `io` is what
-          // an unrecognised failure means here; a classified cause keeps its code.
+          // The craft store is local SQLite, so an unrecognised failure is `io`.
           const failure = toKinuError({
             doing: `workspace.createTool ${toolName}`, cause: err, otherwise: 'io',
           });
@@ -578,8 +482,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     tools: withVfsGuidance(vfs, tools),
     types,
     positionalArgs: true,
-    // This fallback has no inbound TCP surface. Hosted composition supplies
-    // its own process/port methods; Worker slates use their separate host.
+    // No inbound TCP surface here; Worker slates use their separate host.
     async exposePort(port) {
       return {
         supported: false,

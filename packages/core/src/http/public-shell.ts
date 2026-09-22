@@ -1,42 +1,13 @@
 /**
- * The one HTML shell every signed-out page is built from.
- *
- * Four public surfaces render outside React and outside the bundle. They are
- * the front page, sign-in, the OAuth result pages, and the CLI install and
- * approval pages. One module owns their shared shell. It carries the tokens,
- * the chrome, the type scale, the controls and the responsive rules, so a
- * token edit lands on every surface. A page supplies a title and a body.
- *
- * ## Tokens
- *
- * `THEME_BLOCKS` is a projection of `index.css`, not a second palette. Every
- * value is what that stylesheet declares for the same token in the same theme,
- * and `unit-public-shell.test.ts` replays the cascade in `index.css` and fails
- * when one drifts. That is why the projection is data rather than a string of
- * CSS.
- *
- * The public face and the app share ONE palette — the owner's app mock,
- * warm blacks and gold. A returning user's stored mode is honoured, because
- * the app writes it on this same origin.
- *
- * ## Type
- *
- * Two self-hosted faces over the wire, latin subsets. Schibsted Grotesk is
- * the display face AND the reading face — the app earns hierarchy with
- * weight, not typeface swaps — and Fragment Mono carries labels and
- * commands. Newsreader, the app's serif, is the brand mark only and lives
- * in the React bundle, so these documents ship neither its face nor a serif
- * stack.
+ * The HTML shell every signed-out page is built from.
+ * `THEME_BLOCKS` projects `index.css`; `unit-public-shell.test.ts` fails when a value drifts.
  */
 
 import { escapeHtml } from './http';
 
-/* ── Tokens ──────────────────────────────────────────────────────────── */
-
 export type Mode = 'dark' | 'light';
 
-/** The tokens the public pages use, and nothing else. A token added here must
- *  exist in `index.css` for both modes or the parity test fails. */
+/** A token added here must exist in `index.css` for both modes or the parity test fails. */
 export type PublicToken =
   | '--c-recessed' | '--c-bg' | '--c-sidebar' | '--c-surface' | '--c-elevated' | '--c-fill'
   | '--c-border' | '--c-border-strong' | '--c-input-border'
@@ -48,9 +19,7 @@ export type PublicToken =
 
 export type TokenSet = Readonly<Record<PublicToken, string>>;
 
-/** The projection of `index.css`'s two blocks — dark on `:root`, light on
- *  `[data-mode="light"]`. Values are the owner's app mock, verbatim; the
- *  parity test replays the app cascade and fails when one drifts. */
+/** Dark on `:root`, light on `[data-mode="light"]`, verbatim from `index.css`. */
 const DARK = {
   '--c-recessed': '#131110',
   '--c-bg': '#0F0D0B',
@@ -99,12 +68,7 @@ const LIGHT = {
   '--shadow-overlay': '0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07)',
 } satisfies TokenSet;
 
-/**
- * Selector → tokens, in the source order the cascade needs.
- *
- * Every block declares the COMPLETE set: a token one block omitted would
- * resolve by source order instead of by intent.
- */
+/** Every block declares the complete set: an omitted token would resolve by source order. */
 const THEME_BLOCKS: ReadonlyArray<{
   readonly selector: string;
   readonly mode: Mode;
@@ -114,12 +78,9 @@ const THEME_BLOCKS: ReadonlyArray<{
   { selector: '[data-mode="light"]', mode: 'light', tokens: LIGHT },
 ];
 
-
 export type RadiusRole = '--r-control' | '--r-row' | '--r-card' | '--r-overlay';
 
-/** Radii, as the roles `index.css` states them. The mock's two 14px measures
- *  (outer card, composer) are literals there now, not Tailwind rungs, so the
- *  parity test compares these strings to the role declarations directly. */
+/** Radii as `index.css` roles; the parity test compares these strings directly. */
 const RADII = {
   '--r-control': '6px',
   '--r-row': '8px',
@@ -127,15 +88,7 @@ const RADII = {
   '--r-overlay': '14px',
 } satisfies Readonly<Record<RadiusRole, string>>;
 
-/**
- * Pre-paint theme resolution, as the text that ships.
- *
- * It runs before the first paint, so it cannot be a module. One copy lives
- * here, and `unit-public-shell.test.ts` evaluates this exact text against
- * stubbed storage to prove the resolutions.
- *
- * The app's own bootstrap in `index.html` resolves the same way.
- */
+/** Runs before first paint, so it ships as text; the test evaluates this exact text. Matches `index.html`'s bootstrap. */
 const THEME_BOOT = `(() => {
   var root = document.documentElement;
   var stored = null;
@@ -147,72 +100,39 @@ const THEME_BOOT = `(() => {
   root.style.colorScheme = mode;
 })();`;
 
-/* ── The mark ────────────────────────────────────────────────────────── */
-
-/**
- * Kinu is 絹, silk. The mark is the hiragana く, one stroke, which is also the
- * turn a search makes: a line arrives, changes direction, and leaves. Each
- * candidate below is that stroke and nothing else. No container, no gradient,
- * no second colour. They are hand-authored paths on a 24-unit grid, drawn to
- * hold at 16px.
- *
- * `KINU_MARK` selects the one that ships, so the pick is this line.
- */
+/** The mark is the hiragana く on a 24-unit grid; `KINU_MARK` selects the one that ships. */
 export type MarkId = 'kana' | 'node' | 'loom' | 'brush';
 
 export const KINU_MARK: MarkId = 'brush';
 
-/** The stroke, as the kana is written.
- *
- * A symmetric chevron is a mathematical `>`, not a く. Four things make the
- * difference and all four are geometry: the turn sits above the middle, the
- * entry is the SHORT stroke, the exit is long and bows right before it leaves,
- * and the corner is a point rather than a curve. Getting them wrong is what
- * makes a "japanese-looking" mark come out as a caret.
- */
+/** Turn above the middle, short entry, long bowed exit, pointed corner: otherwise it reads as a caret. */
 const KU = 'M 10.2 3.6 Q 14.4 6.2 17 9.6 Q 15.2 15 4.8 21';
 
-/** The corner is mitred and the ends are round: a brush leaves a point where it
- *  changes direction and a soft edge where it lifts. */
 const STROKE = 'fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="miter"';
 
 const MARK_BODIES = {
   kana: `<path d="${KU}" ${STROKE} stroke-width="2"/>`,
-  // The stroke with its turn marked. A node with two edges IS the smallest
-  // search tree, and it is also where the kana changes direction, so one dot
-  // carries the product and the name at the same time. It is the only mark
-  // here that still reads as something at 16px.
   node: `<path d="${KU}" ${STROKE} stroke-width="1.9"/><circle cx="17" cy="9.6" r="2.5" fill="currentColor"/>`,
-  // Warp and weft. One vertical filament at low weight, crossed by the stroke,
-  // which is what a loom is, and what silk is made on.
   loom: `<path d="M 4.6 3.4 L 4.6 20.6" ${STROKE} stroke-width="1.2" stroke-opacity="0.38"/><path d="M 10.6 3.6 Q 14.8 6.2 17.4 9.6 Q 15.6 15 5.4 21" ${STROKE} stroke-width="2"/>`,
-  // The stroke as a brush lays it: pressed on entry, held through the turn,
-  // lifted on the way out. One filled outline offset from the same centre line,
-  // so there is no stroke weight left to thin out at 16px — the taper stops at
-  // 0.55 units for that reason, which is a third of a pixel on a favicon and
-  // still a visible tail.
+  // Taper stops at 0.55 units so the tail stays visible at 16px.
   brush: `<path d="M 11.52 2.1 Q 15.72 4.7 18.65 9.58 Q 16.33 16.2 5.18 21.4 L 4.42 20.6 Q 14.07 13.8 15.35 9.62 Q 13.08 7.7 8.88 5.1 Z" fill="currentColor"/>`,
 } satisfies Readonly<Record<MarkId, string>>;
 
-/** The mark at `size` px, coloured by `currentColor`. */
+/** Coloured by `currentColor`. */
 export function mark(size: number, id: MarkId = KINU_MARK): string {
   return `<svg class="mark" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${MARK_BODIES[id]}</svg>`;
 }
 
 export const MARK_IDS: readonly MarkId[] = ['kana', 'node', 'loom', 'brush'];
 
-/** Mark plus name, as one link home. */
 function wordmark(size = 21): string {
   return `<a class="brand" href="/" aria-label="Kinu.run home">${mark(size)}<span>Kinu.run</span></a>`;
 }
 
-/** The favicon, as its own document. Same paths, one declared colour, because a
- *  favicon has no cascade to inherit from. */
+/** One declared colour, because a favicon has no cascade to inherit from. */
 export function markDocument(id: MarkId = KINU_MARK): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" color="${DARK['--c-accent']}">${MARK_BODIES[id]}</svg>\n`;
 }
-
-/* ── Stylesheet ──────────────────────────────────────────────────────── */
 
 const THEME_CSS = THEME_BLOCKS.map(({ selector, tokens }) => {
   const body = Object.entries(tokens).map(([name, value]) => `${name}:${value}`).join(';');
@@ -221,12 +141,7 @@ const THEME_CSS = THEME_BLOCKS.map(({ selector, tokens }) => {
   return `${selector}{${body}${radii}}`;
 }).join('\n');
 
-/** The webfonts the public pages ship: Schibsted Grotesk, variable
- *  [wght 400-900], for display and UI, and Fragment Mono for labels and
- *  commands — the app's own three-face system minus Newsreader, which is
- *  app-only. Latin subsets, self-hosted (no font CDN at runtime), beside
- *  their OFL licence in `public/assets/fonts/`. `unit-public-shell` holds
- *  their byte budgets so an unsubset swap cannot land silently. */
+/** Self-hosted latin subsets (OFL in `public/assets/fonts/`); `unit-public-shell` holds their byte budgets. */
 const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
 
 const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
@@ -236,13 +151,6 @@ const FONT_FACES = [
   `@font-face{font-family:"Fragment Mono";src:url("${MONO_FONT_PATH}") format("woff2");font-weight:400;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
 ].join('\n');
 
-/**
- * One stylesheet for every public page.
- *
- * Structure comes from surface steps and hairlines, never from shadows or blur,
- * which is the rule the app's dark mode states. Light mode gets the same
- * structure from surface steps on the undyed ground.
- */
 const SHELL_CSS = `
 ${FONT_FACES}
 *,::before,::after{box-sizing:border-box}
@@ -416,26 +324,19 @@ footer{flex-direction:column;align-items:flex-start;gap:14px}
 }
 `;
 
-/* ── Document ────────────────────────────────────────────────────────── */
-
 export interface PublicPageOptions {
-  /** `<title>`. */
   readonly title: string;
   readonly description?: string;
-  /** Extra CSS for one page. Kept short: anything two pages need belongs in
-   *  `SHELL_CSS`. */
+  /** Anything two pages need belongs in `SHELL_CSS`. */
   readonly styles?: string;
-  /** Right-hand side of the header bar. Absent means no bar at all, which is
-   *  what the CLI approval pages want. */
+  /** Absent means no header bar. */
   readonly nav?: string;
   readonly body: string;
   readonly footer?: string;
-  /** Inline script text, appended after the body. */
   readonly script?: string;
 }
 
-/** Copy-to-clipboard for every `[data-copy]` button, addressed by the element
- *  id in its attribute. One implementation for every command on every page. */
+/** Copy-to-clipboard for every `[data-copy]` button, addressed by element id. */
 export const COPY_SCRIPT = `
 for (const button of document.querySelectorAll('[data-copy]')) {
   button.addEventListener('click', async () => {
@@ -474,13 +375,10 @@ ${options.footer ?? ''}</div>${options.script ? `<script>${options.script}</scri
 </html>`;
 }
 
-/** The one external link the public pages carry, in the one place that has to
- *  change when the repository is renamed. */
 export const REPO_URL = 'https://github.com/AshishKumar4/kinu';
 
 export const GITHUB_ICON = '<svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
 
-/** The footer every page shares. */
 export function publicFooter(): string {
   return `<footer>
   <span class="lockup">${mark(18)} Kinu.run</span>

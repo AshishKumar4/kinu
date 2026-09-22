@@ -1,68 +1,37 @@
 /**
- * What kind of terminal each environment can give a user, and the line-mode
- * driver for the environments that can give no shell at all.
- *
- * One module because the lane answer has two readers that must agree: the
- * route that attaches the socket (terminal-route.ts) and the pane that renders
- * it (components/TerminalPane.tsx). A pane that offered a PTY the route
- * refuses would be a terminal that fails on connect, and a pane that fell back
- * to line mode where a PTY exists would be a fake shell.
- *
- * The line driver lives beside the table rather than inside the pane because
- * every rule in it is decided over strings, and this is the module a test can
- * load: the pane's own graph pulls xterm, its stylesheet and React.
- *
- * Client-safe by construction: no imports, so the browser bundle can hold it.
+ * Terminal lane per environment, plus the line-mode driver for environments with no PTY.
+ * Shared by terminal-route.ts and TerminalPane.tsx, which must agree. Import-free so the browser bundle can hold it.
  */
 
-/**
- * A lane is a mode and nothing else. The pane labels the mode it is in and
- * says nothing about primitives an environment lacks: what a person can do
- * here is run one command at a time, and that is the whole label. The
- * capability evidence for each environment is the comment on
- * {@link terminalLane}, which is engineering provenance rather than product
- * copy.
- */
 export type TerminalLane =
   | { mode: 'pty' }
   | { mode: 'shell' }
   | { mode: 'line' };
 
-/** The line-mode label, beside the pane so a test can read it without xterm. */
 export const LINE_MODE_LABEL = 'line mode · one command at a time';
 
-/** What the line driver writes to. xterm's `Terminal` satisfies it. Declaring
- *  the one method keeps this module import-free and lets a test hold the bytes
- *  the pane would have painted. */
+/** xterm's `Terminal` satisfies it; one method keeps this module import-free. */
 export interface TerminalWriter {
   write(data: string): void;
 }
 
-/** One finished command, as the pane receives it — from the live broadcast, or
- *  from the stored rows a reload reads back. */
 export interface TerminalPaneOutput {
   id: string;
   command: string;
   stdout: string;
   stderr: string;
-  /** Stored lengths of the two streams. The server clips what it sends, and a
-   *  pane that showed the prefix alone would present part of an output as the
-   *  whole of it — so the clip is drawn, never implied. */
+  /** Stored stream lengths; the server clips what it sends, so the clip is drawn, never implied. */
   stdout_len: number;
   stderr_len: number;
   exit_code: number;
   created_at: number;
 }
 
-/* ── what the pane paints ─────────────────────────────────────────────── */
 
-/** The prompt, and the prompt for a command the shell has not finished
- *  reading. `sh` writes `$ ` and `> `, and the two mean the same here. */
 const PROMPT = '\x1b[32m$\x1b[0m ';
 
 const CONTINUATION = '\x1b[32m>\x1b[0m ';
 
-/** The in-flight marker, on its own line so it can be erased whole. */
 export const BUSY = '\x1b[2m⋯ running\x1b[0m';
 
 export function writePrompt(term: TerminalWriter) {
@@ -74,16 +43,10 @@ export function clearBusy(term: TerminalWriter, state: LineTerminalState) {
   term.write('\r\x1b[2K'); // carriage return + erase line
 }
 
-/* ── the line editor ──────────────────────────────────────────────────── */
 
 /**
- * Mutable state owned by one line terminal. Changing executor starts a new
- * generation so work started for the previous terminal cannot complete into
- * this one.
- *
- * The buffer holds one COMMAND, which the shell may read over several lines —
- * a backslash continuation, an open quote, a heredoc body. `needsMoreInput`
- * decides when it is finished.
+ * Changing executor starts a new generation so stale work cannot complete into this terminal.
+ * The buffer holds one command, possibly spanning lines; `needsMoreInput` decides when it is finished.
  */
 export class LineTerminalState {
   #generation = 0;
@@ -106,7 +69,6 @@ export class LineTerminalState {
     return this.#running;
   }
 
-  /** The command as typed so far, newlines included. */
   get buffer(): string {
     return this.#buffer;
   }
@@ -118,8 +80,6 @@ export class LineTerminalState {
     return true;
   }
 
-  /** Take the finished command and empty the buffer. The newline that
-   *  submitted it is not part of it. */
   takeCommand(): string {
     const command = this.#buffer.replace(/\n$/, '');
     this.#buffer = '';
@@ -131,18 +91,14 @@ export class LineTerminalState {
     this.#buffer += data;
   }
 
-  /** End one input line. The shell may still be reading. */
   newline() {
     this.#buffer += '\n';
   }
 
-  /** Delete the character before the cursor. This editor cannot move the
-   *  cursor off the current row, so backspace stops at the start of a
-   *  continuation line instead of joining it to the line above. */
+  /** Stops at the start of a continuation line rather than joining it to the line above. */
   backspace(): boolean {
     if (this.#buffer === '' || this.#buffer.endsWith('\n')) return false;
-    // One code point, not one UTF-16 unit: input arrives by code point, so
-    // slicing one unit off an astral character submits a lone surrogate.
+    // One code point, not one UTF-16 unit, so no lone surrogate is submitted.
     const points = Array.from(this.#buffer);
     points.pop();
     this.#buffer = points.join('');
@@ -150,8 +106,6 @@ export class LineTerminalState {
     return true;
   }
 
-  /** Throw away what was typed. Ctrl-C drops the whole command, every line of
-   *  it, exactly as a shell does. */
   discard() {
     this.#buffer = '';
   }
@@ -176,26 +130,20 @@ export class LineTerminalState {
   }
 }
 
-/** A heredoc the shell is waiting to read the body of. */
 interface HeredocDelimiter {
   readonly word: string;
-  /** `<<-` strips leading tabs from the body and from the closing line. */
   readonly dashed: boolean;
 }
 
 interface CommandLineScan {
-  /** The quote still open at the end of the line: `'`, `"`, or empty. */
   readonly quote: string;
-  /** The line ended with a backslash the shell removes: the command goes on. */
   readonly continued: boolean;
-  /** Heredocs this line opened, in the order their bodies arrive. */
   readonly heredocs: readonly HeredocDelimiter[];
 }
 
-/** Characters that end a word outside quotes. */
 const WORD_BREAK = ' \t;&|<>()';
 
-/** Read the delimiter word of a heredoc operator. Returns where it ends. */
+/** Returns where the delimiter word ends. */
 function readDelimiter(line: string, start: number) {
   let word = '';
   let i = start;
@@ -234,7 +182,6 @@ function readDelimiter(line: string, start: number) {
   return { word, end: i };
 }
 
-/** One command line, read with the quote left open by the line before it. */
 function scanCommandLine(line: string, openQuote: string): CommandLineScan {
   const heredocs: HeredocDelimiter[] = [];
   let quote = openQuote;
@@ -251,7 +198,6 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
     }
 
     if (quote === "'") {
-      // A single quote quotes everything, the backslash included.
       if (ch === "'") quote = '';
       i += 1;
       continue;
@@ -276,8 +222,7 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
     }
 
     if (ch === '#' && (i === 0 || line[i - 1] === ' ' || line[i - 1] === '\t')) {
-      // A comment runs to the end of the line, so a `<<EOF` inside one opens
-      // no heredoc and must not strand the editor on a continuation prompt.
+      // A `<<EOF` inside a comment opens no heredoc.
       break;
     }
 
@@ -286,9 +231,7 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
       let at = i + (dashed ? 3 : 2);
 
       while (line[at] === ' ' || line[at] === '\t') at += 1;
-      // `<<<` is a here-string and takes no body. It needs no branch of its
-      // own: its third `<` breaks the word, the delimiter comes back empty,
-      // and an empty delimiter queues nothing.
+      // `<<<` needs no branch: its third `<` breaks the word and the empty delimiter queues nothing.
       const delimiter = readDelimiter(line, at);
 
       if (delimiter.word !== '') heredocs.push({ word: delimiter.word, dashed });
@@ -303,23 +246,12 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
 }
 
 /**
- * Whether the shell would still be reading this command.
- *
- * The executor takes a whole command as one string and runs it in one shell
- * (`box.exec`, core/src/execution/nimbus.ts), so a command the shell reads over
- * several lines is one call rather than several. This predicate decides when
- * Enter submits and when it opens a continuation line.
- *
- * It answers for what a lexer can see: an open single or double quote, a
- * trailing backslash, and a heredoc whose delimiter line has not arrived. A
- * command left incomplete by the GRAMMAR — a trailing `|`, `&&`, or an open
- * `do` — submits, and the shell reports the syntax error. Reading those needs
- * the parse, and a wrong guess strands a user at a prompt no key can leave.
+ * Whether the shell would still be reading this command: open quote, trailing backslash, or pending heredoc.
+ * Grammar-incomplete commands (trailing `|`, `&&`, open `do`) submit and the shell reports the error.
  */
 function needsMoreInput(source: string): boolean {
   const lines = source.split('\n');
 
-  // A trailing newline ends the last line; it does not start an empty one.
   if (lines[lines.length - 1] === '') lines.pop();
   let quote = '';
   let continued = false;
@@ -339,15 +271,13 @@ function needsMoreInput(source: string): boolean {
     continued = scan.continued;
     queued.push(...scan.heredocs);
 
-    // The bodies start after the whole logical line, so a continued line keeps
-    // collecting operators before the first body arrives.
     if (!continued) body = queued.shift() ?? null;
   }
 
   return quote !== '' || continued || body !== null || queued.length > 0;
 }
 
-/** Skip one escape sequence. Returns the index of its last character. */
+/** Returns the index of the escape sequence's last character. */
 function skipEscape(chars: readonly string[], start: number): number {
   const next = chars[start + 1];
 
@@ -367,23 +297,14 @@ function skipEscape(chars: readonly string[], start: number): number {
 }
 
 /**
- * Feed one xterm data chunk to the line editor. Returns the command to run, or
- * null while the editor is still collecting.
- *
- * A chunk is the unit, not a keystroke, because a PASTE arrives as one chunk
- * with every newline already turned into CR (xterm's `prepareTextForTerminal`,
- * browser/Clipboard.ts). Submitting the first line and returning is how every
- * later line of a pasted script vanishes with no echo and no error. Here a CR
- * that is not the end of the chunk opens the next line of the SAME command,
- * which is what the pasted text means: one shell, one working directory, one
- * call — the script the user copied.
+ * Returns the command to run, or null while collecting. A paste arrives as one chunk with newlines as CR,
+ * so a CR not at the chunk's end continues the same command.
  */
 export function feedInput(
   term: TerminalWriter,
   state: LineTerminalState,
   data: string,
 ): string | null {
-  // By code point, so an astral character stays one unit.
   const chars = Array.from(data);
 
   for (let i = 0; i < chars.length; i += 1) {
@@ -391,9 +312,7 @@ export function feedInput(
     const code = ch.charCodeAt(0);
 
     if (code === 0x1b) {
-      // An escape sequence is a key this editor does not implement: an arrow,
-      // Home, a function key. Skipping it whole keeps its final letter out of
-      // the command: otherwise `\x1b[A` types `[A` at the cursor.
+      // Unimplemented keys are skipped whole, so `\x1b[A` does not type `[A`.
       i = skipEscape(chars, i);
       continue;
     }
@@ -430,8 +349,7 @@ export function feedInput(
       continue;
     }
 
-    // Tab is text here, not completion: a pasted `<<-` body and any indented
-    // script carry them, and dropping them changed what the user pasted.
+    // Tab is text, not completion: pasted `<<-` bodies and indented scripts carry them.
     if (code === 0x09 || code >= 0x20) {
       state.append(ch);
       term.write(ch);
@@ -441,10 +359,7 @@ export function feedInput(
   return null;
 }
 
-/* ── what a finished command paints ───────────────────────────────────── */
 
-/** Say what the row is not showing. Silence here would turn a clipped prefix
- *  into a claim about the whole output. */
 function writeClipNote(term: TerminalWriter, stream: string, shown: number, stored: number) {
   const withheld = stored - shown;
 
@@ -453,40 +368,19 @@ function writeClipNote(term: TerminalWriter, stream: string, shown: number, stor
 }
 
 /**
- * Program bytes to terminal bytes, and one stream painted.
- *
- * A program ends a line with LF. A terminal starts the next line at column 0,
- * which takes CR LF, and xterm writes exactly the bytes it is given. An LF
- * alone drops one row and keeps the column, so every row of an `ls -la` began
- * where the row above it ended and the output walked off the right edge. A
- * real tty converts in its line discipline (ONLCR). Line mode has no tty, so
- * the pane converts here, at the one seam where program bytes arrive.
- *
- * xterm's `convertEol` option would convert too, and it is not used: the
- * option belongs to the Terminal, and both drivers build theirs from
- * `newTerminal`. The PTY driver carries container bytes that already end lines
- * in CR LF and that position the cursor before writing an LF, so adding a CR
- * there would move output the container placed.
- *
- * A lone CR survives. A progress bar means it.
+ * Converts LF to CR LF (line mode has no tty ONLCR); a lone CR survives for progress bars.
+ * Not xterm `convertEol`: the PTY driver shares `newTerminal` and its bytes already end in CR LF.
  */
 function writeStream(term: TerminalWriter, text: string, danger: boolean) {
   const painted = text.replace(/\r?\n/g, '\r\n');
   term.write(danger ? `\x1b[31m${painted}\x1b[0m` : painted);
 
-  // The next thing painted is the prompt, and it belongs on its own row.
   if (!text.endsWith('\n')) term.write('\r\n');
 }
 
 /**
- * Paint one finished command.
- *
- * A FAILING row carries one text in both columns. The executor renders the
- * exit code, stdout and stderr into a single string (`formatExecResult`,
- * core/src/execution/exec-result.ts) and the orchestrator stores that string as
- * stdout and as stderr (`executeInExecutor`), so painting both drew every
- * failure twice — once plain, once in red. The repeat is dropped and the
- * failure keeps its colour.
+ * A failing row carries one text as both stdout and stderr (`formatExecResult`, `executeInExecutor`),
+ * so the repeat is dropped.
  */
 export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
   const failed = out.exit_code !== 0;
@@ -504,37 +398,11 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
 }
 
 /**
- * Per-environment terminal capability, established from each environment's own
- * source rather than from what would be convenient.
- *
- * `sandbox` — @cloudflare/sandbox 0.12.8 runs a real pseudo-terminal:
- *   `sandbox-container/src/pty.ts` spawns the shell against a `Bun.Terminal`
- *   (`name: 'xterm-256color'`, `TERM=xterm-256color` in the child's env),
- *   `resize(cols, rows)` reaches that terminal, and a 256 KiB ring buffer
- *   replays to a reattaching client.
- *
- * `workspace` — Nimbus's own shell, `shell` mode. The hosted runtime
- *   (@nimbus-sh/worker 0.10.0 `composeHostedRuntime`: `attachTerminal`,
- *   `terminalFrame`, `terminalClose`) keeps one `WebSocketTerminal` per
- *   workspace with its own line editor, scrollback replay on reattach, and
- *   the bash and python REPLs. It is not a pseudo-terminal: Nimbus is a
- *   JS/WASM substrate whose tty shim states there is no real TTY
- *   (`@nimbus-sh/core` substrate/lifo/node-compat/tty.d.ts), so there is no
- *   raw mode and a full-screen program cannot paint. The wire is JSON text:
- *   `{type:'input'}` and `{type:'resize'}` in, `{type:'output'}` and
- *   `{type:'ready'}` out (`packages/worker/src/facets/ws-terminal.ts`).
- *
- * `device` — the owner's own machine, through its agent
- *   (`packages/pc-agent/src/pty.js`). The agent allocates a real terminal per
- *   session, claims it as the shell's controlling terminal, and streams bytes
- *   both ways over the one socket it already dials out on. Measured there
- *   2026-09-03: `top` paints, a resize delivers SIGWINCH to the running
- *   program, and ^C, ^Z, `bg` and `fg` all reach it. A session carries the
- *   workspace's grant for that machine and the same sandbox confinement an
- *   `exec` carries, decided by one call (`UserDO.deviceRpc`).
- *
- * `parent` — a fork reaching its origin's exec plane, one call per command,
- *   with no session of its own to attach to.
+ * Per-environment terminal capability:
+ * `sandbox` — @cloudflare/sandbox runs a real PTY (`sandbox-container/src/pty.ts`).
+ * `workspace` — Nimbus `WebSocketTerminal`, a line editor with no raw mode (no real TTY in the substrate).
+ * `device` — a real PTY per session via `packages/pc-agent/src/pty.js`, gated by `UserDO.deviceRpc`.
+ * `parent` — a fork's origin exec plane, one call per command, no session.
  */
 export function terminalLane(executor: string): TerminalLane {
   if (executor === 'sandbox' || executor === 'device') return { mode: 'pty' };

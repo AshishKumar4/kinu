@@ -8,19 +8,9 @@ import { JsonValueSchema, isJsonObject, type JsonObject } from '../utils/json';
 const ArgumentObjectSchema = v.pipe(JsonValueSchema, v.check(isJsonObject), v.transform((value) => (isJsonObject(value) ? value : {})));
 
 /**
- * The AI SDK's `experimental_repairToolCall` seam, filled deterministically.
- *
- * The SDK calls this once per tool call it cannot parse or validate, and the
- * contract (`ai/dist/index.mjs`, `parseToolCall`) is exact: a returned call is
- * parsed and validated AGAIN, `null` keeps the original error — the call then
- * lands as `invalid` and the model reads it back through the tool-error
- * feedback projection — and a throw becomes a `ToolCallRepairError`, which is
- * why nothing here throws.
- *
- * No model is consulted. The SDK's documented repairs re-ask the model or run
- * `generateObject` against the schema, which is inference outside every spend
- * ledger this backend keeps; the shapes below are the ones a deterministic
- * rewrite settles, and everything else is left to the model's own retry.
+ * The AI SDK's `experimental_repairToolCall` seam, filled deterministically. A returned call is
+ * re-validated, `null` keeps the original error, and a throw becomes `ToolCallRepairError`, so nothing
+ * here throws. No model is consulted: that would be inference outside every spend ledger.
  */
 export function repairToolCall<Tools extends ToolSet>(): ToolCallRepairFunction<Tools> {
   return async ({ toolCall, tools, error }) => {
@@ -28,8 +18,7 @@ export function repairToolCall<Tools extends ToolSet>(): ToolCallRepairFunction<
       const wanted = toolCall.toolName.toLowerCase();
       const matches = Object.keys(tools).filter((name) => name.toLowerCase() === wanted);
 
-      // Two names that differ only by case are two tools; guessing between
-      // them is a call the model did not make.
+      // Case-only differences name distinct tools; do not guess.
       return matches.length === 1 && matches[0] !== undefined ? { ...toolCall, toolName: matches[0] } : null;
     }
 
@@ -48,8 +37,7 @@ const DoubleEncodedSchema = v.pipe(
   ArgumentObjectSchema,
 );
 
-/** `{ input: {…} }` / `{ arguments: {…} }`: the schema's object wrapped in the
- *  wire's own key name, and nothing beside it. */
+/** `{ input: {…} }` / `{ arguments: {…} }` wrapping the schema's object, with nothing beside it. */
 const WrappedSchema = v.union([
   v.strictObject({ input: ArgumentObjectSchema }),
   v.strictObject({ arguments: ArgumentObjectSchema }),

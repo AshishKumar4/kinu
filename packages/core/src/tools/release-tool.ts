@@ -1,14 +1,6 @@
 /**
- * The release lane's dispatch logic — the ledger (board/bind_source/create/
- * update/transition/request_approval), the no-engine record_* twins, and the
- * engine-driven apply/run_checks/preview/deploy/rollback actions, gated on
- * the SAME `releases.engine` presence the schema gates on (see the release
- * doctrine block in tools/registry.ts).
- *
- * This was the body of a native `release` tool; it is now reached ONLY
- * through the `release.*` codemode namespace (tools/release-codemode.ts) —
- * this file holds the ONE implementation both the codemode members and any
- * future caller share, mirroring delegation/agents-tool.ts's dispatchAgentsAction.
+ * Release lane dispatch: ledger actions, no-engine record_* twins, and engine actions gated on
+ * `releases.engine`. Reached only through the `release.*` codemode namespace (tools/release-codemode.ts).
  */
 import {
   isEngineOwnedTransitionTarget,
@@ -56,15 +48,11 @@ export interface ReleaseToolDeps {
     deploymentId?: string | null;
     rollbackTarget?: string | null;
   }): Promise<ReleaseDeployment>;
-  /** Execution engine beneath the ledger (apply/run_checks/preview/deploy/
-   *  rollback grounded in real sandbox execution). When wired, the tool
-   *  refuses manual transitions into engine-owned states and refuses
-   *  record_check / record_deployment — those results are EARNED via the
-   *  engine actions. Absent on backends without an execution substrate. */
+  /** Execution engine beneath the ledger. When wired, manual transitions into engine-owned
+   *  states and record_check / record_deployment are refused. */
   engine?: Pick<ReleaseEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
 }
 
-/** The one input shape every release action reads a slice of. */
 export interface ReleaseActionInput {
   action: ReleaseToolAction;
   binding?: {
@@ -112,17 +100,12 @@ export type ReleaseActionResult =
   | Awaited<ReturnType<ReleaseEngine['rollback']>>
   | { error: string };
 
-/** Everything the engine-driven phase reads: the deps holding the engine
- *  and the action input. Only reached for engine actions; any other action
- *  answers an error rather than falling off the switch. */
 interface ReleaseEngineContext {
   readonly releases: ReleaseToolDeps;
   readonly args: ReleaseActionInput;
 }
 
-/** Engine-driven actions — apply, run_checks, preview, deploy, rollback —
- *  grounded in real execution. Refuses without an engine, and requires the
- *  change the engine acts on. */
+/** Engine-driven actions; refuses without an engine or a change. */
 async function runReleaseEngineAction(ctx: ReleaseEngineContext): Promise<ReleaseActionResult> {
   const engine = ctx.releases.engine;
 
@@ -158,8 +141,7 @@ async function runReleaseEngineAction(ctx: ReleaseEngineContext): Promise<Releas
       });
     case 'rollback':
       return await engine.rollback(ctx.args.changeId, ctx.args.deployment?.command ? { command: ctx.args.deployment.command } : undefined);
-    // The ledger actions, named rather than defaulted: this dispatcher runs the
-    // engine half, and `runReleaseLedgerAction` has already taken these.
+    // Ledger actions were already taken by `runReleaseLedgerAction`.
     case 'bind_source':
     case 'board':
     case 'create':
@@ -172,8 +154,7 @@ async function runReleaseEngineAction(ctx: ReleaseEngineContext): Promise<Releas
   }
 }
 
-/** Dispatch one release action. Never throws — every failure comes back as
- *  `{ error }` so a codemode caller sees a value, not an exception. */
+/** Dispatch one release action. Never throws; failures return `{ error }`. */
 export async function runReleaseAction(
   releases: ReleaseToolDeps,
   args: ReleaseActionInput,
@@ -246,10 +227,7 @@ export async function runReleaseAction(
       case 'request_approval':
         if (!args.changeId || !args.approvalType) return { error: 'request_approval requires changeId and approvalType' };
 
-        // A rollback approval binds the command it authorises, so the owner is
-        // approving a specific restore rather than the word "rollback".
-        // `deployment.command` is where the caller already states it, and
-        // `rollback()` recomputes the same digest before executing.
+        // A rollback approval binds its command; `rollback()` recomputes the same digest before executing.
         return args.approvalType === 'rollback'
           ? await releases.requestApproval(args.changeId, args.approvalType, {
             command: args.deployment?.command ?? null,

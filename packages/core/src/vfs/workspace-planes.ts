@@ -1,16 +1,6 @@
 /**
- * The hosted workspace's other byte planes: the protected SOUL write, the two
- * halves of a fork transfer, and the archive walk.
- *
- * Each is an ordinary operation on the filesystem this actor holds, not an RPC
- * into another object, and that is what makes the fork's staging atomic: the
- * rename that publishes a staged file happens in the same SQLite as the row
- * that records the transfer, so `transactionSync` covers both.
- *
- * They are here rather than on {@link HostedWorkspace} because they are not part
- * of what a turn reaches. The workspace's file plane, shell and executor are
- * used on every step; these four are used by three flows the orchestrator owns
- * (setSoul, fork, export) and nothing else builds them.
+ * SOUL write, fork transfer halves, and archive walk. Fork staging is atomic because the
+ * publishing rename and the transfer row share one SQLite `transactionSync`.
  */
 
 import {
@@ -25,25 +15,13 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
-/** The plane the fork transfer and the archive walk read and write: the same
- *  rows the agent's own file tools see, as the same identity the session's
- *  pid-less file operations resolve to. */
 async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
   return (await bundle.session()).vfs.as(CRED_SESSION_USER);
 }
 
 /**
- * The owner-protected SOUL write.
- *
- * Ordinary Unix permissions, and nothing else: the workspace root becomes a
- * sticky 1777 directory owned by the kernel and SOUL.md itself is kernel-owned
- * and mode 444, so the agent keeps normal use of its own home and cannot
- * replace, rename or remove its identity document. Exactly the mechanism
- * Nimbus's own protected-root write uses (`_rpcWriteProtectedRootFile`), which
- * this replaces now that the filesystem is in this isolate.
- *
- * Bytes as well as text, so a fork publishes the exact frame it received without
- * decoding it first.
+ * Owner-protected SOUL write: sticky 1777 root owned by the kernel, SOUL.md kernel-owned
+ * mode 444, so the agent cannot replace, rename or remove it.
  */
 export async function writeWorkspaceSoul(
   bundle: WorkspaceBundle, content: string | Uint8Array,
@@ -62,17 +40,9 @@ export async function writeWorkspaceSoul(
   kernel.chmod(soul, 0o444);
 }
 
-/**
- * The fork receiver's filesystem authority.
- *
- * Kept outside the general file handle because range writes are staging-only: an
- * ordinary caller must not receive raw range-write authority over the workspace.
- */
+/** Range writes are staging-only; ordinary callers must not get raw range-write authority. */
 export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: string): ForkFileSink {
-  // Staging is a WRITE, and a write's parents are its precondition: a fork
-  // lands on a fresh target whose tree holds nothing yet, so the first
-  // `memory/*` range would otherwise ENOENT on the directory. Same contract
-  // the box file adapter keeps for `write`.
+  // A fork lands on an empty tree, so staging creates parents first.
   const ensureParent = async (path: string): Promise<void> => {
     const resolved = workspacePath(path);
     const cut = resolved.lastIndexOf('/');
@@ -93,21 +63,12 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
       await ensureParent(path);
       (await sessionPlane(bundle)).writeRange(workspacePath(path), offset, bytes);
     },
-    // The staged temp read back for the whole-file digest. Ranged, and through
-    // the same read the source half streams with: the activation that finishes a
-    // file need not be the one that wrote its first range, so the check has to
-    // come off the staging rather than out of memory.
+    // Read back from staging: the activation that finishes a file may not have written its first range.
     async readRange(path, offset, length) {
       return (await sessionPlane(bundle)).readRange(workspacePath(path), offset, length);
     },
     async rename(from, to) {
-      // `SqliteVFS.rename` is the ONE op that reads its inode map without
-      // normalizing — every sibling op drops the leading slash through
-      // `normalizeVfsPath` before the lookup — so a slash-prefixed source
-      // misses a key that provably exists, and a slash-prefixed DESTINATION
-      // would be stored under a key later lookups can never spell. Normalized
-      // here at the seam; every fork file's publish crosses it, and the
-      // resumed-transfer test walks exactly this path.
+      // `SqliteVFS.rename` does not normalize paths itself, unlike sibling ops.
       (await sessionPlane(bundle)).rename(
         normalizeVfsPath(workspacePath(from)), normalizeVfsPath(workspacePath(to)),
       );
@@ -116,15 +77,8 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
   };
 
   return new NativeSinkPlan(native, transferId, {
-    // Ordinary files publish by rename. SOUL cannot: the protected write chowns
-    // the file to the kernel and takes whole content, and renaming a
-    // session-user temp over SOUL would publish the identity document without
-    // that ownership.
+    // SOUL cannot publish by rename: that would skip the protected write's kernel ownership.
     owns: (targetPath) => targetPath === SOUL_PATH,
-    // Published from the ONE frame SOUL arrived in — the same bytes the sink was
-    // handed, sent straight into the protected write. Nothing is staged on disk
-    // for it, and the mission is read from the head of those bytes rather than
-    // by decoding the document into a second whole copy.
     async publish(_targetPath, bytes) {
       await writeWorkspaceSoul(bundle, bytes);
 
@@ -133,8 +87,6 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
   });
 }
 
-/** The source half of a fork: the workspace plane's own walk, with each
- *  inherited file read one range at a time rather than materialized whole. */
 export function createWorkspaceForkSource(
   bundle: WorkspaceBundle, plane: ForkFileSource,
 ): ForkFileSource {
@@ -146,13 +98,7 @@ export function createWorkspaceForkSource(
   };
 }
 
-/**
- * The workspace root as the archive stream reads it.
- *
- * Only metadata is accumulated; file bodies remain one-at-a-time reads in the
- * archive pager. Unsupported node kinds fail the backup instead of silently
- * producing an incomplete one.
- */
+/** Unsupported node kinds fail the backup rather than producing an incomplete one. */
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
   return archiveFileTree({
     readdir: async (path) => [...(await sessionPlane(bundle)).readdir(workspacePath(path))],
@@ -160,7 +106,6 @@ export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSourc
   });
 }
 
-/** Paths are relative to the source root; unsupported node kinds refuse the archive. */
 export function archiveFileTree(source: {
   readdir(path: string): Promise<readonly { name: string; type: string }[]>;
   readFile(path: string): Promise<Uint8Array>;

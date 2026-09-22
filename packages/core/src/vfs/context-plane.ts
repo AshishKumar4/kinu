@@ -72,8 +72,8 @@ interface StagedView { readonly entries: readonly ContextEntry[]; readonly block
 
 interface DesiredEntry { readonly entryId: string; readonly messageId: string; readonly message: JsonObject; readonly prepare: boolean }
 
-/** What the working file shows over the selected revision: the pending proposal's preview when one is staged, the revision
- *  itself otherwise. A preview the history has rewritten from under its proposal is shown as the revision, blocked and not staged. */
+/** The pending proposal's preview when staged, else the revision. A preview rewritten from under its
+ *  proposal shows as the revision, blocked. */
 function stagedEntries(history: SessionHistory, selection: ContextSelection | null, pending: PendingContextProposal | undefined): StagedView {
   let entries = selection === null ? [] : history.context.entries(selection);
   let blocked = pending?.deferred_reason ?? undefined;
@@ -96,12 +96,11 @@ interface WorkingVersionFacts {
   readonly blocked: StagedContextDeferral | undefined; readonly claim: StoredActorClaim | null;
 }
 
-/** The working file's revision token: everything a later write must find unchanged, in the order contextRevision reads it back. */
+/** Revision token: everything a later write must find unchanged, in the order contextRevision reads it. */
 const workingVersion = ({ actorId, selection, pending, blocked, claim }: WorkingVersionFacts): string =>
   token([actorId, selection?.contextId ?? null, selection?.revision ?? 0, pending?.proposal_id ?? null,
     blocked ?? null, claim?.turnId ?? null, claim?.epoch ?? null, claim?.status ?? null]);
 
-/** The header's status: a staged proposal is what the file shows; with none, the selection says whether there is a context at all. */
 function headerStatus(staged: boolean, selection: ContextSelection | null): ContextFileHeader['status'] {
   if (staged) return 'staged';
 
@@ -110,7 +109,6 @@ function headerStatus(staged: boolean, selection: ContextSelection | null): Cont
   return 'active';
 }
 
-/** The entries a revision token addresses: a staged proposal's preview at that revision, or the revision's own entries. */
 function revisionEntries(history: SessionHistory, selection: ContextSelection | null, stagedProposalId: string | null): readonly ContextEntry[] {
   if (selection === null) return [];
 
@@ -119,11 +117,11 @@ function revisionEntries(history: SessionHistory, selection: ContextSelection | 
   return history.context.entries(selection);
 }
 
-/** The tool-pairing view of a message, or undefined when it carries no tool parts: only structured assistant and tool content can pair. */
+/** Tool-pairing view of a message, or undefined when it carries no tool parts. */
 const pairingView = (message: JsonObject): PairingView | undefined =>
   (message.role === 'assistant' || message.role === 'tool') && !v.is(v.string(), message.content) ? v.parse(PairingView, message) : undefined;
 
-/** The body lines of a working.jsonl write, admitted only when its $context header is the observed one: the same actor, version, selection and pending edit. */
+/** Body lines of a working.jsonl write, admitted only when its $context header matches the observed one. */
 function workingLines(data: string | Uint8Array, observed: WorkingView, actorId: string): readonly string[] {
   const text = v.is(v.string(), data) ? data : new TextDecoder('utf-8', { fatal: true }).decode(data);
   const lines = text.split('\n').filter(line => line.trim() !== '');
@@ -139,9 +137,8 @@ function workingLines(data: string | Uint8Array, observed: WorkingView, actorId:
   return lines.slice(1);
 }
 
-/** The entries a write asks for, matched line by line against the observed ones. A new line gets a fresh identity; an existing line keeps
- *  its entry and keeps its message unless the content differs, in which case the message is re-prepared under a new id.
- *  `originals` holds the projection read for every existing line, so the pairing check does not read it twice. */
+/** Matches a write's lines against the observed entries. New lines get fresh ids; changed lines are
+ *  re-prepared under new ids. `originals` avoids re-reading projections for the pairing check. */
 async function desiredEntries(lines: readonly string[], observed: readonly ContextEntry[], messages: SessionMessages): Promise<{ desired: DesiredEntry[]; originals: Map<string, JsonObject> }> {
   const entries = lines.map(line => v.parse(EntrySchema, JSON.parse(line)));
   const visible = new Map(observed.map(entry => [entry.entryId, entry]));
@@ -168,8 +165,7 @@ async function desiredEntries(lines: readonly string[], observed: readonly Conte
   return { desired, originals };
 }
 
-/** Prepares every changed or new message in order, resolving each tool result against the tool call that precedes it in the
- *  desired order; a kept message contributes its calls from storage. */
+/** Prepares changed or new messages in order; each tool result resolves against its preceding call. */
 async function prepareDesired(desired: readonly DesiredEntry[], messages: SessionMessages): Promise<PreparedMessage[]> {
   const calls = new Map<string, { messageId: string; part: number }>();
   const prepared: PreparedMessage[] = [];
@@ -189,7 +185,6 @@ async function prepareDesired(desired: readonly DesiredEntry[], messages: Sessio
   return prepared;
 }
 
-/** Refuses an edit that leaves a tool call or result unpaired which was paired in the observed context. */
 async function assertPairsIntact(observed: readonly ContextEntry[], originals: ReadonlyMap<string, JsonObject>, desired: readonly DesiredEntry[], messages: SessionMessages): Promise<void> {
   const beforeViews: PairingView[] = [];
 
@@ -206,8 +201,7 @@ async function assertPairsIntact(observed: readonly ContextEntry[], originals: R
   if ([...afterPairs.calls].some(id => !beforePairs.calls.has(id)) || [...afterPairs.results].some(id => !beforePairs.results.has(id))) throw new KinuError('bad_input', 'context edit severs a tool call/result pair');
 }
 
-/** The change list from the base revision to the desired entries: every base entry the write dropped, then every desired entry whose
- *  identity or position differs from the base. */
+/** Changes from base to desired: dropped base entries, then desired entries whose identity or position differs. */
 function changesAgainst(base: readonly ContextEntry[], desired: readonly DesiredEntry[]): ContextChange[] {
   const baseById = new Map(base.map(entry => [entry.entryId, entry]));
   const wantedIds = new Set(desired.map(entry => entry.entryId));
@@ -224,7 +218,6 @@ function changesAgainst(base: readonly ContextEntry[], desired: readonly Desired
 }
 
 function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readRange'> {
-  /** The actor and segments a path addresses, or null when it addresses nothing. */
   const target = (path: string): Target | null => {
     const parts = path.split('/').filter(part => part !== '' && part !== '.');
 
@@ -242,7 +235,6 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     return { stores: child, author: own.claims.actorId, segments: parts.slice(2), child: true };
   };
 
-  /** The same address, for an operation that needs one. */
   const located = (path: string): Target => {
     const resolved = target(path);
 
@@ -316,7 +308,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     },
   });
 
-  /** The file a resolved address names, or null when none does; a directory address is refused as one. */
+  /** The file a resolved address names, or null; a directory address is refused. */
   const document = (resolved: Target, path: string): Document | null => {
     const [head, second, third] = resolved.segments;
     const history = resolved.stores.claims.history;
@@ -381,7 +373,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     return null;
   };
 
-  /** A directory's entries, 'file' when the address names a file, null when it names no directory. */
+  /** Directory entries, 'file' for a file address, null for no directory. */
   const list = (resolved: Target): string[] | 'file' | null => {
     const [head, second] = resolved.segments;
     const history = resolved.stores.claims.history;
@@ -408,7 +400,6 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     return 'file';
   };
 
-  /** One question, answered once: what a path names. */
   const resolve = (path: string): { kind: 'dir'; entries: string[] } | { kind: 'file'; document: Document } | null => {
     const resolved = target(path);
 
@@ -423,7 +414,6 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     return source === null ? null : { kind: 'file', document: source };
   };
 
-  /** The file a path names, for a read that needs one. */
   const file = (path: string): Document => {
     const source = document(located(path), path);
 

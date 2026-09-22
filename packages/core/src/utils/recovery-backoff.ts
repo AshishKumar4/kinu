@@ -1,34 +1,8 @@
-/**
- * The pace of recovery work that must never give up.
- *
- * Every durable lane in this system re-enters work an interruption left behind:
- * a notice whose delivery was refused, a maintenance pass that did not finish,
- * a background job whose isolate died mid-attempt. None of them may stop trying
- * — a cap there discards the user's work over a platform event that says nothing
- * about whether the work is possible — and none of them may retry at the speed
- * of the loop that noticed, or a persistently failing sweep becomes a 1 Hz
- * hammer on the same rows.
- *
- * So: unbounded ATTEMPTS with a bounded PACE, which is the retry doctrine every
- * provider path here already follows.
- *
- * ONE CURVE, and that is why this lives in core rather than beside its first
- * caller. The notice lane, the maintenance tick's re-arm and the job runner's
- * deferral are the same decision about the same kind of event, and a second
- * definition of it is the drift this repository keeps paying to remove.
- */
+/** Recovery pace for durable lanes: unbounded attempts, bounded pace. One shared curve; do not redefine per caller. */
 
 /**
- * How long to wait before attempt `attempts + 1`: one second, doubling, to a
- * sixty-second ceiling.
- *
- * `attempts` is how many attempts have already been made, so the FIRST wait —
- * the one after a single interruption — is the curve's first term, one second.
- * Clamped at both ends: the exponent saturates before the doubling could
- * overflow, and the result is capped at the ceiling, so a caller that keeps
- * counting can keep calling without special-casing a number it never chose.
- * A negative or fractional count truncates toward zero and floors at the
- * first term, and a non-finite count waits the ceiling.
+ * Wait before attempt `attempts + 1`: 1s doubling to a 60s ceiling. Negative/fractional
+ * counts truncate and floor at 1s; non-finite counts wait the ceiling.
  */
 export function recoveryBackoffMs(attempts: number): number {
   if (!Number.isFinite(attempts)) return RECOVERY_BACKOFF_CEILING_MS;
@@ -36,6 +10,4 @@ export function recoveryBackoffMs(attempts: number): number {
   return Math.min(1000 * 2 ** Math.min(Math.max(0, Math.trunc(attempts)), 6), RECOVERY_BACKOFF_CEILING_MS);
 }
 
-/** The curve's ceiling: the longest a durable lane waits between attempts,
- *  and the instant a wake armed "for a kill, not for a pass" lands at. */
 export const RECOVERY_BACKOFF_CEILING_MS = 60_000;

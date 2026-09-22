@@ -1,19 +1,11 @@
-/**
- * The one cf-side construction of the shared web-search/fetch provider
- * (core web/provider.ts): Worker global fetch + optional owner-scoped auth
- * (Tavily upgrade) + env.AI.toMarkdown as the HTML→markdown override.
- * Every actor builds its web-search provider through here — the main actor and
- * every hosted actor alike — so the wiring cannot drift between them.
- */
+/** The one cf-side construction of the shared web provider, so wiring cannot drift between actors. */
 
 import { createDefaultWebSearchProvider, type WebSearchProvider } from './provider';
 import { REAL_CLOCK } from '../types/clock';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
 
-/** The one `env.AI` surface this provider touches, stated structurally so core
- *  compiles without the Worker's ambient `Env`. Matches the binding's
- *  `toMarkdown(files[])` overload (workers-types `Ai`). */
+/** Structural so core compiles without the Worker's ambient `Env`. */
 interface WorkersAiToMarkdown {
   toMarkdown(files: { name: string; blob: Blob }[]): Promise<
     ({ format: 'markdown'; data: string } | { format: 'error' })[]
@@ -25,11 +17,8 @@ interface WebProviderEnv {
 }
 
 /**
- * @param resolveAuth Thunk resolving the owner-scoped auth resolver, or
- *   undefined when the agent has no owner yet. Resolved PER CALL, not baked at
- *   construction: this provider (and the toolset holding it) is cached across
- *   turns, and the first web call may precede owner claim — a baked-undefined
- *   resolver would then never see the Tavily credential even after the claim.
+ * @param resolveAuth Resolved per call, not at construction: the provider is cached across turns and the
+ *   first web call may precede owner claim.
  */
 export function buildCfWebSearchProvider(
   env: WebProviderEnv,
@@ -53,10 +42,7 @@ export function buildCfWebSearchProvider(
       const name = (opts?.url ?? "page") + ".html";
       const blob = new Blob([html], { type: "text/html" });
       const out = await ai.toMarkdown([{ name, blob }]);
-      // A model ran and the account was billed neurons for it, but the binding
-      // returns only the markdown — so the CALL is reportable and its cost is
-      // not. Counted here rather than omitted, because a workspace total that
-      // silently drops a whole producer is the thing that cannot be trusted.
+      // The binding returns no cost, so the call is counted without one rather than omitted.
       reportModelCall?.({ source: "platform", usage: {}, modelId: "toMarkdown" });
       const converted = out[0];
 

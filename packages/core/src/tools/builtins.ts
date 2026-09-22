@@ -1,66 +1,7 @@
 /**
- * The canonical built-in tool factory — the single source of truth for the
- * LLM's capability surface. An ACTOR is built from `buildActorTools`
- * (tools/actor-tools.ts), which is this factory plus the one tool this one
- * cannot hold; a head or a swarm node is built from this factory directly and
- * filtered by `keepBuiltins` (heads/types.ts).
- *
- * The agent's tool surface is deliberately SMALL: not for token cost, but
- * because every native tool is a standing choice the model weighs on EVERY
- * turn it is not the answer to, and selection accuracy degrades with choice
- * count. Tools emitted (in registration order):
- *   1. eval  — the codemode sandbox. An actor builds it LAST, over
- *                       the finished surface, because the sandbox declares
- *                       every other tool as `tools.<name>` (see
- *                       `installCodemode` and tools/actor-tools.ts).
- *                       A confined surface hands in `prebuiltCodemodeTool`.
- *                       Absent → returns a 'NOT CONFIGURED' error. Core
- *                       itself does NO codegen.
- *   2. shell          — one command via executionRouter; `runtime` param explicitly
- *                       chooses workspace / sandbox / device, with
- *                       workspace (rt.shell) as the conservative default.
- *   3. file           — the ONE file plane: read / edit / write over the same
- *                       workspace filesystem every other surface addresses. The edit is
- *                       exact-match, atomic and unique-or-refused; the read is
- *                       capped and names the offset that continues it.
- *                       Unconditional — every runtime has rt.storage.vfs.
- *   4. agents         — the ONE delegation tool: ephemeral swarm nodes (heads /
- *                       mcts settle), persistent subordinates, and peer
- *                       workspace messaging behind a single action surface.
- *                       NOT registered here — see tools/actor-tools.ts, which
- *                       wraps this factory with it. Its implementation IS the
- *                       search engine (strategy/swarm-run → strategy/node-agent),
- *                       and a node's own surface comes back through this
- *                       factory, so holding it here was a runtime import cycle:
- *                       the module-scope reader at the far end of that ring is
- *                       what put six tests in the TDZ. No confined surface has
- *                       this tool anyway (HEAD_BUILTIN_TOOLS omits it), so the
- *                       split costs nothing it was buying.
- *   5. memory         — one durable-state tool: prose notes (save/search), the
- *                       typed keyed world model (remember/recall/forget), and
- *                       this agent's past conversation transcript
- *                       (conversations).
- *   6. tasks          — the agent's own task list: add/update/list over
- *                       one workspace table. Unconditional; every runtime has
- *                       rt.storage.sql.
- *   7. web            — live web access: search / fetch. Gated on
- *                       deps.webSearch.
- *   8. report         — the subordinate's progress spine back to its parent
- *                       workspace orchestrator. Gated on deps.report
- *                       (subordinate-only).
- *
- * `skills` (list/read/create/edit/delete SKILL.md files) and `release`
- * (the governed product/UI self-customization lane) are NOT native tools:
- * skills are ordinary files under /workspace/skills/, already reachable via
- * `workspace.readFile`/`writeFile`/`readdir` in eval — a dedicated
- * tool would have been a third path to the same bytes. `release`'s machinery
- * (ledger + engine) is untouched and reachable as the `release.*` codemode
- * namespace (tools/release-codemode.ts) — occasional and high-blast-radius
- * enough that it does not earn a standing top-level choice.
- *
- * Platform specifics (craftedToolExecute, the eval builder) are
- * injected through BuiltinToolDeps so the factory stays portable; the agents
- * spawn substrate rides ActorToolDeps for the reason above.
+ * Canonical built-in tool factory. Actors use `buildActorTools` (adds `agents`, which cannot live
+ * here without an import cycle); heads and swarm nodes use this directly, filtered by `keepBuiltins`.
+ * Skills are plain files and `release` is a codemode namespace, not native tools.
  */
 
 import { tool, jsonSchema } from 'ai';
@@ -101,8 +42,7 @@ import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
-// The admitted-set filter beside the sets it narrows (heads/types.ts). That
-// module holds no runtime import, so this edge cannot close a ring.
+// heads/types.ts holds no runtime import, so this edge cannot close a ring.
 import { keepBuiltins } from '../heads/types';
 import { toolsInWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
@@ -111,171 +51,71 @@ type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[
 
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
 
-/** The crafted tools a sandbox may call, keyed by name. */
 export type CraftedToolSet =
   Record<string, { description: string; execute: (arg: JsonValue) => Promise<JsonValue | undefined> }>;
 
-/**
- * What a backend needs to build `eval` for a FINISHED tool surface.
- * The sandbox declares every native tool as `tools.<name>(input)`, so it can
- * only be built once every other tool exists — which is why an actor's
- * builder runs in `buildActorTools`, after `agents` is registered, and not
- * inside `buildBuiltinTools`.
- */
+/** Builds `eval` over a finished surface: the sandbox declares every other tool, so it runs last. */
 export interface CodemodeSurface {
-  /** The finished surface. The sandbox never binds or declares its own entry
-   *  (`renderToolsDeclaration`, `nativeToolFunctions` skip `eval`). */
   readonly native: ToolSet;
-  /** Resolved PER EXECUTE, not once per toolset: a tool the agent crafts
-   *  mid-turn has to be callable on the very next `eval` call, which
-   *  is what the tool's own description promises and what the in-episode loop
-   *  is for. Cheap to call — compiled bodies are memoised by name and code. */
+  /** Resolved per execute so a tool crafted mid-turn is callable on the next `eval`. */
   readonly craftedTools: () => CraftedToolSet;
-  /** The live executor namespaces (`workspace`, `sandbox`, `device`, …). */
   readonly providers: ExecutorProviderSurface[];
 }
 
-/** Builds the `eval` entry for one finished surface. The CLI's is
- *  `createNodeCodemodeToolFactory` (@kinu.run/cli-backend); core has no
- *  codegen of its own. */
+/** Core has no codegen; the CLI supplies `createNodeCodemodeToolFactory`. */
 export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 
 export interface BuiltinToolDeps {
-  /** Fixed authority of this constructed tool surface. */
   workMode?: WorkMode;
   rt: AgentRuntime;
   /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
   minEffectiveScore?: number;
   /**
-   * Platform-correct crafted-tool executor factory.
-   *
-   * - null declares sandbox-side compilation: CF injects the shared source
-   *   selection into its Worker Loader prelude, without a host-side callable.
-   * - CLI adapter supplies a Node-eval implementation (Node/Bun permits
-   *   codegen).
-   * - Omitted: no crafted executor, for minimal test runtimes.
+   * null: sandbox-side compilation (CF Worker Loader prelude). Omitted: no crafted executor.
    */
   craftedToolExecute?: CraftedToolExecute | null;
-  /**
-   * A ready `eval` entry for a CONFINED surface (a head, a swarm
-   * node): those are built from this factory directly and finish their surface
-   * themselves. A finished Tool is used as-is; heads/head-tools.ts and
-   * strategy/node-agent.ts also accept a function of the finished surface,
-   * resolved after their own filtering. An actor sets `codemode` on
-   * `buildActorTools` instead, which keeps the clamp and the effect claim on
-   * the built entry.
-   */
+  /** Ready `eval` for a confined surface (head, swarm node); actors set `codemode` on `buildActorTools` instead. */
   prebuiltCodemodeTool?: unknown;
-  /**
-   * Optional Vectorize-backed VectorStore for semantic memory recall.
-   * When provided, memory.search does hybrid retrieval (FTS5 + Vectorize via
-   * RRF) instead of FTS5-only. Falls back gracefully when not provided OR
-   * when the underlying binding is unavailable. null explicitly declares a
-   * backend without a semantic index; the result reports lexical-only coverage.
-   */
+  /** Hybrid memory search when present; null declares no semantic index (results report lexical-only). */
   vectorStore?: import('../memory/vector-store').VectorStore | null;
-  /** agent_facts world model. When provided, the `memory` tool also exposes
-   *  remember/recall/forget, and search joins remembered facts to the note
-   *  hits through the same RRF merge. */
+  /** Enables remember/recall/forget and joins facts into the search RRF merge. */
   facts?: import('../memory/facts').FactsStore;
-  /** The actor's canonical conversation. Required: the `memory` tool's
-   *  `conversations` action recalls transcript text through it, and a surface
-   *  built without one would answer recall with silence. */
   history: SessionHistory;
-  /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
-   *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
-   *  ∪ frequently-used recent) are injected — saves context as the store
-   *  grows large. */
+  /** Crafted-tool surfacing; 'relevant' injects FTS5 top-K plus frequently used recent tools. */
   toolSurfacing?: {
     mode: 'all' | 'relevant';
-    /** The user's task / current message — drives FTS5 relevance. */
     query?: string;
-    /** Default 20. */
     maxRelevant?: number;
   };
-  /** Subordinate → parent progress reporting (the `report` tool). Wired only
-   *  on subordinate actors. */
+  /** Wired only on subordinate actors. */
   report?: ReportToolDeps;
-  /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
-   *  Tavily-key auth seam differ per backend). Exposes the `web` tool — and the
-   *  codemode `web.*` namespace is wired by the same provider in each backend's
-   *  eval assembly. */
   webSearch?: WebSearchProvider;
-  /** Plan-mode-only review submission. Structural absence is the gate: normal
-   *  Build/Chat toolsets do not contain submit_plan at all. */
+  /** Plan mode only; its absence is the gate. */
   submitPlan?: SubmitPlanToolDeps;
-  /** The turn's file ledger — what the model has read (so `file` can refuse a
-   *  blind edit) and what its edits did (the durable `file_edit` row). Same
-   *  ownership rule as contextBudget: backends pass their TurnAccumulator's, and
-   *  a caller that omits it gets a fresh one, so the policy is per-root. */
+  /** Per-turn ledger: lets `file` refuse blind edits. Omitted → fresh one, so the policy is per-root. */
   fileLedger?: TurnFileLedger;
-  /** The turn's cumulative context budget — the per-result clamp tightens once
-   *  a turn has admitted its budget, and every spill trip is counted for the
-   *  durable `context_budget` row. Backends pass their TurnAccumulator's; a
-   *  caller that omits it (a node's own toolset, tests) gets a fresh one, so
-   *  the policy is per-root by construction. */
+  /** Per-turn context budget; omitted → fresh one, so the policy is per-root. */
   contextBudget?: TurnContextBudget;
-  /** The turn's escalation decisions — which provisioned environments `shell` was
-   *  sent to instead of the workspace shell, the model's stated reason, and the
-   *  outcome. Same ownership rule as fileLedger/contextBudget: backends pass
-   *  their TurnAccumulator's, and a caller that omits it gets a fresh one. */
+  /** Per-turn escalation ledger; omitted → fresh one. */
   escalations?: TurnEscalationLedger;
-  /**
-   * Where a tool's refusals and handled failures are logged. Omitted everywhere
-   * but a test: the default writes one JSON line per event to `console`, which is
-   * what Workers Logs and the CLI journal both already collect.
-   *
-   * A test passes `createRecordingLogger()` and asserts the event name and the
-   * classification — an instrument nobody asserts on is one nobody notices has
-   * stopped.
-   */
+  /** Test seam; defaults to one JSON line per event on `console`. */
   logger?: Logger;
-  /** THIS turn's profile catalog envelope, for tasks action=mode role
-   *  switches. Absent: switching refuses with a clear reason. */
+  /** Absent: role switches (tasks action=mode) refuse. */
   roleAuthority?: () => ProfileCatalogEnvelope | null;
 }
 
-// ── Report (subordinate → parent) tool contract ─────────────────────────────
-
 export interface ReportToolDeps {
-  /** Publish a `subordinate_report` event into the PARENT workspace's
-   *  EventLog (via the parent stub). */
   report(input: {
     status: SubordinateReportStatus;
     content: string;
-    /** The structured handoff, already trimmed and bounded by
-     *  {@link dispatchReport}. Absent when the model sent none, and never
-     *  present at all on a `bodyOnly` destination. */
+    /** Absent when the model sent none; never present on a `bodyOnly` destination. */
     handoff?: SubordinateReportHandoff;
   }): Promise<JsonValue | undefined>;
-  /**
-   * A destination that consumes the PROSE BODY alone, so the structured
-   * handoff fields are not declared to the model here.
-   *
-   * Exactly one such destination exists: a search node's captured report
-   * (`strategy/node-agent.ts`), which the engine grades through `candidateOf`
-   * on `content` and never reads a second field of. Offering `concerns` there
-   * would advertise a field that reaches nobody — the accepted-and-ignored
-   * defect this repository gates against — and it is the same reason the
-   * memory tool's action enum is `memoryActionsFor(!!facts)` rather than a
-   * fixed list with dead arms.
-   *
-   * Absent means the ordinary subordinate → parent spine, which carries them.
-   */
+  /** Destination consumes only the prose body (search node reports), so handoff fields are not declared. */
   readonly bodyOnly?: boolean;
 }
 
-// ReleaseToolDeps lives in tools/release-tool.ts now — the release lane's
-// only caller is the release.* codemode namespace, not this file.
-
-/**
- * Build the crafted-tool map using a platform-correct executor factory.
- * All codegen lives behind `craftedToolExecute(tool)` — core has no
- * in-process code-generation path of its own.
- *
- * Filter semantics: effective-score >= minScore, comment-only code dropped.
- * Read fresh on every call, so a tool crafted mid-turn is here on the next one.
- */
+/** Crafted-tool map, read fresh each call; codegen only via `craftedToolExecute`. */
 function buildCraftedToolSetFromExecute(
   rt: AgentRuntime,
   factory: CraftedToolExecute,
@@ -286,10 +126,6 @@ function buildCraftedToolSetFromExecute(
 
   const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, minScore);
 
-  // Relevance filter (Voyager / Tool-Search style): when the agent has many
-  // crafted tools, stuffing them all into every turn wastes context and hurts
-  // selection. In 'relevant' mode we fetch top-K via FTS5 over the current
-  // user message, then union with the top-K most frequently used recent tools.
   let relevantNames: Set<string> | null = null;
 
   if (surfacing?.mode === 'relevant') {
@@ -297,13 +133,7 @@ function buildCraftedToolSetFromExecute(
     const half = Math.max(5, Math.floor(maxRelevant / 2));
     relevantNames = new Set();
 
-    // Neither read is guarded: `crafted_tools_fts` and the crafted_tools
-    // quality columns are both part of the one workspace schema
-    // (state/workspace-schema.ts, asserted per root by conformance/
-    // manifest.ts), and CraftStore.search quotes the
-    // query as an FTS5 phrase so no user text can make it a syntax error. A
-    // failure here means the workspace database is broken, and swallowing it
-    // silently narrows the agent's callable set with no way to tell.
+    // Unguarded on purpose: the schema guarantees these, and swallowing a failure would silently narrow the callable set.
     if (surfacing.query && surfacing.query.length > 0) {
       for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
     }
@@ -323,13 +153,8 @@ function buildCraftedToolSetFromExecute(
       const execute = factory({ name: t.name, description, code: t.code });
       out[t.name] = {
         description,
-        // Stamped with the tool's identity so a failure is attributable to the
-        // artifact rather than to the code around it (craft/attribution.ts).
-        // THIS is the runtime attribution point for every crafted tool on every
-        // backend — both the native and the sandbox surfaces resolve through
-        // here — so a substrate must NOT wrap its own compile as well. Doing so
-        // double-stamps, and since blame matches on the marker, one failure then
-        // reads as several.
+        // The single runtime attribution point for crafted tools; substrates must not also stamp,
+        // or one failure reads as several.
         execute: attributeCraftedFailure(t.name, execute),
       };
     } catch (err) {
@@ -344,9 +169,7 @@ function buildCraftedToolSetFromExecute(
   return out;
 }
 
-/** One compiled body per (name, code). The platform factories are documented
- *  as idempotent, so re-deriving the same tool is safe — it is just wasteful,
- *  and it now happens once per `eval` call rather than once per turn. */
+/** One compiled body per (name, code). */
 function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute {
   const compiled = new Map<string, { code: string; execute: CraftedToolExecuteFn }>();
 
@@ -370,18 +193,10 @@ interface WebToolInput {
   url?: string;
 }
 
-/**
- * This toolset's log event names. Declared as constants beside the code that
- * emits them, the way `SPAN_ATTR_*` is declared beside the tracer: what makes an
- * event findable across Workers Logs and the CLI journal is that the emitter and
- * the query spell it identically, and a constant is the only way to guarantee
- * that. Every one is a refusal or a handled failure — a THROWN error is not
- * logged here, because whoever catches it classifies it there.
- */
+/** Log event names; constants so emitter and query spell them identically. Only refusals and handled failures. */
 const RUN_SHELL_ABSENT = 'shell.shell_absent';
 
 const RUN_ESCALATION_REFUSED = 'shell.escalation_refused';
-
 
 const RUN_RUNTIME_NO_EXEC = 'shell.runtime_no_exec';
 
@@ -389,9 +204,6 @@ const RUN_ESCALATION_FAILED = 'shell.escalation_failed';
 
 const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
 
-/** What a caller does about a runtime that is not provisioned yet. Each reads as
- *  a next step rather than a state, because the refusal is a retry in two of the
- *  three cases and a wiring mistake in the third. */
 function unprovisionedAdvice(runtimeKey: string): string {
   if (runtimeKey === 'device') {
     return 'A machine runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.';
@@ -410,42 +222,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const router = rt.executionRouter;
   const shell = rt.shell;
 
-  // The enum lists the registered executors; device nicknames are not in
-  // it (the live prompt lists them), and the resolver below routes any other
-  // value to the device executor, which resolves the name itself.
+  // Device nicknames are not in the enum; any unknown value routes to the device executor.
   const shellRuntimes = [...new Set(['workspace', ...(router?.listExecutors().map(({ name }) => name) ?? [])])];
 
-  // A toolset built without a budget still budgets — a fresh one, scoped to
-  // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
-  // Same per-turn ownership as the budget: the turn's escalation decisions, so
-  // `shell` can record WHY it left the workspace shell at the moment it decides.
   const escalations = deps.escalations ?? new TurnEscalationLedger();
-  // Same per-turn ownership as the budget: each hand-rolled-write shape gets
-  // its note once, on the call that earned it (shell-file-steer.ts).
   const fileToolSteer = createFileToolSteer();
-  // The observability seam. A toolset built without one still logs: the console
-  // logger writes one JSON line per event to the sink both backends already
-  // collect. Never absent, so a refusal is never silent. `diagnostics`, not a
-  // private console logger: the destination is the host's decision (obs/log.ts),
-  // and a foreground CLI turn installs a file sink so this never lands between
-  // the reader and their agent.
+  // `diagnostics`, not console: the host decides the sink (obs/log.ts).
   const logger = deps.logger ?? diagnostics;
 
   const tools: ToolSet = {};
 
-  // ── 1. eval ─────────────────────────────────────────────────────
-  // Registered FIRST so the sandbox heads the model's list, and filled here
-  // only for a confined surface (`prebuiltCodemodeTool`). An actor's sandbox
-  // is built over the finished surface by `installCodemode`, which
-  // reassigns this key in place, so the position holds.
+  // Registered first so eval heads the list; actors replace this key in place via `installCodemode`.
   const prebuilt = { value: deps.prebuiltCodemodeTool };
-  // no core-level fallback. Callers MUST supply the tool one way or the other
-  // (a confined surface: prebuiltCodemodeTool; an actor: `codemode` on
-  // buildActorTools, built from @cloudflare/codemode in cf-backend/
-  // codemode-tool.ts or from @kinu.run/cli-backend/codemode-tool-factory). If
-  // neither is wired, eval returns a sharp error — a silent
-  // in-process compile would break in any V8 isolate.
+  // No core fallback: an in-process compile would break in any V8 isolate.
   tools.eval = isExecutableToolEntry(prebuilt) ? prebuilt.value : tool({
     description:
       BUILTIN_TOOL_DESCRIPTIONS.eval +
@@ -459,21 +249,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // Restorable result budget: oversize eval results are offloaded to
-  // the workspace VFS and clamped to head+tail (see clamp.ts). The `shell` tool
-  // clamps at its own return sites below.
   tools.eval = withClampedToolResult(tools.eval, {
     vfs: rt.storage.vfs, budget, producer: 'eval',
   });
 
-  // ── 2. shell ─────────────────────────────────────────────────────────────
-  // Shell command tool. The `runtime` parameter dispatches through the
-  // ExecutionRouter — workspace (default) hits the workspace's own Nimbus
-  // shell, over the same bytes the `file` tool addresses; every other runtime
-  // is a different machine, provisioned on demand via ExecutorProvider. No fallback
-  // chain: if you ask for "sandbox" and sandbox isn't ready, you get a
-  // structured error pointing at the install card, not silently routed
-  // somewhere else.
+  // No fallback chain: an unready runtime returns a structured error, never silently routes elsewhere.
   tools.shell = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.shell,
     inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
@@ -497,28 +277,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args: { command: string; runtime?: string; why?: string }, options?: ToolExecutionOptions) => {
       requireBuild('Native shell execution');
       const signal = options?.abortSignal;
-      // No separate approval rule here — the approval ladder (reviewCommand / shellApprovalMode
-      // / the interactive channel) lives at the execution seam this tool
-      // dispatches to: the `shell` a workspace command runs through, and
-      // every ExecutionRouter provider's `exec` for everything else (see
-      // execution/approval.ts). That is also where codemode's
-      // `workspace.exec()` / `sandbox.exec()` /
-      // `device.exec()` land, so the same command answers to the identical
-      // decision whichever path reached it — not a check re-derived here.
+      // Approval lives at the execution seam (execution/approval.ts), not here.
 
-      // Restorable result budget — the full text is offloaded to the workspace
-      // VFS before clamping (see clamp.ts), so big outputs never rot the
-      // session and nothing is lost. A command that hand-rolls a file edit
-      // carries the `file` steer back with it, the first time this turn uses
-      // that shape (shell-file-steer.ts). The steer is composed INTO the text
-      // that gets clamped rather than added after it: what the model receives
-      // is one string, so one cap, one spill and one accounting cover it.
+      // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).
       const steer = fileToolSteer(args.command);
       const clampOpts: ClampToolResultOptions = { vfs: rt.storage.vfs, budget, producer: 'shell' };
 
       const clamp = async (result: CommandResult): Promise<string> => {
         if (!v.is(v.string(), result)) {
-          // A refusal carries no steer.
           const failure = await clampToolResult(result.error, clampOpts);
 
           throw new KinuError(result.reason, failure, { execution: result.execution });
@@ -544,34 +310,16 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         return clamp(commandResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
 
-      // Everything below this line is an ESCALATION: the work is leaving this
-      // agent's own shell for an environment that must be provisioned, costs a
-      // cold start, and shares a hard `max_instances` ceiling with every other
-      // concurrent turn. Each exit path records the decision with the model's
-      // stated reason — a REFUSED escalation is as informative as a successful
-      // one, since "the runtime was never there" and "the command failed" are
-      // different findings that a single failure count would merge.
-      // One runtime field names the machine. `workspace` and `sandbox` are
-      // executor names; any other value is a device nickname, routed to the
-      // device executor with the name in its call context. THAT executor
-      // resolves the nickname against the fleet and refuses an unknown name
-      // or an ambiguous omission in its own words — the one resolver, not a
-      // second copy of it here.
+      // Past here is an escalation; every exit records it, including refusals.
+      // Unknown runtime values are device nicknames resolved by the device executor.
       const registered = router?.getProvider(runtimeKey);
       const nickname = registered === undefined && runtimeKey !== 'sandbox' ? runtimeKey : undefined;
       const provider = nickname === undefined ? registered : router?.getProvider('device');
 
       if (!provider) {
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
-        // Caller asked for a runtime that hasn't been provisioned. Do NOT
-        // silently fall back to workspace; that confuses the LLM into thinking
-        // it has more access than it does.
-        //
-        // `unavailable`, never `unsupported`: a sandbox provisions on first use
-        // and a device comes back when its daemon does, so this is a retry, and
-        // a reader that filed it as a capability gap would report a cold start
-        // as a missing feature. `error` keeps its literal token because the
-        // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
+        // Never fall back to workspace. `unavailable` (retryable), not `unsupported`; the `error`
+        // token is matched by the install card (cf-backend WorkspacePage.tsx).
         const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         throw new KinuError(refusal.code, refusal.message + ': '
@@ -582,29 +330,19 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
       if (!execTool) {
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
-        // `unsupported`, not `unavailable`: this environment is here and does
-        // not have a shell. Retrying cannot change that, and the two codes exist
-        // to keep those apart.
+        // `unsupported`: this environment has no shell; retrying cannot help.
         const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
         logger.failure(RUN_RUNTIME_NO_EXEC, refusal, { runtime: runtimeKey });
         throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
 
-      // The trailing context every executor's exec reads: the abort signal,
-      // and — for a device runtime — which of the user's machines the command
-      // is for. An executor with no fleet ignores the device.
       const context = { signal, device: nickname };
       let result: CommandResult;
 
       try {
         result = v.parse(CommandResultSchema, await execTool.execute(args.command, context));
       } catch (caught) {
-        // A remote executor that cannot kill an in-flight command stops WAITING
-        // and throws (execution/signal.ts), and the platform's own memory wall
-        // throws prose. Unclassified, both leave this tool by raising, so the
-        // durable row records `threw` with the class gone — the caller cannot
-        // tell a cancelled wait from an OOM from a dead transport. Classified
-        // here and returned as a refusal the reader can branch on.
+        // Classify cancellations and OOM prose here, or the durable row only records `threw`.
         const failure = toKinuError({
           doing: `run \`${args.command}\` on ${runtimeKey}`,
           cause: caught,
@@ -626,18 +364,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 3. file ─────────────────────────────────────────────────────────────
-  // The file plane: read / edit / write over the same filesystem `shell` and
-  // eval address, so one tool serves every mount on both backends.
-  // Unconditional — every runtime has rt.storage.vfs, and a model without an
-  // exact-match editor falls back to sed -i and heredocs.
   tools.file = createFileTool({
     vfs: rt.storage.vfs,
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,
-    // The live table at the moment a result is rendered: a machine that
-    // connected mid-turn names its files by its own segment from then on.
+    // Live table at render time: a machine connected mid-turn uses its own segment.
     roots: () => {
       const fleet = rt.deviceTransport?.status().devices;
 
@@ -649,17 +381,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 5. memory — the ONE durable-state tool ────────────────────────────────
-  // Prose notes (save/search), the typed keyed world model
-  // (remember/recall/forget), and the past conversation transcript are one
-  // concept: state written now to be read later. They are actions here rather
-  // than separate tools chosen by storage shape.
-  // search auto-hybridises: Vectorize-backed semantic + FTS5 lexical merged via
-  // RRF when a VectorStore is wired + available; the wired FactsStore is a
-  // second lexical source in that same merge, and the lexical arm when it is
-  // the only one. Dispatch lives in memory-tool.ts, shared verbatim with the
-  // `memory.*` codemode namespace (memory-codemode.ts) — one implementation,
-  // two callers.
+  // Dispatch shared with the `memory.*` codemode namespace (memory-tool.ts).
   const facts = deps.facts;
 
   const runMemoryAction = createMemoryDispatcher({
@@ -711,12 +433,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args: MemoryToolInput) => runMemoryAction(args),
   }));
 
-  // ── 6. tasks — the agent's own task list and durable role ─────────────────
-  // Unconditional, like `file` and `memory`: it needs one SQL handle and every
-  // runtime has one. Both stores are constructed here rather than injected;
-  // neither TaskListStore nor ConversationSearchStore holds process state.
-  // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
-  // codemode namespace (tasks-codemode.ts).
   const taskList = new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync);
   const runTasksAction = createTasksDispatcher(taskList, rt.actor.config, deps.roleAuthority);
   tools.tasks = permitInPlan(tool({
@@ -758,13 +474,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args: TasksToolInput) => runTasksAction(args),
   }));
 
-  // ── 7. web — live web research (search / fetch) ───────────────────────────
-  // One capability used as a pair: search discovers ranked results, fetch
-  // retrieves one URL as clean markdown, and the doctrine is to loop them.
-  // Both work key-less (DuckDuckGo + Markdown-for-Agents); a stored `tavily`
-  // credential upgrades search quality transparently. Codemode gets the same
-  // capability as `web.search()` / `web.fetch()` via createWebCodemodeProvider,
-  // wired in each backend's eval assembly.
   const webSearch = deps.webSearch;
 
   if (webSearch) {
@@ -785,10 +494,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         required: ['action'],
       }),
       execute: async (args: WebToolInput) => {
-        // The declared union is a request to the provider, not a guarantee
-        // about what arrives: the AI SDK leaves `Schema.validate` undefined for
-        // a jsonSchema-declared input. Refused WITH the vocabulary, so the
-        // model's next call can succeed.
+        // The AI SDK does not validate jsonSchema-declared inputs; refuse with the vocabulary.
         const action = v.safeParse(WebActionSchema, args.action);
 
         if (!action.success) {
@@ -806,13 +512,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           case 'fetch': {
             if (!args.url) throw new KinuError('bad_input', 'web.fetch requires `url`');
             const res = await webSearch.fetch(args.url);
-            // Restorable clamp: an oversized page is offloaded to the
-            // workspace VFS and reduced to a re-readable head (see clamp.ts),
-            // so a big page never rots the session. The provenance header is
-            // part of the clamped text, not a prefix added after it: the
-            // title and URL come from the page, so a hostile one cannot buy
-            // itself room outside the cap, and the spilled copy is exactly
-            // what the model was shown a digest of.
+            // The provenance header is inside the clamped text so a hostile title cannot buy room outside the cap.
             const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
 
             return clampToolResult(header + res.markdown, {
@@ -824,7 +524,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }));
   }
 
-  // ── 8. report — subordinate → parent progress spine ───────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = permitInPlan(tool({
@@ -842,17 +541,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         },
         required: ['status', 'content'],
       }),
-      // The SAME dispatcher `report.*` in codemode calls, so one capability
-      // validates its arguments one way on both surfaces — a hand-check in
-      // this body is how `status` goes unchecked while `content` is checked.
+      // Same dispatcher as `report.*` in codemode, so validation matches.
       execute: async (args: ReportToolInput) => dispatchReport(report, args),
     }));
   }
 
-  // ── submit_plan — Plan mode's one completion surface ─────────────────────
-  // It is intentionally outside BUILTIN_TOOLS: that registry describes the
-  // stable surface every turn can build. This tool exists only on a Plan turn,
-  // where ActorAgent wires this dependency and adds the name to activeTools.
+  // Outside BUILTIN_TOOLS: exists only on Plan turns.
   const submitPlan = deps.submitPlan;
 
   if (submitPlan) {
@@ -898,9 +592,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }));
   }
 
-  // No builtin may take the `mcp_` prefix (isMcpToolKey is the one predicate,
-  // shared by both backends). Reserve that prefix exclusively for MCP so a
-  // future builtin can't silently collide with a user's MCP server.
+  // `mcp_` is reserved for MCP (isMcpToolKey).
   for (const name of Object.keys(tools)) {
     if (isMcpToolKey(name)) {
       throw new Error(
@@ -913,8 +605,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   return toolsInWorkMode(deps.workMode ?? 'build', tools);
 }
 
-/** Render search results model-ready: a ranked list of title + url + snippet
- *  (+ date when present), with the synthesized answer first when available. */
 function formatSearchResults(res: WebSearchResponse): string {
   if (res.results.length === 0) {
     return `No web results for "${res.query}".`;
@@ -934,7 +624,6 @@ function formatSearchResults(res: WebSearchResponse): string {
   return lines.join('\n');
 }
 
-
 function isExecutableToolEntry(
   input: { value: unknown },
 ): input is { value: ExecutableToolEntry } {
@@ -944,16 +633,7 @@ function isExecutableToolEntry(
   }), input.value);
 }
 
-/**
- * Build `eval` over a FINISHED surface and put it in place.
- *
- * The sandbox declares every other tool as `tools.<name>(input)`, so the
- * builder runs after the last tool is registered. `buildActorTools` calls this
- * once `agents` is in, before the effect-claim wrap, so the built entry keeps
- * both the result clamp and the claim the registry declares for it. The
- * crafted set is resolved per execute and memoised per (name, code): a stored
- * body compiles once, and again only when the agent rewrites it.
- */
+/** Build `eval` over a finished surface; `buildActorTools` calls it before the effect-claim wrap. */
 export function installCodemode(
   surface: ToolSet,
   build: CodemodeBuilder,
@@ -982,33 +662,18 @@ export function installCodemode(
   );
 }
 
-/**
- * The one tool assembly for every agent kind: builtins, admitted narrow, kind
- * tools, allowed narrow, then `eval` over the finished set. Actors
- * pass no admitted set and finish with their `codemode` builder (after
- * `agents` merges, so `tools.*` declares it); confined kinds pass their
- * admitted set and finish with `codemodeTool` (a finished entry installs with
- * the builtins, a function builds over the finished set). A head filters with
- * `allowed` and records builtins via `wrapAdmitted`; a node appends its
- * proposal via `post`, after the finish, and wraps via `wrapFinished`.
- */
+/** The one tool assembly: builtins, admitted narrow, kind tools, allowed narrow, then `eval`. */
 export interface ToolSurfaceDeps extends BuiltinToolDeps {
-  /** Narrow the builtins to these names. Absent keeps the whole surface. */
   admitted?: readonly string[];
-  /** Wrap the admitted builtins before kind tools merge. */
   wrapAdmitted?: (admitted: ToolSet) => ToolSet;
-  /** Kind tools merged before the allowed narrow and the finish. */
   extra?: ToolSet;
-  /** Narrow the merged surface. Absent keeps it whole. */
   allowed?: readonly string[];
-  /** Build `eval` over the finished surface. Wins over `codemodeTool`. */
+  /** Wins over `codemodeTool`. */
   codemode?: CodemodeBuilder;
-  /** Confined `eval`: a finished entry installs with the builtins, a
-   *  function builds over the finished surface. Unused with `codemode`. */
+  /** A finished entry installs with the builtins; a function builds over the finished surface. */
   codemodeTool?: unknown;
-  /** Kind tools merged after the finish, never declared to the sandbox. */
+  /** Merged after the finish, never declared to the sandbox. */
   post?: ToolSet;
-  /** Wrap the finished surface. */
   wrapFinished?: (finished: ToolSet) => ToolSet;
 }
 

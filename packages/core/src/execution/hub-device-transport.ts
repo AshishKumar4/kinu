@@ -1,14 +1,6 @@
 /**
- * The device runtime's DeviceTransport over the user-level device hub (UserDO).
- *
- * `status()` is sync + hot (it gates per-turn tool exposure), so it serves a
- * cached snapshot refreshed from the hub in the background once it goes stale —
- * a device connecting AFTER the runtime was built becomes visible within the
- * TTL, without a DO restart. `refreshStatus()` awaits the hub authoritatively;
- * the orchestrator calls it at turn start so the turn's context never lags a
- * mid-session connect/disconnect. Actual calls stay authoritative either way:
- * the hub rejects when no device is connected, and each call's outcome
- * re-seeds the snapshot.
+ * DeviceTransport over the user-level device hub (UserDO). `status()` is sync and serves a TTL cache
+ * refreshed in the background; `refreshStatus()` awaits the hub and runs at turn start.
  */
 import { WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId } from './device-tunnel';
 import type { Clock } from '../types/clock';
@@ -21,33 +13,18 @@ import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventNa
 import * as v from 'valibot';
 import { type UserCaller } from '../safety/workspace-capability';
 
-
-/** How long the runtime status cache stays fresh before a hub re-check.
- *  Independent of DEVICE_ROSTER_POLL_MS: tool admission reads this cache;
- *  roster polling refreshes a visible account list, not runtime authority. */
+/** Runtime status cache freshness; independent of DEVICE_ROSTER_POLL_MS. */
 const DEVICE_STATUS_TTL_MS = 5_000;
 
-/**
- * What a background re-check does with a hub failure. The failure is RECORDED
- * first, then tolerated as a request-scope non-fatal: the answer to a stale
- * `status()` is still the snapshot it holds, and tearing a working snapshot
- * down to `disconnected` on a blip would blind the tool gating that reads it.
- * What the old detached `.catch(() => snapshot)` destroyed was the record — a
- * hub that had stopped answering read exactly like a hub with nothing to say.
- */
+/** A background re-check failure is recorded, then tolerated: the stale snapshot is kept. */
 const STATUS_RECHECK_FAILED: LogEventName = 'device.status_refresh_failed';
 
-
-/** No machine, and nothing known about one. The `toolchain: null` is not a
- *  detail: it is what keeps "we have not asked" from reading as "it has no
- *  python" once a device does attach. */
+/** `toolchain: null` distinguishes "not asked" from "has no toolchain". */
 const DISCONNECTED: DeviceStatus = { connected: false, registered: false, toolchain: null };
 
-/** The UserDO surface the device transport needs (a DO-to-DO RPC stub view).
- *  Both methods are attenuated at the hub, so both carry the caller identity. */
+/** UserDO surface the transport needs. Both methods are attenuated, so both carry caller identity. */
 export interface DeviceHubClient {
-  /** Presence AND what the attached machine can run — the hub asks the machine
-   *  itself, because a Worker isolate has no PATH to look at. */
+  /** Presence and toolchain; the hub asks the machine (a Worker has no PATH). */
   deviceRuntimeStatus(caller: UserCaller): Promise<DeviceStatus>;
   deviceRpc(
     caller: UserCaller,
@@ -62,34 +39,22 @@ export interface DeviceRpcOptions {
   agentName?: string;
   checkpoint?: DeviceCheckpointHint;
   timeoutMs?: number;
-  /** The canonical identity to issue the call under, so the caller can cancel
-   *  it by that same id. Minted by core's protocol authority. */
+  /** Canonical call id, so the caller can cancel by it. Minted by core's protocol authority. */
   requestId?: string;
-  /** The durable background job that owns this call as it is issued, so the
-   *  request is recorded as that job's rather than handed over afterwards.
-   *  Cloud-side only: it never rides the frame to the device. */
+  /** Durable job owning this call. Cloud-side only; never sent to the device. */
   backgroundJobId?: string;
-  /** The machine this call is FOR. The hub routes on it; absent, the hub
-   *  answers a one-machine account and refuses a fleet of several. */
+  /** Target machine. Absent: hub answers a one-machine account and refuses several. */
   deviceId?: string;
 }
 
 export interface HubDeviceTransportOpts {
-  /** Fresh hub stub per call; null when the agent has no owner user yet. */
   hub(): DeviceHubClient | null;
-  /** This actor's proof of workspace identity to the hub. Rejects when the
-   *  workspace has no capability token — the device plane then reads as
-   *  disconnected, which is the fail-closed direction. */
+  /** Workspace identity proof to the hub. Rejects without a capability token (fail-closed). */
   caller(): Promise<UserCaller>;
-  /** Passed with every RPC so the hub can enforce per-agent consent. */
   agentName: string;
-  /** CLI-forwarded working directory for device exec calls, when present. */
   cliCwd(): string | null;
-  /** Current turn identity for the daemon's pre-mutation shadow-git snapshot
-   *  (deduped daemon-side per turn). Null outside turns / when unwired. */
+  /** Turn identity for the daemon's pre-mutation shadow-git snapshot. Null outside turns. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
-  /** The status TTL's clock: real in production, one a test advances past
-   *  the TTL by hand rather than sleeping through it. */
   clock: Clock;
 }
 
@@ -102,15 +67,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   let checkedAt = 0;
   let inFlight: StatusRefresh | null = null;
 
-  /**
-   * The authoritative hub check, deduped while one is running. The failure
-   * arm lives HERE, once, under a lexical owner: a device-status failure is
-   * recorded (see `STATUS_RECHECK_FAILED`) and then represented as "keep the
-   * last snapshot" — the transport's documented answer to a transient hub
-   * error, and the fail-closed direction the turn start awaits. The slot is
-   * released only while this round trip still owns it, so a later re-check
-   * can never be cleared by an earlier failure.
-   */
+  /** Authoritative hub check, deduped. Failure keeps the last snapshot; the slot is released only by its owner. */
   const beginStatusRefresh = (): StatusRefresh => {
     if (inFlight?.promise) return inFlight;
     const hub = opts.hub();
@@ -129,9 +86,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         const status = await opts.caller().then((caller) => hub.deviceRuntimeStatus(caller));
         snapshot = status;
       } catch (cause) {
-        // Transient hub error — keep the last snapshot. The outcome is recorded
-        // rather than only tolerated, so a hub gone dark is a line in the journal
-        // and not silence wearing the cache.
+        // Transient hub error: keep the last snapshot, but record it.
         diagnostics.failure(STATUS_RECHECK_FAILED, toKinuError({
           doing: 'refreshing the device status from the hub',
           cause,
@@ -154,14 +109,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   );
 
   return {
-    /**
-     * Sync + hot, so it serves the cache and KICKS a re-check when stale. The
-     * kick is not a promise discarded into the air: the retained `inFlight`
-     * slot IS the ownership — the same slot `refreshStatus()` dedupes against
-     * — and the lexical `catch` inside that round trip is where a hub failure
-     * becomes a recorded one. `refreshStatus` never rejects, so there is no
-     * rejection to lose.
-     */
+    /** Serves the cache and kicks a re-check when stale; the `inFlight` slot owns it and `refreshStatus` never rejects. */
     status: (): DeviceStatus => {
       if (!inFlight && opts.clock.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
 
@@ -172,11 +120,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
       const hub = opts.hub();
 
       if (!hub) {
-        // A null hub is an UNATTACHED WORKSPACE, never an unlinked machine: the
-        // stub resolves off the owner id, so there was no hub to ask and no
-        // device question was reached. Reporting it as "no device connected"
-        // told an owner to run `kinu connect` for a machine they may already
-        // have linked.
+        // A null hub means an unattached workspace, not an unlinked machine.
         snapshot = DISCONNECTED;
         checkedAt = opts.clock.now();
         throw new Error(WORKSPACE_HAS_NO_OWNER);
@@ -186,14 +130,11 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         const cwd = opts.cliCwd();
         const first = params.at(0);
 
-        // Only a string first param is a command to prefix a `cd` onto; any
-        // other shape belongs to a method the daemon parses itself.
+        // Only a string first param is a command to prefix with `cd`.
         const effectiveParams: JsonValue[] = method === 'exec' && cwd && v.is(v.string(), first)
           ? [`cd ${shellQuote(cwd)} && ${first}`]
           : params;
 
-        // Mutating methods carry the pre-mutation snapshot hint; the daemon
-        // checkpoints the target dir before executing (invisible, per-turn).
         const meta = (method === 'exec' || method === 'writeFile') ? opts.checkpointMeta?.() ?? null : null;
 
         const checkpoint: DeviceCheckpointHint | undefined = meta ? {
@@ -219,18 +160,12 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         const caller = await opts.caller();
         const rawResult = await hub.deviceRpc(caller, method, effectiveParams, deviceOptions);
 
-        // The actor has received the UserDO result at this point. A normal
-        // supervisor result remains replayable until this separate durable ACK
-        // succeeds; a reset between the two calls leaves the UserDO row and
-        // local result intact for reconciliation.
+        // A supervisor result stays replayable until this separate durable ACK succeeds.
         if (requestId !== undefined) {
           await hub.acknowledgeDeviceRequest(caller, requestId);
         }
 
-        // A call getting through re-proves presence and nothing else: the
-        // toolchain answer is the machine's, not this call's, so it is carried
-        // forward rather than dropped. Overwriting it here would blank the row
-        // the moment the agent used the device.
+        // A successful call re-proves presence only; keep the toolchain answer.
         snapshot = { ...snapshot, connected: true, registered: true };
         checkedAt = opts.clock.now();
 
@@ -243,9 +178,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           checkedAt = opts.clock.now();
         }
 
-        // Several machines are live and the call named none. The hub's
-        // message already names them; the class is the caller's, not the
-        // transport's, so it is fixed here before the executor's `io` wrap.
+        // Several machines live and none named: caller's error class, fixed before the executor's `io` wrap.
         if (isDeviceAmbiguityError({ cause: err })) {
           throw new KinuError('bad_input', renderThrownChain({ cause: err }), { cause: err });
         }

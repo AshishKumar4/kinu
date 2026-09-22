@@ -1,16 +1,6 @@
 /**
- * Document security headers.
- *
- * Two policies, one base. Public pages (landing, CLI install/approval, OAuth
- * result pages) are self-contained HTML. The app is the SPA: it opens a
- * WebSocket to its own origin and frames previews served from the preview host,
- * so it needs those two exceptions and nothing more.
- *
- * `'unsafe-inline'` in `script-src` covers the theme bootstrap in index.html and
- * the small inline handlers on the standalone pages. It is not load-bearing for
- * XSS defence here — the app has no HTML-injection sink (no
- * `dangerouslySetInnerHTML`, and react-markdown escapes raw HTML) — the value of
- * these headers is `frame-ancestors`, `frame-src`, `base-uri` and `form-action`.
+ * Document security headers: public pages vs the SPA (own-origin WebSocket, preview-host frames).
+ * `'unsafe-inline'` scripts are tolerated: the app has no HTML-injection sink.
  */
 
 const BASE_CSP = [
@@ -23,13 +13,7 @@ const BASE_CSP = [
   "frame-ancestors 'none'",
 ];
 
-/**
- * The cache policy for anything derived from a signed-in identity: a shared
- * cache must not hold it and a browser must not replay it from disk after a
- * logout. One string, because a per-route header is a per-route omission —
- * every authenticated JSON answer takes it at the `json()` boundary
- * (`lib/http.ts`) and every authenticated document takes it here.
- */
+/** Cache policy for anything derived from a signed-in identity (applied by `json()` and here). */
 export const PRIVATE_NO_STORE = 'private, no-store';
 
 const BASE_HEADERS = {
@@ -56,42 +40,21 @@ export function publicHtmlHeaders() {
 }
 
 
-/**
- * CSP for the authenticated SPA.
- *
- * `previewOrigin` is the wildcard the preview hosts live under
- * (`https://*.<PREVIEW_HOST_SUFFIX>`). Naming it explicitly is the
- * browser-enforced half of the preview-origin rule: whatever URL the agent
- * manages to get in front of the app, only a preview host can be framed. Null
- * (previews unconfigured) falls back to `'self'`.
- */
+/** `previewOrigin` (`https://*.<PREVIEW_HOST_SUFFIX>`) is the only framable host; null falls back to `'self'`. */
 function appDocumentCsp(url: URL, previewOrigin: string | null): string {
   const frameSrc = previewOrigin ? `'self' ${previewOrigin}` : "'self'";
 
   return [
     ...BASE_CSP,
-    // The chat transport is a WebSocket to this same host. CSP 3 folds ws/wss
-    // into 'self', but naming it costs nothing and removes the doubt.
     `connect-src 'self' wss://${url.host}`,
-    // Agent output and message attachments carry remote image URLs; images
-    // execute nothing.
     "img-src 'self' data: blob: https:",
-    // KaTeX's maths fonts, pulled in by `index.css`. Every one of them is over
-    // Vite's 4096-byte inline threshold and ships as a hashed asset — except
-    // KaTeX_Size3-Regular.woff2 at 3624 bytes, which Vite emits INLINE as
-    // `data:font/woff2;base64,…`. With `font-src` unset, `default-src 'self'`
-    // applied and the browser refused exactly that one font. `data:` rather
-    // than raising the inline threshold: a font is not script, and the app must
-    // not depend on a bundler's size cut-off staying on one side of a limit.
+    // `data:`: Vite inlines small KaTeX fonts as data URLs.
     "font-src 'self' data:",
     `frame-src ${frameSrc}`,
   ].join('; ');
 }
 
-/**
- * Attach the app document policy to an HTML response. Non-HTML responses
- * (hashed bundles, JSON) are returned untouched — they carry no document.
- */
+/** Non-HTML responses are returned untouched. */
 export function withAppSecurityHeaders(
   response: Response,
   url: URL,

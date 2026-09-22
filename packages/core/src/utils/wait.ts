@@ -1,35 +1,16 @@
-/**
- * One wait shape for every CLI loop that asks another party until it answers.
- *
- * `kinu auth` asks the hub whether the browser approved the sign-in. `kinu
- * connect` asks it whether the daemon showed up. A running turn asks the agent
- * whether a device consent is pending. Each is the same loop: ask, and when the
- * answer is "not yet", show progress, pause, ask again.
- *
- * The wait ends on the answering side's own signal (an answer, or a failure it
- * throws) or on the caller's abort. It carries no clock. A clock ends the wait
- * on a number nobody measured while the daemon it waits for is still starting,
- * and it reports that as the daemon's failure.
- */
+/** One ask-until-answered loop for CLI waits. Ends on the answer, a thrown failure, or abort; it carries no clock. */
 
 export interface WaitOptions {
-  /** The pause between one answer of "not yet" and the next question. */
   readonly intervalMs: number;
-  /** Runs after every answer of "not yet", so the surface can show progress. */
   onWaiting?: () => void;
 }
 
 export interface StoppableWaitOptions extends WaitOptions {
-  /** Ends the wait: the promise resolves `undefined` once this aborts. */
+  /** The promise resolves `undefined` once this aborts. */
   readonly signal: AbortSignal;
 }
 
-/**
- * Ask `probe` until it answers. `undefined` from the probe means "not yet".
- * Resolves the probe's answer, or `undefined` when `signal` aborted first; a
- * wait with no signal ends only on an answer. A probe that throws ends the
- * wait with its error.
- */
+/** `undefined` from the probe means "not yet". A wait with no signal ends only on an answer. */
 export function waitForAnswer<T>(probe: () => Promise<T | undefined>, opts: StoppableWaitOptions): Promise<T | undefined>;
 export function waitForAnswer<T>(probe: () => Promise<T | undefined>, opts: WaitOptions): Promise<T>;
 export async function waitForAnswer<T>(
@@ -46,9 +27,7 @@ export async function waitForAnswer<T>(
   }
 }
 
-/** Resolve after `ms`, or as soon as `signal` aborts. Module-private: the only
- *  production reader is `waitForAnswer` above, and an exported sleep is how a
- *  suite stops waiting for the product's own signal. */
+/** Module-private: an exported sleep lets suites stop waiting for the product's own signal. */
 function pause(ms: number, signal?: AbortSignal): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
 

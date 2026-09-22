@@ -1,16 +1,6 @@
 /**
- * SQLite-backed durable fiber for Linux CLI.
- * Same FiberCtx contract as CF Agent.runFiber.
- *
- * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
- *
- * On SIGTERM: the fiber row persists in SQLite. On restart, query the `fibers`
- * table for orphaned rows (equivalent to Agent.onFiberRecovered).
- *
- * ACTOR-SCOPED. A fiber is a lane of ONE actor's work and its name is minted per
- * lane, so every actor in a workspace presents the same fiber names and an
- * unscoped sweep would let a subordinate's recovery resume the root's lane. The
- * `fibers` DDL belongs to core's identity/schema.ts — one owner per table.
+ * SQLite-backed durable fiber for Linux CLI; same FiberCtx contract as CF Agent.runFiber.
+ * Actor-scoped: fiber names repeat across actors, so every query filters by actor_id.
  */
 
 import { decodeJsonValue, parseJsonValue } from '../utils/json';
@@ -47,15 +37,13 @@ export function createSqlFiber(sql: SqlExecutor, actor: ActorHandle): Schedule['
     try {
       return await fn({ stash, snapshot: null });
     } finally {
-      // Deliberately NOT re-authorized: this deletes only the row this call
-      // inserted, and a retirement mid-fiber must not turn cleanup into a
-      // throw that replaces the body's own result or error.
+      // Not re-authorized: a mid-fiber retirement must not turn cleanup into a throw.
       void sql`DELETE FROM fibers WHERE actor_id = ${actorId} AND id = ${id}`;
     }
   };
 }
 
-/** Orphans from a previous crashed run — THIS actor's lanes only. */
+/** Orphans from a previous crashed run, this actor's lanes only. */
 export function detectOrphanedFibers(sql: SqlExecutor, actor: ActorHandle): OrphanedFiber[] {
   actor.assertCurrent();
 

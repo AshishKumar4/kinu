@@ -1,36 +1,14 @@
 /**
- * The IN-PROCESS wake queue — what makes an agent with no durable message table
- * a place a background wake can ARRIVE.
- *
- * {@link BackgroundJobRunner} ends every settled job by handing a signal to an
- * `AgentInbox`, and there is exactly ONE delivery time: the agent's next
- * step. For an actor that inbox is `Inbox`, which either splices the
- * signal into the turn in flight or enqueues a durable message row that becomes
- * the next turn. A swarm node has neither — no chat, no message table, no socket
- * a surface can watch — so it implements the SAME seam over an in-memory queue,
- * and its "next step" is the next iteration of its own loop.
- *
- * That is the whole of the mechanism difference, and it is why the runner needs
- * no branch for it: the runner never states a delivery time, never picks a
- * mechanism, and cannot tell the two apart. Everything else — the detach
- * threshold, the concurrency cap, the job row, the settle, the announcement's
- * idempotency — is the code an actor already runs.
- *
- * WHY A WAKE IS A MESSAGE. The actor's delivery ends in a durable user-role
- * message carrying the signal's text, which becomes the next turn's last
- * message. This returns the same message for the same text, so a woken node
- * reads exactly what a woken actor reads, from one wording maintained in one
- * place (`BackgroundJobRunner.wake`).
+ * In-process `AgentInbox` for agents with no durable message table (swarm nodes): wakes queue in memory and
+ * arrive on the loop's next step, as the same message text an actor's `Inbox` would deliver.
  */
 
 import type { ModelMessage } from 'ai';
 import type { AgentSignal, AgentInbox, SendOutcome } from '../types/signals';
 
 export class AgentWakeQueue implements AgentInbox {
-  /** Wakes that have arrived and not yet been handed to a turn. */
   private readonly arrived: AgentSignal[] = [];
-  /** The turn currently blocked in {@link next}, if any. At most one: an agent
-   *  takes one turn at a time, so there is never a second awaiter to fan out to. */
+  /** The turn blocked in {@link next}, if any; at most one, since an agent takes one turn at a time. */
   private resume: (() => void) | null = null;
 
   async send(signal: AgentSignal): Promise<SendOutcome> {
@@ -39,25 +17,14 @@ export class AgentWakeQueue implements AgentInbox {
     this.resume = null;
     waiting?.();
 
-    // 'queued', never 'mid-turn': this seam hands work to the NEXT turn, because
-    // an agent driven by a step loop has no channel into the request already in
-    // flight. The runner ignores the outcome. Compensation travels on the
-    // signal callback. A queued signal never calls it.
+    // Always 'queued': a step-loop agent has no channel into the request in flight. A queued signal never calls
+    // the compensation callback.
     return 'queued';
   }
 
   /**
-   * The messages the NEXT turn runs on, or `null` when this agent has nothing
-   * coming and its run is therefore over.
-   *
-   * `holding` answers "is there still work whose result I have not seen" — for a
-   * node, how many background jobs its own runner is driving. It is asked only
-   * after the queue is found empty, and asked again after every wake, so an agent
-   * that backgrounded three jobs takes three turns and then ends.
-   *
-   * There is no timer here and there must not be: an agent awaiting a wake is
-   * healthy however long it waits. It resumes when a wake arrives, or ends when
-   * its caller cancels it or its work fails definitively.
+   * Messages for the next turn, or `null` when nothing is coming and the run is over. `holding` is asked only
+   * after the queue drains. No timer by design: an agent awaiting a wake is healthy however long it waits.
    */
   async next(holding: () => boolean): Promise<readonly ModelMessage[] | null> {
     for (;;) {
@@ -66,9 +33,7 @@ export class AgentWakeQueue implements AgentInbox {
       if (wakes.length > 0) return wakes;
 
       if (!holding()) return null;
-      // Nothing runs between the drain above and this executor — one synchronous
-      // stretch on one thread — so a wake cannot land in the gap and find no
-      // awaiter to release.
+      // Synchronous from the drain to here, so a wake cannot land in the gap and find no awaiter.
       await new Promise<void>((settle) => { this.resume = settle; });
     }
   }

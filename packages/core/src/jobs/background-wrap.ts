@@ -1,31 +1,7 @@
 /**
- * The auto-detach WRAPPER, and the entries of the detach policy whose gate needs
- * nothing.
- *
- * Two shapes of backgroundable work, one axis:
- *   'result' — the turn is waiting on the call's result and its duration is
- *              unknown (`shell`, `eval`), so it races the surface's
- *              detach threshold and only work that proved slow crosses.
- *   'spawn'  — the call launches a process whose completion arrives as a wake
- *              event (`agents` swarm). Where a wake can arrive it detaches the
- *              moment the spawn is confirmed started (the threshold wait could
- *              only ever be dead air); where none can, it runs inline to
- *              completion, because a detached result there has no reader.
- *
- * WHY THE WRAPPER LIVES HERE AND THE FULL POLICY DOES NOT. The `agents` entry's
- * gate is a translator of the delegation tool's own input, so the module holding
- * the full policy (orchestrator/background-tools.ts) must import that tool — and
- * that tool's implementation IS the search engine, which builds a swarm node,
- * which needs this wrapper. Importing the full policy from a node would close
- * exactly the runtime import ring whose module-scope reader put six tests in a
- * TDZ. So the mechanism is a leaf, the policy is passed in, and the SET is named
- * at the call site — the same arrangement `keepBuiltins(builtin, NAMED_SET)`
- * already uses to make a confined tool surface structural rather than incidental.
- *
- * A confined surface (a head, a swarm node) has no `agents` tool at all, so the
- * two entries below are the whole of the policy that can apply to one, and they
- * are declared ONCE — the actor's map is built from them plus its own third
- * entry, so the two cannot drift.
+ * Auto-detach wrapper plus the two ungated detach-policy entries. 'result' races the detach threshold;
+ * 'spawn' detaches on spawn-confirm when a wake can arrive, else runs inline.
+ * The full policy (orchestrator/background-tools.ts) is passed in: importing it here closes a runtime import ring.
  */
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
@@ -36,44 +12,24 @@ import type { BackgroundJobRunner } from './runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 
-/** How a backgroundable tool's work detaches: racing the threshold for a
- *  result the turn waits on, or on spawn-confirm for a launched process. */
 export interface BackgroundableTool {
   readonly completion: 'result' | 'spawn';
-  /** Per-call gate over the tool input. */
   readonly detachable: (input: JsonValue) => boolean;
 }
 
-/**
- * The two entries every surface can hold — a shell command and a code run, both
- * result-shaped and both ungated, because neither has an input shape that could
- * make one call detachable and another not.
- */
 export const CONFINED_BACKGROUNDABLE_TOOLS = {
   eval: { completion: 'result', detachable: () => true },
   shell: { completion: 'result', detachable: () => true },
 } as const satisfies Readonly<Record<string, BackgroundableTool>>;
 
 /**
- * Return a SHALLOW CLONE of the raw toolset with the long-running tools'
- * execute wrapped in the surface's background detach (threshold race for
- * result-shaped work, spawn-confirm for spawn-shaped). Never mutates the
- * cached raw toolset — so the raw surface stays unwrapped for the eval
- * side-streams (shadow eval / scaffold / GEPA), where a long tool run must
- * complete inline instead of detaching a job into the user's chat.
- *
- * Each detachable call gets its own AbortController (hard-cancel aborts the
- * underlying work), merged with the turn's signal so a turn abort still
- * propagates. `trackController` (cf) keeps it foreground-owned until the call
- * settles; a refused detach therefore preserves normal foreground cancellation.
- * Once a job actually retains the call, BackgroundJobRunner owns the controller.
+ * Returns a shallow clone; never mutates the cached raw toolset, which eval side-streams (shadow eval,
+ * scaffold, GEPA) use unwrapped. Once a job retains a call, BackgroundJobRunner owns its controller.
  */
 export function wrapToolsForBackground(raw: ToolSet, deps: {
   jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy'>;
-  /** Which tools may detach, and on what gate. Named by the caller so a
-   *  confined surface's set is visible where the surface is built. */
+  /** Named by the caller so a confined surface's set is visible where it is built. */
   backgroundable: Readonly<Record<string, BackgroundableTool>>;
-  /** Captured when the outer tool call begins, before it can detach. */
   mode: () => WorkMode;
   trackController?: (controller: AbortController) => (() => void);
 }): ToolSet {
@@ -91,16 +47,12 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
 
         if (!detachable(parsedInput)) return exec(input, options);
         const controller = new AbortController();
-        // One holder per invocation: it accumulates what this call issues, and
-        // carries the owning job's identity once this call detaches.
         const ownership = new DeviceRequestOwnership();
         const mode = deps.mode();
         const turnSignal = options.abortSignal;
         const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
         const untrack = deps.trackController?.(controller);
-        // The policy is read per call, exactly like the threshold: on cf one
-        // runner serves both surfaces and only the turn in flight knows which
-        // it is.
+        // Policy is read per call: on cf one runner serves both surfaces.
         let run: Promise<unknown>;
 
         if (completion === 'spawn') {

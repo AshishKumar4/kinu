@@ -1,17 +1,6 @@
 /**
- * `file` — the built-in file plane: read, edit, write.
- *
- * Everything here goes through `rt.storage.vfs`, the workspace filesystem, on
- * both backends. There is deliberately no second filesystem path and no
- * per-runtime variant: another environment is reached through its own
- * namespace, in its own paths, rather than through a prefix here.
- *
- * Why one tool with three actions rather than three tools: reading a file,
- * replacing text inside it and creating it are one concept — the file plane —
- * and which action a call needs follows from what the model is doing, not from a
- * comparison it must make. That is the same reason `memory` is one tool and
- * `web` is one tool. They also share everything underneath: one path vocabulary,
- * one error vocabulary, one read ledger, one durable outcome counter.
+ * `file` — the built-in file plane: read, edit, write, all through `rt.storage.vfs`.
+ * No second filesystem path; another environment is reached through its own namespace.
  */
 
 import { formatReference, type ReferenceRoot } from '../vfs/references';
@@ -35,41 +24,16 @@ import { KinuError, renderThrownChain } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 
-/**
- * The most NAMES one `list` answers with.
- *
- * A directory belongs to whoever wrote it, so the size of this answer is not
- * the agent's choice and not the tool's. One thousand is the count this tree
- * already gives a model-facing bulk read (`tools/db-codemode.ts`
- * SELECT_LIMIT_MAX: "one read returns at most 1000 rows; page with `offset` or
- * narrow the query"), and it sits just above what the context cap can carry —
- * so the spill file holds slightly more than the transcript, and neither holds
- * a directory.
- */
+/** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
 
-/** The most CHARACTERS of names one `list` answers with, for the directory
- *  whose entries are few and enormous. Both ceilings are real: the entry count
- *  bounds an ordinary wide directory and this bounds a pathological one, and a
- *  listing that tripped neither is returned whole. */
+/** Most characters of names one `list` returns, for a directory of few enormous entries. */
 const FILE_LIST_MAX_CHARS = RESIDENT_TEXT_MAX_BYTES;
 
-/** The most BYTES one `search` reads of the file it scans. The same budget
- *  every bounded view in this tree spends on text it makes resident
- *  (`vfs/mounts.ts`), applied here because search read the file WHOLE — a log
- *  the agent did not write became an allocation the size of that log inside
- *  the object that holds the workspace. */
+/** Most bytes one `search` reads of the scanned file (same budget as `vfs/mounts.ts`). */
 const FILE_SEARCH_MAX_BYTES = RESIDENT_TEXT_MAX_BYTES;
 
-/**
- * The entries a listing answers with, and what it says when it kept back the
- * rest.
- *
- * The shape follows the page-metadata rule the recovery sweep states
- * (`cf-backend/src/fiber-recovery.ts`): a bounded producer reports the counts,
- * never the blob. `truncated` is ABSENT on a whole listing rather than present
- * and zero, so its presence is the fact and a reader needs no arithmetic.
- */
+/** `truncated` is absent on a whole listing, so its presence is the fact. */
 function boundListing(path: string, entries: readonly string[]): JsonValue {
   const shown: string[] = [];
   let chars = 0;
@@ -90,15 +54,11 @@ export interface FileToolDeps {
   vfs: VFS;
   /** The turn's read/edit ledger. */
   ledger: TurnFileLedger;
-  /** The turn's bulk budget — a file read is bulk like any other tool result,
-   *  so it is capped by the same turn-cumulative rule. */
+  /** The turn-cumulative bulk budget; a file read counts as bulk. */
   budget: TurnContextBudget;
-  /** Long-term memory, so a write under `memory/` re-indexes exactly as
-   *  `workspace.writeFile` does. Without it the FTS index would silently go
-   *  stale for the one directory whose whole purpose is being searchable. */
+  /** Long-term memory, so a write under `memory/` re-indexes FTS like `workspace.writeFile`. */
   memory?: Memory;
-  /** The live reference roots (`vfs/references.ts`), so a result that names
-   *  a file names it the way a person reads it: `root://path`. */
+  /** Live reference roots (`vfs/references.ts`), so results name files as `root://path`. */
   roots?: () => readonly ReferenceRoot[];
 }
 
@@ -113,8 +73,7 @@ export interface FileToolInput {
   edits?: Array<{ old_text?: string; new_text?: string }>;
 }
 
-/** What the read-before-write gate decided: the refusal the model is shown and
- *  the reason that classifies it, or both null when the operation may proceed. */
+/** The read-before-write gate's refusal and reason, or both null when the operation may proceed. */
 interface GateVerdict {
   readonly refusal: string | null;
   readonly reason: FileEditOutcomeReason | null;
@@ -122,19 +81,8 @@ interface GateVerdict {
 
 const QuerySchema = v.pipe(v.string(), v.minLength(1));
 
-/**
- * Why a `file` call did not do what it was asked, on the result the MODEL
- * receives — the ledger's own reason vocabulary plus the one case the ledger
- * cannot hold: a call whose arguments were malformed never became an edit
- * attempt, so counting it among them would inflate `attempts`.
- *
- * It is on the result because the dispatcher already computes it at every
- * failure site and, until now, threw it away there: the reason reached the
- * per-TURN counters in the `file_edit` event and nothing else, so a durable
- * `tool_call_end` row could say a `file` call failed and never which of nine
- * distinct things happened. Nine reasons collapsed to one bit is why "why do
- * the tool calls fail" was unanswerable from the ledger.
- */
+/** Why a `file` call failed: the ledger's reasons plus malformed arguments, which never
+ *  became an edit attempt and must not inflate `attempts`. */
 export type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
 
 /** Fail at the operation that made the decision; callers choose the native or namespace boundary. */
@@ -143,19 +91,7 @@ function failure(reason: FileToolFailureReason, error: string): never {
   throw new KinuError(reason, error);
 }
 
-/**
- * A file-plane failure, rendered for the model and classified for the ledger.
- *
- * A plane may answer in the file surface's OWN refusal vocabulary rather than
- * with an errno — the `/context` projection refuses a write against a
- * superseded revision as `stale`, the same word the read ledger uses for the
- * same fact, and refuses a malformed working history as `bad_input`. Those
- * verdicts are carried through rather than flattened: classifying a
- * compare-and-set refusal as `io` would tell the model the filesystem broke,
- * when what happened is that its base moved and it needs to read again.
- */
-/** Which refusal a VFS errno is: an absent path, a permission wall, or the
- *  filesystem itself failing. */
+/** Which refusal a VFS errno is: absent path, permission wall, or filesystem failure. */
 function editOutcomeReason(code: VfsErrorCode): FileEditOutcomeReason {
   if (code === 'ENOENT') return 'missing';
 
@@ -177,9 +113,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
       return { reason: err.code, error: err.message };
     }
 
-    // `bad_input` is rethrown rather than classified: like a malformed tool
-    // argument, content this file cannot be never became an edit attempt, and
-    // counting it among them would inflate the ledger's attempt count.
+    // `bad_input` never became an edit attempt; counting it would inflate attempts.
     throw err;
   }
 
@@ -189,9 +123,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
 
   const reason = editOutcomeReason(err.code);
 
-  // ENOENT and EISDIR are the model's own addressing mistakes, and the hint
-  // names this agent's real roots. Everything else (a reserved mount, an
-  // offline device, a read-only plane) already carries its own reason.
+  // Only addressing mistakes get the roots hint; other errors carry their own reason.
   const hint = err.code === 'ENOENT' || err.code === 'EISDIR'
     ? ` — ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
     : '';
@@ -199,14 +131,8 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
   return { reason, error: `${err.message}${hint}` };
 }
 
-/**
- * The file plane's dispatch logic — read / write / edit over one VFS,
- * ledger and budget. Factored out so codemode's `workspace.writeFile` and
- * `workspace.editFile` call the SAME implementation as the native `file`
- * tool, sharing the SAME TurnFileLedger. A guarded write refuses identically
- * regardless of surface, and a read/write/edit through one is known to the
- * other.
- */
+/** The file plane's dispatch logic, shared by the native `file` tool and codemode's
+ *  `workspace.writeFile`/`editFile` so both use one TurnFileLedger and refuse identically. */
 export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<JsonValue> {
   const { vfs, ledger, budget } = deps;
 
@@ -230,10 +156,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
 
-  /** The one write path. `observe` runs the moment the bytes land — a later
-   *  step failing must not leave the ledger denying content already on disk —
-   *  and differs only in what the caller now knows: a `write` authored the whole
-   *  file, an `edit` changed one span of what it already knew. */
+  /** The one write path. `observe` runs as soon as the bytes land, so a later failure
+   *  cannot leave the ledger denying content already on disk. */
   const persist = async (path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision): Promise<void> => {
     const dir = vfsDirname(path);
 
@@ -255,14 +179,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     if (deps.memory && indexed) await deps.memory.index(indexed);
   };
 
-  /** The read-before-write gate, shared by edit and overwriting write. Returns
-   *  the refusal a verdict earns AND the reason that classifies it, computed
-   *  once here rather than at each call site with a ternary of its own — that
-   *  would be two places for one rule.
-   *
-   *  `partial` classifies as `unread` — read to less depth than the operation
-   *  needs is the same defect as not read at all, and the prose is what
-   *  distinguishes them for the model. It is only reachable on `whole`. */
+  /** The read-before-write gate, shared by edit and overwriting write. `partial` classifies
+   *  as `unread`; it is only reachable on `whole`. */
   const gate = (path: string, current: string, action: 'edit' | 'overwrite'): GateVerdict => {
     const need: FileSeenNeed = action === 'edit' ? 'part' : 'whole';
     const verdict = ledger.seenState(path, current, need);
@@ -293,11 +211,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const referenceOf = (path: string): string => formatReference(path, deps.roots?.() ?? []);
 
   return async (args: FileToolInput): Promise<JsonValue> => {
-    // Declared types, not established ones: the AI SDK leaves
-    // `Schema.validate` undefined for a jsonSchema-declared tool input, so both
-    // of these are whatever the model emitted. `path.trim()` on a non-string
-    // threw out of the tool instead of answering, and an unrecognised action
-    // was answered without naming the three that work.
+    // The AI SDK does not validate jsonSchema tool input; these are whatever the model emitted.
     const parsed = v.safeParse(ActionSchema, args.action);
 
     if (!parsed.success) {
@@ -339,11 +253,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
         let scanned: ScannedFile;
 
-        // RETAINED MEMORY, not I/O: the scan reads every byte, because the
-        // ledger keys on the fingerprint of the WHOLE content, and keeps only
-        // this window and the running hash. A read that authorized an edit
-        // from the lines it happened to show would be a cheaper gate, not
-        // the same one.
+        // Reads every byte (the ledger keys on the whole-content fingerprint) but retains
+        // only this window and the running hash.
         try {
           scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
         } catch (err) {
@@ -360,8 +271,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         budget.admit(slice.output.length);
 
         if (slice.omitted > 0) {
-          // The full text is not spilled anywhere: it is already addressable
-          // at its own path, and the marker says which offset continues it.
+          // Not spilled: the file is addressable at its path and the marker names the continuing offset.
           budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true });
         }
 
@@ -408,8 +318,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return failure('bad_input', 'file action=edit requires `edits`: [{ old_text, new_text }].');
         }
 
-        // A malformed edit must not be read as the destructive option: a
-        // missing new_text would otherwise default to deleting the match.
+        // A missing new_text must not default to deleting the match.
         const EditInputSchema = v.object({ old_text: v.string(), new_text: v.string() });
         const malformed = raw.findIndex((edit) => !v.safeParse(EditInputSchema, edit).success);
 
@@ -457,8 +366,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         }
 
         try {
-          // Coverage carries across the edit: only the span the model named
-          // itself changed, so what it knew about the file it still knows.
+          // Coverage carries across the edit: only the named span changed.
           await persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);

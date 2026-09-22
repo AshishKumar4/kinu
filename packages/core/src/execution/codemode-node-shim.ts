@@ -1,28 +1,7 @@
 /**
- * The Node-style conveniences a program run by `eval` gets, as the
- * source of a module the dynamic Worker loads beside the model's program.
- *
- * Plain JavaScript in a string, because it runs INSIDE the sandbox isolate and
- * nothing here is compiled by this package. The sandbox has `nodejs_compat`,
- * so the real Node builtins (`node:path`, `node:crypto`, `node:util`, …) are
- * importable there; what Node has and a Worker has not is a filesystem and a
- * process table, and those two are shimmed over the `workspace` namespace:
- *
- *   require('fs/promises').readFile('notes.md')   →  workspace.readFile
- *   require('fs/promises').writeFile(p, text)     →  workspace.writeFile
- *   require('child_process').exec('ls -la')       →  workspace.exec
- *
- * `createFetch` is the program's `fetch`: the platform's own, except that the
- * loopback egress entrypoint answers a network failure with a marked 502 (an
- * exception thrown inside it would reach here as an opaque `internal error`),
- * and this turns that back into the rejection a Node program expects.
- *
- * `defineCrafted` is how a crafted tool becomes `tools.<name>`: the stored
- * source is evaluated per tool inside its own try, so a tool whose source
- * throws when evaluated, or evaluates to something that is not a function,
- * poisons only its own name and reports why on its first call. The failure
- * marker is core's `craftFailureMarker` shape (`[crafted:<name>]`), which the
- * in-episode fitness reads to blame the right artifact.
+ * Source of the Node-convenience module loaded beside an `eval` program; plain JS because it runs inside the
+ * sandbox isolate. `fs`/`child_process` are shimmed over `workspace`; `createFetch` turns the egress entrypoint's
+ * marked 502 back into a rejection; `defineCrafted` isolates each crafted tool (`[crafted:<name>]` marker).
  */
 
 export const KINU_NODE_MODULE_NAME = 'kinu-node.js';

@@ -1,28 +1,18 @@
 /**
- * Kinu's `VFS` over a Mossaic tenant.
- *
- * Mossaic is a Durable-Object filesystem whose SDK exposes an fs/promises
- * shape (`readFile`, `stat`, `listChildren`, ...). Core never imports that SDK:
- * the hosted backend constructs the client and hands it in as
- * {@link MossaicClient}, the structural subset this adapter reaches. What the
- * adapter owns is the BOUNDARY — Mossaic's error taxonomy and stat shape are
- * parsed at the wire and re-issued in Kinu's closed `VfsErrorCode` set, so a
- * caller switching on `err.code` above a `/shared` mount sees the same codes it
- * sees above the workspace tree.
+ * Kinu's `VFS` over a Mossaic tenant. Core never imports the Mossaic SDK; the hosted backend injects a
+ * {@link MossaicClient}. Mossaic errors and stats are re-issued in Kinu's closed `VfsErrorCode` set.
  */
 import * as v from 'valibot';
 import type { VFS, VfsEntryStat } from '../types/primitives';
 import { makeVfsError, type VfsErrorCode } from './errno';
 import type { VfsListedEntry, VfsNativeMutations, VfsNativeReads } from './mounts';
 
-/** What Mossaic's `stat`/`lstat` answer, as this adapter reads it. */
 export interface MossaicStat {
   readonly type: 'file' | 'dir' | 'symlink';
   readonly size: number;
   readonly mtimeMs: number;
 }
 
-/** One `listChildren` entry: the leaf name, its kind, and its stat when asked for. */
 export interface MossaicChild {
   readonly kind: 'folder' | 'file' | 'symlink';
   readonly name: string;
@@ -34,12 +24,7 @@ export interface MossaicChildrenPage {
   readonly cursor?: string;
 }
 
-/**
- * The subset of `@mossaic/sdk`'s `VFS` class this adapter drives. Structural,
- * so the hosted backend's real client satisfies it without a cast and a test
- * can stand in a fake. Every method throws the SDK's `VFSFsError` (a `code`
- * from Mossaic's own union) on failure; {@link mossaicVfs} translates.
- */
+/** Structural subset of `@mossaic/sdk`'s `VFS` this adapter drives; methods throw the SDK's `VFSFsError`. */
 export interface MossaicClient {
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, data: Uint8Array | string): Promise<void>;
@@ -56,21 +41,13 @@ export interface MossaicClient {
   listChildren(path: string, opts?: { limit?: number; cursor?: string; includeStat?: boolean }): Promise<MossaicChildrenPage>;
 }
 
-/** Kinu's plane over a tenant, with the native operations the mount table forwards. */
 export interface MossaicVfs extends VFS, VfsNativeMutations, Pick<VfsNativeReads, 'readdirStats'> {
-  /** A symlink's target, unresolved. */
   readlink(path: string): Promise<string>;
   symlink(target: string, path: string): Promise<void>;
 }
 
-/**
- * Mossaic's error union, translated into Kinu's. The shared names pass
- * through. The rest fold by MEANING, not by number: a throttled or
- * unreachable tenant is the mount being unavailable (`ENXIO`, the code the
- * mount table itself uses for an absent mount), a malformed path or a
- * too-large write is an I/O condition the caller cannot fix by retrying
- * (`EIO`), and encryption-mode refusals are permission conditions.
- */
+/** Mossaic error union mapped to Kinu's by meaning: unavailable tenant is `ENXIO`, unfixable input is `EIO`,
+ *  encryption-mode refusals are permission errors. */
 const CODE_MAP = {
   ENOENT: 'ENOENT',
   EEXIST: 'EEXIST',
@@ -133,10 +110,8 @@ function entryStat(raw: MossaicStat): VfsEntryStat {
   return { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.type === 'dir' };
 }
 
-/** The largest page Mossaic serves in one `listChildren` call. */
 const CHILDREN_PAGE = 1000;
 
-/** Kinu's file plane over one Mossaic tenant. */
 export function mossaicVfs(client: MossaicClient): MossaicVfs {
   return {
     async readFile(path, opts) {

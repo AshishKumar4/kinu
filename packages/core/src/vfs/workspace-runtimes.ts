@@ -1,50 +1,8 @@
 /**
- * The toolchain an embedded Nimbus workspace can reach, and the moment it
- * arrives.
- *
- * A bare `NimbusWorkspace` is the JavaScript half of Nimbus: the durable
- * filesystem, the shell, ~95 coreutils and `node`. `bash`, `python3`, `pip`
- * and `npm` are all "command not found" — not disabled, ABSENT, because the
- * workspace has been handed nothing that could run a wasm module and nothing
- * that speaks to a package registry.
- *
- * `npm` and `npx` are handed over unconditionally: they are JavaScript reaching
- * a registry over `fetch`. The wasm interpreters are handed over only where
- * something can actually run one — see `provisionWorkspaceRuntimes`' `facets`,
- * which the CLI supplies as `localFacetHost()`. A deployed Worker forbids the
- * dynamic evaluation that host performs; its interpreters run instead in the
- * dynamic-worker facets of Nimbus's hosted runtime, which registers its own
- * runners and REPLs over the same `workspace.runtimes` and installs from the
- * R2 catalog `WorkspaceOptions.runtimeSource` names.
- *
- * WHERE THE BYTES COME FROM
- *
- * On Cloudflare, `nimbus install <name>` reads a runtime out of an R2 bucket
- * through a digest chain. Off Cloudflare there is no bucket and none is needed:
- * `@nimbus-sh/runtime-bash` and `@nimbus-sh/runtime-cpython` are npm packages
- * holding the same manifest and the same content-addressed blobs, and
- * `seedRuntimePackage` writes the same tree at the same path. Which publisher
- * ran is not observable afterwards. The packages are NOT imported here — they
- * read `node:fs` and weigh 40 MB, so the host that has a filesystem supplies
- * them and the Worker never sees them.
- *
- * WHEN IT ARRIVES
- *
- * On first use of the command, never at open. Measured by
- * `scripts/nimbus-runtime-probe.ts`: workspace open is 12ms with no runtimes
- * supplied and 14ms with both, the first `python3` costs 82ms because it is the
- * install, and every `python3` after it costs 0ms. The re-seed check itself is
- * 0.2ms, so the expense was never the check — it is the 35.7 MB of durable rows
- * CPython writes, and a workspace that never runs Python must not carry them. So
- * each bin name a supplied-but-uninstalled runtime declares gets a stub that
- * installs on the first invocation and hands the same call to the real command;
- * from then on the runtime is on disk and the stub is gone.
- *
- * A workspace reopened over a populated filesystem skips all of that: the
- * runtimes are already installed and only need re-registering, which is what
- * `rehydrateInstalledRuntimesView` does here. That path is not an optimisation
- * — a Durable Object that was evicted comes back with the filesystem and an
- * empty command registry, so without it an installed runtime is invisible.
+ * The toolchain an embedded Nimbus workspace can reach. npm/npx are always registered; wasm interpreters
+ * (bash, cpython) only where a `facets` host can run them. Runtime packages are supplied by the host, never
+ * imported here (they read `node:fs`). Each runtime installs on first use of one of its bins via a stub;
+ * reopening rehydrates installed runtimes, which an evicted Durable Object needs to see them again.
  */
 
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -64,21 +22,8 @@ import { KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError,
 import type { JsonValue } from '../utils/json';
 
 /**
- * The refusal a workspace shell's "command not found" is worth.
- *
- * Both shells that stand in as `workspace` end up here: the embedded one
- * (`createWorkspace`'s bundle, checked against its live command registry) and
- * the hosted session box (checked against the runtimes the box can install).
- * The substrate's own wording is `<name>: command not found` at exit 127 —
- * truthful, but it names nothing to DO, and the 2026-09-12 trajectory run
- * watched an agent burn two turns discovering `bun` lives only in the sandbox
- * container. This refusal names the absent command and the two real exits:
- * `runtime: 'sandbox'`, and `nimbus install <name>` when this workspace's
- * runtime catalog can actually produce that bin.
- *
- * `cataloged` is supplied per call rather than captured: installed runtimes
- * re-register their bins into the live registry mid-session, so a catalog read
- * once at composition would go stale while the workspace lives on.
+ * Turn a shell's exit-127 "command not found" into a refusal naming the real exits (sandbox, `nimbus install`).
+ * `cataloged` is per call: installed runtimes re-register bins mid-session.
  */
 export async function workspaceCommandNotFound(
   outcome: { stdout: string; stderr: string; exitCode: number; refusal?: Refusal },
@@ -104,8 +49,7 @@ export async function workspaceCommandNotFound(
           ? `Run it in the sandbox executor (runtime 'sandbox'), or install it with \`nimbus install ${bin}\`.`
           : `Run it in the sandbox executor (runtime 'sandbox'), which ships a full toolchain, `
             + `or install it with \`nimbus install ${bin}\` if a Nimbus runtime provides it.`)
-        // A catalog that threw is a fact this refusal carries, not hides:
-        // "no bins known" and "could not ask" are different answers.
+        // "No bins known" and "could not ask" are different answers.
         + (unreadable === undefined ? '' : ` The runtime catalog could not be read: ${renderCauseChain(unreadable)}`),
       { execution: { exitCode: outcome.exitCode } },
     )),
@@ -113,10 +57,7 @@ export async function workspaceCommandNotFound(
 }
 
 
-/** Parse the shape `runtimes.list()` answers with — `{installed, available}`
- *  on the SDK handle, a bare `installed` array on hosts that wrap it — into the
- *  one fact a command-not-found refusal needs: which bins the box's runtime
- *  catalog can produce. Malformed means none, never a thrown probe. */
+/** `runtimes.list()` answer: `{installed, available}` on the SDK handle, or a bare `installed` array. */
 const NimbusRuntimeCatalogSchema = v.union([
   v.object({
     installed: v.array(v.object({ name: v.string(), bins: v.array(v.string()) })),
@@ -125,10 +66,7 @@ const NimbusRuntimeCatalogSchema = v.union([
   v.array(v.object({ name: v.string(), bins: v.array(v.string()) })),
 ]);
 
-/** The bins a hosted session box's `runtimes.list()` can put on its PATH:
- *  installed bins already, plus every bin name the still-available runtime
- *  manifests declare (the same merge `runtimeEntrypoints` performs for the
- *  embedded registry — substrate's own table, not a second list). */
+/** Bins a hosted session box can put on PATH: installed bins plus available runtime names. */
 export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
   try {
     const parsed = v.safeParse(NimbusRuntimeCatalogSchema, await list());
@@ -146,33 +84,21 @@ export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefin
 
     return names;
   } catch (cause) {
-    // A list() that threw is a fact the refusal carries — distinct from a
-    // catalog that parsed and named no bins.
+    // Distinct from a catalog that parsed and named no bins.
     return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
   }
 }
 
 /**
- * The capability names a workspace holding `runtimes` may honestly declare.
- *
- * Beside {@link provisionWorkspaceRuntimes} because it reads the same argument:
- * the list that decides which commands get registered is the list that decides
- * what the model is told, so the declaration cannot drift from the registry. A
- * host that supplies nothing declares nothing extra — the coreutils, `node` and
- * the shell are the bare workspace's own and are declared by the executor.
- *
- * `npm` needs no runtime package: Nimbus's own npm client is registered
- * unconditionally, because it is JavaScript reaching a registry over `fetch`.
- * `bash` maps to no capability of its own; the vocabulary already says `shell`,
- * and it was never a lie — the workspace has always had one.
+ * Capabilities a workspace holding `runtimes` may declare; reads the same list that decides registration,
+ * so the declaration cannot drift. `npm` is always registered.
  */
 export function workspaceToolchainCapabilities(
   runtimes: readonly RuntimePackage[],
 ): readonly ExecutorCapability[] {
   const capabilities: ExecutorCapability[] = ['npm'];
 
-  // `python` is the catalog name users type; `cpython` is the wasm32-wasi
-  // interpreter that supersedes it and the name its manifest carries.
+  // `cpython` is the manifest name; `python` is the catalog name users type.
   if (runtimes.some((pkg) => pkg.manifest.name === 'cpython' || pkg.manifest.name === 'python')) {
     capabilities.push('python');
   }
@@ -181,19 +107,8 @@ export function workspaceToolchainCapabilities(
 }
 
 /**
- * Give `workspace` the runtimes in `runtimes` on demand, and npm/npx now.
- *
- * Called once per workspace, after `NimbusWorkspace.create` and before the
- * first command runs. Idempotent registrations only — no bytes are written
- * unless a provisioned command is actually invoked.
- */
-/**
- * The runner and package machinery, loaded on first provisioning rather than at
- * module eval: the bash and cpython runner modules statically reach wasm
- * assets, and the npm command sits in the same substrate graph. Evaluating them
- * with the module would put a WebAssembly import into every consumer's static
- * graph — the Worker's cold start and the workerd test pool alike — for
- * machinery only a BOOTING workspace uses.
+ * Loaded on first provisioning, not at module eval: the runner modules reach wasm assets, which would
+ * otherwise enter every consumer's static import graph.
  */
 interface RuntimeToolkit {
   readonly makeBashRunnerFactory: typeof import('@nimbus-sh/core/runtime/bash-runner.js')['makeBashRunnerFactory'];
@@ -240,16 +155,8 @@ export async function provisionWorkspaceRuntimes(deps: {
   workspace: NimbusWorkspace;
   runtimes: readonly RuntimePackage[];
   /**
-   * Where a wasm interpreter would run, or absent because nothing here can run
-   * one.
-   *
-   * Absent is workerd. `localFacetHost` builds a facet's scope with
-   * `new AsyncFunction(preamble)` — dynamic evaluation, which the Workers
-   * runtime forbids outright — so a deployed Worker that registered
-   * bash/cpython runners anyway would answer `python3` with an eval error
-   * instead of "command not found", and would first have written 35.7 MB of
-   * interpreter rows to get there. A registry entry that cannot run is worse
-   * than an absent one: `provisioningStub` says so itself.
+   * Where a wasm interpreter runs; absent on workerd, which forbids the dynamic evaluation `localFacetHost` uses.
+   * Absent means those runtimes register no bins, so the command stays "not found" rather than throwing.
    */
   facets?: FacetHost;
 }): Promise<void> {
@@ -258,16 +165,8 @@ export async function provisionWorkspaceRuntimes(deps: {
   const registry = workspace.registry;
   const home = workspace.env.HOME ?? WORKSPACE_ROOT;
   const kernelFs = workspace.vfs.as(CRED_KERNEL);
-  // The runner each manifest entrypoint can name, over THIS workspace. Held per
-  // workspace rather than in the substrate's process-global runner table because
-  // every factory closes over one filesystem and one facet host: a second
-  // workspace in the same process would otherwise retarget the first one's bash.
-  //
-  // Empty when no facet host was supplied, which is not a degraded table but the
-  // honest one: a manifest naming `cpython-runner` on a host that cannot run wasm
-  // resolves to nothing, `rehydrateInstalledRuntimesView` registers no bin for
-  // it, and `python3` stays "command not found" instead of becoming a command
-  // that throws.
+  // Per workspace, not the substrate's process-global runner table: each factory closes over one filesystem.
+  // Empty without a facet host, so wasm-runner manifests register no bins.
   const runnerDeps = deps.facets ? { facets: deps.facets, filesystem: workspace.filesystem } : null;
 
   const runners: Record<string, RunnerFactory> = runnerDeps
@@ -282,8 +181,7 @@ export async function provisionWorkspaceRuntimes(deps: {
   const installed = await kit.rehydrateInstalledRuntimesView(kernelFs, registry, home, runnerFor);
   const alreadyRegistered = new Set(installed.bins);
 
-  // Process output crosses the runtime as bytes; each stream gets its own
-  // streaming decoder so a multibyte character split across chunks lands whole.
+  // Per-stream decoder so a multibyte character split across chunks lands whole.
   const shellExecute: ShellExecuteFn = async (command, ctx) => (await workspace.shell.execute(command, {
     cwd: ctx.cwd,
     env: ctx.env,
@@ -291,9 +189,7 @@ export async function provisionWorkspaceRuntimes(deps: {
     onStderr: textSink((text) => ctx.stderr.write(text)),
   })).exitCode;
 
-  // Nimbus's own npm: it resolves against registry.npmjs.org, extracts tarballs
-  // into this filesystem and registers each package's bins as commands. Free to
-  // register — nothing is fetched until a subcommand runs.
+  // Nothing is fetched until a subcommand runs.
   registry.register('npm', kit.createNpmCommand(registry, shellExecute, workspace.kernel));
   registry.register('npx', kit.createNpxCommand(registry, shellExecute));
 
@@ -314,12 +210,8 @@ export async function provisionWorkspaceRuntimes(deps: {
 }
 
 /**
- * Install `runtimePackage` at most once, however many of its commands are
- * invoked concurrently, and re-register its entrypoints when it lands.
- *
- * Returns the bin names that became invokable, which is the difference between
- * "installed" and "runnable": a manifest whose runner this workspace cannot
- * build writes its files and registers nothing.
+ * Install `runtimePackage` at most once and re-register its entrypoints. Returns bins that became runnable;
+ * a manifest whose runner cannot be built registers none.
  */
 function provisionOnce(deps: {
   kit: RuntimeToolkit;
@@ -338,9 +230,7 @@ function provisionOnce(deps: {
 
         return (await deps.kit.rehydrateInstalledRuntimesView(deps.kernelFs, deps.registry, deps.home, deps.runnerFor)).bins;
       } catch (error) {
-        // A failed install must not become a permanently poisoned command: clear
-        // the memo so the next invocation tries again, and re-raise with the
-        // cause for the caller already waiting on this one.
+        // Clear the memo so a failed install is retried on the next invocation.
         running = null;
         throw new Error(`${deps.runtimePackage.manifest.name} runtime install failed`, { cause: error });
       }
@@ -351,12 +241,8 @@ function provisionOnce(deps: {
 }
 
 /**
- * The command a not-yet-installed runtime answers with: install, then run.
- *
- * Re-resolving through the registry rather than calling a captured handler is
- * what keeps this honest — the install re-registers the real command under this
- * same name, so a resolve that still returns this stub means the runtime landed
- * on disk with nothing able to run it, and that is reported instead of looping.
+ * Install, then run. Re-resolves through the registry; a resolve that still returns this stub means no
+ * runner was registered, which is reported instead of looping.
  */
 function provisioningStub(deps: {
   binName: string;

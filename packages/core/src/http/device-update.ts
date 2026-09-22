@@ -1,29 +1,15 @@
 /**
- * Self-update vocabulary shared by the hub, the CLI and the device row.
- *
- * The served build stamp (`/downloads/kinu-version.json`, written by
- * scripts/build-cli-dist.sh) is the only version source. A CLI or a daemon is
- * "behind" when its own stamp is not that one; nothing here orders versions,
- * because `0.1.0+abc` and `0.1.0+def` are different builds of one semver and
- * the deploy that published the stamp is by definition the build to run.
+ * Self-update vocabulary. The served build stamp (`/downloads/kinu-version.json`)
+ * is the only version source; versions are compared for equality, never ordered.
  */
 import { CLI_DIST_PLATFORMS } from './deployed-assets';
 
-/** Build metadata is significant here: 0.1.0+aaa and 0.1.0+bbb are different
- *  builds even though semver treats the suffix as ignorable. */
+/** Build metadata is significant: 0.1.0+aaa and 0.1.0+bbb differ. */
 export function isSameBuild(installed: string, served: string): boolean {
   return installed.trim() === served.trim();
 }
 
-/**
- * The frame the hub sends a daemon whose HELLO named another build:
- * `{ type: 'UPDATE', version, urls: { tarball, checksum }, sha256 }`.
- *
- * `urls` are PATHS on the daemon's own origin, never absolute: the daemon
- * downloads over the origin its credentials already trust, and a frame cannot
- * point it anywhere else. `sha256` is the published checksum, so the daemon
- * can tell a frame from an earlier deploy apart from the archive now served.
- */
+/** Hub → daemon frame. `urls` are paths on the daemon's own origin, never absolute. */
 export const DEVICE_UPDATE = 'UPDATE';
 
 export interface DeviceUpdateFrame {
@@ -31,17 +17,12 @@ export interface DeviceUpdateFrame {
   version: string;
   urls: { tarball: string; checksum: string };
   sha256: string;
-  /** Every artifact's checksum the build signed, and the signature over them
-   *  (`http/release-signing.ts`): what the daemon verifies against its pinned
-   *  key before it downloads anything. The hub relays these from the served
-   *  build's manifest; it cannot mint them. */
+  /** Signed checksums (`http/release-signing.ts`) the daemon verifies against its pinned key; relayed, never minted, by the hub. */
   checksums: Record<string, string>;
   signature: string;
 }
 
-/** The published CLI artifact for a machine, by the words its daemon's HELLO
- *  uses (`os.platform()`, `os.arch()`), or null when no artifact is built for
- *  that platform. */
+/** Null when no artifact is built for `os.platform()`-`os.arch()`. */
 export function cliArtifactPath(os: string | undefined, arch: string | undefined): string | null {
   const platform = `${os ?? ''}-${arch ?? ''}`;
 
@@ -51,13 +32,8 @@ export function cliArtifactPath(os: string | undefined, arch: string | undefined
 }
 
 /**
- * What the Devices card says about a machine's software, and what the hub
- * decides on HELLO. `off` is the owner's `updateCheck: false`, reported by the
- * daemon; it wins over `behind` because the owner asked not to be touched.
- * `unreported` is a daemon too old to name its build at all. `unstamped` is a
- * version carrying no build metadata (`0.2.0`, not `0.2.0+<sha>`) — a source
- * install, never a build the deploy published, so the hub pushes nothing over
- * it. `current` also covers a hub that has no served stamp to compare against.
+ * `off` (owner's `updateCheck: false`) wins over `behind`. `unstamped`: no build
+ * metadata, i.e. a source install; nothing is pushed over it.
  */
 export type DeviceUpdateState = 'current' | 'behind' | 'off' | 'unreported' | 'unstamped';
 

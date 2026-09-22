@@ -1,26 +1,12 @@
 /**
- * Tool-call summary lines — what a tool call is doing, from its arguments.
- *
- * A bare `agents` chip repeated six times tells the operator nothing, and the
- * arguments the agent already passed say exactly what each call was about.
- * This turns those arguments into one compact line per call. It never invents
- * detail the arguments do not carry: when they say nothing the summary is
- * empty and the caller falls back to the tool name alone.
- *
- * This lived in `cf-backend/src/components/` and was therefore a web-chat
- * capability, which is not what it is: nothing in it touches Cloudflare, React
- * or a DOM. The CLI, which renders the same tool calls to a terminal, had no
- * access to it and printed the raw argument VALUES joined with commas and
- * clipped at 70 characters — so `file({action:'edit', path, replacements})`
- * read as `edit, /a/b.ts, [{"old":"…` there and `Edited b.ts — 3 replacements`
- * on the web. One vocabulary, one home, both surfaces.
+ * One-line tool-call summaries derived only from the call's arguments; empty when they say nothing.
+ * Shared by the CLI and web chat.
  */
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { redactSecrets } from '../events/hub/visibility';
 import * as v from 'valibot';
 
-/** Chip budget — long enough for a command or a short task, short enough to
- *  stay on one line next to the name, runtime badge and duration. */
+/** Chip budget: must fit one line beside the name, runtime badge and duration. */
 const MAX = 72;
 
 
@@ -68,11 +54,7 @@ const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['product_change', new Set(['list', 'status', 'preview'])],
 ]);
 
-/**
- * Declared native operations can classify a call's consequence. Shell and
- * codemode programs have no authenticated per-call effect receipt on this
- * interface; their source and arbitrary output cannot establish one.
- */
+/** Only declared native operations are classified; shell and codemode programs have no effect receipt. */
 export function toolCallEffect(toolName: string, input: JsonValue | undefined): ToolCallEffect {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
@@ -94,8 +76,7 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined): 
   return 'unknown';
 }
 
-/** Collapse whitespace and clip, marking the clip so nothing reads as complete
- *  when it isn't. */
+/** Collapse whitespace and clip, marking the clip. */
 export function clip(value: string, max: number = MAX): string {
   const flat = value.replace(/\s+/g, " ").trim();
 
@@ -120,8 +101,7 @@ function actionOn(action: string, target?: string, body?: string): string {
   return tail ? `${head} — ${tail}` : head;
 }
 
-/** The first line of an eval program that isn't blank or a comment —
- *  the expanded card shows the rest. */
+/** The first line of an eval program that isn't blank or a comment. */
 function firstCodeLine(code: string): string {
   for (const raw of code.split("\n")) {
     const line = raw.trim();
@@ -149,10 +129,7 @@ function summarizeThink(input: JsonObject): string {
   return [label, task].filter(Boolean).join(": ");
 }
 
-/** The unified delegation tool — one line per action, shaped like the
- *  summaries its three predecessors produced. `fork` is kept for the same
- *  reason `summarizeThink` is: this renders STORED calls, and a timeline written
- *  before the rung was removed must still read as what it was. */
+/** Unified delegation tool. `fork` stays so stored timelines still render. */
 function summarizeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
@@ -178,8 +155,7 @@ function summarizeAgents(input: JsonObject): string {
       if (str(input, "scope") === "workspace") return actionOn("hire workspace", agent, str(input, "mission"));
       const role = str(input, "role");
 
-      // No `role` is a hire handed to an agent that already exists, and then
-      // `message` is the workstream rather than `mission`.
+      // No `role`: a hire handed to an existing agent; `message` is the workstream.
       if (!role) return actionOn(action, agent, str(input, "message"));
 
       return actionOn(str(input, "lifetime") === "task" ? "hire (task)" : action, agent || role, agent ? role : "");
@@ -197,8 +173,6 @@ function summarizeAgents(input: JsonObject): string {
   }
 }
 
-/** The unified durable-state tool — prose actions read by their content or
- *  query, keyed-fact actions by their key. */
 function summarizeMemory(input: JsonObject): string {
   const action = str(input, "action");
 
@@ -211,8 +185,7 @@ function summarizeMemory(input: JsonObject): string {
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
 
-/** The file plane — every action reads by its path, and an edit says how many
- *  replacements it carried, which is the one thing the path does not tell you. */
+/** Every action reads by its path; an edit also reports its replacement count. */
 function summarizeFile(input: JsonObject): string {
   const action = str(input, "action");
   const path = str(input, "path");
@@ -225,7 +198,6 @@ function summarizeFile(input: JsonObject): string {
   return path ? `${action} ${clip(path, 60)}` : action;
 }
 
-/** The unified web tool — a search reads by its query, a fetch by its url. */
 function summarizeWeb(input: JsonObject): string {
   const action = str(input, "action");
   const url = str(input, "url");
@@ -261,8 +233,6 @@ function summarizePeers(input: JsonObject): string {
   }
 }
 
-/** The task list — an add reads by what it wrote, an update by which item it
- *  moved and where to. */
 function summarizeTasks(input: JsonObject): string {
   const action = str(input, "action");
 
@@ -343,13 +313,7 @@ const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   memory: summarizeMemory,
   tasks: summarizeTasks,
   web: summarizeWeb,
-  // think/team/peers were unified into `agents`, fact into `memory`,
-  // web_search/web_fetch into `web`, `experience` became an owner-driven RPC
-  // rather than a tool, `product_change` was renamed `release`, and `skills`
-  // (list/invoke, both dead weight — invoke never restricted the turn that
-  // called it) and `release` itself left the model's tool surface for
-  // codemode/workspace.* reach; their summarizers remain so tool calls in
-  // STORED transcripts keep rendering under the name they were recorded with.
+  // Removed/renamed tools keep summarizers so stored transcripts still render.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
@@ -364,16 +328,7 @@ const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   product_change: summarizeRelease,
 } satisfies Record<string, ToolSummarizer>));
 
-/* ══════════════════════════════════════════════════════════════════════
-   What the call DOES, as opposed to what it was passed.
-
-   `run bun test packages/checkout` tells an operator what was typed. It
-   does not tell them the agent is running tests, which is the thing they
-   actually want to know while watching a turn go by. These functions read
-   the real arguments and name the action; when the arguments do not say,
-   they return "" and the row falls back to the tool name and the raw
-   summary. Nothing here guesses.
-   ══════════════════════════════════════════════════════════════════════ */
+/* What the call does, as opposed to what it was passed. Returns "" rather than guessing. */
 
 /** Strip env assignments, `sudo`, and a leading path so `/usr/bin/git` and
  *  `FOO=1 sudo git` both reduce to `git`. */
@@ -385,8 +340,7 @@ function argv(command: string): string[] {
   const rest = parts.slice(i);
 
   if (rest.length > 0) {
-    // `split` always yields at least one segment, so the last one IS the
-    // command name whether or not the word carried a path.
+    // `split` always yields at least one segment.
     const segments = rest[0].split("/");
     rest[0] = segments[segments.length - 1];
   }
@@ -394,8 +348,7 @@ function argv(command: string): string[] {
   return rest;
 }
 
-/** The verb each command word stands for. Keyed on the word the agent
- *  actually typed, so a match is evidence rather than inference. */
+/** Keyed on the word the agent typed, so a match is evidence rather than inference. */
 const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: string]> = [
   [(w) => w === "test" || w === "pytest" || w === "jest" || w === "vitest" || w === "mocha", "Ran tests"],
   [(w) => w === "typecheck" || w === "tsc", "Typechecked"],
@@ -412,19 +365,15 @@ const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: 
   [(w) => w === "psql" || w === "sqlite3" || w === "mysql" || w === "redis-cli", "Queried a database"],
 ];
 
-/** What a shell command is for, from its own argv. */
 export function describeCommand(command: string): string {
   const commandWords = argv(command);
 
   if (commandWords.length === 0) return "";
 
-  // Every git verb reads fine as "Git <verb>", and flattening them all to one
-  // phrase would lose the only thing the operator cares about.
+  // Keep the git verb; it is what the operator cares about.
   if (commandWords[0] === "git" && commandWords[1]) return `Git ${commandWords[1]}`;
 
-  // A runner and the tool it drives both sit in front of the verb
-  // (`bunx wrangler deploy`, `npm run build`), so look a few words in — but
-  // only a few, or a path argument starts deciding what the command was for.
+  // Runners sit in front of the verb (`bunx wrangler deploy`); look only a few words in so paths don't decide.
   for (const word of commandWords.slice(0, 3)) {
     for (const [test, verb] of RUN_VERBS) if (test(word)) return verb;
   }
@@ -446,7 +395,6 @@ const MEMORY_VERBS = new Map(Object.entries({
   set: "Recorded a fact", delete: "Forgot", list: "Listed memory",
 }));
 
-/** The last path segment — the part a person reads. */
 function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
   const segments = trimmed.split("/");
@@ -456,7 +404,6 @@ function basename(path: string): string {
   return last === "" ? trimmed : last;
 }
 
-/** The `web` tool says which half it ran by which argument it carried. */
 function describeWeb(input: JsonObject): string {
   if (str(input, "action") === "fetch") return "Fetched a page";
 
@@ -545,12 +492,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
 } satisfies Record<string, ToolDescriber>));
 
-/**
- * A plain-English phrase for what a tool call is doing, derived only from
- * its arguments. Empty when the arguments do not say — the caller then
- * shows the tool name and the argument summary alone, which is the honest
- * fallback for an MCP or crafted tool whose contract we do not know.
- */
+/** Plain-English phrase for what a tool call does, from its arguments only; "" when they do not say. */
 export function describeToolCall(toolName: string, input: JsonValue | undefined): string {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
@@ -558,16 +500,12 @@ export function describeToolCall(toolName: string, input: JsonValue | undefined)
 
   const description = DESCRIBERS.get(toolName)?.(parsed.output) ?? "";
 
-  // A description can still carry an argument verbatim — the one-line chip is
-  // a preview of the same call, so it answers to the same redaction the
-  // expanded card applies.
+  // The chip previews the same call, so it gets the expanded card's redaction.
   return redactSecrets(description);
 }
 
 
-/** MCP and crafted tools have no known argument contract. A single string
- *  argument IS the call's subject, so it can be shown as-is; anything else
- *  would be a guess. */
+/** Unknown contract: a single string argument is shown as-is; anything else would be a guess. */
 function summarizeUnknownTool(input: JsonObject): string {
   const strings = Object.values(input).filter((value): value is string =>
     v.is(v.string(), value) && value.trim().length > 0);
@@ -575,11 +513,7 @@ function summarizeUnknownTool(input: JsonObject): string {
   return strings.length === 1 ? clip(strings[0] ?? '') : "";
 }
 
-/**
- * One line describing what a tool call is doing, derived only from its
- * arguments. Empty when the arguments carry nothing worth showing (a bare
- * `agents({action:'list'})` still yields "list"; a call with no input yields "").
- */
+/** One line describing a tool call from its arguments; "" when there is nothing worth showing. */
 export function summarizeToolCall(toolName: string, input: JsonValue | undefined): string {
   const parsed = v.safeParse(JsonObjectSchema, input);
 

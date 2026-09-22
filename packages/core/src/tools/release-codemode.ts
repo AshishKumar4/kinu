@@ -1,30 +1,6 @@
 /**
- * `release.*` — the governed release lane, projected into the codemode
- * sandbox.
- *
- * NOT on the top-level tool surface: a governed, high-blast-radius, occasional
- * lane (self-modifying deploys) does not earn a standing choice on every turn
- * it is not the answer to. This namespace's members are release's only reach
- * and they funnel into the `runReleaseAction` dispatcher
- * (tools/release-tool.ts), so the ledger, the approval gate and the execution
- * engine sit behind one implementation and one gate.
- *
- * Two halves, never both on one actor: where an execution engine drives the
- * working copy, apply/runChecks/preview/deploy/rollback earn their results
- * from real command output and the record_* ledger twins are refused as
- * assertions of what was never run. Where no engine is wired, the agent runs
- * the commands itself with `shell`/`eval` and recordCheck/
- * recordDeployment are the only way the ledger learns what happened. Which
- * half exists is selected by `releaseToolActions(!!deps().engine)`: the
- * namespace members and their declarations. The dispatcher enforces engine
- * presence for the operations it selects.
- *
- * Flow with an engine: bindSource → create → update (store the unified
- * diff) → apply → runChecks → preview → requestApproval → deploy; rollback
- * reverts a bad deploy.
- * Flow without one: bindSource → create → update → transition →
- * recordCheck → requestApproval → recordDeployment, running every command
- * yourself first.
+ * `release.*` codemode namespace for the governed release lane, funnelled into `runReleaseAction` (tools/release-tool.ts).
+ * Engine actors get apply/runChecks/preview/deploy/rollback; engine-less actors get recordCheck/recordDeployment; never both.
  */
 
 import * as v from 'valibot';
@@ -33,14 +9,7 @@ import { RELEASE_STATUSES } from '../types/release';
 import { releaseToolActions, TOOL_REACH, type ReleaseToolAction } from './registry';
 import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';
 
-/** Per-action sandbox declaration + description. Split into two records
- *  because a script sends member-specific arguments, not the flat native
- *  schema — `runReleaseAction` reassembles them into ReleaseActionInput. */
-// Terse on purpose: "engine backends only" / "no-engine backends only" are
-// never said per member — which half exists is ALREADY the fact that the
-// member appears in the declaration at all (releaseToolActions(hasEngine)),
-// so restating it on every line would be pure repetition within any one
-// actor's actual rendering (it only ever sees one half).
+/** Per-action declaration + description; `runReleaseAction` reassembles member args into ReleaseActionInput. */
 const MEMBER_TYPES = {
   board: '  /** Every bound source and its changes. */\n  board(): Promise<unknown>;',
   bind_source: '  /** Bind a source repo (local checkout or GitHub) this workspace can change. */\n  bindSource(input: { kind: "local" | "github"; label: string; repoUrl?: string; defaultBranch?: string; localDeviceId?: string; localRoot?: string; deployTarget?: string }): Promise<unknown>;',
@@ -73,9 +42,7 @@ const MEMBER_DESCRIPTIONS = {
   rollback: 'Engine backends only: revert a bad deploy for real.',
 } satisfies Record<ReleaseToolAction, string>;
 
-/** camelCase member name for each snake_case action — the codemode
- *  vocabulary matches every other namespace here (workspace.readFile,
- *  agents.hire), while the dispatcher keeps the original action strings. */
+/** camelCase member name per snake_case action; the dispatcher keeps the original action strings. */
 const MEMBER_NAMES = {
   board: 'board',
   bind_source: 'bindSource',
@@ -160,9 +127,7 @@ const PreviewSchema = v.object({
 
 const RollbackSchema = v.object({ command: v.optional(v.string()) });
 
-/** Marshal a member's positional call args into the ReleaseActionInput shape
- *  runReleaseAction reads a slice of. Each branch matches the member's own
- *  declared signature above. */
+/** Marshal a member's positional args into ReleaseActionInput; each branch matches the member's declared signature. */
 function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActionInput {
   switch (action) {
     case 'board':
@@ -258,14 +223,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
   }
 }
 
-/**
- * Build the codemode provider exposing `release.*`. `deps` is a thunk, read
- * per call, so a re-bound release engine lands without rebuilding the tool —
- * same convention as `createAgentsCodemodeProvider`. Its action set is read
- * once at construction: which half of the lane exists (engine vs
- * record-only) is structural for this actor's lifetime, the same thing that
- * decided the old schema's action enum.
- */
+/** Build the `release.*` provider. `deps` is read per call; the action set (engine vs record-only) is fixed at construction. */
 export function createReleaseCodemodeProvider(deps: () => ReleaseToolDeps): CodemodeProvider {
   const hasEngine = deps().engine !== undefined;
   const actions = releaseToolActions(hasEngine);
@@ -286,6 +244,4 @@ export function createReleaseCodemodeProvider(deps: () => ReleaseToolDeps): Code
   };
 }
 
-// Re-exported so callers that only need the dispatcher (tests, a future
-// owner-facing surface) do not have to import tools/release-tool.ts directly.
 export { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from './release-tool';

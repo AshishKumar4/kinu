@@ -1,6 +1,3 @@
-/**
- * Execution Layer — capability-based multi-executor routing.
- */
 
 export type {
   ExecutorCapability,
@@ -91,8 +88,7 @@ export {
   type TerminalHolder,
 } from './device-terminal';
 
-// Reusable Nimbus adapter. Cloudflare composes the session as its authoritative
-// workspace; the standalone factory remains available to other backends.
+// Cloudflare composes the Nimbus session as its authoritative workspace; the standalone factory serves other backends.
 export {
   createNimbusExecutor,
   createNimbusWorkspaceExecutor,

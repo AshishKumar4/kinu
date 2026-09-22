@@ -1,34 +1,7 @@
 /**
- * KINU-N028. Who is allowed to write a system instruction.
- *
- * Workspace instruction files — the AGENTS.md chain and `/workspace/skills/*.md`
- * — are read every turn and were rendered straight into the system prompt with
- * instruction force. The agent's own `file` tool, its `eval` codemode
- * and its shell all write the very same bytes on the very same plane, and
- * nothing in discovery recorded who wrote them. So an agent could author its
- * own future system instructions, and a poisoned skill could bound the next
- * turn's tool surface (`skills/render.ts` unionAllowedTools feeds the real
- * gating in `orchestrator/turn-surface.ts`).
- *
- * A delimiter is not a boundary and neither is a path: the agent can rewrite
- * whatever sits at a trusted path. The only thing an owner can actually approve
- * is BYTES. So trust here is content-addressed:
- *
- *   - `builtin`    — module constants. Never digested, never approved, never
- *                    demoted, and never per-workspace approvable.
- *   - `approved`   — an owner decision naming THIS path and THIS digest.
- *                    System placement, unchanged force.
- *   - `unverified` — everything else. Reference material in a labelled,
- *                    sealed, user-role block; it carries no tool policy.
- *
- * Invalidation is a property of the key, not a mechanism. A lookup matches only
- * when the stored digest equals the digest of the bytes about to be rendered, so
- * a rewrite by the file tool, by the shell, by `git checkout`, by a snapshot
- * restore or by any out-of-band edit demotes on the very next turn. There is no
- * sweep, no watcher, no mtime cache and no TTL to get wrong.
- *
- * A revocation is kept rather than deleted. `revoked` is the owner's standing
- * answer, so the refusal outlives the bytes it was made about.
+ * KINU-N028. Workspace instruction files (AGENTS.md chain, skills) get system force only when an owner
+ * approved this exact path and content digest; otherwise they render as unverified reference material.
+ * Any rewrite changes the digest and demotes on the next turn. Revocations are kept, not deleted.
  */
 
 import { argumentDigest } from './argument-digest';
@@ -42,29 +15,18 @@ export type {
 
 import type { VerifiedInstructionTrust } from '../types/instruction-trust';
 
-/** The owner's standing answer for one path. `grandfathered` is a stored answer
- *  from the removed one-time carry-over, read exactly like `approved`; no code
- *  writes it. `revoked` is kept on purpose so nothing can re-grant it. */
+/** `grandfathered` is read like `approved` but no code writes it. `revoked` is kept so nothing re-grants it. */
 export type InstructionDecision = 'approved' | 'grandfathered' | 'revoked';
 
 const DECISION = v.picklist(['approved', 'grandfathered', 'revoked']);
 
-/** A decision as stored: the bytes it was made about, and what it said. */
 export interface InstructionApproval {
   readonly path: string;
   readonly digest: string;
   readonly decision: InstructionDecision;
 }
 
-/**
- * The digest an approval binds.
- *
- * SHA-256 over the exact bytes, via the same `argumentDigest` the release lane
- * binds a reviewed deploy with (`release/approval-digest.ts`). Not `fnv1a64`:
- * that one is documented as fast and non-cryptographic, and the adversary here
- * writes the file, so a forgeable digest would be no boundary at all. `v` guards
- * the shape so a format change can never silently keep matching.
- */
+/** SHA-256 (not fnv1a64: the adversary writes the file). `v` guards the shape against silent format drift. */
 export function instructionDigest(content: string): string {
   return argumentDigest({ v: 1, content });
 }
@@ -92,27 +54,14 @@ function toApproval(row: Row): InstructionApproval {
   return {
     path: row.path,
     digest: row.digest,
-    // A value outside the CHECK cannot be stored, so an unparsable one is a
-    // corrupt row rather than an older shape — read it as the refusal, which is
-    // the only answer that fails closed.
+    // An unparsable decision is a corrupt row; read it as `revoked` to fail closed.
     decision: decision.success ? decision.output : 'revoked',
   };
 }
 
 /**
- * Resolve trust from the one workspace authority's rows. Facets use this
- * snapshot rather than a private actor database, so every agent sharing the
- * workspace sees the same approvals and revocations.
- *
- * Both halves have to hold: a decision that names this path, AND a stored
- * digest equal to the digest of the bytes about to be rendered. That
- * conjunction is the whole invalidation story — nothing else has to notice that
- * a file changed, so there is no sweep or watcher to forget to run.
- *
- * This is the ONLY implementation of that rule. `InstructionApprovalStore`
- * feeds its own row through it rather than restating it, because a second copy
- * of a trust conjunction is a place for a future guard to land on one side
- * only.
+ * Trust needs a decision for this path and a stored digest equal to the content's digest. The only
+ * implementation of that rule; `InstructionApprovalStore` delegates here.
  */
 export function trustOfInstructionApprovals(
   rows: ReadonlyArray<InstructionApproval>,
@@ -127,19 +76,8 @@ export function trustOfInstructionApprovals(
 }
 
 /**
- * The one authority on instruction trust, bound to a scope for its lifetime.
- *
- * `scope` names the authority the decision belongs to — owner plus workspace in
- * the cloud, the discovery root on a local CLI. It is part of the key so a
- * database that ever serves two workspaces cannot lend one's approvals to the
- * other, and so a copied or forked workspace starts unapproved.
- *
- * The ACTOR leads that key. One physical database now holds every logical actor
- * of a workspace, and they share a scope while emphatically not sharing trust:
- * a hired subordinate reads its own instruction files, and the owner approving
- * a skill for the root is not the owner approving it for a temporary the root
- * spawned. A fresh actor therefore starts with no decisions at all: every
- * discovered file is unverified until the owner approves its exact digest.
+ * Keyed by (actor, scope, path): `scope` isolates workspaces (forks start unapproved) and each actor,
+ * subordinates included, starts with no decisions.
  */
 export class InstructionApprovalStore {
   private readonly actorId: string;
@@ -152,7 +90,7 @@ export class InstructionApprovalStore {
     this.actorId = actor.actorId;
   }
 
-  /** The standing decision for this path, whatever bytes it was made about. */
+  /** The standing decision for this path, regardless of digest. */
   get(path: string): InstructionApproval | null {
     this.actor.assertCurrent();
 
@@ -163,17 +101,13 @@ export class InstructionApprovalStore {
     return rows[0] ? toApproval(rows[0]) : null;
   }
 
-  /** The trust these exact bytes have earned at this exact path, decided by the
-   *  one rule in {@link trustOfInstructionApprovals}. */
   trustOf(path: string, content: string): VerifiedInstructionTrust {
     const row = this.get(path);
 
     return trustOfInstructionApprovals(row === null ? [] : [row], path, content);
   }
 
-  /** The owner approves these exact bytes at this exact path. Re-approving a
-   *  changed file moves the digest, which is what makes an edit re-approvable
-   *  without first clearing the old answer. */
+  /** Re-approving a changed file moves the digest. */
   approve(path: string, digest: string): void {
     this.actor.assertCurrent();
     void this.sql`
@@ -183,9 +117,7 @@ export class InstructionApprovalStore {
         DO UPDATE SET digest = ${digest}, decision = 'approved'`;
   }
 
-  /** The owner withdraws trust from a path. The row STAYS, holding the refusal,
-   *  so the file drops to `unverified` and only a fresh owner approval can
-   *  grant it again. */
+  /** The row stays, holding the refusal; only a fresh approval re-grants. */
   revoke(path: string): void {
     this.actor.assertCurrent();
     void this.sql`
@@ -194,8 +126,6 @@ export class InstructionApprovalStore {
       ON CONFLICT (actor_id, scope, path) DO UPDATE SET decision = 'revoked'`;
   }
 
-  /** Every standing decision in this scope — what the owner's approval surface
-   *  lists beside the files discovery actually found. */
   list(): InstructionApproval[] {
     this.actor.assertCurrent();
 
@@ -205,23 +135,11 @@ export class InstructionApprovalStore {
   }
 }
 
-/** What an owner's decision request resolves to. */
 export type AdmittedInstructionDecision =
   | { readonly ok: true; readonly path: string; readonly digest: string }
   | { readonly ok: false; readonly error: string };
 
-/**
- * Admit an owner's approve/revoke request.
- *
- * Both backends call this and nothing else, so "what counts as a valid
- * decision" is one rule rather than one per transport — which is the difference
- * between a real shared method and two that merely share a name. Omit `digest`
- * for a revocation, which names a path and no bytes.
- *
- * A malformed digest is refused rather than stored. It could never match a real
- * one, so storing it would be harmless but silent: the owner would see a row
- * that claims a decision and grants nothing.
- */
+/** Admit an owner's approve/revoke request (the one rule for both backends). Omit `digest` to revoke. */
 export function admitInstructionDecision(path: string, digest?: string): AdmittedInstructionDecision {
   const clean = path.trim();
 

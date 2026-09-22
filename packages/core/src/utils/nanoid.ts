@@ -1,5 +1,3 @@
-/** Tiny ID generator — no external dependencies. */
-
 const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
 
 export function nanoid(size = 21): string {
