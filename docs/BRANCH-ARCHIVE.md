@@ -8,7 +8,7 @@ Never delete a tag under `refs/tags/archive/` until the test reports zero novel 
 
 ## Tag inventory
 
-There are 205 lightweight tags under `refs/tags/archive/`, counted on 2026-09-08. The first forty are inventoried below. Nine predate the 2026-08-21 prune wave, which added thirty-one. Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
+There were 205 lightweight tags under `refs/tags/archive/` on 2026-09-08, and 231 on 2026-09-22 (`git tag -l 'archive/*'` at `ad61dea6c`). The first forty are inventoried below. Nine predate the 2026-08-21 prune wave, which added thirty-one. Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
 
 Blobs `main` lacks are absent from its history. Sole-copy blobs have no other ref. Re-measure the sole-copy count after pruning.
 
@@ -28,12 +28,12 @@ No tag is safe to delete. Two re-roots (982 commits, then 84, measured 2026-08-2
 
 | Tag | Pins the tip of |
 |---|---|
-| `archive/one-filesystem-mounts` | `feat/one-filesystem` (branch still present) |
+| `archive/one-filesystem-mounts` | `feat/one-filesystem` (branch deleted by 2026-09-22) |
 | `archive/nimbus-measure` | `spike/nimbus-measure` (branch deleted) |
 | `archive/stability-audit` | `feat/agent-view-redesign` (branch deleted) |
 | `archive/latency-instrumentation` | `fix/latency-instrumentation` (branch deleted) |
 
-Five tags have no recorded branch name. I rejected `feat/one-filesystem` (AGENTS.md § Execution Layer; `packages/cli-backend/tests/mount-plane.test.ts`). Delete its branch. Keep its tag.
+Five tags have no recorded branch name. I rejected `feat/one-filesystem`: AGENTS.md § Architecture keeps one file plane whose mounts extend the view and never copy it, and `packages/cli-backend/tests/mount-plane.test.ts` pins the mounts that shipped. Its tag stays.
 
 `archive/pre-launch-history` reaches 1,149 commits `main` lacks, the 2026-08-19 base `5dbc0f1b`, and (during the 2026-08-20 prune wave) 60+ deleted branch tips. 307 blobs exist nowhere else.
 
@@ -77,7 +77,7 @@ I created and verified each tag before deleting its branch. Tags omit the type p
 
 I traced successors in `packages/core/src/strategy/`, `tools/oxlint/anti-slop/`, `packages/cf-backend/src/auth/store.ts`, and `scripts/commit-hygiene.ts`. Untraced branches wait on an owner ruling.
 
-`archive/reliability-a1a3` records a 2026-08-10 crash: stale `index.lock`, no index, and 272 of 1,179 files at `df014c73`. Its work had landed. `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 and §A3.
+`archive/reliability-a1a3` records a 2026-08-10 crash: stale `index.lock`, no index, and 272 of 1,179 files at `df014c73`. Its work had landed. `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 to §A3.
 
 
 ### The 2026-08-30 credential redaction
@@ -103,9 +103,9 @@ Reflog expiry and object pruning remain pending until the final all-ref scan lan
 
 ### The 2026-08-28 consolidation prune wave
 
-The integration landed on `consolidate/final-history` (`5d98f3973`). The gitignored valuables moved to the primary checkout. Every remaining worktree was pruned: 102 worktrees removed, 100 branches deleted, each tip tagged first. I exported dirty residue per worktree to `~/Kinu-backups/worktree-residue/` as a tracked-diff patch plus an untracked-files tarball before removal.
+The integration landed on `consolidate/final-history` (`5d98f3973`). The gitignored valuables moved to the primary checkout. Every remaining worktree was pruned: 102 worktrees removed, 100 branches deleted, each tip tagged first. I exported dirty residue per worktree to `~/Proteus-backups/worktree-residue/` as a tracked-diff patch plus an untracked-files tarball before removal.
 
-Novel-object counts against `consolidate/final-history` are dominated by the pre-reroot history every old branch carries. The baseline history is short after the two re-roots. The decisive column is SOLE COPY, measured with the membership counter across all 239 refs on 2026-08-28. 69 of the 102 new tags carry zero sole-copy objects. The 33 that do are listed. No tag is safe to delete while its count is nonzero. After any tag deletion, re-measure.
+Novel-object counts against `consolidate/final-history` are dominated by the pre-reroot history every old branch carries. The baseline history is short after the two re-roots. The deciding column is the sole-copy count, measured with the membership counter across all 239 refs on 2026-08-28. 69 of the 102 new tags carry zero sole-copy objects. The 33 that do are listed. No tag is safe to delete while its count is nonzero. After any tag deletion, re-measure.
 
 | Tag | Branch (deleted) | Sole copy |
 |---|---|---|
@@ -143,7 +143,8 @@ Novel-object counts against `consolidate/final-history` are dominated by the pre
 | `archive/archive-store` | `archive-store` | 3 |
 | `archive/vfs-mounts` | `feat/vfs-mounts` | 1 |
 
-The full 102-row manifest with head SHAs sits at `~/Kinu-backups/worktree-residue/prune-manifest-20260828.json`.
+The full 102-row manifest with head SHAs is at `~/Proteus-backups/worktree-residue/prune-manifest-20260828.json`.
+
 ### The 2026-09-05 prune wave
 
 The lanes of the 2026-09-03 to 2026-09-05 quality program landed on `main` by cherry-pick. 143 worktrees were removed and 151 branches deleted. A branch counted as merged when every commit it carried was on `main` by cherry-pick trailer or by patch id. Those branches have no tag, because their content is on `main`. The 38 branches below carried commits `main` lacks. Each was tagged. The tag was verified at the tip before the branch went. Twelve worktrees held uncommitted residue of child lanes whose parents landed a later form of the work. Each diff is at `~/kinu-wip/<worktree>-2026-09-05.patch`, with its untracked files beside it.
@@ -247,7 +248,7 @@ Six worktrees went (`Kinu-wt-delivery-seam`, `Kinu-wt-devbox-c3`, `Kinu-wt-devbo
 
 Eleven stash entries were tagged `archive/stash-<n>-<slug>-20260918` on their stash commits (the untracked third parent included) and the stash list was cleared. The list as it was is at `~/kinu-wip/prune-2026-09-18/stash-list.txt`.
 
-Remote: `origin/fix/devbox-decision` is a `main` ancestor and `origin/feat/devbox-durability-next` is archived above; both are deleted on the next push of `main`, which carries the new tags. `origin/takeover/stabilize` (2026-09-03, eleven commits `main` lacks) was not assessed and stays.
+Remote: `origin/fix/devbox-decision` is a `main` ancestor and is deleted on the next push of `main`, which carries the new tags. `origin/feat/devbox-durability-next` is not the archived tip: on 2026-09-22 it points at `9ec942bed` (2026-09-07), whose 15 commits `main` lacks include 10 with no patch-equivalent in `archive/devbox-durability-next`. Tag that tip before deleting the remote branch. `origin/takeover/stabilize` (2026-09-03, eleven commits `main` lacks) was not assessed and stays. As of 2026-09-22 origin holds one `archive/*` tag, so the local tags above are the only copies.
 
 ## Reproduce the test
 
@@ -284,9 +285,9 @@ Six blobs are absent from `main`'s history, measured 2026-08-19. Read their tag 
 | `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | 18-finding 2026-04-24 audit. Current source cites its IDs; its `file:line` pointers are stale. |
 | `6a7dec61` `859726b7` `174d731b` `f6f19ee2` | `archive/stability-audit` | `docs/REQUIREMENTS-AUDIT.md`, four revisions | 2026-04-24 tracker contradicting current `workspace` architecture. It cites deleted `docs/EXECUTOR-V2.md` (two `main` commits still touch it) and pre-rewrite SHAs. |
 
-The recovered A4 account is speculative. `packages/core/src/platform-catalog.ts:2067` claims a documented 100 s reap without a URL. Its 25-second heartbeat is at `packages/cf-backend/src/hooks/use-kinu.ts:1359`. Use `git <sha>:<path>` provenance.
+The recovered A4 account is speculative. `packages/core/src/platform-catalog.ts:2067` records that a "documented 100s reap" claim cites no URL. The client's 25-second subordinate-socket ping is at `packages/cf-backend/src/hooks/use-kinu.ts:1532`. Read the archived text with `git show <sha>:<path>`.
 
-AGENTS.md § Deploy Discipline retains `archive/nimbus-measure`'s 185-252 ms Worker startup range. It was measured 2026-08-04 against Cloudflare's 1-second startup limit. The tag also holds its 6,254.64 KiB gzip bundle reading.
+`archive/nimbus-measure` holds a 185-252 ms Worker startup range, measured 2026-08-04 against Cloudflare's 1-second startup limit, and a 6,254.64 KiB gzip bundle reading. AGENTS.md § Deploy now says to measure startup, not cite it, so treat both as history.
 
 The throwaway probe Worker remains tag-only:
 

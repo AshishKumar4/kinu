@@ -1,9 +1,8 @@
-# The observability contract
+# Observability
 
-`AGENTS.md` § Errors, Logging & Traceability points here. The `docs/` history
-(`git log --all --diff-filter=A --name-only`) holds no earlier contract. This page
-is the reference. The source of truth is `packages/core/src/obs/`. For suites, see
-[Testing](TESTING.md).
+This is the reference for how Kinu classifies failures, logs, traces and meters
+spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
+`packages/core/src/obs/`. For test suites, see [Testing](TESTING.md).
 
 ## Status
 
@@ -11,12 +10,14 @@ is the reference. The source of truth is `packages/core/src/obs/`. For suites, s
 | --- | --- | --- |
 | `tolerate` / `tolerateAsync` / `classify`: the tolerable-failure signatures | built | `obs/expected-failure.ts` |
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
-| `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired on six production paths | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
+| `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two production call sites | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `KinuError` / `toKinuError` | built | `obs/error.ts` |
-| `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured today | `obs/error.ts` |
-| `refusalText`: the refusal on the string channel | built, all five executor tools converted | `execution/exec-result.ts:81` |
+| `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured | `obs/error.ts` |
+| `CommandResult` / `commandResult`: command output or a structured refusal | built, used by all five executors | `execution/exec-result.ts` |
+| `refusalText`: a refusal on a declared string channel | built | `execution/exec-result.ts` |
+| `ToolOutcome`: the recorded outcome of a native tool invocation | built | `core/src/types/tool-outcome.ts`, `core/src/tools/outcome.ts` |
 | `Logger` / `ReservedLogField`: the typed logger and its ban | built | `obs/log.ts` |
-| `classifyRunEnd` / `RunEndReason`: the three words a finished run can carry | built, with a tripwire for the state they exclude | `orchestrator/turn-lifecycle.ts` |
+| `classifyRunEnd` / `RunEndReason`: the four words a finished run can carry | built, with a tripwire beside `incomplete` | `orchestrator/turn-lifecycle.ts` |
 | `gate:silent-drop`: the census of what the lint rules cannot see | built, ratcheted; 72 sites locked, 87 instances over 76 sites measured 2026-08-24 | `scripts/silent-drop.ts` |
 | Analytics Engine fleet metrics | built, three datasets | `core/src/obs/analytics/` |
 | Control-plane audit and exact feedback index | built | `cf-backend/src/control-plane/` |
@@ -26,140 +27,132 @@ is the reference. The source of truth is `packages/core/src/obs/`. For suites, s
 ## Fleet metrics, exact state, and feedback
 
 `run_events` is the exact per-workspace record. Analytics Engine holds fleet
-aggregates: turns, tools, models, errors, latency, spend, feedback markers,
+aggregates: turns, tools, models, errors, latency, spend, feedback markers and
 control actions.
 
-Writes enforce one index, 20 blobs, 20 doubles, 16 KiB of blob data, and
-250 writes per Worker invocation. They store digested identifiers only. They never store prompts,
-messages, notes, email addresses, credentials, or headers.
+Each write holds at most one index, 20 blobs, 20 doubles and 16 KiB of blob
+data, and a Worker invocation makes at most 250 writes
+(`obs/analytics/limits.ts`). Writes store digested identifiers only. They never
+store prompts, messages, notes, email addresses, credentials or headers.
 
-Analytics Engine retains samples three months. Control-plane queries weight
-`_sample_interval`. `ControlPlaneDO` holds exact feedback text, screenshot
+Analytics Engine keeps samples for three months. Control-plane queries weight
+by `_sample_interval`. `ControlPlaneDO` holds exact feedback text, screenshot
 pointers, users, workspaces and admin audit rows. `FEEDBACK_BUCKET` holds
 screenshot bytes.
 
-The 250-write budget is per invocation. Windows open at Worker `fetch` and
-`scheduled`, actor turn start, and `UserDO`, `MonitorDO`, `ControlPlaneDO` and
-`SubordinateAgent` RPC entries. A constructor runs once per activation. A
-window opened there gives a hot Durable Object one lifetime budget.
+The 250-write budget is per invocation, so each invocation seam opens its own
+window: the Worker `fetch` and `scheduled` entries, each actor turn, and the
+RPC entries of `UserDO`, `MonitorDO` and `ControlPlaneDO`. A constructor runs
+once per activation, so a window opened only there would give a hot Durable
+Object one budget for its whole lifetime.
 
 The Metrics tab needs `ANALYTICS_SQL_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 Without either, writes continue and the tab says queries are not configured.
 Reads also need `ANALYTICS_DATASET_SUFFIX`: empty in production, `_staging`
 under `env.staging`. Writes omit it because the binding names its dataset.
-`scripts/analytics-datasets.test.ts` holds the two equal per environment.
+`scripts/analytics-datasets.test.ts` checks that the two agree per environment.
 
 ## Where spans are open
 
-Six production call sites, in two of four declared invocation classes.
-I re-grepped `this.tracing.invocation` on 2026-08-24: still six, same sites.
+Two production call sites, both in `cf-backend/src/orchestrator.ts`, in two of
+the four declared invocation classes. Grep of `this.tracing.invocation` on
+2026-09-22.
 
-| File | Class | Root span | Entry method |
-| --- | --- | --- | --- |
-| `cf-backend/src/orchestrator.ts` | `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
-| `cf-backend/src/orchestrator.ts` | `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
-| `cf-backend/src/actor-agent.ts` | `rpc` | `rpc.swarm.arbitrate` | `ActorAgent.nodeArbitrate` |
+| Class | Root span | Entry method |
+| --- | --- | --- |
+| `alarm` | `alarm.tick` | `OrchestratorAgent._kinuTimerTick` |
+| `rpc` | `rpc.head.record_step` | `OrchestratorAgent.recordHeadStep` |
 
-`InvocationKind` declares `fetch`, `alarm`, `rpc`, `websocket`
-(`core/src/obs/agent-tracing.ts`). Only `alarm` and `rpc` run. The class distinguishes an
-uncontended `alarm` from client-holding `fetch`. Methods outlast line numbers.
-
-THREE ROWS ARE GONE, and their absence is the point. `rpc.mcts.branch`,
-`rpc.head.run` and `rpc.swarm.node` were `tracing.invocation('rpc', …)` call
-sites. A branch, a head and a swarm node each ran in a SEPARATE object
-with its own storage, reached across an RPC. They are logical actors of one
-workspace object now (`core/src/state/actor-host.ts`), hosted by
-`cf-backend/src/exploration-hosting.ts`. Those operations run inside the
-invocation that asked for them. An in-object function call has no RPC boundary
-to name, and labelling one `rpc` would be exactly the mislabelling this table
-exists to prevent. Their child phases go with them, including `head.home` and
-`swarm.node.home`, which were the facet-home provisioning spans.
-
-AND THE DISCRIMINATOR IS THE ACTOR, which is the more useful half.
-`SPAN_ATTR_SELF_PATH` is the SDK's `[...parentPath, {className, name}]`, a
-DURABLE OBJECT path. With one object per workspace it is constant for every span
-the workspace emits, so it separates no two forks. Nor can a Durable
-Object id: an old SDK facet's id resolved to the root's `durableObjectId`
-(`do.facet.id_is_root_namespace`), and every logical actor shares the root's
-`ctx.id` outright. What distinguishes two actors' spans is the
-ACTOR the span was opened under, which every hosted actor carries.
+`InvocationKind` declares `fetch`, `alarm`, `rpc` and `websocket`
+(`core/src/obs/agent-tracing.ts`). Only `alarm` and `rpc` are used. The class
+separates an uncontended `alarm` from a `fetch` that holds a client. The table
+names methods because methods outlast line numbers.
 
 | Root | Phases |
 | --- | --- |
 | `alarm.tick` | `alarm.due_triggers`, `alarm.peer_dispatch`, `alarm.email_reconcile`, `alarm.cache_warm`, `alarm.sleep_time`, `alarm.timer_rearm` |
 
-- `alarm.tick`. Its phases distinguish a slow alarm from slow email reconcile.
-- `rpc.swarm.arbitrate`. Waiting and never asking otherwise look alike.
-- `rpc.head.record_step`. A slow journal write looks like a quiet head.
+- `alarm.tick`: its phases separate a slow alarm from a slow email reconcile.
+- `rpc.head.record_step`: separates a slow journal write from a quiet head.
 
-The workspace object hosts heads, nodes and MCTS branches itself, through the
-orchestrator `tracing` getter and
-`AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts:211`). The
-120 s RPC cap that would kill MCTS rollouts against 151/294/509 s turns does
-not reach that path: there is no RPC in it.
-One kind alone cannot explain the other two.
+Heads, swarm nodes and MCTS branches are logical actors of the one workspace
+object (`core/src/state/actor-host.ts`, hosted by
+`cf-backend/src/exploration-hosting.ts`). Their work runs inside the invocation
+that asked for it. There is no RPC boundary, so there is no `rpc` span to open,
+and the 120 s cap on an unanswered cross-object request does not apply.
 
-### A turn cannot be a span at this pin
+No span attribute names the logical actor. `SPAN_ATTR_SELF_PATH` renders the
+SDK's `[...parentPath, {className, name}]`, which is a Durable Object path, and
+with one object per workspace it is the same for every span the workspace
+emits. `ctx.id` is shared by every hosted actor too.
 
-`ActorAgent extends Think`, whose `_runInferenceLoop` is private. I own only
-`getTools()` and `onChatResponse()`. That pair cannot wrap a scoped span
-with an `end()`. `beforeToolCall` and `afterToolCall` repeat the gap. Both
-become spans when one `runChat` function replaces the three loops.
+`ActorAgent`'s `tracing` getter (`cf-backend/src/actor-agent.ts`) builds the
+seam once per construction, with `isolateGen` from
+`AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts`).
+
+### No span covers a turn
+
+The turn loop (core `ActorSession`/`ChatSession` and `runChat` in
+`core/src/chat.ts`) takes no `Tracer`, so neither a turn nor a tool call is a
+span.
 
 `SpanOpenAttributes` requires `isolateGen` and `selfPath` (`obs/tracer.ts:44`).
-Only CF Agents supply them. Use `selfPath`, not `ctx.id`: two hosted actors
-share the root's `ctx.id` and would report identically.
+Only CF Agents supply them.
 
-`tracing.invocation` ends context at `alarm()` and revokes `TracedInvocation`.
-Escaped work throws `KinuError('unsupported')`. The arming turn may be minutes
-or days old in a reset isolate, so one span would measure nothing observed.
-There is deliberately no `AsyncLocalStorage`: implicit context has no
-revocation point (`obs/agent-tracing.ts:51-56`).
+`tracing.invocation` revokes its `TracedInvocation` when the callback settles.
+Work that escapes and opens a span afterwards throws `KinuError('unsupported')`.
+Context ends at `alarm()`: the turn that armed an alarm may be minutes or days
+old, in a reset isolate, so one span across both would claim time nothing
+measured. There is deliberately no `AsyncLocalStorage`: implicit context has no
+revocation point (`obs/agent-tracing.ts:51-55`).
 
 ### A span records one boolean about a failure
 
-The pattern is `~/cloudflare-os/packages/backend-utils/src/tracing.ts`,
+The pattern comes from `~/cloudflare-os/packages/backend-utils/src/tracing.ts`,
 outside this repository:
 
 1. Ambient context. `SpanOpenAttributes` makes attributes structural. Only its
    type catches a missing call attribute.
-2. Tracing only. It never logs or mutates caller-visible state.
+2. Tracing only. It never logs or changes state the caller can see.
 3. Unchanged exception, one marker. `SPAN_ATTR_ERROR` is `kinu.error`
-   (`obs/tracer.ts:103`), `true` only. Error text is unbounded and possibly
-   sensitive. `Logger.failure` classifies and renders every `cause`.
-4. Promise lifetime. Mark before returning. Otherwise the span closes before
-   an async rejection.
+   (`obs/tracer.ts:105`), and is only ever `true`. Error text is unbounded and
+   may be sensitive. `Logger.failure` classifies and renders every `cause`.
+4. Promise lifetime. Mark before returning, or the span closes before an async
+   rejection arrives.
 
 Until 2026-08-19, `cf-tracer.ts` recorded `kinu.error_name` and
-`kinu.error_message`. Upstream messages bypassed `ReservedLogField`. Thrown
-failures marked nothing because only `fail()` wrote fields.
+`kinu.error_message`, so upstream messages bypassed `ReservedLogField`, and
+thrown failures marked nothing because only `fail()` wrote fields.
 `cf-backend/tests/unit-alarm-tracing.test.ts` pins both paths, including a
-planted credential reaching no attribute.
+planted credential that reaches no attribute.
 
-Never wrap a pipelined RPC stub in a span. Rejection marking needs
-a non-stub promise. Wrapping the stub would make pipelining a round trip (`obs/tracer.ts:79-94`).
+Never wrap a pipelined RPC stub in a span. Marking a rejection attaches a
+handler, which needs a real promise; on a stub it turns the pipelined call into
+a round trip (`Tracer.span` in `obs/tracer.ts`).
 
 ## The rules
 
-1. No `catch` discards its error. Do not catch, rethrow with `cause`, or
-   handle and record a domain value. `no-empty-catch`, `no-sentinel-catch`,
-   `require-cause-on-rethrow`, `no-ddl-in-catch` cover narrow cases.
-   `gate:silent-drop` covers the rest. Never add an `oxlint-disable`.
-2. A refusal carries a classification, reason first.
-   `{ reason: ErrorCode, error: string }`. Tool output and steering hashes
-   keep a 1000-char head slice, so the short discriminator precedes prose.
-   `refusalOf(error)` (`obs/error.ts:146`) produces it. Precedents:
-   `tools/file-tool.ts:83`, `execution/inline.ts:397`,
-   `strategy/merge-back.ts:959`, `strategy/swarm-run.ts:398`.
-3. An empty read differs from a failed read. `[]` for both "absent" and a
-   failed query caused lost chat history. A narrow read must refuse.
-4. Never log a secret or unexamined object. The type below enforces it.
+1. No `catch` discards its error. Do not catch; or rethrow with `cause`; or
+   handle the error and record a domain value. `no-empty-catch`,
+   `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` cover
+   narrow cases. `gate:silent-drop` covers the rest. Never add an
+   `oxlint-disable`.
+2. A refusal carries a classification, reason first:
+   `{ reason: ErrorCode, error: string }`. Displays and steering hashes keep a
+   head slice of tool output, so the short discriminator goes before the prose.
+   `refusalOf(error)` (`obs/error.ts`) produces it. Examples: `failure()` in
+   `tools/file-tool.ts`, the argument checks in `execution/inline.ts`, the
+   refused member in `strategy/merge-back.ts`.
+3. An empty read differs from a failed read. Returning `[]` for both "absent"
+   and a failed query once lost chat history. A narrow read must refuse.
+4. Never log a secret or an object you have not looked inside. The type below
+   enforces it.
 5. Every log has a stable dotted event name (`capability.read_failed`).
-   `LogEventName` enforces it (`obs/log.ts:107`). Constants sit beside
-   emitters, as `SPAN_ATTR_*` does beside the tracer.
+   `LogEventName` enforces it (`obs/log.ts:106`). Name constants sit beside
+   their emitters, as `SPAN_ATTR_*` does beside the tracer.
 6. Spans are scoped. Context dies at `alarm()`, hibernation and cold start.
-   There is deliberately no `startSpan` returning a caller-ended span. A
-   cross-invocation span is stranded.
+   There is deliberately no `startSpan` that returns a caller-ended span: a span
+   that crosses invocations is stranded.
 
 ## The silent-drop census
 
@@ -171,7 +164,7 @@ bun scripts/silent-drop.ts --table    # per-class counts, no ratchet
 
 The seven classes are logged sentinel, `error.message` projection, projecting
 helper, absorbing handler, dropped cause, `void`-ed promise and floating
-rejection. They pass all four no-swallow rules.
+rejection. Code in these classes passes all four no-swallow rules.
 
 Measured 2026-08-24 by `--table`: 769 product sources, 858 `catch`
 occurrences, 7 classes searched, 87 instances over 76 sites. The lock holds
@@ -187,151 +180,140 @@ occurrences, 7 classes searched, 87 instances over 76 sites. The lock holds
 | `handler_drops_cause` | 0 |
 | `floating_rejection` | 0 |
 
-The count is a floor (`scripts/silent-drop.ts:46-59`). The script cannot
-resolve named handlers, unawaited stored promises, or internal factory
-chaining. The `parent.ts` `makeVfsError` chains. It excludes `readSources()`
-outsiders, including fixtures.
+The count is a floor (`scripts/silent-drop.ts:46-57`). The script cannot
+resolve handlers passed by name, stored promises that are never awaited, or
+chaining inside a wrapper factory (`parent.ts`'s `makeVfsError` does chain). It
+skips everything outside `readSources()`, fixtures included.
 
-It ratchets because a zero-demanding gate over a non-zero population would sit
-disabled. It is a script, not an oxlint rule, because each class needs
-whole-file knowledge. The four complemented rules are red-to-green through
-real `oxlint` in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
+It ratchets because a gate that demanded zero over a non-zero population would
+sit disabled. It is a script, not an oxlint rule, because each class needs
+whole-file knowledge. The four rules it complements are tested red-to-green
+through real `oxlint` in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
 
 ## Turn-review spend
 
-`EvolutionEngine.reviewTurn` (`evolution/engine.ts:469`) runs up to three
-fast-model completions: `classifyTurnOutcome` (`evolution/outcomes.ts:299`,
-called at `engine.ts:493`), `generateTurnReflection` (`engine.ts:1164`,
-called at `:612`), and generalization (`:1183`). `reviewLlm` (`:338-343`)
-returns `fastLlm` (`:316-318`): `this.rt.fastLlm ?? this.rt.llm`.
+`EvolutionEngine.reviewTurn` (`evolution/engine.ts`) runs up to three
+fast-model completions: `classifyTurnOutcome` (`evolution/outcomes.ts`),
+`generateTurnReflection`, and generalization of a repeated pattern into a
+reusable function. Each goes through `reviewLlm`, which returns the fast model
+(`this.rt.fastLlm ?? this.rt.llm`), wrapped by the mission governor when the
+turn carries mission labels.
 
-It is metered. `LLM.complete` returns a bare string
-(`types/primitives.ts:157`), so `evolution/` sees no tokens. Backends capture
-usage first and report through `ModelCallSink`.
+This spend is metered. `LLM.complete` returns a bare string
+(`types/primitives.ts`), so `evolution/` sees no tokens. Backends capture usage
+first and report it through `ModelCallSink`.
 
-- `MODEL_ROUTE_POLICY` (`profiles/model-route.ts:47`) is the sole
-  `SpendSource` table. `agent`, `head`, `mcts`, `swarm`, `sandbox` use the
-  turn tier. `scaffold`, `judge` and `advisor` use `deep`;
-  `compaction`, `reflection` and `fast` use `fast`.
-  `resolveModelRoute` (`:112`) is the only read path.
+- `MODEL_ROUTE_POLICY` (`profiles/model-route.ts`) is the only `SpendSource`
+  table. `agent`, `head`, `mcts`, `swarm` and `slate` use the turn's tier.
+  `scaffold`, `judge` and `advisor` use `deep`; `compaction`, `reflection` and
+  `fast` use `fast`; `platform` and `warming` resolve no profile.
+  `resolveModelRoute` is the only read path.
 - The CLI resolves the immutable profile and calls `reportCall`
-  (`model-resolver.ts:182`, `:250`, `:262`) with
-  `{ source: resolution.source }`. It writes `model_call` through
-  `LocalAgentSession.modelCallSink` (`local-session.ts:399`).
-- Cf uses `createProfileLaneLLM` (`runtime.ts:911`; `judge`, `fast`,
-  `advisor` at `:597`, `:602`, `:607`), then `reportCall` (`:889`, `:939`)
-  and `ActorAgent.reportModelCall` (`actor-agent.ts:2197`) for that row.
+  (`cli-backend/src/model-resolver.ts`) with the route's source. It writes
+  `model_call` through `LocalAgentSession.modelCallSink`.
+- Cloud uses `createProfileLaneLLM` (`cf-backend/src/runtime.ts`; the
+  `judgeModel`, `fastLlm` and `advisorLlm` lanes), then `reportCall` and
+  `ActorAgent.reportModelCall` for that row.
 
-`workspaceSpend()` (`read-models/workspace-spend.ts:192`) groups the rows.
-`fast` and `reflection` carry review spend, `advisor` its slow-tier call.
-The workspace total includes review spend.
+`workspaceSpend()` (`read-models/workspace-spend.ts`) groups the rows. `fast`
+and `reflection` carry review spend; `advisor` carries its deep-tier call. The
+workspace total includes review spend.
 
-`producers` groups work. `missions` groups `mission_budget` labels, so totals
-cannot disagree with a refusal. Both sum every `step_finish` and `model_call`
-(`RunEventRecorder.spendByProducer`, `events/recorder.ts:506`), with no window
-or `complete` flag. Never add the axes: one call has one producer and every
-mission label sits above it. Cache-hit percentiles alone need a window.
+`producers` groups work by producer. `missions` groups by `mission_budget`
+label, so its totals cannot disagree with a budget refusal. Both sum every
+`step_finish` and `model_call` (`RunEventRecorder.spendByProducer`,
+`events/recorder.ts`), with no window and no `complete` flag. Never add the two
+axes together: one call has one producer, and every mission label sits above
+it. Only cache-hit percentiles need a window.
 
 What the window cost, measured. The CLI 2,000-row window returned 2,001 of
 8,000 agent steps from a synthetic log with 2,000 judge calls: 4x low. A real
-2,600-step local workspace reported 4,080,000 tokens and $4.20. Truth was
+2,600-step local workspace reported 4,080,000 tokens and $4.20. The truth was
 5,304,000 and $5.46, leaving 20.8% of tokens and 23% of dollars behind a
-caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
-20,000 rows. `packages/cf-backend/tests/workerd/long/do-spend-aggregate.test.ts` proves `WITH` and
-`json_extract` on Durable Object SQLite. `bun:sqlite` does not support that proof.
+caveat. SQL costs 62 ms against 55 ms for two windowed reads, on 31 MiB and
+20,000 rows. `packages/cf-backend/tests/workerd/long/do-spend-aggregate.test.ts`
+proves `WITH` and `json_extract` on Durable Object SQLite. `bun:sqlite` cannot
+stand in for that proof.
 
-`offTurnShare` is tokens no agent turn spent. The panel and
-`kinu spend <name>` use one local/cloud model. "Mission budgets" died with
-`ActivitySnapshot.budgets`: same ledger, narrower question, two figures.
+`offTurnShare` is the share of tokens no agent turn spent. The panel and
+`kinu spend <name>` use one model for local and cloud.
 
-1. `MissionGovernor` guards review spend. `EvolutionEngine.reviewLlm`
-   (`evolution/engine.ts:338`) reaches `govern(llm, labels)`
-   (`delegation/agents-tool.ts:1218`). `AgentOrchestrator.recordTurn` stamps
-   `CompletedTurn.missionLabels` from the active scope. It persists in the
-   session window and deferred row because a drainer has no scope or a later
-   one. It is wired at `cli-backend/src/local-session.ts:558`,
-   `cf-backend/src/orchestrator.ts:579`, and, for every hosted logical actor,
-   through the one orchestration builder each of them gets,
+1. `MissionGovernor` caps review spend. `EvolutionEngine.reviewLlm` wraps the
+   fast model with `govern(llm, labels)` (`mission-budget.ts`).
+   `AgentOrchestrator.recordTurn` stamps `CompletedTurn.missionLabels` from the
+   active scope. The labels persist in the session window and the deferred row,
+   because a later drainer has no scope, or a different one. The governor is
+   wired in `cli-backend/src/local-session.ts`, `cf-backend/src/orchestrator.ts`
+   and, for every hosted logical actor, the per-actor orchestration builder in
    `cf-backend/src/actor-hosting.ts`.
 
-   No labels means an unwrapped `LLM`. A spent cap throws
-   `MissionBudgetExhausted` before a request. `runDeferredTurnReviews`
-   (`evolution/engine.ts:688`) records `{reason: 'budget'}` and leaves the
-   source row queued. It retires unreadable rows. `RefusedTurnReview` separates
-   those counts (`evolution/session-window.ts:169-172`). Count-triggered session
-   reflection, scaffold proposal and GEPA spend sit outside mission caps.
+   No labels means the `LLM` is not wrapped. A spent cap throws
+   `MissionBudgetExhausted` before the request. `runDeferredTurnReviews`
+   (`evolution/engine.ts`) records `{ reason: 'budget' }` and leaves the source
+   row queued. It retires unreadable rows. `RefusedTurnReview`
+   (`evolution/session-window.ts`) keeps the two counts apart. Count-triggered
+   session reflection, scaffold proposals and GEPA spend sit outside mission
+   caps.
 
-2. The external bench cannot count it. `closeTurnRun`
-   (`orchestrator/turn-lifecycle.ts:209`) seals in-loop `turn_end.usage` and
-   nulls the run (`cli-backend/src/local-session.ts:1847`) before review.
-   Next-turn `recordTurn` (`agent-orchestrator.ts:336`) defer (`:382`) or
-   detach (`:385`) writes `model_call`. Terminal-Bench sums `turn_end` only
-   at `bench/clbench/kinu/events.py:223-243`, for `ArmSpend.billableTokens`
-   and equal-spend (`scripts/bench-external.ts:185`, `:389`, `:480-483`).
-   The 2026-08-20 TB2.1 figure, 1,248,337 turn-scoped input tokens, excludes
-   review spend. Equal-spend excludes it too.
+2. The external bench cannot count review spend. `closeTurnRun`
+   (`orchestrator/turn-lifecycle.ts`) seals the in-loop `turn_end.usage` and
+   the CLI clears the run before review. The next turn's `recordTurn` writes
+   `model_call` for the review, deferred or detached. Terminal-Bench sums only
+   `turn_end` (`turn_usage` in `bench/clbench/kinu/events.py`) for
+   `ArmSpend.billableTokens` and the equal-spend check
+   (`scripts/bench-external.ts`). The 2026-08-20 TB2.1 figure, 1,248,337
+   turn-scoped input tokens, excludes review spend. Equal-spend excludes it too.
 
-   The internal bench uses an attempt-local HTTP proxy
-   (`scripts/bench-agent-worker.ts:32-37`, totalled `:109`). Its answer
-   includes it. The external answer is the lower bound.
+   The internal bench meters through an attempt-local HTTP proxy
+   (`createBenchInferenceProxy`, `scripts/bench-inference-proxy.ts`, used by
+   `scripts/bench-agent-worker.ts`), so its figure includes review spend. The
+   external figure is the lower bound.
 
-`oneShot` queues reviews in `completed_turns`. Only the daemon or an interactive
-open drains them through `runDeferredTurnReviews`
-(`evolution/session-window.ts`). A Terminal-Bench container dies after its fresh
-trial, so `ArmSpend.executionGradedTurns`
-(`scripts/bench-external.ts:197`, `:161`, via `turn_outcomes`) is 0 for
-`evolve=true`. That is truthful but makes the preregistered figure
-incomparable. `bench-agent-worker.ts` is interactive, so it reviews inline.
+`oneShot` queues reviews in `completed_turns`. Only the daemon or an
+interactive session drains them through `runDeferredTurnReviews`. A
+Terminal-Bench container dies after its fresh trial, so
+`ArmSpend.executionGradedTurns` (`scripts/bench-external.ts`, from
+`turn_outcomes`) is 0 for `evolve=true`. That is truthful, but it makes the
+preregistered figure incomparable. `bench-agent-worker.ts` is interactive, so it
+reviews inline.
 
-## The three words a finished run can carry
+## How a finished run is named
 
-`RUN_END_REASONS` is `completed`, `aborted`, `error`
-(`orchestrator/turn-lifecycle.ts:58`). It replaced a bare string: Stop was
-`aborted` on cf but `error` on CLI. Backends give `classifyRunEnd` (`:156`)
-`RunEndFacts` (`:109`) and receive `RunEndClassification` (`:129`):
+`RUN_END_REASONS` (`orchestrator/turn-lifecycle.ts`) is `completed`, `aborted`,
+`error` and `incomplete`. Backends pass `RunEndFacts` to `classifyRunEnd` and
+receive a `RunEndClassification`. They report facts and never choose the word.
 
 | What the driver observed | Reason |
 | --- | --- |
 | the turn was cut, by a user Stop or by the host | `aborted` |
 | the turn threw something that was not a cut | `error`, carrying the text |
 | the turn neither finished nor threw | `error`, carrying no text |
+| the turn finished, but its last step's finish reason was `other` (the stream ended without naming an end) | `error`, carrying a fixed explanation |
+| the turn finished, but its last step's finish reason was `tool-calls` (`TOOL_CALLS_PENDING`) | `incomplete` |
 | the turn reached its own end | `completed` |
 
-`interrupted` wins first. Neither finished nor threw is `error` with no
-invented cause (`turn-lifecycle.ts:161`).
+`interrupted` is checked first. A turn that neither finished nor threw is
+`error` with no invented cause.
 
-### Why there is no fourth word
+A turn that stops with tool calls pending is `incomplete`, and
+`classifyRunEnd` also emits `diagnostics.failure` under `TURN_ENDED_MID_WORK`
+(`turn.ended_mid_work`, code `unavailable`). The status tells the reader the
+turn did not answer; the failure line reports the defect that stopped the
+loop: a step ceiling, a stop condition, or a relay the loop waited on. Neither
+loop sets a step ceiling: `UNBOUNDED_STEPS` (`core/src/chat.ts`) is `runChat`'s
+default `stopWhen`, and `ActorAgent` passes it explicitly.
 
-An own-ended turn cannot have pending tool calls. `TOOL_CALLS_PENDING` is AI
-SDK `'tool-calls'` (`turn-lifecycle.ts:69`): results delivered, next step due.
+Host death writes no `run_end`. `RunEventRecorder.unterminatedModelOperations`
+(`events/recorder.ts`) detects it.
 
-`@cloudflare/think` OR-s `stepCountIs(this.maxSteps)`, default 10, before
-caller conditions. Four of four production ten-step turns stopped mid-call
-and sealed `completed`. A fourth word is wrong: the ceiling was the only
-cause and this branch removed it. `UNBOUNDED_MAX_STEPS`
-(`core/src/chat.ts:190`) and `UNBOUNDED_STEPS` (`:170`) reach Think at
-`cf-backend/src/actor-agent.ts:4091-4092`, over an instance default at
-`:1053`. No turn reaches that count.
-
-Only structured output, no actor requests it, can otherwise stop Think. Tools
-are server-side and Stop/throws seal earlier. Host death writes no `run_end`.
-`RunEventRecorder.unterminatedModelOperations`
-detects it (`events/recorder.ts:397`). Heads and nodes journal their bounded stops. A
-fourth word would be dead union, valibot, read-model, status and analytics
-vocabulary.
-
-`TURN_ENDED_MID_WORK`, `turn.ended_mid_work` (`turn-lifecycle.ts:106`), is
-the substitute. The completed arm emits `diagnostics.failure` (`:163`,
-`unavailable`) if this breaks, but seals `completed`. The tripwire is a defect
-report and never a user status. It means vendor cap, structured output, or
-client-side tool.
-
-## `ErrorCode` and the vocabulary its nine classes share
+## `ErrorCode`: the ten failure classes
 
 ```
 bad_input    the arguments do not describe an operation. Nothing was tried.
 denied       a gate refused. The work never ran, and that is correct.
-unsupported  the environment cannot do this AT ALL. A capability gap.
+unsupported  the environment cannot do this at all. A capability gap.
+budget       a declared bound is already spent. Retrying changes nothing
+             until the bound renews.
 unavailable  it could, and right now it is not reachable: unprovisioned,
              disconnected, cold. A retry, where `unsupported` is permanent.
 missing      the thing addressed does not exist.
@@ -341,168 +323,185 @@ oom          the environment killed it for memory.
 io           the transport or the filesystem failed.
 ```
 
-`missing` and `io` come from `FileEditOutcomeReason`
-(`tools/file-ledger.ts:47,49`). `bad_input` comes from `FileToolFailureReason`
-(`tools/file-tool.ts:77`). `absent`, `ioError`, `invalid` would create two
-names for one fact. `ErrorCode` is shared.
+`missing` and `io` are the names the file plane already writes
+(`FileEditOutcomeReason`, `types/file-edits.ts`), and `bad_input` is the one
+`FileToolFailureReason` adds (`tools/file-tool.ts`). `ErrorCode` reuses them so
+one fact has one name, not `absent`, `ioError` or `invalid`.
 
-`CODE_IS_REFUSAL` is total (`obs/error.ts:98-109`): `bad_input`, `denied`,
-`unsupported` refuse. Nothing else decides. `classifyErrorCode({ cause })`
-returns `ErrorCode | null`. `toKinuError` requires caller `otherwise`, such
-as `io` for transport or `bad_input` for decoding. It never guesses.
+`CODE_IS_REFUSAL` is total over `ErrorCode` (`obs/error.ts`): `bad_input`,
+`denied`, `unsupported` and `budget` refuse. Nothing else decides that.
+`CODE_WORK_DID_NOT_START` answers a separate question, whether any effect can
+have happened. `classifyErrorCode({ cause })` returns `ErrorCode | null`.
+`toKinuError` requires the caller's `otherwise`, such as `io` for transport or
+`bad_input` for decoding. It never guesses.
 
-`Worker exceeded resource limits` names both `worker.isolate.memory` (`:289`)
-and `do.cpu_ms_per_invocation` (`:607`) in `core/src/platform-catalog.ts`.
-String matching would call a CPU kill OOM. Null is tested. `obs/error.ts`
-imports only `obs/`. Provenance literals are checked by
-`core/tests/unit-obs-error.test.ts` and `scripts/platform-catalog.ts` check 3.
+The message `Worker exceeded resource limits` belongs to both
+`worker.isolate.memory` and `do.cpu_ms_per_invocation` in
+`core/src/platform-catalog.ts`. Matching on the string would call a CPU kill
+OOM, so that case classifies as null, and a test covers it. `obs/error.ts`
+imports only from `obs/`, so its failure signatures are literals with
+provenance. `core/tests/unit-obs-error.test.ts` and check 3 of
+`scripts/platform-catalog.ts` keep them in step with the catalogue.
 
 Measured with bun on 2026-08-17: an aborted `AbortController` gives
-`AbortError`, `code: 20`. `AbortSignal.timeout()` gives `TimeoutError`,
-`code: 23`. Both names are the platform's own, minted at runtime by the
-browser and workerd engines. No identifier in this repository spells them.
-Names are stable. Numeric codes fall through.
+`AbortError` with `code: 20`, and `AbortSignal.timeout()` gives `TimeoutError`
+with `code: 23`. Both names come from the platform, minted at runtime by the
+browser and workerd engines; no identifier in this repository spells them.
+Classification keys on the names, which are stable. The numeric codes are not
+used.
 
-## `ReservedLogField`, a ban that is structural
+## `ReservedLogField`: the compile-time ban
 
 ```ts
 log.event('shell.escalated', { runtime: 'sandbox', attempts: 2 });   // compiles
 log.event('shell.escalated', { soul: prompt });                      // does NOT
 ```
 
-Values are scalars. A mapped `keyof Fields` check catches variables,
-interfaces, spreads and returns, unlike excess-property checks. `Record<string,
-string>` makes `Extract<keyof T, ReservedLogField>` `never`. `LoggableFields`
-rejects that uninspectable map.
+Field values are scalars. A mapped check over `keyof Fields` catches
+variables, interfaces, spreads and returns, which excess-property checks miss.
+For `Record<string, string>`, `Extract<keyof T, ReservedLogField>` is `never`,
+so `LoggableFields` rejects such an open map outright.
 
-`Fields` has no `extends`: `Record<string, LogFieldValue>` rejected annotated
-interfaces without index signatures. Two earlier designs had that false
-positive, caught by `core/tests/fixtures/log-ban/allowed.ts`. Casts need
-`SAFETY:` under `require-safety-comment-for-type-assertion`.
+`Fields` has no `extends` constraint: `Record<string, LogFieldValue>` rejected
+annotated interfaces without index signatures. Two earlier designs had that
+false positive, which `core/tests/fixtures/log-ban/allowed.ts` caught. Casts need
+a `SAFETY:` comment under `require-safety-comment-for-type-assertion`, and
 `no-widen-then-assert` closes the other route.
 
-`packages/core/tests/fixtures/log-ban/` is a two-file tsconfig project with
-intentional `violations.ts` failure. `unit-obs-log-ban.test.ts` requires its
-marker diagnostic and zero diagnostics from `allowed.ts`. `@ts-expect-error`
-would not serve. On 2026-08-17, neutering `LoggableFields` failed 6 of 9 routes.
-The other three rely on scalar values, dotted name and required error.
+`packages/core/tests/fixtures/log-ban/` is a two-file tsconfig project whose
+`violations.ts` must fail. `unit-obs-log-ban.test.ts` requires each case's
+marker diagnostic there and zero diagnostics from `allowed.ts`.
+`@ts-expect-error` would not do the same job. On 2026-08-17, neutering
+`LoggableFields` failed 6 of 9 routes. The other three rely on scalar values,
+the dotted name and the required error.
 
 ## `Logger`
 
-`event` records data. `failure` handles `KinuError`. Catchers classify throws.
-Each writes one JSON line to Workers Logs on workerd or the CLI journal.
+`event` records data. `failure` records a handled `KinuError`. A thrown error
+needs no log call: whoever catches it classifies it. Each call writes one JSON
+line, which reaches Workers Logs on workerd and the daemon journal on the CLI.
 
 ```json
 {"event":"shell.escalation_refused","code":"unavailable","cause":"runtime_not_provisioned","fields":{"runtime":"sandbox"}}
 ```
 
-`createLineLogger` owns it (`obs/log.ts:207`). `createConsoleLogger` binds
-`console.error` (`:298`). Never stdout: ACP JSON-RPC (`cli/src/acp/agent.ts`),
-executor `{ok,result}` (`cli-backend/src/executor.ts`) and `kinu exec --json`
-use it. Envelope keys nest fields. `createRecordingLogger()` keeps it assertable.
+`createLineLogger` builds the line (`obs/log.ts:206`). `createConsoleLogger`
+writes it to `console.error` (`:299`). Never stdout: ACP JSON-RPC
+(`cli/src/acp/agent.ts`), the executor's `{ok,result}` line
+(`cli-backend/src/executor.ts`) and `kinu exec --json` use it. Caller fields
+nest under `fields`, so none can overwrite an envelope key.
+`createRecordingLogger()` makes the output assertable in tests.
 
 ## Why not `neverthrow`
 
-`AGENTS.md` rejects `Result<T, KinuError>` via `neverthrow`: it cannot
-cross `shell`, `tool_call_end` or `eval` structured clone.
-`{ reason, error }` crosses namespace boundaries; native invocations use the
-SDK's thrown-error channel. `KinuError` retains native `cause` and any
-producer-observed process exit metadata.
+`Result<T, KinuError>` via `neverthrow` is rejected: a `Result` cannot cross
+`shell`, `tool_call_end` or the `eval` structured clone. `{ reason, error }`
+crosses namespace boundaries, and native invocations use the SDK's thrown-error
+channel. `KinuError` keeps the native `cause` and any process exit metadata the
+producer observed.
 
 ## Invocation outcomes
 
-`ToolOutcome` (`core/src/tools/outcome.ts`) is the recorded SDK invocation
-outcome: `{ success: true }` or `{ success: false, reason, execution? }`.
-`reason` is an existing error class or file verdict, or `null` when no
-producer-owned classification survived. `execution.exitCode` is included only
-when a producer observed that exit. A diagnostic string is not its substitute.
+`ToolOutcome` (`core/src/types/tool-outcome.ts`, helpers in
+`core/src/tools/outcome.ts`) is the recorded outcome of an SDK invocation:
+`{ success: true }` or `{ success: false, reason, execution? }`, either with an
+optional `failures` list of binding refusals a codemode program received.
+`reason` is an `ErrorCode` or a file verdict, or `null` when no classification
+from the producer survived. `execution.exitCode` is present only when a
+producer observed that exit. A diagnostic string does not substitute for it.
 
-Both SDK hooks capture this outcome before rendering. New `tool_call_end`
-events require an `outcome` field; completed-turn tool records retain the same
-field. Decoders permit its absence in historical records without rewriting
-them. Missing outcome evidence is unmeasured, not successful. An explicit old
-`error` establishes a failure but does not establish its class.
+Both SDK hooks capture the outcome before rendering. New `tool_call_end` events
+require an `outcome` field, and completed-turn tool records keep the same field.
+Decoders accept its absence in historical records without rewriting them. A
+missing outcome is unmeasured, not a success. An explicit old `error` shows a
+failure but not its class.
 
 Steering, UI status and execution reward read the outcome, never JSON-looking
 result data or stdout prefixes. A codemode program that handles a namespace
-refusal and returns normally succeeds. Unhandled program errors fail; captured
-console output and the original cause remain available in the error channel.
+refusal and returns normally succeeds. An unhandled program error fails the
+invocation; the captured console output and the original cause stay available
+in the error channel.
 
-The model-facing error channel is projected separately in the shared
-`prepareStep` pipeline, before extension rewrites, pruning, cache preparation
-and measurement. It uses the SDK's original `tool-error` entries and generated
-response messages, matched by tool-call id within their step, not output text
-or a second error ledger. Known Kinu/file refusals become reason-first
-`error-json` values; unclassified errors remain unclassified. MCP errors carry
-their declared protocol response. Successful data and earlier history are not
-reclassified, even when ids repeat. Original Errors and SDK history are not
-mutated.
+The model sees errors through a separate projection in the shared
+`prepareStep` pipeline, which runs before extension rewrites, pruning, cache
+preparation and measurement. It reads the SDK's original `tool-error` entries
+and generated response messages, matched by tool-call id within their step,
+never by output text or a second error ledger. Known Kinu and file refusals
+become reason-first `error-json` values; unclassified errors stay unclassified.
+MCP errors carry their declared protocol response. Successful data and earlier
+history are not reclassified, even when ids repeat. Original errors and SDK
+history are not mutated.
 
 ## The five executor tools
 
-`sandbox.ts`, `nimbus.ts`, `parent.ts`, `device-tunnel-executor.ts`, `inline.ts`
-under `core/src/execution/` classify call failures. Re-counted 2026-08-24:
-still five. Container lifecycle moved to `@kinu.run/devbox`. These remain tool
-failures, not container health.
+`sandbox.ts`, `nimbus.ts`, `parent.ts`, `device-tunnel-executor.ts` and
+`inline.ts` under `core/src/execution/` classify call failures. Re-counted
+2026-08-24: five. Container lifecycle lives in `@kinu.run/devbox`; the failures
+here are tool failures, not container health.
 
-Command namespaces return structural refusal values so authored code can handle
-them. Native tools raise the same typed operation failures through the SDK.
-`refusalText` remains a codec for explicitly declared string-valued namespace
-channels, not a predicate for arbitrary tool output.
+Commands return a `CommandResult` from `commandResult`: the output text, or a
+refusal with its class. A nonzero exit becomes `io` with the exit code on
+`execution`. Command namespaces return these values so authored code can
+handle them; native tools raise the same typed failures through the SDK.
+`refusalText` encodes a refusal for a namespace channel declared as a string.
+It is never a way to classify arbitrary tool output.
 
 ### What the classification distinguishes, per tool
 
 | Tool | The distinction it buys |
 | --- | --- |
-| `sandbox.ts` | Admission control apart from a transport fault. 503 at the ten-instance concurrency ceiling, 429 on the container start-rate burst, and the eviction disconnect window arrive as one prose string with a genuine transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so the first is `unavailable` and a platform gap while the second is `io` and a candidate defect. Plus `unavailable` for an absent binding. |
-| `nimbus.ts` | An absent binding (`unavailable`) apart from a session handle that has no such surface (`unsupported`). A retry against a permanence, and on the CF backend Nimbus *is* the workspace, so this is every call. |
-| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). The starkest of the five: a prose string in place of either code reaches no reader as a failure at all. |
-| `inline.ts` | `denied` for the misevolution veto (a gate refusing, not a defect in the tool it protected). And `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact, which is the right answer for a shell failure. |
-| `parent.ts` | Nothing new. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` already arrives as `missing` without this file naming anything, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller it has. A code here would be one whose value never varies. The exception is `cancelled`: the abort signal races the RPC, and a signal parsed and dropped instead leaves one class of the nine unreachable on one of the five tools. |
+| `sandbox.ts` | Admission control apart from a transport fault. The 503 at the ten-instance concurrency ceiling, the 429 on the container start-rate burst and the eviction disconnect window arrive as prose strings, like a real transport fault. `TRANSIENT_MARKERS` lists them and `sandboxFailure` reads that list, so admission control is `unavailable` (a platform gap) and a transport fault is `io` (a candidate defect). An absent binding is also `unavailable`. |
+| `nimbus.ts` | An absent binding (`unavailable`, worth a retry) apart from a session handle with no such surface (`unsupported`, permanent). On the CF backend Nimbus is the workspace, so this covers every call. |
+| `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). Without a code, a prose string in either case reaches no reader as a failure at all. |
+| `inline.ts` | `denied` for the misevolution veto, a gate refusing rather than a defect in the tool it protects, and `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact. |
+| `parent.ts` | Nothing of its own. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` arrives as `missing`, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller. The exception is `cancelled`: the abort signal races the RPC, so an aborted caller gets `cancelled` instead of losing that class on this tool. |
 
-Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
+`core/tests/unit-tool-failure-census.test.ts` pins four fixed defects:
 
 1. A no-handle `createSandboxExecutor()` stub in `cf-backend/src/runtime.ts`
    returned `NOT_CONFIGURED` prose, so escalation recorded `ok` and the census
    missed it.
-2. No attached `device` had the same invisible shape.
-3. Sandbox admission refusals surviving retries became `io`, making capacity
-   look like a tool defect.
+2. A missing `device` had the same invisible shape.
+3. Sandbox admission refusals that survived retries became `io`, so capacity
+   looked like a tool defect.
 4. The misevolution veto returned `{ ok: false, error }` without `reason`, so
    the census filed a working gate as `broke`.
 
-`nimbus.listPorts` returned `'[]'` without a port API. `sandbox.exists` and
-`device.exists` returned `'false'` / `false` for an unmade call, the latter
-swallowing its error. `workspace.readdir` returned `[]`. Each now refuses.
+`nimbus.listPorts` without a port API, `sandbox.exists` and `device.exists` on a
+failed call, and `workspace.readdir` on failure each refuse with a class
+instead of returning an empty or false value.
 
 Without observed execution metadata, `refused` holds `bad_input`, `denied`,
 `unsupported` and the file plane's refusal verdicts. `runtimeMissing` holds
-`unavailable`. Other classes belong to `broke` unless execution evidence
-establishes that the work itself failed. An observed nonzero process exit is
-classified from its numeric field: ordinary failing commands count as
-`workFailed`, while the existing shell-specific 124/126/127 distinctions stay
-separate. Class `io` alone does not say whether work ran.
+`unavailable`. Other classes count as `broke` unless execution evidence shows
+that the work itself failed. An observed nonzero process exit is classified
+from its numeric field: ordinary failing commands count as `workFailed`, and
+the shell-specific 124, 126 and 127 distinctions stay separate. Class `io` alone
+does not say whether the work ran.
 
 The Executors terminal uses the structural command result and forwards its
 `refusal` metadata. A successful command whose stdout is
-`{"reason":"denied","error":"historical incident"}` remains exit-zero data.
+`{"reason":"denied","error":"historical incident"}` stays exit-zero data.
 
 ## What is not converted
 
-- Namespace operation results and returned child/verifier/report verdicts remain
-  values. The caller may handle them. They do not make an enclosing codemode
-  invocation fail unless its program raises an unhandled exception.
-- `ExecutorProvider` ports. Typed `{ supported, reason }` differs from parsed
-  strings. `sandbox.listExposedPorts` and `nimbus.listExposedPorts` still use
-  `[]` for an absent handle or preview host.
-- `console.*` in CLI. Regex on 2026-08-24 found 496 `packages/cli/src`
-  matches, terminal output. Core has one live sink call (`obs/log.ts:298`),
-  five comment/probe hits; cf-backend one (`components/ErrorBoundary.tsx:33`);
-  cli-backend two generated-string hits (`executor.ts:177,179`). The
-  2026-08-17 AST census in `obs/log.ts:12-31` was cli 479, cf-backend 99,
-  core 55, cli-backend 17, 650 across 86 files. AST and regex denominators
-  differ, and the 2026-08-17 figures are a baseline: core, cf-backend and
-  cli-backend reach the terminal through the sink, not through `console.*`.
-- `command_not_found` and `not_executable`. Neither belongs in `ErrorCode`.
-  `missing` loses absent-program versus cannot-execute, and both come from
-  shell exit codes rather than an error classifier.
+- Namespace operation results and returned child, verifier and report verdicts
+  stay values. The caller may handle them. They do not fail the enclosing
+  codemode invocation unless its program raises an unhandled exception.
+- `ExecutorProvider` ports. Typed `{ supported, reason }` values differ from
+  parsed strings. `sandbox.listExposedPorts` and `nimbus.listExposedPorts`
+  still return `[]` for an absent handle or preview host.
+- `console.*` outside the logger. Regex on 2026-08-24: 496 matches in
+  `packages/cli/src`, which is terminal output. Regex on 2026-09-22: 493 in
+  `packages/cli/src`. Core has one live sink call (`createConsoleLogger` in
+  `obs/log.ts`); its other matches are comments and generated program text.
+  cf-backend has one live call, a `console.warn` in
+  `components/account/McpServersPanel.tsx`, plus generated install-script text
+  in `cli/routes.ts`. cli-backend has the two stdout protocol lines in
+  `executor.ts`. The 2026-08-17 AST census in `obs/log.ts:12-22` counted cli
+  479, cf-backend 99, core 55, cli-backend 17: 650 across 86 files. AST and
+  regex counts use different denominators; the 2026-08-17 figures are the
+  baseline from before core, cf-backend and cli-backend moved to the sink.
+- `command_not_found` and `not_executable`. Neither belongs in `ErrorCode`:
+  `missing` would lose absent program versus cannot execute, and both come from
+  shell exit codes, not from an error classifier.
