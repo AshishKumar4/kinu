@@ -66,6 +66,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     inlineAttachmentLimitBytes: 1024,
     consents: null,
     checkpoints: null,
+    plans: null,
     localControls: {
       getAlwaysActiveSkills: () => [],
       setAlwaysActiveSkills: () => {},

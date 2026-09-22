@@ -363,6 +363,66 @@ export function formatPlanWithLineNumbers(content: string): string {
   return lines.map((line, index) => `${String(index + 1).padStart(width)}| ${line}`).join('\n');
 }
 
+/**
+ * The turn a decided plan hands off to.
+ *
+ * A verdict means the same thing on every backend: an approval hands the
+ * model the exact plan to implement, a change request hands back the numbered
+ * revision to edit. So the words, the `kinuEvent`/`kinuMode` the loop reads
+ * off them, and the key a retry collapses onto are declared once here rather
+ * than per adapter.
+ */
+export interface PlanHandoffTurn {
+  readonly text: string;
+  readonly metadata: JsonObject;
+}
+
+export function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHandoffTurn {
+  const text = decision === 'request_changes'
+    ? [
+        `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
+        '',
+        '## Review feedback',
+        plan.feedback ?? '',
+        '',
+        `## Current plan (${plan.content.split('\n').length} lines)`,
+        'Use these exact pre-edit line numbers in the next submit_plan call:',
+        '',
+        '```',
+        formatPlanWithLineNumbers(plan.content),
+        '```',
+        '',
+        'Revise the plan with targeted submit_plan edits. Do not implement or create previews.',
+      ].join('\n')
+    : [
+        `The owner approved plan ${plan.id} revision ${plan.revision}.`,
+        ...(plan.feedback ? ['', 'Approval notes:', plan.feedback] : []),
+        '',
+        'Implement the exact approved plan below. Verify the result and report any necessary deviation explicitly.',
+        '',
+        '<approved-plan>',
+        plan.content,
+        '</approved-plan>',
+      ].join('\n');
+
+  return {
+    text,
+    metadata: {
+      kinuEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
+      kinuMode: decision === 'approve' ? 'build' : 'plan',
+      planId: plan.id,
+      revision: plan.revision,
+      decision,
+    },
+  };
+}
+
+/** The name one handoff attempt announces itself under: the decision's own
+ *  identity, so a re-delivery collapses onto the row the first attempt wrote. */
+export function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision, attempt: number): string {
+  return `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`;
+}
+
 export interface PlanReviewStoreOptions {
   readonly newId?: () => string;
   readonly now?: () => number;

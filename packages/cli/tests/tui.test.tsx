@@ -448,7 +448,7 @@ describe('CLI TUI layout', () => {
   test('slash command hints render as a palette without numeric hotkeys', async () => {
     // The offered list, not the raw table: capability-gated commands are
     // absent for this client, exactly as the chat app renders them.
-    const commands = commandsForClient({ localControls: null, consents: null, checkpoints: null });
+    const commands = commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null });
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
 
@@ -567,7 +567,7 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <CommandPaletteOverlay
-            commands={commandsForClient({ localControls: null, consents: null, checkpoints: null })}
+            commands={commandsForClient({ localControls: null, consents: null, checkpoints: null, plans: null })}
             terminal={{ width: 72, height: 24 }}
             onSelect={(command) => { selected.push(command.name); }}
           />

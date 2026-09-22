@@ -5309,7 +5309,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     await session.end();
   });
 
-  test('a standalone local turn rejects Plan when no review surface is wired', async () => {
+  test('a standalone local Plan turn is admitted and its codemode sandbox is closed', async () => {
     const probeCode = (path: string) => `
       await workspace.writeFile('${path}', JSON.stringify({
         releaseType: typeof release,
@@ -5318,10 +5318,13 @@ describe('agents.* codemode namespace — node sandbox', () => {
       return 'probed';
     `;
 
+    // Admitted, because this session IS the review surface a plan lands on:
+    // `submit_plan` on the Plan turn, `decidePlanReview` for the owner.
     const plan = setup('done', codemodeModel(probeCode('/workspace/probe/plan-tools.json')));
-    await expect(plan.session.enqueueTurn({
-      text: 'research a plan', metadata: { kinuMode: 'plan' },
-    })).rejects.toThrow('hosted workspace UI');
+    await plan.session.send('research a plan', { mode: 'plan' });
+    // And `eval` has no Plan-safe execution, so the sandbox never ran.
+    expect(plan.events.filter((event) => event.type === 'tool-result' && event.toolName === 'eval'))
+      .toMatchObject([{ success: false, reason: 'denied' }]);
     expect(await plan.rt.storage.vfs.exists('/workspace/probe/plan-tools.json')).toBe(false);
     await plan.session.end();
 

@@ -1,0 +1,243 @@
+// Plan review on the local backend — the capability the cloud backend had and
+// this one did not: `submit_plan`, the `plan_updated` fan-out, the stored
+// review, and the rule that a build turn waits for the owner's verdict.
+//
+// Driven the way local-session.test.ts drives turns: the authentic
+// createCLIRuntime over a scratch database, one LocalAgentSession, a scripted
+// model. Every assertion is on this session's public surface — the event
+// stream a frontend subscribes to, `getActivePlanReview`, `decidePlanReview`,
+// and the durable run-event ledger — never on the store underneath.
+import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
+import { CHAT_SESSION_ID, initWorkspaceSchema, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { LocalAgentSession, type SessionEvent } from '../src/local-session';
+
+const DUMMY_LLM: LLMProviderConfig = {
+  name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
+};
+
+const PLAN_BODY = '# Migration plan\n- move the ledger to integer cents';
+
+const USAGE = {
+  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 1, text: 1, reasoning: undefined },
+} as const;
+
+/** One scripted step: a named tool call, or the turn's answer. */
+type Step =
+  | { readonly call: string; readonly input: JsonObject }
+  | { readonly answer: string };
+
+/** A model that replays `steps` in order, one per request, and answers
+ *  'nothing left to do' once the script is spent — so an unexpected extra
+ *  request ends its turn instead of re-running the last tool call. */
+function scriptedSteps(steps: readonly Step[]) {
+  const taken: Step[] = [];
+
+  const model = scriptedTurnModel({ doGenerate: () => {
+    const step = steps[taken.length] ?? { answer: 'nothing left to do' };
+    taken.push(step);
+
+    if ('answer' in step) {
+      return {
+        content: [{ type: 'text' as const, text: step.answer }],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: USAGE, warnings: [],
+      };
+    }
+
+    return {
+      content: [{
+        type: 'tool-call' as const,
+        toolCallId: `call-${String(taken.length)}`,
+        toolName: step.call,
+        input: JSON.stringify(step.input),
+      }],
+      finishReason: { unified: 'tool-calls' as const, raw: undefined },
+      usage: USAGE, warnings: [],
+    };
+  } });
+
+  return { model, taken };
+}
+
+function session(steps: readonly Step[]) {
+  const db = new Database(scratchPath('local-plan-review', 'agent.db'));
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const events: SessionEvent[] = [];
+  const { model, taken } = scriptedSteps(steps);
+
+  const agent = new LocalAgentSession({
+    rt, db, model, noAutoEvolve: true, onEvent: (event) => events.push(event),
+  });
+
+  return { db, rt, agent, events, taken };
+}
+
+/** Every `plan_updated` fan-out this session made, oldest first. */
+function planBroadcasts(events: readonly SessionEvent[]) {
+  return events.flatMap((event) => event.type === 'broadcast' && event.event.type === 'plan_updated'
+    ? [event.event]
+    : []);
+}
+
+/** The work mode each settled turn actually ran under, from the durable
+ *  run-event ledger — the same rows the cloud backend records. */
+function turnModes(agent: LocalAgentSession): string[] {
+  return agent.listRuns().items
+    .map((run) => run.runId)
+    .reverse()
+    .flatMap((runId) => agent.getRunEvents(runId)
+      .flatMap((event) => event.type === 'turn_end' && event.workMode !== undefined ? [event.workMode] : []));
+}
+
+function fileResults(events: readonly SessionEvent[]) {
+  return events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
+}
+
+describe('LocalAgentSession — plan review', () => {
+  test('a submitted plan is stored, broadcast, holds the next build turn, and releases it on approval', async () => {
+    const write = { action: 'write', path: '/home/user/ledger.txt', content: 'integer cents' };
+
+    const { db, agent, events, taken } = session([
+      // The Plan turn: the one completion surface Plan mode has.
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      // The turn the owner asks for next, typed as ordinary work. It is held
+      // in Plan until the verdict lands, so this write is refused.
+      { call: 'file', input: write },
+      { answer: 'I cannot implement before the plan is decided.' },
+      // The handoff turn an approval queues: the same write, now authorized.
+      { call: 'file', input: write },
+      { answer: 'Implemented the approved plan.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+
+      // 1. The tool exists on a Plan turn and the review is readable back.
+      expect(taken[0]).toEqual({ call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } });
+      const submitted = events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan');
+      expect(submitted).toMatchObject({ success: true });
+
+      const active = await agent.getActivePlanReview();
+      expect(active).toMatchObject({
+        sessionId: CHAT_SESSION_ID, revision: 1, status: 'pending', content: PLAN_BODY, handoffAccepted: false,
+      });
+
+      // 2. The fan-out carried the plan itself, not just a poke.
+      expect(planBroadcasts(events).map((event) => event.plan?.content)).toEqual([PLAN_BODY]);
+
+      // 3. A build turn is refused its build authority while the plan waits.
+      await agent.send('Implement it now.');
+      expect(fileResults(events)).toMatchObject([{ success: false, reason: 'denied' }]);
+      expect(turnModes(agent)).toEqual(['plan', 'plan']);
+
+      // 4. The verdict releases it: the handoff turn runs as Build and writes.
+      const planId = active?.id;
+
+      if (planId === undefined) throw new Error('the submitted plan has no id');
+      const decided = await agent.decidePlanReview(planId, 1, 'approve');
+      expect(decided).toMatchObject({ ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true } });
+      // The decision admits the handoff turn and returns; it runs on this
+      // session's own pump, which is what a surface joins here.
+      await agent.settleBackgroundWork();
+      expect(fileResults(events)).toMatchObject([{ success: false, reason: 'denied' }, { success: true }]);
+      expect(turnModes(agent)).toEqual(['plan', 'plan', 'build']);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('a change request hands the numbered plan back and the revision supersedes it', async () => {
+    const { db, agent, events, taken } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      { call: 'submit_plan', input: { edits: [{ start: 2, end: 2, content: '- keep the audit trail' }] } },
+      { answer: 'Revised.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      const first = await agent.getActivePlanReview();
+
+      if (!first) throw new Error('the submitted plan was not stored');
+      const decided = await agent.decidePlanReview(first.id, 1, 'request_changes', 'Say what happens to the audit trail.');
+      expect(decided).toMatchObject({ ok: true, queued: true });
+      await agent.settleBackgroundWork();
+
+      // The feedback turn carried the numbered plan, so the model's edit could
+      // name pre-edit lines, and the revision it produced is the active one.
+      const handoff = taken[2];
+
+      if (handoff === undefined || !('call' in handoff)) throw new Error('the feedback turn ran no submit_plan');
+      const revised = await agent.getActivePlanReview();
+      expect(revised).toMatchObject({
+        id: first.id, revision: 2, status: 'pending',
+        content: '# Migration plan\n- keep the audit trail',
+      });
+
+      // Every state the review passed through reached the owner's surface, in
+      // order. Repeats are collapsed: how many times one state is re-announced
+      // is a detail of where the writes land, the sequence is the contract.
+      const seen = planBroadcasts(events).map((event) => `${String(event.plan?.revision)}:${String(event.plan?.status)}`);
+      expect(seen.filter((state, index) => state !== seen[index - 1])).toEqual([
+        '1:pending', '1:changes_requested', '2:pending',
+      ]);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('a build turn with no plan pending keeps its build authority', async () => {
+    const { db, agent, events } = session([
+      { call: 'file', input: { action: 'write', path: '/home/user/plain.txt', content: 'no plan here' } },
+      { answer: 'Done.' },
+    ]);
+
+    try {
+      await agent.send('Write the file.');
+      expect(fileResults(events)).toMatchObject([{ success: true }]);
+      expect(turnModes(agent)).toEqual(['build']);
+      expect(await agent.getActivePlanReview()).toBeNull();
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
+  test('an actor that answers to a parent has no review surface at all', async () => {
+    const { db, agent, events } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+    ]);
+
+    // What the host installs on a subordinate and on no root: this actor's
+    // answers go up to whoever hired it, so a plan here has no owner to
+    // decide it — the cloud backend wires `submitPlan` on the orchestrator
+    // alone for the same reason.
+    agent.setParentRelay({
+      owed: () => null,
+      sequenceId: (messageId) => messageId,
+      send: async () => 'relayed',
+    });
+
+    try {
+      await expect(agent.enqueueTurn({ text: 'Draft a plan.', metadata: { kinuMode: 'plan' } }))
+        .rejects.toThrow('delegated task reports its result instead');
+
+      await agent.send('Draft the ledger migration.', { mode: 'plan' });
+      expect(events.find((event) => event.type === 'tool-result' && event.toolName === 'submit_plan'))
+        .toMatchObject({ success: false });
+      expect(await agent.getActivePlanReview()).toBeNull();
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+});

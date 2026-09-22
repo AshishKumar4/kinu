@@ -17,6 +17,7 @@ import type {
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
   DeferredApproval, DeferredApprovalAnswer,
+  PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -89,6 +90,10 @@ export interface AgentClientSendOptions {
   cwd?: string;
   /** One-turn inference tier override. The backend snapshots it with the turn. */
   tier?: TierId;
+  /** The composer's work mode, a fact on the message. Plan runs a Plan turn,
+   *  which ends in a review the owner decides through {@link PlanReviewSurface}.
+   *  Build unless the caller says otherwise. */
+  mode?: WorkMode;
 }
 
 export interface AgentClientStatus {
@@ -297,6 +302,22 @@ export interface LocalSessionControls {
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
 }
 
+/**
+ * Capability surface: the owner's half of Plan mode.
+ *
+ * A Plan turn ends in `submit_plan`, and nothing moves until the owner says
+ * so. Both backends hold the same review stream (core's `PlanReviewStore`) and
+ * expose the same three actions over it, so one command drives either.
+ */
+export interface PlanReviewSurface {
+  /** The revision awaiting a verdict, or the approved one still being worked. */
+  active(): Promise<PlanReview | null>;
+  saveAnnotations(id: string, revision: number, annotations: PlanReviewAnnotation[]): Promise<PlanReviewResult>;
+  /** Approve or send it back. Approving queues the implementation turn, which
+   *  streams through `subscribe` like any other. */
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): Promise<PlanReviewResult>;
+}
+
 export interface AgentClient {
   readonly mode: AgentClientMode;
   readonly agentName: string;
@@ -305,6 +326,7 @@ export interface AgentClient {
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
+  readonly plans: PlanReviewSurface | null;
   /** Rename this conversation's agent when the backend exposes a complete
    * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
@@ -413,13 +435,20 @@ export interface AgentUiMessage {
   id: string;
   role: 'system' | 'user' | 'assistant';
   parts: AgentUiMessagePart[];
+  /** The mode this message was typed under — the same fact the web composer
+   *  puts on its own messages, which is what makes the turn a Plan turn. */
+  metadata?: { kinuMode: WorkMode };
 }
 
 export type AgentUiMessagePart =
   | { type: 'file'; mediaType: string; filename: string; url: string }
   | { type: 'text'; text: string };
 
-export function createUserUiMessage(text: string, files: ReadonlyArray<PromptFile> = []): AgentUiMessage {
+export function createUserUiMessage(
+  text: string,
+  files: ReadonlyArray<PromptFile> = [],
+  mode?: WorkMode,
+): AgentUiMessage {
   const parts: AgentUiMessagePart[] = files.map((file) => ({
     type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.url,
   }));
@@ -430,5 +459,6 @@ export function createUserUiMessage(text: string, files: ReadonlyArray<PromptFil
     id: crypto.randomUUID(),
     role: 'user',
     parts,
+    ...(mode !== undefined && { metadata: { kinuMode: mode } }),
   };
 }

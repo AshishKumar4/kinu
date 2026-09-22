@@ -175,6 +175,12 @@ import { TierIdSchema,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
+  // Plan review — the owner's decision surface, and the store both backends
+  // keep it in. Core owns every rule; this session owns the broadcast and the
+  // handoff turn.
+  SUBMIT_PLAN_TOOL, admitPlanReviewAnnotations, planHandoffKey, planHandoffTurn, planReviewAwaitingDecision,
+  type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
+  type PlanReviewResult, type PlanReviewStore,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
   ChatSession, CHAT_SESSION_ID,
   type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
@@ -517,6 +523,12 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
 }
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
+
+/** What a plan decision answers with: core's refusal, or the decided plan
+ *  plus the fate of the implementation turn the decision handed off to. */
+export type PlanDecisionOutcome =
+  | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null }
+  | { readonly ok: true; readonly plan: PlanReview; readonly queued: boolean; readonly queueError?: string };
 
 export class LocalAgentSession implements BackendHost {
   private readonly rt: CLIRuntime;
@@ -928,8 +940,13 @@ export class LocalAgentSession implements BackendHost {
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
-        // No review surface here: a plan is reviewed in the hosted workspace UI.
-        planTurnRefusal: () => 'Plan review is available in the hosted workspace UI; this local session has no review surface.',
+        // A plan ends in a decision the owner makes, and a root chat IS that
+        // owner's surface (`decidePlanReview` below). A subordinate's
+        // delegated turn ends in `report`, so a plan nobody there can approve
+        // is refused at admission rather than run.
+        planTurnRefusal: () => this.planReviewSurface()
+          ? null
+          : 'Plan review belongs to the owner of this workspace; a delegated task reports its result instead.',
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         taskList: () => this.taskList,
         // A running job's own settle wakes the session: a reminder fired
@@ -1472,6 +1489,126 @@ export class LocalAgentSession implements BackendHost {
     return { ok: true };
   }
 
+  // ── Plan review (parity with the DO's RPCs) ────────────────────────
+  //
+  // Core's `PlanReviewStore`, over this workspace's SQLite and this actor's
+  // handle — the same object `AgentStores` hands the cloud actor, not a local
+  // re-implementation. What this session adds is the fan-out (`plan_updated`)
+  // and the handoff turn, which is the half that is platform-shaped.
+
+  private get planReviews(): PlanReviewStore {
+    return this.stores.planReviews;
+  }
+
+  /**
+   * Whether this session holds the review surface: a root chat, where the
+   * person at the terminal IS the owner deciding.
+   *
+   * A subordinate reaches its parent through `report`, never through a plan,
+   * which is why the cloud backend wires `submitPlan` on the orchestrator
+   * alone. A parent relay is the local fact that says "this actor answers to
+   * another one".
+   */
+  private planReviewSurface(): boolean {
+    return this.parentRelay === null;
+  }
+
+  private submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
+    const result = this.planReviews.submit(CHAT_SESSION_ID, edits);
+
+    if (result.ok) this.broadcastPlanUpdate(result.plan);
+
+    return result;
+  }
+
+  private broadcastPlanUpdate(plan: PlanReview): void {
+    this.broadcast({ type: 'plan_updated', plan });
+  }
+
+  /** The latest revision this conversation still owes a decision on, or the
+   *  approved one a reload should keep rendering. */
+  async getActivePlanReview(): Promise<PlanReview | null> {
+    return this.planReviews.getActive(CHAT_SESSION_ID);
+  }
+
+  async savePlanReviewAnnotations(
+    id: string,
+    revision: number,
+    annotations: PlanReviewAnnotation[],
+  ): Promise<PlanReviewResult> {
+    const admitted = admitPlanReviewAnnotations({ value: annotations });
+
+    if (!admitted.ok) {
+      return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
+    }
+
+    const result = this.planReviews.saveAnnotations(id, revision, { value: admitted.annotations });
+
+    if (result.ok) this.broadcastPlanUpdate(result.plan);
+
+    return result;
+  }
+
+  /**
+   * Record the owner's verdict and hand the conversation the turn it owes.
+   *
+   * The handoff is ADMITTED here, not awaited: the turn runs on this session's
+   * own pump and streams through the same event channel every other turn does,
+   * and a caller that must see it finish awaits `settleBackgroundWork()`. The
+   * acceptance is written in the same breath as the admission because the turn
+   * itself moves the row — a change request ends with the model submitting the
+   * NEXT revision, which supersedes the one being handed off — so a mark after
+   * the turn would have nothing left to write to.
+   *
+   * The driver lease is asked first, for the reason a drain asks it before
+   * binding rows: a verdict that cannot be handed off here belongs to whoever
+   * is driving the conversation, and refusing before the decision is durable
+   * is better than owing a handoff this process will never run.
+   */
+  async decidePlanReview(
+    id: string,
+    revision: number,
+    decision: PlanReviewDecision,
+    feedback?: string,
+  ): Promise<PlanDecisionOutcome> {
+    const refusal = this.driverGate?.() ?? null;
+
+    if (refusal) {
+      return {
+        ok: false,
+        error: `${refusal.error}. Decide this plan from the session driving the conversation.`,
+        plan: this.planReviews.get(id, revision),
+      };
+    }
+
+    const result = this.planReviews.decide(id, revision, decision, feedback);
+
+    if (!result.ok) return result;
+
+    if (result.plan.handoffAccepted) return { ok: true, plan: result.plan, queued: true };
+    this.broadcastPlanUpdate(result.plan);
+    const plan = result.plan;
+    const { text, metadata } = planHandoffTurn(plan, decision);
+
+    try {
+      const attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
+
+      const handoff = this.enqueueTurn({
+        text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt),
+      });
+
+      const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
+
+      if (!accepted.ok) return accepted;
+      this.broadcastPlanUpdate(accepted.plan);
+      this.actorSession.orchestrator.track(handoff.then(() => {}), 'the plan handoff turn');
+
+      return { ok: true, plan: accepted.plan, queued: true };
+    } catch (error) {
+      return { ok: true, plan, queued: false, queueError: renderThrownChain({ cause: error }) };
+    }
+  }
+
   // ── BackendHost ────────────────────────────────────────────────────
 
   broadcast(event: BroadcastEvent): void {
@@ -1545,10 +1682,12 @@ export class LocalAgentSession implements BackendHost {
 
   // ── Public driver API ──────────────────────────────────────────────
 
-  /** Send the user's message — the one entry, whatever the session is doing. */
+  /** Send the user's message — the one entry, whatever the session is doing.
+   *  `mode` is the composer's own: a message typed in Plan runs a Plan turn,
+   *  which is where `submit_plan` lives. */
   send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: Pick<SendOptions, 'tier' | 'id'> = {},
+    opts: Pick<SendOptions, 'tier' | 'id' | 'mode'> = {},
   ): Promise<SendLanding> {
     return this.chat.send(input, opts);
   }
@@ -2283,12 +2422,17 @@ export class LocalAgentSession implements BackendHost {
     );
 
     const candidateExternalNames = Object.keys(this.extraTools);
-    const candidateAgentActions = agentsActionsFor(this.agentsToolDeps(this.actorSession.workMode));
+    // The mode this turn REALLY runs in — the admitted one, held in Plan while
+    // a submitted plan still awaits the owner. Read once: the candidate tool
+    // list, the codemode providers and the profile below must all see the same
+    // answer, and the store is asked once per turn rather than four times.
+    const workMode = this.turnWorkMode(item.metadata);
+    const candidateAgentActions = agentsActionsFor(this.agentsToolDeps(workMode));
 
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
       activeRoleId: this.getActiveRoleId(),
-      workMode: this.actorSession.workMode,
+      workMode,
       availableTools: [
         ...candidateBuiltinNames,
         ...candidateExternalNames,
@@ -2299,13 +2443,18 @@ export class LocalAgentSession implements BackendHost {
         // role that declares a tool list, and the child silently loses the one
         // surface that can end its assignment.
         ...(this.reportGateOpen() ? [REPORT_TOOL] : []),
+        // `submit_plan` is Plan mode's one completion surface and lives outside
+        // BUILTIN_TOOLS, so it is named here for the same reason `report` is:
+        // without it the role intersection drops the only tool a Plan turn can
+        // finish through.
+        ...(this.planSubmissionOpen(workMode) ? [SUBMIT_PLAN_TOOL] : []),
         // `release` / `agent` / `llm` are reachable only inside the sandbox, so
         // no native tool id names them. Without them here the intersection
         // drops every one from a role that declares a tool list, and a narrowed
         // role silently loses its codemode lanes wholesale. Derived from the
         // providers actually wired, so a capability can never be offered whose
         // namespace is absent.
-        ...codemodeCapabilitiesFor(this.codemodeProviders(this.actorSession.workMode)),
+        ...codemodeCapabilitiesFor(this.codemodeProviders(workMode)),
       ],
       activeSkills: activeSkills?.active.map((skill) => skill.name) ?? [],
       // Most specific first: the tier named on THIS message, then the tier the
@@ -3882,6 +4031,41 @@ export class LocalAgentSession implements BackendHost {
     return this.reportDeps !== null && this.turnIsParentAssigned;
   }
 
+  /**
+   * Whether THIS turn carries `submit_plan`.
+   *
+   * Two conditions, like the report gate. Holding the review surface is a
+   * property of the agent — only a root's plan has an owner to decide it.
+   * Being in Plan is a property of the turn: the tool is Plan's one completion
+   * surface, so a build turn must not be able to open a review nobody asked
+   * for. The cloud backend reaches the same pair through
+   * `OrchestratorAgent.actorToolDeps` plus its Plan-mode tool surface.
+   */
+  private planSubmissionOpen(mode: WorkMode): boolean {
+    return mode === 'plan' && this.planReviewSurface();
+  }
+
+  /**
+   * The work mode one admitted turn runs in.
+   *
+   * The mode the message was typed under, EXCEPT that a build turn is held in
+   * Plan while a submitted plan still awaits the owner's decision: the agent
+   * asked for a verdict and must not start implementing before it has one.
+   * The handoff turn an approval queues says `plan_approved` on its own
+   * metadata and passes, which is what lets the approved work begin. The same
+   * rule, at the same point, as the cloud orchestrator's
+   * `workModeForMetadata`.
+   */
+  private turnWorkMode(metadata: ProgrammaticTurn['metadata']): WorkMode {
+    const requested = this.actorSession.workMode;
+
+    if (requested !== 'build' || !this.planReviewSurface()) return requested;
+
+    if (metadata?.kinuEvent === 'plan_approved') return requested;
+
+    return planReviewAwaitingDecision(this.planReviews.getActive(CHAT_SESSION_ID)) ? 'plan' : requested;
+  }
+
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
     const swarm = this.buildAgentsSwarmDeps();
     const base: AgentsToolDeps = { mode, swarm, budget: this.budget };
@@ -4432,6 +4616,12 @@ export class LocalAgentSession implements BackendHost {
     // subordinate carries `report` on the turns its parent drove and on no
     // others.
     if (this.reportGateOpen() && this.reportDeps) deps.report = this.reportDeps;
+
+    // Same structural gate, same rebuild cadence: Plan's completion surface is
+    // present on a root's Plan turn and on no other.
+    if (this.planSubmissionOpen(mode)) {
+      deps.submitPlan = { submit: (edits) => this.submitPlanEdits(edits) };
+    }
 
     return deps;
   }
