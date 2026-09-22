@@ -1,13 +1,4 @@
-// Mechanical turn steering (orchestrator/turn-steering.ts) — the harness
-// saying, in the turn, the one thing it can see about the turn that the model
-// cannot: it is repeating itself, it is stuck on one approach, or it is
-// spending without moving. Prose alone moved the model 0 times in 10 bench tasks.
-//
-// These are behaviour tests through the public seams: the orchestrator's turn
-// extension both backends register (the steer is delivered as a turn-local
-// signal through the one delivery seam, like every other async producer), and —
-// for the fidelity that matters most — a full runChat turn where the steer has
-// to actually reach the model's next request.
+// Mechanical turn steering (orchestrator/turn-steering.ts) through the turn extension and a full runChat turn.
 import { describe, expect, test } from 'bun:test';
 import { stepCountIs, tool, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -27,25 +18,19 @@ import { makeSqlExec } from './helpers';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 
-/** The session's first ask — a fresh multi-part request, the shape that must
- *  draw nothing at all. */
+/** A fresh multi-part first ask: must draw nothing. */
 const fresh = 'add caching to the api and update the docs';
 
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
-/** A FOLLOW-UP turn's opening context: an ask with this agent's own work behind
- *  it. The generic fixture for every trigger test below. */
+/** A follow-up turn's opening context, with this agent's own work behind it. */
 const followUp = (text: string): ModelMessage[] => [user('earlier'), assistant('handled'), user(text)];
 
-/** The turn's steering rows, and the last of them: the one reactive steer on
- *  every turn where one fired. */
 const rows = (orch: AgentOrchestrator) => orch.steering.snapshot();
 
 const lastSteer = (orch: AgentOrchestrator) => orch.steering.snapshot().at(-1) ?? null;
 
-/** The loop steers never name the delegation ladder: no `agents`, no swarm,
- *  no delegation. A steer that did would nudge toward delegation through prose
- *  rather than a trigger, which is exactly what no trigger fires for. */
+/** Loop steers never name delegation (`agents`, swarm): that would be a prose nudge, not a trigger. */
 function expectNoDelegationNudge(text: string): void {
   expect(text).not.toContain('agents');
   expect(text).not.toContain('swarm');
@@ -53,8 +38,7 @@ function expectNoDelegationNudge(text: string): void {
   expect(text).not.toContain('search');
 }
 
-/** Steering as production wires it: the orchestrator's turn extension on a
- *  backend that never queues, so a steer that fired is a steer the model saw. */
+/** On a backend that never queues, a steer that fired is one the model saw. */
 function newTurn(): AgentOrchestrator {
   const host: BackendHost = {
     broadcast: () => {},
@@ -64,8 +48,7 @@ function newTurn(): AgentOrchestrator {
   };
 
   const { rt, testSql, stores } = createTestRuntime();
-  // The orchestrator's inbox over the runtime's OWN database and actor: a log
-  // bound to a second database would drain an inbox no turn ever writes to.
+  // Same database and actor as the runtime, or the inbox is never written.
   const sql = makeSqlExec(testSql.db);
   initEventsHubTables(sql);
 
@@ -75,8 +58,6 @@ function newTurn(): AgentOrchestrator {
   });
 }
 
-/** The step the model would see: whatever the turn extension hands back (or the
- *  unchanged input when nothing was injected). */
 async function step(orch: AgentOrchestrator, stepNumber: number, messages: ModelMessage[]): Promise<ModelMessage[]> {
   const extension = orch.turnExtension;
 
@@ -85,8 +66,7 @@ async function step(orch: AgentOrchestrator, stepNumber: number, messages: Model
   return await extension.prepareStep({ stepNumber, messages }) ?? messages;
 }
 
-/** A tool call as the turn delivers it. An extension registered without the
- *  hook steers nothing, so its absence fails here rather than passing quietly. */
+/** An extension registered without the hook fails here rather than passing quietly. */
 async function toolCall(orch: AgentOrchestrator, ctx: ToolCallContext): Promise<void> {
   const extension = orch.turnExtension;
 
@@ -95,7 +75,6 @@ async function toolCall(orch: AgentOrchestrator, ctx: ToolCallContext): Promise<
   await extension.onToolCall(ctx);
 }
 
-/** That call's answer, delivered the same way. */
 async function toolResult(orch: AgentOrchestrator, ctx: ToolResultContext): Promise<void> {
   const extension = orch.turnExtension;
 
@@ -114,8 +93,7 @@ function injected(messages: readonly ModelMessage[]): string[] {
     .filter((text) => text.startsWith(TURN_STEERING_HEADER));
 }
 
-/** Distinct failures of one tool: a different call, answered differently, every
- *  time — so this exercises the failure streak and never the repeat detector. */
+/** Distinct failures of one tool: exercises the failure streak, never the repeat detector. */
 let attempt = 0;
 
 async function fail(orch: AgentOrchestrator, toolName: string, times = 1): Promise<void> {
@@ -127,7 +105,6 @@ async function fail(orch: AgentOrchestrator, toolName: string, times = 1): Promi
   }
 }
 
-/** The same call, answered the same way, `times` times. */
 async function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObject, times = 1): Promise<void> {
   for (let i = 0; i < times; i++) {
     await toolCall(orch, { toolName, args });
@@ -158,7 +135,6 @@ describe('repeated-failure trigger', () => {
     const base = followUp('build it');
     expect(await step(orch, 0, base)).toEqual(base);
     await fail(orch, 'shell', CONSECUTIVE_FAILURES_BEFORE_STEER - 1);
-    // Two failures is a correction, not a pattern — nothing yet.
     expect(injected(await step(orch, 1, base))).toEqual([]);
     expect(lastSteer(orch)).toBeNull();
 
@@ -182,8 +158,7 @@ describe('repeated-failure trigger', () => {
     const at1 = await step(orch, 1, [...base, user('a1')]);
     expect(at1.slice(0, 4).map((message) => message.content)).toEqual(['earlier', 'handled', 'q', 'a1']);
     expect(at1[4]?.content).toContain(TURN_STEERING_HEADER);
-    // Later steps rebuild from scratch: the nudge re-applies at its original
-    // position (cache-prefix stability) and is not re-issued.
+    // Later steps re-apply the nudge at its original position (cache-prefix stability).
     await fail(orch, 'shell', 5);
     const at2 = await step(orch, 2, [...base, user('a1'), user('a2')]);
     expect(injected(at2)).toHaveLength(1);
@@ -196,12 +171,9 @@ describe('repeated-failure trigger', () => {
     await fail(orch, 'shell', 2);
     await toolResult(orch, { toolName: 'shell', args: {}, result: 'ok', success: true });
     await fail(orch, 'shell', 2);
-    // Two since the success — and a different tool's failures are its own
-    // streak, not this one's.
     await fail(orch, 'web_fetch', 2);
     expect(injected(await step(orch, 1, [user('q')]))).toEqual([]);
-    // …while a success on ANOTHER tool leaves the failing tool's streak alone:
-    // interleaved reads must not launder a stuck approach.
+    // A success on another tool must not reset the failing tool's streak.
     await toolResult(orch, { toolName: 'web_fetch', args: {}, result: 'page', success: true });
     await fail(orch, 'shell');
     expect(injected(await step(orch, 2, [user('q')]))).toHaveLength(1);
@@ -213,7 +185,6 @@ describe('repeated-call trigger', () => {
   test('three identical calls answered identically are named as a loop', async () => {
     const orch = newTurn();
     await repeat(orch, 'shell', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER - 1);
-    // Two is a retry — the harness stays quiet.
     expect(injected(await step(orch, 1, [user('build it')]))).toEqual([]);
 
     await repeat(orch, 'shell', { command: 'make' });
@@ -244,9 +215,7 @@ describe('repeated-call trigger', () => {
   });
 
   test('two runs that differ only past a long shared preamble are not a repeat', async () => {
-    // A pytest banner, a cargo preamble: identical for thousands of characters,
-    // then the part that matters. Identity is the whole result, so the harness
-    // must not claim these taught the model nothing.
+    // Identical long prefixes (pytest banner, cargo preamble) with a differing tail.
     const orch = newTurn();
     const banner = 'platform linux -- pytest 8.2.0\n'.repeat(200);
 
@@ -305,7 +274,6 @@ describe('repeated-call trigger', () => {
     await step(orch, 1, [user('q')]);
     expect(lastSteer(orch)?.converted).toBe(false);
 
-    // Repeating it once more is not a conversion.
     await toolCall(orch, { toolName: 'shell', args: { command: 'make' } });
     expect(lastSteer(orch)?.converted).toBe(false);
 
@@ -323,8 +291,6 @@ describe('repeated-call trigger', () => {
   });
 });
 
-/** A turn whose every step reaches new ground, driven from `firstStep` through
- *  `lastStep`: no step is ever injected into and no steer is recorded. */
 async function expectNeverSteeredWhileMoving(firstStep: number, lastStep: number): Promise<void> {
   const orch = newTurn();
 
@@ -338,14 +304,10 @@ async function expectNeverSteeredWhileMoving(firstStep: number, lastStep: number
   expect(lastSteer(orch)).toBeNull();
 }
 
-// A stalled step is the SAME call answered DIFFERENTLY every time — a
-// `git status`, a `curl /health`, a `make` whose only change is a timestamp.
-// The identical-output detector cannot see any of those, which is exactly why
-// this trigger exists.
+// Stall: the same call answered differently each time, invisible to the repeat detector.
 describe('no-progress trigger', () => {
   test('a turn that keeps succeeding and getting nowhere is told so', async () => {
     const orch = newTurn();
-    // The first call is new ground; from then on the frontier never moves.
     await toolResult(orch, {
       toolName: 'shell', args: { command: 'git status' }, result: 'clean 0', success: true,
     });
@@ -353,8 +315,6 @@ describe('no-progress trigger', () => {
 
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
       steered = injected(await step(orch, s, [user('ship it')]));
-      // Nothing new happens between boundaries: the same command, a different
-      // answer each time (so the repeat detector stays silent).
       await toolResult(orch, {
         toolName: 'shell', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
@@ -374,17 +334,12 @@ describe('no-progress trigger', () => {
   });
 
   test('a turn making new calls is never steered by this trigger', async () => {
-    // Information-gathering is work. A trigger that fired on a long read-only
-    // investigation would be spam, and the owner's rule is no spam. A fresh
-    // command every step keeps the frontier moving past the stall threshold.
+    // A long read-only investigation with fresh commands must not fire.
     await expectNeverSteeredWhileMoving(1, STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 5);
   });
 
   test('a file touched for the first time is progress, and resets the stall', async () => {
-    // The half no tool-call signature can show: an `eval` program is
-    // ONE call, and what it did is only visible in the shared file ledger.
-    // Two near-threshold stalls with one new file between them: twice the
-    // steps it takes to fire, and it does not, because the turn moved.
+    // An `eval` call's progress is only visible in the file ledger.
     const orch = newTurn();
     let boundary = 0;
     let answer = 0;
@@ -412,8 +367,7 @@ describe('no-progress trigger', () => {
   });
 
   test('an edit that landed is progress; one that missed is not', async () => {
-    // `sed -i` exits 0 whether or not it matched — a failed edit is a step
-    // that spent and moved nothing, and the ledger is what can tell.
+    // `sed -i` exits 0 even when it matched nothing; only the ledger shows no progress.
     const orch = newTurn();
     const missed = newTurn();
 
@@ -433,8 +387,6 @@ describe('no-progress trigger', () => {
       injected(await step(missed, s, [user('q')]));
     }
 
-    // Both turns re-issue an identical-looking call, so neither trips the
-    // repeat detector on args alone; only the landed edit is progress.
     expect(lastSteer(orch)).toBeNull();
     expect(lastSteer(missed)?.trigger).toBe('no_progress');
   });
@@ -448,8 +400,6 @@ describe('no-progress trigger', () => {
   });
 
   test('a long circling turn is steered for stalling, at the stall threshold', async () => {
-    // A turn that re-covers the same ground for dozens of steps is told it is
-    // spending and not moving — at the stall count, not after some length.
     const orch = newTurn();
     await toolResult(orch, {
       toolName: 'shell', args: { command: 'git status' }, result: 'clean', success: true,
@@ -482,11 +432,9 @@ describe('no-progress trigger', () => {
 
     expect(lastSteer(orch)).toMatchObject({ trigger: 'no_progress', converted: false });
 
-    // Re-covering the same ground is not a conversion…
     await toolCall(orch, { toolName: 'shell', args: { command: 'git status' } });
     expect(lastSteer(orch)?.converted).toBe(false);
 
-    // …reaching for something the turn has not done is.
     await toolCall(orch, { toolName: 'shell', args: { command: 'git log -1' } });
     expect(lastSteer(orch)?.converted).toBe(true);
   });
@@ -507,16 +455,12 @@ describe('no-progress trigger', () => {
   });
 });
 
-// There is no turn-start steering and no length steering: step 0 carries no
-// hint whatever the ask looks like, and a long turn that keeps moving draws
-// nothing. What follows pins that absence — a steer that reappeared here
-// would be the delegation nudge through prose rather than a trigger.
+// No turn-start or length steering: step 0 and long moving turns draw nothing.
 describe('no turn-start or length steering', () => {
   test('a fresh ask draws no steer at step 0', async () => {
     const orch = newTurn();
     expect(injected(await step(orch, 0, [user(fresh)]))).toEqual([]);
     expect(rows(orch)).toEqual([]);
-    // …and none arrives on the steps after it either, without loop evidence.
     expect(injected(await step(orch, 1, [user(fresh)]))).toEqual([]);
     expect(rows(orch)).toEqual([]);
   });
@@ -536,8 +480,6 @@ describe('no turn-start or length steering', () => {
   });
 
   test('a long turn that keeps moving is never steered for length', async () => {
-    // Twenty-five steps of new ground is not a length to steer for: a turn that
-    // keeps reaching new calls draws nothing at any step count.
     await expectNeverSteeredWhileMoving(0, STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 15);
   });
 
@@ -546,7 +488,6 @@ describe('no turn-start or length steering', () => {
     await fail(orch, 'shell', CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(injected(await step(orch, 1, [user('q')]))).toHaveLength(1);
 
-    // Still one line in the conversation however long the turn then runs.
     for (let s = 2; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 10; s++) {
       expect(injected(await step(orch, s, [user('q')]))).toHaveLength(1);
     }
@@ -582,10 +523,9 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
     expect(recovery.tool).toBe('shell');
     expect(recovery.failures).toBe(CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(recovery.failedArgs).toContain('npm test');
-    expect(recovery.failedArgs.length).toBeLessThanOrEqual(201); // echo cap + ellipsis
+    expect(recovery.failedArgs.length).toBeLessThanOrEqual(201);
     expect(recovery.succeededArgs).toContain('bun test');
     expect(recovery.failedSignature.startsWith('shell')).toBe(true);
-    // The streak is spent: the next clean call has nothing to recover from.
     expect(clean(steering, { command: 'bun lint' })).toBeNull();
   });
 
@@ -642,17 +582,13 @@ describe('conversion + turn boundaries', () => {
 
     orch.beginTurn(Date.now());
     expect(lastSteer(orch)).toBeNull();
-    // The previous turn's failures do not carry into this one.
     expect(injected(await step(orch, 0, followUp('next')))).toEqual([]);
     await fail(orch, 'shell', CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(injected(await step(orch, 1, followUp('next')))).toHaveLength(1);
   });
 });
 
-// ── the fidelity that matters: the model actually receives it ──────────────
-
-/** A model that calls `flaky` on every step until it is told otherwise, so a
- *  turn accumulates failures. Records the prompt of every request. */
+/** Calls `flaky` every step until told otherwise; records every request prompt. */
 interface PromptMessage {
   content: string | Array<{ text?: string }>;
 }
@@ -713,7 +649,6 @@ function grindingModel(prompts: PromptMessage[][]) {
   });
 }
 
-/** Every text part of a request's prompt, whatever shape the SDK put it in. */
 function promptText(messages: PromptMessage[]): string {
   return messages.map((message) => {
     const text = v.safeParse(v.string(), message.content);
@@ -748,14 +683,11 @@ describe('through a real runChat turn', () => {
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
-    // Requests 1-3 issue the three failing calls; only after the third does
-    // the harness speak, and it is in the request the model answers next.
     const seen = prompts.map((p) => promptText(p).includes(TURN_STEERING_HEADER));
     expect(seen.slice(0, 3)).toEqual([false, false, false]);
     expect(seen[3]).toBe(true);
     expect(promptText(prompts[3] ?? [])).toContain('`flaky` has failed 3 times in a row');
 
-    // …and it says it exactly once, however many more steps the turn runs.
     for (const prompt of prompts.slice(3)) {
       expect(promptText(prompt).split(TURN_STEERING_HEADER)).toHaveLength(2);
     }
@@ -766,9 +698,7 @@ describe('through a real runChat turn', () => {
   });
 
   test('a genuinely repeated command is detected through the real SDK — the call\'s args reach the result hook', async () => {
-    // The fidelity that the unit tests cannot give: `args` on the tool-result
-    // seam has to survive the provider round-trip, or the repeat detector is
-    // comparing empty objects and every tool looks like one repeating call.
+    // `args` must survive the provider round-trip, or the repeat detector compares empty objects.
     const prompts: PromptMessage[][] = [];
     const orch = newTurn();
 
@@ -825,9 +755,6 @@ describe('through a real runChat turn', () => {
   });
 
   test('a fresh ask carries no steering in the FIRST request the model ever sees', async () => {
-    // The inverse of the loop tests above: step 0 has no traffic to read, so
-    // the harness stays quiet — and with no turn-start hint left, nothing
-    // reaches the model until a loop detector has evidence.
     const prompts: PromptMessage[][] = [];
     const orch = newTurn();
 
@@ -856,8 +783,7 @@ describe('through a real runChat turn', () => {
   });
 });
 
-/** Calls `shell` on every step: with `command` fixed (a real repeat) or with a
- *  fresh command each step (different work). */
+/** Calls `shell` every step, with a fixed `command` (repeat) or a fresh one. */
 function repeatingModel(prompts: PromptMessage[][], command: string | null) {
   let stepsSeen = 0;
 

@@ -1,40 +1,5 @@
-// A background job's settle notice must reach the owner's conversation ONCE,
-// and must never read as something the owner said.
-//
-// Measured on the owner's live workspace `stone-ash-71f2` (getChatHistory over
-// POST /api/cli/workspaces/stone-ash-71f2/rpc): the newest page of 100 messages
-// held 58 rows with distinct ids and byte-identical content
-//
-//   {role:'user', content:"Background agents job bgjob-y2vlvl1wbli9gan6sh78a
-//    completed. Read the full result with agent.jobResult('bgjob-…'), …"}
-//
-// stamped 30–31s apart across 28 minutes with no assistant reply between any of
-// them, plus 9 more for a second job that had died with
-// `interrupted by Durable Object eviction before completion (gave up after 5
-// resume attempts)`.
-//
-// That second string is HISTORY as of 2026-09-04: the resume cap that wrote it
-// is deleted, so nothing produces it. Rows carrying it are still out there in
-// real workspaces, which is why this file goes on reading one.
-//
-// Two independent defects produced that:
-//
-//  (a) the notice is stored `role:'user'`, which it must be for the model to
-//      read it as its turn input — but every consumer that asks "what did the
-//      owner say" was answering with it. `forkCandidates` (cli/agent-client.ts,
-//      limit 10, `role === 'user'`) offered ten copies of one machine notice as
-//      the whole walk-back list, and `findForkPivot` resolves duplicates by
-//      occurrence-from-end, so picking one was a coin flip between 58 rows.
-//
-//  (b) `BackgroundJobRunner.recoverJob` re-wakes a job whose outcome is already
-//      persisted and writes nothing back, so every cold activation announced it
-//      again — with a fresh `crypto.randomUUID()` row id each time.
-//
-// Recovery is at-least-once BY DESIGN (recoverOrphans sweeps the registry on
-// every activation; the only thing left to record is that the agent was told,
-// and an activation that dies before recording it must still tell), so the fix
-// is a write that cannot duplicate rather than a flag a second activation
-// loses: the announcement's identity is the row's primary key.
+// A background job's settle notice reaches the owner's conversation once, and never reads as
+// the owner's words. Recovery is at-least-once, so the notice's identity is the row's primary key.
 import { describe, test, expect } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner';
@@ -53,22 +18,9 @@ import { createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
-/**
- * The durable chat store as a backend actually reaches it: the canonical
- * session store, and `BackendHost.enqueueTurn`'s entry derivation
- * (actor-agent.ts) on top of it.
- *
- * Both halves are copied deliberately rather than stubbed. `appendUser`
- * returns early for an id already present, which is the mechanism a stable id
- * relies on — a harness that appended unconditionally would report the fix
- * working when production would still duplicate, and a harness that deduped on
- * text would report it working for the wrong reason.
- */
+/** Copied, not stubbed: `appendUser` skipping a present id is the mechanism a stable id relies on. */
 function chatStore(db: Database) {
   const sql = makeSql(db);
-  // The entries are keyed on their OWNER, and the transcript read below is
-  // actor-scoped, so the copied derivation writes the same workspace main the
-  // registry and the read use. A row written without it is a row no read finds.
   const actor = openWorkspaceMainActor(sql);
 
   const history = new SessionHistory({
@@ -101,9 +53,7 @@ function chatStore(db: Database) {
   return { host, sql, history, transcript };
 }
 
-/** One activation over the given durable rows: fresh runner, fresh in-memory
- *  state, same database. This is the whole reason the defect could not be seen
- *  from inside one process. */
+/** Fresh runner and in-memory state over the same database. */
 function activation(db: Database) {
   const sql = makeSql(db);
   const { host } = chatStore(db);
@@ -113,8 +63,6 @@ function activation(db: Database) {
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
     inbox: new Inbox(host),
-    // The same actor the job store is bound to: the job and the notice it
-    // publishes are one actor's, over the one workspace database.
     eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
     scheduleDrain: () => {},
   });
@@ -122,16 +70,11 @@ function activation(db: Database) {
   return { runner, sql };
 }
 
-/** The job as the eviction left it: settled in the registry, and still carrying
- *  a `running` row for the sweep to find — the exact state recoverOrphans is
- *  written for, and the state that produced the 58 rows. */
+/** Settled in the registry yet still `running` for the sweep: the state recoverOrphans handles. */
 function evictedWorkspace() {
   const ws = createTestWorkspace();
   initBackgroundJobsTable(ws.execRaw);
   initEventsHubTables(makeSqlExec(ws.db));
-  // One actor for both halves: the registry write and the paged read are
-  // actor-scoped, and a fixture that issued two would file the rows under one
-  // and read them back under the other.
   const actor = createTestActors(ws.sql, ws.execRaw).main;
   const store = new BackgroundJobStore(ws.sql, actor);
   const now = Date.now();
@@ -140,14 +83,10 @@ function evictedWorkspace() {
     label: 'fork: design the generation algorithm',
   });
 
-  // The paged read is actor-scoped even where the pane is the authority, so the
-  // fixture hands back the actor its rows belong to.
   return { db: ws.db, store, now, actor };
 }
 
-/** The durable entries at rest, oldest first — read off the canonical store
- *  rather than through the paged view, so a duplicate cannot hide behind a
- *  projection. */
+/** Read off the canonical store, so a duplicate cannot hide behind the paged projection. */
 async function noticeRows(db: Database): Promise<{ id: string; content: string }[]> {
   const transcript = chatStore(db).transcript;
   const rows: { id: string; content: string }[] = [];
@@ -167,9 +106,6 @@ describe('a settled background job announces itself once, and not as the owner',
     const ws = evictedWorkspace();
     ws.store.settle(JOB, 0, JSON.stringify({ strategy: 'mcts', score: 0 }), ws.now + 1_000);
 
-    // Six activations, each a fresh isolate sweeping the registry. The count is
-    // arbitrary: no resume cap bounds it, so the only thing it has to be is
-    // more than one.
     for (let start = 0; start < 6; start++) {
       const { runner } = activation(ws.db);
       await runner.wake(JOB);
@@ -183,14 +119,9 @@ describe('a settled background job announces itself once, and not as the owner',
 
   test('driving orphan recovery twice over the same rows still leaves ONE row', async () => {
     const ws = evictedWorkspace();
-    // The outcome landed but the fiber died before the wake — the one case
-    // recoverJob's blind re-wake exists to cover, and the one it multiplied.
     ws.store.fail(
       JOB, 0,
-      // A give-up message from a run that exhausted its resume attempts. Kept
-      // verbatim because a durable registry outlives the code that filled it,
-      // and the announcement path must stay able to read what it finds — not
-      // only what today's runner would write.
+      // Legacy give-up text: stored rows outlive the code that wrote them.
       'interrupted by Durable Object eviction before completion (gave up after 5 resume attempts)',
       ws.now + 1_000,
     );
@@ -215,8 +146,6 @@ describe('a settled background job announces itself once, and not as the owner',
     expect(history).toHaveLength(1);
     expect(history[0].role).toBe('system');
 
-    // The stored row is untouched: the model still reads its turn input as the
-    // user message it has to be. Only the claim about authorship changed.
     const stored = makeSql(ws.db)<{ role: string }>`SELECT role FROM conversation_entries`;
 
     expect(stored[0].role).toBe('user');
@@ -227,15 +156,13 @@ describe('a settled background job announces itself once, and not as the owner',
     ws.store.settle(JOB, 0, '"done"', ws.now + 1_000);
     const { runner } = activation(ws.db);
     await runner.wake(JOB);
-    // Something the owner really did type, before the notice.
     const owner = chatStore(ws.db);
     await owner.history.record(CHAT_SESSION_ID, {
       id: 'typed-1', parentId: owner.transcript.newestId(), origin: 'input',
       message: { role: 'user', content: 'find me a domain' },
     });
 
-    // forkCandidates' predicate, which is `role === 'user'` and nothing else —
-    // the reason the owner's picker showed ten copies of one notice.
+    // forkCandidates' predicate (`role === 'user'`).
     const pivots = (await getChatHistoryPage(owner.transcript)).items
       .filter((row) => row.role === 'user')
       .map((row) => row.content);
@@ -252,9 +179,6 @@ describe('a settled background job announces itself once, and not as the owner',
       await inbox.send({ kind: 'background_job', text: `Background agents job ${JOB} completed.` });
     }
 
-    // Six rows, byte-identical content, distinct ids — the shape measured on
-    // stone-ash-71f2. Nothing about the seam prevents this; the producer naming
-    // its fact is what does.
     const rows = await noticeRows(ws.db);
     expect(rows).toHaveLength(6);
     expect(new Set(rows.map((row) => row.id)).size).toBe(6);
@@ -262,13 +186,7 @@ describe('a settled background job announces itself once, and not as the owner',
   });
 
   test('authorship covers every programmatic writer, keyed or not', async () => {
-    // The `fork_interrupted` wake (heads/reconcile.ts) is the second background
-    // writer, and it needs no announcement identity — `abandonRunning` settles
-    // its rows first, so a second activation delivers nothing. It was still
-    // stored as the owner's words, and one of them is sitting in the owner's
-    // live transcript at 16:52:06 on stone-ash-71f2, four rows above things they
-    // actually typed. Authorship is fixed at the seam, so an unkeyed turn is
-    // covered by the same rule the keyed one is.
+    // `fork_interrupted` (heads/reconcile.ts) is an unkeyed writer; authorship is fixed at the seam.
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
     await new Inbox(host).send({
@@ -285,9 +203,7 @@ describe('a settled background job announces itself once, and not as the owner',
     ws.store.settle(JOB, 0, '"done"', ws.now + 1_000);
     const sql = makeSql(ws.db);
 
-    // A host that pre-empts: the wake goes undelivered, so compensate publishes
-    // the breadcrumb whose trigger_id must be the same identity the queued turn
-    // would have used — one fact, one name, both rails.
+    // Pre-empting host: the breadcrumb's trigger_id must equal the queued turn's identity.
     const preempting: BackendHost = {
       broadcast: () => {},
       enqueueTurn: async () => ({ status: 'skipped' }),
@@ -309,18 +225,12 @@ describe('a settled background job announces itself once, and not as the owner',
     await runner.wake(JOB);
 
     const events = sql<{ payload: string }>`SELECT payload FROM agent_log WHERE kind = 'event'`;
-    // The EventLog's own `timer:<trigger_id>:<scheduled_fire_at>` dedupe key
-    // already made this rail exactly-once; the point here is that the id it
-    // dedupes on is the SAME string the conversation row is keyed by.
     expect(events).toHaveLength(1);
     expect(events[0].payload).toContain(backgroundJobWakeTrigger(JOB));
   });
 
   test('the entry carries the stamp at rest, and the paged read serves it', async () => {
-    // A notice must state its authorship in the entry itself, not lean on the
-    // id-prefix fallback that reads rows predating stamps; and the paged read
-    // must serve what the entry states. The id here carries NO prefix, so only
-    // the stamp can answer.
+    // The id has no prefix, so only the entry's authorship stamp can answer.
     const ws = evictedWorkspace();
     const store = chatStore(ws.db);
     const id = backgroundJobWakeTrigger(JOB);

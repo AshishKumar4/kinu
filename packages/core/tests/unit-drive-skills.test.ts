@@ -1,9 +1,4 @@
-/**
- * The Drive's skill rules over a tenant: what "mark as skill" and "add skill"
- * do to the tree discovery reads, and what they refuse. The failures that
- * matter are a skill silently replaced by a same-named one, a folder that is
- * not a skill linked as one, and a reserved folder renamed or deleted.
- */
+/** Drive skill rules: no silent same-name replacement, no non-skill links, reserved folders stay put. */
 import { describe, expect, test } from 'bun:test';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { DRIVE_SKILLS_DIR } from '../src/vfs/shared-drive';
@@ -86,7 +81,6 @@ describe('mark as skill', () => {
     await drive.writeFile(`${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, SKILL('deploy'));
     await drive.writeFile('/elsewhere/deploy/SKILL.md', SKILL('deploy'));
     await expect(markAsSkill(drive, '/elsewhere/deploy')).rejects.toThrow('already exists');
-    // The existing skill was not touched.
     expect(await drive.readFile(`${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, { encoding: 'utf8' })).toBe(SKILL('deploy'));
   });
 });

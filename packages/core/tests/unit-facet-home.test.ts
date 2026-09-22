@@ -1,12 +1,6 @@
 /**
- * Every facet kind gets a home in the one global view — not only swarm nodes.
- *
- * A subordinate, a head and a swarm node all work the same tree, so all three
- * need the same boundary: uid/gid/mode on real inodes, a private logical
- * `/tmp`, and the read window that keeps grading and merge-back possible.
- * Asserted here through the public seams — the layout table, the generic
- * provisioner and `WorkspaceBundle.asAgent` — on both planes, because a
- * boundary that holds for file tools and not for commands is not one.
+ * Every facet kind (subordinate, head, swarm node) gets a home: owned inodes, a private `/tmp`,
+ * and a readable window for grading and merge-back, on both the file and shell planes.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
@@ -74,8 +68,7 @@ describe('facet agent names share one namespace without colliding', () => {
   });
 
   test('the longest valid subordinate slug still provisions', () => {
-    // Subordinate slugs run to 64 characters by their own validation; the
-    // kind prefix must not push a valid slug out of the namespace.
+    // Subordinate slugs may be 64 chars; the kind prefix must not push them out of the namespace.
     expect(agentHome(subordinateAgentName('a'.repeat(64)))).toBe(`/home/sub-${'a'.repeat(64)}`);
     expect(agentTmpRoot(subordinateAgentName('a'.repeat(64)))).toBe(`/tmp/sub-${'a'.repeat(64)}`);
   });
@@ -99,22 +92,17 @@ describe('a subordinate and a head provision like a node', () => {
       const asSub = await bundle.asAgent(sub);
       const asHead = await bundle.asAgent(head);
 
-      // Own-home writes pass on the file plane.
       await asSub.vfs.writeFile(`${sub.home}/plan.md`, 'my plan\n');
       expect(await asSub.vfs.readFile(`${sub.home}/plan.md`, { encoding: 'utf8' })).toBe('my plan\n');
 
-      // Sibling visibility stays open: a 0o755 home is readable, which is
-      // what grading and merge-back need.
       expect(await asHead.vfs.readFile(`${sub.home}/plan.md`, { encoding: 'utf8' })).toBe('my plan\n');
 
-      // Sibling writes are refused on the file plane AND the shell.
       await expect(asHead.vfs.writeFile(`${sub.home}/plan.md`, 'stolen'))
         .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
       const refused = await asHead.shell.exec(`echo leak > ${sub.home}/leak.txt`);
       expect(refused.exitCode).not.toBe(0);
       expect(await asSub.vfs.exists(`${sub.home}/leak.txt`)).toBe(false);
 
-      // A hardcoded /tmp write is the writer's own on both planes.
       expect(await asSub.shell.exec('echo scratch > /tmp/pad.txt')).toMatchObject({ exitCode: 0 });
       expect(await asHead.vfs.stat('/tmp/pad.txt')).toBeNull();
       expect(await asSub.vfs.readFile('/tmp/pad.txt', { encoding: 'utf8' })).toBe('scratch\n');

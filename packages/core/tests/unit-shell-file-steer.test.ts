@@ -1,12 +1,5 @@
-// The `shell` interceptor for hand-rolled file edits.
-//
-// `file`'s spec prohibits changing files by pointing `shell` at sed -i, a
-// heredoc, or an inline script — those write whether or not the text they
-// aimed at was there. The corpus says what that prohibition is up against: a
-// 25% base rate of exactly those shapes across 789 `shell` calls, against prose
-// our own telemetry rates near 0% conversion. So the policy is also a
-// mechanism. It STEERS and never blocks: the contract these tests pin is that
-// the command runs, its output arrives whole, and a note names `file`.
+// The `shell` interceptor for hand-rolled file edits steers and never blocks: the command runs,
+// its output arrives whole, and a note names `file`.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/shell-file-steer';
@@ -50,7 +43,6 @@ describe('handRolledFileWrite', () => {
     expect(handRolledFileWrite("cat > config.json <<'EOF'\n{}\nEOF")).toBe('a heredoc written to a file');
     expect(handRolledFileWrite("cat <<EOF >> notes.md\nhello\nEOF")).toBe('a heredoc written to a file');
     expect(handRolledFileWrite("tee /etc/hosts <<EOF\n127.0.0.1 x\nEOF")).toBe('a heredoc written to a file');
-    // A heredoc feeding a program is a script, not a file edit.
     expect(handRolledFileWrite('python3 <<EOF\nprint(sum(range(10)))\nEOF')).toBeNull();
   });
 
@@ -61,7 +53,6 @@ describe('handRolledFileWrite', () => {
       .toBe('an inline interpreter script');
     expect(handRolledFileWrite(`node -e "require('fs').writeFileSync('f','x')"`))
       .toBe('an inline interpreter script');
-    // Computation is exactly what `shell` is for.
     expect(handRolledFileWrite(`python3 -c "print(1+1)"`)).toBeNull();
     expect(handRolledFileWrite(`node -e "console.log(process.version)"`)).toBeNull();
   });

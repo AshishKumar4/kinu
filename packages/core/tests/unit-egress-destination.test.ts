@@ -1,17 +1,11 @@
-// KINU-086 — the egress destination classifier: which destinations untrusted
-// code must never reach, as a pure judgment over a URL.
-//
-// The families and the public control that must still succeed, plus the
-// fail-closed cases. The CF adapter's own boundary (refusal → Worker
-// Response, redirect hops re-checked) is asserted in the cf-backend suite;
-// what belongs here is the JUDGMENT itself, which compiles in core.
+// KINU-086 egress destination classifier, a pure judgment over a URL. The CF adapter's
+// boundary is asserted in the cf-backend suite.
 import { describe, expect, test } from 'bun:test';
 import { refusedHostname } from '../src/safety/egress-destination';
 import { present } from '@kinu.run/test-utils';
 
 const judged = (url: string) => refusedHostname(new URL(url).hostname);
 
-/** Every URL in `denied` is refused as a destination; every URL in `public` is not. */
 function judgesFamily(denied: readonly string[], allowed: readonly string[]): void {
   for (const url of denied) expect(judged(url)).toMatchObject({ reason: 'denied' });
 
@@ -24,7 +18,6 @@ describe('IPv4 literals of every refused family', () => {
     expect(judged('http://172.16.0.1/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://172.31.255.255/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://192.168.1.1/')).toMatchObject({ reason: 'denied' });
-    // The 172/12 boundaries: 172.15 and 172.32 are public.
     expect(judged('http://172.15.0.1/')).toBeNull();
     expect(judged('http://172.32.0.1/')).toBeNull();
   });
@@ -32,8 +25,7 @@ describe('IPv4 literals of every refused family', () => {
   test('loopback — 127/8 in all canonical spellings', () => {
     expect(judged('http://127.0.0.1/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://127.8.8.8/')).toMatchObject({ reason: 'denied' });
-    // WHATWG canonicalization collapses the obfuscated spellings before the
-    // classifier sees them — measured under Bun, asserted at the boundary.
+    // WHATWG canonicalization collapses obfuscated spellings before the classifier sees them.
     expect(new URL('http://127.1/').hostname).toBe('127.0.0.1');
     expect(new URL('http://0x7f000001/').hostname).toBe('127.0.0.1');
     expect(new URL('http://2130706433/').hostname).toBe('127.0.0.1');
@@ -45,7 +37,6 @@ describe('IPv4 literals of every refused family', () => {
   });
 
   test('link-local 169.254/16 including the cloud-metadata address', () => {
-    // 169.255 is outside the /16 and public.
     judgesFamily(
       ['http://169.254.169.254/latest/meta-data/', 'http://169.254.0.1/'],
       ['http://169.255.0.1/'],
@@ -70,31 +61,24 @@ describe('IPv6 literal forms', () => {
     expect(judged('http://[::1]/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://[0:0:0:0:0:0:0:1]/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://[::]/')).toMatchObject({ reason: 'denied' });
-    // The 1 sits in the LAST group. A check reading the FIRST group instead
-    // matches `1::` and not loopback at all, which is what this pins.
+    // The 1 is in the last group; reading the first group would match `1::` instead.
     expect(judged('http://[1::]/')).toBeNull();
   });
 
   test('link-local fe80::/10 — full range, any interface', () => {
-    // fc00 is ULA, not link-local, and separately refused below.
     judgesFamily(['http://[fe80::a]/', 'http://[febf::1]/'], ['http://[fec0::1]/']);
   });
 
   test('unique-local fc00::/7 (the private-fabric ULA)', () => {
-    // fb00 is outside fc00::/7.
     judgesFamily(['http://[fc00::1]/', 'http://[fdff::1]/'], ['http://[fb00::1]/']);
   });
 
   test('IPv4-mapped and IPv4-compatible forms are classified by the embedded IPv4', () => {
-    // Canonicalized to compressed group form; the classifier re-expands.
     expect(new URL('http://[::ffff:169.254.169.254]/').hostname).toBe('[::ffff:a9fe:a9fe]');
     expect(judged('http://[::ffff:169.254.169.254]/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://[::ffff:127.0.0.1]/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://[::ffff:10.0.0.5]/')).toMatchObject({ reason: 'denied' });
-    // Compatible (deprecated) form: ::127.0.0.1 — the whole address is the
-    // embedded IPv4.
     expect(judged('http://[::127.0.0.1]/')).toMatchObject({ reason: 'denied' });
-    // A mapped public IPv4 is fine.
     expect(judged('http://[::ffff:8.8.8.8]/')).toBeNull();
   });
 });
@@ -105,13 +89,11 @@ describe('reserved names', () => {
     expect(judged('http://metadata.goog/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://metadata:80/')).toMatchObject({ reason: 'denied' });
     expect(judged('http://localhost:8080/admin')).toMatchObject({ reason: 'denied' });
-    // Trailing-dot spelling addresses the same host.
     expect(judged('http://localhost./')).toMatchObject({ reason: 'denied' });
   });
 
   test('the RFC 6761 .localhost domain resolves to loopback, so it is refused', () => {
     expect(judged('http://api.service.localhost/')).toMatchObject({ reason: 'denied' });
-    // Percent-escapes decode to the same name (measured: %6C → l).
     expect(new URL('http://foo.%6Co%63alhost/').hostname).toBe('foo.localhost');
     expect(judged('http://foo.%6Co%63alhost/')).toMatchObject({ reason: 'denied' });
   });
@@ -138,15 +120,12 @@ describe('the public control still succeeds', () => {
 
 describe('fail closed on anything not fully judged', () => {
   test('a bracketed literal that does not re-parse as IPv6 is refused, not passed', () => {
-    // Reachable only through a caller that bypasses the URL parser; the
-    // parser itself throws on garbage. The hostname string form is the seam.
+    // Only reachable by callers that bypass the URL parser.
     expect(refusedHostname('[not-an-ipv6]')).toMatchObject({ reason: 'denied' });
   });
 
   test('a short numeric form is refused rather than expanded', () => {
-    // A WHATWG URL never produces one (it expands `10.1` → `10.0.0.1`,
-    // measured), so one arriving means a non-parser caller — refused because
-    // permissive expansions disagree about what it addresses.
+    // WHATWG URLs never produce this form, and permissive expansions disagree on its target.
     expect(new URL('http://10.1/').hostname).toBe('10.0.0.1');
     expect(judged('http://10.1/')).toMatchObject({ reason: 'denied' });
     expect(refusedHostname('169.254')).toMatchObject({ reason: 'denied' });

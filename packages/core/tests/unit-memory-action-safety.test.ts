@@ -1,21 +1,6 @@
 /**
- * A malformed tool call must never destroy state.
- *
- * The defect this locks: the old `fact` tool dispatched with
- * `if (action === 'remember') … if (action === 'recall') …` and then simply
- * fell through to `forget`. Every action name the model got wrong — a typo, a
- * hallucinated verb, a stale name from an older prompt — deleted the key it
- * named. The most destructive branch was the one you reached by NOT matching
- * anything, which is the worst possible place to put it.
- *
- * The suite never caught it because the tests all called the three real
- * actions, and all three behaved correctly. The bug lived entirely in the
- * space of inputs nobody tested — which is where a fallthrough default always
- * lives.
- *
- * So these are degenerate-input tests by design: they assert that the unknown
- * action is REFUSED, and, separately, that the store was not touched. Refusing
- * and quietly deleting look identical if you only check the return value.
+ * An unknown `fact` action must be refused and leave the store untouched;
+ * a fallthrough default once deleted the named key.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -36,7 +21,6 @@ interface RecordingFacts extends FactsStore {
   remembered: string[];
 }
 
-/** An in-memory FactsStore that also records every mutation attempted on it. */
 function recordingFacts(): RecordingFacts {
   const rows = new Map<string, Fact>();
   const forgotten: string[] = [];
@@ -105,20 +89,18 @@ describe('the memory tool refuses actions it does not know', () => {
     facts.upsert('user.tz', 'UTC');
     const tool = memoryTool(facts);
 
-    // Names chosen to sit next to the real ones: near-misses are what a model
-    // actually emits, and a prefix/substring dispatch would let them through.
+    // Near-misses: a prefix/substring dispatch would let these through.
     for (const action of ['delete', 'remove', 'forget_all', 'rememberr', 'Forget', 'recall_all', '']) {
       await expect(tool.execute({ action, key: 'user.tz' })).rejects.toMatchObject({ code: 'bad_input' });
     }
 
     expect(facts.forgotten).toEqual([]);
-    expect(facts.remembered).toEqual(['user.tz']); // only the setup call
+    expect(facts.remembered).toEqual(['user.tz']);
     expect(facts.recall('user.tz')?.value).toBe('UTC');
   });
 
   test('the real actions still work — the guard is not just refusing everything', async () => {
-    // Without this, every assertion above would pass on a tool that does
-    // nothing at all.
+    // Guards against a tool that does nothing passing the assertions above.
     const facts = recordingFacts();
     const tool = memoryTool(facts);
 

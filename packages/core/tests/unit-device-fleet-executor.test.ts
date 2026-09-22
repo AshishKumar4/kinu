@@ -1,8 +1,5 @@
-// The device fleet at the executor surface: a command NAMES its machine, a
-// fleet of several refuses an unnamed call with the classified ask, and the
-// composite file plane serves one machine at `/pc` and several under
-// `/pc/<name>`. Every test here drives the real provider over a transport
-// double whose snapshot is the fleet the hub would serve.
+// Device fleet at the executor surface: commands name their machine, and the file plane serves
+// one machine at `/pc` and several under `/pc/<name>`.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -35,8 +32,7 @@ const SPARE: DeviceFleetEntry = {
 
 interface Sent { method: string; params: JsonValue[]; deviceId: string | undefined }
 
-/** A transport whose fleet is exactly `devices`, recording which machine each
- *  frame was addressed to — the observable the routing proof reads. */
+/** Records which machine each frame was addressed to. */
 function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport & { sent: Sent[]; setFleet(next: readonly DeviceFleetEntry[]): void } {
   const sent: Sent[] = [];
   let fleet = devices;
@@ -71,7 +67,6 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
   };
 }
 
-/** A frame's path argument names the rig's home. */
 function onRig(path: JsonValue | undefined): boolean {
   const named = v.parse(v.string(), path);
 
@@ -85,8 +80,6 @@ describe('the device fleet at the executor surface', () => {
 
     expect(await provider.tools.exec.execute('uname -a', { device: 'mrwhite@rig' })).toBe('ran on dev-rig');
     expect(await provider.tools.exec.execute('uname -a', { device: 'ashish@studio' })).toBe('ran on dev-studio');
-    // The codemode spelling — a bare name as the trailing argument — is the
-    // same call.
     expect(await provider.tools.exec.execute('uname -a', 'mrwhite@rig')).toBe('ran on dev-rig');
 
     expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-rig', 'dev-studio', 'dev-rig']);
@@ -99,14 +92,12 @@ describe('the device fleet at the executor surface', () => {
     const refusal = answeredRefusal(await provider.tools.exec.execute('make') ?? null);
 
     expect(refusal?.reason).toBe('bad_input');
-    // The ask names every LIVE machine with its platform, and nothing else:
-    // the offline spare is not an answer, and no id or internal leaks.
+    // The ask names only live machines with their platform; no ids leak.
     expect(refusal?.error).toBe(deviceFleetAsk([STUDIO, RIG, SPARE]));
     expect(refusal?.error).toContain('ashish@studio (darwin)');
     expect(refusal?.error).toContain('mrwhite@rig (linux)');
     expect(refusal?.error).not.toContain('spare box');
     expect(refusal?.error).not.toContain('dev-');
-    // Nothing crossed to any machine.
     expect(t.sent).toEqual([]);
   });
 
@@ -131,16 +122,11 @@ describe('the device fleet at the executor surface', () => {
     const t = fleetTransport([STUDIO, SPARE]);
     const provider = createDeviceTunnelExecutor(t);
 
-    // Sole live machine: unnamed calls are unambiguous and carry its id.
     expect(await provider.tools.exec.execute('pwd')).toBe('ran on dev-studio');
 
-    // The rig connects. A call that still names the studio lands on the
-    // studio — nothing about a second machine changes where the first is.
     t.setFleet([STUDIO, RIG, SPARE]);
     expect(await provider.tools.exec.execute('pwd', { device: 'ashish@studio' })).toBe('ran on dev-studio');
 
-    // The rig leaves again. The studio keeps working, and unnamed calls
-    // resolve to it again without a flap in between.
     t.setFleet([STUDIO, SPARE]);
     expect(await provider.tools.exec.execute('pwd')).toBe('ran on dev-studio');
 
@@ -162,8 +148,7 @@ describe('the device fleet at the executor surface', () => {
   });
 
   test('a snapshot that has not described the fleet gates nothing, exactly as before', async () => {
-    // No `devices` at all: the hub answers authoritatively for a one-machine
-    // account, and the executor must not invent a refusal from ignorance.
+    // No `devices`: the hub answers for a one-machine account; the executor must not refuse.
     const bare: DeviceTransport & { sent: Sent[] } = {
       sent: [],
       status: () => ({ connected: false, registered: true, toolchain: null }),
@@ -179,8 +164,7 @@ describe('the device fleet at the executor surface', () => {
 
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
     expect(bare.sent).toEqual([{ method: 'exec', params: ['echo hi'], deviceId: undefined }]);
-    // A NAME cannot be matched without the fleet, and that is said rather
-    // than sent to whichever machine the hub would pick.
+    // A name cannot be matched without the fleet, so it is refused rather than sent.
     const named = answeredRefusal(await provider.tools.exec.execute('echo hi', { device: 'ashish@studio' }) ?? null);
     expect(named?.reason).toBe('unavailable');
     expect(named?.error).toContain('not known here yet');
@@ -195,8 +179,6 @@ describe('the composite file plane', () => {
       consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', unconfined: async () => true,
     });
 
-    // The composite plane is the provider's own public `files`; the test
-    // reaches it the way the mount table does, never a private builder.
     const plane = provider.files;
 
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
@@ -204,8 +186,6 @@ describe('the composite file plane', () => {
     expect(await plane.readFile('/ashish@studio/home/dev/notes.md', { encoding: 'utf8' })).toBe('bytes of dev-studio');
     expect(await plane.readdir('/ashish@studio/home/dev')).toEqual(['entry-of-dev-studio']);
     expect(await plane.readdir('/')).toEqual(['ashish@studio']);
-    // The provider opens on the roster, and on ONE machine's own opening dir
-    // when asked by segment — never on a machine picked for the fleet.
     expect(await provider.homeDir()).toBe('/');
     expect(await provider.homeDir('ashish@studio')).toBe('/home/dev');
     await expect(provider.homeDir('toaster')).rejects.toMatchObject({ code: 'ENXIO' });
@@ -221,8 +201,6 @@ describe('the composite file plane', () => {
       consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     });
 
-    // The composite plane is the provider's own public `files`; the test
-    // reaches it the way the mount table does, never a private builder.
     const plane = provider.files;
 
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
@@ -232,7 +210,6 @@ describe('the composite file plane', () => {
     expect(await plane.readFile('/mrwhite@rig/etc/hosts', { encoding: 'utf8' })).toBe('bytes of dev-rig');
     expect(await plane.readdir('/ashish@studio/home')).toEqual(['entry-of-dev-studio']);
     expect(await provider.homeDir()).toBe('/');
-    // The segment is stripped: the machine sees its own native path.
     expect(t.sent.map((frame) => [frame.params[0], frame.deviceId])).toEqual([
       ['/etc/hosts', 'dev-rig'], ['/home', 'dev-studio'],
     ]);
@@ -245,8 +222,6 @@ describe('the composite file plane', () => {
       consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     });
 
-    // The composite plane is the provider's own public `files`; the test
-    // reaches it the way the mount table does, never a private builder.
     const plane = provider.files;
 
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
@@ -272,11 +247,7 @@ describe('the composite file plane', () => {
 });
 
 describe('where the file browser lands on a mount', () => {
-  /** The browser's own path: `getExecutorFiles` over the workspace plane
-   *  carrying the standard mount table, with the REAL device provider behind
-   *  `/pc` — the composition the product runs, never a stubbed plane. Each
-   *  machine consents to its own directory, so a landing that picked the
-   *  wrong machine reads as the wrong home. */
+  /** `getExecutorFiles` over the standard mount table with the real device provider at `/pc`. */
   function browser(fleet: readonly DeviceFleetEntry[], opts: { consented?: Record<string, string | null>; unconfined?: boolean } = {}) {
     const t = fleetTransport(fleet);
     const consented = opts.consented ?? { 'dev-studio': '/home/studio', 'dev-rig': '/home/rig' };
@@ -316,7 +287,6 @@ describe('where the file browser lands on a mount', () => {
     expect(rig.path).toBe('/pc/mrwhite@rig/home/rig');
     const studio = await list('/pc/ashish@studio/');
     expect(studio.path).toBe('/pc/ashish@studio/home/studio');
-    // Every frame the landing sent went to the machine the path named.
     expect(t.sent.map((frame) => frame.deviceId))
       .toEqual(t.sent.map((frame) => (onRig(frame.params[0]) ? 'dev-rig' : 'dev-studio')));
     expect(new Set(t.sent.map((frame) => frame.deviceId))).toEqual(new Set(['dev-rig', 'dev-studio']));
@@ -329,7 +299,6 @@ describe('where the file browser lands on a mount', () => {
   });
 
   test('the consent boundary still refuses what it refused before', async () => {
-    // Nothing widened: the landing moved, the boundary did not.
     const out = await list0([STUDIO], '/pc/ashish@studio/etc');
     expect(out.entries).toBeUndefined();
     expect(out.error).toContain("outside the consented device directory '/home/studio'");
@@ -350,9 +319,7 @@ describe('where the file browser lands on a mount', () => {
   });
 
   test('a machine that cannot say where it starts surfaces ITS refusal, and the asking is recorded', async () => {
-    // The two assertions on the error cannot tell "the fallback was taken"
-    // from "the resolution never ran": both read as the plane's own refusal.
-    // The diagnostic is the discriminator — it fires ONLY on the caught path.
+    // Only the diagnostic distinguishes the fallback path from resolution never running.
     const events: string[] = [];
 
     const restore = setDiagnosticsSink({
@@ -401,15 +368,12 @@ describe('where the file browser lands on a mount', () => {
 });
 
 describe('the shell tool names the machine', () => {
-  /** `shell` over the real router and the real provider — the path a model's
-   *  `shell { runtime: "<nickname>" }` actually takes. */
+  /** `shell` over the real router and provider, as `shell { runtime: "<nickname>" }` runs. */
   function runTool(fleet: readonly DeviceFleetEntry[]) {
     const t = fleetTransport(fleet);
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(createDeviceTunnelExecutor(t));
-    // The tool reads the fleet off the transport the backend hands it, so the
-    // harness hands the same transport through the runtime.
     const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: t }, history: storesFor(rt).history });
 
     return {
@@ -438,9 +402,7 @@ describe('the shell tool names the machine', () => {
   });
 
   test('a nickname before the fleet is described is refused by the executor, never as an unregistered runtime', async () => {
-    // The executor is the one resolver: the tool hands it every non-executor
-    // name, so a nickname the transport cannot match yet gets the executor's
-    // own refusal (the list is not known, retry), not the router's vocabulary.
+    // An unmatched nickname gets the executor's refusal, not the router's.
     const t = fleetTransport([]);
 
     const undescribed: DeviceTransport = {

@@ -1,11 +1,4 @@
-/**
- * Unit tests for workspace.* provider (InlineExecutor) — locks in the
- * post-regression-fix contract:
- *   - listTools() returns Array<{name, description, qualityScore}>, NOT a string
- *   - createTool() preserves original case, does not lowercase
- *   - createTool() upserts: re-creating an existing tool updates it, no duplicate row
- *   - invokeCrafted() looks up CraftStore at call-time — works same-turn as createTool()
- */
+/** workspace.* provider (InlineExecutor): listTools shape, case-preserving upserting createTool. */
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
@@ -121,11 +114,10 @@ describe('workspace provider (InlineExecutor)', () => {
     ));
 
     expect(result.ok).toBe(true);
-    expect(result.name).toBe('multiplyNumbers');        // original case preserved
-    expect(result.name).not.toBe('multiplynumbers');    // NOT lowercased
+    expect(result.name).toBe('multiplyNumbers');
+    expect(result.name).not.toBe('multiplynumbers');
     expect(result.action).toBe('created');
 
-    // Verify in CraftStore — exact name preserved
     const stored = rt.craftStore.get('multiplyNumbers');
 
     if (!stored) throw new Error('created tool was not stored');
@@ -134,7 +126,6 @@ describe('workspace provider (InlineExecutor)', () => {
 
   const SANITIZED_NAMES = [
     {
-      // Non-identifier chars become _; case preserved.
       name: 'createTool sanitizes invalid identifier chars without lowercasing',
       asked: 'Weird Name-With.Chars!', got: 'Weird_Name_With_Chars_',
     },
@@ -164,7 +155,6 @@ describe('workspace provider (InlineExecutor)', () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
 
-    // First create
     const first = v.parse(ToolActionSchema, await exec.tools.createTool.execute(
       'greet',
       'Say hi',
@@ -174,7 +164,6 @@ describe('workspace provider (InlineExecutor)', () => {
     expect(first.action).toBe('created');
     expect(rt.craftStore.list().length).toBe(1);
 
-    // Recreate with same name — should UPDATE, not add a row
     const second = v.parse(ToolActionSchema, await exec.tools.createTool.execute(
       'greet',
       'Say hi v2',
@@ -184,7 +173,6 @@ describe('workspace provider (InlineExecutor)', () => {
     expect(second.action).toBe('updated');
     expect(rt.craftStore.list().length).toBe(1);
 
-    // The stored code reflects the latest version
     const stored = rt.craftStore.get('greet');
 
     if (!stored) throw new Error('updated tool was not stored');
@@ -217,17 +205,10 @@ describe('workspace provider (InlineExecutor)', () => {
     }
   });
 
-  // v2.1(E): invokeCrafted removed. Same-turn `tools.<name>()` access is
-  // unsupported by design — the LLM must use two turns (createTool, then
-  // `tools.<name>`). Tests for createTool alone remain above.
+  // Same-turn `tools.<name>()` is unsupported by design: createTool, then `tools.<name>` next turn.
 });
 
-/**
- * workspace.writeFile over the REAL file plane. Both backends register this
- * executor with the workspace filesystem (cf/cli runtime.ts), and the tool creates
- * parent directories before writing — so every path shape the agent can name
- * has to survive that mkdir, not just the write.
- */
+/** workspace.writeFile over the real file plane: every path shape must survive the parent mkdir. */
 describe('workspace.writeFile over the workspace filesystem — what both backends register', () => {
   function buildPlane() {
     const { rt } = createTestRuntime();
@@ -238,9 +219,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
       dirs,
     };
 
-    // The workspace's own filesystem. The container is a separate environment
-    // reached through `sandbox.*` in its own paths, so it is deliberately NOT
-    // addressable from here.
+    // The container is reached only through `sandbox.*`, never from here.
     const vfs = rt.storage.vfs;
 
     const exec = createInlineExecutor({
@@ -263,9 +242,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const { vfs, exec } = buildPlane();
     await vfs.writeFile('victim.txt', 'keep me');
 
-    // The classification is part of the contract, not incidental: a caller
-    // branches on `reason` to tell "read it first" from a genuine IO failure,
-    // and the declared codemode type promises it.
+    // Callers branch on `reason`, and the declared codemode type promises it.
     expect(await exec.tools.writeFile.execute('victim.txt', 'destroyed blind')).toEqual({
       success: false,
       error: expect.stringContaining('has not been read here yet'),
@@ -281,30 +258,19 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {
     const { vfs, exec } = buildPlane();
     await exec.tools.writeFile.execute('src/main.ts', 'a');
-    // Relative paths resolve at the workspace root, which is where the shell
-    // starts too, so both spellings are the same bytes.
     expect(await vfs.readFile('src/main.ts', { encoding: 'utf8' })).toBe('a');
     expect(await vfs.readFile('/home/user/src/main.ts', { encoding: 'utf8' })).toBe('a');
   });
 
   test('another environment is not addressable from here at all', async () => {
     const { exec, sandbox } = buildPlane();
-    // The container is reached through `sandbox.*` in its own paths. Writing
-    // "/sandbox/app.ts" makes an ordinary file called sandbox/app.ts in this
-    // filesystem, and the container never hears about it — which is the point:
-    // there is no path that silently means two places.
+    // "/sandbox/app.ts" is an ordinary local file: no path silently means two places.
     expect(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top')).toContain('Written');
     expect(sandbox.files.size).toBe(0);
   });
 });
 
-/**
- * workspace.editFile — the codemode reach for the native `file` tool's
- * exact-match, read-before-write-enforced edit (createFileDispatcher, core
- * tools/file-tool.ts). Same gate, and — when a ledger thunk is shared — the
- * SAME state a native `file` call would see, so a read/write on one surface
- * is known to the other.
- */
+/** workspace.editFile shares the native `file` tool's read-before-write gate and, with a ledger thunk, its state. */
 describe('workspace.editFile — the same gate the native `file` tool enforces', () => {
   test('refuses to edit a file never read or written in this scope', async () => {
     const { rt } = createTestRuntime();
@@ -355,8 +321,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
       { old_text: 'foo', new_text: 'bar' },
     ]));
 
-    // The refusal names the anchor, its count and the file. That wording lets
-    // the model widen the anchor on retry.
+    // Naming anchor, count and file lets the model widen the anchor on retry.
     expect(result.error).toContain('appears 2 times in dup.md');
     expect(result.error).toContain('ambiguous');
     expect(await rt.storage.vfs.readFile('dup.md', { encoding: 'utf8' })).toBe('foo\nfoo\n');
@@ -374,9 +339,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
       ledger: () => ledger,
     });
 
-    // Read via workspace.*...
     await exec.tools.readFile.execute('shared.md');
-    // ...then edit via the NATIVE `file` tool, over the SAME shared ledger.
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
 
@@ -390,12 +353,10 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
   });
 
   test('without a shared ledger, workspace.* and the native `file` tool have INDEPENDENT read state', async () => {
-    // Documents the fallback: omitting `ledger` gives workspace.* its own
-    // private ledger, so a workspace.readFile does not satisfy the native
-    // `file` tool's read-before-edit gate.
+    // Without `ledger`, workspace.* has a private ledger that does not satisfy the native gate.
     const { rt } = createTestRuntime();
     await rt.storage.vfs.writeFile('unshared.md', 'content');
-    const exec = buildExec(rt); // no ledger thunk
+    const exec = buildExec(rt);
     await exec.tools.readFile.execute('unshared.md');
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
@@ -406,9 +367,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
 
 describe('declared resource limits', () => {
   test('the executor carries the limits of wherever its shell really runs, through listExecutors', () => {
-    // The cf workspace shell is emulated in a Worker and declares nothing; the
-    // CLI's is the host process, so it passes its own cgroup's limits — and
-    // the router must carry them to the prompt's execution-status block.
+    // The CLI shell passes its cgroup limits; the router must carry them to the prompt.
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(createInlineExecutor({
@@ -424,15 +383,7 @@ describe('declared resource limits', () => {
   });
 });
 
-/**
- * The recurring mental-model error, and what the error has to teach.
- *
- * Models read `workspace.*` as the filesystem of the machine the agent runs on
- * and call `workspace.readdir('/app')` against a container path. A bare
- * `ENOENT: … scandir '/app'` says nothing about why, so the model retries the
- * same shape; under a benchmark it also escaped as an unhandled rejection and
- * ended two whole trials.
- */
+/** `workspace.*` is not the container: a bare ENOENT for '/app' must teach why. */
 describe('workspace.* VFS errors carry the addressing correction', () => {
   function buildPlane() {
     const { rt } = createTestRuntime();
@@ -452,13 +403,11 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     try { await exec.tools.readdir.execute('/app'); } catch (err) { raised = err; }
 
     const err = v.parse(VfsMessageSchema, raised);
-    expect(err.code).toBe('ENOENT');                 // the closed taxonomy survives
-    expect(err.message).toContain('ENOENT');         // the original cause survives
+    expect(err.code).toBe('ENOENT');
+    expect(err.message).toContain('ENOENT');
     expect(err.message).toContain('own virtual filesystem');
     expect(err.message).toContain('NOT the machine or container');
     expect(err.message).toContain('`shell` tool');
-    // The roots come from the live filesystem, so the hint cannot drift from
-    // the runtime it is describing.
     expect(err.message).toContain('roots are: ');
   });
 

@@ -1,19 +1,6 @@
 /**
- * explainNativeToolReferenceError — the codemode sandbox's undefined-
- * identifier hint (D of the observability audit, 2026-08-12). A model that
- * reaches for a native top-level tool (`shell`, `agents`, ...) as if it were a
- * codemode global gets a bare V8 ReferenceError today; this rewrites exactly
- * that shape into an actionable correction and leaves every other error
- * (real bugs, thrown provider errors, timeouts) untouched.
- *
- * Where the capability actually IS is read from TOOL_REACH, never a hardcoded
- * `name === 'shell'` branch pointing at `workspace.exec` with every other native
- * tool told "it is not reachable from inside eval" — a sentence that
- * is FALSE for the six that own a codemode namespace and for `file`, whose
- * bytes are `workspace.readFile`/`writeFile`/`editFile`. The per-tool test
- * below is what makes that impossible: it reads the declaration and demands
- * the message name that tool's own namespace, so a message that hardcodes one
- * tool's answer fails for the other seven.
+ * explainNativeToolReferenceError: rewrites a ReferenceError for a native tool used as a codemode global into
+ * a correction naming that tool's own namespace from TOOL_REACH; every other error is untouched.
  */
 import { describe, test, expect } from 'bun:test';
 import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors';
@@ -83,8 +70,7 @@ describe('explainNativeToolReferenceError', () => {
   });
 
   test('shell and file point at workspace; the six namespace owners point at themselves', () => {
-    // Spelled out rather than only derived, so the derivation above cannot pass
-    // by agreeing with a declaration that is itself wrong.
+    // Spelled out so the derivation above cannot pass by agreeing with a wrong declaration.
     expect(explainNativeToolReferenceError('shell is not defined')).toContain('`workspace` namespace');
     expect(explainNativeToolReferenceError('file is not defined')).toContain('`workspace` namespace');
 
@@ -94,8 +80,6 @@ describe('explainNativeToolReferenceError', () => {
   });
 
   test('no native tool is told it is unreachable from inside eval', () => {
-    // A message that hardcodes one tool's answer says exactly that for seven of
-    // eight, and it is false for all seven.
     for (const name of BUILTIN_TOOLS) {
       expect(explainNativeToolReferenceError(`${name} is not defined`))
         .not.toContain('not reachable from inside eval');
@@ -118,7 +102,7 @@ describe('explainNativeToolReferenceError', () => {
       'Execution timed out',
       'TypeError: Cannot read properties of undefined (reading \'foo\')',
       'run failed with exit code 1',
-      'is not defined', // no identifier captured — malformed, must not match
+      'is not defined',  // no identifier captured: must not match
     ];
 
     for (const m of messages) expect(explainNativeToolReferenceError(m)).toBe(m);

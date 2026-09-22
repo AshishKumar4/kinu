@@ -1,10 +1,4 @@
-/**
- * The `file` tool: the exact-match editor, the honest read, and the
- * read-before-write gate.
- *
- * These assert the CONTRACT the model sees — what a call returns and what the
- * file looks like afterwards — not how the engine is factored.
- */
+/** The `file` tool: exact-match editor, honest read, read-before-write gate. Asserts the model-facing contract. */
 
 import { describe, expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -27,7 +21,6 @@ import type { RunEvent, RunEventBase } from '../src/events/types';
 import { KinuError } from '../src/obs/index';
 import { failedToolOutcome } from '../src/tools/outcome';
 
-// ── the engine ──────────────────────────────────────────────────────────────
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
@@ -39,9 +32,7 @@ describe('applyFileEdits', () => {
     expect(out.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
   });
 
-  /** Every refusal the engine issues: the anchor as the model typed it, the
-   *  file it was typed against, and what the message must say for the model to
-   *  recover without another read. */
+  /** Each refusal: the anchor as typed, the file, and what the message must say to recover without another read. */
   const REFUSALS: ReadonlyArray<{
     name: string;
     file: string;
@@ -82,9 +73,7 @@ describe('applyFileEdits', () => {
       reason: 'no_change', says: [],
     },
     {
-      // Non-overlapping counting reports "aa" in "aaa" once and quietly edits at
-      // index 0. Which of the two placements the caller meant is exactly the
-      // ambiguity the count exists to refuse.
+      // Overlapping matches count: "aa" in "aaa" is ambiguous and must be refused.
       name: 'an anchor that overlaps itself is ambiguous, not a silent first-match',
       file: 'aaa\n', edits: [{ oldText: 'aa', newText: 'b' }],
       reason: 'ambiguous', says: ['appears 2 times'],
@@ -105,8 +94,7 @@ describe('applyFileEdits', () => {
   }
 
   test('matches every edit against the file as read, not against a sibling result', () => {
-    // Naive sequential application would find "b" inside the first edit's own
-    // replacement; matching against the original cannot.
+    // Matching is against the original, so a replacement never feeds a later edit.
     const out = applyFileEdits(
       'one\ntwo\n',
       [{ oldText: 'one', newText: 'two' }, { oldText: 'two', newText: 'three' }],
@@ -119,8 +107,7 @@ describe('applyFileEdits', () => {
     expect(out.content).toBe('two\nthree\n');
   });
 
-  /** What a successful edit must leave alone: the file's own line endings, a
-   *  BOM the model never typed, and every line the anchor did not cover. */
+  /** A successful edit keeps line endings, an untyped BOM, and every line outside the anchor. */
   const REWRITES = [
     {
       name: 'preserves CRLF line endings and a BOM the model never typed',
@@ -133,8 +120,6 @@ describe('applyFileEdits', () => {
       content: 'z\r\n',
     },
     {
-      // Normalize-edit-and-rewrite would convert the LF line to CRLF — the same
-      // class of silent collateral damage as pi's fuzzy path.
       name: 'a mixed-ending file keeps every ending it had outside the replaced span',
       file: 'crlf\r\nlf\nTARGET\r\n', edits: [{ oldText: 'TARGET', newText: 'NEW' }],
       content: 'crlf\r\nlf\nNEW\r\n',
@@ -167,8 +152,7 @@ describe('applyFileEdits', () => {
   });
 
   test('does not normalize away characters it merely failed to match', () => {
-    // pi's fuzzy fallback would rewrite the WHOLE file out of normalized space,
-    // silently converting the unrelated smart quote on line 1. We refuse instead.
+    // A fuzzy fallback would rewrite the whole file out of normalized space; refuse instead.
     const original = 'const a = “quoted”;\nconst b = "plain";\n';
     const out = applyFileEdits(original, [{ oldText: 'const a = "quoted";', newText: 'x' }], '/f');
     expect(out.ok).toBe(false);
@@ -178,22 +162,16 @@ describe('applyFileEdits', () => {
   });
 });
 
-// ── the read ────────────────────────────────────────────────────────────────
 
 describe('the honest read, scanned rather than made resident', () => {
   const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1} ${'.'.repeat(12)}`);
   const file = lines.join('\n');
-  // Above the continuation marker's own length and below the whole file, so a
-  // read at this cap truncates for the reason the test is about. A cap under
-  // the marker cannot be honoured AND stay restorable; the marker wins there.
+  // Above the continuation marker's length and below the file, so the cap truncates. Under the marker, the marker wins.
   const CAP = 180;
 
   /**
-   * The read the tool actually performs: a plane that answers only ranges,
-   * scanned seven bytes at a time so every case crosses chunk boundaries, then
-   * rendered by the same formatter. The plane records unbounded reads, and
-   * every case asserts there were none — a window described by fetching the
-   * whole file is the bug this path exists to remove.
+   * The tool's real read: range-only plane scanned seven bytes at a time to cross chunk boundaries.
+   * Every case asserts no unbounded read happened.
    */
   const slice = async (content: string, opts: { offset?: number; limit?: number; maxChars: number; path?: string }) => {
     const path = opts.path ?? '/f';
@@ -201,7 +179,7 @@ describe('the honest read, scanned rather than made resident', () => {
     const scanned = await scanFileWindow(vfs, path, opts);
 
     expect(vfs.wholeReads).toEqual([]);
-    // The ledger's key is the whole file, never the window that was shown.
+    // The ledger keys on the whole file, never the shown window.
     expect(scanned.fingerprint).toBe(fnv1a64(content));
 
     return formatFileSlice(scanned.window, { path, limit: opts.limit, maxChars: opts.maxChars });
@@ -217,7 +195,7 @@ describe('the honest read, scanned rather than made resident', () => {
     expect(capped.omitted).toBeGreaterThan(0);
     expect(capped.output).toContain('of 10 in /f');
     expect(capped.output).toMatch(/action=read offset=\d+/);
-    // The marker is part of the budget, not an extra charged on top of it.
+    // The marker counts against the budget.
     expect(capped.output.length).toBeLessThanOrEqual(CAP);
   });
 
@@ -248,15 +226,11 @@ describe('the honest read, scanned rather than made resident', () => {
     expect(huge.output).toContain('is 500 chars and does not fit');
     expect(huge.output).toContain('workspace.readFile inside eval');
     expect(huge.output.length).toBeLessThanOrEqual(300);
-    // Shown head plus withheld chars is the whole line: nothing vanishes.
     expect(huge.omitted).toBe(500 - huge.output.indexOf('\n\n['));
   });
 
   test('a leading blank line does not make the next line look free', async () => {
-    // The joining newline costs a char for every line after the first, keyed
-    // on the line COUNT rather than the running total. Measured at this cap:
-    // the rule keeps 2 lines, dropping the join cost keeps 3, so the shown
-    // text is what tells the two apart.
+    // The joining newline costs a char per line after the first; at this cap the rule keeps 2 lines, not 3.
     const rows = ['', ...Array.from({ length: 29 }, (_, i) => String.fromCharCode(97 + (i % 26)).repeat(10))];
     const blank = await slice(rows.join('\n'), { maxChars: 121 });
 
@@ -276,8 +250,7 @@ describe('the honest read, scanned rather than made resident', () => {
   });
 
   test('a whole read that only just fits keeps the file byte-identical', async () => {
-    // The file's own trailing newline is part of the output, so it is part of
-    // what the cap measures.
+    // The file's trailing newline counts toward the cap.
     const content = 'ab\ncd\n';
     expect((await slice(content, { maxChars: content.length })).output).toBe(content);
     expect((await slice(content, { maxChars: content.length - 1 })).output).not.toBe(content);
@@ -351,24 +324,19 @@ describe('the honest read, scanned rather than made resident', () => {
     const original = 'z'.repeat(500);
     const giant = await slice(original, { maxChars: CAP });
 
-    // `last` behind `first` is the formatter saying it showed no line, and it
-    // is what stops the ledger recording a page the model never saw.
+    // `last` < `first` means no line shown; the ledger records no page.
     expect(giant.last).toBe(giant.first - 1);
 
     const ledger = new TurnFileLedger();
     ledger.observeRange('/f', { fingerprint: fnv1a64(original), first: giant.first, last: giant.last, total: giant.total });
-    // That very content is now known AND known to be unread: an overwrite
-    // discarding it is refused with nothing covered, rather than waved
-    // through because a read happened.
+    // That content is known and unread: an overwrite discarding it is refused.
     expect(ledger.seenState('/f', original, 'whole')).toEqual({ state: 'partial', coveredTo: 0, total: 1 });
   });
 
   test('the window reports the range the file has, not the part that was kept', async () => {
     const vfs = memoryVfs({ '/f': file }, { perRead: 7 });
     const { window } = await scanFileWindow(vfs, '/f', { maxChars: CAP });
-    // Counts describe the whole requested range; `lines` is only the head that
-    // fit. A formatter deriving the former from the latter would call a
-    // truncated read complete.
+    // Counts describe the whole requested range; `lines` is only the head that fit.
     expect(window).toMatchObject({ first: 1, total: 10, trailingNewline: false, requestedLines: 10 });
     const [firstLine = ''] = lines;
 
@@ -378,7 +346,6 @@ describe('the honest read, scanned rather than made resident', () => {
   });
 });
 
-// ── the ledger ──────────────────────────────────────────────────────────────
 
 describe('TurnFileLedger', () => {
   test('authorizes by content, so a different spelling of the same path is fine', () => {
@@ -413,7 +380,7 @@ describe('TurnFileLedger', () => {
     const content = 'a\nb\nc\nd\n';
     ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 1, last: 2, total: 4 });
     expect(ledger.seenState('/f', content, 'whole')).toMatchObject({ state: 'partial', coveredTo: 2 });
-    ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 4, last: 4, total: 4 });  // a gap — line 3 still unseen
+    ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 4, last: 4, total: 4 });  // a gap: line 3 still unseen
     expect(ledger.seenState('/f', content, 'whole')).toMatchObject({ state: 'partial', coveredTo: 2 });
     ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 3, last: 4, total: 4 });  // continues the prefix
     expect(ledger.seenState('/f', content, 'whole').state).toBe('seen');
@@ -436,31 +403,19 @@ describe('TurnFileLedger', () => {
   });
 });
 
-// ── the tool ────────────────────────────────────────────────────────────────
 
 /**
- * A plane with the ranged read every production file plane has — the workspace
- * filesystem, a bound container, a connected device and the routed tree over
- * them all — so these tests drive the read the tool actually performs rather
- * than a whole-file shortcut no deployment takes.
- *
- * `perRead` caps how many bytes one `readRange` answers. A few hundred bytes of
- * fixture then exercises the same multi-chunk path, with boundaries falling
- * inside multi-byte sequences and across lines, that a megabyte file would.
- *
- * `wholeReads` records every unbounded `readFile`. A bounded read makes none,
- * and that list is how these tests prove it rather than assert it.
+ * Plane with a ranged read like every production plane. `perRead` caps bytes per `readRange` so small
+ * fixtures cross chunk and multi-byte boundaries; `wholeReads` records every unbounded `readFile`.
  */
 function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; revisions?: boolean } = {}) {
   const files = new Map(Object.entries(seed));
-  // A file that exists already has a revision, so a later write bumps it to a
-  // genuinely new value rather than landing back on the default.
+  // Starts with a revision so a later write bumps it to a new value.
   const revisions = new Map(Object.keys(seed).map((path) => [path, 1]));
   const wholeReads: string[] = [];
   const encoder = new TextEncoder();
 
-  /** Replace a file the way a peer process would: new content, and — where the
-   *  plane has one at all — a new authoritative revision. */
+  /** Replace a file as a peer process would: new content and, where supported, a new revision. */
   const write = (path: string, content: string): void => {
     files.set(path, content);
     revisions.set(path, (revisions.get(path) ?? 0) + 1);
@@ -507,10 +462,7 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
   };
 }
 
-/** What the MODEL can emit, which is wider than the declared `FileToolInput`:
- *  the AI SDK does not validate a jsonSchema-declared tool input, so the tests
- *  that pin the dispatcher's refusals have to be able to send an action outside
- *  the enum and a path that is not a string. */
+/** What the model can emit: the AI SDK does not validate jsonSchema tool input, so actions and paths may be off-schema. */
 type FileToolTestInput = FileToolInput | { action: string; path: string | number };
 
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
@@ -599,7 +551,6 @@ describe('file tool', () => {
     await expect(refused).rejects.toThrow('read only lines 1-3 of 200');
     await expect(refused).rejects.toThrow('offset=4');
     expect(vfs.files.get('big.ts')).toBe(body);
-    // …but it does authorize an edit, whose anchor carries its own proof.
     expect(await call({
       action: 'edit', path: 'big.ts', edits: [{ old_text: 'line 1\nline 2\n', new_text: 'line 1\nLINE 2\n' }],
     })).toMatchObject({ ok: true });
@@ -634,7 +585,6 @@ describe('file tool', () => {
     const result = call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] });
     await expect(result).rejects.toThrow('needs both old_text and new_text');
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
-    // An explicit empty string still deletes.
     expect(await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha', new_text: '' }] }))
       .toMatchObject({ ok: true });
     expect(vfs.files.get('a.ts')).toBe('\n');
@@ -670,8 +620,7 @@ describe('file tool', () => {
   });
 
   test('a file that reads back as bytes is decoded, not thrown out of the tool', async () => {
-    // Only a plane with no ranged read is ever asked for a whole file, so that
-    // is where answering `{encoding:'utf8'}` with bytes has to be survivable.
+    // Only an unranged plane is asked for a whole file, so bytes-for-utf8 must be survivable there.
     const bytes = new TextEncoder().encode('hello\n');
     const { readRange: _ranged, ...unranged } = memoryVfs({ 'a.bin': 'hello\n' });
     const { call } = toolFor({ ...unranged, readFile: async () => bytes });
@@ -725,25 +674,15 @@ describe('file tool', () => {
 
 
   test('a path of the wrong type is refused, not fed to `path.trim()`', async () => {
-    // `args.path.trim()` was the first statement in the dispatcher, so a
-    // non-string path threw a TypeError out of the tool instead of answering.
+    // A non-string path must be answered, not thrown as a TypeError.
     const { call } = toolFor(memoryVfs());
     await expect(call({ action: 'read', path: 7 })).rejects.toMatchObject({ code: 'bad_input', message: 'file requires `path`.' });
   });
 });
 
 /**
- * The read is bounded in MEMORY, not in I/O.
- *
- * The file never becomes a resident string: it is scanned through the plane's
- * own ranged read and only the requested window is kept. Every byte is still
- * fetched and hashed, because the ledger keys on the fingerprint of the WHOLE
- * content — a read that authorized an edit from the window it happened to show
- * would be a cheaper gate, not the same one.
- *
- * These drive the public `file` tool over a plane with a real ranged read, and
- * the plane records every unbounded `readFile`, so "bounded" is demonstrated
- * rather than asserted.
+ * The read is bounded in memory, not I/O: only the requested window is kept, but every byte is hashed
+ * because the ledger keys on the whole-content fingerprint.
  */
 describe('a `file` read never makes the file resident', () => {
   const numbered = (count: number) => Array.from({ length: count }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
@@ -771,7 +710,6 @@ describe('a `file` read never makes the file resident', () => {
     expect(await call({ action: 'read', path: 'a.cs' })).toBe('using System;\nclass A {}\n');
     expect(await call({ action: 'edit', path: 'a.cs', edits: [{ old_text: 'using System;', new_text: 'using X;' }] }))
       .toMatchObject({ ok: true });
-    // The mark belongs to the file, so the edit must not have eaten it.
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
   });
 
@@ -815,8 +753,7 @@ describe('a `file` read never makes the file resident', () => {
 
     for (const offset of [1, 51, 101, 151]) await call({ action: 'read', path: 'big.ts', offset, limit: 50 });
 
-    // Four windows, no whole read. (The overwrite that follows does read the
-    // file — replacing content it has to compare against is not this path.)
+    // Four windows, no whole read (the later overwrite does read the file).
     expect(vfs.wholeReads).toEqual([]);
     expect(await call({ action: 'write', path: 'big.ts', content: 'replacement\n' }))
       .toMatchObject({ ok: true, action: 'replaced' });
@@ -862,7 +799,6 @@ describe('a `file` read never makes the file resident', () => {
 
     const { call } = toolFor(vfs);
     await expect(call({ action: 'read', path: 'f.txt' })).rejects.toThrow('changed while it was being read');
-    // Nothing partial was recorded: the turn has still never read this path.
     await expect(call({ action: 'edit', path: 'f.txt', edits: [{ old_text: 'second', new_text: 'third' }] }))
       .rejects.toThrow('has not been read here yet');
   });
@@ -896,12 +832,11 @@ describe('a `file` read never makes the file resident', () => {
     const refused = toolFor(big).call({ action: 'read', path: 'f.txt' });
     await expect(refused).rejects.toMatchObject({ code: 'denied' });
     await expect(refused).rejects.toThrow('no ranged read');
-    // The refusal is the point: it must not have read the file to reach it.
+    // The refusal must not read the file.
     expect(big.wholeReads).toEqual([]);
   });
 
-  /** An unranged plane whose stat is honest and whose read is not: the file
-   *  grew in between, which is the one case the admission cannot cover. */
+  /** Unranged plane with an honest stat and a dishonest read: the file grew in between. */
   const racingVfs = (grown: string) => {
     const { readRange: _none, ...unranged } = memoryVfs({ 'f.txt': 'small\n' });
 
@@ -915,8 +850,7 @@ describe('a `file` read never makes the file resident', () => {
   });
 
   test('the budget is bytes, so multibyte text over it is refused however few characters it is', async () => {
-    // Three bytes each: comfortably under the budget counted as characters,
-    // half as much again over it counted as the bytes the budget names.
+    // Three-byte chars: under the budget counted as chars, over it counted as bytes.
     const cjk = '\u4e2d'.repeat(Math.floor(RESIDENT_TEXT_MAX_BYTES / 2));
     expect(cjk.length).toBeLessThan(RESIDENT_TEXT_MAX_BYTES);
 
@@ -940,19 +874,9 @@ describe('a `file` read never makes the file resident', () => {
   });
 });
 
-/**
- * The attribution chain, end to end, on the row an investigation actually reads.
- *
- * The dispatcher has always COMPUTED why a call failed — nine distinct reasons —
- * and returned only prose, recording the reason in per-TURN counters and nowhere
- * per call. So a durable `tool_call_end` said `file` failed and a reader could
- * not tell a refusal it was right to make from a broken filesystem. This drives
- * the real dispatcher, through the real accumulator, to the real event, and
- * classifies that event: every link is production code.
- */
+/** Attribution: a real dispatcher call through the real accumulator must classify why `tool_call_end` failed. */
 describe('a `file` failure is attributable from the durable row alone', () => {
-  /** Run one call through the dispatcher and the accumulator, and classify the
-   *  `tool_call_end` the accumulator emitted. */
+  /** Run one call through dispatcher and accumulator; classify the emitted `tool_call_end`. */
   async function ledgerRow(
     call: (input: FileToolTestInput) => Promise<JsonValue>, input: FileToolTestInput,
   ) {
@@ -1026,8 +950,7 @@ describe('a `file` failure is attributable from the durable row alone', () => {
   });
 
   test('a path that does not exist lands as missing and is NOT a refusal', async () => {
-    // The line that keeps the split honest: the tool did not decide anything
-    // here, so this stays in the candidate-defect bucket.
+    // The tool decided nothing here, so this stays a candidate defect.
     const { call } = toolFor(memoryVfs());
     const { failure } = await ledgerRow(call, { action: 'read', path: 'gone.ts' });
     expect(failure).toMatchObject({ tool: 'file', action: 'read', reason: 'missing', refused: false });
@@ -1054,19 +977,11 @@ describe('a `file` failure is attributable from the durable row alone', () => {
 });
 
 /**
- * The producer side of the two bulk reads.
- *
- * The context cap (clamp.ts) is a cap on what reaches the MODEL, applied after
- * the whole answer exists. These pin the cap on what the workspace object
- * BUILDS: a directory the agent does not control, and a file the agent does not
- * control, must not become an allocation proportional to their size inside the
- * one object that holds the workspace's files, conversation and ledgers.
+ * Producer-side caps on the bulk reads: an uncontrolled directory or file must not become an allocation
+ * proportional to its size. The context cap (clamp.ts) only limits what reaches the model.
  */
 describe('a bulk read is bounded where it is produced', () => {
-  /** The `list` answer for a directory the case declares. When the listing is
-   *  bigger than the CONTEXT cap the clamp replaces it with a marker and spills
-   *  the whole thing, so the producer's own output is read back from the spill —
-   *  which is where a person reading the transcript would find it too. */
+  /** The `list` answer for a declared directory, read back from the spill when the context cap replaced it. */
   const listed = async (entries: readonly string[]): Promise<Record<string, JsonValue>> => {
     const vfs = { ...memoryVfs(), async readdir() { return [...entries]; } };
     const { call } = toolFor(vfs);
@@ -1089,9 +1004,7 @@ describe('a bulk read is bounded where it is produced', () => {
     const bigger = await listed(plainNames(9_000));
     const shown = v.parse(v.array(v.string()), big.entries);
 
-    // An absolute cap rather than a share of what was there: three times the
-    // directory answers with the same names and says so, because the size of a
-    // listing is not the agent's choice and not the tool's.
+    // An absolute entry cap: three times the directory returns the same names and says so.
     expect(shown.length).toBeLessThan(3_000);
     expect(v.parse(v.array(v.string()), bigger.entries)).toEqual(shown);
     expect(big.truncated).toEqual({ shown: shown.length, total: 3_000 });
@@ -1105,8 +1018,7 @@ describe('a bulk read is bounded where it is produced', () => {
 
     expect(shown.length).toBeLessThan(wide.length);
     expect(body.truncated).toEqual({ shown: shown.length, total: wide.length });
-    // The control: the same COUNT of ordinary names comes back whole, so the
-    // entry ceiling is not what cut the listing above.
+    // Control: the same count of ordinary names comes back whole.
     expect(await listed(plainNames(wide.length))).toEqual({ path: '/d', entries: plainNames(wide.length) });
   });
 
@@ -1119,15 +1031,13 @@ describe('a bulk read is bounded where it is produced', () => {
   test('search reads the head of a file, not the file', async () => {
     const line = `${'x'.repeat(200)}\n`;
     const hit = 'NEEDLE\n';
-    // A megabyte of file with the query in the first line and again past the
-    // ceiling: the second one is evidence the read stopped.
+    // Query in the first line and again past the ceiling; the second proves the read stopped.
     const head = hit + line.repeat(Math.ceil(RESIDENT_TEXT_MAX_BYTES / line.length) + 4_000);
     const vfs = memoryVfs({ 'big.log': head + hit });
     const { call } = toolFor(vfs);
     const body = v.parse(JsonObjectSchema, await call({ action: 'search', path: 'big.log', query: 'NEEDLE' }));
 
     expect(body.matches).toEqual([{ line: 1, text: 'NEEDLE' }]);
-    // The budget the search shares with every other bounded resident read.
     expect(body.truncated).toEqual({ shown: RESIDENT_TEXT_MAX_BYTES, total: (head + hit).length });
   });
 

@@ -1,26 +1,5 @@
-// Two invariants about long work, and the production failure that broke both at
-// once.
-//
-// The incident (owner screenshot, workspace my-ai-engineer-b3b8b792): a tee'd
-// training script dispatched through `shell` at `runtime: 'sandbox'` came back
-// `CommandError: … Command timeout after 60000ms`. Not a handle, not an answer —
-// a killed command. Two separate facts produced it:
-//
-//   1. The 60000 was OURS. `createSandboxExecutor` sent `timeout: 60_000` on
-//      every sandbox exec, from the day the SDK landed. The container echoed the
-//      number we gave it back in its own error text, which is why that string
-//      appears nowhere in this repository or in the SDK client.
-//   2. A detach window ABOVE a lane's ceiling can never fire. The interactive
-//      window is 30s and would have won; the one-shot window is 300s, and a turn
-//      driven by a background-job wake IS one-shot. So the first detach in a
-//      session guaranteed the next turn's long work died at 60s instead of
-//      detaching — the exact sequence the model described when it said the 30s
-//      window "only triggered for the smoke/unit tests".
-//
-// The invariant is therefore a RELATION, not a number: no execution lane may
-// carry a deadline of its own, because a lane deadline silently outranks
-// whichever detach window is in force. The foreground window stays what it
-// always was — a detach trigger, never a kill.
+// No execution lane may carry its own deadline: a lane deadline silently outranks whichever detach
+// window is in force. The foreground window is a detach trigger, never a kill.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -49,20 +28,13 @@ interface ExecCall {
 interface FakeContainer {
   handle: SandboxHandle;
   calls: ExecCall[];
-  /** Let the in-flight command exit. Nothing here is time-driven: the command
-   *  outlasts its deadline by never finishing until the test says so. */
+  /** Let the in-flight command exit; it outlasts its deadline by never finishing until called. */
   finish: () => void;
 }
 
 const DONE = 'epoch 40/40 done\n';
 
-/**
- * A container that behaves like the real one on the one axis that matters: it
- * enforces whatever deadline the caller sent, and kills the command with the
- * SDK's own message interpolating the number it was given. A command that is
- * still running when its deadline arrives is modelled as one that has not been
- * `finish()`ed — so "outlasts its deadline" is an ordering, not a duration.
- */
+/** A container that enforces the caller's deadline and kills with the SDK's own message; "outlasts" is an ordering, not a duration. */
 function fakeContainer(): FakeContainer {
   const calls: ExecCall[] = [];
   const exit = Promise.withResolvers<{ stdout: string; exitCode: number }>();
@@ -95,8 +67,7 @@ const TRAINING = 'python3 train.py --epochs 40 2>&1 | tee /workspace/train.log';
 
 interface ShellToolInput { command: string; runtime?: string }
 
-/** A `shell` tool shaped like the real one at `runtime: 'sandbox'`: it dispatches
- *  to the router's sandbox provider, which is where the incident ran. */
+/** A `shell` tool shaped like the real one at `runtime: 'sandbox'`, dispatching to the router's sandbox provider. */
 function runToolOverSandbox(provider: ExecutorProvider): ToolSet[string] {
   return tool({
     description: 'shell',
@@ -139,12 +110,9 @@ describe('the sandbox lane carries no deadline of its own', () => {
     const out = await provider.tools.exec.execute(TRAINING, {});
 
     expect(container.calls).toHaveLength(1);
-    // The regression in one assertion: any number here is a work-killer,
-    // because it outranks every detach window larger than it.
+    // Any deadline here outranks every larger detach window.
     expect(container.calls[0]?.opts?.timeout).toBeUndefined();
-    // The default cwd is a separate contract and must survive the removal.
     expect(container.calls[0]?.opts?.cwd).toBe('/workspace');
-    // And the command's own output comes back, not the container's kill notice.
     expect(out).toContain('epoch 40/40 done');
     expect(out).not.toContain('Command timeout');
   });
@@ -156,8 +124,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
     const provider = createSandboxExecutor(container.handle);
     const detached: Array<Promise<unknown>> = [];
 
-    // A zero window makes the race deterministic: the command has not finished,
-    // so the threshold is the only branch that can win. No guessed sleep.
+    // A zero window makes the race deterministic: the threshold is the only branch that can win.
     const runner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 },
       (_kind, promise) => {
@@ -169,22 +136,15 @@ describe("the incident replayed: a long tee'd training run through run → sandb
 
     const out = await wrapShellTool(provider, runner)({ command: TRAINING, runtime: 'sandbox' });
 
-    // The model is handed a handle and keeps working.
     expect(isBackgroundHandle(out)).toBe(true);
     expect(detached).toHaveLength(1);
 
-    // …and the work it was told is "still running, not cancelled" really is.
-    // A lane deadline would settle this as `Command timeout after 60000ms`.
     container.finish();
     expect(String(await detached[0])).toContain('epoch 40/40 done');
   });
 
   test('the one-shot window is reachable: no lane ceiling undercuts it', async () => {
-    // The self-reinforcing half of the incident. A turn woken by its own
-    // background job is one-shot, whose window is 300s. Against a 60s lane
-    // ceiling that window was unreachable and the work was killed; with no lane
-    // ceiling the work finishes inline, which is what the one-shot policy was
-    // measured to want.
+    // A turn woken by its own background job is one-shot; with no lane ceiling its work finishes inline.
     const container = fakeContainer();
     const provider = createSandboxExecutor(container.handle);
     let crossed = 0;
@@ -203,8 +163,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
 
     expect(crossed).toBe(0);
     expect(out).toContain('epoch 40/40 done');
-    // Pinned because the relation is the invariant: the larger window is the one
-    // a lane ceiling silently defeats first.
+    // The larger window is the one a lane ceiling defeats first.
     expect(BACKGROUND_POLICY['one-shot'].detachAfterMs)
       .toBeGreaterThan(BACKGROUND_POLICY.interactive.detachAfterMs);
   });
@@ -212,10 +171,7 @@ describe("the incident replayed: a long tee'd training run through run → sandb
 
 describe('every long-capable surface is declared backgroundable', () => {
   test('the shell and the code lane both ride the window, on every surface', () => {
-    // A confined surface (a swarm node, a head) holds only these two, and the
-    // actor's map is built FROM them — so the sandbox namespace reached through
-    // `eval` and the shell reached through `shell` cannot diverge. Read
-    // through the declared contract, which is what the wrapper indexes.
+    // A confined surface holds only these two and the actor's map is built from them, so `eval` and `shell` cannot diverge.
     const declared: Readonly<Record<string, BackgroundableTool>> = BACKGROUNDABLE_TOOLS;
     expect(declared.shell?.completion).toBe('result');
     expect(declared.eval?.completion).toBe('result');
@@ -226,17 +182,12 @@ describe('every long-capable surface is declared backgroundable', () => {
 
 describe('the settle wakes the agent — the whole chain, no doubles in the middle', () => {
   test("the training run detaches, settles, and enqueues the wake carrying its result", async () => {
-    // The same seams unit-background-job-runner.test.ts asserts on, driven from
-    // the real sandbox lane instead of a bare promise: the REAL runner, the REAL
-    // Inbox, the REAL durable store. Only the fiber and the platform
-    // host are doubles, because a DO is the one thing a unit cannot have.
+    // The real runner, Inbox and durable store over the real sandbox lane; only the fiber and platform host are doubles.
     const db = new Database(':memory:');
     initBackgroundJobsTable(makeExecRaw(db));
     const hubSql = makeSqlExec(db);
     initEventsHubTables(hubSql);
-    // ONE actor for the job store and the inbox: a runner detaches this actor's
-    // job and signals this actor's log, and two handles would signal an inbox
-    // nothing drains.
+    // One actor for job store and inbox: two handles would signal an inbox nothing drains.
     const actor = createTestActorsOver(db).main;
     const store = new BackgroundJobStore(makeSql(db), actor);
 
@@ -265,8 +216,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     const runner = new BackgroundJobRunner({
       store, fiber, inbox: new Inbox(host), eventLog: new EventLog(hubSql, actor),
       scheduleDrain: () => {}, logActivity: () => {},
-      // A zero window so the crossing is decided by the command not having
-      // finished, never by how long a test waited.
+      // A zero window: the crossing is decided by the command not having finished, not by waiting.
       policy: () => ({ ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 }),
     });
 
@@ -290,7 +240,6 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     const jobId = isBackgroundHandle(out) ? out.jobId : '';
     expect(store.get(jobId)?.status).toBe('running');
 
-    // The container finishes the training run long after the turn let go of it.
     container.finish();
     await Promise.all(bodies);
 

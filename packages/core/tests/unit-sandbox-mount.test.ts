@@ -1,29 +1,7 @@
 /**
- * The `/sandbox` mount end to end: the `file` tool and the codemode
- * `sandbox.*` namespace over ONE container file view — the executor's own
- * `files` mounted by `standardMounts`, the same wiring runtime.ts builds.
- *
- * Two defects measured on the deployed build (kinu.run at b4d2c6001,
- * trajectory public-failure-recovery, run-6k2kglxfvqag1l0hwg8o8,
- * 2026-09-14):
- *
- *   - `file write /sandbox/workspace/broken.mjs` on a file that did not exist
- *     answered `{success:false, reason:'io'}` — `FileNotFoundError: File not
- *     found: /workspace/broken.mjs`. The write asks the view whether anything
- *     is already there (file-tool.ts `write` reads first, and only an ENOENT
- *     miss is a create); the view passed the SDK's typed miss through
- *     untranslated, so a create was refused as an I/O failure.
- *   - `sandbox.listFiles('')` refused on the SDK's own `ValidationFailedError:
- *     Invalid path format for '': Path must be a non-empty string`. An absent
- *     path is the executor's working directory — the same thing `'.'` and the
- *     file tool's list of `/sandbox/workspace` produce.
- *
- * The container double is faithful to the SDK contract the view adapts —
- * measured on the real deployment by the run above: file operations THROW
- * typed errors (`FileNotFoundError` on a miss, `ValidationFailedError` on an
- * empty path) rather than returning exit codes, and a relative path resolves
- * against the container working directory `/workspace` (the run's
- * `sandbox.writeFile('broken.mjs', …)` landed there).
+ * The `/sandbox` mount end to end: `file` tool and codemode `sandbox.*` over one container view.
+ * The double follows the SDK: misses and empty paths throw typed errors, and relative paths
+ * resolve against `/workspace`.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -39,10 +17,7 @@ import type { VFS } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
-/** The error shape @cloudflare/sandbox raises and capnweb carries across the
- *  DO hop verbatim (own properties only): `name` is the SDK class,
- *  `errorResponse.code` the container's own code. The `code` getter does not
- *  survive serialization, so neither the double nor the view may rely on it. */
+/** SDK error as carried across the DO hop: own properties only; the `code` getter is lost. */
 function sdkError(name: string, code: string, message: string): Error {
 	const error = new Error(message);
 	error.name = name;
@@ -54,14 +29,11 @@ function sdkError(name: string, code: string, message: string): Error {
 const sdkNotFound = (path: string): Error =>
 	sdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${path}`);
 
-/** The container's filesystem, kept honest about the SDK's own rules. */
 class ContainerFs {
 	readonly files = new Map<string, Uint8Array>();
 	readonly dirs = new Set<string>(['/', WORKSPACE_BACKUP_DIR]);
 	readonly calls: string[] = [];
 
-	/** What the container does to a path before it looks at the disk: empty is
-	 *  refused outright, relative resolves against the working directory. */
 	resolve(path: string): string {
 		if (path === '') {
 			throw sdkError('ValidationFailedError', 'VALIDATION_FAILED',
@@ -162,9 +134,7 @@ function container(fs: ContainerFs): SandboxHandle {
 				return { exitCode: 0, stdout: fs.files.has(target) || fs.dirs.has(target) ? 'true' : 'false' };
 			}
 
-			// The container's ranged read, which the adapter spells as `dd`. A
-			// double that answered it with empty output would report every file
-			// as empty to a caller reading it in windows.
+			// The adapter's ranged read (`dd`); an empty answer would make windowed reads see empty files.
 			const window = /\bdd if='[^']*' bs=1 skip=(\d+) count=(\d+)/.exec(command);
 
 			if (window) {
@@ -190,8 +160,7 @@ function container(fs: ContainerFs): SandboxHandle {
 	return handle;
 }
 
-/** The smallest workspace plane: the mount table only ever asks the base for
- *  non-`/sandbox` paths, so an honest empty tree is enough. */
+/** The mount table only asks the base for non-`/sandbox` paths. */
 function basePlane(): VFS {
 	return {
 		readFile: async (path) => { throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' }); },
@@ -204,8 +173,6 @@ function basePlane(): VFS {
 	};
 }
 
-/** The deployed wiring: one executor's file view mounted at /sandbox over the
- *  workspace plane, with the `file` tool and the codemode tools beside it. */
 function rig(fs: ContainerFs) {
 	const executor = createSandboxExecutor(container(fs));
 
@@ -277,8 +244,6 @@ describe('the codemode sandbox namespace', () => {
 		}
 
 		expect(empty).toBe(dot);
-		// The SDK never sees the empty spelling: it is resolved to the working
-		// directory in core, so every listing call names a real path.
 		expect(fs.calls).toEqual([
 			`listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`, `listFiles:${WORKSPACE_BACKUP_DIR}`,
 		]);

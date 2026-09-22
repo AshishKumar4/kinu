@@ -1,15 +1,6 @@
 /**
- * Parameterized VFS conformance suite (SPEC §11.1).
- *
- * ONE contract, run against EVERY VFS implementation — the workspace filesystem
- * and each executor's own raw-handle file view. It locks:
- *   - the binary byte round-trip invariant (commit 2f57753): every one must
- *     return the exact bytes it was given, NUL / high bytes / a UTF-8 BOM and
- *     all, whether the transport is base64 or lossless-text;
- *   - the errno taxonomy (readFile of a missing path → ENOENT, closed union).
- *
- * The executor views are exercised over a shared in-memory environment that
- * stores real bytes, so the round-trip assertion is genuine, not stubbed.
+ * VFS conformance (SPEC §11.1) across the workspace filesystem and every executor file view:
+ * exact binary byte round-trip, and the errno taxonomy (missing path → ENOENT).
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -37,9 +28,7 @@ import {
 } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
 
-/** The byte corpus that must survive a write→read round trip on every mount:
- *  NUL, a UTF-8 BOM (the silent-3-byte-loss trap), high bytes and a lone 0x80
- *  that is invalid UTF-8 (forces the base64 transport). */
+/** NUL, a UTF-8 BOM, high bytes, and invalid-UTF-8 0x80 (forces the base64 transport). */
 const BINARY = new Uint8Array([0xef, 0xbb, 0xbf, 0x00, 0x01, 0x80, 0xff, 0xfe, 0x00, 0x42]);
 
 const ErrorCodeSchema = v.object({ code: v.optional(v.string()) });
@@ -55,8 +44,6 @@ async function rejectionCode<Result>(action: () => Promise<Result>): Promise<str
     return parsed.success ? parsed.output.code : undefined;
   }
 }
-
-// ── shared in-memory environment for the mount adapters ─────────────────────
 
 class MemFs {
   readonly files = new Map<string, Uint8Array>();
@@ -121,20 +108,14 @@ class MemFs {
   }
 }
 
-/** The shell-quoted PATH the adapters pass — always the LAST quoted token (a
- *  `stat -c '%s %Y %F' 'path'` also quotes its format string first). */
+/** The path is the last quoted token (`stat -c` quotes its format first). */
 const quoted = (cmd: string): string => {
   const all = [...cmd.matchAll(/'([^']*)'/g)];
 
   return all.length ? all[all.length - 1][1] : '';
 };
 
-/** The error the SDK raises where this double used to return an exit code —
- *  the shape capnweb carries across the DO hop: `name` is the SDK class,
- *  `errorResponse.code` the container's own code (measured on the deployed
- *  build 2026-09-14 — the FileNotFoundError a create's existence probe met).
- *  The `code` getter does NOT survive serialization, so the double carries
- *  the code only where the wire leaves it. */
+/** The SDK error shape across the capnweb hop: `code` lives only in `errorResponse.code`. */
 function sandboxSdkError(name: string, code: string, message: string): Error {
 	const error = new Error(message);
 	error.name = name;
@@ -249,8 +230,6 @@ function nimbusHandle(fs: MemFs): NimbusSandboxHandle {
   return handle;
 }
 
-/** `calls` records every method that actually reached the device, so a test can
- *  assert a denial happened locally rather than at the far end. */
 function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
   const transport: DeviceTransport = {
     async rpc(method, params): Promise<JsonValue | undefined> {
@@ -337,15 +316,12 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
   return transport;
 }
 
-// ── the parameterized contract ──────────────────────────────────────────────
-
 interface Case {
   name: string;
   make: () => VFS;
   /** Compose a path this implementation accepts (env-native root varies). */
   path: (sub: string) => string;
-  /** How a missing path stats: the core-VFS impls normalise to null; bare
-   *  Node semantics would throw ENOENT; the core contract says null. */
+  /** How a missing path stats: core-VFS impls return null. */
   statMissing: 'null' | 'enoent';
 }
 
@@ -406,9 +382,7 @@ for (const c of cases) {
     test('stat of a missing name under a live directory signals absence per the impl contract', async () => {
       const vfs = c.make();
 
-      // `null` is the answer for "the parent has no such entry": the parent has
-      // to exist for that answer to mean anything, and the sandbox view's stat
-      // IS a listing of the parent — a missing parent is ENOENT, not absence.
+      // The sandbox stat lists the parent, so a missing parent is ENOENT, not null.
       await vfs.mkdir(c.path('ghost').replace(/\/ghost$/, ''), { recursive: true });
 
       if (c.statMissing === 'null') {
@@ -516,12 +490,8 @@ describe('the global workspace namespace', () => {
   });
 });
 
-// ── the device consent scope ────────────────────────────────────────────────
-
-// The path-scope layer over the hub's action consent: the only thing between an
-// agent granted one directory and the rest of the user's machine. Asserted
-// directly because the shared contract above runs the device view at the
-// full-filesystem tier, where the guard is deliberately inert.
+// Path scope over the hub's action consent, asserted directly: the shared contract runs
+// the device view at the full-filesystem tier, where the guard is inert.
 describe('device file view — the consented subtree is a boundary', () => {
   function scoped(root: string) {
     const calls: string[] = [];
@@ -536,16 +506,13 @@ describe('device file view — the consented subtree is a boundary', () => {
     await expect(vfs.readFile('/etc/passwd')).rejects.toThrow(
       /outside the consented device directory '\/home\/me\/proj'[\s\S]*Ask the owner to consent that directory/,
     );
-    // A sibling whose name merely BEGINS with the consented one is outside it.
     expect(await rejectionCode(() => vfs.readFile('/home/me/projects/x'))).toBe('EACCES');
-    // Every op is guarded, not just reads.
     expect(await rejectionCode(() => vfs.writeFile('/etc/cron.d/evil', 'x'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.readdir('/etc'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.stat('/etc/passwd'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.exists('/etc/passwd'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.unlink('/etc/passwd'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.mkdir('/opt/x'))).toBe('EACCES');
-    // The denial happened locally — nothing was ever sent to the device.
     expect(calls).toEqual([]);
   });
 
