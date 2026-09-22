@@ -9,10 +9,12 @@
   "$kinuComment": "Rules authored here, not vendored: they encode Kinu policy and have no upstream counterpart. Named explicitly rather than inferred from `kinuOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `kinuRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in kinuRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as kinuOnly because every file in this directory must be declared.",
   "kinuRules": [
     "no-ambient-git-in-tests",
-    "no-elapsed-work-deadline",
     "no-copy-rpc-stub",
     "no-ddl-in-catch",
+    "no-elapsed-work-deadline",
     "no-empty-catch",
+    "no-manufactured-sql-column",
+    "no-near-duplicate-functions",
     "no-sentinel-catch",
     "no-unaccounted-catch",
     "no-untyped-console",
@@ -49,6 +51,10 @@
     ],
     "no-untyped-console.gate.test.ts": [
       "no-untyped-console"
+    ],
+    "no-design-smells.gate.test.ts": [
+      "no-near-duplicate-functions",
+      "no-manufactured-sql-column"
     ]
   },
   "vendored": {
@@ -63,7 +69,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "d3805b5675f4633a1dba81866f66c6a8b05bfdadb62d1942c993485e2c1d1707",
+      "local": "f1bbf13178fd9b12b510569068329f56dbd46122cdd0f0b289d5cfd94cf733b6",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -347,6 +353,21 @@
     },
     "vendor/eslint-stylistic/padding-line-options.d.ts": {
       "upstream": "ff3d52f2b1c103bc429e030976641715caec676af4b8a0be802c0009874a0d58"
+    },
+    "rules/no-manufactured-sql-column.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-manufactured-sql-column.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-near-duplicate-functions.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-near-duplicate-functions.test.ts": {
+      "kinuOnly": true
+    },
+    "no-design-smells.gate.test.ts": {
+      "kinuOnly": true
     }
   },
   "$notVendored": "Upstream files deliberately outside the vendored set, so their absence is policy rather than drift. (1) `src/effect/` (five opt-in Effect rules and shared/tagged-values.ts): Kinu imports `effect` in no file, so every one of those rules would register and fire on nothing; a rule that measures an empty set proves nothing and would inflate the rule count the ladder reports. Vendor them the day an `effect` import lands. (2) `src/rules/no-array-filter-map.ts` (+ suite): rejected on measurement, not taste. It fired 152 times on this tree (2026-09-10, oxlint 1.78.0), and both replacements its message prescribes are slower on both engines this tree runs on. Measured with a throwaway microbenchmark over {id, active} rows, half kept, n=8/64/1024/65536: `.values().filter().map().toArray()` ran 6.7x/7.7x/8.7x/2.0x the cost of `.filter().map()` on Node 22 (V8, the workerd engine) and 9.5x/6.5x/6.1x/4.4x on Bun 1.4 (JSC); `flatMap(x => keep ? [x] : [])` ran 3.4x/4.4x/4.9x/1.2x on V8 and 2.0x/3.4x/3.8x/3.1x on JSC. The iterator form also does not typecheck under this tree's ES2022 libs. Only a hand-written push loop is faster (0.5x-0.8x), which the rule does not propose and which would trade 152 declarative sites, nearly all over fixture, config and JSX lists of a few dozen elements, for loops. Re-measure before adopting. (3) `src/rules/require-readable-spacing-cli.test.ts`: spawns `pnpm exec oxlint`, and this tree has no pnpm; the rule is proven through the real oxlint binary here by live-tree.gate.test.ts over every governed file and its fixes by rules/require-readable-spacing.test.ts. `src/shared/lexical-type-parameters.ts` IS still vendored: upstream keeps it beneath shared/type-alias-resolution.ts."

@@ -8,7 +8,9 @@ import { noCopyRpcStubRule } from "./rules/no-copy-rpc-stub.ts";
 import { noDdlInCatchRule } from "./rules/no-ddl-in-catch.ts";
 import { noEmptyCatchRule } from "./rules/no-empty-catch.ts";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.ts";
+import { noManufacturedSqlColumnRule } from "./rules/no-manufactured-sql-column.ts";
 import { noModuleMockingRule } from "./rules/no-module-mocking.ts";
+import { noNearDuplicateFunctionsRule } from "./rules/no-near-duplicate-functions.ts";
 import { noObjectParametersRule } from "./rules/no-object-parameters.ts";
 import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
 import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
@@ -33,8 +35,9 @@ import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety
 /**
  * Generic Oxlint rules that reject low-evidence and low-signal implementation patterns, plus the
  * Kinu-local rules (see upstream.json's `kinuRules`): the no-swallow family,
- * no-wait-until-in-durable-object, no-copy-rpc-stub, no-untyped-console, and
- * require-runtime-import-extension.
+ * no-wait-until-in-durable-object, no-copy-rpc-stub, no-untyped-console,
+ * require-runtime-import-extension, and the two design-smell rules
+ * no-near-duplicate-functions and no-manufactured-sql-column.
  */
 const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
@@ -57,6 +60,8 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-unaccounted-catch": noUnaccountedCatchRule,
 		"no-unsafe-dictionary-type": noUnsafeDictionaryTypeRule,
 		"no-shape-in-symbol-names": noForbiddenTermInSymbolNamesRule,
+		"no-manufactured-sql-column": noManufacturedSqlColumnRule,
+		"no-near-duplicate-functions": noNearDuplicateFunctionsRule,
 		"no-unknown-parameters": noUnknownParametersRule,
 		"no-untyped-console": noUntypedConsoleRule,
 		"no-unknown-returns": noUnknownReturnsRule,

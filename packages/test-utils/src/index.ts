@@ -24,6 +24,8 @@ export * from './ambient-env';
 
 export * from './answer-oracle';
 
+export * from './present';
+
 export * from './eval-identity';
 
 export * from './live-model';
