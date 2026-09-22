@@ -48,6 +48,14 @@ function forkStore(): ForkStore {
   return { ...store, actor: createTestActors(store.sql, store.execRaw).main };
 }
 
+/** A branch's status: the winner is terminal, its siblings are pruned, and a
+ *  search with no winner leaves every branch open. */
+function branchStatus(terminal: boolean, winner: number | null): string {
+  if (terminal) return 'terminal';
+
+  return winner === null ? 'open' : 'pruned';
+}
+
 /** A search the way runMCTS writes one: a root, `branches` children, and — when
  *  `winner` is given — that child marked terminal with the rest pruned, plus
  *  the durable take row convergence writes beside it.
@@ -73,7 +81,7 @@ function seedSearch(store: ForkStore, opts: {
     void sql`INSERT INTO search_nodes
       (actor_id, id, parent_id, root_id, task, depth, status, value, visits, created_at)
       VALUES (${actorId}, ${id}, ${root}, ${root}, ${'task ' + root}, ${1},
-              ${terminal ? 'terminal' : winner === null ? 'open' : 'pruned'},
+              ${branchStatus(terminal, winner)},
               ${terminal ? (opts.value ?? 0.8) : 0.2}, ${1}, ${1_001 + i})`;
   }
 
@@ -296,7 +304,10 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 /** A run-event store plus the actor its rows belong to. `run_events` is
  *  actor-scoped, so a fixture that writes rows and a scorer that reads them
  *  have to agree on one identity — this is where that identity is minted. */
-function eventStore(): TestSql & { actor: ActorHandle } {
+/** A run-event store bound to one actor. */
+type EventStore = TestSql & { actor: ActorHandle };
+
+function eventStore(): EventStore {
   const store = createTestSql();
   initRunEventTables(store.execRaw);
 
@@ -317,7 +328,7 @@ let eventIndex = 0;
  * and not with the real writer certifies nothing.
  */
 function emit(
-  sql: SqlExecutor, actor: ActorHandle, runId: string, type: string, payload: JsonObject,
+  store: EventStore, runId: string, type: string, payload: JsonObject,
 ): void {
   eventIndex += 1;
 
@@ -325,8 +336,8 @@ function emit(
     ...payload, type, runId, eventIndex, timestamp: new Date().toISOString(),
   };
 
-  void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
-    VALUES (${actor.actorId}, ${runId}, ${eventIndex}, ${type},
+  void store.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
+    VALUES (${store.actor.actorId}, ${runId}, ${eventIndex}, ${type},
             ${JSON.stringify(event)}, ${event.timestamp})`;
 }
 
@@ -360,7 +371,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
   test('a rate is never reported above 1, so paired statistics stay well-formed', () => {
     const store = eventStore();
     // followUps deliberately exceeds referenced: one spill address cited twice.
-    emit(store.sql, store.actor, 'run-a', 'context_budget', {
+    emit(store, 'run-a', 'context_budget', {
       admittedChars: 10, omittedChars: 900, trips: { run: 1 },
       referenced: 1, followUps: 3,
     });
@@ -374,8 +385,8 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
 describe('steeringConversion — every mechanical trigger', () => {
   test('a repeat-breaker steer that converted is counted', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'shell', converted: true });
-    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 9, converted: true });
+    emit(store, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'shell', converted: true });
+    emit(store, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 9, converted: true });
 
     expect(steeringConversion.score(store.sql, store.actor).rate).toBe(1);
     store.close();
@@ -385,12 +396,12 @@ describe('steeringConversion — every mechanical trigger', () => {
     const store = eventStore();
 
     for (let i = 0; i < 3; i++) {
-      emit(store.sql, store.actor, `run-${String(i)}`, 'turn_steering', {
+      emit(store, `run-${String(i)}`, 'turn_steering', {
         trigger: 'repeated_failure', step: 5, tool: 'shell', converted: false,
       });
     }
 
-    emit(store.sql, store.actor, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'shell', converted: true });
+    emit(store, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'shell', converted: true });
 
     const score = steeringConversion.score(store.sql, store.actor);
     expect(score.eligible).toBe(4);
@@ -406,7 +417,7 @@ describe('steeringConversion — every mechanical trigger', () => {
     // denominator and read as a steer that never fired. Loud beats silent for a
     // signal something is being trained against.
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'some_future_trigger', step: 1, converted: false });
+    emit(store, 'run-a', 'turn_steering', { trigger: 'some_future_trigger', step: 1, converted: false });
     expect(() => steeringConversion.score(store.sql, store.actor))
       .toThrow(/Invalid type: Expected \("repeated_call" \| "repeated_failure" \| "no_progress"\) but received "some_future_trigger"/);
     store.close();
@@ -417,7 +428,7 @@ describe('steeringConversion — every mechanical trigger', () => {
     // type, so one bad row throws for every caller. These scorers narrow in SQL
     // first, so a corrupt `step_finish` costs one number and not eight.
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 2, converted: true });
+    emit(store, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 2, converted: true });
     void store.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
       VALUES (${store.actor.actorId}, ${'run-a'}, ${9_999}, ${'step_finish'},
               ${'{"type":"step_finish","nonsense":true}'}, ${'t'})`;
@@ -435,7 +446,7 @@ describe('steeringConversion — every mechanical trigger', () => {
 describe('craftReuse — the in-episode loop closing', () => {
   test('crafted then reused scores over the tools crafted, not the turns', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'craft_cycle', {
+    emit(store, 'run-a', 'craft_cycle', {
       crafted: ['grep_imports', 'count_todos'], invoked: ['grep_imports'],
       reused: ['grep_imports'], returned: 1, raised: 0, dropped: [],
     });
@@ -448,7 +459,7 @@ describe('craftReuse — the in-episode loop closing', () => {
 
   test('RED: a tool crafted and never reached for again scores zero over a real denominator', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'craft_cycle', {
+    emit(store, 'run-a', 'craft_cycle', {
       crafted: ['write_only'], invoked: [], reused: [], returned: 0, raised: 0, dropped: [],
     });
     const score = craftReuse.score(store.sql, store.actor);
@@ -460,7 +471,7 @@ describe('craftReuse — the in-episode loop closing', () => {
 
   test('a turn that only invoked a previously-crafted tool crafts no new denominator', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'craft_cycle', {
+    emit(store, 'run-a', 'craft_cycle', {
       crafted: [], invoked: ['from_last_turn'], reused: [], returned: 1, raised: 0, dropped: [],
     });
     const score = craftReuse.score(store.sql, store.actor);
@@ -474,7 +485,7 @@ describe('craftReuse — the in-episode loop closing', () => {
 describe('editLanding — did the edit actually land', () => {
   test('applied over attempted, with the dominant failure mode named', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'file_edit', {
+    emit(store, 'run-a', 'file_edit', {
       attempts: 4, applied: 3, failures: { not_found: 1 },
       recoveredPaths: 1, abandonedPaths: 0,
     });
@@ -487,7 +498,7 @@ describe('editLanding — did the edit actually land', () => {
 
   test('RED: a turn that attempted edits and landed none scores zero, not null', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'file_edit', {
+    emit(store, 'run-a', 'file_edit', {
       attempts: 5, applied: 0, failures: { stale: 3, ambiguous: 2 },
       recoveredPaths: 0, abandonedPaths: 2,
     });
@@ -505,7 +516,7 @@ describe('editLanding — did the edit actually land', () => {
 describe('recoveryDurability — the recovery that TOOK', () => {
   test('a finding whose signature never recurs holds', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
+    emit(store, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'shell', failures: 3, failedSignature: 'run:bun test x' }],
     });
     const score = recoveryDurability.score(store.sql, store.actor);
@@ -520,10 +531,10 @@ describe('recoveryDurability — the recovery that TOOK', () => {
     // tautology: the event only exists when a streak was already broken, so
     // recoveries-over-recoveries is 1.00 on every run forever.
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
+    emit(store, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'shell', failures: 2, failedSignature: 'run:pytest -q' }],
     });
-    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
+    emit(store, 'run-a', 'execution_recovery', {
       recoveries: [{ tool: 'shell', failures: 4, failedSignature: 'run:pytest -q' }],
     });
     const score = recoveryDurability.score(store.sql, store.actor);
@@ -536,7 +547,7 @@ describe('recoveryDurability — the recovery that TOOK', () => {
 
   test('the same signature under a DIFFERENT tool is a different finding', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
+    emit(store, 'run-a', 'execution_recovery', {
       recoveries: [
         { tool: 'shell', failures: 1, failedSignature: 'same' },
         { tool: 'file', failures: 1, failedSignature: 'same' },
@@ -552,7 +563,7 @@ describe('recoveryDurability — the recovery that TOOK', () => {
 describe('completionHonesty — polarity is the reverse of every other scorer', () => {
   test('a gate that found no work left is the PASS', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'completion_gate', { converted: false });
+    emit(store, 'run-a', 'completion_gate', { converted: false });
     const score = completionHonesty.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
     expect(score.passed).toBe(1);
@@ -564,9 +575,9 @@ describe('completionHonesty — polarity is the reverse of every other scorer', 
     // Scoring this the obvious way round — converted as the numerator — would
     // reward a model that habitually declares victory early.
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'completion_gate', { converted: true });
-    emit(store.sql, store.actor, 'run-b', 'completion_gate', { converted: true });
-    emit(store.sql, store.actor, 'run-c', 'completion_gate', { converted: false });
+    emit(store, 'run-a', 'completion_gate', { converted: true });
+    emit(store, 'run-b', 'completion_gate', { converted: true });
+    emit(store, 'run-c', 'completion_gate', { converted: false });
     const score = completionHonesty.score(store.sql, store.actor);
     expect(score.eligible).toBe(3);
     expect(score.passed).toBe(1);
@@ -579,7 +590,7 @@ describe('completionHonesty — polarity is the reverse of every other scorer', 
 describe('spillRetrieval — spilled context read back', () => {
   test('a follow-up against a readable spill passes', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'context_budget', {
+    emit(store, 'run-a', 'context_budget', {
       admittedChars: 1_000, omittedChars: 40_000, trips: { run: 2 },
       referenced: 2, followUps: 2,
     });
@@ -592,7 +603,7 @@ describe('spillRetrieval — spilled context read back', () => {
 
   test('RED: a readable spill the agent never fetched scores zero', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'context_budget', {
+    emit(store, 'run-a', 'context_budget', {
       admittedChars: 500, omittedChars: 80_000, trips: { run: 3 },
       referenced: 3, followUps: 0,
     });
@@ -607,7 +618,7 @@ describe('spillRetrieval — spilled context read back', () => {
     // There was nothing to read back, so this is the harness failing, not the
     // model. Charging it here would score our own defect against the agent.
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'context_budget', {
+    emit(store, 'run-a', 'context_budget', {
       admittedChars: 0, omittedChars: 9_000, trips: { attachment: 1 },
       referenced: 0, followUps: 0,
     });
@@ -621,13 +632,13 @@ describe('spillRetrieval — spilled context read back', () => {
 describe('toolOutcomes — structural attribution with an observed denominator', () => {
   test('producer outcomes win over error-looking data and clean-looking failures', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
+    emit(store, 'run-a', 'tool_call_end', {
       name: 'file', toolCallId: 't1', outcome: { success: true }, result: { error: 'ordinary document data' },
     });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
+    emit(store, 'run-a', 'tool_call_end', {
       name: 'shell', toolCallId: 't2', outcome: { success: true }, result: 'Error (exit 3)',
     });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
+    emit(store, 'run-a', 'tool_call_end', {
       name: 'shell', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 3 } }, result: 'ok',
     });
     const result = toolOutcomes.score(store.sql, store.actor);
@@ -640,9 +651,9 @@ describe('toolOutcomes — structural attribution with an observed denominator',
 
   test('rows with no producer outcome remain observed but cannot supply a success rate', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't1', result: 'Error (exit 3)' });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', error: 'a bare error string, no outcome' });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't3', error: '', result: 'ok' });
+    emit(store, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't1', result: 'Error (exit 3)' });
+    emit(store, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', error: 'a bare error string, no outcome' });
+    emit(store, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't3', error: '', result: 'ok' });
     const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
@@ -654,10 +665,10 @@ describe('toolOutcomes — structural attribution with an observed denominator',
   test('failure attribution uses recorded refusal reasons and process exits', () => {
     const store = eventStore();
 
-    for (const id of ['t1', 't2']) emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
+    for (const id of ['t1', 't2']) emit(store, 'run-a', 'tool_call_end', {
       name: 'file', toolCallId: id, args: { action: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
     });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
+    emit(store, 'run-a', 'tool_call_end', {
       name: 'shell', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 1 } }, result: 'no details',
     });
     const result = toolOutcomes.score(store.sql, store.actor);

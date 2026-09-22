@@ -14,19 +14,19 @@ export interface RecordedRequest {
   body?: string;
 }
 
+/** What a handler answers with. Status 200 by default. */
+export interface MockResponse {
+  status?: number;
+  headers?: Record<string, string>;
+  /** A string is sent verbatim; anything else is JSON-encoded. */
+  body?: string | object;
+}
+
 export interface MockFetchHandler {
   /** Pattern matched against the request URL — substring match. */
   match: string | RegExp | ((req: RecordedRequest) => boolean);
-  /** Response to return. Status 200 by default. */
-  respond: {
-    status?: number;
-    headers?: Record<string, string>;
-    body?: string | object;
-  } | ((req: RecordedRequest, callIndex: number) => {
-    status?: number;
-    headers?: Record<string, string>;
-    body?: string | object;
-  });
+  /** Response to return. */
+  respond: MockResponse | ((req: RecordedRequest, callIndex: number) => MockResponse);
 }
 
 export interface MockFetchHandle {
@@ -38,6 +38,15 @@ export interface MockFetchHandle {
   matching(pattern: string | RegExp): RecordedRequest[];
   /** Reset request log + handler call counters. */
   reset(): void;
+}
+
+/** The bytes a stubbed response carries: a string verbatim, anything else as
+ *  JSON, and an absent body as nothing at all. */
+function responseBody(resp: MockResponse): string {
+  if (resp.body === undefined) return '';
+  const text = v.safeParse(v.string(), resp.body);
+
+  return text.success ? text.output : JSON.stringify(resp.body);
 }
 
 export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
@@ -53,15 +62,12 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
   };
 
   const fetch = asFetchFunction(async (input, init) => {
-    const url = input instanceof Request ? input.url
-      : input instanceof URL ? input.toString()
-      : input;
-
+    const url = input instanceof Request ? input.url : String(input);
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers: Record<string, string> = {};
 
     if (init?.headers) {
-      copyHeaders(init.headers).forEach((v, k) => { headers[k] = v; });
+      for (const [name, value] of copyHeaders(init.headers)) headers[name] = value;
     }
 
     const bodyParse = v.safeParse(v.string(), init?.body);
@@ -87,12 +93,7 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
       ? handler.respond(req, callIndex)
       : handler.respond;
 
-    const responseText = v.safeParse(v.string(), resp.body);
-
-    const bodyOut = resp.body === undefined ? ''
-      : responseText.success ? responseText.output
-      : JSON.stringify(resp.body);
-
+    const bodyOut = responseBody(resp);
     const responseHeaders = new Headers(resp.headers);
 
     if (!responseHeaders.has('content-type')) responseHeaders.set('content-type', 'application/json');

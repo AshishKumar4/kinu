@@ -8,6 +8,13 @@
  */
 import type { MossaicClient, MossaicChild, MossaicStat } from '@kinu.run/core';
 
+/** What a stat's type is called in a listing: Mossaic names a directory a folder. */
+const CHILD_KIND: Record<MossaicStat['type'], MossaicChild['kind']> = {
+  dir: 'folder',
+  file: 'file',
+  symlink: 'symlink',
+};
+
 /** What Mossaic's SDK throws: an Error carrying one of its own codes. */
 export class FakeMossaicError extends Error {
   constructor(readonly code: string, path: string) {
@@ -74,7 +81,7 @@ export function fakeMossaic(): FakeMossaic {
         const full = `${prefix}${name}`;
         const stat = statOf(full);
 
-        return { kind: stat.type === 'dir' ? 'folder' : stat.type === 'file' ? 'file' : 'symlink', name, stat };
+        return { kind: CHILD_KIND[stat.type], name, stat };
       });
     };
 

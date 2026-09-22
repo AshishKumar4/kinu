@@ -440,10 +440,10 @@ export function absorbingRunId(
 
   // Post-hoc, no landing time: the run open NOW, or — when the last close
   // predates this read — the most recently closed run.
-  const live = [...starts.keys()].filter((runId) => !ends.has(runId))
-    .sort((a, b) => starts.get(a)!.localeCompare(starts.get(b)!) || a.localeCompare(b));
+  const live = [...starts].filter(([runId]) => !ends.has(runId))
+    .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
 
-  if (live.length > 0) return live[live.length - 1];
+  if (live.length > 0) return live[live.length - 1][0];
 
   const closed = [...ends.entries()]
     .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));

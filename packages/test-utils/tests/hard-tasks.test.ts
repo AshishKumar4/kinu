@@ -730,17 +730,24 @@ describe('every task can score zero by a real failure', () => {
     expect(scored.detail).toContain('nope');
   });
 
-  test('a solution that does not parse scores 0 rather than taking the harness down', async () => {
-    const scored = await scoreWith(task, 'export function solve( {{{ \n');
-    expect(scored.score).toBe(0);
-    expect(scored.detail).toContain('import failed');
-  });
+  const unusableCases = [
+    {
+      name: 'a solution that does not parse scores 0 rather than taking the harness down',
+      source: 'export function solve( {{{ \n', detail: 'import failed',
+    },
+    {
+      name: 'a module exporting no `solve` scores 0 and names what was missing',
+      source: 'export const notSolve = 1;\n', detail: 'exports no',
+    },
+  ];
 
-  test('a module exporting no `solve` scores 0 and names what was missing', async () => {
-    const scored = await scoreWith(task, 'export const notSolve = 1;\n');
-    expect(scored.score).toBe(0);
-    expect(scored.detail).toContain('exports no');
-  });
+  for (const unusable of unusableCases) {
+    test(unusable.name, async () => {
+      const scored = await scoreWith(task, unusable.source);
+      expect(scored.score).toBe(0);
+      expect(scored.detail).toContain(unusable.detail);
+    });
+  }
 
   test('a cheap WRONG answer scores 0 — correctness gates the ratio', async () => {
     const scored = await scoreWith(task, 'export function solve(input) { return input.tokens[0]; }\n');

@@ -30,7 +30,7 @@
  * deployed Nimbus `node` shim does to an `exec-ratio` harness.
  */
 import { describe, expect, test } from 'bun:test';
-import type { JsonObject, RunEvent, VFS, WorkspaceSpend } from '@kinu.run/core';
+import type { RunEvent, VFS, WorkspaceSpend } from '@kinu.run/core';
 
 import {
   EVAL_BACKEND_ENV, ledgerTotalsFromEvents, probeVerifier, resolveEvalBackend,
@@ -49,21 +49,24 @@ const RUN = 'run-test';
 
 let nextIndex = 0;
 
+/** One variant's own fields, the three base fields removed. Distributed over
+ *  the union so each variant keeps its own shape. */
+type EventBody<Variant = RunEvent> = Variant extends RunEvent
+  ? Omit<Variant, 'runId' | 'eventIndex' | 'timestamp'>
+  : never;
+
 /** One stamped event. The union is wide and only a few variants matter here, so
  *  the caller passes the discriminated body and this supplies the base fields
  *  every variant shares. */
-function event(body: JsonObject): RunEvent {
+function event(body: EventBody): RunEvent {
   nextIndex += 1;
 
-  // SAFETY: constructed below — each call site passes exactly one variant's own
-  // fields beside its `type` discriminator, and this adds the three base fields
-  // every `RunEvent` variant carries.
   return {
     ...body,
     runId: RUN,
     eventIndex: nextIndex,
     timestamp: new Date(1_700_000_000_000 + nextIndex * 1_000).toISOString(),
-  } as RunEvent;
+  };
 }
 
 /** The exact production trail: ten steps, the last still calling tools, and a
@@ -77,7 +80,7 @@ function cappedTrail(): RunEvent[] {
     events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
   }
 
-  events.push(event({ type: 'turn_end', usage: { input: 190_979, output: 6_016 } }));
+  events.push(event({ type: 'turn_end', turnIndex: 0, usage: { input: 190_979, output: 6_016 } }));
   events.push(event({ type: 'run_end', reason: 'completed' }));
 
   return events;
@@ -95,7 +98,7 @@ function naturalTrail(): RunEvent[] {
   }
 
   events.push(event({ type: 'step_finish', stepIndex: 4, reason: 'stop' }));
-  events.push(event({ type: 'turn_end', usage: { input: 100, output: 20 } }));
+  events.push(event({ type: 'turn_end', turnIndex: 0, usage: { input: 100, output: 20 } }));
   events.push(event({ type: 'run_end', reason: 'completed' }));
 
   return events;

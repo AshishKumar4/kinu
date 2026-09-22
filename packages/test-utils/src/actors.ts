@@ -30,8 +30,9 @@ import { sqlOver } from './sql';
 export interface TestActors {
   /** The workspace's main actor — what a single-actor test binds its stores to. */
   readonly main: ActorHandle;
-  /** Issue a real subordinate of `main`, for the two-actor isolation cases. */
-  sibling(name: string): ActorHandle;
+  /** Issue a real subordinate of `main`, for the two-actor isolation cases. A
+   *  property, not a method: a suite reads it off the record to pass it on. */
+  sibling: (name: string) => ActorHandle;
   readonly workspaceId: string;
   readonly directory: WorkspaceActorDirectory;
 }
