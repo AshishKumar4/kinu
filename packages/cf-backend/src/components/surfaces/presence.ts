@@ -1,20 +1,12 @@
-/**
- * Which surfaces have content, and where selection lands when the one the
- * reader is on empties. Pure decisions, kept apart from the switcher chrome
- * so the contract is testable without mounting the strip.
- */
 import type { SlateSummary } from "@kinu.run/core";
 import type { ForkNode, TabPresence } from "@kinu.run/core";
 import type { SurfaceKind } from "./WorkSurface";
 
 export const SLATE_PREFIX = "slate:";
 
-/** The strip's own order — the sequence a falling-back selection walks. */
 export const SURFACES = ["Work", "Diffs", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
 
-/** Everything the gates below read: the server's per-tab flags, the trees the
- *  strip has mounted, the listed Slates, and whether the change-set has content.
- *  `hasDiffs` is absent where no change-set is mounted. */
+/** `hasDiffs` is absent where no change-set is mounted. */
 export interface SurfaceContent {
 	tabPresence: TabPresence | undefined;
 	mctsTrees: ReadonlyMap<string, ForkNode>;
@@ -22,9 +14,7 @@ export interface SurfaceContent {
 	hasDiffs?: boolean;
 }
 
-/** Whether a surface currently has content to show. Diffs answers off the
- *  mounted tree count the strip already holds — the only gate not carried
- *  by `TabPresence`. */
+/** Diffs answers off the strip's mounted tree count, the only gate not carried by `TabPresence`. */
 export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent): boolean {
 	if (surface === "Work") return content.tabPresence?.work ?? true;
 
@@ -43,18 +33,14 @@ export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent)
 	return true;
 }
 
-/** The first surface in strip order that still has content — where an
- *  emptied selection lands. */
 export function firstVisibleSurface(content: SurfaceContent): SurfaceKind {
 	return SURFACES.find((surface) => surfaceHasContent(surface, content)) ?? "Files";
 }
 
-/** An active gated tab that empties falls back to the first visible tab. */
 export function resolveGatedSurface(surface: SurfaceKind, content: SurfaceContent): SurfaceKind {
 	return surfaceHasContent(surface, content) ? surface : firstVisibleSurface(content);
 }
 
-/** Keeps only reload counters that still name a listed Slate. */
 export function pruneSlateReloads(
 	previous: ReadonlyMap<string, number>,
 	slates: readonly SlateSummary[],

@@ -1,10 +1,4 @@
-/**
- * The Supervise altitude's Evolution content: the self-changes the workspace's
- * changelog records. The digest read itself decides what counts — the page
- * asks for `changesOnly`, so the kinds that are measurements (`outcomes`,
- * `replay`) never arrive: a window that closed quietly renders NOTHING — no
- * heading, no card, no empty state.
- */
+/** Supervise Evolution: `changesOnly` digest, so a quiet window renders nothing at all. */
 import { Badge } from "@cloudflare/kumo";
 import { SparkleIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -16,8 +10,6 @@ export const EvolutionEntrySchema = v.object({
 
 export type EvolutionEntry = v.InferOutput<typeof EvolutionEntrySchema>;
 
-/** The loaded changes, newest first. An empty list mounts nothing — a digest
- *  of only bookkeeping must not leave a heading behind. */
 export function EvolutionSection({ entries }: { entries: readonly EvolutionEntry[] }) {
   if (entries.length === 0) return null;
 

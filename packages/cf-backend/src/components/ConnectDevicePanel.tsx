@@ -1,25 +1,3 @@
-/**
- * Linking a machine, wherever the owner asks for it.
- *
- * The Environment tab, the Files drive and Account settings each open this
- * panel in place. Answering "connect my PC" with a link to Account settings →
- * Devices is a page change in the middle of a job: the owner leaves the
- * surface they were working on to reach a button, and nothing brings them
- * back.
- *
- * The panel owns four things and no fetching of its own:
- *   1. the disclosure, stated BEFORE anything is installed (`@kinu.run/core`,
- *      the same five sentences `kinu connect` prints);
- *   2. one registration — `POST /api/user/devices`, which composes the install
- *      command server-side;
- *   3. that command, verbatim, with a copy action;
- *   4. the wait, over the roster its caller already polls.
- *
- * `DeviceConnectFlow` is the whole decision half, and it is a plain object so
- * every claim about it is provable without a browser: one registration per
- * panel, a command rendered as the server wrote it, and a settle that fires
- * exactly when a device the account did not have reports connected.
- */
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { DesktopTowerIcon, PlugIcon, WarningIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
@@ -34,38 +12,21 @@ import { useDeviceRoster } from "@/hooks/use-device-roster";
 import { lastValue } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 
-/** Where the panel is in the one sequence it runs. */
 export type ConnectState =
-  /** Nothing has been asked for yet — the disclosure is on screen. */
   | { readonly kind: "ready" }
   | { readonly kind: "registering" }
-  /**
-   * The server handed over a command. `confirmable` is false when the roster
-   * could not be read at that moment: with no baseline, an arriving machine is
-   * indistinguishable from one the account already had, and the panel says so
-   * rather than waiting on a signal it cannot compute.
-   */
+  /** `confirmable` is false when the roster was unreadable: with no baseline, an arrival cannot be told apart. */
   | { readonly kind: "handed"; readonly command: string; readonly confirmable: boolean }
   | { readonly kind: "connected"; readonly device: UserDevice }
   | { readonly kind: "failed"; readonly message: string };
 
 export interface ConnectFlowDeps {
-  /** `POST /api/user/devices`. The server composes the one-liner; nothing here
-   *  builds a command out of an origin. */
+  /** The server composes the one-liner; nothing here builds a command from an origin. */
   register: (label?: string) => Promise<{ installCommand: string }>;
-  /** The machine arrived and is connected. The surface closes the panel. */
   onConnected: (device: UserDevice) => void;
 }
 
-/**
- * The device that arrived while this panel waited: present in `devices`,
- * absent from `baseline`, and connected.
- *
- * `registerDevice` on the UserDO always inserts a row, so every `kinu connect`
- * run is a new id — an id the account did not have is the machine the owner
- * just linked. A null baseline means the roster was unreadable when the
- * command was handed over, and nothing can be concluded from the roster then.
- */
+/** `registerDevice` always inserts a row, so an id absent from `baseline` is the machine just linked. */
 function arrivedDevice(
   devices: readonly UserDevice[],
   baseline: ReadonlySet<string> | null,
@@ -75,14 +36,7 @@ function arrivedDevice(
   return devices.find((device) => !baseline.has(device.id) && device.connected) ?? null;
 }
 
-/**
- * One panel, one registration.
- *
- * The refusal is in `start` rather than in a disabled attribute, because a
- * disabled button is a rendering and this is a rule: a second ask — a double
- * click, a re-render, a second surface driving the same flow — must not mint a
- * second device row on the owner's account.
- */
+/** The refusal lives in `start`, not a disabled attribute: a second ask must not mint a second device row. */
 export class DeviceConnectFlow {
   #state: ConnectState = { kind: "ready" };
   #baseline: ReadonlySet<string> | null = null;
@@ -101,10 +55,7 @@ export class DeviceConnectFlow {
 
   readonly snapshot = (): ConnectState => this.#state;
 
-  /**
-   * Register this machine. `known` is the roster as the caller last read it —
-   * null when that read has not landed or failed.
-   */
+  /** `known` is null when the caller's roster read has not landed or failed. */
   readonly start = async (label: string | undefined, known: readonly UserDevice[] | null): Promise<void> => {
     if (this.#state.kind !== "ready" && this.#state.kind !== "failed") return;
     this.#baseline = known === null ? null : new Set(known.map((device) => device.id));
@@ -118,7 +69,6 @@ export class DeviceConnectFlow {
     }
   };
 
-  /** A roster read landed. */
   readonly observe = (devices: readonly UserDevice[]): void => {
     if (this.#state.kind !== "handed") return;
     const arrived = arrivedDevice(devices, this.#baseline);
@@ -137,22 +87,14 @@ export class DeviceConnectFlow {
 
 export interface ConnectDevicePanelProps {
   flow: DeviceConnectFlow;
-  /** The roster the caller polls, or null while it has never been read. */
   devices: readonly UserDevice[] | null;
-  /** Why the roster could not be read, for the branch that cannot confirm. */
   rosterError?: string | null;
 }
 
-/**
- * The panel body. Given a flow, it renders that flow's one state and drives
- * the two transitions the owner can make.
- */
 export function ConnectDevicePanel({ flow, devices, rosterError = null }: ConnectDevicePanelProps) {
   const state = useSyncExternalStore(flow.subscribe, flow.snapshot, flow.snapshot);
   const [label, setLabel] = useState("");
 
-  // The only effect: hand every roster read to the flow, which decides whether
-  // it is the arrival this panel is waiting for.
   useEffect(() => {
     if (devices !== null) flow.observe(devices);
   }, [devices, flow]);
@@ -192,9 +134,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
             Your device list is unavailable. Check the Devices page after the command finishes.
           </p>
         )}
-        {/* The icon is the only flex item; the prose is one, because a `code`
-            span as a sibling flex item becomes its own column and cuts the
-            sentence into three. */}
+        {/* The prose is one flex item: a `code` sibling would become its own column and split the sentence. */}
         <p className="p-meta p-text-3 flex items-start gap-1.5">
           <WarningIcon size={11} className="mt-0.5 shrink-0" />
           <span>
@@ -209,9 +149,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
 
   return (
     <div data-connect-state={state.kind} className="space-y-3">
-      {/* Joined, not one paragraph per entry: the array is wrapped for an
-          80-column terminal, and rendering its line breaks as paragraph breaks
-          puts a gap in the middle of a sentence. Same words, reflowed. */}
+      {/* Joined: the array is wrapped for an 80-column terminal, so its line breaks are not paragraph breaks. */}
       <p className="text-xs p-text-2 leading-relaxed">{DEVICE_CONNECT_DISCLOSURE.join(" ")}</p>
       {rosterError !== null && (
         <p className="p-meta p-danger">{rosterError}</p>
@@ -242,20 +180,12 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
   );
 }
 
-/**
- * The panel as a dialog over whatever surface asked for it, with the roster it
- * waits on. This is what a work surface mounts: the Environment card, the
- * Environment call-to-action and the Files drive's offline row all open this
- * one, and it closes itself the moment the machine reports in.
- */
 export function ConnectDeviceDialog({ onClose }: { onClose: () => void }) {
   const { resource, reload } = useDeviceRoster();
   const devices = lastValue(resource);
 
   const [flow] = useState(() => new DeviceConnectFlow({
     register: registerDevice,
-    // The roster is what the surfaces behind this dialog read too, so there is
-    // nothing to hand back: closing is the whole reaction.
     onConnected: onClose,
   }));
 

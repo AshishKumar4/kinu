@@ -14,10 +14,7 @@ import nodesSource from './nodes.wgsl';
 import pulsesSource from './pulses.wgsl';
 import strokesSource from './strokes.wgsl';
 
-/** Instance capacity, sized above what any picture reaches: the search
- *  tree in an hour, the connectome's full mat (`MESH_SEGMENTS` plus its
- *  fusions) at birth. A frame past it draws its first strokes and drops
- *  the rest. */
+/** A frame past capacity draws its first strokes and drops the rest. */
 const STROKE_CAPACITY = 16_384;
 
 const NODE_CAPACITY = 1_024;
@@ -26,7 +23,6 @@ const PULSE_CAPACITY = 1_024;
 
 const STROKE_SEGMENTS = 14;
 
-/** The halo's weight over the scene: enough to read as light, not enough to lift the ground under the copy. */
 const BLOOM_STRENGTH: Record<ArtPalette['mode'], number> = { dark: 0.7, light: 0.35 };
 
 export type WebGpuRendererOutcome =
@@ -54,24 +50,14 @@ function bloomSize(width: number, height: number): readonly [number, number] {
 }
 
 /**
- * The WebGPU drawing of the search tree, through vgpu: instanced stroke
- * strips and point quads into an HDR scene target, a bright pass and a
- * separable blur at half resolution, and a composite that adds the halo back
- * over a transparent canvas so the page's ground shows through.
- *
- * `init()` throwing `VGPU-RING1-UNSUPPORTED` is the one absence this module
- * expects — no WebGPU, or no adapter — and it comes back `unsupported`. Every
- * other way starting up can fail (no device, a shader the driver rejects,
- * init's own defect) comes back `failed` with the cause attached: the hero
- * falls back to Canvas2D on both, so nothing in here throws. A fault that
- * lands after a renderer exists is `onFault`'s, never a thrown listener.
+ * `init()` throwing `VGPU-RING1-UNSUPPORTED` returns `unsupported`; any other startup failure returns
+ * `failed` with the cause. Nothing here throws; later faults go to `onFault`.
  */
 interface WebGpuRendererRequest {
   readonly canvas: HTMLCanvasElement;
   readonly initialPalette: ArtPalette;
   readonly width: number;
   readonly height: number;
-  /** Device pixels per CSS pixel at the mount, before any resize. */
   readonly ratio: number;
 }
 
@@ -80,7 +66,6 @@ export async function createWebGpuRenderer({
 }: WebGpuRendererRequest): Promise<WebGpuRendererOutcome> {
   // `attempted` lets the catch release a gpu `init` already produced.
   let attempted: Gpu | null = null;
-  // The live scale: every resize brings the ratio measured at that moment.
   let scale = ratio;
 
   try {
@@ -166,8 +151,7 @@ export async function createWebGpuRenderer({
       set: { scene, bloom: bloomA, samp: linear, composite: { strength: BLOOM_STRENGTH[initialPalette.mode], pad0: 0, pad1: 0, pad2: 0 } },
     });
 
-    // A surface is only a target inside a frame; its signature pre-warms the
-    // composite pipeline the same way.
+    // A surface is only a target inside a frame; its signature pre-warms the composite pipeline.
     await Promise.all([
       strokes.compile(scene), pulses.compile(scene), nodes.compile(scene), bright.compile(bloomA),
       blurH.compile(bloomB), blurV.compile(bloomA), composite.compile({ colors: [canvasSurface.format] }),
@@ -175,7 +159,6 @@ export async function createWebGpuRenderer({
 
     let disposed = false;
 
-    /** The fault the renderer died of, until `onFault` hands it to the mount. */
     let fault: Error | null = null;
 
     let faultHandler: ((error: Error) => void) | null = null;
@@ -210,9 +193,7 @@ export async function createWebGpuRenderer({
         const pulseCount = Math.min(current.pulseCount, PULSE_CAPACITY);
 
         try {
-          // The writes are inside the try on purpose: `geometry.write` asserts
-          // the device is usable too, and a device that died between ticks
-          // throws the same DISPOSED/LOST here as `frame()` does below.
+          // Inside the try: `geometry.write` throws DISPOSED/LOST on a device that died between ticks.
           if (strokeCount > 0) strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE));
 
           if (nodeCount > 0) nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE));
@@ -231,16 +212,9 @@ export async function createWebGpuRenderer({
             pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
           });
         } catch (thrown) {
-          // A dead device does not reach `gpu.onError` — `frame()` asserts
-          // usability and throws. The guard's own type is @vgpu/core's
-          // ValidationError, a sibling of vgpu's VGPUError rather than an
-          // instance of it, so the check has to name the shared base class —
-          // checking vgpu's VGPUError lets every real device loss escape,
-          // the playback loop dies, and the mount stays on 'webgpu' with a
-          // frozen frame. `DISPOSED` arriving while this renderer is alive
-          // can only be a device the GPU half killed under itself, so both
-          // codes are one fault here; anything else is a real bug and
-          // propagates.
+          // A dead device throws from `frame()`, not `gpu.onError`. Check @vgpu/core's shared base class:
+          // its ValidationError is not a vgpu VGPUError. DISPOSED here can only be a self-killed device;
+          // anything else propagates.
           if (thrown instanceof CoreVGPUError
             && (thrown.code === 'VGPU-DEVICE-LOST' || thrown.code === 'VGPU-DEVICE-DISPOSED')) {
             fault = thrown;
@@ -270,10 +244,8 @@ export async function createWebGpuRenderer({
       },
     };
 
-    // Registered once the renderer exists: a fault before this point is a
-    // start failure the catch below already owns; after it, the renderer
-    // stops itself and hands the mount its swap. A listener may not throw —
-    // nothing out there catches it.
+    // Registered after creation: earlier faults belong to the catch below.
+    // A listener may not throw; nothing catches it.
     const stopListening = gpu.onError((error) => {
       if (disposed) return;
       fault = error;

@@ -1,10 +1,3 @@
-/**
- * Alternate Takes — the answer-card chip ("Take 1 of 3") and the arrow-cycled
- * comparison it opens. Near-tied MCTS candidates from the turn's think
- * convergence; "Use this take" records the user's pick into the outcome
- * ledger (the preference signal) and, on a changed answer, the agent
- * continues with the chosen approach as its next turn.
- */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -27,8 +20,7 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
-  /** Records the pick server-side; resolves with the updated set. Throws on
-   *  RPC failure so the comparison can show it. */
+  /** Throws on RPC failure so the comparison can show it. */
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
 }) {
   const [open, setOpen] = useState(false);
@@ -67,7 +59,6 @@ function TakesComparison({ set, onPick, onClose }: {
     setIndex((i) => cycleTakeIndex(i, delta, count));
   }, [count]);
 
-  // Arrow keys cycle the comparison (Esc is the Modal's).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") step(-1);
@@ -174,27 +165,12 @@ function TakesComparison({ set, onPick, onClose }: {
   );
 }
 
-/**
- * Steer-as-Branch progress chip — rendered near the streaming answer while the
- * branch head runs, becoming the takes affordance (the SAME TakesChip /
- * comparison) on settle, or an honest one-line reason on failure.
- *
- * "Show what it did" opens the branch's own transcript in place. A branch run
- * has exactly one head and its id is DERIVED from the run id
- * ({@link branchHeadId}), so the chip can name the node without first listing
- * the run — the whole reason that id is derived rather than random. It reads
- * through the same `getNodeTranscript` and renders the same {@link
- * TranscriptBody} the Exploration panel does; a chip that could only say
- * "Branching…" left the reader with no way to see what they had spent a turn on.
- */
+/** The branch head id is derived from the run id ({@link branchHeadId}), so the chip fetches its transcript without listing the run. */
 export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_HEAD_DELTAS, onPick, onDismiss }: {
   run: BranchRun;
-  /** The settled set (hydrated from listAlternateTakes by the run's turnId). */
   takes?: AlternateTakeSet;
   rpc: Rpc;
-  /** Per-branch write counter — what makes an open branch transcript live. */
   headActivity: ReadonlyMap<string, number>;
-  /** The live deltas — the step this branch is writing. */
   headDeltas?: HeadDeltas;
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
   onDismiss: () => void;
@@ -209,18 +185,12 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
     rpc,
     headActivity,
     headDeltas,
-    // A working branch arms the clock under the push. Without it this chip was
-    // the one reader that could never recover a missed socket frame: the panel
-    // reader can click another node and re-key the fetch, and a chip has one
-    // node and no elsewhere to click — an open transcript stayed frozen on
-    // whatever step had landed when the frame went missing.
+    // Arm the fallback poll: a chip has no other node to click to recover a missed socket frame.
     running: run.status === "running",
   });
 
   let branchBody: ReactNode = (
-    // The run id IS the journal's root id and the head id is derived from it,
-    // so "nothing recorded" here means the branch died before its first
-    // write — not that the chip looked in the wrong place.
+    // The head id derives from the run id, so "nothing recorded" means the branch died before its first write.
     <div className="px-4 py-6 text-center p-meta p-text-3">
       Nothing is recorded for this branch yet.
     </div>
@@ -277,8 +247,6 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
             <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
               className="shrink-0 border-b p-border px-4 py-2" />
           )}
-          {/* No `onSelect`: a branch run is one head deep, so its search path has
-              no ancestor to leave for. */}
           {branchBody}
         </div>
       )}

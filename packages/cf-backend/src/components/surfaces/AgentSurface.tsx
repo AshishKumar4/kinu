@@ -1,21 +1,6 @@
 /**
- * Agent — what this agent is, and whether it is getting better.
- *
- * Identity · Memory · World model · Tools · Evolution. Everything the agent IS,
- * as opposed to what it made (a titled preview tab per running app, and Diffs
- * for the file changes behind them), what it is working through (Work), how it
- * explored (Exploration), or where it can act (Environment).
- *
- * Evolution is the whole trajectory in one place: the scaffold lineage with its
- * shadow verdict and promote/rollback, the GEPA passes that generate candidates
- * for the next version, and the quality scoreboard that says whether the
- * versions are measurably better. The last two belong here rather than under
- * Exploration beside the fork strategies: adjacency of the strategy code is not
- * a reason, and the quality rows are literally keyed by `scaffoldVersion`, so
- * beside the lineage they measure is where they read as one loop.
- *
- * The changelog lives in Work: a self-change is an EVENT, and "what happened
- * while I was away" is not a question anyone opens a CV to answer.
+ * Agent: what this agent is and whether it is getting better. Evolution holds lineage,
+ * GEPA passes and the quality scoreboard together; quality rows are keyed by `scaffoldVersion`.
  */
 import { useCallback, useState } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
@@ -36,21 +21,16 @@ import * as v from "valibot";
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
 export interface AgentSurfaceProps {
-  /** The workspace snapshot every pane below is fed by. A tri-state rather
-   *  than a nullable status, because "still coming" and "came back broken"
-   *  are different things to draw and neither of them is "none". */
+  /** Tri-state: "still coming" and "came back broken" differ, and neither is "none". */
   snapshot: AsyncResource<AgentStatus>;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
-  /** Re-run the snapshot. The panes offer it when their read failed. */
   onRetryLoad: () => void;
   rpc: Rpc;
 }
 
-/** How each declared reach reads: its badge word, the sentence behind it, and
- *  the tone it takes on an agent that wires it. */
 const EXPOSURE: Record<ToolInfo["exposure"], { label: string; reach: string; tone: string }> = {
   native: {
     label: "native",
@@ -70,21 +50,8 @@ const EXPOSURE: Record<ToolInfo["exposure"], { label: string; reach: string; ton
 };
 
 /**
- * Says how the model reaches a capability, and whether this agent has it.
- *
- * `exposure` is the registry's DECLARED reach (`TOOL_REACH`): `native` = the
- * turn hands it to the model as a tool definition, `codemode` = it exists only
- * as a namespace inside an `eval` program, `both` = both, over one
- * dispatcher. That is a real difference in how the agent has to call it and
- * therefore worth a word on screen.
- *
- * A two-valued guess off the assembled ToolSet — `native` if present,
- * `codemode` otherwise — has no way to say "this agent has it on neither
- * surface". `report` is the one deps-gated builtin, so on an orchestrator it
- * falls into the else-branch and this badge reads "code mode": false twice
- * over, because `report` is native wherever it exists and its `report.*`
- * namespace is wired only on subordinates. Absence is its own signal
- * (`wired`), so neither word has to carry it.
+ * `exposure` is the registry's declared reach (`TOOL_REACH`); `wired` carries absence
+ * separately, since a deps-gated builtin like `report` exists on neither surface on an orchestrator.
  */
 function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
   const { label, reach, tone } = EXPOSURE[exposure];
@@ -111,16 +78,7 @@ function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wi
   );
 }
 
-/**
- * One tool, as a row rather than an essay.
- *
- * A builtin's docstring is the full contract the model is given — summary,
- * when to use, when not to, doctrine, returns — and nine of them rendered as
- * flowing paragraphs is the wall this surface had become: every card the same
- * ink, the same weight, no edge you could find without reading. The row shows
- * the registry's own one-line summary and opens to the docstring, which is
- * newline-structured at the source and so is rendered as the lines it is.
- */
+/** The registry's one-line summary, opening to the newline-structured docstring. */
 function ToolCard({ tool }: { tool: ToolInfo }) {
   const [open, setOpen] = useState(false);
   const hasDetail = tool.description.trim() !== tool.summary.trim();
@@ -145,10 +103,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
             />
           )}
         </span>
-        {/* Open REPLACES the headline rather than appending to it: the
-            docstring's first line is the summary, so showing both prints it
-            twice — and recovering "the rest" would mean splitting a string
-            whose shape belongs to the model, not to this component. */}
+        {/* Open replaces the headline: the docstring's first line is the summary. */}
         {open
           ? <span className="p-meta p-text-2 whitespace-pre-line">{tool.description}</span>
           : <span className="p-row-text p-text-2">{tool.summary}</span>}
@@ -161,42 +116,30 @@ export function AgentSurface(
   { snapshot, tools, memory, memoryContent, onSearchMemory, onRetryLoad, rpc }: AgentSurfaceProps,
 ) {
   const [memorySearch, setMemorySearch] = useState("");
-  // "No world model" is a claim about what this agent has learned, so it may
-  // only be made about a listing that actually came back.
+  // "No world model" may only be claimed about a listing that came back.
   const loadFacts = useCallback(() => rpc<Fact[]>("getFacts", [100]), [rpc]);
   const { resource: factsResource, reload: reloadFacts } = useAsyncResource(loadFacts);
   const facts = lastValue(factsResource) ?? [];
   const as = lastValue(snapshot);
 
-  /** What a pane shows while the snapshot has produced nothing for it: a
-   *  spinner for a read still coming, a retry for one that came back broken.
-   *  Neither carries the reason — the page banner gives it once, and a pane
-   *  repeating it is one outage said four times. Every pane below asks for
-   *  this instead of reporting "none" for a read that never arrived. */
+  /** Spinner while the read is coming, retry once it failed; the page banner gives the reason once. */
   const unloaded = (what: string) => snapshot.status === "error"
     ? <LoadFailure what={what} onRetry={onRetryLoad} />
     : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>;
 
-  // "Nothing here" is only a claim about a snapshot that arrived.
   const noMemories = as === null ? unloaded("memory") : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" />;
   const noTools = as === null ? unloaded("tools") : <EmptyState icon={<PackageIcon size={28} />} title="No tools yet" />;
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Identity */}
       {as ? (
         <Section id="identity" title="Identity" icon={<FingerprintIcon size={14} className="p-text-2" />}>
           <div className="flex items-center gap-3 mb-4">
             <div className="size-11 rounded-xl flex items-center justify-center p-fill border p-border">
               <FingerprintIcon size={22} className="p-accent" />
             </div>
-            {/* The heading is the agent's NAME as everything else in the app
-                shows it — the mission-derived title the sidebar, the chat
-                header and the tab all carry. Beneath it, ONE identifier: the
-                slug, which is the workspace's address and its id. There is no
-                second one to show: `workspace_identity.id` is
-                `idFromName(slug)` on this backend, so it restated the line
-                above it in hex. */}
+            {/* The workspace title as shown elsewhere, then the slug. `workspace_identity.id` is
+                `idFromName(slug)`, so it would only restate the slug in hex. */}
             <div className="min-w-0">
               <div className="p-title p-text truncate" title={workspaceDisplayTitle({ name: as.name, displayName: as.displayName })}>{workspaceDisplayTitle({ name: as.name, displayName: as.displayName })}</div>
               <div className="p-meta p-text-3 font-mono truncate" title={as.name}>{as.name}</div>
@@ -220,7 +163,6 @@ export function AgentSurface(
         </Section>
       ) : unloaded("this agent")}
 
-      {/* Memory */}
       <Section id="memory" title="Memory" icon={<DatabaseIcon size={14} className="p-text-2" />}>
         <div className="space-y-3">
           <div className="relative">
@@ -251,7 +193,7 @@ export function AgentSurface(
         </div>
       </Section>
 
-      {/* World model — keyed agent_facts the agent remembers across turns. */}
+      {/* World model: keyed agent_facts the agent remembers across turns. */}
       {factsResource.status === "error" ? (
         <Section id="world-model" title="World model" defaultOpen={false}
           icon={<BrainIcon size={14} className="p-text-2" />}>
@@ -285,8 +227,6 @@ export function AgentSurface(
         </div>
       </Section>
 
-      {/* Evolution — the agent's versions, where the next candidates come from,
-          and whether the versions are measurably better. One loop, one place. */}
       <Section id="evolution" title="Evolution" defaultOpen={false}
         icon={<GitBranchIcon size={14} className="p-text-2" />}
         badge={as ? <Badge variant="secondary">v{as.scaffoldVersion}</Badge> : undefined}>
@@ -304,8 +244,7 @@ export function AgentSurface(
   );
 }
 
-/** A labelled block inside Evolution. Not a Section: three nested collapsibles
- *  inside one is a fold you have to fight, and these three are one story. */
+/** Not a Section: nested collapsibles inside one are a fold to fight. */
 function EvolutionBlock({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
   return (
     <section className="space-y-1.5">

@@ -1,14 +1,4 @@
-/**
- * One file, read and written through the plane the rest of the drive uses.
- *
- * Its own module because it is its own state machine — reading, an edit buffer,
- * a save in flight, and which form the text is rendered in — and the drive
- * around it shares none of that. The drive owns navigation; this owns one file.
- *
- * Text rides the viewer RPC; images and PDFs ride the raw-bytes route the
- * download uses. A save rides that same raw route with PUT — the identical call
- * the uploader makes, because a file's bytes have one way in.
- */
+/** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import {
@@ -26,9 +16,7 @@ import {
 export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
   rpc: Rpc;
-  /** What the drive's current listing says this file's bytes are. A new value
-   *  is a new read — that IS the cache invalidation, and there is no second
-   *  copy of the text to keep in step with it. */
+  /** A new value triggers a new read; that is the cache invalidation. */
   revision: string;
   rawHref: string;
   downloadHref: string;
@@ -37,7 +25,6 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
 }) {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const kind = viewerKindOf(path);
-  /** The edit buffer, or null while not editing. */
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -45,33 +32,17 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
   const [asSource, setAsSource] = useState(false);
 
   const render = textRenderOf(path);
-  /** What the body shows right now. One value, so the body below is a single
-   *  dispatch instead of three conditions that each have to re-check the other
-   *  two. */
   const shownAs: TextRender = asSource ? "source" : render;
   const body: TextRender | "edit" = draft !== null ? "edit" : shownAs;
 
-  /**
-   * The read, through the app's one tri-state fetch primitive.
-   *
-   * `useAsyncResource` owns the generation: its identity check makes the
-   * rendered value "loading" the instant the identity changes, and only its
-   * newest run may publish. An effect that fired the RPC and wrote whatever
-   * came back would let a reply for the file the reader had already left land
-   * on the file they are looking at, and would never re-read a file whose
-   * bytes changed underneath the pane.
-   *
-   * Image and PDF panes read nothing here; their bytes ride the raw route the
-   * download uses, and the read model refuses them as text on purpose.
-   */
+  /** `useAsyncResource` owns the generation, so a reply for a file the reader left cannot land on the current one. */
   const load = useCallback((): Promise<FileText> => (
     kind === "text" ? rpc<FileText>("readExecutorFile", [PLANE, path]) : Promise.resolve({})
   ), [kind, path, rpc]);
 
   const { resource, reload } = useAsyncResource(load, undefined, `${path}\u0000${revision}`);
 
-  /** `null` IS the loading state: the body must never paint before the answer,
-   *  or a reader (and the browser gate) sees an empty file that is not empty. */
+  /** `null` is the loading state: never paint an empty body before the answer. */
   let file: FileText | null = null;
 
   if (resource.status === "ready") file = resource.value;
@@ -204,8 +175,6 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
   );
 }
 
-/** The text pane: what the read has to say first, then the form the reader
- *  asked for. */
 function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
   file: FileText | null;
   body: TextRender | "edit";

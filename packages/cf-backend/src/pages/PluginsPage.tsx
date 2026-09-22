@@ -1,16 +1,3 @@
-/**
- * Plugins — what this account's agents can reach beyond their built-in tools,
- * in one row grammar: the popular MCP servers one click connects, the servers
- * this account added itself, and the skills every workspace ships with. Each
- * is a read of its own, failing on its own, so an unreachable MCP plane never
- * blanks the skills beside it.
- *
- * A preset-tagged server is drawn once, by its Popular row, and the strip at
- * the top is where a person sees everything the account holds at a glance.
- *
- * Skills a workspace writes for itself live in that workspace's object and
- * are listed there; only the built-in doctrine is account-wide.
- */
 import { useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
@@ -30,16 +17,11 @@ import { McpPresetCards, presetBrand } from "@/components/plugins/McpPresetCards
 import { BrandMark } from "@/components/ui/BrandMark";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
 
-/** While a preset sign-in is open in another tab the user returns to this
- *  page mid-flow, so the server list re-reads itself until every connection
- *  has settled — the same 5s the MCP panel polls on, and only while one is
- *  actually pending. */
+/** Polls only while a preset sign-in in another tab is pending. */
 const revalidateServers = (rows: McpServerSummary[] | null): number | null =>
   rows?.some((s) => s.status === 'authenticating' || s.status === 'connecting'
     || s.status === 'discovering') ? 5000 : null;
 
-/** A server's reachability as a row status: the same words the MCP panel's
- *  badge uses, in the row's own tone vocabulary. */
 function serverStatus(status: McpServerSummary['status']): PluginStatus {
   switch (status) {
     case 'ready':
@@ -57,8 +39,6 @@ function serverStatus(status: McpServerSummary['status']): PluginStatus {
   }
 }
 
-/** What a server row says under its name: what the account gets from it, or
- *  why it gets nothing. The endpoint belongs to the surface that edits it. */
 function serverLine(server: McpServerSummary): string {
   if (server.error !== null) return server.error;
 
@@ -67,8 +47,6 @@ function serverLine(server: McpServerSummary): string {
   return server.toolsCount === 1 ? '1 tool' : `${String(server.toolsCount)} tools`;
 }
 
-/** Everything the account holds, as one strip of marks: the preset's own
- *  brand where a preset tagged the server, the plug otherwise. */
 function InstalledStrip({ servers }: { servers: readonly McpServerSummary[] }) {
   if (servers.length === 0) return null;
 
@@ -94,9 +72,6 @@ function InstalledStrip({ servers }: { servers: readonly McpServerSummary[] }) {
   );
 }
 
-/** One section of the list: its eyebrow, an optional action or note beside
- *  it, and its rows in two columns — or the read's own loader, failure, or
- *  empty line. */
 function PluginSection({ title, rows, onRetry, what, action, note, empty }: {
   title: string;
   rows: AsyncResource<readonly ReactNode[]>;

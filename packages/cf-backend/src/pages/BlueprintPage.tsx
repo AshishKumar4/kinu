@@ -1,12 +1,6 @@
 /**
- * `/shared/blueprint/:id` — one blueprint, read-only, for anyone holding the
- * link. No workspace chrome: a viewer without an account sees this page and
- * nothing else. The one action, "Fork into Kinu", signs in when it must and
- * then opens the workspace picker.
- *
- * What the page says about safety is exact: the bindings are requirements a
- * forker maps to their own connections; the export carries no credential; and
- * when the scan found secret-shaped text it says where, never what.
+ * `/shared/blueprint/:id`: read-only, no workspace chrome; the viewer may have no account.
+ * A secret-shaped scan hit is reported by location, never content.
  */
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -20,7 +14,6 @@ import { ForkDialog } from "@/components/shared/ForkDialog";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import type { WorkspaceEntry } from "@/lib/user-api";
 
-/** What a forker connects for each kind, in the words the panel uses too. */
 export const BINDING_KIND_LABEL: Record<SlateBindingKind, string> = {
   mcp: "MCP server",
   tool: "Tool",
@@ -36,7 +29,6 @@ export const BINDING_KIND_LABEL: Record<SlateBindingKind, string> = {
 
 const KIND_ORDER: readonly SlateBindingKind[] = ["mcp", "tool", "namespace", "app", "ai", "agent", "web", "memory", "tasks", "rpc"];
 
-/** Declared bindings grouped by kind, in a fixed order, empty kinds omitted. */
 function bindingsByKind(bindings: readonly SlateBindingDeclaration[]): Array<{ kind: SlateBindingKind; bindings: SlateBindingDeclaration[] }> {
   return KIND_ORDER
     .map((kind) => ({ kind, bindings: bindings.filter((binding) => binding.kind === kind) }))
@@ -112,7 +104,6 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
 
 export default function BlueprintPage({ fixture, viewer, workspaces }: {
   fixture?: BlueprintView;
-  /** The signed-in email, or null for a visitor; absent, the page asks. */
   viewer?: string | null;
   workspaces?: readonly WorkspaceEntry[];
 } = {}) {

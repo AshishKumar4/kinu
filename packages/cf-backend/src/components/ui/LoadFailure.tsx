@@ -1,12 +1,8 @@
-/**
- * The failed-fetch affordance: an honest "couldn't read this" plus the retry
- * such a failure always needs. Rendered in place of an empty state so no
- * surface ever reports "none" for something it never managed to read.
- */
+/** Rendered instead of an empty state: never report "none" for data that failed to load. */
 import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
 
 export interface LoadFailureProps {
-  /** What could not be loaded, lower-case: "automations", "the changelog". */
+  /** Lower-case: "automations", "the changelog". */
   what: string;
   message?: string;
   onRetry: () => void;

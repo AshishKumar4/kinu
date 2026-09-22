@@ -1,9 +1,3 @@
-/**
- * The Drive root above the file listing: the owner's slates and blueprints,
- * what others shared with the owner, and what the owner shared. Owns the one
- * library read those four sections come from and every action a tile offers,
- * so the page composes them without knowing how a share opens or ends.
- */
 import { startTransition, useCallback, useState } from "react";
 import { ArrowSquareOutIcon, CopyIcon, GitBranchIcon, ProhibitIcon } from "@phosphor-icons/react";
 import {
@@ -17,8 +11,6 @@ import { DriveTileSection, type DriveTile, type TileAction } from "@/components/
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import type { SharedLibraryProps } from "@/components/shared/SharedLibrary";
 
-/** Every slate the owner holds, wherever it runs. A slate opens in its own
- *  workspace, on its own surface. */
 function slateTiles(slates: readonly OwnedSlate[]): DriveTile[] {
   return slates.map((slate) => {
     const href = `/workspace/${encodeURIComponent(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
@@ -35,8 +27,6 @@ function slateTiles(slates: readonly OwnedSlate[]): DriveTile[] {
   });
 }
 
-/** A share as a tile: how old it is, and whose workspace it runs in. A
- *  blueprint's name is its page, which is the link anyone holding it opens. */
 function shareTile(row: SharedRow, actions: readonly TileAction[]): DriveTile {
   const age = shortAge(row.createdAt);
   const meta: string[] = [];
@@ -58,7 +48,6 @@ function shareTile(row: SharedRow, actions: readonly TileAction[]): DriveTile {
 }
 
 interface DriveSectionsProps extends SharedLibraryProps {
-  /** Where a refusal lands: the page's notice, since the sections hold no dialog of their own. */
   onNotice: (message: string) => void;
 }
 
@@ -68,8 +57,7 @@ export function DriveSections({ fixture, workspaces, onNotice }: DriveSectionsPr
   const [forking, setForking] = useState<SharedRow | null>(null);
   const shared = lastValue(sections.resource);
 
-  /** A live share opens on its own host, under a URL minted per open: a share
-   *  that names people carries a ticket that is good for minutes. */
+  /** Minted per open: a share that names people carries a ticket good for minutes. */
   const openLive = (row: SharedRow): void => {
     const workspace = row.workspace;
 
@@ -98,15 +86,10 @@ export function DriveSections({ fixture, workspaces, onNotice }: DriveSectionsPr
     });
   };
 
-  /** How a row opens: a live share through a URL minted now, a blueprint as
-   *  the page its link addresses. */
   const openAction = (row: SharedRow): TileAction => row.kind === "live"
     ? { label: "Open", icon: <ArrowSquareOutIcon size={14} />, onSelect: () => openLive(row) }
     : { label: "Open", icon: <ArrowSquareOutIcon size={14} />, to: blueprintPagePath(row.id) };
 
-  /** What a row of mine offers: open it, hand on its link, fork it, end it.
-   *  A blueprint ends only from the workspace that published it, so this menu
-   *  does not offer that. */
   const myActions = (row: SharedRow): TileAction[] => {
     const actions: TileAction[] = [openAction(row)];
 

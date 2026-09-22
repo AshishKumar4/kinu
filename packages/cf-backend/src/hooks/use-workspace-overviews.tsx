@@ -1,19 +1,6 @@
 /**
- * One answer per workspace for everyone on screen who asks.
- *
- * The overview read model (`GET /api/workspaces/:name/overview`) is what a
- * home card summarises a workspace from, and what the shell's living
- * background reads its activity from. Both used to be — or would have been —
- * separate polls of the same question. Here a surface WATCHES a name for as
- * long as it is mounted, the provider keeps one tri-state read per watched
- * name alive at the shared cadence, and every watcher of that name reads the
- * same `AsyncResource`. A name nobody watches is not asked: the sixth
- * workspace the home page does not show is never fetched, and a page with no
- * card and no background asks for nothing.
- *
- * Each read is a `useAsyncResource` in a headless element of its own, so the
- * retry, the stale-after-failure carry and the revalidation timer are the
- * primitive's, not a second copy.
+ * One overview read per watched workspace name, shared by every watcher; unwatched names are
+ * never fetched. Each read is a `useAsyncResource` in its own headless element.
  */
 import {
   createContext,
@@ -31,30 +18,22 @@ import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { lastValue, useAsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 
-/** How many of the roster's workspaces the shell shows first — the home
- *  page's recent list, and the set the living background listens to. */
+/** How many roster workspaces the shell shows first (home recent list, living background). */
 export const RECENT_WORKSPACES = 5;
 
-/** The shared cadence the workspace surfaces already poll at — the card asks
- *  the same question they do and inherits their rhythm rather than growing a
- *  second timer policy. Module scope because `useAsyncResource` keys its timer
- *  effect on this identity. */
+/** Module scope because `useAsyncResource` keys its timer effect on this identity. */
 const overviewRevalidate = (): number => LIVE_DATA_REFRESH_MS;
 
-/** The read and its retry — the two halves a watcher can use. The primitive's
- *  `set` stays with the watch that owns the read; nothing publishes an
- *  overview it did not fetch. */
+/** The primitive's `set` stays with the owning watch; nothing publishes an overview it did not fetch. */
 export type OverviewRead = Pick<AsyncResourceControl<WorkspaceOverview>, 'resource' | 'reload'>;
 
 interface OverviewsValue {
   readonly reads: ReadonlyMap<string, OverviewRead>;
-  /** Watch `names` until the returned function is called. */
   readonly watch: (names: readonly string[]) => () => void;
 }
 
 const WorkspaceOverviewsContext = createContext<OverviewsValue | null>(null);
 
-/** One watched name's read, published into the provider's map on every change. */
 function OverviewWatch({ name, publish, retire }: {
   readonly name: string;
   readonly publish: (name: string, read: OverviewRead) => void;
@@ -123,10 +102,8 @@ function useOverviews(): OverviewsValue {
   return value;
 }
 
-/** Before the watch's first render has published: loading, with nothing to retry. */
 const LOADING: OverviewRead = { resource: { status: "loading" }, reload: () => undefined };
 
-/** One workspace's overview, watched while the caller is mounted. */
 export function useWorkspaceOverview(name: string): OverviewRead {
   const { reads, watch } = useOverviews();
 
@@ -135,10 +112,7 @@ export function useWorkspaceOverview(name: string): OverviewRead {
   return reads.get(name) ?? LOADING;
 }
 
-/** Every workspace's overview at once, watched while the caller is mounted:
- *  the page that buckets a whole roster by state. `names` is the caller's
- *  memoised list — the provider ref-counts each, so a name is fetched once
- *  however many watchers ask. */
+/** `names` must be memoised; the provider ref-counts each name. */
 export function useOverviewReads(names: readonly string[]): ReadonlyMap<string, OverviewRead> {
   const { reads, watch } = useOverviews();
 
@@ -147,8 +121,6 @@ export function useOverviewReads(names: readonly string[]): ReadonlyMap<string, 
   return reads;
 }
 
-/** What the recent workspaces add up to, watched while the caller is mounted:
- *  the living background's whole input. */
 export function useRosterActivity(): RosterActivity {
   const { entries } = useWorkspaceRoster();
   const { reads, watch } = useOverviews();

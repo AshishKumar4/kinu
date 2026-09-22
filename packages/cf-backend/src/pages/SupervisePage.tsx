@@ -1,15 +1,3 @@
-/**
- * Supervise altitude — the agent over time (automation + run history), distinct
- * from the per-run RUN altitude. One column of blocks, each bound to wired
- * RPCs. Timers and webhooks are active; speculative trigger kinds stay
- * represented in durable state until their operator flows are added.
- *
- * Blocks, in reading order: Automations (the ONE trigger surface: list +
- * create webhooks + revoke, plus the background jobs those and the operator
- * leave running), Run history, and Evolution — which renders only when the
- * changelog records a self-change: a scaffold edit, a kept lesson, a promoted
- * proposal. A window that closed with nothing to show renders nothing.
- */
 import { useState, useCallback, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
@@ -50,8 +38,7 @@ const JobRowSchema = v.object({
 const TriggerRowSchema = v.object({
   id: v.string(),
   kind: v.string(),
-  /** Signed delivery path, minted by the server for webhook rows. Absent when
-   *  the row is not a webhook, or when the deployment cannot sign one. */
+  /** Absent for non-webhook rows or when the deployment cannot sign. */
   url: v.optional(v.string()),
   spec: v.optional(v.object({ label: v.optional(v.string()), cron: v.optional(v.string()) })),
   state: v.string(),
@@ -71,11 +58,6 @@ export interface SupervisePageProps {
   rpc: Rpc;
 }
 
-/**
- * Automations first — what wakes this agent and what it has running — with the
- * run history directly under it. Evolution follows, and only when it exists:
- * the card mounts nothing until the changelog says there is a change to show.
- */
 export function SupervisePage({ rpc }: SupervisePageProps) {
   return (
     <div className="h-full overflow-y-auto px-6 py-6 lg:px-8">
@@ -90,7 +72,6 @@ export function SupervisePage({ rpc }: SupervisePageProps) {
 
 
 
-/** One cell of the supervise layout: the outer card. */
 function SuperviseCard({ children }: { children: ReactNode }) {
   return (
     <div className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface p-5">
@@ -99,14 +80,8 @@ function SuperviseCard({ children }: { children: ReactNode }) {
   );
 }
 
-/* ── Evolution — only when the changelog records a change ──────── */
 
-/** Reads the changelog and mounts the section only when it carries a change.
- *  `changesOnly` is decided inside the digest read — selection before limit —
- *  so a page of fresh bookkeeping cannot hide an older change. The changelog's
- *  own revalidation keeps the card live: a workspace that evolves after this
- *  view opened still earns the section. A failed read still gets the card — a
- *  broken digest must never pose as "no evolution". */
+/** `changesOnly` applies before the limit, so fresh bookkeeping cannot hide an older change. */
 function EvolutionCard({ rpc }: { rpc: Rpc }) {
   const load = useCallback(
     async () => v.parse(
@@ -119,9 +94,7 @@ function EvolutionCard({ rpc }: { rpc: Rpc }) {
   const { resource, reload } = useAsyncResource(load, changelogRevalidate);
   const entries = lastValue(resource);
 
-  // One failure policy for both reads on this page: a failed refresh is
-  // reported above whatever last-good rows remain, and a failed first read
-  // still gets the card — a broken digest must never pose as "no evolution".
+  // A failed read must never pose as "no evolution".
   if (resource.status === "error") {
     return (
       <SuperviseCard>
@@ -136,24 +109,18 @@ function EvolutionCard({ rpc }: { rpc: Rpc }) {
   return <SuperviseCard><EvolutionSection entries={entries} /></SuperviseCard>;
 }
 
-/* ── Run history ───────────────────────────────────────────────── */
 
-/** One page of the history. Each row costs a full read of that run's events to
- *  fold its provenance and usage, so the page is smaller than a list's. */
+/** Each row costs a full event read, so the page is small. */
 const RUN_HISTORY_PAGE = 30;
 
 const RunPageSchema = pageSchema(RunSummarySchema);
 
-/** The tone a table gives a status word. The stores hold whatever word wrote
- *  the row, so a word with no tone of its own reads neutral. */
 function dotTone(tones: Readonly<Record<string, string | undefined>>, status: string): string {
   return tones[status] ?? "p-dot-neutral";
 }
 
 const RUN_DOT = { completed: "p-dot-success", aborted: "p-dot-danger" };
 
-/** The cross-run history, newest first. Totals that a spend decision needs
- *  live on the Activity surface; this header names the list and its size. */
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const load = useCallback(
     async () => v.parse(RunPageSchema, await rpc("getRunSummaries", [{ limit: RUN_HISTORY_PAGE }])),
@@ -170,8 +137,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     [rpc],
   );
 
-  // The first page's own `next`, never an anchor built here: this read's cursor
-  // is opaque and only the server knows how to spell it.
+  // The cursor is opaque; only the server can spell it.
   const startFrom = useCallback(
     () => (first !== null && first.status === "more" ? first.next : null),
     [first],
@@ -180,8 +146,6 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const tail = usePagedScroll<v.InferOutput<typeof RunSummarySchema>>({ grows: "down", fetchPage, startFrom });
 
   const runs = first === null ? null : [...first.items, ...tail.fetched];
-  // A first page that already said 'end' is exhausted before the pager ever
-  // runs, and the pager cannot know that.
   const exhausted = first !== null && (first.status === "end" || tail.exhausted);
 
   const containerRef = useGrowingScroll({
@@ -225,7 +189,6 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   );
 }
 
-/* ── Automations — triggers that wake the agent + what it has running ── */
 
 const JOB_DOT = { running: "p-dot-warning", completed: "p-dot-success", failed: "p-dot-danger" };
 
@@ -295,8 +258,6 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         </div>
       )}
 
-      {/* A failed jobs read is reported, never dropped into the trigger list's
-          silence — and last-good rows stay up behind the failure notice. */}
       {jobsResource.status === "error" && (
         <LoadFailure what="the background jobs" message={jobsResource.message} onRetry={reloadJobs} />
       )}
@@ -335,8 +296,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
 
 const TRIGGER_DOT = { active: "p-dot-success", paused: "p-dot-warning" };
 
-/** One trigger row. The delivery URL is the server's, never assembled here: it
- *  carries a signed route capability, so a URL this page built would 404. */
+/** The delivery URL carries a signed route capability; a URL built here would 404. */
 function TriggerLine({ trigger, onRevoke }: {
   trigger: TriggerRow; onRevoke: () => void;
 }) {
@@ -373,17 +333,7 @@ function TriggerLine({ trigger, onRevoke }: {
   );
 }
 
-/**
- * The curl that tests a new webhook, SPLIT AT THE CREDENTIAL.
- *
- * A template string cannot carry the screenshot's redaction marker, so a secret
- * interpolated into one is a secret in the PNG. Splitting the command is what
- * lets the credential render through `SecretValue` and nothing else.
- *
- * `secret` is the real credential or null: mTLS presents a client certificate
- * and carries none, and a mode whose secret was somehow not returned reads with
- * a placeholder, which belongs in the literal text because it is not a secret.
- */
+/** Split at the credential so it renders through `SecretValue`; a secret in a template string lands in screenshots. */
 interface CurlCommand {
   readonly before: string;
   readonly secret: string | null;
@@ -391,8 +341,6 @@ interface CurlCommand {
 }
 
 function curlCommand(url: string, result: CreateWebhookResult): CurlCommand {
-  // Empty whenever the credential is real, because the credential is then
-  // rendered as its own redacted region rather than as text in this string.
   const placeholder = result.secret === null ? "<your-secret>" : "";
 
   switch (result.auth_mode) {
@@ -427,7 +375,6 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
   }
 }
 
-/* Newly-created webhook — the URL + secret shown ONCE, with a curl test. */
 export function NewWebhookCard({ result, onDismiss }: {
   result: CreateWebhookResult; onDismiss: () => void;
 }) {
@@ -475,9 +422,7 @@ export function NewWebhookCard({ result, onDismiss }: {
   );
 }
 
-/* Step-up auth: creating a durable webhook requires a fresh Kinu browser
- * session (≤5 min since login). On the step-up 401 we send the user through
- * Kinu login and return here. */
+/* Creating a webhook requires a fresh (≤5 min) Kinu session; the step-up 401 sends the user through login and back. */
 export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   agentName: string;
   onClose: () => void;
@@ -500,10 +445,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
     setSubmitting(true); setErr(null);
 
     try {
-      // Blank means "mint one": the server decides and stores the secret for
-      // every hmac/bearer webhook, so a browser-side generator here would be a
-      // second answer to the same question — and the one that produced nothing
-      // when a different client asked.
+      // Blank means the server mints and stores the secret.
       const r = await createDurableWebhook(agentName, {
         label: label.trim(),
         auth_mode: authMode,
@@ -560,9 +502,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
         {authMode !== "mtls" && (
           <label className="block">
             <div className="text-xs p-text-2 mb-1">Secret</div>
-            {/* A password field is redacted from a screenshot without being
-                annotated; the marker is carried too, so a later reveal toggle
-                that flips this to `text` cannot silently undo that. */}
+            {/* Marked for redaction too, so a later reveal toggle to `text` cannot undo it. */}
             <input {...SECRET_REGION} type="password" value={secret}
               onChange={(e) => setSecret(e.target.value)} className={inputCls}
               placeholder="Leave blank and Kinu generates one" />

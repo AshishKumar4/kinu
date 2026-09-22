@@ -1,43 +1,5 @@
-/**
- * The environment terminal.
- *
- * One xterm instance, three families of driver:
- *
- *   PTY   — a real pseudo-terminal: `htop`, `vim` and anything else that
- *           paints a screen works, arrow keys and Ctrl-C reach the foreground
- *           process, and a resize reaches the shell. Two environments have
- *           one, so there are two PTY drivers built on the same xterm
- *           construction — open, fit, keep-fitted, copy chord — factored into
- *           `mountPtyTerminal` so neither repeats it:
- *
- *             sandbox — the container. `SandboxAddon` (shipped by
- *             @cloudflare/sandbox/xterm) is the client half of the container's
- *             own PTY protocol — binary frames of terminal bytes each way,
- *             `{type:'resize'}` out, `ready`/`exit`/`error` in — so the wire
- *             format is the SDK's, not ours, and reconnect/replay come with it.
- *
- *             device — the user's own machine. `SandboxAddon` is addressed by
- *             container id and cannot reach it, so this file opens its own
- *             WebSocket and speaks the same shape by hand: binary frames each
- *             way, `{type:'resize'}` out, `ready`/`exit`/`error` in.
- *
- *   SHELL — the workspace. Nimbus's own shell, inside the workspace object:
- *           its line editor, its scrollback replayed on reattach, its bash
- *           and python REPLs. Not a pseudo-terminal — nothing full-screen
- *           paints — so it is its own family rather than a third PTY driver.
- *           The wire is the runtime's JSON frames (workspace-terminal.ts).
- *
- *   LINE  — every environment with no shell of its own. A command in, its
- *           output back, and the pane SAYS it is line mode. Saying so is the
- *           honest half: an emulated prompt over one-shot exec looks like a
- *           shell and cannot run one.
- *
- * The lane decides the family, and the route agrees with it because both read
- * the same table. Which PTY driver runs inside that family is this file's own
- * call, by executor. lib/terminal-lane.ts holds the lane table, the line-mode
- * label, and the line editor and painter this file mounts — everything that is
- * decided over strings rather than over the DOM.
- */
+// Drivers: PTY (sandbox via SandboxAddon; device via own socket, same frames),
+// workspace shell (runtime JSON frames), line mode. Lanes: core execution/terminal-lane.ts.
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
@@ -55,33 +17,20 @@ import {
 import type { ExecutorCommandResult } from "@kinu.run/core";
 import { WorkspaceTerminalOutputSchema } from "@kinu.run/core";
 
-// The row type is declared with the driver that paints it and named here
-// because this pane's props are what a reader looks at to find it.
 export type { TerminalPaneOutput };
 
 export interface TerminalPaneProps {
-  /** The workspace this terminal belongs to. The socket is per workspace, so
-   *  the pane is told which one rather than re-deriving it from the URL. */
   workspace: string;
-  /** Executor namespace: `sandbox`, `workspace`, `device`, `parent`. */
   executor: string;
-  /** Line-mode inputs. Unused by either PTY driver, which streams live from
-   *  its own transport instead of reading broadcast exec rows. */
   outputs?: readonly TerminalPaneOutput[];
   onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
 }
 
-/** How often an attached terminal tells the server a human is still here.
- *
- *  The container proxy renews the SDK's activity clock on every frame it
- *  forwards, but the DURABLE lease that decides whether the container may take
- *  its final checkpoint and stop is only moved by an operation on the object —
- *  which a proxied frame is not. Without this beat a container can quiesce
- *  under someone who is typing. A minute is far inside the idle gate, and the
- *  server throttles the durable write itself. */
+/** The durable container lease moves only on object operations, not proxied frames;
+ *  this beat keeps a container from quiescing under a typing user. */
 const KEEPALIVE_MS = 60_000;
 
-/** xterm's own default is 1000 lines, which a build log overruns in seconds. */
+/** xterm's default is 1000 lines, which a build log overruns in seconds. */
 const SCROLLBACK_LINES = 5_000;
 
 export function TerminalPane({ workspace, executor, outputs, onExecute }: TerminalPaneProps) {
@@ -96,7 +45,6 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
     : <PtyTerminal workspace={workspace} executor={executor} />;
 }
 
-/* ── PTY ──────────────────────────────────────────────────────────────── */
 
 type PtyState = "connecting" | "connected" | "disconnected";
 
@@ -104,15 +52,6 @@ interface TerminalOperation {
   promise: Promise<void> | null;
 }
 
-/**
- * What every PTY driver needs before it speaks a byte to its transport: an
- * xterm instance opened into the host, kept fitted to it as the host resizes,
- * and the copy chord that works whether or not the shell owns Ctrl-C. Each
- * driver loads its own transport on top of the returned terminal and folds its
- * own teardown around the returned `dispose`.
- */
-/** One xterm, fitted and wired, and the way to take it down again. Both
- *  pty drivers mount through this so neither repeats the construction. */
 interface MountedPty {
   term: Terminal;
   dispose: () => void;
@@ -130,11 +69,7 @@ function mountPtyTerminal(
   term.open(host);
   fit.fit();
 
-  // Copy needs a chord that is not Ctrl-C, because Ctrl-C is a byte the
-  // foreground program must receive (a full-screen app reads it as a
-  // keystroke). Ctrl/Cmd-Shift-C copies the selection; paste is left to
-  // xterm's own handling of the browser paste event, which Ctrl-V and Cmd-V
-  // already produce.
+  // Copy is Ctrl/Cmd-Shift-C: Ctrl-C is a byte the foreground program must receive.
   term.attachCustomKeyEventHandler((event) => {
     const copyChord = (event.ctrlKey || event.metaKey) && event.shiftKey && event.code === "KeyC";
 
@@ -145,16 +80,14 @@ function mountPtyTerminal(
 
     if (copyOperation.current !== null) return false;
     const owner: TerminalOperation = { promise: null };
-    // The key handler must return its boolean synchronously, so install the
-    // owner before the browser action starts and cleanup can fence its result.
+    // The key handler must return synchronously; install the owner before the browser action starts.
     copyOperation.current = owner;
     owner.promise = (async () => {
       try {
         await navigator.clipboard.writeText(selection);
       } catch (cause) {
         if (copyOperation.current === owner) {
-          // The pane's failure line is the reader: the header advertises the
-          // chord, so a refused clipboard write must not vanish.
+          // The header advertises the chord, so a refused clipboard write must be shown.
           setFailure(`clipboard refused the copy: ${renderThrownChain({ cause })}`);
         }
       } finally {
@@ -165,10 +98,7 @@ function mountPtyTerminal(
     return false;
   });
 
-  // The pane resizes with the layout, not only with the window: a sidebar
-  // opening changes the element and nothing else. Re-fitting keeps xterm's
-  // internal geometry in sync; each driver turns the resulting resize event
-  // into its own control frame.
+  // Re-fit on element resize, not only window resize: a sidebar opening changes only the element.
   const observer = new ResizeObserver(() => {
     if (host.clientWidth > 0 && host.clientHeight > 0) fit.fit();
   });
@@ -184,8 +114,7 @@ function mountPtyTerminal(
   };
 }
 
-/** xterm cannot read CSS custom properties, so the palette is applied
- *  imperatively on every theme change — both axes, since either can move. */
+/** xterm cannot read CSS custom properties, so the palette is applied imperatively. */
 function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): void {
   useEffect(() => {
     const term = termRef.current;
@@ -213,10 +142,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     termRef.current = term;
 
     const addon = new SandboxAddon({
-      // The terminal's socket, on the app's own origin under the workspace's
-      // authenticated path — the cookie and `Origin` the handshake carries are
-      // what authorize it. Geometry rides the query so the container's first
-      // paint is already the right size instead of an 80x24 frame that reflows.
+      // Cookie and Origin on the handshake authorize the socket; geometry in the query avoids an 80x24 first paint.
       getWebSocketUrl: ({ sandboxId, origin }) =>
         `${origin}/api/workspaces/${encodeURIComponent(sandboxId)}/terminal`
         + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
@@ -249,8 +175,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     const beat = setInterval(() => {
       const keepaliveKey = crypto.randomUUID();
       const owner: TerminalOperation = { promise: null };
-      // Install the owner before the fetch starts; several keepalives may be
-      // outstanding at once, so each owns its own map entry.
+      // Several keepalives may be outstanding at once; each owns its own map entry.
       keepaliveOperations.current.set(keepaliveKey, owner);
       owner.promise = (async () => {
         try {
@@ -260,9 +185,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
             { method: "POST", credentials: "same-origin" },
           );
 
-          // A missed beat costs at most one idle cycle of lease, so it is not
-          // fatal — but it is shown rather than discarded, because the reason
-          // (container gone, attach failed) arrives here before the socket says so.
+          // Shown, not fatal: the reason (container gone, attach failed) arrives here before the socket reports it.
           if (keepaliveOperations.current.get(keepaliveKey) === owner && !response.ok) {
             setFailure(`the container refused the terminal's keepalive (${response.status})`);
           }
@@ -284,8 +207,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     };
   }, [state, workspace, executor]);
 
-  // A shell that exits leaves the container holding a dead PTY that every later
-  // attach is handed, so the way back has to be reachable from the pane itself.
+  // An exited shell leaves a dead PTY handed to every later attach, so restart must be reachable from the pane.
   const restart = async () => {
     setFailure(null);
 
@@ -324,11 +246,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
           title="Destroy this shell and open a new one. Use this after a shell exits.">
           restart shell
         </button>
-        {/* What the chords actually do here. `⌃C` reaches a full-screen program
-            (they read it as a keystroke), but bash job control is unavailable in
-            this container: the PTY's shell is not a session leader with the
-            terminal as its controlling tty, so the kernel has no foreground
-            group to signal. Saying "⌃C interrupts" would be the fake. */}
+        {/* Job control is unavailable: the PTY shell is not a session leader, so ⌃C only reaches full-screen programs. */}
         <span className="shrink-0" title="⌃C reaches a full-screen program. Suspend, fg and bg do not work here.">
           ⇧⌃C copies · no job control
         </span>
@@ -338,15 +256,12 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   );
 }
 
-/** The window, as both socket drivers declare it: the same control frame. */
 function resizeFrames(term: Terminal, socket: WebSocket): IDisposable {
   return term.onResize(({ cols, rows }) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols, rows }));
   });
 }
 
-/** What both socket drivers undo on unmount: the copy in flight, the socket's
- *  handlers and subscriptions, the socket, the chrome, then the terminal. */
 function releaseSocketPane(pane: {
   socket: WebSocket;
   subscriptions: readonly (IDisposable | null)[];
@@ -370,15 +285,8 @@ function releaseSocketPane(pane: {
   };
 }
 
-/**
- * The wire this driver speaks, verbatim: binary frames of terminal bytes each
- * way, `{type:'resize'}` out, and these three control frames in. Not the
- * SDK's own shape (`code`/`signal`/`message` — see PtyTerminal above): this
- * environment has no vendored client to match, so the shape is the one the
- * route promises instead.
- */
-/** The three control frames the route sends, and nothing else. A frame that
- *  is none of them is dropped: the pane and the route ship together. */
+/** Device wire: terminal bytes each way, `{type:'resize'}` out, these control frames in. */
+/** Other frames are dropped: the pane and the route ship together. */
 const DeviceTerminalMessageSchema = v.variant("type", [
   v.object({ type: v.literal("ready") }),
   v.object({ type: v.literal("exit"), exitCode: v.number() }),
@@ -403,13 +311,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
     const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
     termRef.current = term;
 
-    // The terminal's own socket, on the app's own origin under the same
-    // authenticated workspace path the sandbox driver uses — the cookie and
-    // `Origin` the handshake carries are what authorize it. Geometry rides the
-    // query so the device's first paint is already the right size instead of
-    // an 80x24 frame that reflows. The scheme has to be spelled out: a
-    // relative URL would resolve against `http(s):` and the constructor
-    // rejects that.
+    // The scheme must be explicit: a relative URL resolves to http(s): and the constructor rejects it.
     const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
     const socket = new WebSocket(
@@ -417,8 +319,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
       + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
     );
 
-    // Output arrives as bytes rather than the default Blob, so it can go
-    // straight into xterm with no read step in between.
+    // Bytes rather than Blob, so output goes straight into xterm.
     socket.binaryType = "arraybuffer";
     const encoder = new TextEncoder();
     let dataSubscription: IDisposable | null = null;
@@ -439,8 +340,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
       }
 
       if (event.data instanceof Blob) return;
-      // A frame that is not JSON is the one failure tolerated here by name;
-      // the socket carries what the server wrote. Anything else propagates.
+      // A non-JSON frame is the one tolerated failure; anything else propagates.
       const parsed = v.safeParse(DeviceTerminalMessageSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
 
       if (!parsed.success) return;
@@ -482,10 +382,6 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
         <span>·</span>
         <span>{state === "connected" ? "interactive shell" : state}</span>
         {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        {/* Copy needs the same chord here, and for the same reason: Ctrl-C is
-            a byte the foreground program must receive. On this driver that
-            program is a real shell, so Ctrl-C keeps its ordinary meaning
-            instead of merely reaching a full-screen program's raw input. */}
         <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">
           ⇧⌃C copies
         </span>
@@ -495,14 +391,8 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
   );
 }
 
-/* ── the workspace shell ──────────────────────────────────────────────── */
 
-/**
- * The runtime's terminal over its own frames: keystrokes and the window go
- * out as JSON, the shell's bytes come back as JSON, and `ready` says the
- * runtime attached this socket — after which it has already replayed the
- * scrollback, so a reload lands on the same screen.
- */
+/** `ready` arrives after the runtime replayed scrollback, so a reload lands on the same screen. */
 function WorkspaceTerminal({ workspace, executor }: { workspace: string; executor: string }) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -531,8 +421,7 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
     let resizeSubscription: IDisposable | null = null;
 
     socket.onopen = () => {
-      // The runtime sizes its editor from the frames it is sent, never from
-      // the query, so the window is declared as soon as the socket is up.
+      // The runtime sizes its editor from frames, never the query, so declare the window on open.
       socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       dataSubscription = term.onData((data) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
@@ -541,8 +430,7 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
     };
 
     socket.onmessage = (event) => {
-      // The runtime writes process notices on this socket beside the shell's
-      // output; the pane paints the two frames it knows and drops the rest.
+      // Process notices share this socket; unknown frames are dropped.
       const parsed = v.safeParse(WorkspaceTerminalOutputSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
 
       if (!parsed.success) return;
@@ -593,7 +481,6 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
   );
 }
 
-/* ── line mode ────────────────────────────────────────────────────────── */
 
 function LineTerminal(
   { executor, outputs, onExecute }: {
@@ -611,9 +498,7 @@ function LineTerminal(
   const lineState = lineStateRef.current;
   const commandOperation = useRef<TerminalOperation | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  // The parent hands a fresh closure every render. Held in a ref so the effect
-  // below stays keyed on the executor alone: rebuilding the terminal per render
-  // would wipe the scrollback under whoever was reading it.
+  // Held in a ref so the effect stays keyed on the executor; rebuilding per render wipes scrollback.
   const execute = useRef(onExecute);
   execute.current = onExecute;
 
@@ -634,28 +519,18 @@ function LineTerminal(
       const run = execute.current;
 
       if (lineState.running || !run) return;
-      // The editor owns the echo and decides when a command is finished; a
-      // heredoc and a pasted script both reach here as ordinary chunks.
       const cmd = feedInput(term, lineState, data);
 
       if (cmd === null) return;
-      // Keystrokes are dropped while a command runs, so say so; the marker
-      // is cleared by whichever of the two paths below lands.
       lineState.beginCommand();
       term.write(BUSY);
       setFailure(null);
-      // xterm owns a synchronous data callback, so retain the background
-      // promise until it settles even though the executor generation fences it.
+      // xterm's data callback is synchronous, so retain the promise until it settles.
       const owner: TerminalOperation = { promise: null };
       commandOperation.current = owner;
       owner.promise = (async () => {
         try {
-          // A command that FAILS is an outcome, not a lost failure: its error
-          // belongs on the terminal row. The rejection is therefore held as a
-          // value, and the two fences — a reset generation, a rebuilt terminal
-          // — are decided once below, on the same footing for a command that
-          // failed and one that did not, instead of as a return out of the
-          // handler that reads identically for a stale row and a failed one.
+          // A failed command is an outcome for the terminal row: the rejection is held as a value so both fences apply alike.
           let thrown: { readonly cause: unknown } | undefined;
 
           try {
@@ -669,8 +544,7 @@ function LineTerminal(
           if (termRef.current !== term) return;
 
           if (thrown !== undefined) {
-            // A rejected exec produces no output row, so nothing else would
-            // ever clear the marker or reprint the prompt.
+            // A rejected exec produces no output row, so clear the marker and reprint the prompt here.
             clearBusy(term, lineState);
             term.write(`\x1b[31m${describeError(thrown)}\x1b[0m\r\n`);
             writePrompt(term);
@@ -704,7 +578,6 @@ function LineTerminal(
 
   useTerminalPalette(termRef, theme);
 
-  // New outputs as ANSI rows, deduped so a re-render never reprints a row.
   useEffect(() => {
     const term = termRef.current;
 
@@ -723,9 +596,6 @@ function LineTerminal(
 
   return (
     <div className="w-full h-full flex flex-col">
-      {/* The mode this pane is in. It never explains what an environment
-          cannot do: a device PTY is being built, and a label about a missing
-          primitive would be wrong the day it lands. */}
       <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
         <span className="font-mono">{executor}</span>
         <span>·</span>
@@ -737,7 +607,6 @@ function LineTerminal(
   );
 }
 
-/* ── shared ───────────────────────────────────────────────────────────── */
 
 function newTerminal(mode: ThemeMode): Terminal {
   return new Terminal({
@@ -750,15 +619,8 @@ function newTerminal(mode: ThemeMode): Terminal {
 }
 
 /**
- * xterm needs concrete colours, not custom properties, so the palette is read
- * off the document at theme time. Hardcoding it is what let the previous
- * terminal drift a whole palette behind.
- *
- * ANSI is a protocol: a program that emits `\x1b[31m` means "error", so the
- * four slots with a status role take that role's token. Magenta and cyan have
- * no status meaning and no token; they stay distinguishable (a shell that
- * colours by type needs them to be) but are pulled into the warm family rather
- * than shipping the only violet and cyan in the product.
+ * xterm needs concrete colours, so the palette is read off the document at theme time.
+ * ANSI status slots take their role's token; magenta and cyan are pulled into the warm family.
  */
 const ANSI_UNTOKENED = {
   dark: { magenta: "#c9a0c6", cyan: "#8fbdb8" },

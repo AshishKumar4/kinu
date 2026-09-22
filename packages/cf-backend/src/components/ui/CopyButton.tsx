@@ -1,15 +1,9 @@
-/**
- * The icon-only copy action, with feedback. A bare
- * `onClick={() => navigator.clipboard.writeText(x)}` reports nothing —
- * including for the webhook secret, which is shown exactly once, where a
- * rejected write leaves the user with nothing and no way to know.
- */
+/** Reports clipboard failures; the webhook secret is shown only once. */
 import { CheckIcon, CopyIcon, WarningCircleIcon, type Icon } from "@phosphor-icons/react";
 import { useCopy, type CopyStatus } from "@/hooks/use-copy";
 
 export interface CopyButtonProps {
   value: string;
-  /** What is being copied, for the tooltip: "webhook URL", "the secret". */
   what: string;
   size?: number;
   className?: string;

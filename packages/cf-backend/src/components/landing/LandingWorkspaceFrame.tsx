@@ -1,21 +1,4 @@
-/**
- * The workspace as the landing page shows it: the product's own components,
- * fed fixture state (`landing-fixtures.ts`) the way `gallery.tsx` feeds its
- * frames. WorkspaceBar, SubordinateTabs, MessageView, Composer, WorkSurface,
- * SupervisePage and PlanReviewView are the shipped ones; nothing here is a
- * drawing of them.
- *
- * Loaded lazily from `LandingFrame`: the first paint of the landing page does
- * not pay for the workspace's renderers (Markdown, code highlighting, the plan
- * viewer), which arrive with this chunk.
- *
- * Three frames share the shell:
- *   checkout: a Build turn mid-fix, Work tab open, Run/Supervise live
- *   plan:     the walkthrough movie (`landing-movie-timeline.ts`) — typing,
- *             tool calls, plan review, approval, and the slate it builds,
- *             played over these same components
- *   slate:    a slate the agent wrote, open in its own tab, drawn in the page
- */
+/** Product components fed fixture state; loaded lazily so the landing first paint skips the workspace renderers. */
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { flushSync } from 'react-dom';
 import { MemoryRouter } from 'react-router-dom';
@@ -83,10 +66,7 @@ function SlateBody(): ReactElement {
   );
 }
 
-/** The transcript behind a memo boundary: the movie's typing animation
- *  re-renders the frame per keystroke, and without this every frame would
- *  re-parse the Markdown the beats already built. Props are beat-stable, so
- *  typing renders touch only the composer. */
+/** Memoized: the typing animation re-renders per keystroke; props are beat-stable, so only the composer re-renders. */
 const Transcript = memo(function Transcript(
   { messages, streaming }: { messages: readonly UIMessage[]; streaming: boolean },
 ): ReactElement {
@@ -111,7 +91,6 @@ const Transcript = memo(function Transcript(
 
 export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind }): ReactElement {
   const frame = FRAME[kind];
-  // Only the plan frame carries the movie; the others keep their static story.
   const isMovie = kind === 'plan';
   const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const tRef = useRef(reduced && isMovie ? MOVIE_END : 0);
@@ -140,19 +119,15 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const [draft, setDraft] = useState('');
   const [model, setModel] = useState(LANDING_MODEL);
 
-  // The movie's decision flows through the real `decidePlanReview` rpc: the
-  // cursor's click lands on the product's Approve button, and the decided plan
-  // it returns overrides the timeline's pending one from then on.
+  // The movie's decision flows through the real `decidePlanReview` rpc; the decided plan then
+  // overrides the timeline's pending one.
   const [decided, setDecided] = useState<PlanReview | null>(() => (
     reduced && isMovie
       ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now(), decidedAt: Date.now() }
       : null
   ));
 
-  // One source for the plan: the decided override, else the timeline's. The
-  // rpc serves THIS plan, so the Plans read and the pane agree — a workspace
-  // that has not submitted a plan answers [] rather than advertising the
-  // fixture's.
+  // The rpc serves this same plan, so a workspace with no submitted plan answers [].
   const plan = isMovie ? (decided ?? discrete.plan) : null;
   const decidePlan = useMemo(() => planRpc(setDecided, plan), [plan]);
   const [, setWorkVersion] = useState(0);
@@ -164,8 +139,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     if (planLocked) setMode('plan');
     else if (plan?.status === 'approved') setMode('build');
   }, [planLocked, plan?.status]);
-  // The movie opens the slate tab by itself at the slate beat; between beats
-  // the reader's own tab picks stand.
   useEffect(() => {
     if (isMovie) setSurface(discrete.surface);
   }, [isMovie, discrete.surface]);
@@ -181,7 +154,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   );
 
   const slateBody = useCallback(() => <SlateBody />, []);
-  // A transcript opens at its latest turn, as the app opens it.
   const transcript = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const list = transcript.current;
@@ -189,8 +161,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     if (list !== null) list.scrollTop = list.scrollHeight;
   }, [altitude, cueCount]);
 
-  /** One target's center in stage coordinates, or null while it is unmounted
-   *  (the plan chunk still loading, or the slate tab not yet opened). */
+  /** Null while unmounted (plan chunk loading, or slate tab not opened). */
   const resolveTarget = (target: MovieTarget): { x: number; y: number } | null => {
     const stage = stageRef.current;
 
@@ -217,8 +188,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     return { x: rect.left - box.left + rect.width / 2, y: rect.top - box.top + rect.height / 2 };
   };
 
-  /** The cursor's click, landing on the product's own Approve button so the
-   *  decision runs the product's `decidePlanReview` path, not a storyboard. */
   const clickApprove = (): boolean => {
     const stage = stageRef.current;
 
@@ -236,8 +205,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     return false;
   };
 
-  /** Imperative per-frame paint: cursor, ripple, pressed state, progress
-   *  attributes. Never triggers a React render. */
+  /** Imperative per-frame paint; never triggers a React render. */
   const syncFrame = (): void => {
     const stage = stageRef.current;
 
@@ -300,8 +268,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     }
   };
 
-  /** Beats rebuild the discrete story; the typing animation paints the draft
-   *  per frame between them (the window holds no cues, so the two never fight). */
+  /** The typing window holds no cues, so beats and the per-frame draft paint never fight. */
   const syncBeats = (): void => {
     const count = cueCountAt(tRef.current);
 
@@ -320,7 +287,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     let last = performance.now();
 
     const step = (now: number): void => {
-      // The first rAF timestamp can predate the performance.now() taken when
+      // The first rAF timestamp can predate the `performance.now()` above, hence the clamp.
       tRef.current = Math.min(MOVIE_END, tRef.current + Math.max(0, now - last));
       last = now;
       const t = tRef.current;
@@ -359,14 +326,11 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     return () => cancelAnimationFrame(raf);
   }, [isMovie, reduced, playing]);
 
-  // Re-anchor the cursor whenever a beat re-renders the stage: targets move
-  // when surfaces swap, so the pixel position is recomputed after commit.
   useLayoutEffect(() => {
     syncFrame();
   });
 
-  // Play once when the stage becomes visible. Replays are deliberate clicks;
-  // scrolling away and back never restarts the story.
+  // Plays once when visible; scrolling away and back never restarts it.
   useEffect(() => {
     if (!isMovie || reduced) return;
     const stage = stageRef.current;
@@ -402,9 +366,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       return promise;
     };
 
-    /** An element the PRODUCT decides to render, awaited on its own arrival
-     *  rather than on a count of frames: the mutation that inserts it is the
-     *  end condition. Resolves at once when it is already there. */
+    /** Awaits the inserting mutation, not a frame count; resolves at once when already present. */
     const mounted = (selector: string): Promise<void> => {
       const stage = stageRef.current;
 
@@ -443,21 +405,12 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           if (t < MOVIE_CUES.approve) setDecided(null);
         });
         syncFrame();
-        // Settle async fallout: the plan view is a lazy chunk behind
-        // Suspense, and the approve click decides through the product's rpc.
-        // Neither re-runs this component's effects.
+        // Async fallout (lazy plan chunk, approve rpc) does not re-run this component's effects.
         const settled = discreteAt(tRef.current);
 
         if (settled.plan !== null) {
-          // The review cannot be on screen before its renderer has landed, and
-          // no number of frames is the right number to wait for a chunk: a
-          // count parked the story at this beat whenever the chunk took
-          // longer, and every later beat then measured a movie that had
-          // stopped. Dynamic because it IS the wait: this specifier names the
-          // same module `WorkTab`'s `lazy()` holds, so the promise resolves
-          // exactly when React can render it — a static import would pull the
-          // plan renderer into the landing page's first paint, which is what
-          // the lazy boundary exists to prevent.
+          // Awaits the same module specifier `WorkTab`'s `lazy()` holds, so it resolves when React can
+          // render it; a static import would pull the plan renderer into the landing first paint.
           await import('@/components/surfaces/PlanReviewView');
           await mounted('[data-kinu-plan-review]');
           syncFrame();
@@ -507,9 +460,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
 
   return (
     <MemoryRouter initialEntries={[`/workspace/${LANDING_WORKSPACE}`]}>
-      {/* The rail reads the account the way it does in the app (layout.tsx sits
-          under App.tsx's AccountProvider); on this signed-out page the read
-          refuses and the rail shows its signed-out row, as it always has. */}
       <AccountProvider>
       <WorkspaceRosterProvider>
       <div
@@ -522,11 +472,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         aria-label={kind === 'checkout' ? 'Kinu workspace interface preview' : `Kinu ${kind} interface preview`}
         className="p-workbench relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
-        {/* The app's own rail, the app's own component: `SidebarRail` owns the
-            lane, its veil and the hide/show choice, so the frame cannot drift
-            from what layout.tsx shows. Below md the app summons a drawer from
-            its header instead — the frame has no header, so it shows no rail
-            there either. */}
+        {/* Below md the app summons a drawer from its header; the frame has no header, so no rail there. */}
         <SidebarRail />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceBar
@@ -544,10 +490,6 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           </div>
         ) : (
           <div data-workspace-panel="run" className="flex h-[620px] min-h-0 flex-col md:h-[760px]">
-            {/* The product's workbench: the two columns, the separator, and the
-                inspector's own policy. The column is shut on a frame that holds
-                nothing to inspect and opens itself when the plan arrives —
-                `decideInspector`, not a height this file picked. */}
             <WorkbenchPanels
               scope={kind}
               workspace={undefined}

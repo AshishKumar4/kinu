@@ -1,8 +1,4 @@
-/**
- * First-run setup — the wizard an account that has never finished it lands
- * on, whatever URL it arrived at. Profile (name prefilled from the OAuth
- * login, editable), model (provider connect + default model pick), showcase.
- */
+/** First-run setup wizard; an unfinished account lands here from any URL. */
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -25,8 +21,6 @@ import { useElementSize } from "@/hooks/use-element-size";
 
 const LAST_STEP = ONBOARDING_STEPS.length - 1;
 
-/** Step 3 — what Kinu does. The three cards fade in on arrival, each a beat
- *  after the last, so the step reads as revealed rather than already there. */
 const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   {
     Icon: SparkleIcon,
@@ -45,7 +39,6 @@ const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   },
 ];
 
-/** A step dot: the one you are on is wide, the ones behind are dimmed. */
 function stepDotCls(index: number, step: number): string {
   if (index === step) return 'w-8 bg-[var(--c-accent-fg)]';
 
@@ -81,20 +74,13 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const navigate = useNavigate();
   const profile = lastValue(account.profile);
 
-  // The name field starts from the profile's display name — seeded from the
-  // OAuth login — and stays editable. `null` until the field is touched: the
-  // displayed name follows the loaded profile until the user types, so a slow
-  // profile never overwrites an edit. A seeded user confirms it in one click.
+  // `null` until touched, so a slow profile load never overwrites an edit.
   const [step, setStep] = useState(() => Math.min(Math.max(0, initialStep), LAST_STEP));
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
-  // The card follows the step it is showing: the track is as wide as all the
-  // panels, but its height is the ACTIVE panel's, observed rather than
-  // guessed, so step 0 is not a tall card over a void. `attach` re-binds the
-  // observer whenever `step` changes; `h` stays 0 ("not measured") until the
-  // first callback, and an unmeasured wrapper means no inline height at all.
+  // Card height follows the active panel, observed; `h` 0 means unmeasured (no inline height).
   const stepSize = useElementSize();
   const stepHeight = stepSize.size.h === 0 ? null : stepSize.size.h;
 
@@ -112,8 +98,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     return undefined;
   }, [step]);
 
-  // The onboarding mark is the SAME mark the sidebar shows: first letter of
-  // the name being typed, then of the stored name, then of the email.
+  // Same mark as the sidebar: first letter of the typed name, stored name, then email.
   const named = displayName.trim() || (profile?.email ?? '');
   const letter = (named === '' ? '?' : named)[0].toUpperCase();
 
@@ -125,9 +110,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       const { onboardedAt } = await completeOnboarding();
       const current = lastValue(account.profile);
 
-      // The gate reads the SHARED profile: publishing the stamp before the
-      // navigation is what keeps it from bouncing the route back to /welcome
-      // while the reload is still in flight.
+      // Publish the stamp before navigating so the gate doesn't bounce back to /welcome.
       if (current !== null) account.set({ ...current, onboardedAt });
       account.reload();
       await navigate(APP_ROUTES.home, { replace: true });

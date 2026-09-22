@@ -1,36 +1,6 @@
 /**
- * Activity — the instrument panel for the run itself.
- *
- * It closes with the raw `activity_log` rows. That block was cut once on the
- * argument that event name + detail + ms is telemetry a person can read in chat
- * or in the Work tab's journal instead — but `getActivitySnapshot` kept
- * returning `log`, so the cut left up to 200 rows crossing the wire on every
- * revalidation with no reader at all. It is back, reading the payload the
- * snapshot already carries and adding no request of its own. `kinu debug`
- * prints the same rows for anyone who wants them outside the browser.
- *
- * Provider-reported tokens and cache reads are authoritative and labelled
- * `API`. Category attribution uses the exact composed-content character counts
- * Kinu measures locally. Providers do not report per-category tokens, so
- * this surface never invents them. Anything the backend could not source
- * renders as an em dash and a reason, never as a plausible zero.
- *
- * Cost is TWO scopes and says which is which. The hero figure is this agent's
- * own turns, out of `step_finish`, because the token and cache blocks around it
- * are per-step and would be meaningless mixed with a judge's cold prompt. The
- * workspace total sits under it, grouped by the producer that spent it, with the
- * coverage fraction that says what share of the known calls the providers
- * actually measured — the panel's answer to whether the number includes the
- * async models.
- *
- * Within that table MEASUREMENT OUTRANKS DERIVATION, left to right and in tone:
- * tokens and neurons are what a provider reported, and neurons are Cloudflare's
- * own billing unit rather than a rate anyone applied, so they read at full
- * weight. The dollar column is priced from the models.dev catalog by
- * `priceCall`, is a floor whenever a call carried no rate, and is dimmed and
- * last for exactly that reason (`scripts/eval-spend.ts:12-16` is the same rule
- * one layer down: what a run MEASURED is tokens and calls, and a dollar figure
- * is a number nobody cited).
+ * Provider-reported figures are labelled `API`; unsourced figures render as an em dash and a reason, never zero.
+ * The dollar column (`priceCall`) is a floor when a rate is missing, so it is dimmed and last.
  */
 import { useCallback } from "react";
 import {
@@ -48,13 +18,11 @@ import type {
 } from "@kinu.run/core";
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "@kinu.run/core";
 
-/** Live surface: a turn in flight re-measures every step. */
 const STREAMING_POLL_MS = 1500;
 
 const IDLE_POLL_MS = 10_000;
 
-/** Planes read as one brass ramp rather than five hues — this is one quantity
- *  split by origin, not five unrelated series. */
+/** One brass ramp, not five hues: one quantity split by origin. */
 const PLANE_LABEL = {
   system: "System prompt",
   tools: "Tool definitions",
@@ -96,7 +64,6 @@ export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
   );
 }
 
-/* ── shared chrome ──────────────────────────────────────────────── */
 
 function BlockHeader(
   { icon: Icon, title, note }: { icon: React.ComponentType<{ size?: number; className?: string }>; title: string; note?: string },
@@ -110,7 +77,6 @@ function BlockHeader(
   );
 }
 
-/** Every numeral in this panel is tabular mono so columns align down the page. */
 function Num(
   { children, className = "", title }:
   { children: React.ReactNode; className?: string; title?: string },
@@ -118,7 +84,6 @@ function Num(
   return <span className={`font-mono tabular-nums ${className}`} title={title}>{children}</span>;
 }
 
-/** Marks a figure's provenance. The whole panel turns on this distinction. */
 function Source({ kind }: { kind: "API" | "local" }) {
   return (
     <span
@@ -134,8 +99,6 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="p-row-text p-text-3">{children}</p>;
 }
 
-/** A figure that under-counts, and why. Every gap in this panel is stated in
- *  this shape rather than absorbed into the smaller number. */
 function Warning({ children }: { children: React.ReactNode }) {
   return (
     <p className="flex items-start gap-1.5 p-meta p-warning mt-1.5">
@@ -145,7 +108,6 @@ function Warning({ children }: { children: React.ReactNode }) {
   );
 }
 
-/* ── context ────────────────────────────────────────────────────── */
 
 function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
   const { latest, contextWindow } = snap;
@@ -159,8 +121,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
     );
   }
 
-  // Absent, not zero: `latest` is only non-null because the provider reported
-  // SOMETHING, which need not have included a prompt-token count.
+  // Absent, not zero: the provider may have reported usage without a prompt-token count.
   const { input, cacheRead } = latest.usage;
 
   const windowShare = input !== undefined && contextWindow !== null && contextWindow > 0
@@ -178,7 +139,6 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
       />
 
       <div className="flex items-end gap-2 mb-1">
-        {/* Hero stat numeral: sized to its block, not the type scale. */}
         <Num className="text-[22px] leading-none p-text">{input === undefined ? "—" : input.toLocaleString()}</Num>
         <span className="p-meta p-text-2 pb-px">
           {input === undefined ? "input tokens not reported" : measure}
@@ -321,7 +281,6 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
   );
 }
 
-/* ── cost ───────────────────────────────────────────────────────── */
 
 function CostBlock({ snap }: { snap: ActivitySnapshot }) {
   const { telemetry, spend } = snap;
@@ -336,7 +295,6 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
       />
       {priced ? (
         <div className="flex items-end gap-2">
-          {/* Hero stat numeral: sized to its block, not the type scale. */}
           <Num className="text-[20px] leading-none p-text">{fmtUsd(telemetry.usd)}</Num>
           <span className="p-meta p-text-2 pb-px">
             over {telemetry.pricedSteps} priced steps from this agent&apos;s turns
@@ -376,36 +334,8 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
   );
 }
 
-/**
- * The workspace total, on both of its axes: what KIND of work spent the money,
- * and which declared MISSION it was spent on.
- *
- * One table, because it is one sum read two ways, and two tables would invite
- * the reader to add them. The producer rows and the mission rows do not sum
- * together and the table says so where it turns: the producer half is the window
- * named in the header, the mission half is each label's whole life, because that
- * is the figure its cap is enforced against.
- *
- * The figure above this block is the turn loop's own, and a reader who stops
- * there has no way to know a judge ensemble or an evolution pass ran at all.
- * These rows are the rest of the workspace; the coverage line under them is what
- * separates an answer from a number that merely looks like one, because a
- * producer whose provider reports nothing is counted in calls and absent from
- * tokens, and that gap is stated rather than rounded into the total.
- *
- * A producer with no row never ran. Every producer reports through the same
- * sink, so an absent row is silence about work that did not happen rather than a
- * wiring gap — which is why no zero row is drawn for it. The neurons column
- * obeys the same rule one axis over: a workspace whose providers never bill in
- * neurons gets no column at all, instead of a column of dashes.
- *
- * THREE THINGS CAN QUALIFY THESE TOTALS and they arrive independently, so they
- * are composed into one caveat line by {@link spendCaveat} rather than stacked as
- * three warnings a reader learns to skip. A row bound is not one of them: the
- * producer rows are summed in SQL over every row, so no read stops short with
- * the log running on past it. The figure above this block is still the windowed
- * one; these are the whole life of the workspace, and the header says which.
- */
+/** Producer rows cover the header's window; mission rows cover each label's whole life
+ *  (what its cap is enforced against), so the halves do not sum. */
 function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   const { producers, total, coverage } = spend;
   const { reported } = coverage;
@@ -584,29 +514,10 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   );
 }
 
-/**
- * Everything qualifying the totals, as one sentence instead of three warnings.
- *
- * Three qualifiers arrive independently — producers that measured nothing,
- * producers that measured only some of their calls, and calls no catalog could
- * price — and three stacked warning paragraphs is a panel a reader learns to
- * skip. Each clause is pushed by its own condition, so a live qualifier cannot be
- * lost to the composition and an inapplicable one says nothing at all.
- *
- * A row bound is not a fourth clause: the totals are summed in SQL over every
- * row, so no read stops short with the log running on behind it. The widest
- * qualifier a reader faces is a silent producer bounding the tokens, and a
- * missing rate bounding only the dollars. Null when the totals need no
- * qualifying, which is the one case the panel is allowed to state positively.
- */
 function spendCaveat(spend: WorkspaceSpend): string | null {
   const { total, coverage } = spend;
   const clauses: string[] = [];
 
-  // Passive, so one producer and four read the same. `Judges measured nothing`
-  // and `Judges, MCTS rollouts measured nothing` cannot both be grammatical with
-  // a pronoun in the clause, and a list this short is not worth an Oxford comma
-  // formatter.
   if (coverage.silent.length > 0) {
     clauses.push(`nothing at all was measured from ${sourceList(coverage.silent)}`);
   }
@@ -619,10 +530,7 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
     clauses.push(`${total.unpricedCalls} measured call${total.unpricedCalls === 1 ? "" : "s"} carried no models.dev rate`);
   }
 
-  // Priced, and priced short: the catalog publishes ONE cache-write rate and
-  // these calls used the longer retention tier, which costs more. Named beside
-  // the missing-rate clause because both bound the same dollar figure, and a
-  // reader who cannot see this one reads a floor as the price.
+  // The catalog publishes one cache-write rate; these calls used the pricier longer-retention tier.
   if (total.floorPricedCalls > 0) {
     clauses.push(`${total.floorPricedCalls} priced call${total.floorPricedCalls === 1 ? "" : "s"} wrote cache at a retention tier the catalog does not rate`);
   }
@@ -630,22 +538,10 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
   return clauses.length === 0 ? null : clauses.join("; ");
 }
 
-/** A producer's share of the tokens the workspace actually measured. Null when
- *  either side is unreported: a silent producer has no share, and no row has one
- *  when nothing at all was measured. */
 const shareOfTokens = (tokens: number | undefined, measured: number | undefined): number | null =>
   tokens === undefined || measured === undefined || measured === 0 ? null : tokens / measured;
 
-/**
- * The numeric cells every spend row carries, in provenance order: what the
- * provider measured, then what Kinu derived.
- *
- * Shared by the producer rows and the total so a floor can never be marked in
- * one and swallowed in the other. `className` carries the row's emphasis and is
- * deliberately NOT applied to the dollar cell — that figure is a catalog rate
- * applied to somebody else's measurement, and it reads one step quieter than the
- * counts beside it however important the row is.
- */
+/** `className` is deliberately not applied to the dollar cell: a derived figure reads quieter. */
 function SpendCells(
   { row, measuredTokens, neurons, className }: {
     row: Omit<ProducerSpend, "source">;
@@ -695,21 +591,10 @@ function SpendCells(
   );
 }
 
-/** The figure this follows is a floor. What is missing from it is on the cell's
- *  own title, and what the mark means is stated once in the coverage note. */
 function Floor() {
   return <span className="p-warning">+</span>;
 }
 
-/**
- * Why a count is short, or why there is none at all — absent when the count is a
- * whole measurement, because a tooltip on a figure with nothing to qualify is
- * noise.
- *
- * `missing` is the column's own reason for an em dash. It is only reached when
- * the provider DID report something for at least one call, since a producer that
- * reported nothing at all has one explanation covering every column.
- */
 function countNote(
   value: number | undefined, row: Omit<ProducerSpend, "source">, missing: string,
 ): string | undefined {
@@ -724,9 +609,6 @@ function countNote(
     : `${row.callsWithoutUsage} of ${row.calls} calls reported no usage, so this count is a floor.`;
 }
 
-/** What a dollar figure leaves out. A call the provider reported no usage for
- *  cannot be priced either, so both gaps land on the same figure and both are
- *  named; an absent figure is unpriced, never free. */
 function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
   const gaps: string[] = [];
 
@@ -742,8 +624,7 @@ function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
   return row.usd === undefined ? `${missing} Unpriced.` : `${missing} This figure is a floor.`;
 }
 
-/** Producer names for prose, from the one label map — a second list here is how
- *  a producer added to `SPEND_SOURCES` reaches the owner as `platform`. */
+/** From the one label map, so a producer added to `SPEND_SOURCES` gets its name. */
 const sourceList = (sources: readonly SpendSource[]): string =>
   sources.map((source) => SPEND_SOURCE_LABEL[source]).join(", ");
 
@@ -756,7 +637,6 @@ function Stat({ label, value, size = "normal" }: { label: string; value: string;
   );
 }
 
-/* ── cache ──────────────────────────────────────────────────────── */
 
 export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
   return (
@@ -798,30 +678,9 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
   );
 }
 
-/* ── log ────────────────────────────────────────────────────────── */
 
-/**
- * The agent's own running commentary — one row per notable thing the runtime
- * did, written by `logActivity` on every backend.
- *
- * It is on the panel because the owner asked for it, and because the payload
- * never stopped arriving: `getActivitySnapshot` has always returned `log`, and
- * with nothing reading it every revalidation pulled up to 200 rows across the
- * wire to drop them on the floor. This block reads what the snapshot above
- * ALREADY carried — it adds no fetch, no RPC and no second cadence of its own,
- * so restoring it costs one render rather than one more request.
- *
- * Newest first, because a log is read from the top. `elapsedMs` is time INTO THE
- * TURN that wrote the row and `logActivity` writes 0 when there was no turn in
- * flight (`actor-agent.ts`: `_turnT0 > 0 ? … : 0`), so a zero renders as an em
- * dash and a reason rather than a 0 ms measurement nobody made — the same rule
- * every other figure on this panel follows. `detail` is free text written for a
- * person and is shown as exactly that, never parsed into numbers the run-event
- * log already carries properly (`core/identity/activity-log.ts`).
- */
+/** `elapsedMs` is 0 when no turn was in flight, so zero renders as an em dash, not 0 ms. */
 export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
-  // Walked backwards rather than reversed into a copy: the display order is
-  // newest-first, and the node list React needs is the only array built.
   const rows: React.ReactNode[] = [];
 
   for (let i = log.length - 1; i >= 0; i -= 1) {

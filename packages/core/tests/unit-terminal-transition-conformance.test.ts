@@ -322,6 +322,34 @@ class Plane {
     if (closing !== null) await closing;
   }
 
+  /** One settled response whose carrier dies before the close runs — a fiber
+   *  that could not start, a tracked promise that rejected — handed to the
+   *  one rule every backend's carrier reports through. */
+  async settleOnLostCarrier(declare: () => readonly OwedEffect[]): Promise<void> {
+    const reported: Promise<void>[] = [];
+
+    await this.process().settle({
+      transition: TRANSITION,
+      declare,
+      hold: (claimed) => {
+        this.wakeAt = null;
+        reported.push(this.process().closeFailed(claimed, { cause: new Error('the carrier died before the close ran') }));
+      },
+    });
+    await Promise.all(reported);
+  }
+
+  /** Fire the armed wake into the process that is STILL running — a warm
+   *  isolate's alarm, a live CLI's timer. False when nothing was armed. */
+  async wakeLive(): Promise<boolean> {
+    if (this.wakeAt === null) return false;
+    this.clock = Math.max(this.clock, this.wakeAt);
+    this.wakeAt = null;
+    await this.capture(async () => { await this.process().replayOwedAndRearm(); });
+
+    return true;
+  }
+
   /**
    * Bring a process back for whatever is still owed, the way this transport
    * does.
@@ -639,6 +667,23 @@ describe('terminal transition conformance across two adapters', () => {
     expect(snap.outputs).toEqual(EVERY_OUTPUT);
     expect(snap.inFlight).toBe(0);
     expect(snap.interrupts).toEqual([]);
+  });
+
+  test('a close whose carrier dies is released and re-armed, so the live process closes it', async () => {
+    const snap = await conform(async (plane) => {
+      await plane.settleOnLostCarrier(() => roster(SEQUENCE.filter((name) => name !== DETACHED)));
+      const lost = plane.snapshot();
+      // Every effect ran and only the close is missing. A sequence the live
+      // process still held would be skipped by every later sweep.
+      expect(claimState(lost)[TERMINAL_CLAIM_CALL]).toBeNull();
+      expect(lost.inFlight).toBe(0);
+      // No row is owed, so the ledger arms nothing: the re-arm is the only way back.
+      expect(await plane.wakeLive()).toBe(true);
+    });
+
+    expect(snap.effects).toEqual([]);
+    expect(claimState(snap)).toEqual({ [TERMINAL_CLAIM_CALL]: SETTLED });
+    expect(snap.inFlight).toBe(0);
   });
 
   test('an interruption before a side effect leaves the suffix owed, and a recovery runs it', async () => {

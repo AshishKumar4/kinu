@@ -1,24 +1,4 @@
-/**
- * Releases — the decision surface over the release lane.
- *
- * The agent drives the lane end to end through `release.*`: it binds sources,
- * opens changes, writes the patch, applies and checks it in its sandbox,
- * exposes the preview, requests approval, deploys. What only the owner can do
- * is DECIDE — `decideReleaseApproval` is deliberately absent from the agent's
- * tool surface, so the approve/reject controls here are that decision's one
- * home. Everything else on this surface is the evidence a decision needs:
- * the diff, the checks with their real output, the exact command an approval
- * lets run, the preview, the deploy history.
- *
- * There are no forms. The manual source-binding and change-creation forms
- * duplicated `release.bind_source` / `release.create` — work the agent
- * already does when asked in chat — and led the surface with data entry
- * instead of decisions.
- *
- * The substrate banner is the other honesty rule: the engine runs in the
- * sandbox container, and when that is unavailable this surface says so up
- * front instead of presenting a pipeline that cannot run.
- */
+/** `decideReleaseApproval` is absent from the agent's tool surface, so these approve/reject controls are its only home. */
 import { useCallback, useMemo, useState } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
@@ -43,15 +23,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, CodeBlock } from "./shared";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
-/**
- * How many changes the board carries.
- *
- * A DELIBERATE cap, not a paging window. The release lane is a decision queue:
- * what matters is every change still waiting on the owner, and a change that
- * has deployed or been rejected is closed. Thirty is far past the depth at
- * which the lane needs draining, and an unbounded lane would put settled
- * history in front of the one decision this surface exists to take.
- */
+/** A deliberate cap, not a paging window: settled changes are closed. */
 const RELEASE_BOARD_LIMIT = 30;
 
 const STATUS_META = {
@@ -106,9 +78,6 @@ function SectionTitle({ icon, title, count }: { icon: React.ReactNode; title: st
   );
 }
 
-/** The substrate's honest word, before any change is selected: a pipeline
- *  whose engine cannot run must say so here rather than render as if it
- *  could. Ready-with-note is the milder case (previews off). */
 function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
   const substrate = releaseSubstrate(executors);
 
@@ -163,9 +132,6 @@ function ChangeList({
   );
 }
 
-/** The sources the agent has bound (`release.bind_source`), read-only. Shown
- *  because the deploy target is the command an approval authorizes — worth a
- *  glance before the pipeline asks for one. */
 function SourceList({ bindings }: { bindings: ReleaseSource[] }) {
   return (
     <section>
@@ -205,12 +171,8 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
     finally { setBusy(null); }
   };
 
-  // The digest an approval signs binds {approvalType, patch, command}, and the
-  // command is the binding's own deployTarget — agent-supplied, and until now
-  // displayed nowhere. Approving a shell string you were never shown is not an
-  // approval, however well the digest pins it afterwards.
+  // The approval digest binds the deploy command, so the command must be shown before approving.
   const command = deployTargetAsCommand(binding?.deployTarget ?? null);
-  // A target declared as nothing is no target, and the sentence says so.
   const target = binding?.deployTarget ?? "";
 
   return (
@@ -247,7 +209,6 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
   );
 }
 
-/** The rows of one approval section, each against the source it was signed on. */
 function ApprovalList({ approvals, binding, rpc, onRefresh }: {
   approvals: readonly ReleaseApproval[];
   binding: ReleaseSource | undefined;
@@ -306,9 +267,6 @@ function ChangeDetail({
 }) {
   if (!change) return <EmptyState icon={<GitDiffIcon size={28} />} title="Select a change" />;
 
-  // The one thing on this surface only the owner can do comes first; the
-  // decided history reads below with the rest of the record. A section with
-  // nothing in it does not render — the record grows as the pipeline earns it.
   const pending = approvals.filter((a) => a.decision === "pending");
   const decided = approvals.filter((a) => a.decision !== "pending");
 
@@ -339,8 +297,7 @@ function ChangeDetail({
       {change.previewUrl && (
         <section>
           <div className="p-eyebrow mb-1">Preview</div>
-          {/* The URL comes from an agent-written change record, so it is a link
-              only when it really is a preview route. */}
+          {/* Agent-written URL: a link only when it is a preview route. */}
           {isPreviewUrl(change.previewUrl)
             ? <a href={change.previewUrl} target="_blank" rel="noopener noreferrer" className="text-xs p-accent hover:underline break-all">{change.previewUrl}</a>
             : <span className="text-xs p-text-3 break-all">{change.previewUrl}</span>}
@@ -404,17 +361,13 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
   const bindings = board?.bindings ?? [];
   const changes = board?.changes ?? [];
   const bindingMap = useMemo(() => new Map((board?.bindings ?? []).map((b) => [b.id, b])), [board?.bindings]);
-  // Derived, never written by the loader: a refresh that no longer carries the
-  // selected change falls back to the newest one, without a second state write
-  // racing the fetch that caused it.
+  // Derived, not stored: a refresh missing the selected change falls back to the newest without a racing state write.
   const selected = changes.find((c) => c.id === selectedId) ?? changes[0] ?? null;
   const checks = (board?.checks ?? []).filter((c) => c.changeId === selected?.id);
   const approvals = (board?.approvals ?? []).filter((a) => a.changeId === selected?.id);
   const deployments = (board?.deployments ?? []).filter((d) => d.changeId === selected?.id);
 
-  // Nothing has loaded yet, and "the read broke" is not "the lane is empty".
-  // Rendering the empty state for a failed read is how intact data gets
-  // reported as absent, so the two answers never share a branch.
+  // A failed read never renders the empty state.
   if (board === null) {
     return resource.status === "error"
       ? <LoadFailure what="the release lane" message={resource.message} onRetry={reload} className="p-card p-3" />
@@ -431,8 +384,6 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
         <Button size="sm" variant="ghost" onClick={reload} icon={<ArrowClockwiseIcon size={12} />}>Refresh</Button>
       </div>
 
-      {/* A refresh that failed over a board already on screen. Without this the
-          view goes stale in silence and reads as current. */}
       {resource.status === "error" && (
         <LoadFailure what="a fresher release lane" message={resource.message} onRetry={reload} className="p-card p-3" />
       )}
@@ -445,9 +396,7 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
           {bindings.length > 0 && <SourceList bindings={bindings} />}
         </>
       ) : (
-        // DOM order is the single-column (mobile) order: the selected change's
-        // decision content reads before the sources footnote. On xl the
-        // detail spans the right column and sources tuck under the list.
+        // DOM order is the single-column (mobile) order.
         <div className="grid gap-5 xl:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)] xl:grid-rows-[auto_1fr]">
           <section className="xl:col-start-1 xl:row-start-1">
             <SectionTitle icon={<GitDiffIcon size={14} />} title="Changes" count={changes.length} />

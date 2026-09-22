@@ -1,81 +1,35 @@
 /**
- * The client half of the `Page`/`SeekCursor` contract: walk a cursored read
- * backwards, one page per request, accumulating what has been fetched.
- *
- * Headless on purpose. It owns the walk and the three states and renders
- * nothing, so each surface keeps its own visual language for the loading and
- * end-of-history affordances.
- *
- * ── The three states, on the client ──────────────────────────────────────────
- * `exhausted` is set ONLY by a page that said `status: 'end'`. A failed fetch
- * leaves it false and populates `error`, so a surface can never render "you
- * have reached the beginning" because a request failed. That is the same lie a
- * bare `LIMIT` tells, one layer up.
+ * Client half of the `Page`/`SeekCursor` contract. `exhausted` is set only by a page with
+ * `status: 'end'`; a failed fetch sets `error` instead.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Page, SeekCursor } from "@kinu.run/core";
 import { describeError } from "@/hooks/use-async-resource";
 
 export interface PagedScroll<Item> {
-  /** Everything fetched so far, in the read's presentation order. */
   fetched: readonly Item[];
   loading: boolean;
-  /** Non-null after a failed fetch, until the next one succeeds. */
   error: string | null;
   /** A page said it was the last one. Never set by a failure. */
   exhausted: boolean;
   /** Idempotent while a fetch is in flight; safe to call on every scroll tick. */
   loadMore: () => void;
-  /**
-   * Abandon everything fetched and start the walk over.
-   *
-   * The generation is what makes this safe: a page already in flight belongs to
-   * the walk that asked for it, and once this is called that walk is not the
-   * current one, so its reply is discarded instead of re-seeding a list the
-   * caller just emptied. Clearing a conversation's history while its first page
-   * is in flight would otherwise put that page straight back on screen.
-   */
+  /** Bumps the generation so an in-flight page from the old walk is discarded. */
   reset: () => void;
 }
 
 export interface PagedScrollOptions<Item> {
-  /**
-   * Which end fetched pages land at, matching `useGrowingScroll`'s `grows`.
-   *
-   * A chat presents oldest-first and walks backwards, so each page is older
-   * than everything held and belongs above it. A newest-first feed walks with
-   * its presentation order and each page belongs below.
-   */
+  /** Matches `useGrowingScroll`'s `grows`. */
   grows: "up" | "down";
   fetchPage: (cursor: SeekCursor | undefined) => Promise<Page<Item>>;
   /**
-   * Where to resume when nothing has been fetched yet.
-   *
-   * A thunk, not a value, because the chat's first anchor is the oldest message
-   * the LIVE list is currently showing — seeded by the SDK's own `get-messages`
-   * route, which issues no cursor — and that is not known until the socket has
-   * delivered it.
-   *
-   * Three answers, because there are three states and collapsing two of them
-   * is a defect this codebase has already paid for: an anchor to walk back
-   * from, `"newest"` for "no anchor, read the newest page" — a live list that
-   * came up empty has no anchor, and the store may still hold the whole
-   * conversation — and `null` for "not ready, ask again". Answering `null` for
-   * both of the last two is how a chat draws an empty conversation over a full
-   * one and never asks.
+   * A thunk: the chat's first anchor is unknown until the socket delivers the live list.
+   * `"newest"` means no anchor; `null` means not ready, ask again.
    */
   startFrom: () => SeekCursor | "newest" | null;
 }
 
-/**
- * Where a walk backwards over a live-seeded list begins.
- *
- * `anchor` is the oldest item the live list holds; `delivered` is whether the
- * server has stated that list's contents at all. Three inputs, three answers,
- * and the middle one is the whole point: a DELIVERED empty list is not a
- * finished conversation, it is a live view that came up with nothing, and the
- * store is the only thing that can say which.
- */
+/** A delivered empty live list is not a finished conversation; only the store can say. */
 export function walkStart(
   anchor: string | undefined, delivered: boolean,
 ): SeekCursor | "newest" | null {
@@ -96,25 +50,18 @@ export function usePagedScroll<Item>({
   const [error, setError] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
 
-  // A ref, not the `loading` state: a fast scroll fires several handlers inside
-  // one frame, and every one of them would read the same not-yet-committed
-  // `false` and start its own duplicate request.
+  // A ref, not state: several scroll handlers in one frame would all read the uncommitted `false`.
   const inFlight = useRef(false);
-  // Every abandoned generation stays strongly owned until it settles. This
-  // matters under React StrictMode: effect cleanup retires the first walk while
-  // its request can still be pending, then the replay starts a new walk.
+  // Abandoned generations stay owned until settled; StrictMode retires the first walk while its request is pending.
   const nextTaskId = useRef(0);
   const loadTasks = useRef(new Map<number, PageLoadOperation>());
   const cursor = useRef<SeekCursor | null>(null);
-  // Which walk a reply belongs to. Only the current walk may publish, so a
-  // page fetched before a reset can neither append to the new list nor move its
-  // cursor nor declare it exhausted.
+  // Only the current walk may publish.
   const walk = useRef(0);
   const latest = useRef({ fetchPage, startFrom });
   latest.current = { fetchPage, startFrom };
 
-  // A settled page after unmount must not publish into this hook. `reset` uses
-  // the same generation invalidation for an explicitly abandoned walk.
+  // Unmount retires the generation so a late page cannot publish.
   useEffect(() => () => {
     walk.current += 1;
     inFlight.current = false;
@@ -132,9 +79,7 @@ export function usePagedScroll<Item>({
     const owner: PageLoadOperation = { promise: null };
     loadTasks.current.set(taskId, owner);
     owner.promise = (async () => {
-      // The page's failure, decided after the handler: `reset` and unmount both
-      // retire this walk's generation, and a walk with no list left to fill has
-      // none left to fail into either.
+      // Decided after the handler: `reset` or unmount may have retired this walk.
       let thrown: { cause: unknown } | null = null;
 
       try {
@@ -161,17 +106,14 @@ export function usePagedScroll<Item>({
     })();
   }, [grows, exhausted]);
 
-  // The walk begins as soon as it knows where to start. A scroller only asks
-  // again on a content change, and an actor pane that resolves its actor after
-  // mount has none: its empty conversation stayed a skeleton for good.
+  // Start as soon as the start point is known; a scroller only re-asks on content change.
   useEffect(() => {
     if (cursor.current === null && startFrom() !== null) loadMore();
   }, [startFrom, loadMore]);
 
   const reset = useCallback(() => {
     walk.current += 1;
-    // The abandoned walk's `finally` can no longer clear these, which is why
-    // they are cleared here: the new walk starts idle, not mid-fetch.
+    // The abandoned walk's `finally` can no longer clear these.
     inFlight.current = false;
     cursor.current = null;
     setFetched([]);

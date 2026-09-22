@@ -1,14 +1,3 @@
-/**
- * Is the agent getting better? — the two measurements that answer it.
- *
- * GEPA runs produce CANDIDATES for the next scaffold version; the quality
- * scoreboard scores the live scaffold against graded turns and is keyed by
- * `scaffoldVersion` row by row. They live under Agent → Evolution, beside the
- * lineage they measure, not under Exploration next to the fork strategies:
- * code adjacency is not a reason, nobody comparing fork branches also wants a
- * Wilson interval, and both of these are about the agent's own trajectory
- * across its versions.
- */
 import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
@@ -27,7 +16,6 @@ interface GepaCandidate { id: string; parentId: string | null; aggregateScore: n
 
 interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
 
-/** A run's dot. Any status the engine has not named yet reads as neutral. */
 function runDot(status: string): string {
   if (status === "completed") return "p-dot-success";
 
@@ -89,14 +77,11 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
       {sel !== null && loadedDetail !== null && (
         <div className="space-y-2">
           <div className="p-meta p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
-          {/* Candidate aggregate-score bars; Pareto-front + winner highlighted. */}
           <div className="space-y-1">
             {loadedDetail.candidates.map((c) => {
               const onPareto = paretoIds.has(c.id);
               const isWinner = loadedDetail.run?.winnerId === c.id;
-              // The aggregate is a mean over a handful of judged instances —
-              // shown with its interval so two candidates aren't read apart on
-              // a gap the eval set can't resolve.
+              // The interval keeps candidates from being read apart on a gap the eval set cannot resolve.
               const ci = scoreInterval(Object.values(c.scores));
               const barTone = onPareto ? "p-dot-info" : "p-dot-neutral";
 
@@ -118,21 +103,14 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
   );
 }
 
-/* ── Quality scoreboard ────────────────────────────────────────── */
 
-// The replay-eval loss curve (getReplayEvals): the live scaffold re-scored
-// against graded turns over time. Each row is tagged with the scaffold_version
-// it ran under, so version changes mark before-vs-after-evolution boundaries.
 interface ReplayEvalRow {
   id: string; ranAt: number; sampleSize: number;
   acceptedCount: number; negativeCount: number;
   meanScore: number; loss: number; scaffoldVersion: number | null;
-  /** 95% interval on meanScore — a dozen judge verdicts is not a point. */
   interval: ScoreInterval;
 }
 
-// A reported score is never shown alone: the 95% interval sits under it, at
-// the sample sizes these runs use it is the whole story.
 function ScoreWithInterval({ value, interval, className }: { value: number; interval: ScoreInterval; className?: string }) {
   return (
     <span className="flex flex-col leading-tight">
@@ -142,17 +120,10 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
   );
 }
 
-// The two quality signals load side by side and the pane still resolves once
-// in the ordinary case, but each publishes on its OWN branch: the alignment
-// ledger being unavailable does not blank the replay-eval curve, and vice
-// versa (KINU-073). Each RPC runs under the agents SDK's own call deadline —
-// the one request bound this surface already lives under — so a stalled read
-// settles as that branch's failure rather than holding the pane forever.
+// Each signal publishes on its own branch so one failing does not blank the other; the SDK call deadline bounds a stalled read.
 export function QualityView({ rpc }: { rpc: Rpc }) {
   const loadRows = useCallback(() => rpc<ReplayEvalRow[]>("getReplayEvals", [50]), [rpc]);
 
-  // One branch, not two: AlignmentPanel cannot say anything honest about the
-  // correction rate without the calibration note beside it.
   const loadAlignment = useCallback(async () => {
     const [align, calibration] = await Promise.all([
       rpc<AlignmentConvergence>("getAlignmentConvergence"),
@@ -204,7 +175,7 @@ export function QualityView({ rpc }: { rpc: Rpc }) {
 }
 
 function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
-  const chrono = [...rows].reverse(); // oldest → newest for the curve
+  const chrono = [...rows].reverse();
   const latest = rows[0];
   const latestLoss = lossInterval(latest.interval);
 
@@ -229,7 +200,7 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
         <div className="p-eyebrow">Recent runs</div>
         <div className="space-y-1">
           {rows.map((r, i) => {
-            const prev = rows[i + 1]; // next-oldest
+            const prev = rows[i + 1];
             const evolved = prev != null && prev.scaffoldVersion !== r.scaffoldVersion;
             const belowSuccess = r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger";
 
@@ -253,14 +224,8 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
   );
 }
 
-/* ── K_align (Alignment Convergence Rate) ──────────────────────── */
 
-// How often the user had to correct the agent, per 100 graded turns, split by
-// the scaffold version that served them — computed from the turn_outcomes
-// ledger alone (no benchmark, no judge). Every rate is shown WITH its 95%
-// Wilson interval, and a segment whose interval is too wide to read is drawn
-// muted, because the point of this panel is to stop small numbers being
-// over-read as progress.
+// Segments whose Wilson interval is too wide are muted so small numbers are not over-read.
 const TREND_STYLE = {
   improving: { label: "improving", className: "p-success" },
   worsening: { label: "worsening", className: "p-danger" },
@@ -270,8 +235,6 @@ const TREND_STYLE = {
 
 function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibration: CalibrationReport }) {
   const trend = TREND_STYLE[k.trend];
-  // One shared scale so segment intervals are visually comparable; the floor
-  // keeps a near-zero rate from filling the whole track.
   const scaleMax = Math.max(20, ...k.segments.map((s) => s.rate.highPer100));
 
   return (
@@ -311,14 +274,8 @@ function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibrati
   );
 }
 
-// The rate above is the CLASSIFIER's count of corrections. How far that is from
-// the real one is measurable, and until it has been measured this says so
-// rather than letting the number read as ground truth.
 function CalibrationNote({ report }: { report: CalibrationReport }) {
   if (report.accuracy === null || report.overall === null) {
-    // The gap sentence already opens with the verdict ("uncalibrated — no
-    // hand-labeled turns yet"), so leading with the word again stutters on the
-    // commonest case of all: a workspace nobody has hand-labeled.
     const reason = report.gap === null ? "Uncalibrated" : sentenceCase(describeCalibrationGap(report.gap));
 
     return (
@@ -345,9 +302,7 @@ function CalibrationNote({ report }: { report: CalibrationReport }) {
   );
 }
 
-// Inline SVG mean-score curve with a dashed quality-floor reference. Points are
-// coloured by score band; the path uses a non-scaling stroke so it stays crisp
-// under preserveAspectRatio="none".
+// Non-scaling stroke keeps the path crisp under preserveAspectRatio="none".
 function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; threshold: number }) {
   const W = 100, H = 32, pad = 2;
   const n = points.length;
@@ -355,8 +310,6 @@ function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; thre
   const y = (score: number) => pad + (1 - Math.max(0, Math.min(1, score))) * (H - 2 * pad);
   const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.meanScore).toFixed(2)}`).join(" ");
 
-  // The 95% band the means sit inside — drawn so the curve can't be read as
-  // more precise than it is.
   const band = [
     ...points.map((p, i) => `${x(i).toFixed(2)},${y(p.interval.hi).toFixed(2)}`),
     ...[...points].reverse().map((p, i) => `${x(points.length - 1 - i).toFixed(2)},${y(p.interval.lo).toFixed(2)}`),

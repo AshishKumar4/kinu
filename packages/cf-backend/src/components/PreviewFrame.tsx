@@ -1,16 +1,8 @@
-/**
- * The one preview-iframe pipeline. Every surface that renders an exposed-port
- * app — compact chat cards and full-height preview tabs — uses this frame,
- * so URL/copy/open-in-new-tab chrome and the sandbox policy never drift apart.
- *
- * Fills its parent: render inside a sized container (flex-1 min-h-0 column,
- * or a fixed-height wrapper for the inline chat card).
- */
+/** Fills its parent: render inside a sized container. */
 import { CopyButton } from "@/components/ui/CopyButton";
 import { PREVIEW_SANDBOX, isPreviewUrl } from "@kinu.run/core";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 
-/** URL-only header shared with the signed-out sample, which cannot host an iframe. */
 export function PreviewChrome({ url }: { url: string }) {
   return (
     <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
@@ -23,14 +15,9 @@ export function PreviewChrome({ url }: { url: string }) {
 
 export function PreviewFrame({ url, label }: {
   url: string;
-  /** The frame's accessible name — a tab title or a port label. The header
-   *  shows the URL only: the tab that opened this frame already names it, so a
-   *  second title beside the URL is duplication. */
   label?: string;
 }) {
-  // The only gate on what this app frames. Preview URLs reach here out of raw
-  // tool output, so an agent that writes a URL of its own choosing must not get
-  // it rendered inside the workspace chrome.
+  // The only gate on framed URLs: they come from raw tool output.
   if (!isPreviewUrl(url)) {
     return (
       <div className="h-full flex items-center justify-center p-4 text-center">

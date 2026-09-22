@@ -1,24 +1,12 @@
 /**
- * Per-conversation composer state, kept for the SPA session.
- *
- * Every agent conversation in a workspace — the orchestrator's and each
- * additional agent's — owns its draft, its Auto/Plan mode, and where its
- * reader was scrolled to. The components that render a conversation unmount
- *  when another one opens, so this state cannot live in them; and it must NOT
- *  live in one shared `useState` above them, where a draft typed to one agent
- *  surfaces in another's composer.
- *
- * A module-level map rather than context: the state must survive full
- * remounts (WorkspacePage is keyed by workspace), and it is deliberately
- * session-scoped — a reload starts clean, like the transcript scroll does.
+ * Per-conversation draft, mode, and scroll position. A module map: it must survive remounts,
+ * stay separate per agent (never one shared state), and reset on reload.
  */
 import { useCallback, useEffect, useState } from "react";
 import { planReviewAwaitingDecision, type PlanReview } from "@kinu.run/core";
 import type { ChatMode } from "@/components/Composer";
 
-/** A reader at the live edge saves 'pinned', not a pixel offset: the newest
- *  message keeps arriving while they are away, and restoring yesterday's
- *  offset would strand them just above it. */
+/** At the live edge, save 'pinned' rather than an offset so new messages do not strand the reader. */
 export type ConversationScroll = number | "pinned";
 
 interface ConversationUiEntry {
@@ -42,39 +30,27 @@ function entryFor(key: string): ConversationUiEntry {
 
 export interface ConversationUiState {
   draft: string;
-  /** Replace the draft. */
   setDraft: (draft: string) => void;
-  /** Rewrite the draft from its current value — the steer hook hands an
-   *  interrupted draft back with `(current) => …` exactly like React's
-   *  setState, and giving that shape its own entry keeps both statically
-   *  typed instead of discriminating a union at runtime. */
   updateDraft: (update: (current: string) => string) => void;
   mode: ChatMode;
   setMode: (mode: ChatMode) => void;
-  /** Where this conversation's reader last was — feed to the scroller's
-   *  restore. Read live from the store on every render, because the scroller
-   *  re-arms its restore each time its container remounts (switching to
-   *  another conversation unmounts it) and must see the LATEST position, not
-   *  the one from this component's own mount. */
+  /** Read live on every render: the scroller re-arms its restore on each remount and needs the latest position. */
   savedScroll: ConversationScroll;
-  /** Record positions as the reader moves. Writes the store only — scroll is
-   *  not render state, and a render per scroll tick would be one. */
+  /** Writes the store only; scroll is not render state. */
   rememberScroll: (position: ConversationScroll) => void;
 }
 
 export function useConversationUiState(key: string): ConversationUiState {
   const [current, setCurrent] = useState(() => ({ key, ...entryFor(key) }));
 
-  // Same-render reset when the conversation changes under a mounted component
-  // (the main column swaps workspaces without remounting).
+  // Same-render reset: the main column swaps workspaces without remounting.
   if (current.key !== key) setCurrent({ key, ...entryFor(key) });
 
   const updateDraft = useCallback((update: (current: string) => string) => {
     setCurrent((prev) => {
       if (prev.key !== key) return prev;
       const draft = update(prev.draft);
-      // Store write inside the updater so the rewrite resolves against the
-      // same value it renders from; idempotent under a double invoke.
+      // Store write inside the updater so it resolves against the rendered value; idempotent under a double invoke.
       entryFor(key).draft = draft;
 
       return { ...prev, draft };
@@ -105,20 +81,12 @@ export function useConversationUiState(key: string): ConversationUiState {
   };
 }
 
-/** What the plan gate decides for a composer: the mode it shows and whether
- *  the owner may change it. */
 export interface PlanGatedMode {
   readonly mode: ChatMode;
   readonly locked: boolean;
 }
 
-/**
- * The plan gate for every chat column.
- *
- * A plan that waits for a decision locks the composer to Plan mode. The lock
- * lifts when the plan leaves that state. Both chat columns need this answer,
- * so one statement here keeps them the same.
- */
+/** A plan awaiting a decision locks the composer to Plan mode until it leaves that state. */
 export function usePlanGatedMode(
   plan: PlanReview | null,
   ui: Pick<ConversationUiState, "mode" | "setMode">,

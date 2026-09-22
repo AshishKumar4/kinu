@@ -36,10 +36,8 @@ interface CatalogOperation {
   promise: Promise<void> | null;
 }
 
-/** A select sharing the picker's `size="sm"` box: `inputCls`'s py-2/text-sm is
- *  written for the base field, so the small row overrides it to the combobox's
- *  own metrics (h-6.5, px-2, text-xs). `!` because same-property utilities
- *  resolve by order, not by intent. */
+/** Overrides `inputCls` to the combobox's `size="sm"` metrics; `!` because same-property
+ *  utilities resolve by order, not intent. */
 const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
 
 export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: boolean }) {
@@ -95,8 +93,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
   const dirty = envelope !== null && draft !== null
     && JSON.stringify(envelope.catalog) !== JSON.stringify(draft);
 
-  // A deep selection the phone's strip hasn't scrolled to yet is invisible;
-  // the same bring-into-view the settings rail runs on its own tabs.
+  // A deep selection the phone's strip hasn't scrolled to yet is invisible.
   useEffect(() => {
     roleNav.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }, [selectedRole, addingRole]);
@@ -237,10 +234,8 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
           </div>
         ) : (
           <>
-            {/* One row per tier, ruled like the account's other lists. The top
-                border sits on EVERY row — first included — because a gate
-                reads the default row's borderTopColor to prove the rule is
-                the border token rather than the text colour. */}
+            {/* The top border sits on every row, first included: a gate reads the default row's
+                borderTopColor. */}
             <div>
               {tierIdsOf(draft).map((tierId) => {
                 const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
@@ -249,9 +244,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
 
                 const entry = menu.models.find((model) => model.spec === resolved.model);
 
-                // The levels are the MODEL's, read off its menu entry: a model
-                // that declares xhigh offers it, one that declares only low and
-                // high offers no medium (#9).
+                // Levels come from the model's menu entry (#9).
                 const efforts = offeredReasoningEfforts(
                   entry?.reasoningEfforts,
                   assignment?.reasoningEffort,
@@ -263,9 +256,6 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                   <div key={tierId} className="grid gap-x-3 gap-y-2 border-t p-border py-3 first:border-t-0 first:pt-0 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1.5">
-                        {/* The mark belongs to the model the row names — the
-                            resolved assignment — so it sits beside the tier
-                            it serves, where a picker cell cannot hold it. */}
                         {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
                         <div className="min-w-0">
                           <div className="truncate font-mono text-xs p-text">{tierId}</div>
@@ -327,10 +317,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
         <Card title="Agent roles" icon={IdentificationCardIcon}
           description="Roles select instructions, tools, skills, a tier, and a swarm preset.">
           <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
-            {/* The role list is a navigation surface, so it borrows the rail's
-                two registers outright: a scrolling tab strip below md, the
-                accent-tinted list row at md and up. The strip's scroll covers
-                sit on the card, not the page. */}
+            {/* A scrolling tab strip below md, the accent-tinted list row at md and up. */}
             <nav ref={roleNav} aria-label="Agent roles"
               className="p-tabstrip -mx-5 flex border-b p-border [--scroll-ground:var(--c-surface)] md:mx-0 md:flex-col md:gap-0.5 md:border-b-0 md:overflow-visible">
               {Object.keys(roles).sort().map((roleId) => {
@@ -412,12 +399,8 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
         </Card>
       )}
 
-      {/* One save bar for the whole section. The docked shape is for the
-          settings page: `sticky bottom-3` pins it to the bottom edge of the
-          page's scroll container so the action is on screen from anywhere in
-          the form. Inside the wizard's own scroll panel the same stickiness
-          floats it over the providers below, so tiersOnly renders it in flow
-          — undocked, and labeled for the tiers alone. */}
+      {/* Docked (`sticky bottom-3`) on the settings page; in flow inside the wizard's scroll
+          panel, where stickiness would float it over the providers. */}
       {(draft && envelope) && (
         <div className={tiersOnly
           ? "p-card p-surface px-4 py-3"
@@ -441,7 +424,6 @@ function RoleEditor(props: {
   role: RoleDefinition;
   /** Every tier the catalog offers, so a role can name one the owner added. */
   tiers: readonly TierId[];
-  /** Every role the catalog holds, for the hire list. */
   roleIds: readonly RoleId[];
   customized: boolean;
   onChange: (role: RoleDefinition) => void;
@@ -541,14 +523,8 @@ function RoleEditor(props: {
 }
 
 /**
- * A set over a known list, as checkboxes: what a role may use, drawn from
- * what exists, so the owner never types a name the runtime will not know.
- *
- * `selected` absent means the whole list (the catalog's own convention for
- * `allowedTools` and `spawns`), so every box reads checked and the stored
- * value stays absent until one is cleared; checking the last one back
- * restores absent rather than storing the full list by hand. With
- * `emptyMeansNone` (skills) absent is the empty set instead.
+ * `selected` absent means the whole list (the catalog's convention for `allowedTools` and
+ * `spawns`); checking the last box restores absent. With `emptyMeansNone`, absent is empty.
  */
 function MemberSet(props: {
   label: string;

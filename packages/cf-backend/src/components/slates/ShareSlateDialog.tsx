@@ -1,15 +1,4 @@
-/**
- * The share control on a slate's tab, two ways to share one slate:
- *
- *   Live — the slate keeps running here, in the owner's workspace, and viewers
- *   reach exactly the binding members the owner granted (`LiveShareForm`: the
- *   capability graph, read members by construction, mutating ones by explicit
- *   approval with the risk named).
- *
- *   Blueprint — a committed version exported with every binding unmapped; a
- *   forker connects their own (`BlueprintShareForm`). Nothing of the owner's
- *   is reachable afterwards.
- */
+/** Live: viewers reach granted binding members. Blueprint: bindings exported unmapped; nothing of the owner's stays reachable. */
 import { useState } from "react";
 import { ShareNetworkIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
@@ -25,7 +14,6 @@ export interface ShareSlateDialogProps {
   title: string;
   rpc: Rpc;
   onClose: () => void;
-  /** Fixture inputs for the gallery, one per mode; `mode` picks the tab shown. */
   fixture?: { mode?: ShareMode; live?: LiveShareFixture; blueprint?: BlueprintFixture };
 }
 

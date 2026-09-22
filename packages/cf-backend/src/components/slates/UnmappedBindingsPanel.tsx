@@ -1,9 +1,4 @@
-/**
- * A forked slate's landing panel: every binding `package.json` declares and
- * what the forker must connect for it, before the preview is opened. The
- * manifest is read from the admitted tree, so the list is what the slate will
- * actually resolve — as the forker, in this workspace.
- */
+/** Forked slate's bindings to connect before preview, read from the admitted tree's `package.json`. */
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -16,10 +11,8 @@ import { BINDING_KIND_LABEL } from "@/pages/BlueprintPage";
 
 const FileTextSchema = v.object({ content: v.optional(v.string()), error: v.optional(v.string()) });
 
-/** What connecting one binding means in this workspace, and where to do it. */
 interface BindingConnection {
   readonly text: string;
-  /** The app route where the connection is made, when there is one. */
   readonly to?: string;
   readonly label?: string;
 }
@@ -45,7 +38,6 @@ export function UnmappedBindingsPanel({ slate, title, rpc, onOpen, fixture }: {
   slate: string;
   title: string;
   rpc: Rpc;
-  /** Open the preview: the forker has connected what they need. */
   onOpen: () => void;
   fixture?: SlateBindingDeclaration[];
 }) {

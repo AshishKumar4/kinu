@@ -1,11 +1,4 @@
-/**
- * An official brand mark — the path simple-icons publishes for the brand,
- * in the brand's own hex, on a tile that keeps it legible in both themes.
- * Brand hexes do not theme: a black mark on a dark surface needs the tile
- * to be the surface the brand was drawn for, so every mark sits on white
- * unless its hex cannot be read there — those sit on ink instead. `bare`
- * drops the tile for inline seats (a combobox row already has its own well).
- */
+/** Brand hexes do not theme: marks sit on white unless their hex is unreadable there, then on ink. */
 import {
   siAnthropic, siCloudflare, siDeepmind, siDeepseek, siGithub, siGoogle,
   siGooglecloud, siHuggingface, siKimi, siMetaai, siMinimax, siMistralai,
@@ -37,10 +30,7 @@ const BRANDS = {
 
 export type BrandName = keyof typeof BRANDS;
 
-/** The provider id the model menu groups by, normalised to the brand it
- *  ships under — `workers-ai` is Cloudflare's. A provider with no official
- *  mark in simple-icons answers undefined and keeps whatever fallback the
- *  seat already draws. */
+/** `workers-ai` is Cloudflare's. Undefined when simple-icons has no mark. */
 export function providerBrand(provider: string): BrandName | undefined {
   switch (provider) {
     case "anthropic": return "anthropic";
@@ -69,9 +59,7 @@ export function providerBrand(provider: string): BrandName | undefined {
 
 export function BrandMark({ brand, size = 16, bare = false, className }: {
   brand: BrandName;
-  /** The mark's own pixels; the tile grows around it. */
   size?: number;
-  /** No tile — the bare path for a seat that already provides one. */
   bare?: boolean;
   className?: string;
 }) {

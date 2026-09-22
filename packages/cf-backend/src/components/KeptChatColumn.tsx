@@ -1,12 +1,5 @@
-/**
- * A dismissed agent's conversation, read-only.
- *
- * A dismissal that keeps the history retires the actor: nothing runs as it
- * again and its own chat path is refused at the edge, while its rows stay. So
- * this pane opens no socket and has no composer. It pages the kept transcript
- * over the WORKSPACE's socket, named by the actor id on the roster row
- * (`getChatHistoryPage({ actor })`).
- */
+/** A dismissed agent's retired chat: no socket, no composer. Pages the kept transcript over
+ *  the workspace's socket by the roster row's actor id (`getChatHistoryPage({ actor })`). */
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
 import { Loader } from "@cloudflare/kumo";
@@ -17,17 +10,14 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { KeptTranscript } from "@/components/KeptTranscript";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 
-/** Nothing streams into a dismissed agent's chat. Hoisted so the thread's
- *  memos hold across renders. */
+/** Hoisted so the thread's memos hold across renders. */
 const NO_LIVE: readonly UIMessage[] = [];
 
 export function KeptChatColumn({ workspace, subName, title, rpc, actorId }: {
   workspace: string;
   subName: string;
   title: string;
-  /** The workspace's own RPC: this pane has no socket of its own. */
   rpc: Rpc;
-  /** The roster row's actor id, which every page is read by. */
   actorId: string | null;
 }) {
   const { history, transcript, thread } = useChatThread({ rpc, live: NO_LIVE, seeded: true, actor: actorId });

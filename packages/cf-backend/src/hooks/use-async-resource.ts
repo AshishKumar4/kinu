@@ -1,27 +1,13 @@
-/**
- * The one tri-state fetch primitive for the web UI.
- *
- * A failed fetch is not an empty answer. Nearly every surface here reads an
- * RPC that can fail, and collapsing that failure into `[]` renders a lie —
- * "No triggers registered", "no rewrites yet", "not connected" — while a
- * swallowed rejection leaves an eternal spinner. This owns the three states
- * those call sites actually have (loading / failed-and-retryable / loaded) so
- * they cannot be conflated again. ConnectedModelPicker's inline
- * `T[] | null | "error"` is the original of this pattern.
- *
- * The transitions are pure and separately tested; the hook is the thin React
- * binding over them.
- */
+/** Tri-state fetch: a failed fetch must never render as an empty answer or an endless spinner. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as v from "valibot";
 
 export type AsyncResource<T> =
   | { status: "loading" }
-  | { status: "error"; message: string; /** The last value that did load, if any. */ last: T | null }
+  | { status: "error"; message: string;  last: T | null }
   | { status: "ready"; value: T };
 
-/** Starting a (re)load — a value already on screen stays there while it
- *  revalidates, so a background refresh never blanks a working view. */
+/** A value already on screen stays while it revalidates. */
 export function beginLoad<T>(previous: AsyncResource<T>): AsyncResource<T> {
   if (previous.status === "ready") return previous;
 
@@ -38,7 +24,6 @@ export function loadFailed<T>(previous: AsyncResource<T>, thrown: { cause: unkno
   return { status: "error", message: describeError(thrown), last: lastValue(previous) };
 }
 
-/** The most recent successfully-loaded value, carried across a failure. */
 export function lastValue<T>(resource: AsyncResource<T>): T | null {
   if (resource.status === "ready") return resource.value;
 
@@ -47,9 +32,7 @@ export function lastValue<T>(resource: AsyncResource<T>): T | null {
   return null;
 }
 
-/** A resource's value under a view transform: the read itself is unchanged —
- *  loading stays loading, a failure stays a failure with the last value it
- *  carried — only what a `ready` consumer sees is mapped. */
+/** Maps only the `ready` value; loading and failure pass through. */
 export function mapResource<T, U>(resource: AsyncResource<T>, map: (value: T) => U): AsyncResource<U> {
   if (resource.status === "ready") return { status: "ready", value: map(resource.value) };
 
@@ -62,9 +45,7 @@ export function mapResource<T, U>(resource: AsyncResource<T>, map: (value: T) =>
   return resource;
 }
 
-/** A caught value as one sentence. Wrapped rather than bare so the value
- *  crosses this boundary as the thrown thing it is, the shape core's own
- *  `renderThrownChain` and `toKinuError` already take. */
+/** Wrapped so the value crosses as a thrown thing, the shape `renderThrownChain` and `toKinuError` take. */
 export function describeError({ cause }: { cause: unknown }): string {
   if (cause instanceof Error && cause.message) return cause.message;
 
@@ -73,28 +54,17 @@ export function describeError({ cause }: { cause: unknown }): string {
   return "request failed";
 }
 
-/**
- * How long to wait before reloading, given what last loaded — or null when
- * there is nothing left to watch. A view backed by data the server writes but
- * never pushes goes stale silently; this is how it stays live without polling
- * forever once the work it was watching has settled.
- */
+/** Reload delay after a load, or null once nothing is left to watch. */
 export type Revalidate<T> = (value: T | null) => number | null;
 
 export interface AsyncResourceControl<T> {
   resource: AsyncResource<T>;
   reload: () => void;
-  /** Publish a value the caller already holds — a mutation whose response IS
-   *  the new state — so a dependent read never sees a stale copy while the
-   *  follow-up reload is still in flight. */
+  /** Publish a value already held so a dependent read never sees a stale copy while the reload is in flight. */
   set: (value: T) => void;
 }
 
-/**
- * Fetch `load` on mount and whenever its identity changes, exposing the
- * tri-state plus the retry every failed fetch needs. `load` and `revalidate`
- * must be stable (useCallback) — they are the effect keys.
- */
+/** `load` and `revalidate` must be stable (useCallback): they are the effect keys. */
 export function useAsyncResource<T>(
   load: () => Promise<T>,
   revalidate?: Revalidate<T>,
@@ -109,11 +79,9 @@ export function useAsyncResource<T>(
     ? state.resource
     : { status: "loading" };
 
-  // Only the newest run may write: a slow failing load must not overwrite the
-  // result of the retry that superseded it.
+  // Only the newest run may write; a slow failing load must not overwrite its retry.
   const runId = useRef(0);
-  // Reloads intentionally overlap; retain every task until it settles while the
-  // run id decides which one may publish.
+  // Reloads overlap; every task is retained until it settles, and the run id decides which publishes.
   const activeRuns = useRef(new Map<number, Promise<void>>());
 
   // A task that settles after unmount must not publish into a retired resource.
@@ -129,9 +97,7 @@ export function useAsyncResource<T>(
     }));
     let task: Promise<void> | null = null;
     task = (async () => {
-      // The run's failure, held for a test the handler cannot make: which run is
-      // the newest is decided below, so a slow load that a retry superseded
-      // publishes nothing into the resource that replaced it.
+      // Held until the newest-run check below, so a superseded load publishes nothing.
       let thrown: { cause: unknown } | null = null;
 
       try {
@@ -156,9 +122,7 @@ export function useAsyncResource<T>(
 
   useEffect(() => { run(); }, [run]);
 
-  // Re-arms off each settled load: revalidating a ready resource leaves its
-  // identity untouched (beginLoad returns it), so this schedules one timer per
-  // load rather than one per render.
+  // Revalidating a ready resource keeps its identity, so this arms one timer per load, not per render.
   useEffect(() => {
     if (!revalidate || resource.status === "loading") return;
     const delay = revalidate(lastValue(resource));

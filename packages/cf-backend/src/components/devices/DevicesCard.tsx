@@ -1,14 +1,4 @@
-/**
- * The connected-devices card and the connect panel beneath it — the account's
- * machine roster with its live link states and every per-workspace grant,
- * denied included, and the panel that links a new one.
- *
- * The roster and the grants are `useAsyncResource` reads. A failed poll leaves
- * the last known roster on screen AND says it failed — blanking it to `[]`
- * flashed "register a device" over devices that are registered and running,
- * and swallowing the rejection made an unreachable UserDO look exactly like an
- * account with no devices.
- */
+/** A failed poll keeps the last roster on screen and says it failed, rather than blanking to `[]`. */
 import { useCallback, useState } from "react";
 import { DesktopTowerIcon, PlugIcon } from "@phosphor-icons/react";
 import {
@@ -23,19 +13,16 @@ import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevic
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
-/** Grants ride the SAME cadence as the roster: revoking one changes both what
- *  a machine may do and who has reach, so one clock keeps them honest. */
+/** Grants share the roster's cadence: a revoke changes both, so one clock keeps them consistent. */
 const keepPollingGrants: Revalidate<DeviceConsent[]> = () => DEVICE_ROSTER_POLL_MS;
 
 export function DevicesCard() {
   const roster = useDeviceRoster();
   const grantRoster = useAsyncResource(listDeviceConsents, keepPollingGrants);
   const [err, setErr] = useState<string | null>(null);
-  /** Counts come from the revoke response. The durable incident timestamp
-   * keeps the row across reloads; count is shown when this tab observed it. */
+  /** Counts are shown only when this tab observed the revoke; the durable timestamp keeps the row across reloads. */
   const [unstoppedCounts, setUnstoppedCounts] = useState<ReadonlyMap<string, number>>(new Map());
-  /** An incident this tab acknowledged. The DELETE has already succeeded, so
-   *  the row is gone; this keeps it gone across the poll that confirms it. */
+  /** The DELETE already succeeded; this keeps the row gone across the poll that confirms it. */
   const [acknowledged, setAcknowledged] = useState<ReadonlySet<string>>(new Set());
 
   const reloadDevices = roster.reload;
@@ -44,7 +31,6 @@ export function DevicesCard() {
 
   const [flow] = useState(() => new DeviceConnectFlow({
     register: registerDevice,
-    // Nothing to close here: the machine is now a row in the list above.
     onConnected: reloadDevices,
   }));
 
@@ -85,8 +71,6 @@ export function DevicesCard() {
 
   return (
     <>
-      {/* What a link MEANS is stated once, by the connect panel below, in the
-          words `kinu connect` prints. This card is about the list. */}
       <Card title="Connected devices" icon={DesktopTowerIcon}>
         {devices.length > 0 ? (
           <div className="p-group text-xs">
