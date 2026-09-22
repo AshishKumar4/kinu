@@ -540,7 +540,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private callParentHttp<Input, T = Input>(method: string, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
-    return callAgentRpc(this.origin, this.token, this.cloudName, method, schema, args);
+    return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
   }
 
   /** Invoke a @callable agent method over the websocket ({type:'rpc'}). */

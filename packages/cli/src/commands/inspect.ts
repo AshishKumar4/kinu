@@ -107,7 +107,14 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const result = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelCurrentWork', JsonValueSchema);
+
+    const result = await callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'cancelCurrentWork',
+      schema: JsonValueSchema,
+    });
 
     if (opts.json) printJson(result);
     else console.log(`${OK('stopped')} ${target.name}`);
@@ -178,7 +185,13 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
   const target = resolveAgentTarget(name);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getWorkspaceSnapshot', JsonValueSchema),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getWorkspaceSnapshot',
+      schema: JsonValueSchema,
+    }),
     local: () => decodeJsonValue({ value: getLocalAgentState(target.localName) }),
   });
 
@@ -207,9 +220,13 @@ export async function spendCommand(name: string, opts: InspectOpts = {}): Promis
   const target = resolveAgentTarget(name);
 
   const spend = await readTarget<WorkspaceSpend>(target, {
-    cloud: async (auth) => (await callAgentRpc(
-      auth.origin, auth.token, target.cloudName, 'getActivitySnapshot', ActivitySpendSchema,
-    )).spend,
+    cloud: async (auth) => (await callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getActivitySnapshot',
+      schema: ActivitySpendSchema,
+    })).spend,
     local: () => getLocalWorkspaceSpend(target.localName),
   });
 
@@ -319,8 +336,21 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
 
   const data = await readTarget(target, {
     cloud: async (auth) => query
-      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'searchMemoryHybrid', JsonValueSchema, [query, limit])
-      : { content: await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMemoryContent', v.string()) },
+      ? callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'searchMemoryHybrid',
+        schema: JsonValueSchema,
+        args: [query, limit],
+      })
+      : { content: await callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getMemoryContent',
+        schema: v.string(),
+      }) },
     local: () => query
       ? decodeJsonValue({ value: searchLocalMemory(target.localName, query, limit) })
       : { content: readLocalMemory(target.localName) },
@@ -348,7 +378,14 @@ export async function eventsCommand(name: string, opts: InspectOpts = {}): Promi
   if (since !== undefined) filter.since = since;
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'listRecentEvents', JsonValueSchema, [filter]),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'listRecentEvents',
+      schema: JsonValueSchema,
+      args: [filter],
+    }),
     local: () => decodeJsonValue({ value: listLocalEvents(target.localName, { variant: opts.variant, since, limit }) }),
   });
 
@@ -360,7 +397,14 @@ export async function timelineCommand(name: string, opts: InspectOpts = {}): Pro
   const limit = parseLimit(opts.limit, 100);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getRunTimeline', JsonValueSchema, [{ limit }]),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getRunTimeline',
+      schema: JsonValueSchema,
+      args: [{ limit }],
+    }),
     local: () => listLocalTimeline(target.localName, limit),
   });
 
@@ -372,8 +416,21 @@ export async function mctsCommand(name: string, nodeId: string | undefined, opts
 
   const data = await readTarget(target, {
     cloud: (auth) => nodeId
-      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsNodeDetail', JsonValueSchema, [nodeId])
-      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsTree', JsonValueSchema),
+      ? callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getMctsNodeDetail',
+        schema: JsonValueSchema,
+        args: [nodeId],
+      })
+      : callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getMctsTree',
+        schema: JsonValueSchema,
+      }),
     local: () => decodeJsonValue({ value: nodeId ? getLocalMctsNode(target.localName, nodeId) : listLocalMcts(target.localName) }),
   });
 
@@ -393,7 +450,14 @@ export async function headsCommand(name: string, opts: InspectOpts = {}): Promis
   const limit = parseLimit(opts.limit, 20);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getHeadRuns', JsonValueSchema, [limit]),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getHeadRuns',
+      schema: JsonValueSchema,
+      args: [limit],
+    }),
     local: () => decodeJsonValue({ value: listLocalHeads(target.localName, limit) }),
   });
 
@@ -412,7 +476,14 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   // rather than an alternative.
   if (runId) {
     const detail = await readTarget(target, {
-      cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRun', JsonValueSchema, [runId]),
+      cloud: (auth) => callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'getGepaRun',
+        schema: JsonValueSchema,
+        args: [runId],
+      }),
       local: () => decodeJsonValue({ value: getLocalGepaRun(target.localName, runId) }),
     });
 
@@ -422,7 +493,14 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   }
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRuns', JsonValueSchema, [limit]),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getGepaRuns',
+      schema: JsonValueSchema,
+      args: [limit],
+    }),
     local: () => decodeJsonValue({ value: listLocalGepaRuns(target.localName, limit) }),
   });
 
@@ -442,10 +520,14 @@ async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
   if (opts.metricCalls) budget.maxMetricCalls = Number(opts.metricCalls);
 
   const result = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(
-      auth.origin, auth.token, target.cloudName, 'runScaffoldGepaOptimization',
-      GepaOptimizationResultSchema, [decodeJsonValue({ value: budget })],
-    ),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'runScaffoldGepaOptimization',
+      schema: GepaOptimizationResultSchema,
+      args: [decodeJsonValue({ value: budget })],
+    }),
     local: () => runLocalGepa(target.localName, budget),
   });
 
@@ -487,7 +569,13 @@ export async function executorsCommand(
   const target = resolveAgentTarget(name);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getExecutors', JsonValueSchema),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getExecutors',
+      schema: JsonValueSchema,
+    }),
     local: () => decodeJsonValue({ value: listLocalExecutors() }),
   });
 
@@ -501,7 +589,14 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
   const target = resolveAgentTarget(name);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'executeInExecutor', ExecutorOutputSchema, [executor, command]),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'executeInExecutor',
+      schema: ExecutorOutputSchema,
+      args: [executor, command],
+    }),
     local: async () => v.parse(ExecutorOutputSchema, await executeLocalExecutor(target.localName, executor, command)),
   });
 
@@ -531,7 +626,13 @@ export async function alignmentCommand(name: string, opts: InspectOpts = {}): Pr
   const target = resolveAgentTarget(name);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAlignmentConvergence', AlignmentConvergenceSchema),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getAlignmentConvergence',
+      schema: AlignmentConvergenceSchema,
+    }),
     local: () => getLocalAlignment(target.localName),
   });
 
@@ -553,7 +654,14 @@ export async function releaseCommand(name: string, opts: InspectOpts = {}): Prom
   const limit = parseLimit(opts.limit, 20);
 
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReleaseBoard', JsonValueSchema, [limit]),
+    cloud: (auth) => callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name: target.cloudName,
+      method: 'getReleaseBoard',
+      schema: JsonValueSchema,
+      args: [limit],
+    }),
     local: () => decodeJsonValue({ value: getLocalReleaseBoard(target.localName, limit) }),
   });
 

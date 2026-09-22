@@ -26,10 +26,14 @@ describe('callAgentRpc', () => {
     });
 
     try {
-      const result = await callAgentRpc(
-        `http://localhost:${server.port}`, 'ptc_tok', 'my agent', 'getHeadRuns',
-        v.array(v.object({ id: v.string() })), [5],
-      );
+      const result = await callAgentRpc({
+        origin: `http://localhost:${server.port}`,
+        token: 'ptc_tok',
+        name: 'my agent',
+        method: 'getHeadRuns',
+        schema: v.array(v.object({ id: v.string() })),
+        args: [5],
+      });
 
       expect(result).toEqual([{ id: 'head-1' }]);
       expect(seen[0]).toEqual({
@@ -56,7 +60,13 @@ describe('callAgentRpc', () => {
     });
 
     try {
-      await callAgentRpc(`http://localhost:${server.port}`, 't', 'a', 'getAgentStatus', v.null());
+      await callAgentRpc({
+        origin: `http://localhost:${server.port}`,
+        token: 't',
+        name: 'a',
+        method: 'getAgentStatus',
+        schema: v.null(),
+      });
       expect(bodies[0]).toEqual({ method: 'getAgentStatus', args: [] });
     } finally {
       await server.stop(true);
@@ -70,7 +80,13 @@ describe('callAgentRpc', () => {
     });
 
     try {
-      await expect(callAgentRpc(`http://localhost:${server.port}`, 't', 'a', 'nope', v.null()))
+      await expect(callAgentRpc({
+        origin: `http://localhost:${server.port}`,
+        token: 't',
+        name: 'a',
+        method: 'nope',
+        schema: v.null(),
+      }))
         .rejects.toThrow('No such agent RPC method: nope');
     } finally {
       await server.stop(true);

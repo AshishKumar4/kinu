@@ -405,7 +405,7 @@ async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
   const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
-    callAgentRpc(origin, token, name, method, JsonValueSchema, args);
+    callAgentRpc({ origin, token, name, method, schema: JsonValueSchema, args });
 
   const type = stringField(cmd, 'type') ?? '';
 

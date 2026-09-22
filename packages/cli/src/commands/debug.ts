@@ -313,7 +313,7 @@ interface DebugSource {
 
 function cloudDebugSource(cloudName: string, auth: { origin: string; token: string }): DebugSource {
   const rpc = <T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []) =>
-    callAgentRpc(auth.origin, auth.token, cloudName, method, schema, args);
+    callAgentRpc({ origin: auth.origin, token: auth.token, name: cloudName, method, schema, args });
 
   return {
     identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),

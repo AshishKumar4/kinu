@@ -484,5 +484,5 @@ function cloudRpc<T>(
 ): Promise<T> {
   const auth = requireAuthConfig();
 
-  return callAgentRpc(auth.origin, auth.token, target.cloudName, method, schema, args);
+  return callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method, schema, args });
 }

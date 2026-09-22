@@ -169,10 +169,14 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
   let cursor: ArchiveCursor | null = null;
 
   do {
-    const page: ArchivePage = await callAgentRpc(
-      auth.origin, auth.token, name, 'exportWorkspaceArchive', ArchivePageSchema,
-      [cursor === null ? null : decodeJsonValue({ value: cursor })],
-    );
+    const page: ArchivePage = await callAgentRpc({
+      origin: auth.origin,
+      token: auth.token,
+      name,
+      method: 'exportWorkspaceArchive',
+      schema: ArchivePageSchema,
+      args: [cursor === null ? null : decodeJsonValue({ value: cursor })],
+    });
 
     yield page;
     cursor = page.next;
