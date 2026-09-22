@@ -7,6 +7,7 @@
 
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
+import type { InstructionSourceRow } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
 import { renderSearchTreeLines } from './display';
@@ -73,6 +74,33 @@ function commandHelp(
   return lines.join('\n');
 }
 
+/** How the owner's standing answer for one instruction file reads in the
+ *  listing. A path discovery declined to follow says so instead. */
+function instructionState(row: InstructionSourceRow): string {
+  if (row.reason !== undefined) return `not readable: ${row.reason}`;
+
+  switch (row.decision) {
+    case 'grandfathered': return 'carried over';
+    case 'approved': return 'approved';
+    case 'revoked': return 'refused';
+    case 'none': return 'not decided';
+  }
+}
+
+/** How well one command answers the typed query. Lower sorts first; null
+ *  drops the command from the list. */
+function matchRank(query: string, name: string, description: string): number | null {
+  if (query === '') return 3;
+
+  if (name === query) return 0;
+
+  if (name.startsWith(query)) return 1;
+
+  if (description.includes(query)) return 2;
+
+  return fuzzySubsequence(query, name) ? 3 : null;
+}
+
 export function filterCommands(commands: readonly SlashCommandInfo[], draft: string): SlashCommandInfo[] {
   const token = draft.trimStart();
 
@@ -84,14 +112,7 @@ export function filterCommands(commands: readonly SlashCommandInfo[], draft: str
       const name = command.name.slice(1).toLowerCase();
       const description = command.description.toLowerCase();
 
-      const rank = query === '' ? 3
-        : name === query ? 0
-        : name.startsWith(query) ? 1
-        : description.includes(query) ? 2
-        : fuzzySubsequence(query, name) ? 3
-        : null;
-
-      return { command, index, rank };
+      return { command, index, rank: matchRank(query, name, description) };
     })
     .filter((candidate): candidate is { command: SlashCommandInfo; index: number; rank: number } =>
       candidate.rank !== null)
@@ -451,12 +472,7 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
           text: [
             'Instruction files the agent can write. The agent follows only what you approve.',
             ...rows.map((row, index) => {
-              const state = row.reason !== undefined
-                ? `not readable: ${row.reason}`
-                : row.decision === 'grandfathered' ? 'carried over'
-                  : row.decision === 'approved' ? 'approved'
-                    : row.decision === 'revoked' ? 'refused' : 'not decided';
-
+              const state = instructionState(row);
               const kind = row.kind === 'skill' ? 'skill' : 'AGENTS.md';
 
               return `  ${String(index + 1)}. [${state}] ${row.path} (${kind}, ${String(row.bytes)} bytes) — ${actionUsage(pageId, index + 1, row.path)}`;
@@ -737,10 +753,11 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
 
   if (!Number.isInteger(n) || n < 1 || n > turns.length) {
     const lines = [`Usage: /undo [n], where n is turns back (1–${turns.length} available):`];
-    turns.slice(0, 10).forEach((group, i) => {
+
+    for (const [i, group] of turns.slice(0, 10).entries()) {
       const at = new Date(group[0].at).toLocaleString();
       lines.push(`  ${i + 1}. ${at}  ${group.map((e) => e.dir).join(', ')}`);
-    });
+    }
 
     return { text: lines.join('\n'), restored: false };
   }
@@ -796,11 +813,13 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
 /** The classic-REPL takes listing (`/takes` without a pick). */
 export function renderTakesText(set: AlternateTakeSet): string {
   const lines = [`Alternate takes for: ${set.task.replace(/\s+/g, ' ').slice(0, 100)}`];
-  set.candidates.forEach((candidate, i) => {
+
+  for (const [i, candidate] of set.candidates.entries()) {
     const marker = candidate.nodeId === (set.chosenNodeId ?? set.winnerNodeId) ? '★' : ' ';
     lines.push(`  ${i + 1}. ${marker} [${takeEvidence(candidate)}]`);
     lines.push(`       ${candidate.text.replace(/\s+/g, ' ').slice(0, 160)}`);
-  });
+  }
+
   lines.push('Pick with /takes <n>. Your pick becomes a preference signal.');
 
   return lines.join('\n');
@@ -897,7 +916,7 @@ function renderRefinementRequest(request: RefinementRequestView): string {
       + (request.detail === '' ? '' : `\n  ${request.detail}`),
   ];
 
-  request.routes.forEach((route, index) => lines.push(renderRefinementRoute(route, index)));
+  for (const [index, route] of request.routes.entries()) lines.push(renderRefinementRoute(route, index));
 
   if (request.routes.length > 0) {
     lines.push('', 'Nothing pending is live yet: /changelog shows each proposal with its evidence and revert.');
@@ -921,12 +940,14 @@ function renderRefinementsText(view: AgentRefinementView): string {
   }
 
   lines.push('', `Refinements (${view.requests.length})`);
-  view.requests.forEach((request, index) => {
+
+  for (const [index, request] of view.requests.entries()) {
     const when = new Date(request.createdAt).toISOString().slice(0, 16).replace('T', ' ');
     lines.push(`${String(index + 1).padStart(3)}. ${request.stage} · ${when} · ${request.trigger}`);
     lines.push(`      ${request.detail || '(no detail yet)'}`);
-    request.routes.forEach((route, index) => lines.push(renderRefinementRoute(route, index)));
-  });
+
+    for (const [routeIndex, route] of request.routes.entries()) lines.push(renderRefinementRoute(route, routeIndex));
+  }
 
   return lines.join('\n');
 }
@@ -963,6 +984,14 @@ export function describeTakePick(result: TakePickOutcome, n: number): string {
 
 /** The classic-REPL takes listing (`/takes` without a pick). */
 
+/** How the status line reports the evolution cadence. Absent stays absent:
+ *  a workspace that did not report it shows no row. */
+function autoEvolveText(autoEvolve: boolean | undefined): string | undefined {
+  if (autoEvolve === undefined) return undefined;
+
+  return autoEvolve ? 'auto' : 'manual';
+}
+
 export function renderStatusLines(status: AgentClientStatus): string[] {
   const row = (label: string, value: string | number | undefined) =>
     value === undefined ? null : `${label.padEnd(10)} ${value}`;
@@ -980,6 +1009,6 @@ export function renderStatusLines(status: AgentClientStatus): string[] {
     row('Tools:', status.toolCount),
     row('Memory:', status.memorySize === undefined ? undefined : `${status.memorySize} B`),
     row('Database:', status.dbSize === undefined ? undefined : `${(status.dbSize / 1024).toFixed(1)} KB`),
-    row('Evolve:', status.autoEvolve === undefined ? undefined : status.autoEvolve ? 'auto' : 'manual'),
+    row('Evolve:', autoEvolveText(status.autoEvolve)),
   ].filter((line): line is string => line !== null);
 }
