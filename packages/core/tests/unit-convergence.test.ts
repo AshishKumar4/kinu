@@ -8,6 +8,19 @@ import { converge } from '../src/mcts/convergence';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initAlternateTakesTable, latestAlternateTakeSet, listAlternateTakeSets } from '../src/mcts/takes';
+import type { Executor } from '../src/types/primitives';
+
+/** Code containing FAIL_MARKER fails with `error`, everything else passes. */
+function markerExecutor(error = 'discriminating test failed'): Executor {
+  return {
+    languages: ['javascript'],
+    async execute(code: string) {
+      return String(code).includes('FAIL_MARKER')
+        ? { result: undefined, error }
+        : { result: true };
+    },
+  };
+}
 
 describe('Convergence', () => {
   test('throws when no nodes exist', async () => {
@@ -88,7 +101,7 @@ describe('Convergence', () => {
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
         VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
 
-    const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
+    const result = await converge(rt, session, 'r', { minAcceptable: 0.3, takesEpsilon: 0.1, mode: 'plan' });
     // 0.6 clears minAcceptableScore, so the score alone would ship it as a winner.
     expect(result.winnerValue).toBeCloseTo(0.6, 10);
     expect(result.converged).toBe(false);
@@ -119,7 +132,7 @@ describe('Convergence', () => {
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
         VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.60, 1, 'open', 1, 'approach B')`;
 
-    const result = await converge(rt, session, 'r', 0.3, 0.1, 'plan');
+    const result = await converge(rt, session, 'r', { minAcceptable: 0.3, takesEpsilon: 0.1, mode: 'plan' });
     expect(result.converged).toBe(true);
     expect(result.winnerId).toBe('a');
   });
@@ -185,15 +198,7 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    // Marker executor: code containing FAIL_MARKER fails, everything else passes.
-    rt.executor = {
-      languages: ['javascript'],
-      async execute(code: string) {
-        return String(code).includes('FAIL_MARKER')
-          ? { result: undefined, error: 'discriminating test failed' }
-          : { result: true };
-      },
-    };
+    rt.executor = markerExecutor();
 
     // argmax winner: marginally higher value but its code FAILS the test.
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
@@ -225,14 +230,7 @@ describe('Convergence', () => {
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
-    rt.executor = {
-      languages: ['javascript'],
-      async execute(code: string) {
-        return String(code).includes('FAIL_MARKER')
-          ? { result: undefined, error: 'failed' }
-          : { result: true };
-      },
-    };
+    rt.executor = markerExecutor('failed');
 
     // Both pass; argmax has higher value → it stays the winner.
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
@@ -292,14 +290,7 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
-    rt.executor = {
-      languages: ['javascript'],
-      async execute(code: string) {
-        return String(code).includes('FAIL_MARKER')
-          ? { result: undefined, error: 'discriminating test failed' }
-          : { result: true };
-      },
-    };
+    rt.executor = markerExecutor();
 
     // Prose argmax winner (no code), two code rivals inside takesEpsilon.
     // The passing rival never ran against the winner — promoting it would be

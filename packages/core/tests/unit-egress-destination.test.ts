@@ -7,8 +7,16 @@
 // what belongs here is the JUDGMENT itself, which compiles in core.
 import { describe, expect, test } from 'bun:test';
 import { refusedHostname } from '../src/safety/egress-destination';
+import { present } from '@kinu.run/test-utils';
 
 const judged = (url: string) => refusedHostname(new URL(url).hostname);
+
+/** Every URL in `denied` is refused as a destination; every URL in `public` is not. */
+function judgesFamily(denied: readonly string[], allowed: readonly string[]): void {
+  for (const url of denied) expect(judged(url)).toMatchObject({ reason: 'denied' });
+
+  for (const url of allowed) expect(judged(url)).toBeNull();
+}
 
 describe('IPv4 literals of every refused family', () => {
   test('RFC1918 — 10/8, 172.16/12, 192.168/16', () => {
@@ -37,10 +45,11 @@ describe('IPv4 literals of every refused family', () => {
   });
 
   test('link-local 169.254/16 including the cloud-metadata address', () => {
-    expect(judged('http://169.254.169.254/latest/meta-data/')).toMatchObject({ reason: 'denied' });
-    expect(judged('http://169.254.0.1/')).toMatchObject({ reason: 'denied' });
     // 169.255 is outside the /16 and public.
-    expect(judged('http://169.255.0.1/')).toBeNull();
+    judgesFamily(
+      ['http://169.254.169.254/latest/meta-data/', 'http://169.254.0.1/'],
+      ['http://169.255.0.1/'],
+    );
   });
 
   test('CGNAT 100.64/10 boundaries', () => {
@@ -67,17 +76,13 @@ describe('IPv6 literal forms', () => {
   });
 
   test('link-local fe80::/10 — full range, any interface', () => {
-    expect(judged('http://[fe80::a]/')).toMatchObject({ reason: 'denied' });
-    expect(judged('http://[febf::1]/')).toMatchObject({ reason: 'denied' });
     // fc00 is ULA, not link-local, and separately refused below.
-    expect(judged('http://[fec0::1]/')).toBeNull();
+    judgesFamily(['http://[fe80::a]/', 'http://[febf::1]/'], ['http://[fec0::1]/']);
   });
 
   test('unique-local fc00::/7 (the private-fabric ULA)', () => {
-    expect(judged('http://[fc00::1]/')).toMatchObject({ reason: 'denied' });
-    expect(judged('http://[fdff::1]/')).toMatchObject({ reason: 'denied' });
     // fb00 is outside fc00::/7.
-    expect(judged('http://[fb00::1]/')).toBeNull();
+    judgesFamily(['http://[fc00::1]/', 'http://[fdff::1]/'], ['http://[fb00::1]/']);
   });
 
   test('IPv4-mapped and IPv4-compatible forms are classified by the embedded IPv4', () => {
@@ -123,10 +128,11 @@ describe('the public control still succeeds', () => {
   });
 
   test('the refusal payload is the shared wire shape, never a bare string', () => {
-    const refusal = judged('http://169.254.169.254/');
-    expect(Object.keys(refusal!)).toEqual(['reason', 'error']);
-    expect(refusal!.reason).toBe('denied');
-    expect(refusal!.error.length).toBeGreaterThan(0);
+    const refusal = present(judged('http://169.254.169.254/'), 'the metadata-address refusal');
+
+    expect(Object.keys(refusal)).toEqual(['reason', 'error']);
+    expect(refusal.reason).toBe('denied');
+    expect(refusal.error.length).toBeGreaterThan(0);
   });
 });
 

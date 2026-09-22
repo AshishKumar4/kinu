@@ -15,6 +15,7 @@ import {
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
+import { present } from '@kinu.run/test-utils';
 import {
   listTurnOutcomes, realOutcomeScaffoldRates,
 } from '../src/evolution/outcomes';
@@ -69,7 +70,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     insertNode(sql, actor, { id: 'far', value: 0.4, text: 'approach D' });
     const id = captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
     expect(id).toBeTruthy();
-    const set = latestAlternateTakeSet(sql, actor)!;
+    const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
     expect(set.winnerNodeId).toBe('win');
     expect(set.turnId).toBeNull();
     expect(set.chosenNodeId).toBeNull();
@@ -85,7 +86,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     insertNode(sql, actor, { id: 'child', parentId: 'win', value: 0.87, depth: 3, text: 'refinement of winner' });
     insertNode(sql, actor, { id: 'rival', parentId: 'root', value: 0.86, depth: 1, text: 'genuinely different' });
     captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
-    const set = latestAlternateTakeSet(sql, actor)!;
+    const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'rival']);
   });
 
@@ -96,7 +97,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
 
     for (let i = 0; i < 6; i++) insertNode(sql, actor, { id: `r${i}`, value: 0.88 - i * 0.001, text: `rival ${i}` });
     captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
-    const set = latestAlternateTakeSet(sql, actor)!;
+    const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');
     expect(set.candidates).toHaveLength(4);
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'r0', 'r1', 'r2']);
   });
@@ -112,7 +113,7 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
     // A later turn with no new capture claims nothing (no re-claim).
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
-    expect(latestAlternateTakeSet(sql, actor)!.turnId).toBe('msg-1');
+    expect(present(latestAlternateTakeSet(sql, actor), 'the latest take set').turnId).toBe('msg-1');
   });
 
   test('never claims captures left over from an earlier turn that did not settle', () => {
@@ -171,7 +172,7 @@ async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle, 
   await history.record(CHAT_SESSION_ID, { id: 'msg-9', parentId: 'u-9', origin: 'output',
     message: { role: 'assistant', content: 'I used the winning approach' } });
 
-  return latestAlternateTakeSet(sql, actor)!;
+  return present(latestAlternateTakeSet(sql, actor), 'the latest take set');
 }
 
 describe('recordTakePick — the preference signal', () => {

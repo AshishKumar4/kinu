@@ -125,22 +125,24 @@ describe('buildModelCallEvent — usage is always present, pricing is guarded', 
 // ── Seam 3: run_end.reason is derived, never chosen ──────────────────────────
 
 describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
-  test('a finished turn completes', () => {
-    expect(classifyRunEnd({ completed: true, interrupted: false })).toEqual({ reason: 'completed' });
-  });
+  // THE DRIFT that the second row names: the identical user action sealed as
+  // 'aborted' on one backend and 'error' on the other, so every cross-backend
+  // run-ledger reader counted local stops as failures. The third row is there
+  // because runChat yields `done` and THEN throws the interruption, so both
+  // facts can arrive true — and the user's Stop is the one that names the run.
+  const ends = [
+    { name: 'a finished turn completes', completed: true, interrupted: false, reason: 'completed' },
+    { name: 'an interrupted turn is aborted, never error', completed: false, interrupted: true, reason: 'aborted' },
+    { name: 'an interrupt outranks a completed flag the driver already set',
+      completed: true, interrupted: true, reason: 'aborted' },
+  ] as const;
 
-  // THE DRIFT. The identical user action sealed as 'aborted' on one backend and
-  // 'error' on the other, so every cross-backend run-ledger reader counted local
-  // stops as failures.
-  test('an interrupted turn is aborted, never error', () => {
-    expect(classifyRunEnd({ completed: false, interrupted: true })).toEqual({ reason: 'aborted' });
-  });
-
-  test('an interrupt outranks a completed flag the driver already set', () => {
-    // runChat yields `done` and THEN throws the interruption, so both facts can
-    // arrive true. The user's Stop is the one that names the run.
-    expect(classifyRunEnd({ completed: true, interrupted: true })).toEqual({ reason: 'aborted' });
-  });
+  for (const end of ends) {
+    test(end.name, () => {
+      expect(classifyRunEnd({ completed: end.completed, interrupted: end.interrupted }))
+        .toEqual({ reason: end.reason });
+    });
+  }
 
   // The interruption sentence is the flag beside it, restated. A run sealed
   // 'aborted' that still carries a failure text is the same drift, relabelled.
@@ -350,17 +352,14 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
   // a failed cloud turn reached neither the outcome-review buffer nor the
   // session cadence — the evolution loop graded successes against successes
   // there and the whole distribution locally.
-  test('an errored turn is recorded', () => {
-    const { orch, recorded } = seamOrchestrator();
-    orch.recordTurn(orch.recordedTurn('error', settledTurn()), 'independent_task');
-    expect(recorded).toHaveLength(1);
-  });
+  for (const status of ['error', 'aborted'] as const) {
+    test(`an ${status === 'error' ? 'errored' : status} turn is recorded`, () => {
+      const { orch, recorded } = seamOrchestrator();
 
-  test('an aborted turn is recorded', () => {
-    const { orch, recorded } = seamOrchestrator();
-    orch.recordTurn(orch.recordedTurn('aborted', settledTurn()), 'independent_task');
-    expect(recorded).toHaveLength(1);
-  });
+      orch.recordTurn(orch.recordedTurn(status, settledTurn()), 'independent_task');
+      expect(recorded).toHaveLength(1);
+    });
+  }
 
   test('a FAILED turn still owes its extension end, and owes it before the recording', () => {
     // Recorded AFTER the hook: the hook's effects (memory writes, compaction
@@ -374,25 +373,26 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
     }
   });
 
-  test('an errored turn is stamped hadError even when the accumulator missed it', () => {
-    // A turn can throw outside the accumulator's view, which is why one backend
-    // had to set acc.hadError by hand in its catch.
-    const { orch, recorded } = seamOrchestrator();
-    orch.recordTurn(
-      orch.recordedTurn('error', settledTurn({ hadError: false })), 'independent_task',
-    );
-    expect(recorded[0]?.hadError).toBe(true);
-  });
+  // A turn can throw outside the accumulator's view, which is why one backend had
+  // to set acc.hadError by hand in its catch. A user pressing Stop did not make
+  // the agent fail, so stamping their turn as an error would feed the outcome
+  // classifier a negative label nothing earned.
+  const stamps = [
+    { name: 'an errored turn is stamped hadError even when the accumulator missed it',
+      status: 'error', hadError: true },
+    { name: 'an aborted turn is NOT stamped as an error', status: 'aborted', hadError: false },
+  ] as const;
 
-  // A user pressing Stop did not make the agent fail. Stamping their turn as an
-  // error would feed the outcome classifier a negative label nothing earned.
-  test('an aborted turn is NOT stamped as an error', () => {
-    const { orch, recorded } = seamOrchestrator();
-    orch.recordTurn(
-      orch.recordedTurn('aborted', settledTurn({ hadError: false })), 'independent_task',
-    );
-    expect(recorded[0]?.hadError).toBe(false);
-  });
+  for (const stamp of stamps) {
+    test(stamp.name, () => {
+      const { orch, recorded } = seamOrchestrator();
+
+      orch.recordTurn(
+        orch.recordedTurn(stamp.status, settledTurn({ hadError: false })), 'independent_task',
+      );
+      expect(recorded[0]?.hadError).toBe(stamp.hadError);
+    });
+  }
 
   test('with evolution off nothing is recorded, and the extension end is still owed', () => {
     const { orch, recorded } = seamOrchestrator({ enabled: false });
@@ -748,13 +748,15 @@ describe('the sandbox contract — one namespace for every tool', () => {
     // Every field, literal and optionality distinction survives...
     expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; query: "status"; path?: string; target?: { depth: number; include?: string[] } | string }): Promise<unknown>;');
     // ...while no property description is repeated into the declaration.
-    markers.forEach((marker) => expect(rendered).not.toContain(marker));
+
+    for (const marker of markers) expect(rendered).not.toContain(marker);
 
     // The provider's copy is untouched: byte-identical after the render and
     // still carrying every description.
     expect(JSON.stringify(native.file.inputSchema)).toBe(frozen);
     const providerSchema = JSON.stringify(nativeToolInputSchema(native.file));
-    markers.forEach((marker) => expect(providerSchema).toContain(marker));
+
+    for (const marker of markers) expect(providerSchema).toContain(marker);
   });
 });
 

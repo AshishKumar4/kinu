@@ -15,7 +15,7 @@ import {
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
 import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
-import { createMockFetch, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
+import { createMockFetch, present, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 const CATALOG = {
   groq: {
@@ -166,12 +166,12 @@ describe('models.dev provider metadata', () => {
   test('modelsDevCompatBaseURL — key-satisfiable OpenAI-surface endpoints only', async () => {
     const mock = catalogMock();
     const byId = new Map((await listModelsDevProviders({ fetch: mock.fetch })).map((p) => [p.id, p]));
-    expect(modelsDevCompatBaseURL(byId.get('groq')!)).toBe('https://api.groq.com/openai/v1');
-    expect(modelsDevCompatBaseURL(byId.get('openai')!)).toBe('https://api.openai.com/v1');
+    expect(modelsDevCompatBaseURL(present(byId.get('groq'), 'the groq provider'))).toBe('https://api.groq.com/openai/v1');
+    expect(modelsDevCompatBaseURL(present(byId.get('openai'), 'the openai provider'))).toBe('https://api.openai.com/v1');
     // bespoke SDK + no api, but a pinned OpenAI-compatible endpoint exists
-    expect(modelsDevCompatBaseURL(byId.get('mistral')!)).toBe('https://api.mistral.ai/v1');
-    expect(modelsDevCompatBaseURL(byId.get('sap-ai-core')!)).toBeNull();           // bespoke SDK, no endpoint
-    expect(modelsDevCompatBaseURL(byId.get('cloudflare-workers-ai')!)).toBeNull(); // ${…} template
+    expect(modelsDevCompatBaseURL(present(byId.get('mistral'), 'the mistral provider'))).toBe('https://api.mistral.ai/v1');
+    expect(modelsDevCompatBaseURL(present(byId.get('sap-ai-core'), 'the sap-ai-core provider'))).toBeNull();           // bespoke SDK, no endpoint
+    expect(modelsDevCompatBaseURL(present(byId.get('cloudflare-workers-ai'), 'the cloudflare-workers-ai provider'))).toBeNull(); // ${…} template
   });
 });
 
