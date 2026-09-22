@@ -3,8 +3,8 @@ import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import { KinuError } from '../obs/error';
-import { encodeModelMessages, decodeModelMessages } from './message-codec';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { encodeModelMessage, decodeModelMessageValues } from './message-codec';
+import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObject, type JsonValue } from '../utils/json';
 import type { SessionPayloads, SessionPayloadReader, SessionPayload } from './payload';
 
 export interface MessageReference { readonly messageId: string }
@@ -13,19 +13,17 @@ export type MessageOrigin = 'input' | 'output' | 'edit' | 'context_transform' | 
 
 export interface MessagePartReference { readonly messageId: string; readonly partNo: number }
 
-/** One part of a message's content, as `content_*` stores it. `value` is the
- *  native part, media externalized; `replyTo` pairs a tool result to its call. */
-const StoredPartSchema = v.object({
+/** A stored part's fields besides its native value. */
+const StoredPartFieldsSchema = v.object({
   partNo: v.number(),
   kind: v.string(),
   streamOrder: v.number(),
   replyTo: v.nullable(v.object({ messageId: v.string(), partNo: v.number() })),
-  value: JsonObjectSchema,
 });
 
-const StoredContentSchema = v.array(StoredPartSchema);
-
-export type StoredPart = v.InferOutput<typeof StoredPartSchema>;
+/** One part of a message's content, as `content_*` stores it. `value` is the
+ *  native part, media externalized; `replyTo` pairs a tool result to its call. */
+export type StoredPart = v.InferOutput<typeof StoredPartFieldsSchema> & { value: JsonObject };
 
 export interface PreparedContent { readonly parts: readonly StoredPart[]; readonly payload: SessionPayload }
 
@@ -101,6 +99,55 @@ function* segmented(text: string): Generator<string> {
   }
 }
 
+/** A part descriptor, off a payload the reader parsed as JSON at its boundary. */
+function descriptorObject(value: JsonValue): JsonObject {
+  if (!isParsedJsonObject(value)) throw new KinuError('io', 'a stored part descriptor is not an object');
+
+  return value;
+}
+
+/** A sealed content row's parts. The row is JSON already, parsed at its
+ *  boundary: each part's fields are checked and its value narrowed in one
+ *  step, never walked a second time. */
+function storedParts(content: JsonValue): StoredPart[] {
+  const parts = jsonObjectElements(content);
+
+  if (parts === null) throw new KinuError('io', 'a stored message content is not a list of parts');
+
+  return parts.map((part) => {
+    const value = part.value;
+
+    if (value === undefined || !isParsedJsonObject(value)) throw new KinuError('io', 'a stored message part has no native value');
+
+    return { ...v.parse(StoredPartFieldsSchema, part), value };
+  });
+}
+
+/** A tree of objects and arrays, the shape a materialized message is made of. */
+const ObjectTreeSchema = v.record(v.string(), v.unknown());
+
+/**
+ * A materialized message frozen where it stands, all the way down. Every step
+ * shares the one object, so a consumer that edits it in place must fail at the
+ * edit instead of changing what the next step reads. Byte carriers are left as
+ * they are: a view over bytes cannot be frozen.
+ */
+function freezeTree(node: { readonly value: unknown }): void {
+  const { value } = node;
+
+  if (value instanceof Uint8Array || value instanceof ArrayBuffer || value instanceof URL) return;
+
+  if (Array.isArray(value)) {
+    for (const item of value) freezeTree({ value: item });
+  } else if (v.is(ObjectTreeSchema, value)) {
+    for (const item of Object.values(value)) freezeTree({ value: item });
+  } else {
+    return;
+  }
+
+  Object.freeze(value);
+}
+
 export interface ActorReadAuthority {
   readonly actorId: string;
   assertCurrent(): void;
@@ -108,6 +155,12 @@ export interface ActorReadAuthority {
 
 /** Reads retain the caller's authorization across asynchronous payload access. */
 export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthority, P extends SessionPayloadReader = SessionPayloadReader> {
+  /** Sealed messages as the model reads them, by id. A sealed row is never
+   *  rewritten, so its text crosses the SQL boundary once per reader and every
+   *  later read shares the frozen message. Holds what the last context read
+   *  named, plus what was read since. */
+  private sealed = new Map<string, ModelMessage>();
+
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
 
   protected row(messageId: string): MessageRow {
@@ -138,7 +191,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
         continue;
       }
 
-      const value = v.parse(JsonObjectSchema, await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
+      const value = descriptorObject(await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
 
       if (row.kind === 'text' || row.kind === 'reasoning' || row.text !== '') value.text = row.text;
       parts.push({ partNo: row.part_no, kind: row.kind, streamOrder: row.stream_order, replyTo: null, value });
@@ -155,7 +208,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     const row = this.row(reference.messageId);
 
     if (row.sealed_at === null) return { row, parts: await this.streamed(reference.messageId) };
-    const parts = v.parse(StoredContentSchema, await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest)));
+    const parts = storedParts(await this.payloads.read(payloadOf(row.content_json, row.content_path, row.content_digest)));
     this.actor.assertCurrent();
 
     return { row, parts };
@@ -173,18 +226,51 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   }
 
   async materialize(reference: MessageReference): Promise<ModelMessage> {
+    const cached = this.sealed.get(reference.messageId);
+
+    if (cached !== undefined) {
+      this.actor.assertCurrent();
+
+      return cached;
+    }
+
     const { row, parts } = await this.stored(reference);
     const content: JsonObject[] = [];
 
     for (const part of parts) content.push(part.value.type === 'image' || part.value.type === 'file' ? await this.payloads.resolveMedia(part.value) : part.value);
     const envelope = v.parse(JsonObjectSchema, JSON.parse(row.envelope_json));
-    const native = { ...envelope, role: row.role, content: row.native_content_kind === 'string' ? v.parse(v.string(), content[0]?.text ?? '') : content };
-    const decoded = decodeModelMessages(JSON.stringify([v.parse(JsonValueSchema, native)]))[0];
+    const native: JsonObject = { ...envelope, role: row.role, content: row.native_content_kind === 'string' ? v.parse(v.string(), content[0]?.text ?? '') : content };
+    const decoded = decodeModelMessageValues([native])[0];
     this.actor.assertCurrent();
 
     if (decoded === undefined) throw new KinuError('io', 'session message failed to materialize');
 
+    if (row.sealed_at === null) return decoded;
+    freezeTree({ value: decoded });
+    this.sealed.set(reference.messageId, decoded);
+
     return decoded;
+  }
+
+  /** The messages a context names, in its order, as ONE read: a sealed message
+   *  this reader holds is served from memory, and the actor is asserted once,
+   *  after the read's last await. The sealed ones are then all the reader
+   *  keeps, so a message the context let go is not held. */
+  async materializeAll(references: readonly MessageReference[]): Promise<ModelMessage[]> {
+    const messages: ModelMessage[] = [];
+    const named = new Map<string, ModelMessage>();
+
+    for (const reference of references) {
+      const message = this.sealed.get(reference.messageId) ?? await this.materialize(reference);
+      messages.push(message);
+
+      if (this.sealed.get(reference.messageId) === message) named.set(reference.messageId, message);
+    }
+
+    this.actor.assertCurrent();
+    this.sealed = named;
+
+    return messages;
   }
 }
 
@@ -194,9 +280,9 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
 export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPayloads> {
   private readonly sources = new WeakMap<ModelMessage, MessageReference>();
 
+  /** The row a message object was read from, or null. A lookup in memory:
+   *  the operation that uses it asserts the actor for the whole request. */
   sourceOf(message: ModelMessage): MessageReference | null {
-    this.actor.assertCurrent();
-
     return this.sources.get(message) ?? null;
   }
 
@@ -218,31 +304,30 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   async prepare(message: ModelMessage, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
-    const encoded = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([message])))[0];
+    const { role, content, ...envelope } = encodeModelMessage(message);
 
-    if (encoded === undefined) throw new KinuError('bad_input', 'missing native message');
-    const { role, content, ...envelope } = encoded;
-
-    return this.prepareParts({ id, role: v.parse(v.string(), role), content: v.parse(JsonValueSchema, content), envelope, calls });
+    return this.prepareParts({ id, role: v.parse(v.string(), role), content, envelope, calls });
   }
 
   async prepareProjection(value: JsonObject, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
     const { role, content, ...envelope } = value;
-    const decodedContent = v.is(v.string(), content) ? content : await Promise.all(v.parse(v.array(JsonObjectSchema), content).map(part => part.type === 'file' || part.type === 'image' ? this.payloads.resolveMedia(part) : part));
-    decodeModelMessages(JSON.stringify([{ ...envelope, role, content: decodedContent }]));
+    const parts = v.is(v.string(), content) ? null : jsonObjectElements(content);
+    const decodedContent = parts === null ? content : await Promise.all(parts.map(part => part.type === 'file' || part.type === 'image' ? this.payloads.resolveMedia(part) : part));
+    decodeModelMessageValues([{ ...envelope, role, content: decodedContent }]);
 
-    return this.prepareParts({ id, role: v.parse(v.string(), role), content: v.parse(JsonValueSchema, content), envelope, calls });
+    return this.prepareParts({ id, role: v.parse(v.string(), role), content, envelope, calls });
   }
 
   /** Native structure the codec does not validate: render-only parts a transcript entry shows and the model never reads. */
   async prepareParts(message: NativeMessage): Promise<PreparedMessage> {
     const { id, role, content, envelope, calls = new Map() } = message;
-    const kind = v.is(v.string(), content) ? 'string' : 'parts';
-    const nativeParts = v.is(v.string(), content) ? [{ type: 'text', text: content }] : v.parse(v.array(JsonObjectSchema), content);
+    const text = v.is(v.string(), content);
+    const nativeParts = text ? [{ type: 'text', text: content }] : jsonObjectElements(content);
 
+    if (nativeParts === null) throw new KinuError('bad_input', 'message content is neither text nor a list of parts');
     const parts = nativeParts.map((value, partNo) => ({ partNo, kind: v.parse(v.string(), value.type), streamOrder: partNo, replyTo: replyOf(value, calls), value }));
 
-    return { id, role, contentKind: kind, envelope, content: await this.prepareContent(parts) };
+    return { id, role, contentKind: text ? 'string' : 'parts', envelope, content: await this.prepareContent(parts) };
   }
 
   /** Media leaves the row for the attachment plane; the parts array then
@@ -308,7 +393,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
       WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0`[0];
 
     if (row === undefined) throw new KinuError('denied', 'stream part is missing or sealed');
-    const descriptor = v.parse(JsonObjectSchema, await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
+    const descriptor = descriptorObject(await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
     delete descriptor.providerOptions;
 
     if (providerOptions !== undefined) descriptor.providerOptions = providerOptions;
@@ -397,27 +482,24 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
  * part and the walk reduces to equality.
  */
 function carries(recorded: ModelMessage, message: ModelMessage): boolean {
-  const record = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([recorded])))[0];
-  const wanted = v.parse(v.array(JsonObjectSchema), JSON.parse(encodeModelMessages([message])))[0];
-
-  if (record === undefined || wanted === undefined) return false;
-  const { content: recordedContent, ...recordedEnvelope } = record;
-  const { content: wantedContent, ...wantedEnvelope } = wanted;
+  const { content: recordedContent, ...recordedEnvelope } = encodeModelMessage(recorded);
+  const { content: wantedContent, ...wantedEnvelope } = encodeModelMessage(message);
 
   if (JSON.stringify(recordedEnvelope) !== JSON.stringify(wantedEnvelope)) return false;
 
-  if (!v.is(v.array(v.unknown()), recordedContent) || !v.is(v.array(v.unknown()), wantedContent)) {
+  if (!Array.isArray(recordedContent) || !Array.isArray(wantedContent)) {
     return JSON.stringify(recordedContent) === JSON.stringify(wantedContent);
   }
 
+  const recordedParts = recordedContent.map((part) => JSON.stringify(part));
   let at = 0;
 
   for (const part of wantedContent) {
     const encoded = JSON.stringify(part);
 
-    while (at < recordedContent.length && JSON.stringify(recordedContent[at]) !== encoded) at += 1;
+    while (at < recordedParts.length && recordedParts[at] !== encoded) at += 1;
 
-    if (at === recordedContent.length) return false;
+    if (at === recordedParts.length) return false;
     at += 1;
   }
 
