@@ -50,7 +50,7 @@ import * as v from 'valibot';
 import {
   argumentDigest, claimToolEffect, initToolEffectClaimTable, initWorkspaceSchema, openWorkspaceMainActor,
   parseJsonValue, settleToolEffect, WorkspaceActorDirectory,
-  type ActorHandle, type RawSqlExec, type SqlExecutor, type ToolEffectKey,
+  type ActorHandle, type RawSqlExec, type SqlExecutor, type SqlValue, type ToolEffectKey,
 } from '@kinu.run/core';
 
 import {
@@ -161,14 +161,9 @@ interface EffectLedgerSqlRow {
 }
 
 export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
-  // SAFETY: the same assertion `bindAgentSql` (runtime.ts:113) makes, at the
-  // same boundary and for the same reason — `SqlExecutor` and the platform's
-  // `sql.exec` are one tagged-template protocol, and `SqlExecutor` additionally
-  // admits ArrayBuffer, which Durable Object SQLite binds at runtime and does
-  // not type. The Agents SDK is not hosted in this worker, so the bridge is here.
-  private readonly sql = ((
-    query: TemplateStringsArray, ...values: SqlStorageValue[]
-  ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
+  private readonly sql: SqlExecutor = <Row,>(
+    query: TemplateStringsArray, ...values: SqlValue[]
+  ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
   private readonly execRaw: RawSqlExec = (ddl: string) => {
     this.ctx.storage.sql.exec(ddl);

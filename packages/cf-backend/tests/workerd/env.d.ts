@@ -113,7 +113,10 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
-  start(source?: string, bindChain?: boolean, cred?: VfsCred, browser?: string, project?: Record<string, JsonValue>, app?: { port: number } | null): Promise<void>;
+  start(start?: {
+    source?: string; bindChain?: boolean; cred?: VfsCred;
+    browser?: string; project?: Record<string, JsonValue>; app?: { port: number } | null;
+  }): Promise<void>;
   stop(): Promise<void>;
   facetImages(): Promise<string[]>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;

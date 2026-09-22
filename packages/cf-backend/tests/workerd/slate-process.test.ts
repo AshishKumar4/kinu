@@ -36,14 +36,14 @@ it('the durable application keeps this.sql and this.storage across a process res
     '}',
   ].join('\n');
 
-  await subject.start(source);
+  await subject.start({ source });
 
   try {
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":1}' });
     await subject.stop();
     // The durable application re-attaches to its pinned facet's SQLite, so the
     // probe table survives the release exactly as this.storage does.
-    await subject.start(source);
+    await subject.start({ source });
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":2,"stored":2}' });
   } finally {
     await subject.stop();
@@ -65,11 +65,11 @@ it('a slate edited and rebooted leaves no image of the source it no longer runs'
   ].join('\n');
 
   try {
-    await subject.start(version(1));
+    await subject.start({ source: version(1) });
     const first = await subject.facetImages();
     expect(first.length).toBeGreaterThan(0);
 
-    await subject.start(version(2));
+    await subject.start({ source: version(2) });
     const second = await subject.facetImages();
     expect(await subject.call('which', [])).toEqual({ ok: true, value: '2' });
     // The same count of images as one boot: the edited application's old
@@ -100,12 +100,12 @@ it('a private process gets an ephemeral facet: this.storage survives, this.sql d
 
   // The defaults spelled out: a private process is the durable application's
   // call surface minus the port and the pinned facet — `app: null`.
-  await subject.start(source, true, undefined, undefined, undefined, null);
+  await subject.start({ source, app: null });
 
   try {
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":1}' });
     await subject.stop();
-    await subject.start(source, true, undefined, undefined, undefined, null);
+    await subject.start({ source, app: null });
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":2}' });
   } finally {
     await subject.stop();
@@ -117,18 +117,21 @@ it('a slate declaring a browser surface serves the shell, the client bundle, and
   // Single file: main and browser are the same module, so the generated
   // entries do the splitting — the server bundle keeps the class and the
   // client bundle keeps the component.
-  await subject.start([
-    'import { useState } from "react";',
-    'import { SlateObject } from "kinu:slate";',
-    'export class Slate extends SlateObject {',
-    '  async ping() { return "server-only-marker-1c9e"; }',
-    '}',
-    'export default function App() {',
-    '  const [n] = useState(1);',
-    '  return <button>{"client-only-marker-7f3a"}</button>;',
-    '}',
-  ].join('\n'), false, undefined, undefined,
-    { main: 'app.tsx', browser: 'app.tsx', slate: { title: 'Notes' } });
+  await subject.start({
+    source: [
+      'import { useState } from "react";',
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async ping() { return "server-only-marker-1c9e"; }',
+      '}',
+      'export default function App() {',
+      '  const [n] = useState(1);',
+      '  return <button>{"client-only-marker-7f3a"}</button>;',
+      '}',
+  ].join('\n'),
+    bindChain: false,
+    project: { main: 'app.tsx', browser: 'app.tsx', slate: { title: 'Notes' } },
+  });
 
   try {
     const shell = await subject.route('/');
@@ -225,22 +228,24 @@ it('boots the class whether main exports it as Slate or as default, and the refu
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('export-shapes'));
   // The exact source the first-run eval model wrote after reading the skill:
   // SlateObject imported from kinu:slate, the class as the DEFAULT export.
-  await subject.start([
-    'import { SlateObject } from "kinu:slate";',
-    '',
-    'export default class Slate extends SlateObject {',
-    '  async fetch(request, env) {',
-    '    const url = new URL(request.url);',
-    '    if (request.method === "GET" && url.pathname === "/ping") {',
-    '      return new Response(',
-    '        JSON.stringify({ message: "pong", method: request.method, path: url.pathname }),',
-    '        { status: 200, headers: { "content-type": "application/json" } },',
-    '      );',
-    '    }',
-    '    return new Response("Not Found", { status: 404 });',
-    '  }',
-    '}',
-  ].join('\n'));
+  await subject.start({
+    source: [
+      'import { SlateObject } from "kinu:slate";',
+      '',
+      'export default class Slate extends SlateObject {',
+      '  async fetch(request, env) {',
+      '    const url = new URL(request.url);',
+      '    if (request.method === "GET" && url.pathname === "/ping") {',
+      '      return new Response(',
+      '        JSON.stringify({ message: "pong", method: request.method, path: url.pathname }),',
+      '        { status: 200, headers: { "content-type": "application/json" } },',
+      '      );',
+      '    }',
+      '    return new Response("Not Found", { status: 404 });',
+      '  }',
+      '}',
+    ].join('\n'),
+  });
 
   try {
     const ping = await subject.route('/ping');
@@ -253,12 +258,14 @@ it('boots the class whether main exports it as Slate or as default, and the refu
   }
 
   // The named-export shape the skill documents must keep booting.
-  await subject.start([
-    'import { SlateObject } from "kinu:slate";',
-    'export class Slate extends SlateObject {',
-    '  async fetch() { return new Response("named ok"); }',
-    '}',
-  ].join('\n'));
+  await subject.start({
+    source: [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  async fetch() { return new Response("named ok"); }',
+      '}',
+    ].join('\n'),
+  });
 
   try {
     expect(await subject.route('/anything')).toMatchObject({ status: 200, body: 'named ok' });
@@ -295,17 +302,19 @@ it('binding calls never run outside a slate method invocation', async () => {
   // call queued there must still be refused when a later method drains it.
   // (A timer INSIDE a method keeps its lineage on purpose — async context
   // propagation attributes the call to the invocation it runs under.)
-  await subject.start([
-    'import { SlateObject } from "kinu:slate";',
-    'export class Slate extends SlateObject {',
-    '  #early;',
-    '  constructor(ctx, env) { super(ctx, env); this.#early = this.env.PEER.echo("x"); }',
-    '  async replay() {',
-    '    try { await this.#early; return "unexpected"; }',
-    '    catch (cause) { return String(cause); }',
-    '  }',
-    '}',
-  ].join('\n'));
+  await subject.start({
+    source: [
+      'import { SlateObject } from "kinu:slate";',
+      'export class Slate extends SlateObject {',
+      '  #early;',
+      '  constructor(ctx, env) { super(ctx, env); this.#early = this.env.PEER.echo("x"); }',
+      '  async replay() {',
+      '    try { await this.#early; return "unexpected"; }',
+      '    catch (cause) { return String(cause); }',
+      '  }',
+      '}',
+    ].join('\n'),
+  });
 
   try {
     const result = await subject.call('replay', []);

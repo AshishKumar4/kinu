@@ -36,7 +36,7 @@ import {
   foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
   SessionHistory, summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
-  type ForkStaging, type SqlExecutor, type VFS, type VfsEntryStat,
+  type ForkStaging, type SqlExecutor, type SqlValue, type VFS, type VfsEntryStat,
 } from '@kinu.run/core';
 
 /**
@@ -341,14 +341,9 @@ export interface ForkDeliveryRequest {
 }
 
 export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
-  // SAFETY: the same assertion `bindAgentSql` (runtime.ts:113) makes, at the
-  // same boundary and for the same reason. `SqlExecutor` and the platform's
-  // `sql.exec` are one tagged-template protocol; `SqlExecutor` additionally
-  // admits ArrayBuffer, which Durable Object SQLite binds at runtime and does
-  // not type. The Agents SDK is not hosted in this worker.
-  private readonly sql = ((
-    query: TemplateStringsArray, ...values: SqlStorageValue[]
-  ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
+  private readonly sql: SqlExecutor = <Row,>(
+    query: TemplateStringsArray, ...values: SqlValue[]
+  ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
   private readonly plane = new ProbeFilePlane(this.ctx);
   private schemaReady = false;
@@ -562,15 +557,9 @@ export interface ForkTargetState {
 }
 
 export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
-  // SAFETY: the tagged contract guarantees one `?` placeholder per interpolated
-  // value (`join('?')`), DO SQLite binds the same `SqlStorageValue` vocabulary
-  // `SqlExecutor` declares, and `toArray()` returns `Record<string,
-  // SqlStorageValue>` rows — the row shape the contract's callers parse per
-  // field. The cast bridges only the generic row parameter the platform API
-  // cannot carry.
-  private readonly sql = ((
-    query: TemplateStringsArray, ...values: SqlStorageValue[]
-  ) => this.ctx.storage.sql.exec(query.join('?'), ...values).toArray()) as SqlExecutor;
+  private readonly sql: SqlExecutor = <Row,>(
+    query: TemplateStringsArray, ...values: SqlValue[]
+  ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
   private readonly plane = new ProbeFilePlane(this.ctx);
   private schemaReady = false;

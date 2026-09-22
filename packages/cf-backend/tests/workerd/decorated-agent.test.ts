@@ -95,7 +95,7 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
   // returns the registry answer a live instance returns. Nothing further is
   // constructed on purpose, because an Agent constructor seals its RPC surface,
   // opens SQLite and installs diagnostics, none of which is the premise.
-  const receiver = Object.create(cls.prototype) as Agent<never>;
+  const receiver: Agent<never> = Object.create(cls.prototype);
 
   return {
     callable: [...receiver.getCallableMethods().keys()].sort(),

@@ -196,11 +196,9 @@ type StubThen = (resolve: (settled: string) => void) => void;
  * would buy.
  */
 function pipelinedStub(value: string): PromiseLike<string> {
-  // SAFETY: `then` is the only member `PromiseLike<string>` declares, and it is
-  // constructed by the `get` trap below. Verified against that trap's body,
-  // which returns a `resolve`-calling function for `'then'` and `undefined` for
-  // every other key, so nothing is ever read off this target.
-  const target = {} as PromiseLike<string>;
+  // The trap below answers every read; the target only has to BE the type the
+  // Proxy declares.
+  const target: PromiseLike<string> = { then: (onfulfilled) => Promise.resolve(value).then(onfulfilled) };
 
   return new Proxy<PromiseLike<string>>(target, {
     get(_target: PromiseLike<string>, key: string | symbol): StubThen | undefined {

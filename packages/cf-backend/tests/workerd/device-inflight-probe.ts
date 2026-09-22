@@ -63,10 +63,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
   // statement nobody reads rows from still has to have executed.
   private readonly sql: SqlExec = {
     exec: (query: string, ...bindings: SqlValue[]) => {
-      // SAFETY: `SqlValue` declares the same string/number/null/bytes union the
-      // platform's `SqlStorageValue` declares, so the checked binding widens
-      // nothing — the cast renames the union, it does not add members.
-      const cursor = this.ctx.storage.sql.exec(query, ...bindings as SqlStorageValue[]);
+      const cursor = this.ctx.storage.sql.exec(query, ...bindings);
 
       return { toArray: () => cursor.toArray() };
     },
