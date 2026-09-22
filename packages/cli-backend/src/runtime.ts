@@ -23,7 +23,7 @@ import type {
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { mkdirSync, rmSync, chmodSync } from 'node:fs';
-import { basename, join, resolve as resolvePath } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
   observeWrites, type WriteObserver,
@@ -33,7 +33,6 @@ import {
   DefaultExecutionRouter, createInlineExecutor,
   withMountTable, standardMounts, readTailWithVfsOps,
   withApprovalGatedShell, holdsGrant,
-  withSelfPreservingShell, type HostProcessIdentity,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount,
   resolveRoutingProfile, createRoutedModelLane,
@@ -634,21 +633,13 @@ export function createCLIRuntime(
   // any command may mutate the tree, so it snapshots first. The in-SQLite
   // shell touches no host file and names no host directory, so checkpointing
   // it asked the shadow-git engine to snapshot the database file.
-  //
-  // Self-preservation is OUTERMOST, and only on this branch: this is the one
-  // shell whose commands run as siblings of the process driving the turn, so
-  // it is the only one that can end it. The in-SQLite shell has no host
-  // process to signal.
-  const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withSelfPreservingShell(
-    withApprovalGatedShell(
-      withCheckpointedShell(
-        createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
-        checkpoints,
-        cwd,
-      ),
-      approvalPolicy,
+  const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
+    withCheckpointedShell(
+      createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
+      checkpoints,
+      cwd,
     ),
-    hostProcessIdentity(),
+    approvalPolicy,
   );
 
   const shell: Shell = facetShell
@@ -1112,24 +1103,6 @@ const shellOptionsSchema = v.object({
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
 });
-
-/**
- * The process running this turn, as the host shell's self-preservation guard
- * reads it.
- *
- * Two names, and both are needed. The entry's basename is what the process
- * table shows — `pkill -f` matches a command line — and it is `kinu` for an
- * installed CLI and the script name in a checkout. `kinu` is additionally the
- * name the daemon runs under and the one a person types when they mean "the
- * agent", so a turn told to restart the agent finds it whichever of the two it
- * names. Deduplicated because on an installed CLI they are the same string.
- */
-function hostProcessIdentity(): HostProcessIdentity {
-  const entry = process.argv[1];
-  const own = entry === undefined ? '' : basename(entry);
-
-  return { pid: process.pid, names: own === '' || own === 'kinu' ? ['kinu'] : [own, 'kinu'] };
-}
 
 
 export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
