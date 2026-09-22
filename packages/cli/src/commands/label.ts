@@ -206,7 +206,7 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   }
 
   console.log(`${OK('drew')} ${plural(items.length, 'turn')} → ${ACCENT(path)}` +
-    DIM(`  (~${Math.round(items.length * 0.35)}–${Math.round(items.length * 0.5)} minutes)`));
+    DIM(`  (about ${Math.round(items.length * 0.35)} to ${Math.round(items.length * 0.5)} minutes)`));
   console.log('');
   console.log('  1. Open it and put one letter after each `verdict:`');
   console.log(DIM('       a accepted   c corrected   f frustrated   b abandoned   ? unclear'));
@@ -300,7 +300,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
   }
 
   for (const judge of result.run.judged) {
-    console.log(`${OK('judged')} ${judge.model} — ${plural(judge.stored, 'verdict')}` +
+    console.log(`${OK('judged')} ${judge.model}: ${plural(judge.stored, 'verdict')}` +
       (judge.failed > 0 ? WARN(`, ${judge.failed} unanswered`) : ''));
   }
 
@@ -367,7 +367,7 @@ async function mineCorpus(opts: LabelOpts): Promise<void> {
   const path = corpusReportPath(opts);
 
   const markdown = renderCorpusReport(report, {
-    title: `Claude Code transcript corpus — ${new Date().toISOString().slice(0, 10)}`,
+    title: `Claude Code transcript corpus, ${new Date().toISOString().slice(0, 10)}`,
     provenance: renderMineSkips(mined),
   });
 
@@ -437,7 +437,7 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
   const path = corpusReportPath(opts);
 
   const markdown = renderCorpusReport(report, {
-    title: `Claude Code transcript corpus, scored — ${new Date().toISOString().slice(0, 10)}`,
+    title: `Claude Code transcript corpus, scored, ${new Date().toISOString().slice(0, 10)}`,
     provenance: renderMineSkips(mined),
   });
 

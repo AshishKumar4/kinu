@@ -230,9 +230,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   }, [cloudReady, roster.reload]);
 
   const modeLabel = useMemo(() => {
-    if (mode === 'cloud') return cloudReady ? 'Cloud workspace' : 'Cloud workspace - sign in required';
+    if (mode === 'cloud') return cloudReady ? 'Cloud workspace' : 'Cloud workspace (sign in first)';
 
-    return localReady ? 'Local workspace' : 'Local workspace - provider required';
+    return localReady ? 'Local workspace' : 'Local workspace (connect a provider first)';
   }, [cloudReady, localReady, mode]);
 
 
@@ -314,9 +314,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     try {
       if (setupRequired) throw new Error('Run kinu setup to connect your account or a local model provider.');
 
-      if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with kinu auth, then create a cloud workspace.');
+      if (mode === 'cloud' && !cloudReady) throw new Error('Cloud workspaces need a signed-in account. Run kinu auth, then try again.');
 
-      if (mode === 'local' && !localReady) throw new Error('Connect a local provider with kinu provider connect, or switch to cloud after sign-in.');
+      if (mode === 'local' && !localReady) throw new Error('Local workspaces need a model provider. Run kinu provider connect <provider>, or switch to cloud.');
       // Cloud naming is server-side (async display-name generation after
       // create); only local agents need a locally generated identity.
       const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
@@ -499,9 +499,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         {setupRequired && (
           <box flexDirection="column" style={{ marginTop: 1, marginBottom: 1, border: true, borderStyle: 'rounded', borderColor: colors.border.subtle, paddingLeft: 1, paddingRight: 1 }}>
             <text><strong fg={colors.text.primary}>Setup required</strong></text>
-            <text><span fg={colors.text.muted}>  kinu setup</span> <span fg={colors.text.primary}>connect account and optional local provider</span></text>
-            <text><span fg={colors.text.muted}>  kinu auth</span>  <span fg={colors.text.primary}>connect cloud workspaces only</span></text>
-            <text><span fg={colors.text.muted}>  kinu provider connect codex</span> <span fg={colors.text.primary}>connect local model access</span></text>
+            <text><span fg={colors.text.muted}>  kinu setup</span> <span fg={colors.text.primary}>sign in and pick a model provider</span></text>
+            <text><span fg={colors.text.muted}>  kinu auth</span>  <span fg={colors.text.primary}>sign in for cloud workspaces only</span></text>
+            <text><span fg={colors.text.muted}>  kinu provider connect codex</span> <span fg={colors.text.primary}>use ChatGPT Codex</span></text>
           </box>
         )}
 
@@ -517,7 +517,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               paddingLeft: 1,
               paddingRight: 1,
             }}
-            title={busy ? 'Creating...' : 'Mission'}
+            title={busy ? 'Creating…' : 'Mission'}
             onMouseDown={() => {
               setFocusArea('mission');
               textareaRef.current?.focus();
@@ -526,7 +526,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             <textarea
               ref={(value) => { textareaRef.current = value; }}
               focused={!busy && focusArea === 'mission' && !overlayNavigation}
-              placeholder='A standing brief, not a task. "Own the checkout service..."'
+              placeholder='An ongoing job, not a task. "Own the checkout service…"'
               wrapMode="word"
               keyBindings={[
                 ...openTuiKeyBindings(keybindings, 'editor.submit'),
@@ -582,7 +582,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
           <text>
             <span fg={colors.text.muted}>
               {setupRequired
-                ? `Use the guided setup above, then return here · ${keybindings.hint('home.exit')} exit`
+                ? `Run a command above, then come back · ${keybindings.hint('home.exit')} exit`
                 : `${keybindings.hint('workspace.toggle')} workspaces · ${keybindings.hint('editor.submit')} create · ${keybindings.hint('home.exit')} exit`}
             </span>
           </text>
@@ -853,10 +853,10 @@ function stepDirection(actionId: TuiActionId | null): number {
 
 /** The line under the heading: what to do next, given what is set up. */
 function subtitle(setupRequired: boolean, agentCount: number): string {
-  if (setupRequired) return 'Connect Kinu once, then this screen can create and open workspaces directly.';
+  if (setupRequired) return 'Run one of these once. After that you can create and open workspaces here.';
 
   if (agentCount === 0) {
-    return 'Describe what the workspace is for. It seeds SOUL.md and names the workspace. Nothing runs until you send the first message.';
+    return 'Say what the workspace is for. Kinu names it from this and writes it to SOUL.md. Nothing runs until you send the first message.';
   }
 
   return 'Select a workspace, or write a mission to create a new one.';

@@ -157,7 +157,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (provider === 'cloudflare') {
     console.log(`${WARN('!')} Cloudflare and Workers AI connect through your Kinu account.`);
     console.log(DIM('  Sign out with: kinu logout'));
-    console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Kinu account settings.'));
+    console.log(DIM('  To disconnect Cloudflare itself, revoke it in Account settings in the Kinu app.'));
 
     return;
   }
@@ -165,7 +165,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   if (provider === 'claude' || provider === 'opencode') {
     const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
     const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
-    console.log(`${WARN('!')} Kinu stores no ${tool} credential. It drives the ${tool} login.`);
+    console.log(`${WARN('!')} Kinu stores no ${tool} credential; it uses your ${tool} sign-in.`);
     console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
     clearDefaultModelFor(provider);
     // Kinu holds no credential for these two, but the user ran this command
@@ -214,7 +214,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 
   if (live.length > 0) {
     console.log(`${WARN('!')} ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} still set in this environment.`);
-    console.log(DIM('  Environment credentials win over the config file. Unset them to disconnect.'));
+    console.log(DIM('  Environment variables take precedence over the config file. Unset them to disconnect.'));
   }
 }
 
@@ -278,7 +278,7 @@ function normalizeProvider(value: string): ProviderName {
 async function printProviders(): Promise<void> {
   const connections = await readProviderConnections();
   console.log('');
-  console.log(ACCENT('Kinu providers'));
+  console.log(ACCENT('Model providers'));
   console.log('');
 
   for (const state of connections.states) {
@@ -286,13 +286,13 @@ async function printProviders(): Promise<void> {
     else console.log(`  ${WARN('!')} ${state.descriptor.label} ${DIM(state.detail)}`);
 
     if (state.descriptor.id === 'cloudflare' && state.connected) {
-      console.log(`    ${DIM('Cloud workspaces use your Workers AI quota, if you granted AI permissions at sign-in.')}`);
-      console.log(`    ${DIM('Local workspaces reach the same Workers AI while you are signed in, with no key on this machine.')}`);
+      console.log(`    ${DIM('Cloud workspaces use your Workers AI quota if you granted AI permissions at sign-in.')}`);
+      console.log(`    ${DIM('Local workspaces use the same Workers AI while you are signed in, with no key on this computer.')}`);
     }
 
     if (state.descriptor.id === 'cloudflare' && connections.accountUnreachable !== undefined) {
       console.log(`    ${WARN('!')} Could not read the keys stored in your account (${connections.accountUnreachable}).`);
-      console.log(`    ${DIM('The lines below show only what is on this machine.')}`);
+      console.log(`    ${DIM('The rows below show only what is on this computer.')}`);
     }
   }
 
@@ -303,8 +303,8 @@ async function printProviders(): Promise<void> {
   }
 
   console.log('');
-  console.log(DIM('  Keys connect to your Kinu account by default. No copy on this disk.'));
-  console.log(DIM('  Keep one here instead: kinu provider connect <name> --local'));
-  console.log(DIM('  Remove a stored credential: kinu provider disconnect <name>'));
+  console.log(DIM('  New keys are stored in your Kinu account, not on this computer.'));
+  console.log(DIM('  To keep a key on this computer instead: kinu provider connect <name> --local'));
+  console.log(DIM('  To remove a key: kinu provider disconnect <name>'));
   console.log('');
 }

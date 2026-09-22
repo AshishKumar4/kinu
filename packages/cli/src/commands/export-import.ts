@@ -77,7 +77,7 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
   const size = statSync(output).size;
   console.log(
     `\n${OK('✓')} Exported ${ACCENT(target.name)} (${target.mode}) to ${DIM(output)}`
-    + ` ${DIM(`— ${lines} records, ${formatBytes(size)}`)}\n`,
+    + ` ${DIM(`(${lines} records, ${formatBytes(size)})`)}\n`,
   );
 }
 
@@ -144,7 +144,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   renameSync(partial, dbPath);
   console.log(
     `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
-    + ` ${DIM(`— ${restored.tables} tables, ${restored.rows} records`)}`,
+    + ` ${DIM(`(${restored.tables} tables, ${restored.rows} records)`)}`,
   );
 
   // A restored workspace belongs to the project it was restored into, exactly as

@@ -364,7 +364,7 @@ function assertNotSelfHeld(lockPath: string): void {
   const token = heldByCall.getStore()?.get(lockPath);
 
   if (token === undefined || readOwner(lockPath)?.token !== token) return;
-  throw new Error(`Deadlocked on the config lock: ${lockPath} — this call already holds it, and the `
+  throw new Error(`Deadlocked on the config lock: ${lockPath}: this call already holds it, and the `
     + 'hold is released only when it returns. Take the lock once around the whole '
     + 'read-modify-write instead of nesting it.');
 }

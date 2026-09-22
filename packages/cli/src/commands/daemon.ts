@@ -132,7 +132,7 @@ export async function daemonCommand(action: string | undefined, agent?: string):
     return;
   }
 
-  throw new Error('Usage: kinu daemon [start|stop|restart|status|logs|run|tick [agent]]');
+  throw new Error('Usage: kinu daemon [start|stop|restart|status|logs|tick [workspace]]');
 }
 
 export function ensureLocalDaemonRunning(): void {
@@ -348,7 +348,7 @@ function createDaemonHost(wakeAt?: (at: number) => void): LocalAgentHost {
     roster: (): HostedAgentRef[] => listLocalRefsAllProjects(),
     dbPath: agentDbPath,
     open: openDaemonAgent,
-    // Both callers of this factory are the daemon: `daemon run` resident, and
+    // Both callers of this factory are the daemon: `daemon shell` resident, and
     // `daemon tick` one foreground pass. Saying so is what makes the lease
     // behave as designed — the pass is handed back at the end of it, and a
     // person at a prompt can take the conversation. Left unsaid, the host

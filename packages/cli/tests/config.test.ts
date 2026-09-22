@@ -521,7 +521,7 @@ describe("a logout the server could not be told about", () => {
 
     try {
       const refused = await runLogout(home, origin);
-      expect(refused).toContain("NOT revoked");
+      expect(refused).toContain("Not signed out");
 
       const stranded = storedConfig(home);
       // THE TOKEN SURVIVES. Deleting it here is what orphaned the bearer: the
@@ -532,7 +532,7 @@ describe("a logout the server could not be told about", () => {
 
       reachable = true;
       const landed = await runLogout(home, origin);
-      expect(landed).toContain("Logged out");
+      expect(landed).toContain("Signed out");
 
       const after = storedConfig(home);
       // Only a CONFIRMED revocation clears the local copy — and the pending

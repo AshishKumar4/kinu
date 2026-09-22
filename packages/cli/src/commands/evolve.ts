@@ -20,8 +20,8 @@ export async function evolveCommand(name: string, opts: {
   const configured = resolveAgentRef(name);
 
   if (configured?.mode === 'cloud') {
-    console.log(`\n${DIM('Cloud workspace evolution runs in the Durable Object backend after turns.')}`);
-    console.log(`${DIM('Use:')} ${ACCENT(`kinu run ${configured.name} "improve yourself"`)}\n`);
+    console.log(`\n${DIM('A cloud workspace evolves on its own after turns; kinu evolve runs only for local workspaces.')}`);
+    console.log(`${DIM('To ask it for an improvement now:')} ${ACCENT(`kinu run ${configured.name} "improve yourself"`)}\n`);
 
     return;
   }
@@ -48,7 +48,7 @@ export async function evolveCommand(name: string, opts: {
   });
 
   console.log('');
-  console.log(`${BRAND} ${DIM('— Evolution')}`);
+  console.log(`${BRAND} ${DIM('· evolution')}`);
   console.log(`  ${DIM('Agent:')}    ${ACCENT(workspace)}`);
   console.log(`  ${DIM('Budget:')}   ${budget} iterations, ${branches} branches`);
   console.log(`  ${DIM('Mission:')}  ${info.purpose.slice(0, 60)}`);
@@ -59,7 +59,7 @@ export async function evolveCommand(name: string, opts: {
   const task = `Given my purpose: "${info.purpose}", identify one specific improvement I could make ` +
     `to be more effective. Consider: new tools I could learn, knowledge gaps, or workflow improvements.`;
 
-  const spinner = createSpinner('Starting MCTS exploration...');
+  const spinner = createSpinner('Starting the MCTS search…');
   spinner.start();
 
   // Failed branches score 0 by design (the engine's allSettled), so a run whose
@@ -80,7 +80,7 @@ export async function evolveCommand(name: string, opts: {
       },
     });
 
-    spinner.stop('Exploration complete');
+    spinner.stop('Search finished');
 
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} ORDER BY depth, created_at`;
@@ -109,7 +109,7 @@ export async function evolveCommand(name: string, opts: {
       console.log(DIM(`\n  Crafted tools: ${tools.length}`));
 
       for (const t of tools) {
-        console.log(`    ${ACCENT(t.name)} ${DIM('—')} ${MUTED(t.description.slice(0, 50))}`);
+        console.log(`    ${ACCENT(t.name)}  ${MUTED(t.description.slice(0, 50))}`);
       }
     }
   } catch (err) {
