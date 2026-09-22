@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { callFailed, threadLiveTail, TURN_END_METADATA_KEY } from '@kinu.run/core';
-import { MessageView } from '../src/components/MessageView';
+import { ChatLiveTail, MessageView } from '../src/components/MessageView';
 
 type Part = UIMessage['parts'][number];
 
@@ -135,7 +135,14 @@ describe('MessageView reasoning', () => {
     // reappear across a turn that reasons, pauses and reasons again: the pause
     // drew a shimmering dotted row and the reasoning drew a bordered block with
     // a pulsing word, so every transition between them swapped the shape.
-    const pause = render([tool('a', 'file', { action: 'read', path: 'x' })], true);
+    // The pause is the THREAD's tail, drawn by the page beside the list; the
+    // reasoning is the part's own row. Both come from the same live tail.
+    const pauseMessage: UIMessage = { id: 'turn-1', role: 'assistant', parts: [tool('a', 'file', { action: 'read', path: 'x' })] };
+
+    const pause = renderToStaticMarkup(createElement(ChatLiveTail, {
+      tail: threadLiveTail({ last: pauseMessage, liveness: { kind: 'live', turnId: null } }),
+    }));
+
     const reasoning = render([{ type: 'reasoning', state: 'streaming', text: thought }], true);
 
     // The affordance is the element that carries the word, whatever encloses it.
@@ -188,7 +195,7 @@ describe('MessageView turn end', () => {
       metadata: { [TURN_END_METADATA_KEY]: 'incomplete' },
     };
 
-    const html = renderToStaticMarkup(createElement(MessageView, { message: stopped, isLast: true, isStreaming: false }));
+    const html = renderToStaticMarkup(createElement(MessageView, { message: stopped, liveTail: null }));
 
     expect(html).toContain('Stopped before the work was finished');
 
