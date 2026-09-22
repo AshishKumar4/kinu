@@ -65,6 +65,7 @@ export class SessionRecorder {
       case 'evolution':
       case 'broadcast':
       case 'run-event':
+      case 'background':
         break;
     }
   }

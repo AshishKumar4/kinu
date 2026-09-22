@@ -24,7 +24,9 @@ function blockText(block: ContentBlock): string | null {
       return 'text' in block.resource
         ? `<context uri="${block.resource.uri}">\n${block.resource.text}\n</context>`
         : null;
-    default:
+    // Pictures and sound ride as prompt files, never as text.
+    case 'image':
+    case 'audio':
       return null;
   }
 }

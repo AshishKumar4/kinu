@@ -172,6 +172,7 @@ export async function labelCommand(
     case 'ensemble': return ensembleLabels(target, opts);
     case 'report': return reportLabels(target, opts);
     case 'score': return scoreCorpus(target, opts);
+    case undefined:
     default:
       throw new Error(
         `Unknown action "${action ?? ''}". Use export, ingest, ensemble, report, mine, or score.`,

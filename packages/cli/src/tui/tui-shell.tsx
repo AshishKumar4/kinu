@@ -585,64 +585,68 @@ export function TuiShell(props: TuiShellProps) {
 
     const selected = selectedRowNow()?.row;
 
-    switch (result.actionId) {
-      case 'modal.close':
-        if (!overlayOpen) return;
-        event.preventDefault();
-        props.onNavigationOverlayChange(false);
+    const action = result.actionId;
 
-        return;
-      case 'modal.previous':
-        event.preventDefault();
-        moveSelection(-1);
+    if (action === 'modal.close') {
+      if (!overlayOpen) return;
+      event.preventDefault();
+      props.onNavigationOverlayChange(false);
 
-        return;
-      case 'modal.next':
-        event.preventDefault();
-        moveSelection(1);
+      return;
+    }
 
-        return;
-      case 'modal.page-previous':
-        event.preventDefault();
-        pageRows(-1);
+    if (action === 'modal.previous') {
+      event.preventDefault();
+      moveSelection(-1);
 
-        return;
-      case 'modal.page-next':
-        event.preventDefault();
-        pageRows(1);
+      return;
+    }
 
-        return;
-      case 'modal.collapse': {
-        if (selected === undefined) return;
-        event.preventDefault();
+    if (action === 'modal.next') {
+      event.preventDefault();
+      moveSelection(1);
 
-        if (selected.kind === 'agent') applySelection(workspaceRowKey(selected.agent, projectRoot));
-        else if (selected.kind === 'workspace' && selected.expanded) toggleWorkspace(selected.key);
-        else if (selected.kind === 'remote' && selected.expanded) setRemoteExpanded(false);
+      return;
+    }
 
-        return;
-      }
+    if (action === 'modal.page-previous') {
+      event.preventDefault();
+      pageRows(-1);
 
-      case 'modal.expand': {
-        if (selected === undefined) return;
-        event.preventDefault();
+      return;
+    }
 
-        if (selected.kind === 'workspace' && !selected.expanded) toggleWorkspace(selected.key);
-        else if (selected.kind === 'remote' && !selected.expanded) setRemoteExpanded(true);
+    if (action === 'modal.page-next') {
+      event.preventDefault();
+      pageRows(1);
 
-        return;
-      }
+      return;
+    }
 
-      case 'modal.activate': {
-        if (selected === undefined) return;
-        event.preventDefault();
-        activateRow(selected);
+    if (selected === undefined) return;
 
-        return;
-      }
+    if (action === 'modal.collapse') {
+      event.preventDefault();
 
-      default:
-        return;
+      if (selected.kind === 'agent') applySelection(workspaceRowKey(selected.agent, projectRoot));
+      else if (selected.kind === 'workspace' && selected.expanded) toggleWorkspace(selected.key);
+      else if (selected.kind === 'remote' && selected.expanded) setRemoteExpanded(false);
+
+      return;
+    }
+
+    if (action === 'modal.expand') {
+      event.preventDefault();
+
+      if (selected.kind === 'workspace' && !selected.expanded) toggleWorkspace(selected.key);
+      else if (selected.kind === 'remote' && !selected.expanded) setRemoteExpanded(true);
+
+      return;
+    }
+
+    if (action === 'modal.activate') {
+      event.preventDefault();
+      activateRow(selected);
     }
   });
 

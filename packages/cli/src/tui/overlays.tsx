@@ -959,24 +959,25 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
       return;
     }
 
-    switch (result.actionId) {
-      case 'modal.previous':
-        event.preventDefault();
-        setHighlighted((index) => (index - 1 + choices.length) % choices.length);
+    const action = result.actionId;
 
-        return;
-      case 'modal.next':
-        event.preventDefault();
-        setHighlighted((index) => (index + 1) % choices.length);
+    if (action === 'modal.previous') {
+      event.preventDefault();
+      setHighlighted((index) => (index - 1 + choices.length) % choices.length);
 
-        return;
-      case 'modal.activate':
-        event.preventDefault();
-        onSelect(choice.selection);
+      return;
+    }
 
-        return;
-      default:
-        return;
+    if (action === 'modal.next') {
+      event.preventDefault();
+      setHighlighted((index) => (index + 1) % choices.length);
+
+      return;
+    }
+
+    if (action === 'modal.activate') {
+      event.preventDefault();
+      onSelect(choice.selection);
     }
   });
 

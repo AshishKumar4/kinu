@@ -363,44 +363,51 @@ export function GuidedOnboarding(props: {
       return;
     }
 
-    switch (result.actionId) {
-      case 'home.exit':
-        event.preventDefault();
-        props.onExit();
+    const action = result.actionId;
 
-        return;
-      case 'onboarding.skip':
-        if (activeStep === null) return;
-        event.preventDefault();
-        run(() => props.operations.skip(activeStep));
+    if (action === 'home.exit') {
+      event.preventDefault();
+      props.onExit();
 
-        return;
-      case 'home.previous':
-        if (activeStep === 'workspace') return;
-        event.preventDefault();
-        setSelectedIndex((current) => (current - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length));
+      return;
+    }
 
-        return;
-      case 'home.next':
-        if (activeStep === 'workspace') return;
-        event.preventDefault();
-        setSelectedIndex((current) => (current + 1) % Math.max(1, choices.length));
+    if (action === 'onboarding.skip') {
+      if (activeStep === null) return;
+      event.preventDefault();
+      run(() => props.operations.skip(activeStep));
 
-        return;
-      case 'home.focus-next':
-        if (activeStep !== 'workspace' || props.roles.length === 0) return;
-        event.preventDefault();
-        setRoleIndex((current) => (current + 1) % props.roles.length);
+      return;
+    }
 
-        return;
-      case 'home.activate':
-        if (activeStep === 'workspace') return;
-        event.preventDefault();
-        activate();
+    if (action === 'home.previous') {
+      if (activeStep === 'workspace') return;
+      event.preventDefault();
+      setSelectedIndex((current) => (current - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length));
 
-        return;
-      default:
-        return;
+      return;
+    }
+
+    if (action === 'home.next') {
+      if (activeStep === 'workspace') return;
+      event.preventDefault();
+      setSelectedIndex((current) => (current + 1) % Math.max(1, choices.length));
+
+      return;
+    }
+
+    if (action === 'home.focus-next') {
+      if (activeStep !== 'workspace' || props.roles.length === 0) return;
+      event.preventDefault();
+      setRoleIndex((current) => (current + 1) % props.roles.length);
+
+      return;
+    }
+
+    if (action === 'home.activate') {
+      if (activeStep === 'workspace') return;
+      event.preventDefault();
+      activate();
     }
   });
 
