@@ -1540,6 +1540,7 @@ export {
   planHandoffKey,
   planHandoffTurn,
   planReviewAwaitingDecision,
+  workModeUnderReview,
   planTitle,
   validatePlanEdits,
   type PlanEdit,

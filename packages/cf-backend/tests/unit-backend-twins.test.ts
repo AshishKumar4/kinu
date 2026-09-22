@@ -71,6 +71,9 @@ const REPO = resolve(import.meta.dir, '../../..');
  * share one.
  */
 const KNOWN_TWINS: readonly string[] = [
+  // A one-line getter over the shared store bundle on both sides; the store
+  // itself is core's, so there is no logic here to hoist.
+  'planReviews',
   // KINU-021's SANCTIONED adapter surface. Core owns the terminal-transition
   // vocabulary, declaration, state machine, schema, replay and disposition read
   // model (orchestrator/terminal-{effects,transition,roster}.ts); what a backend
@@ -238,6 +241,14 @@ const SHARED_TRANSPORTS = {
   makeScaffoldHistory: 'createScaffoldHistory',
 
   markChangelogSeen: 'markChangelogSeen',
+  // Plan review: both hold core's PlanReviewActions over their own broadcast
+  // and read the one store; the review's every rule lives in core.
+  planActions: 'PlanReviewActions',
+  submitPlanEdits: '.submit',
+  getActivePlanReview: '.active',
+  savePlanReviewAnnotations: '.saveAnnotations',
+  decidePlanReview: 'planHandoffTurn',
+  turnWorkMode: 'workModeUnderReview',
   pickAlternateTake: 'pickAlternateTake',
   proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',

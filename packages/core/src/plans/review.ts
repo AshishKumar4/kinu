@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import type { WorkMode } from '../types/turn';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -57,6 +58,23 @@ export function planReviewAwaitingDecision(
   return review?.status === 'pending'
     || review?.status === 'changes_requested'
     || (review?.status === 'approved' && !review.handoffAccepted);
+}
+
+/**
+ * The work mode a turn runs in once the review is consulted: a build turn is
+ * held in Plan while a submitted plan awaits the owner's decision, because the
+ * agent asked for a verdict and must not start implementing before it has
+ * one. The handoff turn an approval queues says `plan_approved` on its own
+ * metadata and passes, which is what lets the approved work begin.
+ */
+export function workModeUnderReview(
+  requested: WorkMode,
+  metadata: { readonly kinuEvent?: unknown } | undefined,
+  active: Pick<PlanReview, 'status' | 'handoffAccepted'> | null,
+): WorkMode {
+  if (requested !== 'build' || metadata?.kinuEvent === 'plan_approved') return requested;
+
+  return planReviewAwaitingDecision(active) ? 'plan' : requested;
 }
 
 /** The plan's own name for itself: the first non-empty line of the content,

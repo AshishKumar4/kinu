@@ -227,7 +227,7 @@ import {
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
-  planReviewAwaitingDecision,
+  workModeUnderReview,
   JsonValueSchema, type JsonValue, type JsonObject, type KinuEvent,
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
@@ -1234,15 +1234,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
-    const requested = super.workModeForMetadata(metadata);
-
-    const approvedHandoff = metadata?.kinuEvent === 'plan_approved';
-
-    return requested === 'build'
-      && !approvedHandoff
-      && planReviewAwaitingDecision(this.planReviews.getActive('default'))
-      ? 'plan'
-      : requested;
+    return workModeUnderReview(super.workModeForMetadata(metadata), metadata, this.planReviews.getActive(CHAT_SESSION_ID));
   }
 
 
@@ -5360,7 +5352,7 @@ export class OrchestratorAgent extends ActorAgent {
       mission: entry.birth?.seed.mission ?? '',
       model: { model: profile.tier.model, source: profile.tier.source },
       reasoningEffort: profile.tier.reasoningEffort,
-      activePlan: child.stores.planReviews.getActive('default'),
+      activePlan: child.stores.planReviews.getActive(CHAT_SESSION_ID),
       // The child's OWN acknowledged-but-not-landed steers, read with the
       // child's actor id rather than this root's — the same rows, the same
       // rule and the same ordering `pendingSteerRuns()` reads for the

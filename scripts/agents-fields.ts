@@ -371,8 +371,19 @@ function collectReads(scan: ReadScan, binding: BoundParameter): void {
       const [callee, ...args] = node.children;
 
       for (const [index, argument] of args.entries()) {
-        if (identifierText(argument) !== param) continue;
-        followHop(scan, { source, call: node, callee, index, at });
+        if (identifierText(argument) === param) {
+          followHop(scan, { source, call: node, callee, index, at });
+
+          continue;
+        }
+
+        // `f({ deps, input, mode })`: the whole input rides as ONE property of an
+        // options object, the shape a call with more than four things to say
+        // takes. The hop is followed under the property's key, which is the
+        // name the callee destructures it back to.
+        const key = argument.type === 'ObjectExpression' ? propertyCarrying(argument, param) : undefined;
+
+        if (key !== undefined) followHop(scan, { source, call: node, callee, index, at, key });
       }
 
       return;
@@ -392,22 +403,44 @@ function collectReads(scan: ReadScan, binding: BoundParameter): void {
       && (parent.type === 'FunctionDeclaration' || parent.type === 'ArrowFunctionExpression'
         || parent.type === 'FunctionExpression' || parent.type === 'TSTypePredicate');
 
-    if (asMemberObject || asArgument || isBinding) return;
+    // `{ deps, input }` as a parameter pattern binds the name; as an argument
+    // literal it hands the input on, and the call arm above followed that hop.
+    // Either way the identifier is a property's key or value, not a read; and
+    // `{ input: T }` in a type literal is a member's name, never a value at all.
+    const inProperty = parent?.type === 'Property' || parent?.type === 'TSPropertySignature';
+
+    if (asMemberObject || asArgument || isBinding || inProperty) return;
     into.opaque.push(`${at(node)} — \`${param}\` is used whole here, not read field by field`);
   });
 }
 
-/** One call that hands the whole parameter on, and where it was written. */
+/** One call that hands the whole parameter on, and where it was written.
+ *  `key` names the property the parameter rides under when it is one member
+ *  of an options object rather than the whole argument. */
 interface Hop {
   readonly source: Source;
   readonly call: SyntaxNode;
   readonly callee: SyntaxNode | undefined;
   readonly index: number;
   readonly at: (node: SyntaxNode) => string;
+  readonly key?: string;
+}
+
+/** The key of the property whose value is exactly `param`, in an object literal
+ *  (`{ deps, input }` or `{ call: input }`); undefined when no property is it. */
+function propertyCarrying(literal: SyntaxNode, param: string): string | undefined {
+  for (const property of literal.children) {
+    if (property.type !== 'Property') continue;
+    const value = property.children.at(-1);
+
+    if (value !== undefined && identifierText(value) === param) return declaredName(property);
+  }
+
+  return undefined;
 }
 
 function followHop(scan: ReadScan, hop: Hop): void {
-  const { source, call, callee, index, at } = hop;
+  const { source, call, callee, index, at, key } = hop;
   const { parsed, functions, into } = scan;
   const name = callee === undefined ? undefined : identifierText(callee);
 
@@ -446,11 +479,35 @@ function followHop(scan: ReadScan, hop: Hop): void {
     return;
   }
 
+  if (parameter.type === 'ObjectPattern' && key !== undefined) {
+    // The options object is destructured; the input is whichever binding the
+    // property `key` lands in, and the walk continues under that name.
+    const rebound = parameter.node.children
+      .filter((property) => property.type === 'Property' && declaredName(property) === key)
+      .map((property) => identifierText(property.children.at(-1) ?? property))
+      .find((bound) => bound !== undefined);
+
+    if (rebound === undefined) {
+      into.opaque.push(`${at(call)} — \`${name}(…)\` never binds the \`${key}\` its caller carries the input under`);
+
+      return;
+    }
+
+    const visit = `${targetSource.file}#${name}#${rebound}`;
+
+    if (into.visited.has(visit)) return;
+    into.visited.add(visit);
+    into.hops.push(`${name}({ ${key} })`);
+    collectReads(scan, { source: targetSource, scope: target, param: rebound });
+
+    return;
+  }
+
   if (parameter.type === 'ObjectPattern') {
     for (const property of parameter.node.children) {
-      const key = property.type === 'Property' ? declaredName(property) : undefined;
+      const field = property.type === 'Property' ? declaredName(property) : undefined;
 
-      if (key !== undefined) into.fields.add(key);
+      if (field !== undefined) into.fields.add(field);
     }
 
     into.hops.push(`${name}(…) [destructured]`);
@@ -466,10 +523,10 @@ function followHop(scan: ReadScan, hop: Hop): void {
     return;
   }
 
-  const key = `${targetSource.file}#${name}#${bound}`;
+  const visit = `${targetSource.file}#${name}#${bound}`;
 
-  if (into.visited.has(key)) return;
-  into.visited.add(key);
+  if (into.visited.has(visit)) return;
+  into.visited.add(visit);
   into.hops.push(`${name}(…)`);
   collectReads(scan, { source: targetSource, scope: target, param: bound });
 }

@@ -178,7 +178,7 @@ import { TierIdSchema,
   // Plan review — the owner's decision surface, and the store both backends
   // keep it in. Core owns every rule; this session owns the broadcast and the
   // handoff turn.
-  PlanReviewActions, SUBMIT_PLAN_TOOL, planHandoffKey, planHandoffTurn, planReviewAwaitingDecision,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, planHandoffKey, planHandoffTurn, workModeUnderReview,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type PlanReviewStore,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
@@ -4047,11 +4047,9 @@ export class LocalAgentSession implements BackendHost {
   private turnWorkMode(metadata: ProgrammaticTurn['metadata']): WorkMode {
     const requested = this.actorSession.workMode;
 
-    if (requested !== 'build' || !this.planReviewSurface()) return requested;
+    if (!this.planReviewSurface()) return requested;
 
-    if (metadata?.kinuEvent === 'plan_approved') return requested;
-
-    return planReviewAwaitingDecision(this.planReviews.getActive(CHAT_SESSION_ID)) ? 'plan' : requested;
+    return workModeUnderReview(requested, metadata, this.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {

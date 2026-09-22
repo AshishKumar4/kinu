@@ -684,6 +684,58 @@ describe('agents action/field gate', () => {
     expect(reads.hops).toContain('readLimits(…)');
     expect(auditAgentsFields(readAgentsDeclarations(parsed), reads)).toEqual([]);
   });
+
+  test('an input riding as one property of an options object is followed under its key', () => {
+    // `f({ deps, input })` is the call shape a function with five things to say
+    // takes. The input is one member, destructured back out in the callee, and
+    // the walk continues under the name it lands in; a callee that never binds
+    // that key is the opaque hand-off it used to be.
+    const followed = parseAgentsSources(new Map([
+      [REGISTRY, "export const AGENTS_TOOL_ACTIONS = ['fork'] as const;"],
+      [TOOL, [
+        'const AgentsInputEntries = {\n  action: v.picklist(AGENTS_TOOL_ACTIONS),\n  cap: v.optional(v.number()),\n};',
+        "export const AGENTS_ACTION_FIELDS = {\n  fork: ['cap'],\n} as const satisfies Record<A, readonly F[]>;",
+        'export function dispatchAgentsAction(deps: Deps, input: AgentsToolInput): object {',
+        '  switch (input.action) {',
+        "    case 'fork': {",
+        '      return runFork({ deps, input, mode: 1 });',
+        '    }',
+        '  }',
+        '  return {};',
+        '}',
+        'function runFork({ deps, input, mode }: { deps: Deps; input: AgentsToolInput; mode: number }): object {',
+        '  return { limit: input.cap, mode, deps };',
+        '}',
+      ].join('\n')],
+    ]));
+
+    const reads = readAgentsHandler(followed);
+    expect([...reads.byAction.get('fork') ?? []]).toEqual(['cap']);
+    expect(reads.hops).toContain('runFork({ input })');
+    expect(auditAgentsFields(readAgentsDeclarations(followed), reads)).toEqual([]);
+
+    const unbound = parseAgentsSources(new Map([
+      [REGISTRY, "export const AGENTS_TOOL_ACTIONS = ['fork'] as const;"],
+      [TOOL, [
+        'const AgentsInputEntries = {\n  action: v.picklist(AGENTS_TOOL_ACTIONS),\n  cap: v.optional(v.number()),\n};',
+        "export const AGENTS_ACTION_FIELDS = {\n  fork: ['cap'],\n} as const satisfies Record<A, readonly F[]>;",
+        'export function dispatchAgentsAction(deps: Deps, input: AgentsToolInput): object {',
+        '  switch (input.action) {',
+        "    case 'fork': {",
+        '      return runFork({ deps, input });',
+        '    }',
+        '  }',
+        '  return {};',
+        '}',
+        'function runFork({ deps }: { deps: Deps; input: AgentsToolInput }): object {',
+        '  return { deps };',
+        '}',
+      ].join('\n')],
+    ]));
+
+    expect(auditAgentsFields(readAgentsDeclarations(unbound), readAgentsHandler(unbound)).map((f) => f.kind))
+      .toContain('opaque');
+  });
 });
 
 /**

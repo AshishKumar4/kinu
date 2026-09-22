@@ -880,14 +880,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return null;
   }
 
-  private _planReviews: PlanReviewStore | null = null;
   private _planActions: PlanReviewActions | null = null;
 
   /** One SQL-backed review stream, local to this actor's durable storage. */
   protected get planReviews(): PlanReviewStore {
-    this._planReviews ??= new PlanReviewStore(this.boundSql, this.actorHandle());
-
-    return this._planReviews;
+    return this.stores.planReviews;
   }
 
   /** The review as the owner drives it; every change reaches the clients. */
