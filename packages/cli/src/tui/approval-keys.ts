@@ -1,13 +1,7 @@
-/**
- * Consent chords. Both approval overlays — shell command and device connect —
- * bind the same three actions in the same scope, so the keystroke resolves to
- * a decision here and each overlay maps it to its own verdict.
- */
+/** Consent chords shared by the shell-command and device-connect overlays. */
 import type { TuiKeyDispatcher, TuiKeyEvent } from './actions';
 
-/** What a consent chord decided. Null is "bound nothing" or "the overlay
- *  vetoed approval at this size" — either way the keystroke is consumed and
- *  the question stays open. */
+/** Null consumes the key and leaves the question open. */
 export type ConsentKeyDecision = 'once' | 'always' | 'deny';
 
 export function consentKeyDecision(

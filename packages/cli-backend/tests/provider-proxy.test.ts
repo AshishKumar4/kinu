@@ -1,6 +1,4 @@
-// Behavior tests for the local half of the general provider proxy: a provider
-// the owner connected in the web UI is usable from this machine with no key on
-// disk, and a local key still wins.
+// The local half of the provider proxy: a web-connected provider works here with no key on disk; a local key wins.
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import { asFetchFunction, type LLMProviderConfig } from '@kinu.run/core';
@@ -33,9 +31,7 @@ function completion(content: string, promptTokens: number): Response {
   });
 }
 
-/** A fetch standing in for the whole network: the Kinu worker's credential
- *  listing and forward route (which dispatches on the target header exactly as
- *  the real route does), models.dev, and the providers themselves. */
+/** Stands in for the whole network: the worker's credential listing and forward route, models.dev, and the providers. */
 function networkFetch(opts: {
   credentials?: Array<{ key: string; baseURL?: string }>;
   credentialsStatus?: number;
@@ -107,7 +103,6 @@ describe('web-UI-connected providers reach local agents', () => {
 
   test('a connected catalog provider becomes a routable spec prefix', async () => {
     const resolver = resolverWith(networkFetch({ credentials: [{ key: 'groq.bearer' }] }));
-    // Cold, the first segment is still read as part of a slashful model id.
     expect(resolver.normalizeSpecSync('groq/llama-3.3-70b')).toBe('openai-compat/groq/llama-3.3-70b');
     await resolver.listProviders();
     expect(resolver.normalizeSpecSync('groq/llama-3.3-70b')).toBe('groq/llama-3.3-70b');
@@ -128,7 +123,6 @@ describe('web-UI-connected providers reach local agents', () => {
     expect(forwarded?.headers.get('x-kinu-proxy-cred')).toBe('openrouter.bearer');
     expect(forwarded?.headers.get('x-kinu-proxy-target')).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(forwarded?.headers.get('authorization')).toBe('Bearer ptc_test');
-    // Usage arrives verbatim, so per-step accounting is unaffected by proxying.
     expect(result.usage.inputTokens).toBe(11);
   });
 
@@ -158,7 +152,6 @@ describe('web-UI-connected providers reach local agents', () => {
 
     const menu = await resolver.listModels();
     expect(menu.failures.some((f) => f.provider === 'openrouter' && f.reason.includes('Kinu account'))).toBe(true);
-    // The signed-out placeholders and every other provider are still there.
     expect(providers.length).toBeGreaterThan(3);
   });
 
@@ -173,8 +166,7 @@ describe('web-UI-connected providers reach local agents', () => {
 
 describe('what an unreachable account does and does not claim', () => {
   test('a provider the proxy would never front reports its own honest reason', async () => {
-    // Codex is proxy-denied (its endpoint refuses Worker egress), so a missing
-    // local credential is the whole answer — not "we could not check".
+    // Codex is proxy-denied (its endpoint refuses Worker egress), so a missing local credential is the whole answer.
     const resolver = resolverWith(networkFetch({ credentialsStatus: 503 }));
     const codex = (await resolver.listProviders()).find((p) => p.id === 'codex');
     expect(codex?.available).toBe(false);

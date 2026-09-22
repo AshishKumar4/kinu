@@ -1,14 +1,3 @@
-/**
- * The comparator's own tests — the half that makes a cross-run claim mean
- * something.
- *
- * Every case here is a number this project has already believed, or could:
- * a large effect over too few DIFFERING pairs to decide anything, two
- * inadmissible runs producing a tidy delta, ragged repeats crashing the exact
- * test, and repetitions of one task voting as though they were separate tasks.
- * Each assertion is written so it can go red for a real reason: the arithmetic of
- * the floor is pinned to the value the primitive produces, not to a shape.
- */
 import { describe, test, expect } from 'bun:test';
 import {
   compareRuns, formatComparison,
@@ -34,12 +23,7 @@ function score(name: string, eligible: number, passed: number): EvalScoreRow {
   };
 }
 
-/**
- * A trajectory that behaved: turns closed, tools called, and — since a run that
- * never checked whether the task was solved is not evidence — a measured
- * `task_outcome`. A caller that supplies its own outcome row keeps it, so a test
- * can still say "this task was solved" or "this one was not".
- */
+/** A trajectory with a measured `task_outcome`; a caller-supplied outcome row wins. */
 function scored(
   taskId: string, repetition: number, scores: readonly EvalScoreRow[],
   cost: { turns?: number; toolCalls?: number; tokensIn?: number; tokensOut?: number; ms?: number } = {},
@@ -62,8 +46,7 @@ function unscored(
   return { taskId, repetition, outcome, reason };
 }
 
-/** Admissibility is computed by the real gate rather than declared, so a fixture
- *  cannot hand itself evidence it did not produce. */
+/** Admissibility comes from the real gate, so a fixture cannot declare itself evidence. */
 function run(
   runId: string, observations: readonly EvalObservation[],
   overrides: { repeats?: number; modelId?: string; arm?: EvalArmState } = {},
@@ -83,15 +66,13 @@ function run(
   };
 }
 
-/** One run, one repetition per task, where the scorer passed `passed[i]` of four
- *  eligible opportunities on task i. */
+/** One repetition per task; `passed[i]` of four eligible opportunities pass on task i. */
 function scorerRun(runId: string, passedPerTask: readonly number[]): EvalRunRecord {
   return run(runId, passedPerTask.map((passed, i) =>
     scored(`task-${String(i)}`, 1, [score(SCORER, 4, passed)])));
 }
 
-/** The same, with `repeats` repetitions of every task — the shape that would
- *  pseudoreplicate if the comparator failed to collapse a task first. */
+/** `repeats` repetitions per task: pseudoreplicates unless the comparator collapses per task. */
 function repeatRun(
   runId: string, passedPerTask: readonly number[], repeats: number,
 ): EvalRunRecord {
@@ -371,8 +352,7 @@ describe('compareRuns — an empty denominator is not a zero rate', () => {
     expect(s.baselineRate).toBeNull();
     expect(s.candidateRate).toBeNull();
     expect(s.verdict).toContain('never exercised');
-    // No quantity on the rate scale is printed, so no "+0.0pp" can be misread
-    // as a measured absence of change.
+    // No rate-scale quantity is printed, so no "+0.0pp" reads as a measured null.
     expect(s.verdict).not.toMatch(/[+-]\d+\.\dpp/);
   });
 
@@ -485,10 +465,8 @@ describe('compareRuns — ragged and ungradable observations', () => {
 
 describe('compareRuns — the binary headline is the OUTCOME', () => {
   /**
-   * These two cases vary whether the TASK WAS SOLVED, which is the thing the
-   * headline is supposed to be about. Varying `toolCalls: 0` instead only
-   * exercises `turns > 0 && toolCalls > 0`, the predicate every admissible
-   * trajectory passes by construction, so it could never move an outcome.
+   * Vary whether the task was solved: every admissible trajectory passes
+   * `turns > 0 && toolCalls > 0` by construction.
    */
   const solvedRun = (id: string, solvedCount: number) =>
     run(id, Array.from({ length: 8 }, (_, i) =>
@@ -516,9 +494,7 @@ describe('compareRuns — the binary headline is the OUTCOME', () => {
   });
 
   test('activity alone does not move the headline — a busy run that solved nothing scores 0', () => {
-    // The defect pinned so it cannot come back: both runs closed turns and
-    // called tools, so an activity predicate scores them 1.000 against 1.000.
-    // Under the outcome they are 1.000 against 0.000.
+    // Both runs closed turns and called tools: activity scores 1.000 vs 1.000, outcome 1.000 vs 0.000.
     const baseline = solvedRun('base', 8);
     const candidate = solvedRun('cand', 0);
     const { headline } = attributable(compareRuns(baseline, candidate, OPTS));
@@ -528,8 +504,7 @@ describe('compareRuns — the binary headline is the OUTCOME', () => {
   });
 
   test('an attempt nothing verified is DROPPED and named, never counted as a failure', () => {
-    // A missing verifier is a gap in the corpus. Scoring it as a loss would turn
-    // that gap into a fact about the agent.
+    // A missing verifier is a corpus gap, not a loss for the agent.
     const baseline = solvedRun('base', 8);
 
     const candidate = run('cand', Array.from({ length: 8 }, (_, i) =>

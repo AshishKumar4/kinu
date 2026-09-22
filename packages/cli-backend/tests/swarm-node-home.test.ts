@@ -1,32 +1,6 @@
 /**
- * THE WIRING, OBSERVED ON A SHIPPED CALL: a swarm node in a real `agents.swarm`
- * run gets a private home.
- *
- * `facetHomeProvisioner` was proved against the real substrate long before
- * anything called it (`cf-backend/tests/unit-node-home-wiring.test.ts`), and that
- * is exactly the shape of defect this file exists to close: a seam with a proof
- * and no caller. So nothing here asserts what the provisioner DOES — it asserts
- * that a shipped dispatch reaches it, which is a different claim and was the
- * false one.
- *
- * The home is keyed on the node ACTOR's immutable storage key, never on the raw
- * node id: a rename must not move an actor's home, and two nodes that briefly
- * share a name across a retirement must not share a directory. The wrapper that
- * keyed on `node.nodeId` is gone for exactly that reason.
- *
- * It is driven from `createCLIRuntime`, not a fixture, because the thing under
- * test is a backend's ability to hand over three host-owned members. The local
- * backend's filesystem is an in-isolate `NimbusWorkspace`, so it has a uid-0 view
- * and a principal registry to give; the hosted backend reaches its workspace by
- * RPC and has neither. A stub host would assert the plumbing and leave the only
- * interesting question — whether this backend can actually supply one — untested.
- *
- * THE DENOMINATOR IS ASSERTED, TWICE. `ideate` fans five nodes at depth one, so
- * five `swarm.node_settled` lines is the count a passing run must show; an arm
- * that scanned for one `private-home` line would also pass on a run that emitted
- * exactly one node, or on a filtered list that happened to be empty. And the same
- * call with no `provisionNodeHome` wired is run beside it: if that arm did not
- * report `shared-origin-plane`, the positive arm would be measuring nothing.
+ * A shipped `agents.swarm` call reaches `facetHomeProvisioner`: each node gets a private home keyed on its actor's
+ * storage key, never the node id. Five settled nodes and a no-provisioner control arm are the denominator.
  *
  * Specified by docs/EXPLORATION.md — "Isolation".
  */
@@ -55,8 +29,7 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-/** `ideate`'s branching factor — see SWARM_PRESET_POINTS. Five nodes, depth one,
- *  no selection step, so five is the exact number of settled lines a run emits. */
+/** `ideate`'s branching factor (SWARM_PRESET_POINTS): five nodes, depth one, so five settled lines per run. */
 const IDEATE_BRANCHES = 5;
 
 const databases: Database[] = [];
@@ -65,8 +38,6 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-/** A node that answers once and stops — the smallest run that still provisions a
- *  home, because the home is provisioned before the node's first step. */
 function answeringModel() {
   return scriptedTurnModel({
     provider: 'fake',
@@ -83,14 +54,8 @@ function answeringModel() {
   });
 }
 
-/** The production runtime, with no host plane: a search must never be able to
- *  write into the developer's own repository.
- *
- *  `initWorkspaceSchema` runs first, exactly where `openWorkspaceCLI` runs it:
- *  a node is an actor, and an actor's claim ledger and working-revision history
- *  are workspace tables. `createCLIRuntime` on a root path provisions only the
- *  identity and the actor directory, so a fixture that stops there gives every
- *  node a seat whose first turn cannot find `actor_working_revisions`. */
+/** The production runtime with no host plane, after `initWorkspaceSchema` (as `openWorkspaceCLI` runs it):
+ *  nodes are actors whose first turn needs the workspace tables. */
 function cliRuntime(label: string): CLIRuntime {
   const database = new Database(scratchPath(label, 'agent.db'));
   databases.push(database);
@@ -102,12 +67,8 @@ function cliRuntime(label: string): CLIRuntime {
   });
 }
 
-/** This backend's node-home wiring, as `local-session.ts` builds it: the host it
- *  hands over, and the `provisionNodeHome` seam a swarm's deps carry — the
- *  canonical provisioner over that host, never a second one written here.
- *
- *  The missing host is a THROW rather than an absence, because an arm that
- *  quietly passed nothing would report the shared plane and assert it. */
+/** This backend's node-home wiring as `local-session.ts` builds it. A missing host throws: passing nothing
+ *  would report the shared plane and assert it. */
 function nodeHomeWiring(rt: CLIRuntime) {
   const nodeHome = rt.nodeHome;
 
@@ -123,24 +84,12 @@ function nodeHomeWiring(rt: CLIRuntime) {
   };
 }
 
-/**
- * The home directory name one settled node's own actor owns.
- *
- * Read back through the production directory — `resolve`, never a second
- * `register` — because the mapping from a node id to the key its home is named
- * for is the directory's to state, and resolving it also asserts the row is
- * still there and still active. Naming the home from `headAgentName(nodeId)`
- * instead would assert a rule this workspace does not hold: a rename would
- * move an actor's home, and two nodes sharing a name across a retirement would
- * share a directory.
- */
+/** The home directory name a settled node's actor owns, read back via the directory's `resolve`, never derived. */
 function nodeHomeName(rt: CLIRuntime, nodeId: string): string {
   return headAgentName(openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey);
 }
 
-/** `diagnostics` writes one JSON line per event to console.error and has no
- *  injection seam this far inside core, so the line is read where it lands —
- *  the same reassignment `unit-agents-tool.test.ts` uses. */
+/** `diagnostics` writes JSON lines to console.error with no injection seam, so the line is read where it lands. */
 async function captureEvents(run: () => Promise<void>): Promise<string[]> {
   const original = console.error;
   const lines: string[] = [];
@@ -169,11 +118,7 @@ interface SettledNode {
   readonly isolation: string;
 }
 
-/** Every node the run settled, as the engine itself reported it.
- *
- *  Selected by prefix before parsing rather than parsed-and-tolerated: the AI SDK
- *  writes plain-prose warnings to the same stream, and a JSON parse of those
- *  would throw with nothing worth swallowing. */
+/** Every node the run settled; selected by prefix before parsing because the AI SDK writes prose warnings to the same stream. */
 function settledNodes(lines: string[]): SettledNode[] {
   const prefix = `{"event":"${SETTLED_EVENT}"`;
 
@@ -182,7 +127,6 @@ function settledNodes(lines: string[]): SettledNode[] {
     .map((line) => v.parse(SettledLine, JSON.parse(line)).fields);
 }
 
-/** One shipped `agents.swarm` call, through the tool the model calls. */
 async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
   const tool = createAgentsTool({ mode: 'build', swarm });
   const execute = toolExecute<AgentsToolInput, JsonValue>(tool);
@@ -194,8 +138,6 @@ async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
     });
   });
 
-  // A refusal comes back as a normal result, so an unnoticed one would look like
-  // a run that settled no nodes. Named here, where the reason is still readable.
   const refused = v.safeParse(SwarmRefusal, outcome);
 
   if (refused.success) {
@@ -249,11 +191,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
-    // Read through `rt.storage.vfs` — the ORIGIN's own view, the one the `file`
-    // tool and the workspace shell address. That the homes are visible HERE is the
-    // property, not an implementation detail: one filesystem with per-node
-    // ownership is what keeps a node's read window open, and a home the origin
-    // could not see would be the second tree this design exists to refuse.
+    // Through `rt.storage.vfs`, the origin's own view: a home the origin could not see would be a second tree.
     const homes = await rt.storage.vfs.readdir('/home');
     const owned = settled.map(({ node }) => nodeHomeName(rt, node));
 
@@ -262,25 +200,16 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
       expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ isDir: true });
     }
 
-    // NOT the node ids: a home named for one would move with a rename, and
-    // every id below is absent from `/home` precisely because the storage keys
-    // above are what own it.
     for (const { node } of settled) expect(homes).not.toContain(headAgentName(node));
 
-    // The uid each home was chown'ed to, read back through the production
-    // accessor: it is idempotent by design, so reading it here is also what
-    // proves the allocation is a durable row rather than closure state.
     const { sql } = await nodeHome();
     const uids = new Set(owned.map((home) => agentIdentity(sql, home).uid));
 
     for (const uid of uids) expect(uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
-    // One uid each: two nodes sharing a uid is two nodes sharing a home.
     expect(uids.size).toBe(IDEATE_BRANCHES);
   });
 
   test('the same call with no home host reports the shared plane instead', async () => {
-    // The denominator for the arms above. Without this, `private-home` could be
-    // what this engine always says rather than what the wiring made it say.
     const rt = cliRuntime('swarm-node-home-absent');
 
     const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt) });
@@ -296,10 +225,7 @@ describe('a node seat shares the origin plane on its own head row', () => {
     const rt = cliRuntime('swarm-node-home-seat');
     expect(rt.shell).toBeDefined();
     const seat = await nodeSeatFactory(rt)({ nodeId: 'seat-probe', rootId: 'seat-probe', depth: 1 });
-    // A former-node actor is a head row: the directory presents the swarm mode
-    // as what it behaviorally is, and the seat's base runtime is the origin's
-    // own plane — the home comes later through provisionNodeHome, and building
-    // the head's own home here would provision a plane the loop never runs on.
+    // A former-node actor's seat runs on the origin plane; the home comes later through provisionNodeHome.
     expect(seat.actor.record.kind).toBe('head');
     expect(seat.actor.handle.actorId).not.toBe(rt.actor.actorId);
     expect(seat.actor.runtime.shell).toBe(rt.shell);

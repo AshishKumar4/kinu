@@ -1,7 +1,5 @@
-// Byte fidelity of the workspace filesystem under bun:sqlite. The store binds
-// BLOBs the Cloudflare-DO way (ArrayBuffer) while bun:sqlite binds TypedArrays
-// only and returns BLOBs as Uint8Array, so without the runtime's coercion every
-// local file write/read silently failed. Guards the coercion on both sides.
+// Byte fidelity under bun:sqlite: the store binds BLOBs the Cloudflare-DO way (ArrayBuffer) while bun:sqlite binds
+// TypedArrays only and returns Uint8Array. Guards the runtime's coercion on both sides.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
@@ -52,12 +50,8 @@ describe('workspace filesystem byte round-trip (bun:sqlite)', () => {
 });
 
 describe('workspace filesystem over a read-only handle', () => {
-  // Core writes each schema row only when it is absent: the migration marker,
-  // the filesystem identity and device rows, the inode allocator seed and the
-  // inode backfill (core 0.12.0 `src/vfs/sqlite-vfs.ts:781`, `:792`, `:937`,
-  // `:1014`, `:1047`). Writing them unconditionally fails to open a current
-  // schema over a handle that cannot write. Each guard is measured
-  // load-bearing on its own; see docs/DEVBOX-DECISIONS.md D21, D22 and D23-N.
+  // Core writes each schema row only when absent (core 0.12.0 `src/vfs/sqlite-vfs.ts:781`, `:792`, `:937`, `:1014`, `:1047`);
+  // each guard is load-bearing on its own, see docs/DEVBOX-DECISIONS.md D21, D22 and D23-N.
   test('a current filesystem opens read-only and reads what a writer left', async () => {
     const path = scratchPath('vfs-readonly', 'agent.db');
     const writer = new Database(path, { create: true });

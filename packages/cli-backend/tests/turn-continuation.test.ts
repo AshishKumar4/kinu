@@ -1,12 +1,4 @@
-/**
- * AN INTERRUPTED TURN CONTINUES — the ledger side of the invariant.
- *
- * The turn a dead process left open is re-opened ONCE. The continuation runs
- * under the run the dead process opened, so the run it seals is the run that
- * was open, and a later restart finds nothing to re-open. A continuation that
- * opened a run of its own would leave the original open for good, and every
- * restart after it would run the same turn again.
- */
+/** A turn a dead process left open is re-opened once, under the dead process's run, so a later restart finds nothing open. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -22,7 +14,6 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 const USAGE: LanguageModelV2Usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
-/** Streams one delta and parks with the body open — the instant a death cuts. */
 function parkedModel(delta: string): TestLanguageModelV2 {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -41,7 +32,6 @@ function parkedModel(delta: string): TestLanguageModelV2 {
   });
 }
 
-/** Answers at once, and records how many calls it took. */
 function answeringModel(answer: string, calls: { n: number }): TestLanguageModelV2 {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -83,13 +73,11 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
 
-    // Process A dies with the turn's first delta durable.
     const eventsA: SessionEvent[] = [];
     const a = new LocalAgentSession({ rt, db, model: parkedModel('part-'), noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
     const dying = a.send('continue me');
     await waitFor(() => eventsA.some((event) => event.type === 'text-delta'));
 
-    // Process B continues it to completion: one model call, one answer.
     const eventsB: SessionEvent[] = [];
     const callsB = { n: 0 };
     const b = new LocalAgentSession({ rt, db, model: answeringModel('one', callsB), noAutoEvolve: true, onEvent: (event) => eventsB.push(event) });
@@ -99,12 +87,9 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     expect(callsB.n).toBe(1);
 
     const runs = db.query<{ run_id: string; type: string }, []>("SELECT run_id, type FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid").all();
-    // ONE run: opened by A, sealed by B.
     expect(runs.map((row) => row.type)).toEqual(['run_start', 'run_end']);
     expect(new Set(runs.map((row) => row.run_id)).size).toBe(1);
 
-    // Process C finds nothing open: no re-open (announced synchronously at
-    // construction, so it is readable at once), no model call, no third answer.
     const eventsC: SessionEvent[] = [];
     const callsC = { n: 0 };
     const c = new LocalAgentSession({ rt, db, model: answeringModel('never', callsC), noAutoEvolve: true, onEvent: (event) => eventsC.push(event) });
@@ -113,8 +98,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     expect(callsC.n).toBe(0);
     expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM conversation_entries WHERE role = 'assistant'").get()?.n).toBe(1);
 
-    // The dead process is never resumed; racing its landing against the last
-    // close is what lets the test end without awaiting it.
+    // The dead process is never resumed; racing its landing against the last close lets the test end without awaiting it.
     await Promise.race([dying, Promise.resolve()]);
     db.close();
   });

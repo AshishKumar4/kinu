@@ -1,8 +1,4 @@
-/**
- * docs/CLI.md is generated from the command registry, so the only thing worth
- * asserting is that the checked-in copy still matches what the registry says —
- * a new command or flag lands in the docs or breaks this test.
- */
+/** docs/CLI.md is generated from the command registry; the checked-in copy must match it. */
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';

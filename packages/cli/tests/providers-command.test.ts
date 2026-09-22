@@ -8,22 +8,18 @@ import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/** Behaviour test through the real `providersCommand`: a fake `claude` on PATH
- *  exercises the actual spawn + `claude auth status` probe (no stubbing of the
- *  child-process seam). `mode` shapes how the fake binary answers. */
+/** A fake `claude` on PATH exercises the real spawn + `claude auth status` probe. */
 function runProviders(
   args: string[],
   opts: { claude?: 'ready' | 'logged-out'; home: string; env?: Record<string, string> },
 ) {
   const binDir = scratchDir('claude-bin');
-  // Controlled PATH excludes the user's real `claude` so "absent" is honest;
-  // /usr/bin + /bin keep `bash`/`env` available for the fake binary's shebang.
+  // Controlled PATH excludes the real `claude`; /usr/bin + /bin keep `bash`/`env` for the fake's shebang.
   let path = ['/usr/bin', '/bin'].join(delimiter);
 
   if (opts.claude) {
     const loggedIn = opts.claude === 'ready';
 
-    // The probe runs `claude --version` then `claude auth status` (JSON stdout).
     const script = [
       '#!/usr/bin/env bash',
       'if [ "$1" = "--version" ]; then echo "claude 1.0.0"; exit 0; fi',
@@ -47,7 +43,6 @@ function runProviders(
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', runner],
     cwd: repoRoot,
-    // Ambient provider env vars would change what "connected" means here.
     env: {
       ...process.env,
       OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '', CODEX_ACCESS_TOKEN: '',
@@ -78,7 +73,6 @@ describe('providers command — Claude subscription', () => {
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('Your Claude subscription is ready');
     expect(res.stdout).toContain('claude/claude-opus-4-x');
-    // Compliance note: cloud agents need an Anthropic API key, not the sub.
     expect(res.stdout).toContain('Anthropic API key');
   });
 
@@ -90,7 +84,6 @@ describe('providers command — Claude subscription', () => {
   });
 
   test('connect claude prints install guidance when the binary is absent', () => {
-    // No fake binary on PATH → the probe sees ENOENT → binary:false.
     const res = runProviders(['connect', 'claude'], { home: freshHome() });
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('Install Claude Code');
@@ -110,10 +103,8 @@ describe('providers command — Claude subscription', () => {
 });
 
 /**
- * The cross-process provider signal. A resident daemon or chat session caches
- * its provider listing and invalidates it by SIGNAL rather than by time, and
- * every `kinu provider` command runs in a different process — so the number in
- * config.json is the only thing that can carry the news.
+ * Resident sessions invalidate provider listings by signal, and each `kinu provider` runs in another
+ * process, so the revision in config.json is the only carrier.
  */
 describe('providers command — the provider revision', () => {
   function revisionOf(home: string): number {
@@ -130,7 +121,6 @@ describe('providers command — the provider revision', () => {
       model: 'openai/gpt-5.5',
       providers: { openai: { apiKey: 'sk' } },
     }));
-    // An absent field reads as 0: a machine that has never changed a provider.
     expect(revisionOf(home)).toBe(0);
 
     const res = runProviders(['disconnect', 'openai'], { home });
@@ -141,23 +131,19 @@ describe('providers command — the provider revision', () => {
 
   test('the subscription bridges advance it too, and each command advances it once', () => {
     const home = freshHome();
-    // Kinu stores no credential for the claude bridge, but its availability is
-    // exactly what a listing sweep probes — so a resident session has no other
-    // way to learn the probe now succeeds.
+    // Kinu stores no credential for the claude bridge, but a listing sweep probes it, so availability
+    // changes bump the revision.
     expect(runProviders(['connect', 'claude'], { claude: 'ready', home }).exitCode).toBe(0);
     expect(revisionOf(home)).toBe(1);
 
     expect(runProviders(['disconnect', 'claude'], { home }).exitCode).toBe(0);
     expect(revisionOf(home)).toBe(2);
 
-    // A read is not a mutation.
     expect(runProviders(['list'], { home }).exitCode).toBe(0);
     expect(revisionOf(home)).toBe(2);
   });
 });
 
-/** `provider disconnect` is the inverse of `provider connect`: it must remove
- *  the credential from disk, not merely stop showing it. */
 describe('providers command — disconnect', () => {
   function homeWith(config: JsonObject): string {
     const home = freshHome();
@@ -186,7 +172,6 @@ describe('providers command — disconnect', () => {
     const config = readConfig(home);
     expect(config.providers).toEqual({ openai: { apiKey: 'sk-keep-me' } });
     expect(config.model).toBeUndefined();
-    // The whole point: no trace of the secret survives in the file.
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('secret');
   });
 
@@ -230,8 +215,6 @@ describe('providers command — disconnect', () => {
   });
 
   test('rejects an unknown provider instead of silently doing nothing', () => {
-    // Signed out there is no account to hold a models.dev provider under that
-    // name either, so the rejection names both halves of the answer.
     const res = runProviders(['disconnect', 'not-a-provider'], { home: freshHome() });
     expect(res.exitCode).not.toBe(0);
     expect(res.stderr).toContain('Unknown provider "not-a-provider"');

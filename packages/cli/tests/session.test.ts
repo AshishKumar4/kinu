@@ -27,8 +27,7 @@ describe("CLI transcripts", () => {
     session.append("user", { text: "hello" });
     session.append("assistant", { text: "hi" });
 
-    // A later process records a NEW artifact under the SAME conversation id:
-    // transcripts are diagnostics, never conversations to reopen.
+    // Transcripts are diagnostics, never conversations to reopen: a later process records a new artifact.
     const next = createCliSession("jarvis", { transcriptDir: dir, conversationId });
     expect(next.id).not.toBe(session.id);
     expect(next.conversationId).toBe(conversationId);
@@ -69,7 +68,6 @@ describe("CLI transcripts", () => {
     const recorder = new SessionRecorder("local");
     const turnText = "first text second text third text";
 
-    // A turn that streams: text → tool → text → tool → text.
     const events: AgentClientEvent[] = [
       { type: "turn-start", kind: "user", text: "go" },
       { type: "text-delta", delta: "first text " },
@@ -87,7 +85,6 @@ describe("CLI transcripts", () => {
     const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
     const messages = transcriptMessages(transcript.entries);
 
-    // Text segments land at their true positions, NOT regrouped after the tools.
     expect(messages.map((m) => m.role)).toEqual([
       "assistant", "tool_call", "tool_result",
       "assistant", "tool_call", "tool_result",
@@ -106,7 +103,6 @@ describe("CLI transcripts", () => {
     const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
     const recorder = new SessionRecorder("local");
 
-    // The backend synthesized text without streaming deltas (ended on a tool).
     for (const event of [
       { type: "turn-start", kind: "user", text: "go" },
       { type: "tool-call", toolName: "search", toolCallId: "tc-1", args: {} },
@@ -142,7 +138,6 @@ describe("CLI transcripts", () => {
     if (byId === null) throw new Error("expected the seeded transcript path");
     expect(findTranscriptPath("jarvis", byId, { transcriptDir: dir })).toBe(byId);
     expect(findTranscriptPath("jarvis", "missing-id", { transcriptDir: dir })).toBeNull();
-    // No prefix matching: a diagnostic lookup either names the artifact or fails.
     expect(findTranscriptPath("jarvis", "20260101", { transcriptDir: dir })).toBeNull();
   });
 });

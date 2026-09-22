@@ -62,11 +62,8 @@ describe('createFileCodexAuthStore', () => {
     expect(saved.providers?.codex?.metadata?.accountId).toBe('acct_123');
   });
 
-  // The refresh must run INSIDE the lock: an async callback handed to the
-  // synchronous helper releases the lock the moment it returns its pending
-  // Promise, so two callers submit the same refresh token and race their
-  // replacements into the file. One of the two rotations then holds a token the
-  // provider has already invalidated.
+  // The refresh must run inside the lock: an async callback releases the synchronous helper's lock on its first await,
+  // so two callers rotate the same refresh token.
   test('two concurrent refreshes perform one rotation', async () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
@@ -81,8 +78,6 @@ describe('createFileCodexAuthStore', () => {
     }, null, 2)}\n`);
 
     const submitted: string[] = [];
-    // Resolved from inside the refresh, so the second caller starts while the
-    // first still holds the lock rather than at a guessed moment.
     const midFlight = Promise.withResolvers<void>();
 
     const store = createFileCodexAuthStore(configPath, {
@@ -91,8 +86,6 @@ describe('createFileCodexAuthStore', () => {
 
         submitted.push(present(form.get('refresh_token'), 'the refresh token the provider submitted'));
         midFlight.resolve();
-        // Yield before answering, so the refresh is genuinely mid-flight — the
-        // state in which a lock released at the callback's first await is gone.
         await Promise.resolve();
 
         return Response.json({
@@ -103,20 +96,12 @@ describe('createFileCodexAuthStore', () => {
       }),
     });
 
-    // TWO INDEPENDENT CALLERS, which is what concurrent means here. Creating
-    // the second inside the provider callback would put it inside the first
-    // caller's own hold: an acquisition nested in the holder's async context is
-    // a deadlock, because the hold is released only when that call returns.
-    // Started from here it is a real contender — its first attempt is
-    // synchronous and lands while the lock is held, and it proceeds when the
-    // first caller releases.
+    // The second caller starts outside the first's callback: nesting it in the holder's async context would deadlock.
     const first = store.getAuth();
     await midFlight.promise;
     const second = store.getAuth();
     const [firstAuth, waiter] = await Promise.all([first, second]);
 
-    // The provider saw the stored refresh token once, both callers carry what
-    // that one rotation produced, and the file agrees with both of them.
     expect(submitted).toEqual(['refresh-old']);
     expect(waiter?.headers.Authorization).toBe(firstAuth?.headers.Authorization);
     const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
@@ -128,10 +113,7 @@ describe('createFileCodexAuthStore', () => {
     expect(CODEX_CRED_KEY).toBe('codex.oauth');
   });
 
-  // A config that exists but does not parse must not read as `{}`: that makes
-  // `hasCredential()` say "no token stored" and makes `save()` write a file
-  // holding ONLY the codex credential — silently deleting every other
-  // provider's key it is supposed to preserve.
+  // An unparseable config must not read as `{}`, or `save()` deletes every other provider's key.
   test('an unparseable config is a failure, not an empty one', () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');

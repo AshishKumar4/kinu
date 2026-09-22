@@ -1,7 +1,4 @@
-// Where a provider secret is written when `kinu provider connect` captures
-// one. The default is the owner's Kinu account — sealed at rest there and
-// reachable from every machine through the provider proxy — so that this disk
-// does not end up holding a second copy of the same key.
+// `kinu provider connect` writes secrets to the owner's Kinu account by default, not this disk.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { readFileSync, writeFileSync } from 'node:fs';
 
@@ -20,12 +17,8 @@ function storedConfig(home: string): JsonObject {
   return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
 }
 
-/** The real connect flow, run in a child process so KINU_HOME is read fresh
- *  and nothing touches the developer's own ~/.kinu. The port stands in for a
- *  surface: it answers the questions the flow asks and reports nowhere. */
+/** Child process, so KINU_HOME is read fresh and the developer's ~/.kinu is untouched. */
 async function runStore(home: string, opts: { local: boolean; origin?: string; endpoint?: string }) {
-  // An endpoint only belongs to the OpenAI-compatible flow; every other
-  // provider's key has no address of its own.
   const provider = opts.endpoint === undefined ? 'openrouter' : 'openai-compatible';
 
   const answers = opts.endpoint === undefined
@@ -98,7 +91,6 @@ describe('where a provider secret is written', () => {
 
       const config = storedConfig(home);
       expect(JSON.stringify(config)).not.toContain('sk-or-secret');
-      // The model pointer still lands locally — it names a model, not a secret.
       expect(config.model).toBe('openrouter/anthropic/claude-x');
     } finally {
       await server.stop(true);
@@ -121,10 +113,7 @@ describe('where a provider secret is written', () => {
     expect(JSON.stringify(storedConfig(home))).toContain('sk-or-secret');
   });
 
-  // An endpoint the Worker cannot reach keeps its key here whatever the
-  // account could hold. IPv6 unique-local (fc00::/7) and carrier-grade NAT
-  // (100.64.0.0/10) read as reachable until 2026-09-05, so the key went to
-  // the account, where the proxy could never use it.
+  // An endpoint the Worker cannot reach (including fc00::/7 and 100.64.0.0/10) keeps its key local.
   test.each([
     'https://[fd00::1]:11434/v1',
     'https://100.64.3.4/v1',
@@ -190,8 +179,7 @@ describe('when the account will not take it', () => {
 
     try {
       expect((await runStore(home, { local: false })).stdout).toContain('WHERE:account');
-      // A local key wins at resolution time, so leaving the old one behind
-      // would mean the stale key is the one actually spent.
+      // A local key wins at resolution time, so a stale one left behind would be the one spent.
       expect(JSON.stringify(storedConfig(home))).not.toContain('sk-stale-local');
     } finally {
       await server.stop(true);

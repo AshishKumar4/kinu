@@ -1,17 +1,5 @@
-// A local workspace opened WITHOUT a LocalAgentSession still routes its model
-// lanes.
-//
-// The defect this pins: `setProfileResolver` had exactly one caller, the
-// LocalAgentSession constructor, so every surface that opens a workspace and
-// drives it directly — `kinu evolve` through `openWorkspaceCLI`, a fixture, a
-// scheduled one-shot — got a runtime whose judge, explorer, fast and advisor
-// lanes threw `this runtime has no profile resolver`. `kinu evolve` spent a
-// real search against that throw and printed
-// `! [1/1] branch ... this runtime has no profile resolver` followed by
-// `Did not converge — best score: 0.000`.
-//
-// The lanes exercised here are the ones the MCTS engine actually reads:
-// `explorer: rt.llm` and `judge: rt.judgeModel` (core mcts/engine.ts:306-307).
+// A workspace opened without a LocalAgentSession still routes its model lanes (`kinu evolve` via `openWorkspaceCLI`).
+// The lanes are the ones the MCTS engine reads: `explorer: rt.llm` and `judge: rt.judgeModel`.
 import { scratchDir } from '../../test-utils/src/scratch';
 
 import { join } from 'node:path';
@@ -41,8 +29,7 @@ function recordRoutes(rt: CLIRuntime) {
   return { seen, issuer };
 }
 
-/** A workspace on disk, exactly as `kinu evolve` finds one: an identity row, a
- *  SOUL, and whatever model the operator stored. No session is ever built. */
+/** A workspace on disk as `kinu evolve` finds one; no session is ever built. */
 async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: string }> {
   const dir = scratchDir('sessionless');
   const dbPath = join(dir, 'agent.db');
@@ -55,9 +42,7 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   return { db, dbPath };
 }
 
-/** Replace what a resolved route RUNS with, so no lane reaches a provider.
- *  The resolver under test is untouched — this stubs the model, not the
- *  routing decision. */
+/** Stubs the model a resolved route runs with, not the routing decision. */
 function stubModels(rt: CLIRuntime): ModelRouteResolution[] {
   const seen: ModelRouteResolution[] = [];
   rt.setModelForRoute?.((resolution): LLM => ({
@@ -89,8 +74,6 @@ describe('a local runtime opened without a session', () => {
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
     const seen = stubModels(rt);
 
-    // core mcts/engine.ts passes `explorer: rt.llm`; this is the exact call
-    // that threw for every `kinu evolve` branch.
     expect(await rt.llm.complete('propose one improvement')).toBe('stub answer');
     expect(seen.map((resolution) => resolution.source)).toEqual(['reflection']);
   });
@@ -119,9 +102,7 @@ describe('a local runtime opened without a session', () => {
 
     const profile = await rt.ensureProfile?.();
 
-    // `actor_config.model` spelled in full by the same registry the routed-lane
-    // factory resolves through — the durable row a session reads, not a
-    // constant chosen here.
+    // Spelled by the registry the routed-lane factory resolves through, as the durable row a session reads.
     expect(profile?.tier.model).toBe('openai-compat/my-model');
     expect(profile?.tiers.deep.model).toBe('openai-compat/my-model');
   });
@@ -200,8 +181,7 @@ describe('a local runtime opened without a session', () => {
 
     const { seen, issuer } = recordRoutes(rt);
 
-    // No ambient operation at issue time: nothing owns this stream yet, so it
-    // must not pick up whoever happens to consume it.
+    // No ambient operation at issue time, so the stream must not pick up whoever consumes it.
     const stream = rt.llm.stream({ system: 's', messages: [{ role: 'user', content: 'unowned' }] });
 
     await runOperationProfile(operationA, async () => {
@@ -271,8 +251,7 @@ describe('the authority a session refines', () => {
 
     expect((await rt.profiles?.resolvePreTurn())?.tier.model).toBe('openai-compat/fake-model');
 
-    // What a session with no provider registry installs. It refines the ONE
-    // authority the runtime built; nothing installs a second resolver.
+    // What a session with no provider registry installs: a refinement of the one resolver, never a second.
     rt.profiles?.refine({ plane: staticModelPlane() });
 
     expect((await rt.profiles?.resolvePreTurn())?.tier.model).toBe(STATIC_MODEL_SPEC);

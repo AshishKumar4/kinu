@@ -1,21 +1,4 @@
-/**
- * The hard-task tier's seam into the eval instrument that already exists.
- *
- * WHAT THIS DELIBERATELY DOES NOT BUILD. No loader, no record schema, no
- * statistics, no second comparator. `EvalCase` already carries `env` (an opaque
- * key the tier resolves to a seeder) and `params`, and both had ZERO consumers
- * until now — they were landed for exactly this. `outcomeRow` already projects a
- * verdict onto the row that persistence, the paired comparator and admissibility
- * all read. So this module is three things and nothing else: a lookup, a seeding
- * step, and a verification step.
- *
- * WHY THE CASES ARE DERIVED AND NOT A JSONL FILE. Every prompt quotes the target
- * its verifier scores against. Split across `behaviour.jsonl` and a `.ts` those two
- * numbers would drift, and a prompt promising a target the scorer does not use is a
- * silently mis-stated task that would look like an agent failure. Deriving the
- * cases from {@link HARD_TASKS} makes the drift impossible rather than merely
- * unlikely, and it is why `hardTaskCases` returns cases instead of being a file.
- */
+/** The hard-task tier's seam into the eval instrument: lookup, seeding, verification. Cases derive from {@link HARD_TASKS} so prompts and verifier targets cannot drift. */
 import type { EvalBudget, EvalCase, VFS } from '@kinu.run/core';
 import { outcomeRow, ratioOutcome, type VerifierContext } from '../eval-outcome';
 import type { EvalScoreRow } from '../eval-run';
@@ -26,27 +9,10 @@ export * from './cost-model';
 
 export { HARD_TASKS } from './tasks';
 
-/**
- * The `EvalCase.env` value that marks a case as belonging to this tier.
- *
- * One constant, not one per task: `env` names the ENVIRONMENT — what has to be put
- * in the workspace and what will be run over it afterwards — and the task's own
- * `id` already identifies which instance. A per-task env key would be the id
- * spelled twice, with two places for it to disagree.
- */
+/** The `EvalCase.env` marking this tier; the task `id` identifies the instance. */
 export const HARD_TASK_ENV = 'hard-task';
 
-/**
- * What one hard task may spend. One shape for the tier rather than per-task
- * sizing, for the reason the probes state where they are declared: nobody has
- * measured this tier's cost distribution yet, so per-task ceilings would
- * pretend to a precision the run record has not earned. These ceilings are set
- * to catch a runaway episode — a search stuck looping, a verifier hammered a
- * hundred times — not to rank efficiency: a competent hard-task episode closes
- * far fewer than 120 steps, and the recorded `measured` beside every verdict
- * is what a later tightening sizes from. Generous on purpose; the judges
- * record rather than gate, so a ceiling that fires is a finding, never a red.
- */
+/** Per-task spend ceilings, sized to catch runaway episodes, not rank efficiency; a fired ceiling is a finding, not a red. */
 export const HARD_TASK_BUDGET: EvalBudget = {
   steps: 120,
   tokens: 1_000_000,
@@ -54,57 +20,32 @@ export const HARD_TASK_BUDGET: EvalBudget = {
   wallMs: 1_800_000,
 };
 
-/**
- * The corpus as eval cases, ready to concatenate with any other corpus.
- *
- * `rubric` and `reference` are deliberately absent: this tier's ground truth is
- * code, and a rubric is the affordance a judge reads. Leaving them unset is what
- * makes "no LLM judge" a property of the data rather than a promise in a comment.
- */
+/** The corpus as eval cases; `rubric`/`reference` are absent because ground truth is code. */
 export function hardTaskCases(): EvalCase[] {
   return HARD_TASKS.map((task) => ({
     id: task.id,
     task: task.prompt,
     tags: [...task.tags],
     env: HARD_TASK_ENV,
-    // The instance size, so a record says what was actually solved. A stored score
-    // whose instance is not recorded beside it is a score nobody can re-derive.
+    // The instance size, so a stored score can be re-derived.
     params: { ...task.problem.params },
     budget: { ...HARD_TASK_BUDGET },
   }));
 }
 
-/** The task behind a case, or undefined when the case belongs to another tier.
- *  Callers must handle the undefined rather than being handed a throw: a mixed
- *  corpus is the normal state, not an error. */
+/** The task behind a case, or undefined for cases of other tiers. */
 export function hardTaskFor(task: Pick<EvalCase, 'id' | 'env'>): HardTask | undefined {
   if (task.env !== HARD_TASK_ENV) return undefined;
 
   return HARD_TASKS.find((t) => t.id === task.id);
 }
 
-/**
- * Put the task's files in the workspace the agent is about to be handed.
- *
- * Separate from verification because the two happen either side of a paid episode,
- * and because seeding through the OPENED runtime's VFS is the whole point: a task
- * seeded into the birth runtime's inline VFS is a task the agent never sees.
- */
+/** Seed the task's files through the opened runtime's VFS (the birth runtime's inline VFS is never seen by the agent). */
 export async function seedHardTask(task: HardTask, vfs: VFS): Promise<void> {
   for (const file of task.seed) await vfs.writeFile(file.path, file.content);
 }
 
-/**
- * Measure the workspace the agent left behind and project the verdict onto the one
- * primary-metric row.
- *
- * THROWS when the measurement harness could not run at all, which is the
- * instrument being broken and must be a red run that publishes no number. A
- * solution that is missing, unparseable, throwing, over budget, below its
- * problem's certificate floor or simply wrong comes back as a scored zero with a
- * detail that says which — because "the agent failed" and "we failed to measure"
- * are different facts.
- */
+/** Score the workspace; throws only when measurement itself fails, otherwise wrong solutions score zero with a detail. */
 export async function verifyHardTask(
   task: HardTask, ctx: VerifierContext,
 ): Promise<EvalScoreRow> {

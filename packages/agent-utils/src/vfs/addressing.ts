@@ -1,25 +1,7 @@
-/**
- * The correction a model needs when it addressed the agent's file plane as if
- * it were the machine's.
- *
- * Models routinely read `workspace.*`, the `file` tool and the emulated shell
- * as the container's filesystem, and a bare `ENOENT: … '/app'` neither says
- * otherwise nor points anywhere useful — under a benchmark that mistake ended
- * two whole trials, and in production it made a fork conclude a repository did
- * not exist when it was one mount away.
- *
- * It lives here, in the lowest layer, because both consumers need it and only
- * one of them can import the other: core's file surfaces (`vfs/errno.ts`
- * re-exports it) and this package's shell emulator.
- *
- * The roots are read live from the filesystem itself, so the hint can never
- * drift from the runtime it describes.
- */
+/** Correction for a model that addressed the agent file plane as the machine filesystem; roots are read live. */
 
 export async function vfsAddressingHint(
 	vfs: { readdir(path: string): Promise<string[]> },
-	/** How the caller's surface names itself, so the correction reads as being
-	 *  about the thing the model just called. */
 	subject: string,
 ): Promise<string> {
 	let roots = "";
@@ -27,10 +9,7 @@ export async function vfsAddressingHint(
 	try {
 		roots = (await vfs.readdir("/")).join(", ");
 	} catch (error) {
-		// This correction is built while reporting a failed path lookup, so it has
-		// to be produced regardless: throwing would replace the diagnosis the
-		// caller is holding with a second, less useful one. A root that cannot be
-		// listed is itself part of the diagnosis, so it is stated, not omitted.
+		// Built while reporting a failed lookup, so it must not throw; an unlistable root is stated.
 		roots = `unlistable (${error instanceof Error ? error.message : String(error)})`;
 	}
 

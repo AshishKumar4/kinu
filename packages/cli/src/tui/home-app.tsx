@@ -117,23 +117,19 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const [defaultModel, setDefaultModelState] = useState(initialDefaults.model);
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort);
   const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
-  // The catalog the effort row reads its levels from: a model's own list
-  // (#9), loaded once in the background and refreshed whenever the picker
-  // opens. Unreadable is fine here; the picker reports that on its own.
+  // Effort-row catalog (#9), refreshed when the picker opens.
   const [catalog, setCatalog] = useState<AgentModelMenu>(EMPTY_MODEL_MENU);
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Both things that make the roster on screen less than the whole truth: a
-  // refresh that failed, and a name the two stores contest.
+  // Why the roster may be incomplete: a failed refresh, or a name the two stores contest.
   const [cloudSyncNotice, setCloudSyncNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [focusArea, setFocusArea] = useState<HomeFocus>('mission');
   const modelPickerRequestRef = useRef(0);
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const initialFocusApplied = useRef(false);
-  // An effect can return cleanup, not its task. Retain the task here until it
-  // settles so refresh work belongs to this scene for its full lifetime.
+  // Effects return cleanup, not tasks; retain the task until it settles.
   const cloudSyncTaskRef = useRef<Promise<void> | null>(null);
   const catalogTaskRef = useRef<Promise<void> | null>(null);
   const deviceConnect = useDeviceConnectPrompt();
@@ -161,8 +157,6 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   useEffect(() => {
     if (setupRequired) return;
     let live = true;
-    // Retained on a ref, like the cloud sync above: the effect returns its
-    // cleanup, not its task.
     catalogTaskRef.current = (async () => {
       try {
         const menu = await loadHomeModelCatalog(mode, opts);
@@ -180,8 +174,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     initialFocusApplied.current = true;
     setFocusArea('agents');
   }, [sidebarFocusable]);
-  // A hidden sidebar cannot hold focus: Alt+W off or a resize below the wide
-  // threshold hands focus back to the mission field.
+  // A hidden sidebar cannot hold focus; hand it back to the mission field.
   useEffect(() => {
     if (focusArea === 'agents' && !sidebarFocusable) setFocusArea('mission');
   }, [focusArea, sidebarFocusable]);
@@ -193,9 +186,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     let task: Promise<void> | null = null;
     let settled = false;
     task = (async () => {
-      // The rejection leaves the handler as a value: whether a refresh failure
-      // has anywhere to land is this effect's fact — its own cleanup is the only
-      // thing that aborts the signal — and not the error's.
+      // Only this effect's cleanup aborts the signal, so it decides whether a refresh failure has anywhere to land.
       let failure: { readonly cause: unknown } | undefined;
 
       try {
@@ -205,8 +196,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         await roster.reload();
 
         if (abort.signal.aborted) return;
-        // A contested name reached the roster as neither store's cloud row.
-        // Saying nothing would read as "you have no such cloud workspace".
+        // A contested name is neither store's cloud row; silence would read as "no such cloud workspace".
         setCloudSyncNotice(sync.collisions.length === 0 ? null : collisionNotice(sync.collisions));
       } catch (cause) {
         failure = { cause };
@@ -216,8 +206,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
       }
 
-      // A list that could not be refreshed must not read as the list itself —
-      // and a scene the cleanup already tore down has no notice to show.
+      // A failed refresh must not read as the list; a torn-down scene shows nothing.
       if (failure !== undefined && !abort.signal.aborted) {
         setCloudSyncNotice(`Cloud workspaces could not be refreshed: ${renderThrownChain({ cause: failure.cause })}`);
       }
@@ -245,8 +234,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     try {
       const menu = await loadHomeModelCatalog(mode, opts);
 
-      // A menu with failures explains itself in the picker; only a menu with
-      // nothing at all to show is a catalog error.
+      // Only an empty menu is a catalog error; partial failures explain themselves in the picker.
       if (menu.models.length === 0 && menu.failures.length === 0) {
         throw new Error(`No ${mode} models are available.`);
       }
@@ -287,8 +275,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
   }, []);
 
-  // What the row offers: the default model's declared levels, plus the stored
-  // one when the catalog no longer lists it, so the row never reads as empty.
+  // The stored level stays listed if the catalog dropped it.
   const efforts = useMemo(
     () => offeredReasoningEfforts(
       catalog.models.find((model) => model.spec === defaultModel)?.reasoningEfforts,
@@ -317,8 +304,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
       if (mode === 'cloud' && !cloudReady) throw new Error('Cloud workspaces need a signed-in account. Run kinu auth, then try again.');
 
       if (mode === 'local' && !localReady) throw new Error('Local workspaces need a model provider. Run kinu provider connect <provider>, or switch to cloud.');
-      // Cloud naming is server-side (async display-name generation after
-      // create); only local agents need a locally generated identity.
+      // Cloud naming is server-side; only local agents need a generated identity.
       const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
 
       const created = await createCliAgent({
@@ -331,8 +317,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         allowInteractiveAuth: false,
       });
 
-      // A new cloud agent with no connected PC: offer to connect this one
-      // before the chat opens (the modal resolves immediately otherwise).
+      // New cloud agent with no connected PC: offer to connect this one before chat opens.
       if (created.mode === 'cloud') await deviceConnect.offerIfUnconnected();
       finishHome?.({ type: 'open-agent', name: created.name });
     } catch (err) {
@@ -802,8 +787,7 @@ function createDefaultOnboarding(
 }
 
 export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiAction> {
-  // The home screen is an interactive surface like chat and run: its stderr is
-  // the person's own screen, so diagnostics go to cli.log, not between us.
+  // Interactive surface: stderr is the person's screen, so diagnostics go to cli.log.
   installTurnDiagnostics();
   requireInteractiveTerminal();
   const renderer = await createCliRenderer({ exitOnCtrlC: false });
@@ -812,15 +796,8 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
 
   const complete = (action: HomeTuiAction) => {
     process.off('SIGINT', onSigint);
-    // Unmount synchronously BEFORE the renderer frees its native state.
-    // `root.render(<box />)` is not an unmount: createRoot's render() opens a
-    // new container each call, so it left HomeApp mounted with whatever state
-    // update was still queued — submit() sets `busy` and reaches here before
-    // React's scheduler commits it. That commit then flipped the textarea's
-    // `focused` prop on a renderer whose native pointer destroy() had already
-    // released, and opentui writes the cursor position through that pointer
-    // unguarded: a segfault in the child process, at whatever rate the commit
-    // lost the race. Only flushSync makes unmount() land now.
+    // Unmount synchronously (flushSync) before the renderer frees native state: a queued commit on a
+    // destroyed renderer writes through a freed pointer and segfaults.
     flushSync(() => { root.unmount(); });
     renderer.destroy();
     resolve(action);
@@ -836,22 +813,19 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   });
 }
 
-/** Which keybinding scopes a key press is read against: the picker owns every
- *  key while it is open, and the composer takes editor keys. */
+/** An open picker owns every key. */
 function keyScopes(modelPickerOpen: boolean, focusArea: HomeFocus): readonly KeyScope[] {
   if (modelPickerOpen) return ['modal'];
 
   return focusArea === 'mission' ? ['editor', 'home', 'global'] : ['home', 'global'];
 }
 
-/** Which way a list action moves the selection; 0 for an action that does not. */
 function stepDirection(actionId: TuiActionId | null): number {
   if (actionId === 'home.previous') return -1;
 
   return actionId === 'home.next' ? 1 : 0;
 }
 
-/** The line under the heading: what to do next, given what is set up. */
 function subtitle(setupRequired: boolean, agentCount: number): string {
   if (setupRequired) return 'Run one of these once. After that you can create and open workspaces here.';
 
@@ -862,14 +836,13 @@ function subtitle(setupRequired: boolean, agentCount: number): string {
   return 'Select a workspace, or write a mission to create a new one.';
 }
 
-/** The composer's frame: dimmed while a turn runs, lit while it has focus. */
 function composerBorder(colors: TuiThemeColors, busy: boolean, focused: boolean): string {
   if (busy) return colors.border.strong;
 
   return focused ? colors.border.focus : colors.border.user;
 }
 
-/** Whether the chosen location has a provider behind it. `both` needs either. */
+/** `both` needs either. */
 function connectedFor(location: WorkspaceLocationChoice | undefined, account: boolean, local: boolean): boolean {
   if (location === 'cloud') return account;
 
@@ -888,14 +861,7 @@ function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
   return order[(index + 1) % order.length] ?? order[0];
 }
 
-/**
- * What a contested name costs the reader: the cloud workspace is not on the
- * roster, the local one kept the name, and only a rename settles it — the
- * same posture `resolveAgentTarget` takes when a bare name has two candidates.
- *
- * Names first, because this row is clipped to the panel width and the names
- * are the part the reader cannot reconstruct from anything else on screen.
- */
+/** Names first: the row clips. */
 function collisionNotice(collisions: readonly CloudRefCollision[]): string {
   const names = collisions.map((hit) => hit.name).join(', ');
 

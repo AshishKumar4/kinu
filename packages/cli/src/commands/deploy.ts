@@ -1,17 +1,6 @@
 /**
- * `kinu deploy` — the two doors a terminal has: `cloudflare` (the same run as
- * the page) and `local` (this machine, `./deploy-local.ts`).
- *
- * ONE FLOW, ONE LEDGER. Nothing here re-implements a step. The command mints a
- * run on kinu.run, authorizes on a loopback redirect the way wrangler does,
- * hands the token pair to that run, answers the four questions at the
- * terminal, and then watches the run's own progress socket and prints the rows
- * the Durable Object writes. A run started here can be finished from the page
- * and the other way round.
- *
- * THE VERIFIER STAYS LOCAL and the token pair is POSTed once over TLS to the
- * run that will spend it. What kinu.run keeps afterwards is nothing: the last
- * step writes the refresh token into the new Worker and wipes the run's vault.
+ * `kinu deploy`: `cloudflare` (the same run the page drives) or `local` (this machine).
+ * The verifier stays local; the token pair is POSTed once over TLS to the run that spends it.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import {
@@ -72,8 +61,6 @@ async function cloudflareDoor(opts: { origin?: string }): Promise<void> {
   await follow(door, origin, await door.start(inputs));
 }
 
-/** The authorization leg: a loopback listener, the browser, and the exchange.
- *  The code never leaves this process except as a token pair. */
 async function authorize(door: DeployDoor, clientId: string): Promise<void> {
   const pkce = await createPkcePair();
   const state = crypto.randomUUID();
@@ -106,18 +93,8 @@ async function authorize(door: DeployDoor, clientId: string): Promise<void> {
 }
 
 /**
- * The redirect, caught.
- *
- * ANYTHING MAY KNOCK ON A LOOPBACK PORT. Any page open in the browser can
- * `fetch('http://localhost:8899/…')`, and a listener that closed on the first
- * request of any kind would reject an authorization the person is in the
- * middle of giving. So a request that does not carry this run's own `state`
- * gets a 404 and the listener stays up; the leg ends on the callback that
- * carries it, which is the whole job of `state`.
- *
- * `127.0.0.1` rather than every interface: the redirect is the browser on
- * this machine, and a browser resolving `localhost` to `::1` first falls back
- * to it. Binding `::` to save that fallback would put the leg on the LAN.
+ * Any page can hit a loopback port, so a request without this run's `state` gets a 404 and the listener stays up.
+ * Binds `127.0.0.1` only: `::` would put the leg on the LAN.
  */
 function awaitCode(state: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
@@ -169,8 +146,7 @@ async function answers(door: DeployDoor, prompts: readonly string[]): Promise<De
   const ownerEmail = await ask('Your email (the sign-in address)');
   const zones = await door.zones();
   const hostname = zones.length === 0 ? '' : await ask('Hostname (blank for a workers.dev address)', '');
-  // A label boundary, not a suffix: `kinu.notexample.com` ends with
-  // `example.com` and belongs to a different account's zone.
+  // A label boundary, not a suffix: `kinu.notexample.com` ends with `example.com`.
   const zone = zones.find((held) => hostname === held.name || hostname.endsWith(`.${held.name}`));
   const keyNames: string[] = [];
 
@@ -195,13 +171,7 @@ async function answers(door: DeployDoor, prompts: readonly string[]): Promise<De
   };
 }
 
-/**
- * The run, watched on its own socket.
- *
- * The rows are printed as they change rather than redrawn: a terminal that
- * scrolled away is still a record of what happened, and the snapshot the
- * socket carries is the same one the page renders.
- */
+/** Rows print as they change rather than redraw, so scrollback stays a record. */
 async function follow(door: DeployDoor, origin: string, first: DeploySnapshot): Promise<void> {
   const shown = new Map<string, string>();
 

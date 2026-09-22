@@ -1,16 +1,7 @@
 /**
- * Local code executor for CLI backend using Bun subprocess.
- *
- * Runs user code in a separate Bun process, under the caller's declared
- * wall-clock budget — and under NO budget when the caller declared none. A
- * default of 30 seconds would be the same number as the foreground detach
- * window: a program that outran the window would be killed at the very moment
- * the window would have handed the model a handle, so the detach could never be
- * observed. A deadline here is a kill; the window is not.
- *
- * This is a local convenience boundary, not a security sandbox: code executes
- * with the user's OS permissions. Tool-backed execution runs in-process because
- * provider functions cannot be passed across process boundaries.
+ * Local code executor via Bun subprocess. Not a security sandbox: code runs with
+ * the user's OS permissions. No default deadline: one equal to the foreground
+ * detach window would kill a program at the moment it would have detached.
  */
 
 import { normalizeCode } from '@cloudflare/codemode/normalize';
@@ -57,12 +48,7 @@ export function createSandboxedExecutor(): Executor {
       const language = opts?.language ?? 'javascript';
 
       if (language !== 'javascript') {
-        // ONE refusal, because there was only ever one state to refuse:
-        // `languages` is 'javascript' plus exactly those INTERPRETERS whose
-        // command resolved on PATH, so "declared but has no interpreter" cannot
-        // happen — and the two identical refusals that stood here read as if it
-        // could. The lookup stays because it is what hands the compiler a
-        // defined interpreter.
+        // `languages` holds only interpreters resolved on PATH, so one refusal covers every case.
         const interpreter = this.languages.includes(language)
           ? INTERPRETERS.get(language)
           : undefined;
@@ -74,8 +60,7 @@ export function createSandboxedExecutor(): Executor {
         return executeWithInterpreter(code, interpreter, timeoutMs);
       }
 
-      // If providers are needed, we can't pass functions across process
-      // boundaries. Fall back to in-process vm for tool-backed execution.
+      // Provider functions cannot cross process boundaries; run in-process.
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
 
       if (providerList.some(p => Object.keys(p.fns).length > 0)) {
@@ -102,12 +87,8 @@ async function executeWithInterpreter(
 }
 
 /**
- * Spawn, bound by wall clock, and read output WITHOUT depending on pipe EOF.
- *
- * stdio goes to temp files, read after exit. With pipes, `new Response(stdout)`
- * resolves only at EOF, and a grandchild the code left running (a daemonized
- * server) inherits the write end — so a finished probe held `kinu exec`
- * open until the harness cap killed it (TB2.1 nginx trial, 2026-08-20).
+ * stdio goes to temp files read after exit: a pipe resolves only at EOF, and a
+ * daemonized grandchild inheriting the write end would hold `kinu exec` open.
  */
 async function runToCompletion(
   argv: string[],
@@ -132,7 +113,6 @@ async function runToCompletion(
 
     let killedByTimeout = false;
 
-    // No deadline asked for, no kill armed. The process ends when it ends.
     const timeout = timeoutMs === undefined
       ? undefined
       : setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
@@ -159,10 +139,8 @@ async function runToCompletion(
   }
 }
 
-/** Execute in a Bun subprocess with timeout. */
 async function executeInSubprocess(code: string, timeoutMs?: number): Promise<ExecuteResult> {
-  // A compiled binary may have no bun CLI beside it. The in-process adapter
-  // binds the same providers but cannot supply module-only runtime features.
+  // A compiled binary may have no bun CLI beside it.
   const bunBin = Bun.which('bun');
 
   if (!bunBin) return executeInProcess(code, [], timeoutMs);
@@ -211,13 +189,7 @@ function normalizeProviders(
   return [{ name: 'codemode', fns: providers }];
 }
 
-/**
- * In-process execution — for tool-backed code, and for the JS lane on a machine
- * with no subprocess runtime on its PATH.
- *
- * Codemode owns source normalization. This adapter only binds the local
- * providers and invokes the resulting callable once, just like the subprocess.
- */
+/** In-process execution: tool-backed code, or JS when no subprocess runtime is on PATH. */
 async function executeInProcess(
   code: string, providers: ResolvedProvider[], timeoutMs?: number,
 ): Promise<ExecuteResult> {
@@ -226,9 +198,7 @@ async function executeInProcess(
   for (const p of providers) {
     context[p.name] = new Proxy<ExecutorNamespace>({}, {
       get: (_target, toolName: string) => {
-        // Every argument is forwarded: the host bridge a scaffold runs against
-        // is multi-arg (host.callTool(name, args), host.appendMemory(path,
-        // content)), and dropping all but the first silently truncated them.
+        // Forward every argument: host bridge calls are multi-arg.
         return async (...args: JsonValue[]) => {
           const fn = p.fns[toolName];
 
@@ -240,7 +210,6 @@ async function executeInProcess(
     });
   }
 
-  // Use Function constructor with explicitly passed context vars
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);
 
@@ -253,9 +222,7 @@ async function executeInProcess(
       value === undefined ? undefined : decodeJsonValue({ value }));
 
     if (timeoutMs === undefined) return { result: await settled };
-    // A caller that ASKED for a deadline gets one. Cleared in the finally — a
-    // scaffold turn's budget is minutes, and a live timer would hold the
-    // process open long after the code settled.
+    // Cleared in the finally: a live timer would hold the process open after the code settled.
     const deadline = Promise.withResolvers<JsonValue>();
     timer = setTimeout(
       () => deadline.reject(new Error(`Execution timeout (${Math.round(timeoutMs / 1000)}s)`)),

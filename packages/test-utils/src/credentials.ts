@@ -1,9 +1,4 @@
-// Credential fixtures — auth-resolver shims for tests.
-//
-// The new provider seam exposes `getAuth(key)` returning ready-to-attach
-// HTTP headers rather than raw Credential values. UserDO is the production
-// implementation; this file gives tests the equivalent shape without
-// spinning up a DO.
+// Auth-resolver fixtures: the `getAuth(key)` header-bundle shape UserDO provides, without a DO.
 import type { AuthResolution, AuthResolver } from '@kinu.run/core';
 
 export interface TestAuth {

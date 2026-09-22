@@ -1,8 +1,4 @@
-// `daemon.log` grew without bound. These pin the cap, the single predecessor,
-// and the two properties rotation must not break: the detached daemon's
-// inherited stdout fd keeps writing to the live file (which is why rotation is
-// copy-truncate rather than rename), and `daemon logs` still shows history
-// from before the roll.
+// Rotation is copy-truncate, not rename: the detached daemon's inherited stdout fd keeps writing the live file.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { appendFileSync, closeSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
 
@@ -52,9 +48,7 @@ describe('daemon log rotation', () => {
   });
 
   test('an append-mode fd opened before the roll keeps writing to the live log', () => {
-    // This is the daemon's own stdout: opened at spawn, inherited by a detached
-    // process, never reopened. A rename-based rotation would strand it on the
-    // predecessor, so it must survive rotation and land back at the top.
+    // The daemon's own stdout: inherited at spawn, never reopened, so it must land back at the top after rotation.
     const path = makeLog();
     writeFileSync(path, 'x'.repeat(64));
     const fd = openSync(path, 'a');

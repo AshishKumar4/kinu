@@ -1,13 +1,6 @@
 /**
- * A hand-rolled v2 model for the suites that need the v2 spec specifically.
- *
- * `doStream` DEFAULTS TO A REPLAY of the same `doGenerate` script rather than to a
- * throw. Every agent turn in this tree is issued by `runChat`, which streams — an
- * actor's, a fork's and a swarm node's alike — so a fixture that scripts only
- * `doGenerate` would answer nothing at all and would say only "does not implement
- * doStream" from inside the loop, where a head report turns it into `errored` and
- * names nothing about the fixture. A script is a script; which method the loop
- * happens to call is not the fixture's business.
+ * A hand-rolled v2 model. `doStream` replays the `doGenerate` script instead of throwing: every turn goes through
+ * `runChat`, which streams, and a throw would surface only as an unnamed `errored` head.
  */
 import type { LanguageModelV2, LanguageModelV2StreamPart } from '@ai-sdk/provider';
 

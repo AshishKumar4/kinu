@@ -1,8 +1,3 @@
-/** Codec contract: encode→decode is identity (byte-verbatim, same object
- *  references) for real ModelMessage histories, tool pairing folds calls and
- *  results into one item, pruned items drop their full native footprint, and
- *  identity is deterministic without message ids. */
-
 import { describe, expect, test } from 'bun:test';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -166,7 +161,6 @@ describe('decode after pruning', () => {
 
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => part.type)).toEqual(['text', 'tool-call', 'tool-call']);
-    // Surviving parts are the same objects; untouched messages are verbatim.
     const original = messages[1];
 
     if (original.role !== 'assistant' || isString(original.content)) throw new Error('unexpected structure');
@@ -398,7 +392,6 @@ describe('estimation and transcripts', () => {
     expect(doc).toContain('total 12\\ndrwxr-xr-x');
     expect(doc).toContain('[binary 5 bytes]');
 
-    // Every fenced block parses back to the native message group.
     const blocks = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)]
       .map((match) => parseMessageGroup(match[1]));
 

@@ -36,9 +36,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { installTurnDiagnostics } from '../turn-log';
 import { loadActiveProfile, updateDefaultTier } from '../profiles';
 
-/** Transcript flags as Commander actually delivers them: `--no-transcript`
- *  arrives as `transcript: false` on the shared option key, not as
- *  `noTranscript: true`. */
+/** `--no-transcript` arrives as `transcript: false`, not `noTranscript: true`. */
 interface TranscriptFlags {
   transcript?: boolean;
   transcriptDir?: string;
@@ -88,13 +86,7 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
   transcriptDir?: string;
 }
 
-/**
- * `kinu exec` — the headless face of the one-shot run machinery. Built for
- * CI: no prompts of any kind (device consents are denied, fail closed, with
- * pre-authorization instructions), `--json` streams line-delimited events,
- * and the exit code is honest — 0 only when the turn completed without
- * errors or denied consents.
- */
+/** `kinu exec`: headless for CI. Consents fail closed; exit 0 only when the turn completed without errors or denied consents. */
 export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
   const rawPrompt = await buildPrompt(promptParts);
 
@@ -119,26 +111,13 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
 }
 
 /**
- * End the one-shot command.
- *
- * A one-shot run is over once its turn and its bounded background drain are:
- * there is nothing left for this process to do. It still cannot simply return,
- * because the shell it ran commands through keeps a handle on every child it
- * spawned — so a `shell` the agent deliberately left running in the background (a
- * server, a VM, a training job) holds the process open long after the answer was
- * printed. That was measured at 6.4 of 16.2 agent-hours of pure idle tail across
- * an 89-task benchmark run, all of it after the agent had already finished.
- *
- * Exiting here does not disturb that work: every child is spawned into its own
- * process group and outlives us, which is precisely what "I left it running"
- * has to mean for the task that asked for a running server.
+ * Exit rather than return: the shell keeps handles on background children (servers, VMs), which would hold the process open.
+ * Each child runs in its own process group, so it outlives this exit.
  */
 function exitOneShot(failed: boolean): never {
   process.exit(failed ? 1 : 0);
 }
 
-/** exec is non-interactive, so an omitted --workspace only works when there
- *  is exactly one configured workspace to mean. */
 function resolveExecWorkspaceName(explicit?: string): string {
   if (explicit?.trim()) return explicit.trim();
   const agents = listConfiguredAgentRefs();
@@ -149,27 +128,15 @@ function resolveExecWorkspaceName(explicit?: string): string {
     : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
 }
 
-/**
- * The single one-shot run path behind `kinu run <name> "prompt"` and
- * `kinu exec`: resolve attachments, stream the turn through the
- * AgentClient seam, watch device consents (interactively or fail-closed),
- * and report whether anything failed.
- */
 async function runOneShot(
   target: AgentTarget,
   rawPrompt: string,
   opts: AgentClientFlags & TranscriptFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
-  // The daemon is this process's deferred-work host: a one-shot run never
-  // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
-  // what eventually runs it (see AgentOrchestrator's exit contract).
+  // A one-shot run never starts the evolution pass it cannot finish; the daemon runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  // Diagnostics belong in the turn log on BOTH surfaces. Text mode: they would
-  // land between the reader and the run. --json: stderr is part of the machine
-  // contract — empty on success, the rendered error alone on failure — and a
-  // routine event (`admission.uncounted` fires on every openai-compat request)
-  // would break every consumer that treats stderr output as the failure text.
+  // Diagnostics go to the turn log: in --json mode stderr is empty on success and holds only the error on failure.
   installTurnDiagnostics();
 
   const client = await createAgentClient(
@@ -178,9 +145,7 @@ async function runOneShot(
     'one-shot',
   );
 
-  // Same @path semantics as the chat surfaces: images/PDFs inline as file
-  // parts, other files stay path references the agent reads with its tools.
-  // Resolved after the client exists — it reports the backend's inline cap.
+  // Resolved after the client exists: it reports the backend's inline cap.
   const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes });
 
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
@@ -193,7 +158,6 @@ async function runOneShot(
     render(event);
   });
 
-  /** Headless fails a consent closed; a JSON surface has nobody to ask. */
   function startConsentWatch(): ConsentWatcher | null {
     const consents = client.consents;
 
@@ -219,16 +183,9 @@ async function runOneShot(
     );
 
     if (result.landed === 'turn' && result.hadError) failed = true;
-    // send() resolves when the task turn resolves, but the task turn is not
-    // always the last one: a tool that auto-detached ends the turn early and
-    // its result arrives as a wake turn, and the one-shot completion gate
-    // queues a confirming turn against freshly observed state. This process
-    // exits after send(), so drain the rest HERE — while the subscription is
-    // still live, so their events stream — instead of losing the second half.
+    // A detached tool's wake turn or the completion gate's confirming turn may follow; drain while the subscription is live.
     await client.settleBackgroundWork?.();
   } catch (err) {
-    // In-stream failures already surfaced as an error event; only report
-    // failures that never reached the stream (connect, ticket, transport).
     const alreadyReported = failed;
     failed = true;
 
@@ -252,8 +209,6 @@ function transcriptOptions(opts: TranscriptFlags): CliSessionOptions {
   };
 }
 
-/** One-shot runs have no resident readline — open one per consent question
- *  and close it as soon as the line (or an abort) settles. */
 function askLineOnce(question: string, signal: AbortSignal): Promise<string | null> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -274,8 +229,6 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
   });
 }
 
-/** Answer one non-prompt RPC command with its result, or with its failure
- *  rendered for the caller reading the stream. */
 async function respondToRpcCommand(
   cmd: JsonObject,
   output: (input: { value: unknown }) => void,
@@ -343,8 +296,7 @@ async function runRpc(
   const client = await createAgentClient(target, clientOpts);
   client.subscribe((event) => output({ value: { type: 'event', event } }));
   output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() } });
-  // Defer client-owned MCP connection until the first prompt. The daemon
-  // already owns orphaned-job recovery.
+  // Client-owned MCP connects on the first prompt; the daemon owns orphaned-job recovery.
   let connected = false;
 
   const ensureConnected = async () => {
@@ -384,15 +336,12 @@ async function runRpc(
     try {
       await client.close();
     } catch (error) {
-      // stdout carries the JSON-lines protocol, so this belongs on stderr.
       process.stderr.write(`note: closing the workspace client failed: ${renderThrownChain({ cause: error })}\n`);
     }
   }
 }
 
-/** `model` edits the canonical profile tier, independent of which transport
- * carried the headless command. Per-agent `setModel` is only a bootstrap hint;
- * fresh turn profile resolution overrides it. */
+/** Edits the canonical profile tier; per-agent `setModel` is only a bootstrap hint that turn profile resolution overrides. */
 async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
   const spec = stringField(cmd, 'spec');
 
@@ -403,7 +352,6 @@ async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
   return decodeJsonValue({ value: { spec: envelope.catalog.tiers.default.model } });
 }
 
-/** The command word an RPC frame carries; a frame with none matches no case. */
 const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
@@ -582,7 +530,6 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
   }
 }
 
-/** Plain streaming renderer for one-shot runs (pipe-friendly: raw deltas). */
 function renderRunEvent(event: AgentClientEvent): void {
   switch (event.type) {
     case 'text-delta':
@@ -648,15 +595,8 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
         hadError: event.turn.hadError,
       };
 
-      // The turn's usage, field-for-field, and only when the provider reported
-      // something: a reader must be able to tell "spent nothing" from "nobody
-      // metered this", so an unreported field is an ABSENT key rather than a 0
-      // (bench/clbench/kinu/events.py is the reader that depends on it).
-      // `projectJsonValue`, not `decodeJsonValue`, for the same reason the
-      // run-event arm below uses it: this is an in-process object on its way
-      // OUT, so a present-and-`undefined` field must be dropped rather than
-      // thrown on — JsonValueSchema rejects `undefined`, which would print a
-      // valibot stack mid-run.
+      // Unreported fields stay absent rather than 0 (bench/clbench/kinu/events.py depends on it).
+      // `projectJsonValue` drops present-and-`undefined` fields, which JsonValueSchema would reject.
       if (event.turn.usage && usageReported(event.turn.usage)) {
         turnEnd.usage = projectJsonValue({ value: event.turn.usage });
       }
@@ -677,18 +617,8 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
       return [{ type: 'background', event: event.event, message: event.message }];
     case 'broadcast':
       return [{ type: 'broadcast', event: decodeJsonValue({ value: event.event }) }];
-    // The durable ledger, verbatim and whole: every RunEvent kind travels
-    // under one envelope so a consumer reads `event.type` rather than waiting
-    // for this switch to learn about the next kind. Enveloped rather than
-    // flattened because the ledger's own `turn_start`/`turn_end`/`error` names
-    // collide with the presentation events above.
-    // `projectJsonValue`, not `decodeJsonValue`: a run-event is an in-process
-    // object on its way OUT to the wire, not a value that arrived as JSON. The
-    // accumulator builds steps from SDK results, so optional properties are
-    // present-and-`undefined` (`toolCallId`, `providerMetadata`), which JSON has
-    // no representation for. Validating instead of projecting threw ValiError
-    // inside the listener, so `kinu exec --json` printed a valibot stack to
-    // stderr mid-run while still exiting 0.
+    // Every RunEvent kind under one envelope; the ledger's `turn_start`/`turn_end`/`error` collide with the events above.
+    // `projectJsonValue`, not `decodeJsonValue`: SDK-built steps carry present-and-`undefined` fields.
     case 'run-event':
       return [{ type: 'run_event', event: projectJsonValue({ value: event.event }) }];
   }
@@ -710,22 +640,14 @@ function parseRpc(line: string): RpcParseResult {
   }
 }
 
-/** Grace period for OPTIONAL stdin's FIRST byte — see buildPrompt. Long
- *  enough for a real pipe to start delivering, short enough that a harness
- *  which inherits an idle stdin is not stalled. */
+/** Long enough for a real pipe to start delivering, short enough not to stall a harness that inherits an idle stdin. */
 const OPTIONAL_STDIN_GRACE_MS = 250;
 
 async function readStdin(): Promise<string> {
   return await new Response(Bun.stdin.stream()).text();
 }
 
-/**
- * Read optional stdin with first-byte semantics: if ANY data arrives within
- * the grace window, the pipe is real — wait for EOF and keep every byte. Only
- * a pipe that stayed silent for the whole window reads as absent. The old
- * whole-read race dropped bytes already received when EOF missed the window
- * (a slow `cat bigfile |` lost its input mid-stream, silently).
- */
+/** Any byte within the grace window makes the pipe real: wait for EOF and keep every byte. */
 async function readOptionalStdin(): Promise<string> {
   const reader = Bun.stdin.stream().getReader();
 
@@ -735,7 +657,6 @@ async function readOptionalStdin(): Promise<string> {
   ]);
 
   if (first === 'idle') {
-    // Cancelling ends the idle read; await its release before returning.
     try {
       await reader.cancel();
     } catch (cause) {
@@ -763,16 +684,7 @@ async function readOptionalStdin(): Promise<string> {
   return text + decoder.decode();
 }
 
-/**
- * Assemble the turn prompt from argv and, where it makes sense, stdin.
- *
- * When argv carries no prompt, stdin IS the prompt (`cat notes | kinu exec`)
- * and waiting for EOF is correct. When argv already carries one, stdin is
- * supplementary context — and waiting on it hangs forever against a pipe that
- * is open but idle, which is exactly what a harness or CI runner inherits.
- * That hang made every scripted use of `kinu exec` require a `</dev/null`
- * incantation to work at all.
- */
+/** With no argv prompt, stdin is the prompt; otherwise it is optional context, since CI runners inherit open idle pipes. */
 async function buildPrompt(parts: string[]): Promise<string> {
   const chunks = [...parts];
   const argvPrompt = chunks.join(' ').trim();

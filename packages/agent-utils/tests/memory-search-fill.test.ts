@@ -1,11 +1,4 @@
-// The recall fill policy, and the twin of the transcript-search defect fixed in
-// core: broadening ran only when the strict all-term page came back EMPTY, so an
-// underfull page stayed underfull and every relevant single-term chunk was
-// dropped while capacity sat unused.
-//
-// `fillToCapacity` is tested directly as well as through the store, because it
-// is now the ONE fill policy both FTS surfaces share and its capacity argument
-// is the non-obvious part.
+// Partial matches must fill an underfull strict page, not only an empty one.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
 import { fillToCapacity, relaxFtsQuery } from "../src/memory/query";
@@ -31,7 +24,6 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 		expect(hits[0].path).toBe("memory/both.md");
 		expect(hits.map((h) => h.path).slice(1).sort())
 			.toEqual(["memory/one.md", "memory/two.md"]);
-		// The chunk sharing no term is not admitted just because capacity is free.
 		expect(hits.some((h) => h.path === "memory/none.md")).toBe(false);
 	});
 

@@ -1,17 +1,6 @@
 /**
- * `kinu deploy local` end to end: a release channel this test publishes, the
- * real workerd binary, and the instance answering on its own port.
- *
- * WHY THE WHOLE COMMAND AND NOT THE RENDERER. What the renderer produces is
- * asserted as text in `packages/core/tests/unit-deploy-flow.test.ts`; the
- * question a person actually has is whether workerd ACCEPTS that text and
- * serves the release. So this row installs from a channel, starts the
- * supervisor, fetches the instance's own response, and stops it — the config
- * being valid is proved by the runtime rather than by our opinion of it.
- *
- * The port is a free one rather than 8787: this repository's default is
- * asserted in the core row, and a fixed port here would collide with whatever
- * else on the machine is serving one.
+ * `kinu deploy local` end to end: workerd must accept the rendered config and serve the release;
+ * the renderer's text is asserted in packages/core/tests/unit-deploy-flow.test.ts.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -27,25 +16,14 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-/** The workerd this repository already pins for the workerd test layer. The
- *  installed instance resolves `workerd` from PATH when `bin/workerd` is
- *  absent, which is what this puts there. */
+/** The pinned workerd; the instance resolves `workerd` from PATH when `bin/workerd` is absent. */
 const binDir = join(repoRoot, 'node_modules/.bin');
 
 const VERSION = '0.4.0+local01';
 
 /**
- * The probe release's Worker.
- *
- * `/kv` is the row that matters for the bindings: it writes and reads back
- * through `env.AUTH_KV`, which exists as a KvNamespace only when the rendered
- * config binds the disk service with `kvNamespace`. Under a plain `service`
- * binding the Worker gets a Fetcher and `put` is not a function, so this route
- * answers 500.
- *
- * `/api/health` is what the supervisor reads to decide the instance is up: a
- * release that answers it is a Kinu, and whatever else may be holding the port
- * is not.
+ * `/kv` answers 500 unless the disk service is bound with `kvNamespace` (a plain `service` binding
+ * gives a Fetcher). `/api/health` is the supervisor's readiness signal.
  */
 const WORKER = `export default { async fetch(request, env) {
   const path = new URL(request.url).pathname;
@@ -67,8 +45,6 @@ const started: { home: string; port: number }[] = [];
 
 const servers: Server[] = [];
 
-/** Processes a row put in a pidfile on purpose. Killed here so a refusal row
- *  cannot leave one behind, whichever way the row went. */
 const strangers: Bun.Subprocess[] = [];
 
 afterEach(async () => {
@@ -128,8 +104,7 @@ function manifestOf(): string {
   });
 }
 
-/** The channel's tarball, built with the system `tar` so nothing here is a
- *  second implementation of the archive format core's reader accepts. */
+/** Built with the system `tar`, so nothing here reimplements the archive format. */
 async function artifact(): Promise<Uint8Array> {
   const stage = scratchDir('local-release');
 
@@ -150,14 +125,6 @@ async function artifact(): Promise<Uint8Array> {
   return new Uint8Array(readFileSync(out));
 }
 
-/**
- * The channel, on a port of its own: `release.json`, the tarball, and the
- * digest the installer verifies before it unpacks anything.
- *
- * The parameter is the manifest this channel serves. A row that expects the
- * install to refuse that manifest never reaches the tarball, which stays the
- * good one.
- */
 async function channel(manifest: string = manifestOf()): Promise<string> {
   const archive = await artifact();
 
@@ -191,9 +158,7 @@ async function channel(manifest: string = manifestOf()): Promise<string> {
   return `http://127.0.0.1:${String(boundPort(server))}`;
 }
 
-/** A port nothing is on: taken and released, so the instance can have it. A
- *  free port rather than 8787 keeps this row off whatever else on the machine
- *  is serving one. */
+/** A free port, not 8787, so this row stays off whatever else the machine is serving. */
 async function freePort(): Promise<number> {
   const probe = createServer();
 
@@ -213,9 +178,6 @@ function listening(server: Server): Promise<void> {
   return promise;
 }
 
-/** The port the OS gave a listening server, read the way every other
- *  boundary here is read — parsed. A server answering with a pipe name or
- *  nothing at all never took a TCP port, and every caller here asked for one. */
 function boundPort(server: Server): number {
   const bound = v.safeParse(v.object({ port: v.number() }), server.address());
 
@@ -224,14 +186,7 @@ function boundPort(server: Server): number {
   return bound.output.port;
 }
 
-/**
- * One `kinu deploy local …` run.
- *
- * Spawned ASYNCHRONOUSLY, not with `spawnSync`: the release channel above is
- * an HTTP server in THIS process, and a synchronous spawn holds the event loop
- * while the child waits for a manifest that can never be served. That
- * deadlock is the whole reason this is async.
- */
+/** Spawned async: the channel is an HTTP server in this process, so `spawnSync` would deadlock. */
 async function runDeploy(home: string, args: readonly string[]) {
   const proc = Bun.spawn({
     cmd: [process.execPath, cliBin, 'deploy', 'local', ...args],
@@ -268,9 +223,7 @@ describe('kinu deploy local', () => {
     expect(installed.exitCode).toBe(0);
     expect(installed.stdout).toContain(VERSION);
     expect(installed.stdout).toContain(`http://127.0.0.1:${String(port)}`);
-    // A capability workerd has no implementation of is named, not silently
-    // dropped — R2 among them, because `r2Bucket` over a disk service speaks a
-    // protocol a directory does not answer.
+    // Unsupported capabilities are named, not dropped; `r2Bucket` over a disk service cannot work.
     expect(installed.stdout).toContain('MEMORY_VECTORS');
     expect(installed.stdout).toContain('BACKUP_BUCKET');
 
@@ -285,15 +238,11 @@ describe('kinu deploy local', () => {
     expect(readFileSync(join(layout, 'workerd.capnp'), 'utf8'))
       .toContain(`(name = "http", address = "127.0.0.1:${String(port)}", http = (), service = "main"),`);
 
-    // The instance itself answers: workerd parsed the rendered config, loaded
-    // the release's module and bound the Durable Object class it names.
     const answer = await fetch(config.address);
 
     expect(answer.status).toBe(200);
     expect(await answer.text()).toBe('local probe');
 
-    // KV is on disk and is a KV namespace: the Worker's own `put` then `get`
-    // round-trips, and the value is a file under the binding's directory.
     const roundTrip = await fetch(new URL('/kv', config.address));
 
     expect(roundTrip.status).toBe(200);
@@ -313,11 +262,7 @@ describe('kinu deploy local', () => {
     expect((await runDeploy(home, ['stop'])).stdout).toContain('No local Kinu is running');
   });
 
-  /**
-   * A pidfile outlives the process it names, and a pid is reused: after a
-   * reboot `workerd.pid` can name any live process on the machine. `stop` must
-   * refuse that pid rather than SIGTERM then SIGKILL a stranger's work.
-   */
+  /** A pidfile outlives its process and pids are reused; `stop` must refuse a stranger's pid. */
   test('refuses a pidfile that names a live process which is not its workerd', async () => {
     const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
     const origin = await channel();
@@ -337,20 +282,13 @@ describe('kinu deploy local', () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain(`Not stopping pid ${String(stranger.pid)}`);
 
-    // Untouched, and the pidfile that named it is gone, so the next command
-    // starts an instance instead of reporting one.
     expect(stranger.exitCode).toBeNull();
     expect(stranger.signalCode).toBeNull();
     expect(existsSync(join(home, 'local/workerd.pid'))).toBe(false);
     expect((await runDeploy(home, ['stop'])).stdout).toContain('No local Kinu is running');
   });
 
-  /**
-   * The port accepting is not the instance serving. With something else on the
-   * port, workerd dies on EADDRINUSE while a connect to that port still
-   * succeeds — so a supervisor that reads readiness off the socket prints a
-   * stranger's address and a pid that is already gone.
-   */
+  /** With the port taken, workerd dies on EADDRINUSE while connects still succeed. */
   test('reports the failure when workerd exits and another process holds the port', async () => {
     const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
     const origin = await channel();
@@ -374,19 +312,11 @@ describe('kinu deploy local', () => {
     expect(readPid(home)).toBeNull();
   });
 
-  /**
-   * A manifest is data from whatever channel `--origin` names, and the install
-   * joins every `files[].path` onto the release directory. A path that leaves
-   * that directory is a host file write, so the manifest is refused before the
-   * install creates anything at all.
-   */
+  /** A manifest path escaping the release directory is refused before anything is created. */
   test('refuses a release whose manifest names a path outside its release', async () => {
     const home = scratchDir(`local-home-${randomUUID().slice(0, 8)}`);
     const escaping = manifestOf().replace('"worker/index.js"', '"worker/../../../../escape.js"');
 
-    // `<home>/local/releases/<version>/worker/../../../../escape.js` is
-    // `<home>/escape.js`: four levels up, out of the release and out of the
-    // door's own tree.
     expect(escaping).toContain('worker/../../../../escape.js');
 
     const origin = await channel(escaping);
@@ -395,8 +325,6 @@ describe('kinu deploy local', () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain('a release file path must stay inside its release');
 
-    // Nothing was laid down: no release tree, no rendered config, no escaped
-    // file. The refusal is before the first write, not after it.
     expect(existsSync(join(home, 'local'))).toBe(false);
     expect(existsSync(join(home, 'escape.js'))).toBe(false);
   });

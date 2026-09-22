@@ -1,15 +1,4 @@
-/**
- * "Is there a newer Kinu?" — the shared logic behind `kinu update`,
- * `kinu doctor`, and the once-a-day startup notice.
- *
- * The served build publishes its version at /downloads/kinu-version.json,
- * written by scripts/build-cli-dist.sh from the same stamped
- * packages/cli/package.json the built CLI carries. That stamp is the only
- * version source; nothing here invents one.
- *
- * Every entry point is fail-soft: a version check must never slow down, block,
- * or break the CLI.
- */
+/** The served /downloads/kinu-version.json stamp is the only version source; every entry point is fail-soft. */
 import { VERSION } from './display';
 import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
 import { spawnBackgroundRefresh } from './self-update';
@@ -19,23 +8,9 @@ import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@
 
 const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
-/**
- * The bound on the STARTUP notice's probe, and on nothing else.
- *
- * That probe is a UX non-blocking one: nobody asked for it, it runs once a day
- * on a TTY after the command has already parsed, and a slow answer is worth
- * less than the prompt it delays. 1_500 ms is not measured, and it does not
- * have to be — missing it costs one day's notice and says nothing to the user.
- *
- * `kinu update` and `kinu doctor` pass no bound, because the user ASKED. Under
- * this bound `doctor` printed `served: unreachable` for an origin that answered
- * in 1.6 s, which is a diagnostic reporting a fault it never observed.
- */
+/** Bounds only the startup notice's probe; 1_500 ms is unmeasured, and missing it costs one day's notice. `update`/`doctor` pass no bound. */
 const STARTUP_PROBE_TIMEOUT_MS = 1_500;
 
-/** How long a startup notice stays quiet after one probe. Once a day: the
- *  published build changes at most that often in practice, and the notice is
- *  an interruption whether or not it has news. */
 const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 
 const ServedVersionSchema = v.object({
@@ -52,22 +27,13 @@ export interface ServedVersion {
 
 type FetchVersion = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-/**
- * Fetch the served build's version, or null when the origin could not be asked
- * (unreachable, no such endpoint, a payload that is not a served version, or a
- * `timeoutMs` the caller set and the origin missed).
- *
- * `timeoutMs` is CALLER-REQUESTED ONLY. Absent means the probe ends on the
- * origin's answer or on a network failure — a user who ran `kinu update` wants
- * the real answer, not a null a clock produced.
- */
+/** `timeoutMs` is caller-requested only. */
 export async function fetchServedVersion(
   origin: string,
   fetchImpl: FetchVersion = fetch,
   timeoutMs?: number,
 ): Promise<ServedVersion | null> {
-  // No bound asked for means no controller and no signal: nothing local can end
-  // this probe, so it ends on the origin's answer or on a network failure.
+  // No bound: the probe ends only on the origin's answer or a network failure.
   const controller = timeoutMs === undefined ? undefined : new AbortController();
   const timer = controller === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
 
@@ -77,15 +43,13 @@ export async function fetchServedVersion(
     try {
       res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store', signal: controller?.signal });
     } catch (error) {
-      // Could not ask: unreachable origin, or a caller-set bound firing. A malformed origin is
-      // OURS — swallowed here, the update check would silently never fire again.
+      // A malformed origin is ours and propagates, or the check would never fire again.
       if (classify({ cause: error }) === 'malformed-input') throw error;
 
       return null;
     }
 
     if (!res.ok) return null;
-    // The payload belongs to the server: unparseable JSON is a probe that learned nothing.
     const parsed = v.safeParse(ServedVersionSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
 
     if (!parsed.success) return null;
@@ -107,8 +71,7 @@ export interface NoticeContext {
   now: number;
 }
 
-/** Whether to spend a network round-trip on the startup notice. Pure so the
- *  suppression rules are testable without a clock, a terminal, or a server. */
+/** Pure so suppression rules test without clock, terminal, or server. */
 function shouldCheckForUpdate(ctx: NoticeContext): boolean {
   if (!ctx.isTTY) return false;                       // CI, pipes, --json
 
@@ -120,27 +83,13 @@ function shouldCheckForUpdate(ctx: NoticeContext): boolean {
   return ctx.now - last >= CHECK_INTERVAL_MS;
 }
 
-/** The one muted line: the served build is being installed by a child of this
- *  process, and the next launch runs it. Null when the installed build is
- *  current. */
 function updateNotice(installed: string, served: ServedVersion | null): string | null {
   if (!served || isSameBuild(installed, served.version)) return null;
 
   return `Installing Kinu ${served.version} in the background; it applies on the next launch.`;
 }
 
-/**
- * Fire-and-forget startup check: never awaited by the entrypoint, so a command
- * that has printed its answer exits without waiting. Resolves to the notice
- * line (already printed by the caller's `log`) or null. Never throws. This is
- * the one caller that bounds its probe, and {@link STARTUP_PROBE_TIMEOUT_MS}
- * says why.
- *
- * A newer served build starts the refresh through `spawnRefresh` — by default
- * a detached `kinu update --background` — and prints the notice. The refresh
- * itself downloads, verifies and swaps the tree; this process never waits on
- * it, which is what keeps the swap off every command's exit path.
- */
+/** Never awaited, never throws. See {@link STARTUP_PROBE_TIMEOUT_MS}. */
 export async function runStartupUpdateCheck(opts: {
   log: (line: string) => void;
   isTTY?: boolean;
@@ -164,8 +113,7 @@ export async function runStartupUpdateCheck(opts: {
     if (origin === undefined) return null;
 
     const served = await fetchServedVersion(origin, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
-    // Record the attempt either way so a persistently unreachable origin does
-    // not retry on every single invocation.
+    // Record the attempt either way so an unreachable origin does not retry every invocation.
     updateConfigFile((c) => {
       c.updateCheckedAt = ctx.now;
 
@@ -180,14 +128,8 @@ export async function runStartupUpdateCheck(opts: {
 
     return notice;
   } catch (error) {
-    // Expected probe conditions stay silent: the check is throttled to once a
-    // day, so an aborted, timed-out or unreachable probe says nothing until
-    // the next window opens — a user mid-command saw "Update check failed: The
-    // operation was aborted." for exactly this path. The classification is the
-    // same map every other seam reads: AbortError is `cancelled`, and it
-    // cannot carry a `doing` frame. A check that can NEVER succeed — an
-    // unwritable config, a malformed origin — still has to say so instead of
-    // skipping every run.
+    // Expected probe failures (aborted, timed out, unreachable) stay silent until the next daily window; a check that can
+    // never succeed (unwritable config, malformed origin) still reports.
     const code = classifyErrorCode({ cause: error });
 
     if (code === 'cancelled' || code === 'timeout' || code === 'unavailable') return null;

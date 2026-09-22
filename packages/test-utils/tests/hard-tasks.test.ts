@@ -1,28 +1,6 @@
 /**
- * The hard-task corpus, calibrated against MEASURED oracle counts rather than
- * against arithmetic in a comment.
- *
- * WHAT THIS PROVES, AND WHY EACH PART IS NECESSARY.
- *
- *   1. Every reference RUNS, in a real opened workspace, and answers its own
- *      instance correctly. `trial` throws when the reference is wrong, so a green
- *      run here is the ground truth checking itself.
- *   2. Every reference costs MORE than its target. `scoreRatio` refuses a target at
- *      or below the measured reference, so this is the assertion that each task has
- *      a range to score on at all — and it is measured on this machine, in this
- *      substrate, not asserted from a formula.
- *   3. Every task is SOLVABLE: a known-optimal implementation reaches a high score
- *      and does so ABOVE the certificate floor. A corpus nothing can solve ranks
- *      exactly as little as one everything solves, and "hard" has to mean hard
- *      rather than impossible.
- *   4. Every task can score ZERO by a real failure — absent module, syntax error,
- *      wrong answer, runaway — with a detail that says which. A tier where nothing
- *      can score zero has reproduced, in a new field, the defect that made
- *      `pass@1` read 1.000 twice.
- *
- * These run without a credential and spend nothing: the workspace is real, the
- * measurement is real, and no model is involved anywhere. The corpus's difficulty
- * for an AGENT is a separate question that only a live run can answer.
+ * Every reference runs and answers correctly, costs more than its target, is matched by a
+ * known-optimal solution, and can score zero by a real failure. No model or credential involved.
  */
 import { scratchDir } from '../src/scratch';
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -39,14 +17,11 @@ import {
   hardTaskCases, hardTaskFor, scoreRatio, seedHardTask, verifyHardTask,
   type HardTask,
 } from '../src/hard-tasks/index';
-// The measurement substrate itself lives in core now — a registered verifier kind has
-// to resolve to code the tool surface can reach, and a kind whose implementation sat in
-// a test package would be a name with nothing behind it in production. The corpus is
-// one caller of it; what stayed in `cost-model.ts` is the eval ladder's own scoring.
+// The substrate lives in core: a registered verifier kind must resolve to code the tool
+// surface can reach.
 import { REFERENCE_FILE, SOLUTION_FILE, type RatioMeasurement } from '@kinu.run/core';
 
-// Never called. The unroutable baseURL is deliberate: if anything in this file
-// reaches a model, it must fail rather than quietly bill someone.
+// Never called; the unroutable baseURL makes any model use fail.
 const LLM: LLMProviderConfig = {
   name: 'test', baseURL: 'http://127.0.0.1:1', headers: {}, model: 'unused',
 };
@@ -75,9 +50,10 @@ afterAll(() => {
   db.close();
 });
 
-/** Seed the task, overwrite the solution with `source`, and score it. Each task's
- *  files are written fresh, so one workspace serves every case and the harness's
- *  cache-busted import is what makes re-verification read the new file. */
+/**
+ * Each task's files are written fresh; the harness's cache-busted import makes
+ * re-verification read the new file.
+ */
 async function scoreWith(task: HardTask, source: string) {
   await seedHardTask(task, ctx.vfs);
   await ctx.vfs.writeFile(SOLUTION_FILE, source);
@@ -85,8 +61,7 @@ async function scoreWith(task: HardTask, source: string) {
   return task.verify(ctx);
 }
 
-/** A candidate that is exactly the reference. The floor of the scale by
- *  definition, and the cheapest way to prove the whole pipeline ran. */
+/** Exactly the reference: the floor of the scale. */
 const asReference = async (task: HardTask) => {
   const ref = task.seed.find((f) => f.path === REFERENCE_FILE);
 
@@ -96,29 +71,12 @@ const asReference = async (task: HardTask) => {
 };
 
 /**
- * THE BEST implementation this corpus ships, per task. Its MEASURED cost is what
- * each task's `targetOps` is set to, so 1.0 means "matched the best algorithm we
- * know for this problem" and is reachable by construction rather than by hope.
- *
- * WHY THIS REPLACED "a textbook algorithm scores > 0.9". The first live pilot
- * solved 7 of 7 at exactly 1.0000 and beat six of the seven targets outright,
- * because every target had been set at a generous multiple of a NAMED algorithm
- * and a strong model recalls named algorithms: it returned 59998 for min-and-max,
- * which is exactly ceil(3n/2)-2, and 1796 for 150 binary searches, which is
- * exactly 12 probes each. A corpus whose ceiling is the first idea anyone has
- * cannot produce a differing pair, so it buys no statistical power at all.
- *
- * Written out in full rather than generated: a generated solution proving a
- * generated target proves nothing.
+ * The best known implementation per task; its measured cost is the task's `targetOps`, so 1.0
+ * is reachable. Written out, not generated: a generated solution proving a generated target proves nothing.
  */
 const BEST = {
-  // Floyd-Rivest SELECT. The array arrives in random order, so the contiguous
-  // sub-range around the target rank IS a random sample: recursing into a band of
-  // width ~n^(2/3) chosen from the order statistics of that sample yields two
-  // pivots that bracket rank k with high probability, and the outer partition then
-  // touches each element about once. Costs n + min(k, n-k) + O(n^(2/3)) rather than
-  // quickselect's ~3.4n. No PRNG at all, so its measured cost — and therefore this
-  // task's targetOps — is reproducible.
+  // Floyd-Rivest select: n + min(k, n-k) + O(n^(2/3)) vs quickselect's ~3.4n. No PRNG, so its
+  // cost, and therefore targetOps, is reproducible.
   'hard-select-kth': `export function solve(input, oracle) {
   const a = input.tokens.slice();
   const swap = (i, j) => { const t = a[i]; a[i] = a[j]; a[j] = t; };
@@ -156,16 +114,8 @@ const BEST = {
   return select(0, a.length - 1, input.k);
 }
 `,
-  // Same-size cancellation tournament, the equality-oracle analogue of Fischer-
-  // Salzberg: pair the tokens up, cancel unequal pairs two-for-one, merge equal ones
-  // into groups that are then cancelled only against groups of the SAME size. 746
-  // calls settle the candidate here where Boyer-Moore's first pass costs n. The
-  // second half is where the win is: the tournament's own record verifies the
-  // survivor, because one call to a group's representative settles the whole group
-  // and each cancelled pair can hold the candidate on at most one of its two sides.
-  // 1488 + 1504 = 2992 calls for the pair, under 1.25n each, against 4696 for plain
-  // Boyer-Moore. Worst case observed over 100k fuzzed instances is 1.4n, inside
-  // Fischer-Salzberg's 3n/2 - 2 optimum.
+  // Same-size cancellation tournament (Fischer-Salzberg for an equality oracle); its record
+  // verifies the survivor. 2992 calls vs 4696 for plain Boyer-Moore.
   'hard-majority-vote': `export function solve(input, oracle) {
   const t = input.tokens;
   const n = t.length;
@@ -211,13 +161,8 @@ const BEST = {
   return known * 2 > n ? cand : null;
 }
 `,
-  // Walk the runs in ASCENDING order so each one inherits its predecessor's answer as a
-  // lower bound, and probe first where the answer most likely IS rather than at the
-  // midpoint of what is left. With `rem` thresholds still to place in [lo, hi], the next
-  // one exceeds x with probability ((hi-x)/(hi-lo))^rem, so the median sits at
-  // hi - (hi-lo)*2^(-1/rem) — about a gap ahead of `lo`, not half a range. Every probe
-  // then splits the remaining possibilities in half by PROBABILITY, which is what makes
-  // the total approach the entropy of the staircase instead of m*log2(n).
+  // Ascending runs inherit the predecessor's answer as a lower bound; probing at the probability
+  // median hi - (hi-lo)*2^(-1/rem) approaches the staircase's entropy, not m*log2(n).
   'hard-boundary-staircase': `export function solve(input, oracle) {
   const runs = input.runs;
   const m = runs.length;
@@ -270,12 +215,8 @@ const BEST = {
   return second;
 }
 `,
-  // Hwang-Lin binary merge: for each short element, probe the element one block of
-  // 2^t ahead in the long run (t from the ratio of what REMAINS of each), skip the
-  // whole block on one comparison when the short element is larger, and binary
-  // search inside the block when it is not. Optimal in order for unequal runs, and
-  // what the independent-binary-search STANDARD misses is exactly this: successive
-  // insertion points are non-decreasing, so the long run is never re-searched.
+  // Hwang-Lin binary merge: probe 2^t ahead, skip whole blocks, binary search inside; insertion
+  // points are non-decreasing, so the long run is never re-searched.
   'hard-merge-two': `export function solve(input, oracle) {
   const a = input.shortRun; const b = input.longRun;
   const p = a.length; const q = b.length;
@@ -307,10 +248,7 @@ const BEST = {
   return out;
 }
 `,
-  // Binary search on BOTH runs at once: one comparison between the two runs'
-  // floor((k+1)/2)-th remaining elements proves that whole half of the smaller side
-  // lies inside the first k, so it is discarded outright and k shrinks with it. One
-  // comparison per halving, hence about log2(k) per instance.
+  // Halve both runs at once: one comparison discards half the smaller side, about log2(k) per instance.
   'hard-kth-two-runs': `export function solve(input, oracle) {
   const out = [];
   for (const inst of input.instances) {
@@ -333,15 +271,8 @@ const BEST = {
   return out;
 }
 `,
-  // The saddleback walk. Start at the bottom-left corner and read one probe as a
-  // statement about a whole quadrant: if the cell is below the threshold then so is
-  // everything above it in that column, so the column contributes r+1 to the count
-  // and we step right; if it is not, then neither is anything to its right in that
-  // row, so that row is finished and we step up. Every probe therefore retires a
-  // column or a row and the entire staircase is traced in at most rows + cols, here
-  // 316 because the walk stops as soon as it climbs into a wholly-below row. This is
-  // the only solution here that uses BOTH declared monotonicities: the column order
-  // is what makes one probe worth r+1 cells instead of one.
+  // Saddleback walk from bottom-left: each probe retires a column or a row (316 probes here),
+  // using both row and column monotonicity.
   'hard-saddleback-count': `export function solve(input, oracle) {
   const g = input.grid;
   const rows = g.length;
@@ -359,28 +290,12 @@ const BEST = {
 } satisfies Record<string, string>;
 
 /**
- * THE OBVIOUS correct improvement over the reference, per task — the solution a
- * competent solver writes first, without the specific idea the task is about.
- *
- * It exists to be the thing that must NOT reach the target. This is the assertion
- * that makes a saturating corpus unable to pass its own tests, and it is
- * deliberately bounded on BOTH sides: a standard algorithm scoring ~0 would mean
- * the task is all-or-nothing, which is the binary metric this tier replaced, and
- * one scoring ~1 would mean the task has no headroom above the first idea. Both
- * are corpus defects and both are red.
+ * The obvious improvement per task. Must score inside a band: ~0 means the task is
+ * all-or-nothing, ~1 means no headroom above the first idea.
  */
 const STANDARD = {
-  // Quickselect with a three-way partition: recurse into the side holding rank k and
-  // throw the other away. The first idea anyone has here, and a real 5x win over
-  // sorting, but it re-scans a linear-sized range at every level and so pays a
-  // constant times n instead of n plus a sub-linear correction.
-  //
-  // The pivot comes from an LCG seeded in the solution, NOT from `Math.random`: this
-  // number is asserted against a band, and a candidate whose cost moves between runs
-  // would make that assertion flake. Measured 172_302 here, close to the analytic
-  // expectation of 2(n + k*ln(n/k) + (n-k)*ln(n/(n-k))) = 156_138 for this k; every
-  // plain seed tried (1, 7, 101, 12345, 999983) spanned 98_466..400_236 and stayed
-  // inside the band, so the headroom is a property of the algorithm, not of the seed.
+  // Quickselect with a three-way partition. LCG pivot, not `Math.random`, so the cost is stable
+  // against the band; seeds 1, 7, 101, 12345, 999983 all stayed inside it.
   'hard-select-kth': `export function solve(input, oracle) {
   const a = input.tokens.slice();
   const k = input.k;
@@ -404,10 +319,7 @@ const STANDARD = {
   }
 }
 `,
-  // Plain Boyer-Moore: one pass to find a candidate, one full pass to verify it. The
-  // named algorithm everyone recalls, a 613x win over the all-pairs reference, and
-  // still 1.57x the target — because the verification pass throws away everything the
-  // first pass learned and re-compares all n tokens. 2336 + 2360 = 4696 calls.
+  // Plain Boyer-Moore: the verify pass discards what the first pass learned. 4696 calls, 1.57x target.
   'hard-majority-vote': `export function solve(input, oracle) {
   const t = input.tokens;
   let cand = null; let count = 0;
@@ -422,11 +334,7 @@ const STANDARD = {
   return c * 2 > t.length ? cand : null;
 }
 `,
-  // Binary-search each short element's insertion point in the WHOLE long run,
-  // independently: p*ceil(log2 q) comparisons. A real 7x win over the linear merge
-  // and the first thing anyone writes once they notice the runs are sorted, but it
-  // throws away the monotonicity of the insertion points and re-searches the whole
-  // long run 200 times.
+  // Independent binary search per short element: p*ceil(log2 q), re-searching the whole long run.
   'hard-merge-two': `export function solve(input, oracle) {
   const a = input.shortRun; const b = input.longRun;
   const at = new Array(a.length);
@@ -476,11 +384,7 @@ const STANDARD = {
   return second;
 }
 `,
-  // Rank by nested binary search. The global rank of a run's t-th token is
-  // t + (how many of the other run's tokens are below it), which is increasing in t,
-  // so binary search t and answer each probe with a second binary search in the other
-  // run. Correct, and a huge win over merging, but it pays log2(len) comparisons per
-  // probe where the halving algorithm pays one: log-squared instead of log.
+  // Nested binary search on rank: log-squared where halving pays log.
   'hard-kth-two-runs': `export function solve(input, oracle) {
   const below = (run, x) => {
     let lo = 0;
@@ -512,13 +416,7 @@ const STANDARD = {
   return out;
 }
 `,
-  // One binary search per run over the WHOLE index range, each run treated as if it stood
-  // alone: 1796 calls — 146 runs at ceil(log2 n) = 12 and the 4 whose interval happens to
-  // close a step early at 11 — which is the very number a live flash model returned when
-  // the runs really were independent. A 5.4x win over the block-scanning reference and the
-  // first thing anyone writes, but it throws the staircase away — every search restarts at
-  // index 0 and spends its first several probes re-establishing a lower bound the previous
-  // run's answer already gave it for free.
+  // Independent binary search per run: 1796 calls, discarding the staircase's lower bounds.
   'hard-boundary-staircase': `export function solve(input, oracle) {
   const out = [];
   for (const run of input.runs) {
@@ -532,12 +430,7 @@ const STANDARD = {
   return out;
 }
 `,
-  // Binary-search each row for its own boundary and sum the prefix lengths:
-  // rows * ceil(log2(cols + 1)) probes. The first thing anyone writes once told the
-  // rows are sorted, and a real 27x win over probing all 40000 cells — but it uses
-  // only the ROW ordering. Every row is searched from scratch even though the column
-  // ordering makes the prefix lengths non-increasing, so each of the 200 searches
-  // re-derives a boundary the previous one had already almost located.
+  // Per-row binary search: uses only row order, ignoring the non-increasing prefix lengths.
   'hard-saddleback-count': `export function solve(input, oracle) {
   let count = 0;
   for (const row of input.grid) {
@@ -554,9 +447,7 @@ const STANDARD = {
 `,
 } satisfies Record<string, string>;
 
-/** Looked up by a runtime id rather than indexed, so the literal keys survive and
- *  a task shipped without a solution reads as `undefined` here instead of needing
- *  a cast at every call site. */
+/** Looked up by runtime id so a task without a solution reads `undefined` without casts. */
 const BEST_BY_ID = new Map<string, string>(Object.entries(BEST));
 
 const STANDARD_BY_ID = new Map<string, string>(Object.entries(STANDARD));
@@ -568,9 +459,7 @@ describe('every task has a scoring range, measured on this substrate', () => {
       const scored = await asReference(task);
       const { refOps, candOps, targetOps, lowerBoundOps } = scored.measured;
 
-      // `trial` throws when the reference answers wrongly and `scoreRatio` throws
-      // when the target is unreachable, so arriving here at all is most of the
-      // proof. These make the numbers visible in the failure message.
+      // `trial` and `scoreRatio` throw on a wrong reference or unreachable target; these surface the numbers.
       expect(refOps, `${task.id}: reference must cost more than its ${String(targetOps)} target`)
         .toBeGreaterThan(targetOps);
       expect(refOps, `${task.id}: reference must be above its own certificate floor`)
@@ -596,8 +485,7 @@ describe('the target is reachable — the best implementation the corpus ships h
         + 'may be impossible rather than hard').toBeString();
       const scored = await scoreWith(task, source ?? '');
 
-      // Not "> 0.9". The target IS this implementation's measured cost, so anything
-      // short of 1.0 means the target was set from arithmetic instead of measurement.
+      // The target is this implementation's measured cost, so below 1.0 means it came from arithmetic.
       expect(
         scored.score,
         `${task.id}: ${scored.detail} — targetOps must be set to what BEST actually costs`,
@@ -619,16 +507,8 @@ describe('the target is reachable — the best implementation the corpus ships h
 });
 
 /**
- * THE PROPERTY THE FIRST LIVE PILOT FAILED, now asserted offline for free.
- *
- * Every task must have headroom above the obvious algorithm, or two arms can never
- * disagree on it. The band is (0.10, 0.95): the lower edge says a standard solution
- * earns real partial credit rather than nothing, because a task where only the best
- * answer scores is a pass/fail bit wearing a continuous scale; the upper edge says
- * the best answer is meaningfully better than the first idea anyone has.
- *
- * Run A scored 7 of 7 at 1.0000 against a live model. This is the check that would
- * have been red before that run, at no cost and with no credential.
+ * Every task needs headroom over the obvious algorithm: band (0.10, 0.95), partial credit
+ * yet short of the best.
  */
 describe('no task is saturated — the obvious algorithm lands strictly inside the scale', () => {
   test.each(HARD_TASKS.map((t) => [t.id, t] as const))(
@@ -661,31 +541,14 @@ describe('no task is saturated — the obvious algorithm lands strictly inside t
   );
 });
 
-/**
- * The property the whole tier is FOR: partial progress earns a partial score.
- *
- * A pass/fail bit gives a search nothing to climb — on binary tasks MCTS
- * degenerates toward best-of-n — so a scale whose only reachable values are 0 and 1
- * would have all of this design's cost and none of its benefit. Three merge
- * algorithms of strictly increasing quality are submitted to the same task, and the
- * scores must ORDER them. That is a stronger claim than "a partial score exists":
- * it says the number ranks.
- *
- * This ran on `hard-sort-total` until that task was removed for having no headroom:
- * a merge sort scored 0.9938 there, and even a best sitting exactly on
- * ceil(log2(1500!)) would have left it 0.9934, so the three sorts it ranked were
- * two sorts and a rounding error. `hard-merge-two` has the separation sorting
- * lacked — a linear merge, a per-element binary search and Hwang-Lin are three
- * genuinely different costs on one instance.
- */
+/** Partial progress earns a partial score: three merges of increasing quality must be ordered by score. */
 describe('the score is continuous, not a bit in disguise', () => {
   const task = HARD_TASKS.find((t) => t.id === 'hard-merge-two');
 
   if (!task) throw new Error('hard-merge-two is missing from the corpus');
 
   test('three merges of increasing quality receive strictly increasing scores', async () => {
-    // The linear merge is this task's own seeded reference, so the bottom of the
-    // scale is read from the corpus rather than retyped as a constant here.
+    // The linear merge is the task's seeded reference, read from the corpus.
     const linear = await asReference(task);
     const binary = await scoreWith(task, STANDARD_BY_ID.get(task.id) ?? '');
     const best = await scoreWith(task, BEST_BY_ID.get(task.id) ?? '');
@@ -698,8 +561,7 @@ describe('the score is continuous, not a bit in disguise', () => {
     expect(linear.measured.candOps).toBeGreaterThan(binary.measured.candOps);
     expect(binary.measured.candOps).toBeGreaterThan(best.measured.candOps);
 
-    // The middle one is the point. If the scale collapsed to {0, 1} this is the
-    // assertion that would fail, and with it the reason for the whole design.
+    // The middle one fails if the scale collapses to {0, 1}.
     expect(binary.score, `binary insertion scored ${binary.score.toFixed(4)}: ${binary.detail}`)
       .toBeGreaterThan(0);
     expect(binary.score).toBeLessThan(1);
@@ -716,9 +578,7 @@ describe('the score is continuous, not a bit in disguise', () => {
 });
 
 describe('every task can score zero by a real failure', () => {
-  // One task, not all seven: these exercise the substrate's failure paths, which
-  // are shared by construction (`trial` in the harness prologue). Running them
-  // seven times would measure the same code seven times and cost a minute.
+  // One task: failure paths are shared through `trial` in the harness prologue.
   const task = HARD_TASKS[0];
 
   if (!task) throw new Error('HARD_TASKS is empty');
@@ -765,8 +625,7 @@ describe('every task can score zero by a real failure', () => {
 
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('oracle budget');
-    // The budget is a multiple of the MEASURED reference, so the runaway is
-    // bounded by the instance and not by a constant somebody has to maintain.
+    // The budget is a multiple of the measured reference, not a constant.
     expect(scored.measured.candOps).toBeGreaterThan(scored.measured.refOps);
   });
 });
@@ -872,12 +731,8 @@ describe('the outcome row this tier publishes', () => {
     expect(row.name).toBe(TASK_OUTCOME);
     expect(row.rate).toBeGreaterThan(0.9);
     expect(row.passed).toBeLessThanOrEqual(row.eligible);
-    // Destructured rather than optional-chained. `row.measured?.refOps` against
-    // `row.measured?.targetOps ?? 0` passes vacuously when `measured` is absent on
-    // ONE side and fails confusingly when it is absent on both, which is how this
-    // read as an intermittent flake to a sibling running the suite mid-edit. An
-    // absent `measured` is a real defect — the raw counts are what makes a ratio
-    // re-derivable — so it must be its own named failure.
+    // Destructured, not optional-chained: `?.` passes vacuously when `measured` is absent on
+    // one side. An absent `measured` is its own failure.
     const measured = row.measured;
     expect(measured, 'the outcome row carries no measured counts, so its ratio cannot be '
       + 're-derived from the record').toBeDefined();

@@ -1,23 +1,7 @@
 /**
- * What this process is REALLY allowed to use — read from its own cgroup.
- *
- * `nproc`, `/proc/cpuinfo` and `free` report the machine, not the container.
- * A benchmark task died exactly there: the agent ran `make -j$(nproc)` inside a
- * 1-CPU / 2GB cgroup, `nproc` answered with the host's core count, and the
- * compilers OOM-killed the build. Doctrine alone cannot fix that — the honest
- * number has to be in front of the model. This reads it once per session and
- * hands it to the executors whose processes actually live under that cgroup;
- * the prompt renders it in the live execution-status block.
- *
- * Honest or silent, never a guess: an unlimited controller (`max`, a negative
- * v1 quota, the v1 no-limit sentinel) or an unreadable one yields nothing at
- * all, so a bare-metal run says nothing rather than reporting the host as a
- * "limit".
- *
- * Both hierarchies, and both container shapes. With a cgroup namespace (the
- * usual container) `/proc/self/cgroup` reads `0::/` and the limits sit at the
- * mount root; without one it reads the path the process occupies inside the
- * host's hierarchy, so that path is tried first and the mount root second.
+ * Resource limits from this process's own cgroup: `nproc`/`free` report the host, not the container.
+ * Unlimited or unreadable controllers yield nothing rather than a guess. v1 and v2, with or without
+ * a cgroup namespace: the process's own path is tried before the mount root.
  */
 
 import { readFileSync } from 'node:fs';
@@ -25,9 +9,7 @@ import type { ResourceLimits } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 
 export interface CgroupSource {
-  /** cgroupfs mount point. */
   root?: string;
-  /** The process's own place in the hierarchy. */
   procSelfCgroup?: string;
 }
 
@@ -35,19 +17,14 @@ const DEFAULT_ROOT = '/sys/fs/cgroup';
 
 const DEFAULT_PROC_SELF = '/proc/self/cgroup';
 
-/** memory.limit_in_bytes on an unlimited v1 cgroup is a page-aligned INT64_MAX
- *  rather than a sentinel word — anything near it means "no limit". */
+/** An unlimited v1 memory.limit_in_bytes is a page-aligned INT64_MAX, not a sentinel word. */
 const V1_UNLIMITED_FLOOR = 2 ** 62;
 
 function read(path: string): string | null {
   return tolerate(() => readFileSync(path, 'utf8'), 'enoent')?.trim() ?? null;
 }
 
-/**
- * The process's path within one hierarchy, from `/proc/self/cgroup`:
- * `0::/some/path` for v2, `7:cpu,cpuacct:/some/path` for a v1 controller.
- * Empty string when it is the root or absent; an unreadable one propagates.
- */
+/** The process's path from `/proc/self/cgroup` (`0::/p` v2, `7:cpu,cpuacct:/p` v1); empty for root or absent. */
 function selfPath(procSelfCgroup: string, controller: string | null): string {
   const content = read(procSelfCgroup);
 
@@ -66,15 +43,11 @@ function selfPath(procSelfCgroup: string, controller: string | null): string {
   return '';
 }
 
-/** Directories to try for one controller, most specific first. */
 function candidates(base: string, self: string): string[] {
   return self ? [`${base}${self}`, base] : [base];
 }
 
-/** `cpu.max` is "<quota|max> <period>"; v1 splits it across two files. Quota
- *  over period is CPUs, rounded UP to a whole worker: a 0.5-CPU cgroup still
- *  runs one job, and CPU quota throttles rather than kills, so the rounding
- *  costs latency at worst — where rounding DOWN would waste the cap outright. */
+/** Quota over period, rounded up: a 0.5-CPU cgroup still runs one job, and CPU quota throttles rather than kills. */
 function parseCpus(quota: string | undefined, period: string | undefined): number | undefined {
   const q = Number(quota);
   const p = Number(period);
@@ -131,7 +104,6 @@ function readMemory(root: string, procSelfCgroup: string): number | undefined {
   return undefined;
 }
 
-/** The cgroup limits in force here, or null when the environment declares none. */
 export function readCgroupLimits(source: CgroupSource = {}): ResourceLimits | null {
   const root = source.root ?? DEFAULT_ROOT;
   const procSelfCgroup = source.procSelfCgroup ?? DEFAULT_PROC_SELF;
@@ -151,9 +123,7 @@ export function readCgroupLimits(source: CgroupSource = {}): ResourceLimits | nu
 
 let memoized: ResourceLimits | null | undefined;
 
-/** The host cgroup's limits, read at most once per process — a container's
- *  limits do not change under it, and a turn must not pay the file reads to
- *  re-learn that. */
+/** Read at most once per process; a container's limits do not change under it. */
 export function hostResourceLimits(): ResourceLimits | null {
   if (memoized === undefined) memoized = readCgroupLimits();
 

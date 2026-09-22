@@ -1,11 +1,6 @@
 /**
- * The executable-runtime refusal, proven red against the real degraded runtime
- * and green against the real production one.
- *
- * Not a mock of either. Both runtimes are constructed here exactly as their
- * callers construct them, because the whole defect was that one of them LOOKS
- * like the other: `createWorkspace` returns an `AgentRuntime` that satisfies the
- * type completely and cannot execute anything.
+ * `createWorkspace` returns a type-complete `AgentRuntime` that cannot execute, so both
+ * runtimes are built exactly as their callers build them.
  */
 import { scratchDir } from '../src/scratch';
 import { describe, test, expect } from 'bun:test';
@@ -17,9 +12,7 @@ import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/inde
 import { openWorkspaceCLI, makeWorkspaceSchemaSql } from '../../cli-backend/src/index';
 import { assertExecutableRuntime, createTestRuntime } from '../src/runtime';
 
-// Never called: both runtimes are constructed and inspected, never asked to
-// generate. The unroutable baseURL is deliberate — if anything here reaches the
-// network, this test should fail rather than quietly succeed.
+// Never called; the unroutable baseURL makes any network use fail.
 const LLM: LLMProviderConfig = {
   name: 'test', baseURL: 'http://127.0.0.1:1', headers: {}, model: 'unused',
 };
@@ -38,7 +31,7 @@ describe('assertExecutableRuntime', () => {
     try {
       db.exec('PRAGMA journal_mode = WAL');
       const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });
-      // The exact shape of the defect: a complete AgentRuntime with no router.
+      // A complete AgentRuntime with no router.
       expect(rt.executionRouter).toBeFalsy();
       expect(() => assertExecutableRuntime(rt, 'behaviour eval'))
         .toThrow(/NO executionRouter/);
@@ -73,8 +66,7 @@ describe('assertExecutableRuntime', () => {
   });
 
   test('REFUSES a router with zero providers — registered but empty is still unusable', () => {
-    // `createTestRuntime`'s default. Legitimate for a unit test that never
-    // executes; never legitimate for a tier that measures an agent's work.
+    // `createTestRuntime`'s default: fine for a unit test, never for a tier measuring agent work.
     const { rt } = createTestRuntime();
     expect(rt.executionRouter?.getProviders()).toEqual([]);
     expect(() => assertExecutableRuntime(rt, 'some tier'))
@@ -96,9 +88,7 @@ describe('the birth runtime refuses to fabricate an exploration result', () => {
     try {
       db.exec('PRAGMA journal_mode = WAL');
       const rt = await createWorkspace(db, { name: 'birth', purpose: 'birth', llm: LLM });
-      // A `{ text: 'exploration result' }` answer here is one no consumer could
-      // tell from a real exploration — so every MCTS-shaped measurement taken on
-      // this runtime would score a fabricated string.
+      // A `{ text: 'exploration result' }` answer is indistinguishable from a real exploration.
       expect(() => rt.spawnBranch('any')).toThrow(/does not implement spawnBranch/);
       expect(() => rt.spawnBranch('any')).toThrow(/openWorkspaceCLI/);
     } finally {

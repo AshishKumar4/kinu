@@ -1,10 +1,4 @@
-/**
- * The text body a `fetch` call carries, read the way a server reads it.
- *
- * `BodyInit` also admits streams, buffers and form data, so a fake that reads
- * `String(init.body)` records `[object ReadableStream]` for everything but a
- * string, and a `URLSearchParams` body only looks right by accident.
- */
+/** The text body of a `fetch` call; `String(init.body)` would give `[object ReadableStream]` for non-strings. */
 export function requestBodyText(input: RequestInfo | URL, init?: RequestInit): Promise<string> {
   return new Request(input, init).text();
 }

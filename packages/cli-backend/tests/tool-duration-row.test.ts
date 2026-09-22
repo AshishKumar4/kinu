@@ -1,13 +1,4 @@
-/**
- * THE LEDGER'S TOOL ROW CARRIES HOW LONG THE CALL TOOK.
- *
- * `tool_call_end.durationMs` is what the timeline, the fleet tool row and the
- * evolution signal read for a call's cost in time. The Think switch dropped it
- * on the shared loop: the session recorded tool results without a duration,
- * so every row read 0 ms on cf and nothing on the CLI, and the parity
- * re-record hid the loss. Driven through `LocalAgentSession`, read back off
- * `run_events`.
- */
+/** The ledger's `tool_call_end` row carries `durationMs`, read back off `run_events` through `LocalAgentSession`. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -75,8 +66,7 @@ describe('tool_call_end', () => {
       .map((row) => v.parse(v.object({ name: v.string(), durationMs: v.optional(v.number()) }), JSON.parse(row.payload)));
 
     expect(rows.map((row) => row.name)).toEqual(['memory']);
-    // A measured duration is a finite count of milliseconds; whether the row
-    // has one at all is the property, not how long the fake took.
+    // Whether the row has a duration is the property, not how long the fake took.
     expect(rows[0]?.durationMs).toBeNumber();
     expect(Number.isFinite(rows[0]?.durationMs)).toBe(true);
     db.close();

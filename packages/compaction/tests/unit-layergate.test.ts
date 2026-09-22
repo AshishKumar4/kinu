@@ -1,9 +1,5 @@
-// The compaction-ladder layer-gate slice — this package's own deterministic
-// regression gate over the ladder that rewrites history (core declares the
-// layer; this package measures it). Same contract as core's gate: locked
-// baseline conformance, deterministic observation, and a fault that craters
-// its own slice. Cross-layer isolation against the CORE layers is proven by
-// the merged matrix in scripts/layergate.ts --matrix.
+// Compaction-ladder layer slice: locked baseline, deterministic observation, own-slice fault.
+// Cross-layer isolation is proven by scripts/layergate.ts --matrix.
 import { describe, expect, test } from 'bun:test';
 import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -57,8 +53,7 @@ describe('compaction-ladder layer gate', () => {
     }
 
     const impacts = await runFaultMatrix(subjects, COMPACTION_FAULTS, COMPACTION_LAYERS);
-    // The floor packages/core's copy of this test carries and this one did not:
-    // a matrix that produced no rows satisfies every localization claim below.
+    // A matrix with no rows would satisfy every localization claim below.
     expect(impacts).toHaveLength(COMPACTION_FAULTS.length);
 
     for (const impact of impacts) {

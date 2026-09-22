@@ -1,13 +1,4 @@
-/**
- * Owner-only files are VERIFIED, not requested.
- *
- * `writeFileSync(path, data, { mode: 0o600 })` followed by
- * `try { chmodSync(path, 0o600) } catch {}` is wrong in both halves: `mode` is
- * honoured only on creation, so a file already left group-readable keeps its
- * bits on rewrite, and the chmod meant to fix that is the one call whose
- * failure is discarded. A refresh token then sits in a world-readable file
- * with nothing anywhere saying so.
- */
+/** Owner-only files are verified, not requested: `mode` applies only on creation, and a failed chmod must not be swallowed. */
 
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect } from 'bun:test';
@@ -31,8 +22,7 @@ describe('writeSecretFile', () => {
   });
 
   test('narrows an existing group- and world-readable file', () => {
-    // The regression `writeFileSync(..., { mode })` alone cannot fix: the mode
-    // option is ignored for an existing file.
+    // `writeFileSync(..., { mode })` ignores the mode for an existing file.
     const path = join(scratch(), 'config.json');
     writeFileSync(path, 'stale');
     chmodSync(path, 0o644);
@@ -51,8 +41,7 @@ describe('writeSecretFile', () => {
 
 describe('enforceOwnerOnly', () => {
   test('throws rather than leaving a secret readable beyond its owner', () => {
-    // The swallow's whole failure mode, exercised directly: the narrowing does
-    // not take, and the caller must find out instead of proceeding.
+    // The narrowing does not take, and the caller must find out instead of proceeding.
     const path = join(scratch(), 'token');
     writeFileSync(path, 'secret');
     chmodSync(path, 0o644);

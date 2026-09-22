@@ -1,17 +1,4 @@
-/**
- * Source-reading assertions, made non-vacuous.
- *
- * Several suites assert wiring by reading source, because the seam under test
- * has no runtime harness in this repo. Their failure mode is silent: when a
- * refactor renames an anchor, `indexOf` returns -1, `slice(start, -1)` runs to
- * end-of-file, and the assertion then passes against the whole file instead of
- * the member it named. Three tests were live in that state — one guarding a
- * call that appears six times elsewhere in its file, so the call could be
- * deleted outright with the test still green.
- *
- * Every anchor here is required. A rename fails the test that depends on it,
- * which is the point of writing the test against source in the first place.
- */
+/** Source-reading assertions whose anchors are required, so a rename fails instead of matching the whole file. */
 
 /** Offset of `needle`, or throw naming what went missing. */
 export function anchor(source: string, needle: string, label = 'source'): number {
@@ -65,16 +52,7 @@ function endOfTemplateExpr(src: string, at: number): number {
   throw new Error('unterminated template expression');
 }
 
-/**
- * The body of the member declared at `declaration`, by brace matching.
- *
- * Anchored on the member itself and never on whatever follows it — a trailing
- * marker is exactly what drifted in all three vacuous tests. `declaration` must
- * reach its closing paren (e.g. `'async onStart()'`) so the first `{` found is
- * the body and not a parameter's object type. Strings, template
- * interpolations, and comments are skipped, so braces inside them do not
- * unbalance the scan.
- */
+/** The body of the member declared at `declaration`, by brace matching; `declaration` must reach its closing paren. */
 export function memberBody(source: string, declaration: string, label = 'source'): string {
   const start = anchor(source, declaration, label);
   const open = source.indexOf('{', start);

@@ -14,19 +14,13 @@ import { tolerate } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { present } from '@kinu.run/test-utils';
 
-/** Bytes to assertable text. Decoration and line endings are the invoking
- *  terminal talking, not the CLI's answer: both production deploys failed on
- *  tests that inherited a PTY no local run had, with colour codes landing
- *  between the tokens the assertions bind. `Bun.stripANSI` is structural — no
- *  regex, no control characters, maintained beside the renderer that emits
- *  the codes. */
+/** Bytes to assertable text, stripped of terminal decoration. */
 function toText(bytes: Buffer): string {
   return Bun.stripANSI(bytes.toString()).replaceAll('\r\n', '\n');
 }
 
 const tempDirs: string[] = [];
 
-/** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir("test-project");
   tempDirs.push(dir);
@@ -47,9 +41,7 @@ const RunEventEnvelopeSchema = v.object({
   event: v.object({ type: v.string(), runId: v.string() }),
 });
 
-// A steer that NAMES a call: `repeated_call` and `repeated_failure` carry the
-// tool they fired over, and requiring `tool` here is what proves which arm
-// fired rather than also accepting `no_progress`, which names nothing.
+// Requiring `tool` proves a naming arm (`repeated_call`/`repeated_failure`) fired, not `no_progress`.
 const SteeringEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({
@@ -68,13 +60,9 @@ const ErrorEventSchema = v.object({
   hint: v.string(),
 });
 
-/** The `--json` turn-end usage payload, parsed by the SAME schema the durable
- *  ledger uses. Every field is optional there because an absent field means the
- *  provider did not report it, so the tests below assert on the parsed KEYS. */
+/** `--json` turn-end usage; an absent field means the provider did not report it. */
 const UsageEnvelopeSchema = v.object({ usage: UsageSchema });
 
-/** A ledger row on the `--json` stream, kept whole. `RunEventEnvelopeSchema`
- *  above narrows to two fields, which cannot answer "is this key absent?". */
 const LedgerRowSchema = v.object({
   type: v.literal("run_event"),
   event: v.objectWithRest({ type: v.string() }, JsonValueSchema),
@@ -86,8 +74,7 @@ afterEach(() => {
   }
 });
 
-/** Local one-shot commands auto-start the scheduler daemon inside
- *  KINU_HOME; kill it before the temp home disappears under it. */
+/** Local one-shot commands auto-start the scheduler daemon; kill it before the home is removed. */
 function stopLocalDaemon(home: string): void {
   const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), "enoent");
 
@@ -340,9 +327,6 @@ describe("kinu exec (headless)", () => {
     expect(stderr).toContain("beta");
   });
 
-  // The real hermetic smoke: a local agent created and exec'd through the
-  // spawned CLI binary against a mock OpenAI-compatible endpoint — proving
-  // exit codes and the line-delimited JSON event shape end to end.
   test("runs a local workspace end-to-end with --json and honest exit codes", async () => {
     const home = scratchDir("cli-exec-smoke");
     tempDirs.push(home);
@@ -368,32 +352,19 @@ describe("kinu exec (headless)", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
       const turnEnd = events.find((e) => e.type === "turn_end");
       expect(turnEnd).toMatchObject({ hadError: false });
-      // The turn's cost, field for field, as the external contract emits it.
-      // The mock reports prompt and completion tokens and nothing else, so
-      // exactly those two travel: `cacheRead` is ABSENT rather than 0, even
-      // though the SDK dialect in between fabricates cacheReadTokens: 0
-      // (@ai-sdk/openai-compatible dist/index.js:88). That is what lets a
-      // reader tell "no cache reads happened" from "nobody measured them".
+      // The mock reports only prompt/completion tokens, so `cacheRead` is absent rather than 0,
+      // even though @ai-sdk/openai-compatible fabricates cacheReadTokens: 0.
       const turnUsage = v.parse(UsageEnvelopeSchema, turnEnd).usage;
       expect(turnUsage).toEqual({ input: 5, output: 7 });
       expect(Object.keys(turnUsage).sort()).toEqual(["input", "output"]);
 
-      // The durable run-event ledger rides the same stream. Without it the log
-      // is readable only from inside the agent's own database, which a
-      // container-scoped run destroys on exit.
       const ledger = events.flatMap((event) => {
         const parsed = v.safeParse(RunEventEnvelopeSchema, event);
 
         return parsed.success ? [parsed.output.event] : [];
       });
 
-      // Profile resolution lands before the step. The mock answers in one step
-      // and nothing repeats, fails or stalls, so no `turn_steering` row is
-      // written at all; the step's first delta writes the partial ledger row a
-      // continuation would resume from, then the finished step supersedes it.
-      // The model call opens and closes its own operation row around the step.
-      // Pin the whole sequence so a row that appears or vanishes here cannot
-      // pass while the turn still looks complete.
+      // Pinned whole so an extra or missing row cannot pass while the turn looks complete.
       expect(ledger.map((e) => e.type)).toEqual([
         "run_start", "turn_start", "profile_resolution", "model_operation", "step_partial", "step_finish",
         "model_operation", "turn_end", "run_end",
@@ -401,8 +372,6 @@ describe("kinu exec (headless)", () => {
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
-      // A second exec opens a fresh transcript; the durable conversation
-      // carries the history, never a selectable JSONL artifact.
       const second = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello again"], { home, env });
       expect(second.exitCode).toBe(0);
 
@@ -446,8 +415,6 @@ describe("kinu exec (headless)", () => {
     }
   });
 
-  // --no-auto-evolve is the switch a paired benchmark arm needs: the same
-  // workspace and the same turn, with the evolution machinery off.
   test("--no-auto-evolve runs the turn normally on a local workspace", async () => {
     const home = scratchDir("cli-exec-noevolve");
     tempDirs.push(home);
@@ -473,8 +440,6 @@ describe("kinu exec (headless)", () => {
     }
   });
 
-  // Reaching this rejection proves the flag is threaded all the way into the
-  // AgentClient factory rather than parsed and dropped.
   test("--no-auto-evolve is rejected for cloud workspaces", () => {
     const home = scratchDir("cli-exec-noevolve-cloud");
     tempDirs.push(home);
@@ -493,16 +458,13 @@ describe("kinu exec (headless)", () => {
   });
 });
 
-// A tool refusal is the `{reason,error}` payload executor tools answer failures
-// on — written for the MODEL to branch on. The person watching the run must
-// read prose, not that JSON, and the diagnostic the refusal logs must not land
-// between them and their agent either.
+// A tool refusal's `{reason,error}` JSON is for the model; the person reads prose, and the
+// refusal's diagnostic stays off their streams.
 describe("kinu run — a tool refusal is rendered for the person, not the model", () => {
   test("a refused escalation prints prose under ✗ and its diagnostic lands in cli.log", async () => {
     const home = scratchDir("cli-run-refusal");
     tempDirs.push(home);
 
-    // An unregistered runtime fails deterministically without touching a shell.
     const server = startToolLoopMockLlm(
       { name: "shell", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
       1,
@@ -526,7 +488,6 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
       expect(stdout).toContain("runtime_not_provisioned");
       expect(stdout).toContain("(unavailable)");
       expect(stdout).not.toContain('"reason"');
-      // No diagnostic JSON on the reader's streams — the turn log owns it now.
       const stderr = toText(proc.stderr);
       expect(stderr).not.toContain('"event"');
       expect(stderr).not.toContain("AI SDK Warning");
@@ -538,17 +499,11 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
   });
 });
 
-// The mechanical loop-detection steers were measurable only from the
-// run_events table inside the agent's database — which a benchmark container
-// deletes with the container. Zero steers were observable across a whole
-// ten-task run as a result.
 describe("kinu exec --json — a mechanical steer is observable from outside", () => {
   test("a turn reports the steering row it wrote, with trigger, tool and conversion", async () => {
     const home = scratchDir("cli-exec-nudge");
     tempDirs.push(home);
 
-    // Three failures from the same tool is the `repeated_failure` trigger; an
-    // unregistered runtime fails deterministically without touching a shell.
     const server = startToolLoopMockLlm(
       { name: "shell", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
       3,
@@ -576,12 +531,10 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
 
       expect(steers).toHaveLength(1);
       expect(steers[0]).toMatchObject({
-        // repeated_call, not repeated_failure: the mock grinds the SAME call
-        // with the same args and the same output, and the repeat detector
-        // outranks the failure counter because it can name the exact call.
+        // repeated_call, not repeated_failure: the repeat detector outranks the failure counter
+        // because it can name the exact call.
         trigger: "repeated_call",
         tool: "shell",
-        // The model was told and pushed on alone — the conversion denominator.
         converted: false,
       });
       expect(steers[0]?.step).toBeNumber();
@@ -591,16 +544,13 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
   });
 });
 
-// What a turn cost is priced OUTSIDE this repo: bench/clbench/kinu/events.py
-// reads this stream and CL-Bench prices what it says. So "the provider measured
-// nothing" and "the provider measured zero" must not arrive as the same bytes.
+// Turn cost is priced outside this repo (bench/clbench/kinu/events.py), so "measured nothing"
+// and "measured zero" must not arrive as the same bytes.
 describe("kinu exec --json — the turn-end usage payload", () => {
   test("carries no usage at all when the provider reported none", async () => {
     const home = scratchDir("cli-exec-unmetered");
     tempDirs.push(home);
-    // The one difference from the metered smoke above: no `usage` block on the
-    // completion — which @ai-sdk/openai-compatible turns into an all-undefined
-    // report (dist/index.js:68-84) and `normalizeUsage` into {}.
+    // No `usage` block: @ai-sdk/openai-compatible reports all-undefined and `normalizeUsage` returns {}.
     const server = startMockLlm("Hello from mock.", null);
 
     try {
@@ -618,12 +568,8 @@ describe("kinu exec --json — the turn-end usage payload", () => {
 
       const turnEnd = events.find((e) => e.type === "turn_end");
       expect(turnEnd).toMatchObject({ hadError: false });
-      // The key is ABSENT — not present-and-zero, not present-and-null. A
-      // reader pricing `usage.input ?? 0` gets nothing to price.
       expect(turnEnd && "usage" in turnEnd).toBe(false);
 
-      // The enveloped ledger row on the same stream says the same thing, so the
-      // two copies of one fact cannot disagree about a silent turn.
       const ledger = events.flatMap((event) => {
         const parsed = v.safeParse(LedgerRowSchema, event);
 
@@ -639,9 +585,6 @@ describe("kinu exec --json — the turn-end usage payload", () => {
   });
 });
 
-/** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks
- *  for stream requests and returns a completion object otherwise. `usage: null`
- *  omits the usage block entirely — the provider that measures nothing. */
 function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 }) {
   const server = Bun.serve({
     port: 0,
@@ -692,8 +635,6 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
   return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
-/** Like startMockLlm, but the first `calls` streamed responses are the SAME
- *  tool call and the next one is the final answer — a turn that grinds. */
 function startToolLoopMockLlm(
   call: { name: string; arguments: string },
   calls: number,
@@ -769,18 +710,13 @@ function startFailingLlm() {
   return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
-/** 200 OK, then an OpenAI-shaped error object in the SSE body — the shape a
- *  provider uses to reject a request mid-stream, and the one that reached
- *  users as `[object Object]`. */
 function startInBandErrorLlm(payload: JsonValue) {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     async fetch(request) {
-      // A provider registry lists the endpoint's models before it completes
-      // anything, and that probe is a GET with no body. Parsing one as JSON
-      // threw INSIDE Bun.serve, which surfaces as an unhandled error "between
-      // tests" and fails whichever neighbour happens to be running.
+      // A provider registry probes with a body-less GET first; parsing it as JSON throws inside
+      // Bun.serve and fails whichever neighbouring test is running.
       if (request.method === 'GET') return Response.json({ data: [] });
       const body = v.parse(RequestBodySchema, await request.json());
 
@@ -795,9 +731,7 @@ function startInBandErrorLlm(payload: JsonValue) {
   return { port: present(server.port, 'the mock server port'), stop: () => server.stop(true) };
 }
 
-/** The Kinu worker as far as the CLI's provider registry cares: a model
- *  menu. An empty one is a signed-in account whose Cloudflare AI was never
- *  granted — the case that produced a workspace nothing could run. */
+/** A model menu; empty means Cloudflare AI was never granted. */
 function startEmptyModelMenuOrigin() {
   const server = Bun.serve({
     port: 0,
@@ -825,10 +759,8 @@ describe("kinu create — an unusable model is named at creation", () => {
         user: { id: "user_123", email: "ashish@example.com" },
       });
 
-      // Any ambient credential path — a BYO key, or the KINU_BASE_URL /
-      // KINU_MODEL direct-endpoint override another test file sets on this
-      // process — would supply a working provider and correctly suppress the
-      // warning. The subprocess starts without them.
+      // Ambient credentials (a BYO key, or KINU_BASE_URL/KINU_MODEL set by another test file) would
+      // suppress the warning; the subprocess starts without them.
       const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
@@ -869,9 +801,7 @@ describe("kinu create — an unusable model is named at creation", () => {
   });
 });
 
-// A provider rejection reaches the terminal ONCE, in the provider's own words,
-// with the command that fixes it — not the AI SDK's default
-// `console.error(rawPayload)` dump plus our own `error [object Object]`.
+// A provider rejection prints once, in the provider's words, with the fix command.
 describe("kinu exec — provider failures are legible and actionable", () => {
   const BILLING_ERROR: JsonObject = {
     error: { message: "Your account is not active.", type: "invalid_request_error", code: "billing_not_active" },
@@ -947,18 +877,13 @@ describe("kinu exec — provider failures are legible and actionable", () => {
   });
 });
 
-// `kinu exec "prompt"` does not block on stdin until EOF when stdin is not a
-// TTY: a harness or CI runner spawns the CLI with an inherited, idle pipe that
-// never sends EOF, so waiting on it hangs every scripted use forever — the full
-// 15s timeout for a ~0.6s run, and a `</dev/null` incantation to get out of it.
+// With non-TTY stdin, `kinu exec "prompt"` must not wait for EOF: a harness's idle pipe never sends one.
 describe("kinu exec — stdin must not hang a scripted run", () => {
   test("returns promptly when argv carries the prompt and stdin stays open", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
     const home = scratchDir("stdin");
     const started = Date.now();
 
-    // stdin: 'pipe', never written to and never closed — exactly what a harness
-    // that inherits an idle stdin hands the process.
     const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
       stdin: "pipe",
       stdout: "ignore",
@@ -967,8 +892,6 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     });
 
     await proc.exited;
-    // The assertion is that it terminates at all, rather than waiting on an
-    // EOF that never arrives.
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
@@ -983,15 +906,12 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
       env: { ...process.env, KINU_HOME: home },
     });
 
-    // First chunk inside the grace window, second well past it: the old
-    // whole-read race resolved '' at 250ms and dropped BOTH chunks silently.
     await proc.stdin.write("chunk-one ");
     await new Promise((r) => setTimeout(r, 600));
     await proc.stdin.write("chunk-two");
     await proc.stdin.end();
     await proc.exited;
     const stderr = await new Response(proc.stderr).text();
-    // A delivering pipe is a real pipe: it must never be reported as ignored.
     expect(stderr).not.toContain("stdin was open but idle");
   });
 });

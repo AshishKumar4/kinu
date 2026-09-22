@@ -1,14 +1,5 @@
-/**
- * Prompt attachments for the CLI chat surfaces (TUI + readline REPL).
- *
- * Mention syntax — one syntax, both backends: an explicit @path, plus quoted
- * ("…" / '…') and ~-prefixed tokens (terminal drag-drop pastes those), that
- * stat to an existing regular file. Images and PDFs are inlined as data-URL
- * PromptFiles for multimodal models; every other file stays a path reference
- * in the text — the agent reads it with its fs tools (local backend) or the
- * device tunnel (cloud). @mentions are rewritten to the bare path so the
- * model sees plain prose.
- */
+/** @path, quoted and ~-prefixed tokens (drag-drop) that stat to a regular file become attachments. Images and
+ * PDFs inline as data-URL parts; other files stay path references for the agent's tools. */
 
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -17,9 +8,7 @@ import type { PromptFile } from '@kinu.run/core';
 import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from './display';
 
-/** File types worth inlining as model-visible parts. Everything else is
- *  reachable through the agent's read tools, so inlining would only burn
- *  context. */
+/** Everything else is reachable through the agent's read tools; inlining would only burn context. */
 const INLINE_MEDIA_TYPES = new Map([
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -32,11 +21,8 @@ const INLINE_MEDIA_TYPES = new Map([
 ]);
 
 export interface PathToken {
-  /** Exact matched substring (including the @ / quotes). */
   raw: string;
-  /** Start offset of `raw` in the prompt. */
   index: number;
-  /** Candidate path with @ and quotes stripped (~ not yet expanded). */
   path: string;
   /** True for explicit @mentions — rewritten to the bare path on send. */
   mention: boolean;
@@ -50,8 +36,7 @@ function stripQuotes(s: string): string {
     : s;
 }
 
-/** Candidate file-path tokens in a prompt. Purely lexical — resolution
- *  (stat + size policy) happens in resolvePromptAttachments. */
+/** Purely lexical; resolution happens in resolvePromptAttachments. */
 function extractPathTokens(text: string): PathToken[] {
   const tokens: PathToken[] = [];
 
@@ -68,40 +53,28 @@ function extractPathTokens(text: string): PathToken[] {
 }
 
 export interface ResolvedAttachment {
-  /** Absolute path on disk. */
   path: string;
   filename: string;
-  /** Inline media type when attached as a model-visible part; null when the
-   *  file stays a path reference for the agent's read tools. */
+  /** Null when the file stays a path reference for the agent's read tools. */
   mediaType: string | null;
   size: number;
 }
 
 export interface PromptAttachments {
-  /** The prompt with @mentions rewritten to bare paths. */
   text: string;
-  /** Data-URL parts for the inlined attachments (images / PDFs). */
   files: PromptFile[];
-  /** Every detected file mention — inlined or referenced — for chips. */
   attached: ResolvedAttachment[];
   /** Per-file problems (over-cap, unreadable) — surfaced, never silent. */
   errors: string[];
 }
 
-/** Longest single filename POSIX filesystems accept, and the longest absolute
- *  path they will resolve. A candidate that breaks either cannot name an
- *  existing file, so it is prose that happened to be quoted rather than a
- *  mention — and `stat` answers ENAMETOOLONG, which is not ENOENT and so
- *  escaped this function and killed the turn. Measured: `kinu exec` died on
- *  a 298-byte quoted sentence with
- *  `ENAMETOOLONG, statx '…/work/I am the big blind with J7 offsuit…'`,
- *  which is how a CL-Bench poker rollout ended. */
+/** A candidate beyond POSIX name/path limits cannot name a file, and `stat` would throw ENAMETOOLONG
+ *  (not ENOENT), killing the turn; treat it as prose. */
 const NAME_MAX_BYTES = 255;
 
 const PATH_MAX_BYTES = 4095;
 
-/** Expand ~ and resolve against cwd; retry once without one trailing
- *  punctuation mark so "see @/tmp/shot.png." still matches the file. */
+/** Retries once without one trailing punctuation mark so "see @/tmp/shot.png." matches. */
 async function statCandidate(token: string, cwd: string): Promise<{ path: string; size: number } | null> {
   const candidates = [token];
   const trimmed = token.replace(/[.,;:!?]$/, '');
@@ -116,9 +89,7 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
       Buffer.byteLength(absolute) > PATH_MAX_BYTES
       || absolute.split('/').some((part) => Buffer.byteLength(part) > NAME_MAX_BYTES)
     ) continue;
-    // A token naming nothing is the normal case — most words are not paths. Any OTHER stat failure
-    // (an unreadable parent, a path component that is not a directory) would silently drop a
-    // mention the user typed, so it is theirs to see.
+    // ENOENT is normal (most words are not paths); any other stat failure surfaces to the user.
     const stats = await tolerateAsync(() => stat(absolute), 'enoent');
 
     if (stats?.isFile()) return { path: absolute, size: stats.size };
@@ -128,18 +99,11 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
 }
 
 export interface PromptAttachmentOptions {
-  /** Per-message aggregate cap on raw inlined bytes. Every caller passes its
-   *  client's `inlineAttachmentLimitBytes`: the cap is a property of the
-   *  backend that will store and re-send the message, and the two backends
-   *  differ by 8×, so there is no honest default to fall back on. */
+  /** The cap belongs to the backend that stores the message and the two differ by 8x, so no default. */
   limitBytes: number;
   cwd?: string;
 }
 
-/**
- * Resolve a prompt's path mentions into attachments. Both chat surfaces call
- * this in their submit path and hand `{ text, files }` to AgentClient.send.
- */
 export async function resolvePromptAttachments(
   text: string,
   { limitBytes, cwd = process.cwd() }: PromptAttachmentOptions,
@@ -149,8 +113,7 @@ export async function resolvePromptAttachments(
   const errors: string[] = [];
   const seen = new Set<string>();
   const rewrites: Array<{ index: number; raw: string }> = [];
-  // The inline cap is a per-message AGGREGATE across all file parts (they
-  // persist together in one backend message) — spend it as files inline.
+  // Aggregate across all file parts: they persist together in one backend message.
   let inlineBudget = limitBytes;
 
   for (const token of extractPathTokens(text)) {
@@ -191,7 +154,7 @@ export async function resolvePromptAttachments(
     }
   }
 
-  // Strip the @ off resolved mentions, right-to-left so indices stay valid.
+  // Right-to-left so indices stay valid.
   let rewritten = text;
 
   for (const r of rewrites.sort((a, b) => b.index - a.index)) {
@@ -201,8 +164,6 @@ export async function resolvePromptAttachments(
   return { text: rewritten, files, attached, errors };
 }
 
-/** Chip label for a resolved attachment, e.g. "shot.png (24.3 KB)" or
- *  "notes.txt (1.2 KB, referenced)". */
 export function describePromptAttachment(a: ResolvedAttachment): string {
   return `${a.filename} (${formatBytes(a.size)}${a.mediaType ? '' : ', referenced'})`;
 }

@@ -1,15 +1,6 @@
 /**
- * One cloud turn's stream, accumulated.
- *
- * Owns everything "the turn so far" means: the AI-SDK chunk vocabulary, the
- * tool calls paired to their outputs by id, the step count, the client events
- * a surface renders, and the single turn-end every turn-start is paired with.
- *
- * It also owns the one fact only a RESUMED stream has. The DO replays a resumed
- * stream from chunk zero on every resume ack, so a client that simply applied
- * what arrived would render the answer twice; the count of bodies already
- * applied is what makes the replay idempotent instead. CloudAgentClient keeps
- * the socket and the resume handshake — this keeps the turn.
+ * One cloud turn's accumulated stream. The DO replays a resumed stream from chunk zero on every ack, so the
+ * applied-body count makes replay idempotent.
  */
 import * as v from 'valibot';
 import {
@@ -21,14 +12,9 @@ import { asRecord } from './options';
 import type { AgentClientEvent, AgentSendResult, AgentTurnResult } from './agent-client';
 
 export class CloudTurnStream {
-  /** Whether this turn's resume has been acked on the LIVE socket. The DO
-   *  announces a resumable stream both proactively on connect and in answer to
-   *  a probe, and every ack replays the buffer from chunk zero — so the ack
-   *  goes out once per socket generation. */
+  /** Every ack replays from chunk zero, so the ack goes out once per socket generation. */
   resumeAcked = false;
-  /** Set when the socket died with this turn still running, cleared by the
-   *  first frame that arrives for it afterwards. A drop that finds it still set
-   *  made no progress, so the turn is reported rather than chased forever. */
+  /** Still set on a second drop means no progress: the turn is reported rather than chased forever. */
   awaitingRebind = false;
 
   private readonly startedAt = Date.now();
@@ -36,14 +22,10 @@ export class CloudTurnStream {
   private steps = 0;
   private readonly toolCalls: AgentTurnResult['toolCalls'] = [];
   private readonly toolById = new Map<string, AgentTurnResult['toolCalls'][number]>();
-  /** Stream bodies already applied. */
   private applied = 0;
-  /** Bodies counted in the CURRENT replay, against `applied`. */
   private replayed = 0;
 
-  /** The text of a message sent to a RUNNING turn, whose turn-start is owed
-   *  only if the server answers with a stream after all; null once announced
-   *  or for a message that started its own turn. */
+  /** Turn-start owed only if the server answers with a stream; null once announced. */
   private deferredStart: string | null;
 
   constructor(
@@ -54,26 +36,15 @@ export class CloudTurnStream {
     this.deferredStart = opts.deferStart;
   }
 
-  /** The server took the message into its running turn: no turn of its own
-   *  started, so no turn-start/turn-end pair is owed. */
   landedMidTurn(): void {
     this.deferredStart = null;
     this.resolve({ landed: 'mid-turn' });
   }
 
-  /** A resume ack just went out: the replay that answers it starts at chunk
-   *  zero, so the comparison against `applied` starts there too. */
   beginReplay(): void {
     this.replayed = 0;
   }
 
-  /**
-   * Feed one stream body.
-   *
-   * A replayed body the surface has already seen is dropped: a resumed stream
-   * repeats its chunks in production order, so the first `applied` of them are
-   * exactly the ones already rendered.
-   */
   apply(body: string, replay: boolean): void {
     if (!this.admit(replay)) return;
 
@@ -85,8 +56,7 @@ export class CloudTurnStream {
     this.decode(body);
   }
 
-  /** End the turn: exactly ONE turn-end per turn-start, carrying `hadError`
-   *  (the error event precedes it) so a surface can pair the lifecycle. */
+  /** Exactly one turn-end per turn-start, after any error event. */
   settle(hadError = false): void {
     if (this.deferredStart !== null) {
       this.emit({ type: 'turn-start', kind: 'user', text: this.deferredStart });
@@ -195,9 +165,7 @@ function stringifyToolOutput(output: JsonValue): string {
   return text.success ? text.output : JSON.stringify(output);
 }
 
-/** The message an error-shaped JSON field carries, or `fallback` when it
- *  carries nothing readable. Exported because the client reads it off RPC
- *  rejections too. */
+/** Exported because the client reads RPC rejections with it too. */
 export function jsonErrorMessage(value: JsonValue | undefined, fallback: string): string {
   if (value === undefined || value === null || value === '') return fallback;
   const text = v.safeParse(v.string(), value);

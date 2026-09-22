@@ -1,27 +1,6 @@
 /**
- * The workspace-resolution guard: a workspace package must resolve INSIDE the
- * checkout being tested.
- *
- * This has broken silently three times, always the same way. A tree with no
- * node_modules of its own borrows one wholesale — `ln -s` the directory, a bind
- * mount, a copied sandbox image — and every entry inside it resolves through the
- * DONOR's path, the workspace scope included. `<scope>/core` is then the donor's
- * core: the suite runs, passes, and measures a tree nobody edited. It cost us a
- * bench run in which solver edits were graded as if they had never been made,
- * the harbor adapter, and a week of agent worktrees.
- *
- * Nothing about that failure is loud on its own — the imports work, the tests
- * are green — so this makes it loud. Every package's suite calls it, and the
- * message names the fix.
- *
- * Reached from those suites by RELATIVE path, never through the workspace scope
- * itself: a guard imported through that scope cannot report that the scope is
- * wrong.
- *
- * Every name here is READ from the manifests on disk. Writing the scope down
- * would put this file's own copy of it one rename behind the packages it
- * checks — and a guard that checks the wrong name passes, which is the exact
- * failure it exists to make loud.
+ * Guard: every workspace package must resolve inside the checkout under test, not a donor's symlinked
+ * node_modules. Imported by relative path; names are read from manifests on disk.
  */
 
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
@@ -33,9 +12,7 @@ import * as v from 'valibot';
 /** The one documented way to prepare a checkout that has no node_modules. */
 const SETUP_COMMAND = 'bash scripts/setup-worktree.sh';
 
-/** The checkout `from` belongs to — the nearest ancestor holding both a root
- *  package.json and `packages/`. Resolved through realpath so a tree reached by
- *  a symlinked path still compares equal to what module resolution reports. */
+/** The checkout `from` belongs to (nearest ancestor with package.json and `packages/`), via realpath. */
 function treeRoot(from: string): string {
   let dir = realpathSync(from);
 
@@ -49,24 +26,8 @@ function treeRoot(from: string): string {
 }
 
 /**
- * Every workspace package that has an entry point to resolve, name → directory.
- * A bin-only package (the CLI) has none and is not a resolution target.
- *
- * Exported because it is THE list of what a tree's `node_modules` workspace
- * links must point at, and whatever BUILDS those links has to work from the same
- * list this guard judges them by. `scripts/bench-sandbox.ts` rebuilds them for
- * every attempt sandbox from THIS list, never from `sources.ts:workspaceScope()`
- * — the single PRODUCT scope, which by construction cannot name the vendored
- * `@agent-core` one, so a builder reading that scope leaves the link pointing
- * into the donor checkout and every sandbox measures the donor's agent-core
- * while reporting on the copy. A builder reading one list while the guard reads
- * another is the set-equality defect itself, so there is one list and this is it.
- *
- * `setup-worktree.sh` derives the same set with a shell glob because it runs
- * BEFORE `node_modules` exists, where this module's own imports cannot resolve.
- * That is not a second answer: the script ends by running the suites that call
- * {@link assertWorkspaceResolution}, so its result is checked against this
- * enumeration before it is believed.
+ * Workspace packages with an entry point, name → directory. The one list `scripts/bench-sandbox.ts` builds
+ * links from; `setup-worktree.sh` globs the same set and is checked against this.
  */
 export function workspacePackages(root: string): Map<string, string> {
   const packages = new Map<string, string>();
@@ -88,11 +49,7 @@ export function workspacePackages(root: string): Map<string, string> {
   return packages;
 }
 
-/**
- * Assert that every workspace package resolves, from `from`, to that same
- * checkout's copy. Throws with the diagnosis and the fix. Call it with
- * `import.meta.dir` from a test inside the package whose resolution you mean.
- */
+/** Assert every workspace package resolves from `from` to the same checkout; call with `import.meta.dir`. */
 export function assertWorkspaceResolution(from: string): void {
   const root = treeRoot(from);
   const problems: string[] = [];

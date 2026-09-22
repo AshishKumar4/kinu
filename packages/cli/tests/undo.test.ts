@@ -1,8 +1,4 @@
-/**
- * /undo — the files half of the walk-back pair. performUndo drives the REAL
- * shadow-git engine (createHostCheckpoints + real git on this host) through
- * the AgentClient checkpoint surface, exactly as LocalAgentClient wires it.
- */
+/** /undo drives the real shadow-git engine through the AgentClient checkpoint surface, wired as LocalAgentClient does. */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -59,9 +55,7 @@ function realEngineClient(opts: { gitBin?: string } = {}) {
   mkdirSync(work, { recursive: true });
   const engine = createHostCheckpoints({ agent: 'undo-test', base: join(root, 'shadow'), gitBin: opts.gitBin });
 
-  // Composed exactly as LocalAgentClient wires it through the session: one call
-  // carries reachability with the entries, so no caller can read an empty list
-  // as a statement about the turn.
+  // One call carries reachability with the entries, so no caller reads an empty list as a statement about the turn.
   const checkpoints: FileCheckpointSurface = {
     list: async (limit, turnId) => {
       const availability = await engine.status();
@@ -112,24 +106,14 @@ describe('performUndo', () => {
     expect(listing.restored).toBe(false);
     expect(listing.text).toContain('Usage: /undo [n]');
 
-    const result = await performUndo(client, '3'); // back to before turn-0's mutations
+    const result = await performUndo(client, '3');
     expect(result.restored).toBe(true);
     expect(readFileSync(join(work, 'state.txt'), 'utf8')).toBe('before turn 0');
   });
 
   /**
-   * A TURN IS RESTORED WHOLE, OR THE WINDOW IS LYING ABOUT SUCCESS.
-   *
-   * A turn takes one checkpoint per directory it touched, retention is per
-   * directory, and the browse limit is global across them — so a turn that
-   * touched three directories can arrive with only some of them inside the
-   * window. Acting on that window restored part of the turn and printed
-   * "✓ N file(s) restored", which is worse than a wrong message: the operator is
-   * told the undo succeeded while a directory stays clobbered.
-   *
-   * The engine here is real. `browseLimit` is forced to 2 so the newest-first
-   * window physically cannot hold all three of the turn's checkpoints, which is
-   * the same condition 200 reaches once enough directories are active.
+   * A turn is restored whole or not at all: checkpoints are per directory while the browse limit is global,
+   * so `browseLimit` is forced to 2 to leave one of the turn's three checkpoints outside the window.
    */
   test('a turn split across directories is restored whole, not just the part in the window', async () => {
     const root = scratchDir('undo-split');
@@ -145,13 +129,10 @@ describe('performUndo', () => {
     const engine = createHostCheckpoints({ agent: 'undo-split', base: join(root, 'shadow') });
     engine.beginTurn({ turnId: 'wide-turn', sessionId: 'default' });
 
-    // One checkpoint per directory: each take returns the commit it wrote,
-    // so a skipped directory (null) fails here rather than restoring short.
     for (const dir of dirs) expect(await engine.ensureCheckpoint(dir)).toMatch(/^[0-9a-f]{40}$/);
 
     for (const dir of dirs) writeFileSync(join(dir, 'f.txt'), 'clobbered');
 
-    // The browse can only see 2 of the 3; a turn-keyed read sees all 3.
     const browseLimit = 2;
 
     const checkpoints: FileCheckpointSurface = {
@@ -168,7 +149,6 @@ describe('performUndo', () => {
     const result = await performUndo({ checkpoints });
     expect(result.restored).toBe(true);
 
-    // All three, not the two the window held.
     for (const dir of dirs) {
       expect(readFileSync(join(dir, 'f.txt'), 'utf8')).toBe('original');
     }
@@ -182,14 +162,12 @@ describe('performUndo', () => {
     await engine.ensureCheckpoint(work);
     writeFileSync(join(work, 'app.ts'), 'turn one damage');
 
-    // First /undo restores to pre-turn state and advertises its own undo.
     const first = await performUndo(client);
     expect(first.restored).toBe(true);
     expect(first.text).toContain('Undo this with /undo 1.');
     expect(readFileSync(join(work, 'app.ts'), 'utf8')).toBe('turn zero');
 
-    // The promised follow-up: /undo 1 must land on the pre-restore
-    // snapshot ("turn one damage"), not re-apply the pre-turn checkpoint.
+    // /undo 1 must land on the pre-restore snapshot, not re-apply the pre-turn checkpoint.
     const second = await performUndo(client, '1');
     expect(second.restored).toBe(true);
     expect(readFileSync(join(work, 'app.ts'), 'utf8')).toBe('turn one damage');
@@ -329,11 +307,7 @@ describe('/undo command surface', () => {
   });
 });
 
-/**
- * /advisor — the advisor's only control surface. It drives the evolution-config
- * RPC pair, so the stub below behaves like the real store: a partial write
- * lands and the effective config comes back.
- */
+/** The stub behaves like the real evolution-config store: a partial write lands and the effective config returns. */
 describe('/advisor command surface', () => {
   function advisorClient(): AgentClient {
     const config: EvolutionConfigView = {
@@ -402,7 +376,6 @@ describe('/advisor command surface', () => {
       expect(await advisorText(client, input)).toBe('Usage: /advisor on | off | severity <nit | concern | blocker>');
     }
 
-    // Nothing was written by any of them.
     expect(await advisorText(client, '/advisor')).toContain('Advisor: off.');
   });
 });

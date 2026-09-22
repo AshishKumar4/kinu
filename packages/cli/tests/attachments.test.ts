@@ -1,6 +1,3 @@
-// Prompt-attachment resolution for the CLI chat surfaces: @path mentions
-// (plus quoted / ~-prefixed tokens) that stat to real files become data-URL
-// PromptFiles (images/PDFs) or path references (everything else).
 import { scratchDir } from '../../test-utils/src/scratch';
 import { writeFileSync, mkdirSync } from 'node:fs';
 
@@ -13,8 +10,7 @@ import {
   resolvePromptAttachments,
 } from '../src/attachments';
 
-/** The cap is the caller's (its client's) — these cases only need one that is
- *  cheap to exceed on disk. The real backend caps are exercised separately. */
+/** Any cap cheap to exceed on disk; real backend caps are tested separately. */
 const CAP = 64 * 1024;
 
 function makeDir(): string {
@@ -38,8 +34,6 @@ describe('prompt token shapes through resolution', () => {
       { limitBytes: CAP, cwd: dir },
     );
 
-    // The @mention inlines and loses its @. The quoted path stays quoted.
-    // The ~ path and the bare word name nothing on disk and pass through.
     expect(result.text).toBe(`look at ${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`);
     expect(result.attached.map((a) => a.path).sort()).toEqual([img, notes].sort());
     expect(result.errors).toEqual([]);
@@ -93,7 +87,7 @@ describe('resolvePromptAttachments', () => {
     const result = await resolvePromptAttachments(`summarize "${pdf}"`, { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.files[0].mediaType).toBe('application/pdf');
-    expect(result.text).toBe(`summarize "${pdf}"`); // only @mentions are rewritten
+    expect(result.text).toBe(`summarize "${pdf}"`);
   });
 
   test('relative @mentions resolve against the provided cwd', async () => {
@@ -178,16 +172,14 @@ describe('resolvePromptAttachments', () => {
     const result = await resolvePromptAttachments(`diff @${img} with @${img}`, { limitBytes: CAP, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.attached).toHaveLength(1);
-    expect(result.text).toBe(`diff ${img} with ${img}`); // both mentions rewritten
+    expect(result.text).toBe(`diff ${img} with ${img}`);
   });
 });
 
 describe('the inline cap belongs to the backend, not to the CLI', () => {
   test('an attachment between the two caps inlines locally and is refused on the cloud', async () => {
-    // The cloud cap is a Durable Object row limit; a local bun:sqlite session
-    // has no row limit and is bounded by provider request size instead. A file
-    // in between must therefore get two different answers — the whole point of
-    // the limit being supplied by the client rather than read from core.
+    // The cloud cap is a Durable Object row limit; a local bun:sqlite session is bounded by provider
+    // request size instead, so a file in between gets two different answers.
     expect(LOCAL_MAX_INLINE_ATTACHMENT_BYTES).toBeGreaterThan(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
     const dir = makeDir();
     const img = join(dir, 'screenshot.png');
@@ -210,14 +202,7 @@ describe('the inline cap belongs to the backend, not to the CLI', () => {
 });
 
 describe('a quoted sentence is prose, not a path', () => {
-  // Measured on the first CL-Bench rollout Kinu ever ran: TOKEN_RE treats any
-  // double-quoted single-line string as a path candidate, and stat() answered
-  // ENAMETOOLONG rather than ENOENT, which is not the tolerated failure, so it
-  // escaped resolvePromptAttachments and killed `kinu exec` mid-turn:
-  //   ENAMETOOLONG, statx '…/work/I am the big blind with J7 offsuit facing a limp…'
-  // The benchmark hits it because a repair prompt embeds the model's own prior
-  // answer verbatim; a user pasting a long quoted sentence into the TUI or chat
-  // hits exactly the same path.
+  // stat() answers ENAMETOOLONG (not ENOENT) for a long quoted string; it must pass through, not throw.
   const SENTENCE = 'I am the big blind with J7 offsuit facing a limp from the opponent. '
     + 'This is a weak, poorly-connected hand, so raising would be a risky bluff with little equity. '
     + 'Since the opponent only limped, I can see the flop for free, which is the safest and most '

@@ -51,8 +51,6 @@ export interface TuiOnboardingOperations {
   readReadiness(): OnboardingReadiness | Promise<OnboardingReadiness>;
   chooseLocation(location: WorkspaceLocationChoice): void | Promise<void>;
   listProviders(): Promise<readonly ProviderConnectionState[]>;
-  /** Runs the provider's own credential flow against the step's port: the
-   *  step reports its progress and answers its questions. */
   connectProvider(id: ProviderConnectId, port: ProviderConnectPort): Promise<ProviderConnectOutcome>;
   configureTiers: () => void | Promise<void>;
   selectTheme(selection: ThemeSelection): void | Promise<void>;
@@ -179,11 +177,7 @@ export function GuidedOnboarding(props: {
     });
   }, [activeStep, loadProviders, startTransition]);
 
-  /**
-   * What a provider flow writes to and reads from while it runs. The secret
-   * never reaches a renderable: the step holds the typed answer and paints
-   * dots, and the flow receives it only when Enter resolves the question.
-   */
+  /** The secret never reaches a renderable. */
   const port = useMemo<ProviderConnectPort>(() => ({
     report: (line) => setProgress((lines) => [...lines, line]),
     ask: (request) => {
@@ -226,12 +220,7 @@ export function GuidedOnboarding(props: {
     setBusy(false);
   }, []);
 
-  /**
-   * The connect flow runs OUTSIDE `startTransition`: it stops on a question
-   * and waits for the person's keystrokes, and React holds every update made
-   * inside an async transition until that transition settles — which would
-   * paint the prompt only after the answer it is asking for.
-   */
+  /** Runs outside `startTransition`: React holds async transition updates until settle, so the prompt would paint after its answer. */
   const runConnect = useCallback((operation: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -241,9 +230,7 @@ export function GuidedOnboarding(props: {
 
   const { registry } = useTuiTheme();
 
-  // Light first, then dark, each group in registry order: the step is a flat
-  // cursor over the themes with the two headings drawn between them, so the
-  // selected index never has to skip a row that cannot be chosen.
+  // A flat cursor with headings drawn between, so selection never skips a row.
   const themeChoices = useMemo<readonly ThemeChoiceRow[]>(() => (
     THEME_APPEARANCES.flatMap((appearance) => registry.themes
       .filter((theme) => theme.appearance === appearance)
@@ -254,7 +241,6 @@ export function GuidedOnboarding(props: {
       })))
   ), [registry]);
 
-  /** The rows the active step offers, in the order they are shown. */
   function stepChoices(): readonly string[] {
     switch (activeStep) {
       case 'location': return ['cloud', 'local', 'both'];
@@ -337,8 +323,7 @@ export function GuidedOnboarding(props: {
         return;
       }
 
-      // Escape answers nothing, which every flow reads as "no credential" and
-      // reports as blocked — the step stays where it is.
+      // Escape answers nothing, which flows report as blocked; the step stays.
       if (event.name === 'escape') {
         answerRef.current?.('');
 

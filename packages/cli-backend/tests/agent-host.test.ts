@@ -54,7 +54,6 @@ const DUMMY_LLM: LLMProviderConfig = {
   model: 'fake-model',
 };
 
-/** One answer as the stream parts a turn reads, in the order the SDK emits them. */
 function textStream(answer: string, usage: LanguageModelV2Usage): ReadableStream<LanguageModelV2StreamPart> {
   return new ReadableStream({
     start(controller) {
@@ -68,7 +67,6 @@ function textStream(answer: string, usage: LanguageModelV2Usage): ReadableStream
   });
 }
 
-/** The same answer for the non-streaming call the detached review pass makes. */
 function textAnswer(answer: string, usage: LanguageModelV2Usage) {
   return { content: [{ type: 'text' as const, text: answer }], finishReason: 'stop' as const, usage, warnings: [] };
 }
@@ -137,13 +135,7 @@ function gatedFirstModel(): GatedModel {
   return { model, started, release, calls: () => callCount };
 }
 
-/** A subordinate that answers its assignment with a TERMINAL report: one
- *  `report` tool call declaring `completed`, then its closing text.
- *
- *  The status is the child's own word, which is the whole point. The local
- *  child has a wired `report` tool, and its declared terminal status reaches
- *  the parent; hardcoding `'progress'` in `relayToParent` would leave the
- *  child `working` regardless of its report. */
+/** A subordinate that files a terminal `completed` report; the status must be the child's own word. */
 function reportingChildModel(content: string, status: 'completed' | 'failed' = 'completed') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
@@ -152,10 +144,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    // The detached review pass calls this one; without it every turn reports a
-    // failure that belongs to the fixture rather than to the product. The
-    // turn reflection is one of those calls, and it is counted apart because
-    // it is the one call turn-level learning spends.
+    // The detached review pass calls this; the turn reflection is counted apart as turn-level learning's one call.
     doGenerate: async (options) => {
       if (JSON.stringify(options.prompt).includes('should be done differently')) reflections += 1;
 
@@ -168,8 +157,6 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
     },
     doStream: async () => {
       calls += 1;
-      // Call 1 is the child's assigned turn; 2 is its continuation past the
-      // tool result; the rest are the parent's wake turn.
       const reporting = calls === 1;
 
       return {
@@ -204,11 +191,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
   return { model, calls: () => calls, reflections: () => reflections };
 }
 
-/** A child that finishes its assigned turn with NO TEXT AT ALL.
- *
- *  The durable relay withholds this (`subordinateRelaysTurnEnd` requires
- *  non-empty text), which for a temporary agent meant the caller's `ask` never
- *  returned. A task child must report it as a non-answer instead. */
+/** A child that finishes with no text: the durable relay withholds it, so a task child must report a non-answer. */
 function silentChildModel() {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
@@ -231,7 +214,6 @@ function silentChildModel() {
   });
 }
 
-/** A child whose turn FAILS outright: the provider throws. */
 function failingChildModel() {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -241,14 +223,7 @@ function failingChildModel() {
   });
 }
 
-/** A child that files a mid-task `progress` note through the report tool and
- *  THEN reaches a terminal state.
- *
- *  This is the shape that hung an ask: the progress note sets "spoke this turn",
- *  which is the DURABLE relay's suppression bit, while `temporaryRunSettles`
- *  correctly refuses to treat it as the answer. A task child that filed one and
- *  then answered had its terminal report suppressed and its caller waited
- *  forever. `then` decides what happens after the note. */
+/** A child that files a `progress` note, then ends per `then`: the note must not suppress its terminal report. */
 function progressThenChildModel(then: 'answer' | 'throw') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
@@ -321,9 +296,7 @@ async function seedAgent(state: string, name: string): Promise<string> {
   return dbPath;
 }
 
-/** A throwaway pair: agent state under `state/`, the physical project under
- *  `project/`. Separate because that is the shape the product has — state is
- *  never inside the directory the agent works in. */
+/** State under `state/`, project under `project/`: state is never inside the agent's working directory. */
 function makeRoots() {
   const state = scratchDir('host-state');
   const project = scratchDir('host-project');
@@ -333,12 +306,9 @@ function makeRoots() {
 
 interface TestHost {
   host: LocalAgentHost;
-  /** Each ROOT's runtime, captured where the host asks for it. */
   runtimes: Map<string, CLIRuntime>;
 }
 
-/** Whatever a scenario needs beyond the roster: the retry hook, and — for the
- *  lease scenarios — what kind of driver this host says it is. */
 interface TestHostExtras {
   wakeAt?: (at: number) => void;
   driverKind?: DriverKind;
@@ -376,12 +346,8 @@ function makeHost(
 }
 
 /**
- * Event rows in the agent log. `peer` counts what another agent sent; `pending`
- * counts rows nothing has bound to a turn yet — the exact condition
- * `EventLog.pending()` selects on, and deliberately NOT `consumed_at IS NULL`:
- * that column is the recovery LEASE, and a turn that answers a delivery closes
- * its lease while keeping the binding, so reading it here would count an
- * answered event as pending again.
+ * Event rows in the agent log. `pending` matches `EventLog.pending()`, not `consumed_at IS NULL`:
+ * that column is the recovery lease, which an answered delivery closes while keeping its binding.
  */
 function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
   const db = new Database(dbPath, { readonly: true });
@@ -397,14 +363,7 @@ function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
   }
 }
 
-/**
- * A promise for `count` completed turns on `agent`.
- *
- * Peer mail wakes the receiver's loop without waiting for it — the sender is
- * not blocked on the receiver's turn, by design — so a test that stops at the
- * assertion would tear the host down mid-turn. This is the same synchronisation
- * the subordinate-report test uses, for the same reason.
- */
+/** Resolves after `count` turns on `agent`: peer mail does not wait for the receiver, so the host must not close mid-turn. */
 function awaitTurns(host: LocalAgentHost, agent: string, count: number): Promise<void> {
   const settled = Promise.withResolvers<void>();
   let seen = 0;
@@ -434,17 +393,8 @@ function pendingOutboxRows(dbPath: string): Array<{ id: string; state: string; a
 }
 
 /**
- * A model that ANSWERS a peer ask the way the product does: it finds the event
- * id the drain told it to cite, calls the real `agents` tool with
- * `action:'msg'` with an `event_id`, and then closes the turn.
- *
- * Reading the id out of its own prompt is the point rather than a shortcut —
- * that hint is the only way a real model learns which event to answer, so a
- * test that supplied the id some other way would not prove the loop closes.
- *
- * Each id is answered ONCE. The hint stays in the conversation forever, so a
- * model that re-answered on sight would keep re-reading its own history and
- * never finish a turn.
+ * Answers a peer ask via the real `agents` tool, citing the event id from the drain's hint in its own prompt.
+ * Each id is answered once; the hint stays in history forever.
  */
 function replyingModel(answer: string) {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -453,9 +403,7 @@ function replyingModel(answer: string) {
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    // The detached turn-review pass calls this one; without it every peer turn
-    // reports `orchestrator.detached_work_failed` for a reason that is the
-    // fixture's, not the product's.
+    // Without this, every peer turn reports `orchestrator.detached_work_failed`.
     doGenerate: async () => textAnswer(answer, usage),
     doStream: async (options) => {
       const eventId = askedEventId(options.prompt);
@@ -497,7 +445,6 @@ function replyingModel(answer: string) {
   return { model, replies: () => answered.size };
 }
 
-/** The unanswered ask in this prompt, from the drain's own reply hint. */
 function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | null {
   const matches = [...renderPromptText(prompt)
     .matchAll(/the sender awaits your answer[\s\S]*?event_id:'([^']+)'/gu)];
@@ -564,11 +511,7 @@ describe('LocalAgentHost', () => {
     const now = Date.now();
     store.create({ id: jobId, kind: 'agents', workMode: 'build', now, label: 'restart proof' });
     store.settle(jobId, 0, JSON.stringify({ done: true }), now + 1);
-    // A fiber is a lane of ONE actor's work, so the orphan is seeded under the
-    // handle whose lane the recovery sweep reads. Under a different actor id it
-    // would be a row nobody owns: the sweep would find nothing, the assertion
-    // below would hold for the wrong reason, and the redrive it is meant to
-    // pin would never have been exercised.
+    // Seeded under the handle whose lane the recovery sweep reads; another actor id would pass vacuously.
     db.query(
       'INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES (?, ?, ?, ?, ?)',
     ).run(
@@ -632,11 +575,7 @@ describe('LocalAgentHost', () => {
         if (!first) throw new Error('The hired child never reached its model.');
         const conversation = hireConversation(first);
 
-        // THE BRIEF IS THE TURN. The child's driving message is the mission
-        // verbatim, never the reactor's `task: …` drain line: an assignment is
-        // the whole input of the turn it buys, and the delegation runner admits
-        // it as one. A child reading `1 event arrived … task: <mission>` is
-        // working from a paraphrase of its own instructions.
+        // The child's driving message is the mission verbatim, never the reactor's `task: …` drain line.
         if (context === 'inherit') {
           expect(conversation.slice(0, 3)).toEqual(HIRE_FORK_PREFIX);
           expect(conversation.findIndex((message) => message.content === HIRE_FORK_MISSION)).toBeGreaterThan(2);
@@ -741,12 +680,7 @@ describe('LocalAgentHost', () => {
 
     if (!reference) throw new Error('The created subordinate has no actor reference.');
     expect(created.subordinate.status).toBe('idle');
-    // NO FILE, AND NO DIRECTORY TO PUT ONE IN. A subordinate is a logical
-    // actor of the parent's one database, so the path a per-child store would
-    // take is never written. Asserted while the child is LIVE rather than after
-    // its dismissal: "the store is gone" that holds because nothing ever
-    // created it is an assertion that cannot fail, while this one fails the
-    // moment a per-child store appears.
+    // Asserted while the child is live: absence after dismissal could not fail.
     expect(existsSync(join(dirname(dbPath), 'subordinates', reference.actorId, 'agent.db'))).toBe(false);
     expect(existsSync(join(dirname(dbPath), 'subordinates'))).toBe(false);
 
@@ -780,14 +714,8 @@ describe('LocalAgentHost', () => {
 
     await team.dismiss({ name: 'researcher', requestedBy: 'user' });
     expect(await team.list()).toEqual([]);
-    // A RETAINED dismissal gives up the NAME and keeps the CONVERSATION, and
-    // those are two rows in two places because a subordinate has no file: the
-    // directory row records the release, and the actor's own rows — the
-    // transcript itself — stay.
+    // A retained dismissal releases the directory row and keeps the actor's own rows.
     expect(actorLifecycle(dbPath, reference.actorId)).toBe('retained');
-    // The task it was assigned, as its own turn read it: a message of its own,
-    // carrying the brief and nothing else. The reactor used to wrap an ingress
-    // line around it, which left the child working from a summary.
     expect(await userMessages(dbPath, reference.actorId))
       .toContain('Find the root cause and report it.');
     await expect(team.assign({ name: 'researcher', task: 'again', mode: 'build' }))
@@ -802,38 +730,17 @@ describe('LocalAgentHost', () => {
     const temporaryReference = temporary.subordinate.actorReference;
 
     if (!temporaryReference) throw new Error('The created temporary-named subordinate has no actor reference.');
-    // KEPT, THEN PURGED — the transition the per-child directory stood for.
-    // `keepHistory: false` is literal: this actor's rows go from every table
-    // the product's own sweep covers. The directory row is NOT one of them and
-    // stays released either way, which is why the count is what decides here
-    // and the lifecycle is what decided above.
+    // `keepHistory: false` purges the actor's rows; the directory row stays released either way.
     expect(actorLifecycle(dbPath, temporaryReference.actorId)).toBe('live');
     const temporaryRows = actorRowCount(dbPath, temporaryReference.actorId);
     expect(temporaryRows).toBeGreaterThan(0);
     await team.dismiss({ name: 'temporary', requestedBy: 'user', keepHistory: false });
     expect(actorRowCount(dbPath, temporaryReference.actorId)).toBe(0);
-    // And the retained one was untouched by its sibling's destroy.
     expect(actorRowCount(dbPath, reference.actorId)).toBeGreaterThan(0);
     await host.close();
   });
 
-  /**
-   * B10, on the local host: ONE assignment row, ONE runner, ONE turn.
-   *
-   * The defect was two runners over one row kind. The reactor admitted a
-   * `subordinate_task` like any external event, digested it into "1 event
-   * arrived while you were idle … [subordinate_task] from workspace …", and
-   * handed that to the child's turn admission; on the cloud backend that
-   * admission re-published the digest as a NEW assignment, so the two runners
-   * fed each other — 242 rows from one hire, bodies nesting 253 → 850
-   * characters, measured 2026-09-17 in the workerd pool. The local host had one
-   * runner and therefore no loop, but the same wrong input: its child worked
-   * from the wrapper rather than from the brief.
-   *
-   * Everything asserted here is read through the public host surface — the
-   * `team` port, the subscription, the model the child actually called, and the
-   * rows on disk. Nothing stubs the runner or reads source text.
-   */
+  /** B10, local host: one assignment row, one runner, one turn, driven by the brief rather than a reactor digest. */
   test('a hired child runs its brief once, as its own instruction, under the row\'s mode', async () => {
     const brief = 'Reconcile the ledger and report the variance.';
     const { state, project } = makeRoots();
@@ -847,8 +754,6 @@ describe('LocalAgentHost', () => {
       doStream: async (options) => {
         calls += 1;
 
-        // The child speaks first: its assignment is what starts this scene, and
-        // the parent's own turn only runs once the report reaches it.
         if (calls === 1) childPrompts.push(options);
 
         const answer = calls === 1 ? 'variance reconciled' : 'noted';
@@ -887,17 +792,10 @@ describe('LocalAgentHost', () => {
       await answered;
       await reported.promise;
 
-      // ONE turn, driven by the brief itself and under the mode the row was
-      // admitted with. `programmatic` is the fact that opens the child's
-      // `report` surface and the fact the relay policy reads, so the shape the
-      // reactor used to produce is preserved in everything except the text.
+      // `programmatic` opens the child's `report` surface and is what the relay policy reads.
       expect(childTurns).toEqual([{ kind: 'programmatic', workMode: 'build', text: brief }]);
 
-      // What the child's model was actually handed. Exactly ONE user text
-      // mentions the brief and that text IS the brief: a wrapper would still
-      // contain it, so the equality is what separates the instruction from a
-      // summary of it. The turn-local `dynamic_context` block rides beside it as
-      // harness state and is not conversation.
+      // Exactly one user text mentions the brief and equals it; a wrapper would contain it too.
 
       const prompt = childPrompts[0]?.prompt ?? [];
 
@@ -908,8 +806,7 @@ describe('LocalAgentHost', () => {
       expect(heard.filter((text) => text.includes(brief))).toEqual([brief]);
       expect(JSON.stringify(prompt)).not.toContain('event arrived while you were');
 
-      // One row for one brief, and its body IS the brief — a re-admission loop
-      // shows up here as a second row whose body quotes the first.
+      // A re-admission loop shows up as a second row quoting the first.
       const view = new Database(dbPath, { readonly: true });
 
       const assignments = view.query<{ body: string }, [string]>(
@@ -929,16 +826,7 @@ describe('LocalAgentHost', () => {
     }
   });
 
-  /**
-   * THE TEMPORARY RUNG, END TO END ON THE REAL LOCAL SUBSTRATE.
-   *
-   * A role-targeted `ask` is not a bare model call and not a second execution
-   * path: it births a real local actor with its own SQLite database, its own
-   * `LocalAgentSession` and its own tool loop, drives it through the same
-   * `subordinate_task` admission a hire uses, takes its report through the same
-   * ingress, and then archives it in the SAME roster. Everything asserted here
-   * is a fact on disk or in that one roster.
-   */
+  /** Temporary rung end to end: a role-targeted `ask` births a real local actor, admits its task, and archives it in the same roster. */
   test('a role-targeted ask runs a real local child, answers from the call, and archives it in the one roster', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -950,8 +838,6 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    // The port is wired wherever a local agent holds a roster — the rung is
-    // structural, not a per-session option.
     const port = present(team.temporary, 'the temporary hire port');
 
     const outcome = await port.run({
@@ -961,8 +847,6 @@ describe('LocalAgentHost', () => {
       mode: 'build',
     });
 
-    // ONE stable shape, and the answer came back from THIS call rather than as
-    // an event on a later turn.
     expect(outcome).toMatchObject({
       status: 'completed',
       lifetime: 'task',
@@ -973,21 +857,12 @@ describe('LocalAgentHost', () => {
     const agent = v.parse(v.object({ agent: v.string() }), outcome).agent;
     expect(agent).toStartWith('ask-researcher-');
 
-    // It was a REAL actor, and the archive KEPT it. Two readers because they
-    // answer two questions: the directory row says the NAME was given up, which
-    // every dismissal does and this rung's `transcript: 'kept'` does not
-    // contradict; `actorRowCount` says the actor's own rows survived it, and
-    // those rows ARE the transcript the outcome claims. Reading the lifecycle
-    // alone would prove nothing about the bytes — `actorRowCount` deliberately
-    // excludes `workspace_actors` — and a destroy would pass it.
+    // Lifecycle says the name was released; `actorRowCount` (which excludes `workspace_actors`) says the transcript survived.
     const askActorId = childActorId(dbPath, agent);
     expect(actorLifecycle(dbPath, askActorId)).toBe('retained');
     expect(actorRowCount(dbPath, askActorId)).toBeGreaterThan(0);
 
-    // ONE roster. Released from the working set...
     expect(await team.list()).toEqual([]);
-    // ...and archived in that same roster, carrying the lifetime that says which
-    // rung created it. No second table was consulted to learn any of this.
     const archived = new Database(dbPath, { readonly: true });
 
     const rows = archived.query<{
@@ -1000,9 +875,7 @@ describe('LocalAgentHost', () => {
     ]);
 
     await host.close();
-    // The child's answer was consumed by the waiting call, so it never became a
-    // `subordinate_report` event on the parent's rail — publishing it too would
-    // have billed a turn to read an answer already in hand.
+    // The waiting call consumed the answer, so no `subordinate_report` bills a parent turn.
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
@@ -1013,8 +886,6 @@ describe('LocalAgentHost', () => {
     expect(reports).toBe(0);
   });
 
-  /** A hire is untouched by the rung above: it stays DURABLE in the same roster,
-   *  and its report still travels the event rail that wakes its parent. */
   test('a hire in the same roster keeps lifetime durable and still reports onto the rail', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -1041,8 +912,6 @@ describe('LocalAgentHost', () => {
     const roster = await team.list();
     expect(roster).toHaveLength(1);
     expect(roster[0]?.lifetime).toBe('durable');
-    // The row names the assignment its report will cite — one correlation for
-    // both lifetimes.
     expect(roster[0]?.taskEventId).toBeTruthy();
 
     await reported.promise;
@@ -1055,20 +924,10 @@ describe('LocalAgentHost', () => {
     ).get()?.n ?? 0;
 
     view.close();
-    // A durable subordinate's answer IS its parent's event: exactly one, on the
-    // rail, unchanged by the temporary rung's existence.
     expect(reports).toBe(1);
   });
 
-  /**
-   * NO HANG, EXACTLY ONE RESULT — for every way a temporary child's turn can end.
-   *
-   * There is no deadline anywhere in this rung by ruling, so the ONLY thing that
-   * makes `shell` return is the child reporting. These drive the two endings the
-   * durable relay policy withholds — a finished turn with nothing to say, and a
-   * turn that failed — on the real local substrate, and assert the call returns
-   * with exactly one report and no duplicate.
-   */
+  /** No deadline exists in this rung, so `shell` returns only when the child reports: exactly one result for every ending. */
   for (const [label, model] of [
     ['finishes with nothing to say', silentChildModel()],
     ['fails outright', failingChildModel()],
@@ -1091,13 +950,10 @@ describe('LocalAgentHost', () => {
         mode: 'build',
       });
 
-      // It RETURNED — that is the guarantee. Classified, with the child's own
-      // account rather than a bare timeout.
       expect(outcome).toMatchObject({ status: 'failed', lifetime: 'task', transcript: 'kept' });
       const answer = v.parse(v.object({ answer: v.string(), agent: v.string() }), outcome);
       expect(answer.answer.length).toBeGreaterThan(0);
 
-      // Released from the working set, archived in the SAME roster.
       expect(await team.list()).toEqual([]);
       await host.close();
       const view = new Database(dbPath, { readonly: true });
@@ -1106,8 +962,6 @@ describe('LocalAgentHost', () => {
         'SELECT name, status, lifetime FROM actor_subordinates',
       ).all();
 
-      // EXACTLY ONE result: the waiting call consumed the report, so it never
-      // also became an event that would wake the parent for a second reading.
       const reports = view.query<{ n: number }, []>(
         "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
       ).get()?.n ?? 0;
@@ -1118,7 +972,6 @@ describe('LocalAgentHost', () => {
     });
   }
 
-  /** Both child lifetimes retain task evidence without joining the turn window. */
   test('a subordinate turn gets advisor feedback while its evolution window stays empty', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -1167,8 +1020,6 @@ describe('LocalAgentHost', () => {
   });
 
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
-    // One host per half: the fixture model reports on its FIRST turn only, so
-    // each child needs a model of its own to make its failing report.
     const ask = makeRoots();
     const askDb = await seedAgent(ask.state, 'root');
     const askChild = reportingChildModel('could not find the root cause', 'failed');
@@ -1211,8 +1062,7 @@ describe('LocalAgentHost', () => {
     await childTurnEnded.promise;
     await hiring.host.close();
 
-    // Same as cf, where a subordinate runs `runHeadInference` and never
-    // reaches `recordTurn`: the hire's actor-scoped ledger stays empty.
+    // Matches cf, where a subordinate runs `runHeadInference` and never reaches `recordTurn`.
     expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, outcomes: [], lessons: [] });
     expect(hireChild.reflections()).toBe(0);
   });
@@ -1251,15 +1101,7 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
-  /**
-   * A PROGRESS NOTE MUST NOT CANCEL THE ANSWER.
-   *
-   * The mid-task `progress` report is invited behaviour, and it sets the DURABLE
-   * relay's "spoke this turn" bit — which is not the same question as "already
-   * answered". Suppressing the terminal report on it left the caller parked with
-   * no deadline to rescue it. Both endings after a note are covered: the child
-   * answers, and the child fails.
-   */
+  /** A progress note sets the durable relay's "spoke this turn" bit, which must not suppress the terminal answer. */
   for (const [then, expected] of [
     ['answer', 'completed'],
     ['throw', 'failed'],
@@ -1282,10 +1124,8 @@ describe('LocalAgentHost', () => {
         mode: 'build',
       });
 
-      // It RETURNED. Before the settling bit existed this call never resolved.
       const settled = v.parse(v.object({ status: v.string(), agent: v.string() }), outcome);
       expect(settled.status).toBe(expected);
-      // Released, in the one roster.
       expect(await team.list()).toEqual([]);
       await host.close();
       const view = new Database(dbPath, { readonly: true });
@@ -1294,8 +1134,7 @@ describe('LocalAgentHost', () => {
         'SELECT status, lifetime FROM actor_subordinates',
       ).all();
 
-      // The PROGRESS note is the one thing that legitimately reaches the rail:
-      // it is not the answer, so it wakes the parent like any mid-work note.
+      // The progress note is not the answer, so it reaches the rail like any mid-work note.
       const reports = view.query<{ n: number }, []>(
         "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
       ).get()?.n ?? 0;
@@ -1306,16 +1145,7 @@ describe('LocalAgentHost', () => {
     });
   }
 
-  /**
-   * THE DEPTH CAP, STRUCTURALLY, ON THE LOCAL BACKEND.
-   *
-   * A role-targeted ask births a child through the same runtime a hire does, so
-   * it adds a level. The port was wired for every entry, so a depth-4 local actor
-   * advertised and ran it, seeded a depth-5 child, and that child got a port of
-   * its own — one call per level without bound, which is the failure
-   * `DELEGATION_MAX_DEPTH` exists to prevent. Absence is the containment, which
-   * is what the cloud backend's `teamProfile()` already did.
-   */
+  /** Depth cap on the local backend: a child at `DELEGATION_MAX_DEPTH` has no ask port at all, matching cf's `teamProfile()`. */
   test('a local actor at the delegation cap is wired no temporary port at all', async () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
@@ -1325,12 +1155,9 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    // A root has the whole cap below it, so it HAS the rung.
     expect(team.temporary).toBeDefined();
 
-    // A child AT the cap, put there the only way one can be: hired at every
-    // level below the root. Its depth is the directory's answer, walked up the
-    // rows — never a number written on the child's own config.
+    // Depth comes from walking the directory rows, never from the child's config.
     let address = 'root';
 
     for (let level = 1; level <= DELEGATION_MAX_DEPTH; level++) {
@@ -1349,18 +1176,11 @@ describe('LocalAgentHost', () => {
     const capped = await reopened.team(address);
     expect(capped.delegation.depth).toBe(DELEGATION_MAX_DEPTH);
     expect(delegationExhausted(capped.delegation)).toBe(true);
-    // ABSENT, not present-and-refusing: the rung is gone from this actor's
-    // schema, sandbox namespace and prompt because the port was never wired.
     expect(capped.temporary).toBeUndefined();
     await reopened.close();
   });
 
-  /**
-   * A hosted child's first owner message titles it through the turn's own
-   * `auto_title` effect — provisional, then the generated title — exactly as a
-   * root's chat does, once the plan reads the child's own roster name rather
-   * than the workspace slug `agentName()` returns for every actor in the tree.
-   */
+  /** A hosted child's first owner message titles it via `auto_title`, using the child's roster name rather than the workspace slug. */
   test('a message to an unnamed hire titles it through the turn itself, once', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -1369,8 +1189,6 @@ describe('LocalAgentHost', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
 
-    // The generated title is announced by the rename the effect's OWN persist
-    // emits — awaited, not polled.
     const titled = Promise.withResolvers<void>();
     host.subscribe((agent, event) => {
       if (agent === 'root/helper' && event.type === 'broadcast'
@@ -1391,17 +1209,14 @@ describe('LocalAgentHost', () => {
       await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
       await Promise.all([first, titled.promise]);
 
-      // The turn's own effect wrote the generated title, not the provisional.
       expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
 
-      // Once named, no later message moves it.
       const second = awaitTurns(host, 'root/helper', 1);
       await team.message({ name: 'helper', content: 'Name yourself something else entirely', mode: 'build' });
       await second;
 
       expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
 
-      // The owner's word still beats any title the system wrote.
       await team.rename({ name: 'helper', displayName: 'Coupon Auditor' });
 
       const third = awaitTurns(host, 'root/helper', 1);
@@ -1415,16 +1230,7 @@ describe('LocalAgentHost', () => {
     }
   });
 
-  /**
-   * EXACTLY ONE RESULT, AND ONLY ONE.
-   *
-   * A failing turn fires an `error` event and a `turn-end` event, and both are
-   * terminal endings a task child owes a report for — so the relay records that
-   * it spoke (`detachRelay`). What is observable from outside is the other half
-   * of the same guarantee: once the run has settled, the row is released, and a
-   * further report for that child is REFUSED rather than delivered as a second
-   * result for one question.
-   */
+  /** Once the run settles the row is released, so a further report is refused rather than delivered as a second result. */
   test('a settled temporary run refuses a second report for the same child', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -1446,8 +1252,6 @@ describe('LocalAgentHost', () => {
     const agent = v.parse(v.object({ agent: v.string(), status: v.string() }), outcome);
     expect(agent.status).toBe('failed');
 
-    // Released, so the child is no longer an addressable member of the roster —
-    // which is what makes a second report impossible rather than merely unwanted.
     expect(await team.list()).toEqual([]);
     await expect(team.assign({ name: agent.agent, task: 'again', mode: 'build' }))
       .rejects.toThrow(`subordinate "${agent.agent}" is dismissed`);
@@ -1460,15 +1264,10 @@ describe('LocalAgentHost', () => {
     ).get()?.n ?? 0;
 
     view.close();
-    // The one result went to the waiting call and never also to the rail.
     expect(reports).toBe(0);
   });
 
-  /**
-   * THE WAITER-ABSENT LATE EVENT. A child that answers after its caller is gone
-   * must not be lost and must not leave a row behind: with no waiter the report
-   * takes the ordinary rail, and the roster releases the row on its way past.
-   */
+  /** Waiter-absent late report takes the ordinary rail, and the roster releases the row. */
   test('a report with no waiter becomes one correlated event and releases the task row', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
@@ -1480,9 +1279,7 @@ describe('LocalAgentHost', () => {
     ]);
 
     const team = await host.team('root');
-    // Hand a child work, then mark its row task-lifetime with no waiter parked,
-    // which is exactly the state an evicted asking activation leaves. The
-    // durable verbs refuse a task row, so the row flips after the handoff.
+    // The state an evicted asking activation leaves; durable verbs refuse a task row, so flip after the handoff.
     await team.spawn({
       name: 'ask-researcher-late',
       role: 'researcher',
@@ -1512,9 +1309,7 @@ describe('LocalAgentHost', () => {
     ).all();
 
     view.close();
-    // ONE event — not zero (it would be lost) and not two (a duplicate report).
     expect(reports).toBe(1);
-    // And released by the roster's own report policy, not left listed forever.
     expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
   });
 
@@ -1528,10 +1323,7 @@ describe('LocalAgentHost', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
 
-    // Resolved on the first REPORT — the assignment rides the same
-    // `subordinate_event` channel under status 'task' — and then asserted, so a
-    // host that published the wrong status fails by naming it rather than by
-    // hanging on a status-filtered wait that never arrives.
+    // Assignment rides the same `subordinate_event` channel under status 'task'; a wrong status fails by name, not by hanging.
     const reported = Promise.withResolvers<{ status: string; text: string }>();
     const childTurnEnded = Promise.withResolvers<void>();
     const parentTurnEnded = Promise.withResolvers<void>();
@@ -1562,35 +1354,17 @@ describe('LocalAgentHost', () => {
 
     expect(assigned.delivery).toBe('starts_now');
 
-    // The child's own word — and its body — cross into the parent's rail.
-    // `relayToParent` hardcoded 'progress' here, so a child could say
-    // `completed` and its parent would still be told it was mid-work.
     expect(await reported.promise).toEqual({ status: 'completed', text: CONTENT });
-    // Both turns are over, so the child's turn-end relay has had its chance to
-    // fire and the roster below is the settled state rather than a mid-flight one.
     await childTurnEnded.promise;
     await parentTurnEnded.promise;
 
-    // `applyReport` takes 'completed' to idle and clears the task. The automatic
-    // turn-end relay passes 'progress', which leaves the row 'working' with its
-    // task intact — the state the sibling test above pins, and the only state
-    // this backend could reach before the report tool existed here.
+    // `applyReport` takes 'completed' to idle; the turn-end relay's 'progress' would leave the row 'working'.
     const status = v.parse(TeamStatusSchema, await team.status({ name: 'researcher' }));
     expect(status.roster.status).toBe('idle');
     expect(status.roster.currentTask).toBeNull();
 
-    // ONE report, not two — counted after close(), which joins every relay still
-    // in flight; counting before it races the child's own turn-end.
-    //
-    // TWO guards hold this, and measurably either one alone is enough: a
-    // terminal report clears `current_task`, and `parentAdmitsSubordinateReport`
-    // refuses a relay to a parent with no outstanding task, because a parent
-    // that asked for nothing is not the audience for unsolicited work; the
-    // report dep also sets `reportedThisTurn`, which suppresses the turn-end
-    // relay within the same turn whatever the status was. Defeating both — a
-    // report published as 'progress' that does not record that it spoke — is
-    // what produces the duplicate, and a duplicate would push the row this
-    // report just cleared straight back to 'working'.
+    // Counted after close(), which joins in-flight relays. Either guard alone prevents a duplicate:
+    // `parentAdmitsSubordinateReport` refuses a parent with no task, and `reportedThisTurn` suppresses the turn-end relay.
     await host.close();
     const view = new Database(dbPath, { readonly: true });
 
@@ -1620,13 +1394,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       const alpha = present(await host.peers('alpha'), 'the alpha peer surface');
       const beta = present(await host.peers('beta'), 'the beta peer surface');
 
-      // Symmetry IS equality here: each sees exactly the other, so there is no
-      // root that owns the workspace and no root that hangs off another.
       expect(await alpha.deps.listPeers()).toEqual([{ name: 'beta', displayName: 'Beta' }]);
       expect(await beta.deps.listPeers()).toEqual([{ name: 'alpha', displayName: 'Alpha' }]);
 
-      // And each is a root in its own right: both hold the subordinate surface
-      // at depth 0, which is what "equal root" means to the delegation budget.
       expect((await host.team('alpha')).delegation.depth).toBe(0);
       expect((await host.team('beta')).delegation.depth).toBe(0);
     } finally {
@@ -1649,7 +1419,6 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
 
     try {
       const alpha = present(await host.peers('alpha'), 'the alpha peer surface');
-      // Two turns on beta: the note it is woken by, and the ask it answers.
       const betaSettled = awaitTurns(host, 'beta', 2);
 
       const sent = await alpha.deps.send({
@@ -1668,14 +1437,10 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
         from: 'beta',
         reply: 'the parser is the bottleneck',
       });
-      // The answer came out of beta's own turn calling the tool, not from the
-      // transport inventing one.
       expect(answering.replies()).toBe(1);
       await betaSettled;
-      // Beta's post-turn drain is scheduled rather than awaited by the reply
-      // path; run it out so nothing is mid-flight when the host closes.
+      // Beta's post-turn drain is scheduled, not awaited by the reply path.
       await host.tick('beta', Date.now());
-      // Both legs are durable rows, and both were delivered rather than retried.
       expect(pendingOutboxRows(alphaDb).map((row) => row.state)).toEqual(['sent', 'sent']);
       expect(pendingOutboxRows(betaDb).map((row) => row.state)).toEqual(['sent']);
     } finally {
@@ -1692,8 +1457,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj' },
       { name: 'beta', cwd: project, workspaceId: 'proj' },
-      // Same directory, different virtual workspace — the case that proves the
-      // boundary is the PAIR and not the folder.
+      // Same directory, different virtual workspace: the boundary is the pair, not the folder.
       { name: 'gamma', cwd: project, workspaceId: 'other' },
     ];
 
@@ -1710,13 +1474,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       expect(actorLifecycle(betaDb, childActorId(betaDb, 'auditor'))).toBe('live');
       expect((await host.team('alpha/scout')).delegation.depth).toBe(1);
 
-      // A subordinate holds no peer transport at all, so there is no action for
-      // it to reach a peer with — structural, not a runtime check it could miss.
       expect(await host.peers('alpha/scout')).toBeNull();
       expect(await host.peers('beta/auditor')).toBeNull();
 
-      // A root cannot address the other workspace either: gamma shares the
-      // directory and is still not a peer.
       const alpha = present(await host.peers('alpha'), 'the alpha peer surface');
 
       expect(await alpha.deps.listPeers()).toEqual([{ name: 'beta' }]);
@@ -1724,15 +1484,10 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
         agent: 'gamma', topic: 'note', message: 'hello', mode: 'build',
       })).rejects.toThrow('unknown peer "gamma" in workspace "proj"');
 
-      // And the receiving side refuses it too, so a message that somehow
-      // reached the hop is still not admitted. This is the enforcement half.
       const refused = await alpha.receive({
         sender_event_id: 'forged-1',
         sender_agent_name: 'gamma',
-        // A foreign group, spelled the way the transport puts it on the wire
-        // (core's `peerGroupId`: `local:<workspaceId>:<cwd>`). The property is
-        // that an id which is not THIS group's is refused, so stating one is
-        // the whole arrangement.
+        // Foreign group in wire form (core's `peerGroupId`: `local:<workspaceId>:<cwd>`).
         sender_user_id: `local:other:${project}`,
         topic: 'note',
         body: 'let me in',
@@ -1752,8 +1507,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
 
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj' },
-      // Placed in the roster, so it is a legitimate peer — but its state does
-      // not exist yet, so the hop throws and the row must WAIT rather than die.
+      // Placed in the roster but with no state yet, so the hop throws and the row must wait, not die.
       { name: 'beta', cwd: project, workspaceId: 'proj' },
     ];
 
@@ -1766,15 +1520,13 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     });
 
     expect(queued).toMatchObject({ status: 'queued' });
-    // The retry instant reaches the driver, and the tick reports it too, so a
-    // sleeping loop cannot sleep past it.
+    // The retry instant reaches the driver so a sleeping loop cannot sleep past it.
     expect(armed.length).toBeGreaterThan(0);
     const pending = await first.tick('alpha', Date.now());
     expect(pending.ran).toBe(true);
     expect(pending.nextAt).not.toBeNull();
     await first.close();
 
-    // The queue is a row, not memory: it is still there with the process gone.
     expect(pendingOutboxRows(alphaDb)).toEqual([
       expect.objectContaining({ state: 'pending', attempt_count: 1 }),
     ]);
@@ -1783,11 +1535,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { host: second } = makeHost(state, streamingModel('ack'), refs);
 
     try {
-      // The re-driven delivery wakes beta, whose turn is deliberately not
-      // awaited by the sender — so wait for it here rather than tear the host
-      // down underneath it.
+      // Beta's turn is not awaited by the sender.
       const betaWoken = awaitTurns(second, 'beta', 1);
-      // Past the 5s first backoff — the same fold the daemon's delay uses.
+      // Past the 5s first backoff, the same fold the daemon's delay uses.
       await second.tick('alpha', Date.now() + 10_000);
       expect(pendingOutboxRows(alphaDb).map((row) => row.state)).toEqual(['sent']);
       expect(eventCount(betaDb, 'peer')).toBe(1);
@@ -1817,13 +1567,10 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       await (await host.team('alpha')).create({
         name: 'scout', role: 'researcher', mission: 'Read the parser.',
       });
-      // Both peers opened, so both runtimes exist to compare.
       await host.acquire('beta');
       const alphaRt = present(runtimes.get('alpha'), 'the alpha runtime');
       const betaRt = present(runtimes.get('beta'), 'the beta runtime');
 
-      // The bytes: one directory, written by one peer and read by the other,
-      // and really on disk where the developer's own tools would see it.
       await alphaRt.storage.vfs.writeFile('shared-note.md', 'peers share this file');
       expect(await betaRt.storage.vfs.readFile('shared-note.md', { encoding: 'utf-8' }))
         .toBe('peers share this file');
@@ -1831,20 +1578,14 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       expect(alphaRt.cwd).toBe(project);
       expect(betaRt.cwd).toBe(project);
 
-      // The subordinate is on it too, and it was told so — the prompt's own
-      // runtime context is the only place a turn learns its directory, and
-      // this capture holds nothing but that turn.
+      // The prompt's runtime context is the only place a turn learns its directory.
       seen.length = 0;
       await (await host.acquire('alpha/scout')).send('where am I working?');
       expect(seen.join('\n')).toContain(`Working directory: ${project}`);
 
-      // Nothing private leaked into the shared directory: SOUL, memory and
-      // scaffold belong to each agent's own state tree.
       expect(existsSync(join(project, 'SOUL.md'))).toBe(false);
       expect(existsSync(join(project, 'MEMORY.md'))).toBe(false);
 
-      // The state: three separate SQLite files, so a turn on one is invisible
-      // in the others' conversations.
       await (await host.acquire('alpha')).send('only alpha said this');
       expect(await userMessages(join(state, 'alpha', 'agent.db'))).toContain('only alpha said this');
       expect(await userMessages(join(state, 'beta', 'agent.db'))).not.toContain('only alpha said this');
@@ -1865,13 +1606,7 @@ function renderPromptText(prompt: LanguageModelV2CallOptions['prompt']): string 
   )).join('\n');
 }
 
-/**
- * The ACTOR ID one child was hired under, read from its parent's roster.
- *
- * There is no child database to name: a subordinate is a row set in its
- * parent's one file, keyed by this id. The property every assertion here
- * proves is "the child's actor exists and its rows are its own".
- */
+/** The actor id a child was hired under; a subordinate is a row set in its parent's one database. */
 function childActorId(parent: string, name: string): string {
   const db = new Database(parent, { readonly: true });
 
@@ -1885,8 +1620,7 @@ function childActorId(parent: string, name: string): string {
   } finally { db.close(); }
 }
 
-/** One config row off the child's own actor_id — where a title actually lands,
- *  since the roster carries no display name. */
+/** One config row for the child's actor_id; the roster carries no display name. */
 function childConfigValue(parent: string, name: string, key: string): string | null {
   const db = new Database(parent, { readonly: true });
 
@@ -1902,18 +1636,8 @@ function childConfigValue(parent: string, name: string, key: string): string | n
 }
 
 /**
- * One actor's lifecycle in this workspace's directory — the one-database
- * answer to "does this child still exist, and how much of it".
- *
- * "Released" and "destroyed" are NOT one question, and reading them as one
- * makes a retained dismissal look like a destroyed actor: `deleted_at`
- * records the NAME being given up, which EVERY dismissal does, while only a
- * destroy purges the actor's rows. The directory row is NOT among those: the
- * directory owns its lifecycle, so it survives a destroy in the released state
- * too, and how much of the actor is left is `actorRowCount` below.
- *
- * Takes an actor id rather than a roster name, because the destroyed case has
- * no name left to resolve through.
+ * One actor's directory lifecycle. `deleted_at` marks the name released (every dismissal);
+ * only a destroy purges the actor's rows, which `actorRowCount` counts.
  */
 function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 'retained' | null {
   const db = new Database(parent, { readonly: true });
@@ -1931,20 +1655,8 @@ function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 
 }
 
 /**
- * Every row this workspace holds for one actor, over every table that carries
- * an `actor_id` column.
- *
- * The table set is asked of THIS database's own catalogue rather than taken
- * from the product's cleanup pass, and that is deliberate: a count read
- * through the very pass it is checking agrees with that pass by construction,
- * so a purge that stopped sweeping a table would still report zero here and
- * `keepHistory: false` would pass while the rows sat there. Asked
- * independently, that defect leaves rows this count can still see.
- *
- * `workspace_actors` is the one table left out, and leaving it out is the
- * reason the DIRECTORY state above and the DATA here are two separate
- * questions: the directory owns that row's lifecycle, so every dismissal
- * releases the name and only a destroy takes the rows.
+ * Rows for one actor across every `actor_id` table, read from the catalogue rather than the product's cleanup pass,
+ * so a purge that skips a table is caught. `workspace_actors` is excluded: the directory owns its lifecycle.
  */
 function actorRowCount(parent: string, actorId: string): number {
   const db = new Database(parent, { readonly: true });
@@ -1967,8 +1679,6 @@ function actorRowCount(parent: string, actorId: string): number {
   } finally { db.close(); }
 }
 
-/** What one actor's turns left in the three conversational evolution ledgers:
- *  the durable window, the graded outcomes and the lessons. */
 function evolutionRows(dbPath: string, actorId: string) {
   const db = new Database(dbPath, { readonly: true });
 
@@ -1985,9 +1695,7 @@ function evolutionRows(dbPath: string, actorId: string) {
   } finally { db.close(); }
 }
 
-/** A read handle for any actor this database holds, including the one a
- *  retained dismissal left behind: presence in the workspace is the fence, not
- *  lifecycle, so a released subordinate's conversation still reads. */
+/** Read handle for any actor this database holds; presence is the fence, not lifecycle. */
 function readHandle(sql: SqlExecutor, actorId: string): ActorHandle {
   const row = sql<{ workspace_id: string; parent_actor_id: string | null; name: string; storage_key: string }>`
     SELECT workspace_id, parent_actor_id, name, storage_key FROM workspace_actors WHERE actor_id = ${actorId}`[0];
@@ -2007,12 +1715,9 @@ async function userMessages(dbPath: string, actorId?: string): Promise<string[]>
   const db = new Database(dbPath, { readonly: true });
 
   try {
-    // ACTOR-SCOPED when asked. One database holds every actor's transcript, so
-    // "what did THIS agent hear" is a predicate now rather than a file choice.
     const sql = makeSql(db);
     const actor = actorId === undefined ? openWorkspaceMainActor(sql) : readHandle(sql, actorId);
-    // An empty plane is enough: a message this short is an inline payload, so
-    // a read that reaches the VFS at all is a spill this helper should surface.
+    // A message this short is inline, so any VFS read is a spill this helper should surface.
     const rows = await readTranscriptRows(sql, actor, createMemoryVfs().vfs);
 
     return rows.filter((row) => row.role === 'user').map((row) => row.content);
@@ -2021,9 +1726,7 @@ async function userMessages(dbPath: string, actorId?: string): Promise<string[]>
   }
 }
 
-/** Schedule a timer on the workspace from ANOTHER handle, as `kinu triggers
- *  <name> at` does from the operator's process. The host's own pass fires it,
- *  which is the one external ingress a local workspace has. */
+/** Schedule a timer from another handle, as `kinu triggers <name> at` does; the host's own pass fires it. */
 async function scheduleTimer(dbPath: string, label: string, atMs: number): Promise<void> {
   const db = new Database(dbPath);
 
@@ -2035,15 +1738,7 @@ async function scheduleTimer(dbPath: string, label: string, atMs: number): Promi
   }
 }
 
-/**
- * The driver lease as a REAL host uses it, over a real workspace database.
- *
- * The competing driver is a real sleeping OS process whose pid is written into
- * the lease by the lease's own API. That is a genuine cross-process condition:
- * the only fact the lease asks about a holder is whether its pid still exists,
- * and a `sleep` child answers that for real, so the host under test runs
- * against `OS_LEASE_PROCESS` with no substitution of any kind.
- */
+/** The driver lease over a real database; the rival is a real sleeping process, since liveness is only whether its pid exists. */
 describe('LocalAgentHost — the driver lease', () => {
   const rivals: Subprocess[] = [];
 
@@ -2051,9 +1746,7 @@ describe('LocalAgentHost — the driver lease', () => {
     await retireRivals();
   });
 
-  /** Stop every rival and WAIT for it to be reaped, so its pid genuinely stops
-   *  existing before anything asks. A killed-but-unreaped child still answers
-   *  `kill(pid, 0)`, which is the lease's whole liveness question. */
+  /** Kill and reap every rival: an unreaped child still answers `kill(pid, 0)`. */
   async function retireRivals(): Promise<void> {
     const going = rivals.splice(0);
 
@@ -2061,7 +1754,6 @@ describe('LocalAgentHost — the driver lease', () => {
     await Promise.all(going.map((rival) => rival.exited));
   }
 
-  /** Give the lease to another live process, as that process would take it. */
   function rivalHolds(dbPath: string, kind: DriverKind): number {
     const rival = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
     rivals.push(rival);
@@ -2084,7 +1776,6 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   }
 
-  /** Who is driving, by the file rather than by any hold this process keeps. */
   function holderAt(dbPath: string): DriverLeaseHolder | null {
     const db = new Database(dbPath);
 
@@ -2103,8 +1794,6 @@ describe('LocalAgentHost — the driver lease', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
 
-    // The injected drain uninstalls itself as it refuses, so the retry below
-    // runs the real one.
     const realFlush = present(
       Object.getOwnPropertyDescriptor(LocalAgentSession.prototype, 'flushPendingDrains'),
       'the LocalAgentSession pending-drain flush',
@@ -2118,13 +1807,9 @@ describe('LocalAgentHost — the driver lease', () => {
 
     try {
       await expect(host.acquire('root')).rejects.toThrow('injected first-open drain failure');
-      // The failed entry acquired an interactive hold before recovery. It no
-      // longer exists, so nothing owns its conversation.
       expect(holderAt(dbPath)).toBeNull();
 
-      // The same host retries against a fresh Database. A memoized hold over
-      // the handle the failed open closed would throw `Database has closed`
-      // here.
+      // A memoized hold over the closed handle would throw `Database has closed` here.
       expect(await host.acquire('root')).toBeInstanceOf(LocalAgentSession);
       expect(holderAt(dbPath)?.kind).toBe('interactive');
     } finally {
@@ -2205,11 +1890,8 @@ describe('LocalAgentHost — the driver lease', () => {
     try {
       const first = await host.tick('root');
       expect(first.ran).toBe(true);
-      // Nobody owns the conversation between passes. A host that called itself
-      // interactive kept the row until the process exited, which is what made
-      // the resident daemon un-preemptible for its whole lifetime.
+      // A host must not keep the conversation between passes, or the daemon becomes un-preemptible.
       expect(holderAt(dbPath)).toBeNull();
-      // And it takes it again for the next pass rather than believing it still has it.
       expect((await host.tick('root')).ran).toBe(true);
       expect(holderAt(dbPath)).toBeNull();
     } finally {
@@ -2229,11 +1911,9 @@ describe('LocalAgentHost — the driver lease', () => {
     try {
       const result = await host.tick('root');
 
-      // The whole point of the result shape: a caller cannot mistake this for a
-      // pass that ran and found nothing to do.
+      // The result shape keeps this distinguishable from a pass that ran and found nothing.
       expect(result.ran).toBe(false);
       expect(result.heldBy).toEqual({ pid: rivalPid, kind: 'interactive' });
-      // A daemon never takes the conversation from a live person.
       expect(holderAt(dbPath)).toEqual({ pid: rivalPid, kind: 'interactive' });
     } finally {
       await host.close();
@@ -2241,10 +1921,8 @@ describe('LocalAgentHost — the driver lease', () => {
   });
 
   test('opening a workspace reclaims and delivers an event a dead process left bound to a turn it never ran', async () => {
-    // KINU-020, end to end: the previous process bound this event's row to a
-    // synthetic drain turn, acknowledged the delivery, and died before running
-    // it. The row is invisible to `pending()`, so nothing else can ever find it
-    // — opening the workspace under the driver lease is what hands it back.
+    // KINU-020: a row bound to a synthetic drain turn by a dead process is invisible to `pending()`;
+    // opening under the driver lease hands it back.
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
@@ -2253,15 +1931,13 @@ describe('LocalAgentHost — the driver lease', () => {
     try {
       const fireAt = Date.now() + 60_000;
       await scheduleTimer(dbPath, 'a build finished', fireAt);
-      // Fired but not drained: the drain is a debounced timer, and closing the
-      // host before it runs is what a process killed in that window leaves.
+      // The drain is a debounced timer; closing first leaves what a process killed in that window leaves.
       const session = await before.host.acquire('root');
       expect((await session.fireDueTriggers(fireAt)).fired).toBe(1);
     } finally {
       await before.host.close();
     }
 
-    // What the dead process left: bound to its turn, lease still open.
     const db = new Database(dbPath);
 
     try {
@@ -2280,8 +1956,6 @@ describe('LocalAgentHost — the driver lease', () => {
     });
 
     try {
-      // Opening it is the whole recovery: buildEntry reclaims under the lease
-      // and drains in the same bracket.
       await after.host.acquire('root');
       expect(turns).toBe(1);
       expect(eventCount(dbPath, 'pending')).toBe(0);
@@ -2298,11 +1972,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const { host } = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
     let turns = 0;
-    // The drain BINDS its rows, then announces the signal, then queues the turn.
-    // A rival that arrives in that window is the case the queue-item contract
-    // exists for: the pass held the lease when it bound the rows and does not
-    // hold it when the turn is about to run. The announcement is the seam that
-    // makes it exact — no clock, no guessed window.
+    // The drain binds rows, announces, then queues the turn; a rival arriving in that window is the queue-item contract's case.
     let stolenBy: number | null = null;
 
     const unsubscribe = host.subscribe((_agent, event) => {
@@ -2314,7 +1984,6 @@ describe('LocalAgentHost — the driver lease', () => {
     });
 
     try {
-      // Admission is not conversion: the row lands whoever is driving.
       const fireAt = Date.now() + 60_000;
       await scheduleTimer(dbPath, 'a build finished', fireAt);
       expect((await (await host.acquire('root')).fireDueTriggers(fireAt)).fired).toBe(1);
@@ -2324,19 +1993,14 @@ describe('LocalAgentHost — the driver lease', () => {
 
       expect(stolenBy).not.toBeNull();
       expect(holderAt(dbPath)).toEqual({ pid: stolenBy ?? -1, kind: 'interactive' });
-      // The event is exactly where it was. Bound-and-abandoned is invisible to
-      // `pending()`, so this assertion is the one that fails when a refused turn
-      // is settled as a queued one: the row stays consumed and nothing ever
-      // delivers it.
+      // Bound-and-abandoned is invisible to `pending()`; this fails if a refused turn is settled as queued.
       expect(eventCount(dbPath, 'pending')).toBe(1);
       expect(turns).toBe(0);
 
-      // The rival goes away. Nothing expired — the pid simply stopped existing.
       await retireRivals();
 
       const ran = await host.tick('root');
       expect(ran.ran).toBe(true);
-      // Delivered exactly once: one turn, and the row is now bound to it.
       expect(turns).toBe(1);
       expect(eventCount(dbPath, 'pending')).toBe(0);
     } finally {

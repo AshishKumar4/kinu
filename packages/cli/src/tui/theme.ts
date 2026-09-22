@@ -8,90 +8,10 @@ export type ThemeAppearance = 'dark' | 'light';
 export type TerminalColorCapability = 'truecolor' | 'ansi256' | 'ansi16';
 
 /**
- * The TUI's colour roles, and where each one comes from.
- *
- * Two sources, in this order:
- *
- * 1. The canvas model is oh-my-pi's (can1357/oh-my-pi 17.4.2,
- *    `packages/coding-agent/src/modes/theme/`). Its `dark.json` and
- *    `light.json` set `text: ""` and `userMessageText: ""`, and `color.ts`
- *    turns `""` into `\x1b[39m` / `\x1b[49m`: the terminal's own foreground
- *    and background. Nothing paints the canvas. What IS painted: the user
- *    bubble (`userMessageBg`, `components/user-message.ts`), the composer
- *    (`tui-adapters.ts` `surfaceColor: bgFill("userMessageBg")`), tool cards
- *    (`toolPendingBg`/`toolSuccessBg`/`toolErrorBg`,
- *    `components/tool-execution.ts`) and the status line. Thinking is
- *    `thinkingText: gray`, italic (`components/assistant-message.ts`).
- *    Markdown code fences take `mdCodeBlock` ink and no fill
- *    (`tui-adapters.ts` `getMarkdownTheme`). Here that canvas model is one
- *    PICKER PRESET, not the default: a fresh install paints the web app's
- *    canvas, chrome and cards (see DEFAULT_TUI_THEME_SELECTION), and the
- *    transparent presets keep the omp behaviour for terminals that want
- *    their own background to show through. The bubble, the composer, the
- *    tool/code well and the dialogs are painted either way.
- *
- *    One deliberate difference: opentui paints unset text `#FFFFFF` rather
- *    than emitting `39m` (measured on a pty, 2026-09-01), so prose takes the
- *    selected theme's ink instead of the terminal's.
- *
- * 2. Every colour is the web app's (`packages/cf-backend/src/index.css`, the
- *    `:root` dark block and the `[data-mode="light"]` block). A terminal has
- *    no alpha, so the one tint the web uses is composited at its ground.
- *
- * | TUI role              | web token                              | dark    | light   |
- * |-----------------------|----------------------------------------|---------|---------|
- * | background.canvas     | --c-bg (solid presets; else terminal)   | #0F0D0B | #E9E2D3 |
- * | background.chrome     | --c-sidebar (solid presets; else none)  | #141110 | #F1EBDD |
- * | background.surface    | --c-surface (solid presets; else none)  | #181512 | #F7F3E9 |
- * | background.overlay    | --c-overlay — dialogs, palettes, hubs   | #221C15 | #F7F3E9 |
- * | background.recessed   | --c-recessed — a well inside a dialog   | #131110 | #E0D8C5 |
- * | background.elevated   | --c-elevated — the open/active row      | #221C15 | #E8E0CE |
- * | background.selection  | --c-neutral-tint over --c-overlay       | #2E2821 | #E9E5DA |
- * | background.accent     | --c-accent — the gold fill              | #E0A458 | #D89A44 |
- * | background.user       | --c-user-bg — user bubble, composer     | #241E16 | #F2D9AC |
- * | border.default        | --c-border — structural rules           | #262019 | #D2C6AE |
- * | border.subtle         | --c-dash — separators inside a card     | #2A241D | #DBD1BE |
- * | border.strong         | --c-border-strong — outlined controls   | #332C23 | #BBAB8C |
- * | border.focus          | --c-accent, text-grade on paper (*)     | #E0A458 | #8F5C10 |
- * | border.user           | --c-user-border — the bubble edge       | #3A3126 | #D9B573 |
- * | text.primary          | --c-text-2 — prose, UI text             | #D8CFC2 | #3D3427 |
- * | text.strong           | --c-text — ink: headings, the bubble    | #EDE5D8 | #1C1710 |
- * | text.muted            | --c-text-3 — dim: hints, thinking       | #9C9184 | #5E5344 |
- * | text.onAccent         | --c-accent-on — ink on the gold fill    | #1A1408 | #1F1503 |
- * | intent.accent         | --c-accent, text-grade on paper (*)     | #E0A458 | #8F5C10 |
- * | intent.accentStrong   | --c-accent-fg — silk: links, inline code| #E3D2AE | #7A5514 |
- * | intent.info           | --c-info                                | #8FB6D6 | #2F6289 |
- * | intent.success        | --c-success                             | #8FBC8B | #316530 |
- * | intent.warning        | --c-warning                             | #E8B97A | #7E5205 |
- * | intent.danger         | --c-danger                              | #C97B6B | #96412C |
- * | well.fill             | --c-recessed, dark block (**)           | #131110 | #131110 |
- * | well.border           | --c-border-strong, dark block           | #332C23 | #332C23 |
- * | well.ink              | --c-text-2, dark block                  | #D8CFC2 | #D8CFC2 |
- * | well.muted            | --c-text-3, dark block                  | #9C9184 | #9C9184 |
- * | well.code             | --c-code, dark block                    | #E3D2AE | #E3D2AE |
- * | well.accent           | --c-accent, dark block                  | #E0A458 | #E0A458 |
- * | well.success          | --c-success, dark block                 | #8FBC8B | #8FBC8B |
- * | well.danger           | --c-danger, dark block                  | #C97B6B | #C97B6B |
- *
- * (*) The web keeps two golds on paper: the fill stays bright (#D89A44) and
- * text-grade gold deepens to #8F5C10, the mock's own figure. In a terminal
- * every gold is text or a one-cell rule, so the light ink set's
- * `intent.accent` and `border.focus` take the text-grade gold (4.4:1 on the
- * web canvas) and only `background.accent` keeps the bright fill, under
- * `text.onAccent`.
- *
- * (**) Code blocks and tool cards sit on a dark well in every theme, light
- * ones included. That is a Kinu decision: omp's own `light.json` tints its
- * tool cards light (`toolSuccessBg: #e8f0e8`). The well is the web's dark
- * code surface (`.p-code`: silk on `--c-recessed`), and because it is dark
- * on a light canvas it carries the dark block's inks and marks itself.
- *
- * Roles the web has and the TUI does not: `--c-text-4` (micro labels;
- * `text.muted` covers the register), `--c-fill` (chip planes; a terminal chip
- * is a bracketed word), the status tints (a notice here is a bordered box in
- * the status hue) and `--c-scrim` (a transparent canvas has nothing to blend
- * a scrim into). `intent.warningMuted` is gone: the web has no such hue, and
- * every mark that used it is gold or dim on the web.
+ * TUI colour roles. The canvas model follows oh-my-pi (transparent presets leave the terminal's own fg/bg); every colour
+ * comes from the web app's `packages/cf-backend/src/index.css`, alpha composited onto its ground. Code blocks and tool
+ * cards sit on a dark well in every theme, light included (a Kinu decision), with the dark inks. opentui paints unset
+ * text `#FFFFFF` rather than emitting `39m`, so prose takes the theme's ink.
  */
 export interface TuiThemeColors {
   readonly background: {
@@ -129,7 +49,6 @@ export interface TuiThemeColors {
     readonly warning: string;
     readonly danger: string;
   };
-  /** The dark surface code blocks and tool cards sit on, with its own inks. */
   readonly well: {
     readonly fill: string;
     readonly border: string;
@@ -145,7 +64,6 @@ export interface TuiThemeColors {
 export interface TuiThemeDefinition {
   readonly id: string;
   readonly label: string;
-  /** One line the picker shows beside the label. */
   readonly description: string;
   readonly appearance: ThemeAppearance;
   readonly source: 'kinu' | 'custom';
@@ -166,23 +84,13 @@ const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark-solid';
 
 const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light-solid';
 
-/**
- * What a fresh install paints, and what the onboarding theme step opens on:
- * the web app's own dark canvas, chrome and cards, whole. A panel keeps its
- * edge and fill on every terminal, including one whose background the ink set
- * was never designed for. The transparent presets stay in the picker for
- * terminals that want their own background to show through.
- */
+/** Fresh-install default: the web app's dark theme painted whole. */
 export const DEFAULT_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
   mode: 'theme',
   themeId: DEFAULT_DARK_TUI_THEME_ID,
 });
 
-/**
- * The grounds a transparent theme is measured on: the web canvas of its
- * appearance, which the ink set was designed for, and the extreme the
- * terminal can go to. A theme that paints its canvas is measured on that.
- */
+/** A transparent theme is measured on its web canvas and the terminal's extreme. */
 export const REFERENCE_TERMINAL_GROUNDS: Readonly<Record<ThemeAppearance, readonly string[]>> = Object.freeze({
   dark: Object.freeze(['#0F0D0B', '#000000']),
   light: Object.freeze(['#E9E2D3', '#FFFFFF']),
@@ -193,7 +101,6 @@ const TEXT_CONTRAST_MINIMUM = 4.5;
 
 const MARK_CONTRAST_MINIMUM = 3;
 
-/** The web's dark code surface; every theme's well unless it says otherwise. */
 const KINU_DARK_WELL: TuiThemeColors['well'] = {
   fill: '#131110',
   border: '#332C23',
@@ -271,7 +178,6 @@ const KINU_DARK_COLORS: TuiThemeColors = {
   well: KINU_DARK_WELL,
 };
 
-/** The web's light ink set on the terminal's own background. */
 const KINU_LIGHT: TuiThemeDefinition = {
   id: 'kinu-light',
   label: 'Kinu light, transparent',
@@ -281,7 +187,6 @@ const KINU_LIGHT: TuiThemeDefinition = {
   colors: KINU_LIGHT_COLORS,
 };
 
-/** The web's dark ink set on the terminal's own background. */
 const KINU_DARK: TuiThemeDefinition = {
   id: 'kinu-dark',
   label: 'Kinu dark, transparent',
@@ -291,12 +196,7 @@ const KINU_DARK: TuiThemeDefinition = {
   colors: KINU_DARK_COLORS,
 };
 
-/**
- * Kinu dark with every ground, rule and ink turned to the family's slate:
- * the hue of `--c-info` (207°) at Kinu dark's own saturation and lightness
- * per rung. The brass, the silk and the status hues do not move, so the
- * accent stays the one warm note. For terminals that run cool.
- */
+/** Kinu dark in slate (`--c-info` hue, 207°); brass, silk, and status hues unchanged. */
 const KINU_DUSK: TuiThemeDefinition = {
   id: 'kinu-dusk',
   label: 'Kinu dusk',
@@ -339,7 +239,6 @@ const KINU_DUSK: TuiThemeDefinition = {
   },
 };
 
-/** The web's `[data-mode="light"]` block painted whole: canvas, chrome and cards. The light default. */
 const KINU_LIGHT_SOLID: TuiThemeDefinition = {
   id: DEFAULT_LIGHT_TUI_THEME_ID,
   label: 'Kinu light',
@@ -357,7 +256,6 @@ const KINU_LIGHT_SOLID: TuiThemeDefinition = {
   },
 };
 
-/** The web's `:root` dark block painted whole: canvas, chrome and cards. The dark default. */
 const KINU_DARK_SOLID: TuiThemeDefinition = {
   id: DEFAULT_DARK_TUI_THEME_ID,
   label: 'Kinu dark',
@@ -375,12 +273,6 @@ const KINU_DARK_SOLID: TuiThemeDefinition = {
   },
 };
 
-/**
- * Kinu light painted one rung up: the canvas takes the paper card tone
- * (`--c-surface`), cards step to a near-white warm paper, and the web canvas
- * (`--c-bg`) becomes the well inside dialogs. For a terminal that reads the
- * tinted ground as dim.
- */
 const KINU_PAPER: TuiThemeDefinition = {
   id: 'kinu-paper',
   label: 'Kinu paper, painted',
@@ -401,7 +293,6 @@ const KINU_PAPER: TuiThemeDefinition = {
   },
 };
 
-/** Kinu dark pushed to the ends: near-white ink and bright rules on the terminal's black. */
 const HIGH_CONTRAST: TuiThemeDefinition = {
   id: 'high-contrast',
   label: 'High contrast',
@@ -451,11 +342,7 @@ const HIGH_CONTRAST: TuiThemeDefinition = {
   },
 };
 
-/**
- * Order matters twice: the picker lists themes in it, and a selection naming
- * a theme that is gone falls back to the first entry when the dark default
- * itself is missing, so the painted defaults lead it.
- */
+/** Picker order; a stale selection may fall back to the first entry, so painted defaults lead. */
 export const BUILTIN_TUI_THEMES: readonly TuiThemeDefinition[] = Object.freeze([
   KINU_LIGHT_SOLID,
   KINU_DARK_SOLID,
@@ -552,20 +439,7 @@ export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): Them
 
 const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
 
-/**
- * The theme a selection names, or the default when it names one this registry
- * does not have.
- *
- * `tui.json` is a file a person edits, and its schema can only check that
- * `themeId` is a non-empty string — registry membership is not a fact the
- * preference layer holds. So a custom theme that is deleted or renamed leaves a
- * selection pointing at nothing, and `registry.get` throwing inside the
- * provider's `useMemo` took the whole TUI down at first render with
- * `Unknown TUI theme`. A stale id in a user's config is drift, not a
- * programming error: it degrades to the default and is RECORDED, because
- * falling back silently would leave someone wondering why their theme stopped
- * applying.
- */
+/** Unknown ids fall back to the default and are recorded: `tui.json` is hand-edited. */
 function resolveThemeSelection(
   registry: ThemeRegistry,
   selection: ThemeSelection,
@@ -637,12 +511,6 @@ export interface ThemeContrastPair {
   readonly ratio: number;
 }
 
-/**
- * The pairs every theme is held to: the three inks on every ground they are
- * drawn on, the ink on the gold fill, each status hue on the grounds a mark
- * or label sits on, the focus rule on the canvas, and the well's own inks and
- * marks on the well.
- */
 function themeContrastPairs(theme: TuiThemeDefinition): readonly ThemeContrastPair[] {
   const { background, border, text, intent, well } = theme.colors;
   const pairs: ThemeContrastPair[] = [];
@@ -712,25 +580,7 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
 }
 
 
-/**
- * Assistant markdown in the terminal's registers: prose in ink
- * (`text.strong`), inline code as silk (`.p-code-inline`), links as silk
- * (`--text-color-kumo-link`), quotes in the dim register. The web keeps its
- * body one step dimmer than ink (`--c-text-2`); a terminal body needs the
- * full ink, or the agent's prose reads as another grey register beside
- * thinking and the annotations.
- *
- * A fenced block takes no colour from here. opentui gives each fenced block a
- * renderable of its own and paints it in the markdown renderable's own ink, so
- * the block's ground and ink come from the `well` roles, through the block
- * hook in `messages.tsx`. One surface, one source.
- *
- * Measured against opentui 0.1.107 on 2026-09-01: this map resolves by
- * tree-sitter capture name. The markdown grammar emits `markup.*`,
- * `punctuation.*`, `conceal` and `label`, so the token names below reach
- * nothing and prose takes the `fg` the renderable carries. The registers are
- * the intent; naming real captures is the theme's own open work.
- */
+/** Fenced blocks take colour from `well` via the block hook in `messages.tsx`. */
 function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
   const { border, text, intent } = theme.colors;
   const prose = { fg: text.strong };
@@ -740,21 +590,9 @@ function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
   const mark = { fg: intent.accent };
   const punctuation = { fg: text.muted };
 
-  // Keyed by the tree-sitter CAPTURE names opentui's markdown grammar emits
-  // (`assets/markdown{,_inline}/highlights.scm`), because that is what
-  // `MarkdownRenderable.getStyle` looks up — the exact capture, then the
-  // segment before the first dot. A key marked's token vocabulary would
-  // suggest (`strong`, `heading`, `list`) reaches nothing, and every span
-  // falls to the flat `default` ink: bold, italic and headings all vanish
-  // while the markers stay concealed. Heading levels are listed one by one
-  // because `markup.heading.2` falls back to `markup`, not to `markup.heading`.
-  //
-  // Prose takes the bright ink: the body register sits beside thinking
-  // (`text.muted`, italic, `messages.tsx` PhaseLine) and beside the dim
-  // system annotations, and a grey body read as neither.
-  // No `default` entry: a fenced block's chunks resolve `default` before the
-  // block's own ink, and the well's code ink is set on the block by
-  // `messages.tsx` — a default here would paint code in prose ink.
+  // Keyed by the tree-sitter capture names `MarkdownRenderable.getStyle` looks up (exact, then the prefix before the first
+  // dot); heading levels are listed singly because `markup.heading.2` falls back to `markup`. No `default` entry: fenced
+  // chunks resolve `default` before the block's own well ink.
   return SyntaxStyle.fromStyles({
     markup: prose,
     'markup.strong': { fg: text.strong, bold: true },
@@ -877,7 +715,6 @@ function contrastRatio(foreground: string, background: string): number {
     / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
 }
 
-/** The grounds of a theme as `mapColors` assembles them, optional ones last. */
 type ThemeGrounds = { -readonly [Key in keyof TuiThemeColors['background']]: TuiThemeColors['background'][Key] };
 
 function mapColors(colors: TuiThemeColors, map: (color: string) => string): TuiThemeColors {

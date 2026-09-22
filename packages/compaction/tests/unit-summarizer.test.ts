@@ -1,6 +1,3 @@
-/** The model summarizer waits for provider completion unless its caller
- * cancels the surrounding work. Elapsed time alone never fails an active fold. */
-
 import { describe, expect, test, vi } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
@@ -9,8 +6,7 @@ import type { LanguageModelV3GenerateResult } from '@ai-sdk/provider';
 import { createModelSummarizer } from '../src/index';
 
 
-/** One completed fold, typed off the provider spec so the double cannot drift
- *  from what a real provider returns. */
+/** Typed off the provider spec so the double cannot drift from a real provider. */
 const FOLDED: LanguageModelV3GenerateResult = {
   content: [{ type: 'text', text: 'folded' }],
   finishReason: { unified: 'stop', raw: 'stop' },
@@ -72,10 +68,7 @@ describe('createModelSummarizer', () => {
   });
 
   test('a completed fold reports one model_call under the `compaction` producer', async () => {
-    // `compaction` was a declared SPEND_SOURCE that could never appear in the
-    // Spend panel, because both backends built the summarizer without this sink.
-    // The producer fires precisely when a conversation got expensive, so the
-    // workspace total understated exactly the sessions an owner asks about.
+    // Guards compaction spend being reported to the sink; without it workspace totals understate.
     const reports: ModelCallReport[] = [];
 
     const summarize = createModelSummarizer(

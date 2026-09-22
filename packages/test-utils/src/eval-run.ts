@@ -1,28 +1,7 @@
 /**
- * What one eval run WAS, recorded so a later run can be compared against it.
- *
- * The owner's requirement is "report numbers and stats which we can compare
- * against previous versions/runs". A pass rate does not survive that on its own:
- * two runs differing in model, in tool surface, or in whether evolution was even
- * wired on are not comparable, and nothing in a bare number says so. So a run
- * record carries the facts that make it comparable, and the comparator refuses
- * pairs whose arms differ in ways that would make a delta unattributable.
- *
- * THE CENTRAL RULE, and the reason this module exists rather than a JSON blob:
- * A RUN IS NOT ADMISSIBLE EVIDENCE UNTIL THE HARNESS HAS ASSERTED THE MECHANISM
- * SUBSTANTIVELY WORKED — not merely that it was configured on. That is not a
- * theory. CL-Bench's first live run reported mean_gain -0.2 over 5 tasks with
- * evolution firing 14 times in 14 turns, every outcome recorded as
- * "ungraded (no follow-up) | 0 tool calls | 1 steps", the workspace ending at
- * scaffoldVersion 0 / searchNodeCount 0 / craftedToolCount 0. The contrast was
- * inert and the number looked like a measurement. `admissibility` below is the
- * gate that makes that state fail loudly instead of reporting -20pp.
- *
- * The observation shape and the pairing key are pi's (external/pi/packages/evals
- * /src/vitest-evals/summary.ts) rather than invented here: an outcome union that
- * makes a score unreachable unless the observation was scored, and a pairing
- * identity of repetition + task id. pi owns that collector design; the
- * statistics stay ours (packages/core/src/bench).
+ * What one eval run was, recorded so later runs can be compared against it. A run is not admissible
+ * evidence until the harness asserts the outcome was measured, not merely configured. The observation
+ * union and pairing key follow pi's vitest-evals collector; statistics live in packages/core/src/bench.
  */
 import { execFileSync } from 'node:child_process';
 import * as v from 'valibot';
@@ -39,24 +18,9 @@ import { TASK_OUTCOME, isCovariateRow, type EvalSubgoal } from './eval-outcome';
 import { compareRunEventOrder } from './eval-target';
 
 /**
- * The two DeepSeek arms, verified against the account's own model list rather
- * than assumed. `kinu`'s default is the pro id; the flash id is NOT derivable
- * from it — the suffixes differ (`-0813` vs `-0731`) — so it is recorded here
- * having been read from the live catalogue:
- *
- *   curl -H "Authorization: Bearer $KINU_TOKEN" \
- *     $KINU_ORIGIN/api/user/ai/v1/models | jq -r '.data[].id'
- *
- * The split is the owner's: flash for high-volume runs that produce the stats,
- * pro for a small number of runs that establish the upper bound. Declared as a
- * property of a run so a record says which regime produced it, because a 40-pair
- * flash number and a 4-pair pro number invite completely different readings.
- *
- * `product` is the model a new workspace runs on when nobody picks one —
- * imported from core rather than spelled here, so a change to the product's
- * default moves the arm with it. It is the arm `gate:trajectory` runs on the
- * build a deploy just shipped, because a red on any other model is a red on a
- * model users do not have.
+ * The DeepSeek arms, read from the live model catalogue (flash is not derivable from pro: `-0813` vs
+ * `-0731`). Flash for high-volume stats, pro for upper bounds. `product` is imported from core's default,
+ * the arm `gate:trajectory` runs on after a deploy.
  */
 export const EVAL_MODELS = {
   flash: '@cf/deepseek-ai/deepseek-v4-flash-0731',
@@ -66,42 +30,20 @@ export const EVAL_MODELS = {
 
 export type EvalTier = keyof typeof EVAL_MODELS;
 
-/**
- * Every optional mechanism's position, recorded because a measurement whose
- * mechanism was switched off is not a measurement of that mechanism.
- *
- * `evolution` is the one that has already cost a run: `LocalAgentSession` takes
- * `noAutoEvolve`, so an eval suite can silently produce a corpus with the
- * learning loop disabled and report the result as though it had been on.
- */
+/** Every optional mechanism's position; `evolution` matters because `noAutoEvolve` can silently disable learning. */
 export interface EvalArmState {
-  /** Auto-evolution wired on — the inverse of LocalAgentSession's noAutoEvolve. */
+  /** Auto-evolution wired on: the inverse of LocalAgentSession's noAutoEvolve. */
   readonly evolution: boolean;
-  /** Fork settle policy in force, or 'none' when forks were never offered. */
   readonly settle: string;
-  /** The tool surface actually offered, from BUILTIN_TOOLS. */
   readonly tools: readonly string[];
 }
 
-/** The full builtin tool surface, read through the registry so a tool added
- *  there widens recorded runs instead of leaving a stale list beside the single
- *  source (`BUILTIN_TOOLS` / `TOOL_REACH` in core/src/tools/registry.ts). */
 export const FULL_TOOL_SURFACE: readonly string[] = [...BUILTIN_TOOLS];
 
-/** pi's outcome union. A score is REACHABLE ONLY when the observation was
- *  scored, so an inert or errored trajectory cannot contribute a number — the
- *  property that makes `0` distinguishable from "never ran" in the type system
- *  rather than in a reviewer's memory.
- *
- *  `incomplete` is the NO-VERDICT outcome: the case began and never settled, so
- *  there is neither pass nor fail nor score. Three causes reach it — an operator
- *  cancelled the run, the process died mid-case, or the ENVIRONMENT killed the
- *  turn (an upstream 5xx, a rate limit, a refused credential). All three mean the
- *  run still owes the case, which is why a restart retries it and why the phase
- *  is not settled. */
+/** pi's outcome union: a score exists only when scored. `incomplete` is no verdict (cancelled, crashed,
+ *  or killed by the environment); the run still owes the case, so a restart retries it. */
 export type EvalOutcome = 'scored' | 'inert' | 'errored' | 'skipped' | 'incomplete';
 
-/** One scorer's verdict, flattened for persistence. */
 export interface EvalScoreRow {
   readonly name: string;
   readonly asserts: string;
@@ -109,61 +51,34 @@ export interface EvalScoreRow {
   readonly passed: number;
   readonly rate: number | null;
   readonly detail: string;
-  /** Raw measurement inputs and attributed/unmeasured tool counts. */
   readonly measured?: Readonly<Record<string, number>>;
 }
 
-/** One run event in an observation's provenance slice: structural facts only.
- *  Content-bearing payloads (`args`, `result`, `messages`, error text, the user
- *  prompt) are dropped at the collector, so a published record carries what the
- *  episode DID without carrying what was said into it. */
+/** One run event in an observation's provenance slice: structural facts only, no prompt, args, results or text. */
 export interface EvalProvenanceEvent {
   readonly runId: string;
   readonly timestamp: string;
   readonly eventIndex: number;
   readonly type: string;
-  /** The tool name on a `tool_call_end` row. */
   readonly name?: string;
   readonly durationMs?: number;
-  /** Why a tool call failed, as the failure's CLASS (`exit_127`, `threw`,
-   *  `denied`, …) — never its text. */
+  /** Why a tool call failed, as its class (`exit_127`, `threw`, `denied`, …), never its text. */
   readonly failureClass?: string;
-  /** The actual producer outcome; absent on historical unmeasured records. */
   readonly outcome?: ToolOutcome;
 }
 
-/** A bounded slice of one observation's raw run-event ledger. `bound` states
- *  the cap and `totalEvents` the untruncated count, so a reader can tell a full
- *  trail from a clipped one without trusting either number's absence. */
+/** A bounded slice of one observation's run-event ledger; `bound` and `totalEvents` distinguish full from clipped. */
 export interface EvalRunProvenance {
   readonly totalEvents: number;
   readonly bound: number;
   readonly events: readonly EvalProvenanceEvent[];
 }
 
-/** How many run events one observation's provenance may carry. A long episode
- *  can produce thousands of rows; the bound keeps a published record a record
- *  rather than a second copy of the ledger, and `totalEvents` beside it says
- *  exactly how much a clipped slice is not showing. */
 export const PROVENANCE_EVENT_BOUND = 500;
 
 /**
- * An episode's run-event trail, in time order, bounded and stripped of
- * everything that could quote the prompt or a secret.
- *
- * OVER EVENTS, NOT OVER A STORE, for the reason `ledgerTotalsFromEvents` is:
- * the local harness walks a `bun:sqlite` store and the public-plane families
- * fetch the same `RunEvent[]` over the run-event routes, and the projection was
- * only ever the shared half. Until it lived here the behaviour arm was the one
- * family whose observations carried provenance, and a trajectory record named a
- * `transcripts` directory holding nothing but itself.
- *
- * WHAT IS DROPPED, deliberately: `userMessage` (the prompt), `args`, `result`,
- * `messages`, `error`/`details` text (an error string can quote file contents),
- * and the model-authored prose fields. What survives is what happened, never
- * what was said. A failed tool call keeps its failure CLASS from
- * `classifyToolFailure` (`exit_127`, `threw`, `denied`, …) so a record can be
- * triaged without reopening anything.
+ * An episode's run-event trail in time order, bounded, with prompt, args, results, messages, error text and
+ * model prose dropped. Over events, not a store, so local and public-plane families share it.
  */
 export function projectRunEventProvenance(events: readonly RunEvent[]): EvalRunProvenance {
   const projected = [...events].sort(compareRunEventOrder).map((event): EvalProvenanceEvent => {
@@ -173,9 +88,7 @@ export function projectRunEventProvenance(events: readonly RunEvent[]): EvalRunP
 
     if (event.type !== 'tool_call_end') return base;
 
-    // `undefined` for an unreported duration or a clean call: the interface
-    // admits it, `JSON.stringify` drops it, and the wire copy in the behaviour
-    // harness omits it — so a published row never carries the key.
+    // `undefined` for an unreported duration or clean call, so `JSON.stringify` omits the key.
     return {
       ...base, name: event.name, durationMs: event.durationMs,
       failureClass: classifyToolFailure(event)?.reason,
@@ -191,16 +104,8 @@ export function projectRunEventProvenance(events: readonly RunEvent[]): EvalRunP
 }
 
 /**
- * What a PUBLIC-PLANE episode leaves behind: the ledger the scores were computed
- * from, the durable transcript the web pane is seeded from, and the verdicts.
- *
- * The local families retain the agent's own SQLite store under `transcripts`,
- * which is the whole trajectory; a deployed workspace's store is inside a
- * Durable Object and the run-event and message routes are the only copies this
- * process ever holds. So they are written down, per case, in the directory the
- * record names — or the record's `transcripts` field points at a directory
- * holding only the record, which is what every trajectory record published
- * before this existed did, and why a tool-failure count in one named no call.
+ * What a public-plane episode leaves behind: ledger, transcript and verdicts. A deployed workspace's store
+ * lives in a Durable Object, so these route copies are the only ones this process holds.
  */
 export interface EpisodeTranscript {
   readonly events: readonly RunEvent[];
@@ -208,18 +113,12 @@ export interface EpisodeTranscript {
   readonly subgoals: readonly EvalSubgoal[];
 }
 
-/** The files one retained episode is: the raw ledger as JSON lines (one event a
- *  row, so a clipped read is still parseable), and the transcript and verdicts
- *  as documents. Named here so a reader and the writer agree. */
+/** The files of one retained episode: ledger as JSON lines (a clipped read stays parseable), transcript and verdicts. */
 export const EPISODE_TRANSCRIPT_FILES = {
   events: 'events.jsonl', history: 'history.json', subgoals: 'subgoals.json',
 } as const;
 
-/**
- * Retain one episode's transcript under `<transcripts>/<taskId>/`, and return
- * that directory. Written BEFORE the case's subgoals are asserted, so a case
- * that missed one leaves the evidence that says how.
- */
+/** Retain one episode's transcript under `<transcripts>/<taskId>/`, before subgoals are asserted, and return it. */
 export function retainEpisodeTranscript(
   transcripts: string, taskId: string, transcript: EpisodeTranscript,
 ): string {
@@ -248,44 +147,23 @@ export interface EpisodeEvidence {
 }
 
 /**
- * How long an evidence read may still run once the episode budget is spent.
- *
- * The budget tells the OPERATION to stop; reading the ledger afterwards is a
- * different wait, and on the failure this bound exists for the product cannot
- * answer it either: a Durable Object wedged inside a turn it never closed
- * serves its run-event, history and spend routes from the same thread as that
- * turn. Measured 2026-09-17 against the deployed build cba44dcb9: the
- * `delegation` first-run row spent its 20-minute budget, then its collect()
- * never returned, so the tier ended on its own test bound with no verdict
- * printed and no ledger retained.
- *
- * So the read gets this much after the abort and no more — three orders above
- * what a healthy read costs (measured 2026-09-17 on a local dev server: the
- * spend and history channels of a settled episode answered together in tens of
- * milliseconds), so a product that is answering at all is never cut short.
- * Whatever lands inside the grace is retained; a channel that has not answered
- * is recorded as unanswered, a fact about the product rather than a timeout.
+ * How long an evidence read may run after the episode budget is spent. A Durable Object wedged in an
+ * unclosed turn serves its run-event, history and spend routes from that thread (2026-09-17, cba44dcb9: collect()
+ * never returned after a 20-minute budget); healthy reads take tens of milliseconds. Unanswered channels are recorded.
  */
 export const EVIDENCE_GRACE_MS = 60_000;
 
-/** The evidence boundary starts before session opening. Missing sessions leave
- * unavailable channels, never fabricated empty ledgers or zero spend. */
+/** The evidence boundary starts before session opening; missing sessions leave unavailable channels, not empty data. */
 export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, T>(
   open: () => Promise<Reader>,
   options: {
     readonly transcripts: string; readonly taskId: string; readonly modelCalls: 'expected' | 'none';
-    /** The budget runs on this clock (D19): production hands `REAL_CLOCK`, a
-     *  test hands a `handClock` it advances so "the budget was spent" is a
-     *  step the test takes, never a sleep racing a real timer. */
+    /** The budget runs on this clock (D19): production hands `REAL_CLOCK`, a test hands a `handClock` it
+     *  advances, never a sleep racing a real timer. */
     readonly clock: Clock;
-    /** The most wall time the operation may take once the session is open.
-     *  When it is spent the operation is told (its `budget` signal aborts),
-     *  the episode is recorded as spent under `failure.json` with
-     *  `phase: 'budget'`, the evidence is COLLECTED as it stands — bounded in
-     *  its turn by {@link EVIDENCE_GRACE_MS}, because a product that never
-     *  settled a turn may never answer its ledger routes either — and the
-     *  spend is thrown, so such a product leaves a ledger to read rather than
-     *  an empty directory a runner's own timeout left behind. */
+    /** The most wall time the operation may take once the session is open. When spent, the `budget` signal
+     *  aborts, `failure.json` records `phase: 'budget'`, evidence is collected within {@link EVIDENCE_GRACE_MS},
+     *  and the spend is thrown. */
     readonly budgetMs?: number;
   },
   operation: (reader: Reader, collect: () => Promise<EpisodeEvidence>, budget: AbortSignal) => Promise<T>,
@@ -315,14 +193,10 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   }
 
   const budget = new AbortController();
-  /** Where the EVIDENCE read ends: {@link EVIDENCE_GRACE_MS} past the spent
-   *  budget, armed with it below. Separate from `budget`, which ends the
-   *  operation: the read is what turns a spent budget into a verdict. */
+  /** Where the evidence read ends: {@link EVIDENCE_GRACE_MS} past the spent budget. Separate from `budget`. */
   const reading = new AbortController();
 
-  /** One channel of the collection, abandoned when the read's own end
-   *  arrives. `Promise.race` keeps reading the read: a late answer is
-   *  dropped, never an unhandled rejection. */
+  /** One collection channel, abandoned at the read's end; a late answer is dropped, never an unhandled rejection. */
   const readChannel = <Value>(name: string, read: Promise<Value>): Promise<Value> => Promise.race([
     read,
     new Promise<never>((_resolve, reject) => {
@@ -399,8 +273,7 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   };
 
   let result: { ok: true; value: T } | { ok: false; error: Error };
-  /** Settles with the spend when the budget runs out — a value, so the race
-   *  below has no losing rejection to leave unread. */
+  /** Settles with the spend when the budget runs out; a value, so the race has no unread rejection. */
   const spent = Promise.withResolvers<{ readonly spent: Error }>();
 
   const disarm = options.budgetMs === undefined ? null : options.clock.after(options.budgetMs, () => {
@@ -409,8 +282,6 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     spent.resolve({ spent: reason });
   });
 
-  /** The read's end, armed WITH the budget rather than at the abort: one
-   *  timeline on one clock, which is also how a test reaches it in one step. */
   const disarmReading = options.budgetMs === undefined
     ? null
     : options.clock.after(options.budgetMs + EVIDENCE_GRACE_MS, () => { reading.abort(); });
@@ -447,45 +318,23 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   return result.value;
 }
 
-/** One task attempted once. `repetition` plus `taskId` is the pairing identity;
- *  two runs are comparable exactly where both produced the same pair. */
+/** One task attempted once. `repetition` plus `taskId` is the pairing identity. */
 export type EvalObservation =
   | {
     readonly taskId: string;
     readonly repetition: number;
     readonly outcome: 'scored';
     readonly scores: readonly EvalScoreRow[];
-    /** Turns the ledger recorded closing. Zero is inert, never scored. */
     readonly turns: number;
     readonly toolCalls: number;
-    /**
-     * The tools this attempt actually called, in order.
-     *
-     * The harness has always computed this and the record dropped it, which is
-     * why "did the agent ever enter codemode" had to be re-derived from source
-     * twice instead of read off the artifact. It is the cheapest possible
-     * covariate and it explains outcomes directly: a run whose tool list contains
-     * no `eval` cannot have crafted anything, and one that never touched
-     * `file` produced no gradable edit signal however well it did the task.
-     *
-     * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and
-     * `flash-b.json` were written before it was recorded, and both are still
-     * read — as history, not as baselines. Every record written from now on sets
-     * it. Read it with `?? []` rather than assuming presence.
-     */
+    /** The tools this attempt called, in order. Optional: flash-a/b records predate it; read with `?? []`. */
     readonly toolNames?: readonly string[];
     readonly tokensIn: number;
     readonly tokensOut: number;
-    /** Reasoning tokens, when the provider reported them. Optional for the same
-     *  reason as `toolNames`: the flash-a/b baselines predate it. */
+    /** Reasoning tokens, when the provider reported them. Optional: flash-a/b predate it. */
     readonly reasoningOut?: number;
-    /** Measured observation duration. It is evidence, never a work deadline. */
     readonly ms: number;
-    /**
-     * Bounded raw run-event provenance for this episode — see
-     * {@link EvalRunProvenance}. Written by the behaviour harness; optional so
-     * records predating it stay readable.
-     */
+    /** Bounded run-event provenance; see {@link EvalRunProvenance}. Optional so older records stay readable. */
     readonly provenance?: EvalRunProvenance;
   }
   | {
@@ -496,141 +345,69 @@ export type EvalObservation =
     readonly scores?: never;
   };
 
-/** The pairing key, pi's identity: the task and which repetition of it. */
 export function observationKey(o: Pick<EvalObservation, 'taskId' | 'repetition'>): string {
   return `${o.taskId}#${String(o.repetition)}`;
 }
 
 /**
- * Why a run is or is not admissible evidence.
- *
- * Each field is a fact about the trajectory corpus, not about configuration.
- * `outcomesScored` is the one that matters: a run that measured no task outcome
- * says nothing about whether the agent can do the work, whatever else it
- * recorded.
- *
- * `mechanismsExercised` is deliberately NOT that field, and its absence from the
- * failure list is the point. "A scorer had a non-zero denominator" is a fact
- * about what the corpus reached, and treating it as a precondition for evidence
- * makes mechanism coverage an end in itself — which is how a delegation rate of
- * 15% gets reported as a defect when the truth is that the mechanism
- * converted 4/4 wherever the work was genuinely divisible and 0/21 where it was
- * not. Both fields stay, in full, as TELEMETRY: they are how a moved outcome
- * gets explained after the fact. Neither gates anything.
+ * Why a run is or is not admissible evidence. `outcomesScored` is what gates; mechanism coverage fields are
+ * telemetry that explains a moved outcome and gate nothing.
  */
 export interface EvalAdmissibility {
   readonly admissible: boolean;
-  /** Observations that produced scores. */
   readonly scored: number;
-  /** Observations that ran and recorded nothing gradable — CL-Bench's state. */
   readonly inert: number;
-  /** Turns the ledger recorded across the whole run. A run with zero graded
-   *  turns has measured nothing, whatever its pass rate says. */
+  /** Turns recorded across the run. Zero graded turns means nothing was measured. */
   readonly gradedTurns: number;
-  /** Tool calls across the run. Zero means no agent behaviour occurred. */
   readonly toolCalls: number;
-  /** Observations carrying a `task_outcome` row — the count of attempts whose
-   *  RESULT was actually checked against ground truth. */
+  /** Observations carrying a `task_outcome` row: attempts actually checked against ground truth. */
   readonly outcomesScored: number;
-  /** Scorers that had at least one eligible opportunity somewhere in the run.
-   *  Covariate telemetry: reported, never gating. */
   readonly mechanismsExercised: readonly string[];
-  /** Scorers no task in this corpus gave a single opportunity to. Covariate
-   *  telemetry: reported, never gating. */
   readonly mechanismsAbsent: readonly string[];
-  /** Why it is inadmissible, empty when it is. */
   readonly failures: readonly string[];
-  /** Observations the operator's cancellation caught mid-episode. Never
-   *  scored; their presence marks the whole record partial. */
+  /** Observations cancellation caught mid-episode. Never scored; they mark the record partial. */
   readonly incomplete: number;
 }
 
-/** A complete run: what it ran, under what, and what it found. */
 export interface EvalRunRecord {
   readonly schema: 1;
   readonly runId: string;
   readonly createdAt: string;
-  /**
-   * Which eval family produced this record — `behaviour`, `research`,
-   * `optimization`. The reader (`scripts/eval-report.ts`) groups on it, because
-   * a research retrieval verdict and a behaviour mechanism rate are not one
-   * population and averaging them would answer no one's question.
-   *
-   * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and
-   * `flash-b.json` were written before it existed, under hand-named runIds
-   * (`flash-a`) a reader cannot derive a family from. Every record written from
-   * now on sets it; absence reads as pre-family, never as a guessed name.
-   */
+  /** The eval family (`behaviour`, `research`, `optimization`); `scripts/eval-report.ts` groups on it.
+   *  Optional: flash-a/b predate it, and absence reads as pre-family. */
   readonly family?: string;
-  /** The commit the code under test was at, and whether the tree was dirty.
-   *  A dirty tree makes a run unreproducible and must be visible in the record,
-   *  not discovered later. */
+  /** The commit under test and whether the tree was dirty; a dirty tree makes a run unreproducible. */
   readonly gitSha: string;
   readonly gitDirty: boolean;
   readonly tier: EvalTier;
   readonly modelId: string;
-  /** The model the run's ledger observed serving its turns — the distinct
-   *  `modelId` across the episode `step_finish` rows, via
-   *  {@link modelObservedFromEvents}. Null when the ledger names none (the
-   *  provider reported no serving id) or names more than one (no single model
-   *  to claim). `assessAdmissibility` refuses a record whose observed model is
-   *  non-null and differs from `modelId`: the turns ran on something other
-   *  than the record claims.
-   *
-   *  Optional for exactly one reason: records written before it existed stay
-   *  readable. Every record written from now on sets it; absence reads as
-   *  pre-observed, never as agreement. */
+  /** The single model the ledger observed serving turns ({@link modelObservedFromEvents}), else null.
+   *  `assessAdmissibility` refuses a record whose non-null observed model differs from `modelId`.
+   *  Optional so older records stay readable; absence is not agreement. */
   readonly modelObserved?: string | null;
   readonly repeats: number;
   readonly seed: number;
   readonly arm: EvalArmState;
-  /** Task ids the run DECLARED it would attempt. */
   readonly declaredTasks: readonly string[];
-  /** Task ids it actually attempted. The set a run measures and the set it
-   *  claims to govern must be the same set, and `admissibility` asserts it. */
   readonly executedTasks: readonly string[];
   readonly observations: readonly EvalObservation[];
   readonly admissibility: EvalAdmissibility;
   readonly spend: { readonly calls: number; readonly tokensIn: number; readonly tokensOut: number };
   /**
-   * Directory holding the run's agent stores — the trajectories the scores were
-   * computed from.
-   *
-   * Required, like every other provenance field here: an optional evidence
-   * pointer is the field that will be missing exactly when someone needs it.
-   * A swept location — `/tmp`, or anything a teardown deletes — is refused by
-   * `resolveArtifactRoot` (scripts/bench-retention.ts) with no opt-out, because
-   * a published tool-failure count whose trajectories are gone names no call and
-   * cannot be investigated at all.
-   *
-   * The two stored baselines do not carry it, which is why neither could be
-   * upgraded and both were retired: the directory that would explain their one
-   * inert attempt does not exist. `readRunRecord` validates the envelope only,
-   * so their absence is a value the triage instrument reports rather than a
-   * crash.
+   * Directory holding the run's agent stores, the trajectories scores came from. Required; swept locations
+   * like `/tmp` are refused by `resolveArtifactRoot` (scripts/bench-retention.ts).
    */
   readonly transcripts: string;
 }
 
-/**
- * What this design can and cannot resolve, computed BEFORE anything is spent.
- *
- * CL-Bench reported a gain over 5 tasks of which only 2 differed between arms;
- * the smallest two-sided p that 2 differing pairs can produce is 0.5, so no
- * outcome on that split could have been significant at any effect size. Stating
- * that up front is the difference between a null result and a wasted bill.
- */
+/** What this design can resolve, computed before anything is spent: 2 differing pairs cannot beat p = 0.5. */
 export interface EvalPreRegistration {
   readonly tasks: number;
   readonly repeats: number;
   readonly pairs: number;
-  /** Fewest differing pairs at which significance is reachable at all. */
   readonly minimumPairs: number;
-  /** ψ the required sizes below were computed from. */
   readonly dispersion: number;
-  /** False when `dispersion` is the neutral 0.5 assumption rather than a number
-   *  measured by running one arm twice. A required size quoted from an assumed
-   *  dispersion is a guess with a decimal point, and the note says so. */
+  /** False when `dispersion` is the neutral 0.5 assumption rather than measured by running one arm twice. */
   readonly dispersionMeasured: boolean;
   /** Tasks needed to resolve a 10 / 20 percentage-point effect at 80% power. */
   readonly pairsFor10pp: number;
@@ -640,17 +417,13 @@ export interface EvalPreRegistration {
 }
 
 /**
- * @param measuredDispersion ψ measured by running ONE arm twice on this very
- *   corpus (`scripts/eval-dispersion.ts`). Omit it and the neutral 0.5 is used
- *   AND LABELLED as assumed — a required size computed from a guessed dispersion
- *   must not read like a measurement.
+ * @param measuredDispersion ψ from running one arm twice on this corpus (`scripts/eval-dispersion.ts`).
+ *   Omitted: the neutral 0.5 is used and labelled as assumed.
  */
 export function preRegister(
   tasks: number, repeats: number, measuredDispersion?: number,
 ): EvalPreRegistration {
   const minimumPairs = minimumPairsForSignificance();
-  // 0.5 is the neutral assumption before any data exists. A measured run
-  // replaces it, and `dispersionMeasured` records which of the two this is.
   const dispersionMeasured = measuredDispersion !== undefined && measuredDispersion > 0;
   const dispersion = dispersionMeasured ? measuredDispersion : 0.5;
   const pairsFor10pp = requiredPairs(0.10, { dispersion });
@@ -672,14 +445,7 @@ export function preRegister(
   };
 }
 
-/**
- * Score every behavioural instrument against one trajectory's store.
- *
- * A scorer that throws is not silently dropped. Its event type failing the
- * canonical parse means the ledger is corrupt for that mechanism, and a corrupt
- * reward signal must not degrade into a missing row that reads as an absent
- * mechanism.
- */
+/** Score every behavioural instrument against one store. A throwing scorer propagates: a corrupt ledger is not an absent mechanism. */
 export function scoreTrajectory(
   sql: SqlExecutor, actor: ActorHandle, scorers: readonly BehaviourScorer[] = BEHAVIOUR_SCORERS,
 ): EvalScoreRow[] {
@@ -691,20 +457,8 @@ export function scoreTrajectory(
 }
 
 /**
- * The model a run's ledger observed serving its turns, or null when the
- * ledger does not identify one.
- *
- * Read off `step_finish` rows only: they are the turn loop's own steps, so
- * their `modelId` — the provider's report of what served the request — is the
- * model the turns ran on. `model_call` rows are deliberately excluded: judges,
- * classifiers and other auxiliary lanes run on other models BY DESIGN, and
- * folding them in would refuse every run with a judge in it.
- *
- * Exactly one distinct serving id answers it; zero (no provider reported one)
- * or more than one (a mid-run model change, or two spellings of one route)
- * answers null rather than a guess. A resumed run's prior-process episodes
- * are gone with their scratch stores, so this covers the ledgers handed to
- * it — which is what makes null "unobserved" rather than "agreed".
+ * The model a run's ledger observed serving its turns, or null unless exactly one serving id appears.
+ * `step_finish` rows only: `model_call` rows include judges and auxiliary lanes on other models by design.
  */
 export function modelObservedFromEvents(events: readonly RunEvent[]): string | null {
   const seen = new Set<string>();
@@ -713,7 +467,6 @@ export function modelObservedFromEvents(events: readonly RunEvent[]): string | n
   return seen.size === 1 ? [...seen][0] ?? null : null;
 }
 
-/** The serving ids a batch of run events votes, for both readers below. */
 function collectServingIds(events: readonly RunEvent[], seen: Set<string>): void {
   for (const event of events) {
     if (event.type !== 'step_finish') continue;
@@ -722,12 +475,7 @@ function collectServingIds(events: readonly RunEvent[], seen: Set<string>): void
   }
 }
 
-/**
- * The incremental form of {@link modelObservedFromEvents}, for suites that
- * observe episodes one at a time — a live event forward, or per-episode
- * ledgers read before a shared teardown deletes them. One accumulator per
- * run; `observed` answers the same single-or-null rule over everything noted.
- */
+/** The incremental form of {@link modelObservedFromEvents}, one accumulator per run, same single-or-null rule. */
 export interface ObservedModelAccumulator {
   note(events: readonly RunEvent[]): void;
   readonly observed: string | null;
@@ -746,20 +494,12 @@ export function createObservedModelAccumulator(): ObservedModelAccumulator {
   };
 }
 
-/** The claimed model beside the observed one, for the admissibility refusal. */
 export interface AdmissibilityModelClaim {
   readonly modelId: string;
   readonly modelObserved: string | null;
 }
 
-/**
- * Whether an observed serving id disproves a claimed model.
- *
- * Spelling-tolerant by containment, the way the pin check is: normalisation
- * legitimately respells a spec between the config that claimed it and the
- * provider that served it, while the account default standing in for the
- * run's model contains it in neither direction.
- */
+/** Whether an observed serving id disproves a claimed model; containment in either direction tolerates respelling. */
 export function modelClaimRefuted(modelId: string, modelObserved: string | null): boolean {
   return modelObserved !== null
     && modelObserved !== modelId
@@ -768,16 +508,8 @@ export function modelClaimRefuted(modelId: string, modelObserved: string | null)
 }
 
 /**
- * Is this run evidence?
- *
- * Deliberately strict on the things that have already produced a
- * believed-but-meaningless number, and deliberately silent on how WELL the agent
- * did. A run where the agent solved nothing is perfectly admissible — that is a
- * finding, and the most useful kind. A run that never checked whether it solved
- * anything is not evidence about task performance at all.
- *
- * That last condition replaced "no mechanism was exercised". Mechanism coverage
- * is not a precondition for evidence; measuring the OUTCOME is.
+ * Is this run evidence? Strict on measurement, silent on quality: solving nothing is admissible, never
+ * checking the outcome is not.
  */
 export function assessAdmissibility(
   declaredTasks: readonly string[],
@@ -793,9 +525,7 @@ export function assessAdmissibility(
   const outcomesScored = scored
     .filter((o) => o.scores.some((s) => s.name === TASK_OUTCOME)).length;
 
-  // Covariates only. The outcome row is not a mechanism, and letting it into
-  // this set would put the primary metric back inside the mechanism-coverage
-  // framing this field was just demoted out of.
+  // Covariates only: the outcome row is not a mechanism.
   const exercised = new Set<string>();
 
   for (const o of scored) {
@@ -820,24 +550,17 @@ export function assessAdmissibility(
       + 'not whether any task was solved, so it is not evidence about task performance');
   }
 
-  // The set a run measures must equal the set it declares.
   if (missing.length > 0) {
     failures.push(`declared ${String(declaredTasks.length)} tasks but never attempted ${missing.join(', ')}`);
   }
 
-  // A cancelled run is partial evidence by construction: whatever it did settle
-  // stands, but the record must say out loud that it is incomplete rather than
-  // let a shorter denominator read as a finished measurement.
+  // A cancelled run is partial: settled work stands, but the record must say it is incomplete.
   if (incomplete > 0) {
     failures.push(`${String(incomplete)} case(s) never settled — the run was cancelled `
       + 'mid-flight; this record is partial evidence, not a verdict');
   }
 
-  // The record's model claim must survive the ledger: a run that named one
-  // model and turned on another measured the other's behaviour under the
-  // first's name. Omitted (a direct two-argument call) means the caller never
-  // looked — old callers predate the claim, and only the record assembly
-  // passes it, so nothing that never observed can fail here.
+  // The model claim must survive the ledger. Omitted means the caller never observed, so it cannot fail here.
   if (model !== undefined && modelClaimRefuted(model.modelId, model.modelObserved)) {
     failures.push(`run claimed model ${model.modelId} but the ledger observed `
       + `${model.modelObserved} serving its turns — the turns ran on a model the record does not name`);
@@ -852,15 +575,12 @@ export function assessAdmissibility(
   };
 }
 
-/** The commit the code under test was at, and whether the tree was dirty. */
 export interface GitProvenance {
   readonly gitSha: string;
   readonly gitDirty: boolean;
 }
 
-/** Uses `gitEnv` so the caller's GIT_DIR/GIT_WORK_TREE cannot redirect this at
- *  the wrong repository — the pre-push hook exports GIT_DIR, and a fixture that
- *  ignored that wrote into the real checkout. */
+/** Uses `gitEnv` so an exported GIT_DIR/GIT_WORK_TREE (e.g. the pre-push hook) cannot redirect this. */
 export function gitProvenance(cwd: string): GitProvenance {
   const git = (...args: string[]) =>
     execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' }).trim();
@@ -868,21 +588,12 @@ export function gitProvenance(cwd: string): GitProvenance {
   return { gitSha: git('rev-parse', 'HEAD'), gitDirty: git('status', '--porcelain') !== '' };
 }
 
-/** Everything a family's suite KNOWS about its run; the rest of a record is
- *  derived. One assembly point so the runId format, the git provenance, the
- *  admissibility verdict and the spend flattening are one policy across every
- *  family rather than three afterAll blocks free to drift. */
+/** Everything a family's suite knows about its run; one assembly point for runId, git provenance,
+ *  admissibility and spend across families. */
 export interface RunRecordInputs {
   readonly family: string;
   readonly tier: EvalTier;
-  /** The model DRIVEN, read from the config the session was built with rather
-   *  than re-derived from the tier. A record's model id has to be a fact about
-   *  the run, not a second computation that can disagree with it. */
   readonly modelId: string;
-  /** The model the run's LEDGER observed serving its turns, via
-   *  {@link modelObservedFromEvents} over the episodes' `step_finish` rows.
-   *  Null when the suite's ledger names none — the record then carries no
-   *  ledger check, stated rather than hidden. */
   readonly modelObserved: string | null;
   readonly repeats: number;
   readonly seed: number;
@@ -891,7 +602,6 @@ export interface RunRecordInputs {
   readonly observations: readonly EvalObservation[];
   readonly spend: LiveModelSpend;
   readonly transcripts: string;
-  /** Where `gitProvenance` runs — the repo under test. */
   readonly repoRoot: string;
 }
 
@@ -914,10 +624,7 @@ function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
     admissibility: assessAdmissibility(inputs.declaredTasks, inputs.observations, {
       modelId: inputs.modelId, modelObserved: inputs.modelObserved,
     }),
-    // FIELD RENAME ONLY: LiveModelSpend carries `usage: Usage` instead of flat
-    // inputTokens/outputTokens. The `?? 0` and the tokensIn/tokensOut spelling
-    // are EvalsInfra's agreed follow-up (spend becomes
-    // { calls, callsWithoutUsage, input, output }); this keeps the build green.
+    // LiveModelSpend carries `usage: Usage`; flattened to tokensIn/tokensOut here.
     spend: {
       calls: inputs.spend.calls,
       tokensIn: inputs.spend.usage.input ?? 0,
@@ -933,29 +640,9 @@ function writeRunRecord(path: string, record: EvalRunRecord): void {
 }
 
 /**
- * Publish a run's record, or say why there is none. The ONLY path that writes
- * one.
- *
- * A run that attempted nothing is not evidence, and a record of one is worse
- * than no record at all: 81 of the corpus's first 89 records were that shape.
- * Every case skipped for want of a credential — `skipIf(!TARGET)` — and each
- * arm's `afterAll` wrote the record regardless, so the largest group the triage
- * instrument found was one fact repeated 45 times, over runs that never ran.
- *
- * The guard lives here, not in three `afterAll` blocks, and `assembleRunRecord`
- * and `writeRunRecord` are module-private behind it. That is what makes the
- * shape structurally unavailable rather than merely fixed in the three families
- * that have it today: a fourth family cannot reintroduce it without editing
- * this function.
- *
- * The destination is `KINU_EVAL_RECORD` when set, and otherwise the run's own
- * transcripts directory — the record beside the trajectories its scores were
- * computed from. `tests/eval/runs/` holds PUBLISHED records, committed
- * deliberately by whoever publishes the number, and is never a default: a local
- * scripted-model run landing there reaches the primary checkout and blocks a
- * deploy, because `deploy.sh` correctly refuses a dirty tree.
- *
- * Returns the record it wrote, or null when it wrote nothing.
+ * Publish a run's record, or say why there is none; the only writer. A run that attempted nothing gets no
+ * record. Destination is `KINU_EVAL_RECORD` or the run's transcripts directory, never `tests/eval/runs/`:
+ * that dirties the checkout and `deploy.sh` refuses a dirty tree. Returns the record, or null.
  */
 export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null {
   if (inputs.observations.length === 0) {
@@ -975,14 +662,8 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
   return record;
 }
 
-/** The version marker every stored record must carry. Validated rather than
- *  trusted: a record is a persisted blob, and a schema bump has to fail loudly
- *  here instead of surfacing as an undefined field inside a comparison.
- *
- *  The envelope IS the record's identity: schema 1 is only ever produced by
- *  `writeRunRecord` in this module, from an `EvalRunRecord`. Re-declaring every
- *  nested field would restate the whole interface as a second declaration free
- *  to drift from the first. */
+/** The version marker every stored record must carry, validated so a schema bump fails loudly. Schema 1 is
+ *  only produced by `writeRunRecord`, so the envelope is the record's identity. */
 const RunRecordSchema = v.custom<EvalRunRecord>(
   (raw) => v.is(v.looseObject({ schema: v.literal(1) }), raw),
   'not an eval run record of schema 1',
@@ -999,14 +680,7 @@ export function readRunRecord(path: string): EvalRunRecord {
   return record.output;
 }
 
-/**
- * Every record path under a root: `<root>/<run>/run-record.json` for an artifact
- * root, `<root>/*.json` for the published-records directory.
- *
- * Both readers need the same answer — `scripts/eval-report.ts` renders the
- * corpus and `scripts/eval-triage.ts` triages it — and a second copy of this
- * walk is how one reader comes to read a corpus the other cannot see.
- */
+/** Every record path under a root (`<root>/<run>/run-record.json` or `<root>/*.json`), shared by eval-report and eval-triage. */
 export function runRecordPaths(root: string): string[] {
   if (!existsSync(root)) return [];
   const paths: string[] = [];
@@ -1024,7 +698,6 @@ export function runRecordPaths(root: string): string[] {
   return paths.sort();
 }
 
-/** How one covariate row reads: unmeasured, without an opportunity, or its rate. */
 function covariateRate(row: { eligible: number; passed: number; unmeasured: boolean }): string {
   if (row.unmeasured) {
     return `unmeasured — ${String(row.eligible)} observed opportunities, ${String(row.passed)} known successes`;
@@ -1035,15 +708,7 @@ function covariateRate(row: { eligible: number; passed: number; unmeasured: bool
   return `${String(row.passed)}/${String(row.eligible)} = ${(row.passed / row.eligible).toFixed(3)}`;
 }
 
-/**
- * A run record as a reader should see it: what it ran, whether it is evidence,
- * then THE OUTCOME, then the mechanism covariates under a heading that says so.
- *
- * The ordering and the heading are the point. A reader who meets eight mechanism
- * rates before any statement of whether the work got done will reason about
- * mechanisms, and that is how "delegation converted 15% of eligible turns" came
- * to be read as a finding about the agent rather than about the corpus.
- */
+/** A run record for a reader: what ran, whether it is evidence, the outcome, then labelled covariates. */
 export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
 
@@ -1089,8 +754,6 @@ export function formatRunRecord(record: EvalRunRecord): string {
       + `${(outcome.passed / outcome.eligible).toFixed(3)} over `
       + `${String(a.outcomesScored)} scored attempts`}`);
 
-  // Covariates, named as such. Every row kept: this telemetry is how a moved
-  // outcome gets explained. None of it is a score.
   lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
 
   for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {

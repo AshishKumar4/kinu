@@ -17,17 +17,10 @@ import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { present, scratchPath } from '@kinu.run/test-utils';
 
-// ─── stream-json fixtures (captured from the real `claude` binary) ───────────
-
-/** The `usage` block Anthropic's `result` event carries. Its three prompt parts
- *  are DISJOINT — plain input, cache reads, cache writes. `null` is the run the
- *  binary reported nothing about, which must not arrive downstream as zeros. */
+/** Anthropic `usage`: input, cache reads and cache writes are disjoint. `null` means unreported and must not become zeros. */
 interface UsageFixture { inputTokens?: number; outputTokens?: number; cacheRead?: number }
 
-/** Native streaming output: system/init → rate_limit → stream_event deltas →
- *  assistant → result. We keep just the lines doStream consumes. */
 function streamJsonLines(text: string, usage: UsageFixture | null = {}): string {
-  // The real stream emits content_block_start then incremental text_delta lines.
   const startLine = JSON.stringify({
     type: 'stream_event',
     event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
@@ -69,20 +62,17 @@ function streamJsonLines(text: string, usage: UsageFixture | null = {}): string 
 }
 
 function chunk(text: string): string[] {
-  // Split into a couple of pieces to exercise incremental delta accumulation.
   if (text.length <= 2) return [text];
   const mid = Math.ceil(text.length / 2);
 
   return [text.slice(0, mid), text.slice(mid)];
 }
 
-/** A spawn seam over canned per-invocation stdout/stderr/exit. */
 interface FakeProc {
   stdout?: string;
   stderr?: string;
   code?: number | null;
   signal?: NodeJS.Signals | null;
-  /** Resolve only after the abort signal fires (to test cancellation). */
   hangUntilAbort?: boolean;
 }
 
@@ -120,7 +110,6 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
 
     async function* lines(value: string | undefined): AsyncGenerator<Uint8Array> {
       if (proc.hangUntilAbort) {
-        // Emit nothing until the process is aborted, then end the stream.
         await exit;
 
         return;
@@ -145,8 +134,6 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
   return { spawn, get calls() { return calls; }, get killed() { return state.killed; } };
 }
 
-/** Probe-aware spawn: `--version` succeeds, `auth status` reports loggedIn,
- *  the `-p` call streams `text`. */
 function availableSpawn(text = 'Hello from Claude.', usage?: UsageFixture | null) {
   return fakeSpawn((args) => {
     if (args[0] === '--version') return { stdout: '2.1.174 (Claude Code)\n', code: 0 };
@@ -157,9 +144,7 @@ function availableSpawn(text = 'Hello from Claude.', usage?: UsageFixture | null
   });
 }
 
-/** The provider's own finish part, before ai's v2→v3 conversion re-derives the
- *  total — the only place `finishPart`'s numbers are observable as it emitted
- *  them. */
+/** The provider's finish part before ai's v2→v3 conversion re-derives the total. */
 async function finishUsage(model: LanguageModelV2): Promise<LanguageModelV2Usage> {
   const { stream } = await model.doStream({
     prompt: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
@@ -177,8 +162,6 @@ async function finishUsage(model: LanguageModelV2): Promise<LanguageModelV2Usage
   }
 }
 
-/** Probe-only spawn: the binary answers `--version`, `auth status` reports what
- *  the case is about. */
 function probeSpawn(loggedIn: boolean): FakeSpawn {
   return fakeSpawn((args) => args[0] === '--version'
     ? { stdout: '2.1.174\n', code: 0 }
@@ -187,7 +170,6 @@ function probeSpawn(loggedIn: boolean): FakeSpawn {
 
 function deps() { return { env: {}, getAuth: async () => null, hasCredential: async () => false }; }
 
-// ─── doStream parsing ────────────────────────────────────────────────────────
 
 describe('claude-cli provider — doStream', () => {
   test('parses stream-json into text deltas and a finish part with usage', async () => {
@@ -201,17 +183,13 @@ describe('claude-cli provider — doStream', () => {
     for await (const delta of result.textStream) text += delta;
     expect(text).toBe('PONG.');
 
-    // Anthropic's `input_tokens` EXCLUDES the cached prefix, so the
-    // cache-inclusive prompt is 3 + 2131 — the same fold @ai-sdk/anthropic
-    // performs (dist/index.js:1810). Reading `input_tokens` alone reported 3 of
-    // 2134 real prompt tokens on every cached turn, and Claude Code caches.
+    // `input_tokens` excludes the cached prefix, so the prompt is 3 + 2131, the fold @ai-sdk/anthropic performs.
     const usage = await result.usage;
     expect(usage.inputTokens).toBe(2134);
     expect(usage.inputTokenDetails.cacheReadTokens).toBe(2131);
     expect(usage.outputTokens).toBe(7);
     expect(await result.finishReason).toBe('stop');
 
-    // The -p invocation uses the opus alias + tools off + stream-json.
     const pCall = present(calls.find((a) => a[0] === '-p'), 'the `claude -p` invocation');
     expect(pCall).toContain('--output-format');
     expect(pCall).toContain('stream-json');
@@ -226,9 +204,7 @@ describe('claude-cli provider — doStream', () => {
     const provider = createClaudeCliProvider({ spawn: availableSpawn('PONG.', null).spawn });
     const usage = await finishUsage(provider.createModel('claude-opus-4-x'));
 
-    // The binary said nothing, so the finish part says nothing. The old
-    // `(inputTokens ?? 0) + (outputTokens ?? 0)` answered that with a
-    // confident total of 0 — a turn that looked measured and free.
+    // Unreported usage must not become a confident total of 0.
     expect(usage.inputTokens).toBeUndefined();
     expect(usage.outputTokens).toBeUndefined();
     expect(usage.cachedInputTokens).toBeUndefined();
@@ -312,7 +288,6 @@ describe('claude-cli provider — doStream', () => {
   });
 });
 
-// ─── abort ───────────────────────────────────────────────────────────────────
 
 describe('claude-cli provider — abort', () => {
   test('aborting mid-stream kills the child and the stream finishes', async () => {
@@ -351,7 +326,6 @@ describe('claude-cli provider — abort', () => {
   });
 });
 
-// ─── availability gating ───────────────────────────────────────────────────
 
 describe('claude-cli provider — availability', () => {
   test('available when the binary is present and logged in', async () => {
@@ -418,7 +392,6 @@ describe('claude-cli provider — availability', () => {
   });
 });
 
-// ─── prompt translation ──────────────────────────────────────────────────────
 
 describe('buildClaudePrompt', () => {
   function opts(prompt: LanguageModelV2CallOptions['prompt']): LanguageModelV2CallOptions {
@@ -450,7 +423,6 @@ describe('buildClaudePrompt', () => {
   });
 });
 
-// ─── composition with Kinu's tool loop ────────────────────────────────────
 
 describe('claude-cli provider — tool loop composition', () => {
   test('the model is a drop-in LanguageModel for the ai-SDK tool loop', async () => {
@@ -458,8 +430,6 @@ describe('claude-cli provider — tool loop composition', () => {
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
 
-    // The harness still exposes a tool; the claude/* model just answers. The
-    // point: a claude/* model composes with the SDK's own tool loop.
     const result = await generateText({
       model,
       prompt: 'use the tool',
@@ -505,18 +475,15 @@ describe('claude-cli provider — tool loop composition', () => {
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('The capital of France is Paris.');
 
-    // The model was driven through the real `claude -p` invocation (opus alias).
     const pCall = present(calls.find((a) => a[0] === '-p'), 'the `claude -p` invocation');
     expect(pCall[pCall.indexOf('--model') + 1]).toBe('opus');
     await session.end();
   });
 });
 
-// ─── tool calls through the subscription ─────────────────────────────────────
 
 describe('claude-cli provider — tool calls', () => {
-  /** What a Claude model with no formal tool parameter emits when it wants to
-   *  act: its trained antml call block, inline in the text stream. */
+  /** A Claude model with no formal tool parameter emits its trained call block inline in the text stream. */
   const FC_BLOCK = [
     'Let me look that up.',
     '<function_calls>',

@@ -1,15 +1,6 @@
 /**
- * Device-consent watching — the single poll/present/resolve loop behind every
- * CLI surface (readline REPL, one-shot run, TUI overlay).
- *
- * While a turn is processing, the watcher polls the client's pending device
- * consents and presents each one at most once: answered or instruction-printed
- * ids are remembered until they leave the pending list, so a poll tick that
- * races the server-side resolution can never re-prompt. The loop is the one
- * every CLI wait shares (`waitForAnswer`), so a question in flight is never
- * overlapped by the next poll. Stopping the watcher (the turn settled) aborts
- * an in-flight question cleanly and best-effort denies it so the blocked
- * device RPC unblocks instead of waiting out its timeout.
+ * The one device-consent poll/present/resolve loop for every CLI surface. Each consent is presented at most once while pending;
+ * stopping aborts an in-flight question and best-effort denies it so the blocked device RPC unblocks.
  */
 
 import type {
@@ -26,24 +17,17 @@ const CONSENT_POLL_MS = 750;
 export type ConsentNoteKind = 'resolved' | 'stale' | 'error';
 
 export interface ConsentWatchOptions {
-  /**
-   * Present one pending consent and gather the user's decision. Resolve
-   * `null` when the surface can only print instructions (non-interactive) and
-   * `'cancelled'` when `signal` aborts mid-question — the promise MUST settle
-   * promptly on abort. Each consent is presented at most once while it stays
-   * pending.
-   */
+  /** Resolves `null` when the surface can only print instructions, `'cancelled'` on abort; must settle promptly on abort. */
   present(
     consent: PendingDeviceConsent,
     signal: AbortSignal,
   ): Promise<DeviceConsentDecision | 'cancelled' | null>;
-  /** Surface the outcome of a presented consent. */
   note(kind: ConsentNoteKind, message: string): void;
 }
 
 export interface ConsentWatcher {
   stop(): void;
-  /** Settles once the loop has ended after `stop`; nothing polls after it. */
+  /** Settles once the loop has ended after `stop`. */
   done: Promise<void>;
 }
 
@@ -60,8 +44,7 @@ export function watchDeviceConsents(
 
       if (abort.signal.aborted) return;
 
-      // Forget ids that left the pending list — they can never reappear, and
-      // the set stays bounded across a long turn.
+      // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
       const live = new Set(pending.map((item) => item.consentId));
 
       for (const id of handled) if (!live.has(id)) handled.delete(id);
@@ -74,9 +57,7 @@ export function watchDeviceConsents(
       handled.add(consent.consentId);
 
       if (outcome === 'cancelled') {
-        // The turn settled mid-question: deny so the blocked device RPC unblocks instead of
-        // waiting out its timeout. Reported here rather than below because 'cancelled' means the
-        // signal aborted, and the outer guard would drop the one failure that leaves a device hung.
+        // Deny so the blocked device RPC unblocks; reported here because the outer guard drops 'cancelled' failures.
         try {
           await consents.resolve(consent.consentId, 'deny');
         } catch (err) {
@@ -86,7 +67,7 @@ export function watchDeviceConsents(
         return;
       }
 
-      if (outcome === null) return; // instructions printed — nothing to resolve
+      if (outcome === null) return;
       const result = await consents.resolve(consent.consentId, outcome);
 
       if (abort.signal.aborted) return;
@@ -100,10 +81,7 @@ export function watchDeviceConsents(
     }
   };
 
-  // The watcher never answers: it runs until `stop` aborts it. A failure
-  // thrown past the tick's own reporting (a surface whose `note` throws)
-  // ends the loop and is recorded, so a rejection nobody awaits cannot take
-  // the process down.
+  // Runs until `stop`; a failure past the tick's own reporting ends the loop and is recorded, never an unhandled rejection.
   const done = (async () => {
     try {
       await waitForAnswer(async () => {
@@ -133,15 +111,10 @@ function decisionFeedback(decision: DeviceConsentDecision): string {
   return decision === 'always' ? 'Approved (always).' : 'Approved once.';
 }
 
-/** Read one line from the surface's stdin. Resolve null on EOF or abort. */
+/** Resolves null on EOF or abort. */
 export type ConsentAskLine = (question: string, signal: AbortSignal) => Promise<string | null>;
 
-/**
- * Terminal consent watcher shared by the readline REPL and one-shot runs:
- * interactive stdin gets an inline y/a/n prompt (re-asked on invalid input),
- * non-interactive runs print actionable instructions once per request so the
- * turn never stalls silently. Surfaces differ only in how a line is asked.
- */
+/** Interactive stdin gets a y/a/n prompt; non-interactive runs print instructions once per request so the turn never stalls silently. */
 export function watchTerminalConsents(
   consents: DeviceConsentSurface,
   agentName: string,
@@ -166,13 +139,7 @@ export function watchTerminalConsents(
   });
 }
 
-/**
- * Headless (CI) consent watcher for `kinu exec`: never prompts. Every
- * pending device consent is denied immediately — fail closed — with
- * actionable pre-authorization instructions, and the run is flagged through
- * `onDenied` so it exits nonzero. Pre-authorized ("always") devices never
- * raise a consent, so they are unaffected.
- */
+/** `kinu exec`: denies every pending consent (fail closed) and flags the run via `onDenied`. "Always" devices raise none. */
 export function watchHeadlessConsents(
   consents: DeviceConsentSurface,
   agentName: string,
@@ -201,8 +168,7 @@ export function watchHeadlessConsents(
       return Promise.resolve('deny');
     },
     note: (kind, message) => {
-      // The consent_denied line already reports the outcome; only real
-      // failures of the deny round-trip are worth surfacing.
+      // The consent_denied line already reports the outcome.
       if (kind === 'error') console.error(`${ERR('error')} ${message}`);
     },
   });
@@ -223,7 +189,7 @@ async function promptConsentDecision(
 
     if (signal.aborted) return 'cancelled';
 
-    if (answer === null) return 'deny'; // EOF — stdin is gone
+    if (answer === null) return 'deny'; // EOF
     const normalized = answer.trim().toLowerCase();
 
     if (normalized === 'y' || normalized === 'yes' || normalized === 'o') return 'once';

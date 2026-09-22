@@ -1,10 +1,4 @@
-/**
- * The file-edit diff card: a `file` call's edit/write result draws the change
- * it made — header, counts, prefixed hunk lines — reconstructed from the
- * call's own record by the same LCS the workspace change-set runs. The cases
- * here are the card's whole contract: what it shows, what it collapses to,
- * how it says so when it cannot show a diff.
- */
+/** Diff card for a `file` edit/write, reconstructed from the call's own record by the change-set LCS. */
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { EXPANDED_RESULT_LINES } from '../src/tui/diff-card';
@@ -12,8 +6,6 @@ import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture'
 
 afterEach(cleanupChats);
 
-/** The shape `file action=edit` answers, rendered the way the event stream
- *  carries it. */
 function editResult(path: string, applied: Array<{ line: number; removed_lines: number; added_lines: number }>): string {
   return JSON.stringify({ ok: true, path, applied });
 }
@@ -49,7 +41,6 @@ describe('the file diff card', () => {
     expect(frame).toContain('−1');
     expect(frame).toContain('− export const ready = false;');
     expect(frame).toContain('+ export const ready = true;');
-    // The result's own JSON never appears as the clipped text row it used to be.
     expect(frame).not.toContain('"applied"');
   });
 
@@ -111,7 +102,6 @@ describe('the file diff card', () => {
     const frame = screen.frame();
     expect(frame).toContain('− const one = 1;');
     expect(frame).toContain('− const two = 2;');
-    // Two hunks, one separator between them.
     expect(frame).toContain('⋮');
   });
 
@@ -190,8 +180,7 @@ describe('the file diff card', () => {
       type: 'tool-call', toolName: 'file', toolCallId: 'edit-b',
       args: { action: 'edit', path: 'b.ts', edits: [{ old_text: 'const two = 2;', new_text: 'const two = 202;' }] },
     });
-    // Results arrive in call order: positional pairing alone would hand
-    // b.ts's call to a.ts's result.
+    // Results arrive in call order: positional pairing alone would hand b.ts's call to a.ts's result.
     agent.emit({
       type: 'tool-result', toolName: 'file', toolCallId: 'edit-a',
       result: editResult('a.ts', [{ line: 1, removed_lines: 1, added_lines: 1 }]),
@@ -210,8 +199,6 @@ describe('the file diff card', () => {
     expect(frame).toContain('+ const one = 101;');
     expect(frame).toContain('b.ts');
     expect(frame).toContain('− const two = 2;');
-    // A wrong pairing would have failed the path check and left a card
-    // worded "diff unavailable" instead of these hunks.
     expect(frame).not.toContain('diff unavailable');
   });
 

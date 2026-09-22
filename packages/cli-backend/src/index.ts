@@ -1,6 +1,4 @@
-/**
- * CLI backend — macOS/Linux Bun runtime for the self-evolving agent.
- */
+/** CLI backend: macOS/Linux Bun runtime for the self-evolving agent. */
 
 export {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql, inspectionFiles,

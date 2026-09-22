@@ -71,39 +71,26 @@ export interface LocalProviderCredentials {
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
 }
 
-/** The signed-in Kinu session — lets local agents run on the user's
- *  Cloudflare AI (Workers AI + their AI Gateway) through the worker's
- *  /api/user/ai/v1 proxy, with no Cloudflare token on this machine. */
+/** Signed-in Kinu session: local agents use the user's Cloudflare AI through
+ *  the worker's /api/user/ai/v1 proxy, with no Cloudflare token on this machine. */
 export interface LocalCloudSession {
   origin: string;
   /** CLI bearer (`ptc_…` session or `pta_…` access token with ai.proxy). */
   token: string;
 }
 
-// CLOUD_PROXY_PROVIDER_IDS and cloudProxyBaseURL now live beside the route they
-// describe, in core's providers/proxy.ts, and are re-exported here because this
-// module is the CLI's endpoint/credential seam and every caller already imports
-// them from it.
+// Re-exported: this module is the CLI's endpoint/credential seam.
 export {
   CLOUD_PROXY_PROVIDER_IDS, cloudProxyBaseURL, type CloudProxyProviderId,
 } from '@kinu.run/core';
 
-/**
- * Proxy fetch wrappers, memoized per session + underlying fetch.
- *
- * `deps.fetch` is the identity the models.dev catalog caches on
- * (`getModelsDevCatalog` compares function identity), so handing every new
- * resolver a fresh closure would re-download the catalog on each one. The
- * wrapper is pure given its inputs, so one instance per session is correct as
- * well as cheap.
- */
+/** Memoized per session + fetch: `getModelsDevCatalog` caches on fetch identity,
+ *  so a fresh closure per resolver would re-download the catalog. */
 const proxyFetchCache = new Map<string, { base: typeof fetch | undefined; proxy: typeof fetch }>();
 
 function proxyFetchFor(cloud: LocalCloudSession, base: typeof fetch | undefined): typeof fetch {
-  // Deliberately not keyed on sessionAffinity: that header pins a Workers AI
-  // replica and means nothing to a third-party provider, so it is not sent
-  // here — and keying on it would have given each agent name its own fetch
-  // identity, re-downloading the models.dev catalog on every switch.
+  // Not keyed on sessionAffinity: that header pins a Workers AI replica, is not
+  // sent to third parties, and keying on it would re-download the catalog per agent.
   const cacheKey = `${cloud.origin} ${cloud.token}`;
   const cached = proxyFetchCache.get(cacheKey);
 
@@ -124,74 +111,43 @@ export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   resolveModel(specOrNull?: string | null): LanguageModel;
   listProviders(): Promise<ProviderInfo[]>;
-  /** Models from every available provider, plus the providers that could not
-   *  be listed — one broken credential never empties the menu. */
+  /** One broken credential never empties the menu. */
   listModels(): Promise<ModelMenu>;
-  /** One spec's catalog entry (provider listModels lookup) — per-model
-   *  metadata like input modalities for the attachment sanitizer. Null when
-   *  the provider/model is unknown or the catalog is unreachable. */
+  /** Per-model metadata (e.g. input modalities); null when unknown or unreachable. */
   modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
-  /** One spec per available provider, in registry preference order — what
-   *  judge/panel selection walks (core's `availableJudgeSpecs`, the same rule
-   *  the DO backend uses). */
+  /** One spec per available provider, in registry preference order. */
   judgeCandidates(): Promise<string[]>;
-  /**
-   * What the resolved spec's provider says an assembled request costs, before
-   * it is submitted (core `providers/input-tokens.ts`). Reports `unsupported`
-   * for a provider that publishes no pre-request count endpoint — the turn is
-   * then assembled ungated rather than gated on an estimate.
-   */
+  /** Pre-request token count (core `providers/input-tokens.ts`); `unsupported`
+   *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
-  /** Resolve auth headers for a credential key (e.g. `tavily` for the web
-   *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
   /**
-   * Install the sink every wait notice flows to — the `provider_wait` run
-   * events and, through the session's event rail, the surface that says the
-   * turn is waiting on a provider rather than thinking.
-   *
-   * A setter rather than a config field because the sink belongs to the
-   * session, and the resolver is built before the session that holds it:
-   * wiring it at construction would need the session to exist first. The
-   * resolver is shared across the sessions a client opens, so the install is
-   * last-writer-wins — the live session's sink is the one that answers.
-   *
-   * Optional: a hand-built resolver fixture has nothing to report to, and
-   * absent here is the same as absent on the deps — waits go unreported.
+   * A setter: the resolver is built before the session owning the sink, and is
+   * shared across sessions, so the last install wins. Unset leaves waits unreported.
    */
   setProviderWaitSink?(sink: ((info: ProviderWaitInfo) => void) | undefined): void;
 }
 
 export interface LocalModelResolverConfig {
-  /** The default inference endpoint for BARE model ids — the one thing the
-   *  registry cannot know on its own. Null when nothing derives one: explicit
-   *  `provider/model` specs still resolve through the registry, and a bare id
-   *  then fails at resolution with the fixes named. */
+  /** Default endpoint for bare model ids. Null when nothing derives one: explicit
+   *  `provider/model` specs still resolve, bare ids fail with the fixes named. */
   llm: LLMProviderConfig | null;
   credentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
-  /** Signed-in session. When present, workers-ai + my-gateway resolve through
-   *  the worker's AI proxy; when absent they list as unavailable with a
-   *  `kinu auth` hint. */
+  /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
+   *  when absent they list as unavailable with a `kinu auth` hint. */
   cloud?: LocalCloudSession;
-  /** Agent-level conversation identity for routing and prefix caching. */
   sessionAffinity?: string;
   fetch?: typeof fetch;
-  /** Seam for the local Claude-subscription provider (tests inject a fake
-   *  `claude` binary). Production leaves this undefined — the provider spawns
-   *  the real binary and probes `claude auth status`. */
+  /** Seam for the local Claude-subscription provider; tests inject a fake `claude` binary. */
   claudeCli?: ClaudeCliProviderOptions;
-  /** Called the moment a resolved model's request sleeps on a provider wait.
-   *  Read per call by the deps object below so {@link LocalModelResolver.setProviderWaitSink}
-   *  can install the session's sink after construction. */
+  /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
+   *  the session's sink after construction. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
-/** One shape for both paths of the seam below, so a source label and a spec
- *  cannot be attached one way in `stream` and another in `complete`. Reported
- *  even when the provider said nothing — `normalizeUsage` returns `{}` and the
- *  CALL still lands, which is what keeps a silent provider distinguishable from
- *  a free one. */
+/** Reported even when the provider said nothing (`{}`), so a silent provider
+ *  stays distinguishable from a free one. */
 function reportCall(
   spend: ModelCallSpend,
   spec: string,
@@ -205,36 +161,18 @@ function reportCall(
 }
 
 /**
- * The workspace LLM seam over the local registry.
- *
- * `spec` overrides which model it resolves — that is how the MECHANICAL
- * producers reach a different model without a second provider path: same
- * resolver, same credentials, one different model id. WHICH model comes from
- * the turn profile's tier route (core's profiles/model-route.ts), never from
- * this seam. Omitted = the workspace's configured chat model.
- *
- * Every judge, classifier, reflection, craft-generalization and sleep-time
- * compute call in a local workspace comes through here, and `spend` is the
- * whole difference between a workspace total that counts them and one that
- * silently omits them: without it each call discards the provider's usage
- * report on the line that received it. Only a completed call reports. A call
- * that threw produced no usage. This seam cannot tell whether that call was
- * billed. Counting it would understate the coverage fraction with requests that
- * cost nothing.
+ * The workspace LLM seam over the local registry. `spec` overrides the model
+ * (chosen by the turn profile's tier route); omitted = configured chat model.
+ * Only completed calls report spend: a thrown call yields no usage.
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   spec?: string | null;
-  /** The sink AND the label, in one field: this factory backs `rt.llm`'s
-   *  reflection, `rt.fastLlm`'s mechanical tier and `rt.judgeModel`'s grading,
-   *  so only the consumer knows which producer a call belongs to. Optional, and
-   *  it stays optional: a seam with no sink wired is a seam whose spend is
-   *  unattributed, which the coverage fraction states rather than hides. */
+  /** Sink and producer label together: only the consumer knows which producer
+   *  a call belongs to. Unset leaves spend unattributed. */
   spend?: ModelCallSpend;
 }): LLM {
   const resolver = createLocalModelResolver(opts);
-  // Normalized per call, not at construction: a seam over a registry-only
-  // family (or an endpoint chosen later) must still BUILD — an id that cannot
-  // resolve fails at the call that names it, with the fixes named.
+  // Normalized per call: an unresolvable id fails at the call, not at construction.
   const spec = () => resolver.normalizeSpecSync(opts.spec ?? null);
   const model = (resolved: string) => resolver.resolveModel(resolved);
   const spend = opts.spend;
@@ -260,10 +198,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
 
       for await (const chunk of result.textStream) yield chunk;
 
-      // Usage is knowable only once the stream has drained, so the report lands
-      // here. A consumer that abandons the generator never reaches this line and
-      // reports nothing — honest, because the cost of a stream nobody finished
-      // is not something this seam ever learns.
+      // Usage exists only once the stream drains; an abandoned stream reports nothing.
       if (spend) reportCall(spend, resolved, await result.totalUsage, (await result.response).modelId);
     },
     async complete(prompt) {
@@ -287,12 +222,8 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
 }
 
 /**
- * Local provider registry for the CLI backend.
- *
- * The DO backend resolves model specs through UserDO-scoped credentials. The
- * CLI has no UserDO, so this adapter supplies the same registry contract from
- * local config/env credentials while preserving the advanced KINU_BASE_URL /
- * KINU_AUTH override.
+ * Local provider registry: the DO backend's registry contract from local
+ * config/env credentials, keeping the KINU_BASE_URL / KINU_AUTH override.
  */
 export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalModelResolver {
   const registry = createProviderRegistry();
@@ -302,9 +233,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const cloud = opts.cloud;
 
-  // An explicit direct endpoint (KINU_BASE_URL → llm.name workers-ai) keeps
-  // precedence over the signed-in proxy; the proxy-derived llm config (its
-  // baseURL IS the proxy) registers through the cloud providers below instead.
+  // An explicit direct endpoint takes precedence over the signed-in proxy; the
+  // proxy-derived config registers through the cloud providers below.
   const llmIsCloudProxy = cloud !== undefined
     && localEndpoint !== null
     && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
@@ -312,9 +242,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const defaultProvider = defaultProviderFor(localEndpoint);
 
   if (localEndpoint !== null && defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
-    // The explicit endpoint is Cloudflare-shaped (the product proxy or the
-    // account's own /ai/v1), so it takes the same replica pin the proxy path
-    // below sends: the proxy forwards the header, Workers AI honors it.
+    // Cloudflare-shaped endpoint, so it takes the same replica pin as the proxy path.
     const pinned = withAffinity(localEndpoint, opts.sessionAffinity);
     registry.register(createGatewayBackedProvider({
       id: 'workers-ai',
@@ -380,11 +308,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     if (name !== 'default') registry.register(createOpenAICompatProvider(`openai-compat:${name}`));
   }
 
-  // Any provider the owner connected in the web UI resolves through the
-  // worker's general proxy — a marker instead of a secret, and the request
-  // relocated to a server that holds the key. A LOCAL credential always wins:
-  // the machine keeps working offline, and an explicit local key is an
-  // explicit override.
+  // Web-UI-connected providers resolve through the worker's proxy. A local
+  // credential always wins: offline use and explicit override.
   const proxied = cloud ? proxyCredentialSourceFor(cloud, opts.fetch) : null;
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
@@ -405,8 +330,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     async hasCredential(key) {
       if (authStore.has(key)) return true;
 
-      // A credential the proxy would never front cannot be hiding in the
-      // account, so the local answer is the whole answer for it.
+      // A credential the proxy never fronts: the local answer is complete.
       if (PROXY_DENIED_CRED_KEYS.includes(key)) return false;
       const remote = await proxied?.load();
 
@@ -418,9 +342,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
       if (listed) return true;
 
-      // Never listed successfully — "not connected" would be a guess, and a
-      // provider reported unavailable for the wrong reason is worse than one
-      // reported unavailable for the right one.
+      // Never listed successfully: "not connected" would be a guess.
       if (remote.error) throw new Error(remote.error);
 
       return false;
@@ -435,8 +357,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     onProviderWait: (info) => { opts.onProviderWait?.(info); },
   };
 
-  /** What a bare model id falls to. Null endpoint = no honest default: the
-   *  fixes live in `noDefaultModelMessage`, shared by every bare-id failure. */
+  /** Null endpoint = no default; fixes live in `noDefaultModelMessage`. */
   const fallback: { provider: string; model: string } | null = localEndpoint
     ? {
       provider: defaultProvider !== null && registry.get(defaultProvider) ? defaultProvider : 'openai-compat',
@@ -462,16 +383,12 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
       if (registry.get(first)) return s;
 
-      // A models.dev provider the account has connected is a provider here
-      // too — that is what makes a web-UI-connected key selectable locally.
-      // The snapshot is empty until a listing lands, so this answer can change
-      // once within a process; every path that picks a model (the menu,
-      // `findUnusableModel`, catalog lookup) lists first, and the source is
-      // memoized per session so one listing warms them all.
+      // Account-connected models.dev providers count here. The snapshot is empty
+      // until a listing lands; every model-picking path lists first.
       if (proxied?.providerIds().has(first)) return s;
 
-      // Slashful model IDs (for example minimax/m3) are model IDs under the
-      // configured local endpoint unless the first path segment is a provider.
+      // Slashful model IDs (e.g. minimax/m3) belong to the configured endpoint
+      // unless the first segment is a provider.
       if (!fallback) throw new Error(noDefaultModelMessage());
 
       return `${fallback.provider}/${s}`;
@@ -515,8 +432,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   };
 }
 
-/** The endpoint with the agent's replica pin on its headers, or itself when
- *  the agent has none - a headers copy only when there is something to add. */
 function withAffinity(llm: LLMProviderConfig, sessionAffinity: string | undefined): LLMProviderConfig {
   if (!sessionAffinity) return llm;
 
@@ -580,8 +495,7 @@ const CLOUD_MENU_TTL_MS = 60_000;
 
 interface CloudMenu {
   entries: AgentModelEntry[];
-  /** Why the server could not list a provider, keyed by provider id — the
-   *  cloud providers report it verbatim instead of their canned hint. */
+  /** Per-provider listing failure, reported verbatim instead of a canned hint. */
   failures: Map<string, string>;
 }
 
@@ -592,11 +506,8 @@ interface CloudProxyHeaders {
 
 const EMPTY_CLOUD_MENU: CloudMenu = { entries: [], failures: new Map() };
 
-/** Server-driven model menu (GET /api/cli/models) shared by the cloud
- *  providers — the worker is the source of truth for what the signed-in
- *  account can actually serve (Cloudflare connected, gateway BYOK slugs,
- *  Unified Billing). Failures list as empty, so availability stays honest
- *  while explicit specs still resolve through the proxy. */
+/** Server-driven model menu (GET /api/cli/models). Failures list as empty;
+ *  explicit specs still resolve through the proxy. */
 function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): () => Promise<CloudMenu> {
   const baseFetch = fetchImpl ?? fetch;
   let cached: { at: number; menu: CloudMenu } | null = null;
@@ -628,14 +539,10 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
   };
 }
 
-/** The credentials the worker will front for this machine: keys only, plus the
- *  base URL for the ones whose endpoint is part of the credential, or the
- *  failure for one the account holds and could not read. */
 interface ProxiedCredentials {
   byKey: Map<string, { baseURL?: string; failure?: string }>;
-  /** Set only while no listing has ever succeeded — once one has, a later
-   *  failure serves the last good answer instead of unlearning the account's
-   *  providers over a transient network blip. */
+  /** Set only until a listing succeeds; afterwards a failure serves the last
+   *  good answer rather than forgetting providers over a network blip. */
   error: string | null;
 }
 
@@ -645,17 +552,12 @@ const CATALOG_CRED_KEY = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
 
 interface ProxyCredentialSource {
   load(): Promise<ProxiedCredentials>;
-  /** Catalog provider ids the proxy is currently serving, as last loaded.
-   *  Synchronous because `normalizeSpecSync` has to decide whether the first
-   *  path segment of `groq/llama-3.3` is a provider or part of a slashful
-   *  model id, and it cannot await. Empty until a listing has landed, which
-   *  is why the source is memoized per session below: every async listing in
-   *  the process warms the snapshot the sync path reads. */
+  /** Synchronous: `normalizeSpecSync` must decide whether `groq/llama-3.3` starts
+   *  with a provider and cannot await. Empty until a listing lands. */
   providerIds(): ReadonlySet<string>;
 }
 
-/** One source per signed-in session, shared across resolver instances so a
- *  listing done for the model picker also warms the spec normalizer. */
+/** Shared across resolvers so a picker listing also warms the spec normalizer. */
 const proxyCredentialSources = new Map<string, { base: typeof fetch | undefined; source: ProxyCredentialSource }>();
 
 function proxyCredentialSourceFor(cloud: LocalCloudSession, base: typeof fetch | undefined): ProxyCredentialSource {
@@ -685,9 +587,7 @@ function createProxyCredentialSource(
         headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
       });
 
-      // A rejected session is a real answer — this machine has no account
-      // credentials — and serving the last good listing over it would keep
-      // advertising providers every call now 401s on.
+      // A rejected session is a real answer; serving the last listing would advertise providers that 401.
       if (res.status === 401 || res.status === 403) {
         const value: ProxiedCredentials = { byKey: new Map(), error: null };
         cached = { at: Date.now(), value };
@@ -725,8 +625,7 @@ function createProxyCredentialSource(
   return { load, providerIds: () => providerIds };
 }
 
-/** workers-ai / my-gateway backed by the worker's signed-in AI proxy. The
- *  model id IS the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
+/** The model id is the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
  *  match the hosted backend exactly. */
 function createCloudProxyProvider(opts: {
   id: 'workers-ai' | 'my-gateway';
@@ -779,8 +678,7 @@ function createCloudProxyProvider(opts: {
   };
 }
 
-/** Honest placeholder when the user is not signed in: the providers stay
- *  visible in /model with the exact step that unlocks them. */
+/** Signed out: providers stay visible in /model with the step that unlocks them. */
 function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
   const reason = 'Sign in with `kinu auth` to use Workers AI in your Cloudflare account from local workspaces.';
 
@@ -796,10 +694,7 @@ function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): 
   };
 }
 
-/** Why a bare model id has nowhere to go, with every fix named. The COPY is
- *  deliberately per backend — core's `defaultSpecFor` returns null rather than a
- *  sentence, because "run kinu auth" and the cloud's "reconnect Workers AI"
- *  name different remedies on different surfaces. */
+/** Per-backend copy: the CLI and cloud name different remedies. */
 function noDefaultModelMessage(): string {
   return 'No default model is set.'
     + ' Run kinu auth to use Workers AI in your Cloudflare account, run kinu setup to pick a model provider,'
@@ -807,23 +702,14 @@ function noDefaultModelMessage(): string {
     + ' (for example --model claude/claude-sonnet-4-x once you are signed in to Claude Code).';
 }
 
-/** The providers a configured local endpoint can stand for. Named so the
- *  derivation below and the spec it composes cannot drift apart. */
 type CliProviderId =
   | 'workers-ai' | 'codex' | 'openai' | 'anthropic'
   | 'openrouter' | 'openai-compat' | 'opencode' | 'claude';
 
 /**
- * Which provider a BARE model id belongs to, given the configured endpoint.
- *
- * This half is genuinely local: it reads adapter state — an endpoint, and below
- * a registry — that core has no business reading, which is why
- * `providers/default-spec.ts` declares it platform-specific at the seam rather
- * than hoisting it. This table is the adapter's ONE answer, read through
- * `defaultSpecForEndpoint` below — the create path included, because a second
- * copy of it missing the `opencode`, `claude` or `@cf/` rows makes creating a
- * workspace against a Claude subscription write `openai-compat/<model>` into
- * its config and the first turn resolve the wrong provider.
+ * Which provider a bare model id belongs to, given the configured endpoint. The
+ * adapter's one table, create path included; a copy missing rows would seed the
+ * wrong provider.
  */
 function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
@@ -845,20 +731,13 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
   return 'openai-compat';
 }
 
-/**
- * The full `provider/model` spec a configured endpoint stands for.
- *
- * What `actor_config.model` is seeded with when the operator named no model, and
- * what a bare id falls to. Null when no endpoint derives one, which is the
- * caller's cue to say `noDefaultModelMessage()` — the same shape core's
- * `defaultSpecFor` uses for the half it owns.
- */
+/** Full spec a configured endpoint stands for: the seed for `actor_config.model`
+ *  and the bare-id fallback. Null cues `noDefaultModelMessage()`. */
 export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | null {
   const provider = defaultProviderFor(llm);
 
   if (provider === null || llm === null) return null;
-  // `codex` is the one provider whose configured model already carries its own
-  // prefix in some configs, so prefixing again would name `codex/codex/…`.
+  // Some `codex` configs already carry the prefix; avoid `codex/codex/…`.
   const model = llm.model.startsWith(`${provider}/`) ? llm.model.slice(provider.length + 1) : llm.model;
 
   return `${provider}/${model}`;

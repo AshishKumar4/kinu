@@ -1,10 +1,3 @@
-/**
- * Open an existing workspace for the CLI with the cli-backend runtime: FTS5
- * memory, the sandboxed executor and real MCTS branches.
- *
- * Returns the WorkspaceInfo structure the CLI commands display.
- */
-
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
   initWorkspaceBaselineTable, initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
@@ -31,16 +24,13 @@ export interface WorkspaceInfo {
 }
 
 interface CLIOpenOptions {
-  /** The default endpoint for bare ids — null when nothing derives one.
-   *  Explicit specs resolve through the registry regardless. */
+  /** Default endpoint for bare ids; null when nothing derives one. */
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
   codexAuthStore?: LocalCodexAuthStore;
   codexConfigPath?: string;
-  /** The canonical physical directory every agent in this virtual workspace
-   *  shares as its file and shell plane. See CLIRuntimeConfig.cwd. */
+  /** See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
-  /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }
 
@@ -48,26 +38,15 @@ export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
 
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 
-/**
- * Open an existing workspace using the full CLI backend runtime. It uses:
- * - the workspace plane `config.cwd` names, or the Nimbus filesystem with none
- * - MemoryStore with FTS5 (BM25 ranking, markdown chunking)
- * - Sandboxed executor (Bun subprocess with timeout)
- * - Real MCTS branch spawner (child processes with LLM calls)
- * - Proper CraftStore with FTS5 search
- */
+/** Open an existing workspace with the full CLI backend runtime. */
 export async function openWorkspaceCLI(
   db: Database,
   dbPath: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
   const sql = makeSql(db);
-  // A RUNNING workspace is WAL: the scheduler daemon and the CLI read the same
-  // file at the same time, which is what WAL is for. It is set here rather than
-  // at creation because `kinu create` publishes the file with no sidecars
-  // beside it — a WAL database is unreadable without the `-shm` SQLite builds
-  // next to it — and opening is the one moment a workspace gains what it is
-  // missing, exactly as the schema below does.
+  // Set on open, not at creation: `kinu create` publishes the file with no sidecars,
+  // and a WAL database is unreadable without its `-shm`.
   db.exec('PRAGMA journal_mode = WAL');
 
   let identity: OpenedWorkspaceIdentity;
@@ -91,16 +70,10 @@ export async function openWorkspaceCLI(
 
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
-  // Gather stats for WorkspaceInfo display
-  // The LIVE version — the one that actually drives a turn. MAX(version)
-  // reported an unresolved pending proposal as though it were already running.
-  // Scoped to `rt.actor`, NOT the workspace main: the branch above opens a
-  // facet as its OWN actor, and the scaffold pointer and task ledger are
-  // per-actor — reading the main's would report the parent's program here.
+  // The live version, scoped to `rt.actor`: a facet opens as its own actor, and
+  // the scaffold pointer is per-actor.
   const scaffoldVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? 0;
-  // Unscoped ON PURPOSE, and the only stat here that is: `crafted_tools` is one
-  // catalog per workspace (see identity/schema.ts) and this count reports the
-  // catalog, not this actor's eligible slice of it.
+  // Unscoped on purpose: `crafted_tools` is one catalog per workspace.
   const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
 
   const searchNodeCount = sql<{ c: number }>`
@@ -109,8 +82,6 @@ export async function openWorkspaceCLI(
   const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
     WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
-  // Memory is the agent's own, so it is measured on the agent's own plane —
-  // never on a shared project directory, where `memory/` does not belong.
   const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
 
   return {

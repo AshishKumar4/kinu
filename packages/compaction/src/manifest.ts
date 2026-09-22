@@ -1,34 +1,16 @@
 /**
- * The compaction archive manifest — the checkpoint's navigation index.
- *
- * The ladder already archives every compacted range verbatim at a citable VFS
- * path (stores.ts), and the checkpoint message already names the newest one.
- * That makes the archive readable but not *navigable*: the model can grep, it
- * cannot glance. The manifest closes that gap — one mechanical line per
- * archived range (turn span, role mix, the ask that opened it, the file that
- * holds it), rendered with no LLM in the path and appended to the very message
- * the checkpoint rides on.
- *
- * Ranges are non-overlapping by construction. A compaction always archives the
- * conversation prefix `[0, boundary)`, so each successive archive is a superset
- * of the last; the manifest indexes what each one ADDED and cites the smallest
- * archive containing it. Continuation is proven, not assumed: an indexed range's
- * `rangeHash` IS the content hash of the prefix it ended, so re-hashing that many
- * turns of the new prefix either reproduces it — and the delta is everything
- * after — or the history was rewritten underneath and the index restarts.
+ * Archive manifest: one mechanical line per archived range, appended to the checkpoint message.
+ * Each compaction archives prefix `[0, boundary)`; a range's `rangeHash` is the hash of the prefix it
+ * ended, so re-hashing proves continuation or signals a rewritten history.
  */
 
 import { rangeHash, type Turn } from '@better-compact/core';
 
-/** One archived range: the slice of conversation a single compaction folded
- *  out, plus the smallest archive file that contains it. */
 export interface ArchiveRange {
-  /** Content hash of the whole compacted prefix ending at `endTurn` — the
-   *  archive file's identity AND the proof the next range continues it. */
+  /** Hash of the whole compacted prefix ending at `endTurn`: archive identity and continuation proof. */
   rangeHash: string;
-  /** Citable VFS path of the archive holding this range. */
   path: string;
-  /** 1-based turn ordinals within the session's durable history. */
+  /** 1-based turn ordinals. */
   startTurn: number;
   endTurn: number;
   userTurns: number;
@@ -37,29 +19,20 @@ export interface ArchiveRange {
   firstUserAsk: string;
 }
 
-/** Durable index of a session's archived ranges. Append-only within one
- *  history; cleared wholesale when that history is rewritten. */
+/** Append-only within one history; cleared when that history is rewritten. */
 export interface ArchiveIndexStore {
-  /** Ranges oldest-first. */
   list(sessionKey: string): ArchiveRange[];
-  /** Append a range; a repeat of the same `rangeHash` is a no-op. */
+  /** A repeat of the same `rangeHash` is a no-op. */
   append(sessionKey: string, range: ArchiveRange): void;
-  /** Drop the index — the history it described no longer exists. */
   clear(sessionKey: string): void;
 }
 
 const ASK_SNIPPET_CHARS = 120;
 
-/** Newest ranges kept in the rendered manifest. A thousand-turn session folds
- *  dozens of times; the index must stay a glance, not a second transcript. */
+/** Keeps the manifest a glance, not a second transcript. */
 const RENDERED_RANGES = 24;
 
-/**
- * The range a freshly written archive adds to the index, or null when it adds
- * nothing (a rebuild over an already-indexed prefix). `reset` means the indexed
- * ranges describe a prefix this one does not continue — an edited, undone or
- * restored history — so the caller must clear before appending.
- */
+/** The range a new archive adds, or null; `reset` means the caller must clear the index first. */
 export function deriveArchiveRange(
   compacted: readonly Turn[],
   hash: string,
@@ -108,7 +81,6 @@ export function deriveArchiveRange(
   };
 }
 
-/** The manifest section, or '' when nothing has been archived yet. */
 export function renderArchiveManifest(ranges: readonly ArchiveRange[]): string {
   if (ranges.length === 0) return '';
   const rendered = ranges.slice(-RENDERED_RANGES);
@@ -129,12 +101,7 @@ export function renderArchiveManifest(ranges: readonly ArchiveRange[]): string {
   ].join('\n');
 }
 
-/**
- * Attach the manifest to the ladder's synthesized checkpoint/reference turn —
- * the one turn with no native handle, which is precisely the message that
- * stands in for the compacted prefix. Nothing is attached when the stream was
- * not compacted or the index is empty.
- */
+/** Attach the manifest to the synthesized checkpoint turn (the one with no native handle), if any. */
 export function withArchiveManifest(turns: readonly Turn[], manifest: string): Turn[] {
   if (!manifest) return [...turns];
 

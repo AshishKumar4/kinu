@@ -16,10 +16,7 @@ import { createSandboxedExecutor } from '../src/executor';
 import { makeWorkspaceSchemaSql } from '../src/runtime';
 import { initScaffoldTables } from '../../core/src/scaffold/schemas';
 
-/** The two real phases a claim owner runs, as one call: pin the selected
- *  version's bytes, then start the turn on them. Production splits these at the
- *  durable claim write (ActorSession.execute); a test with no claim to write
- *  still has to run them in that order. */
+/** Pin the selected version's bytes, then start the turn: the order `ActorSession.execute` splits at the claim write. */
 async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extends infer _T
   ? Omit<Parameters<typeof startActorTurn>[0], 'program'> : never) {
   const program = await prepareActorProgram({
@@ -46,12 +43,7 @@ function headInput(): HeadInput {
 
 async function runtime(source: string, version = 1) {
   const { rt, testSql } = createTestRuntime();
-  // THE PRODUCTION INITIALIZER over this runtime's own database, never a
-  // hand-rolled CREATE. These heads take CLAIMED turns on a real `ActorSession`
-  // and run the default inference, so the fixture needs the whole actor state
-  // plane the turn touches — the admission ledger and its raw working
-  // revisions, the world model, the journal. `createTestRuntime` bootstraps
-  // workspace identity and the actor directory only.
+  // Production initializer: claimed turns need the whole actor state plane, which `createTestRuntime` does not bootstrap.
   initActorStateSchema(makeWorkspaceSchemaSql(testSql.db));
   rt.executor = createSandboxedExecutor();
   rt.identity.scaffold.version = async () => version;
@@ -143,7 +135,6 @@ test('a native refusal keeps the same failed outcome at capture and scaffold bou
   expect(capture.toolCalls).toMatchObject([{ outcome: { success: false, reason: 'denied' } }]);
 });
 
-/** Two steps: a reasoning part with one `probe` call, then the closing text. */
 function probeThenFinish(reasoning: string, toolCallId: string) {
   let step = 0;
 
@@ -217,8 +208,7 @@ test('the turn receives a tool\'s actual output data, not its model-side renderi
     run: { rt, task: 'go', llmStream: createScaffoldLLMStream({ model, tools: () => tools }) },
   }));
 
-  // The result event carries what the tool RETURNED — the client's data —
-  // while the model is shown the tool's own rendering of it.
+  // The result event carries the tool's returned data; the model sees the tool's own rendering.
   expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', toolCallId: 'raw-call', result: JSON.stringify(value), success: true }));
 });
 

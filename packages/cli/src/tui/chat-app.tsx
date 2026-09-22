@@ -1,15 +1,4 @@
-/**
- * TUI Chat Application — the single OpenTUI React chat surface for both
- * backends, parameterized by an AgentClient (LocalAgentClient over
- * LocalAgentSession, CloudAgentClient over the OrchestratorAgent DO). The
- * client owns transport, recording, and history; this renders its
- * AgentClientEvent stream into scrollable message history with streaming text,
- * tool rows, evolution markers, status, shared workspace navigation, profile
- * hubs, and exclusive consent overlays.
- *
- * The input reducer owns turn state. The semantic action registry owns every
- * key chord, so queue, branch, cancel, and editor behavior stay preset-safe.
- */
+/** OpenTUI chat surface for both backends. The input reducer owns turn state; the action registry owns key chords. */
 
 import {
   createCliRenderer,
@@ -112,44 +101,32 @@ import {
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
-/** What a host's one-click creator produced, and how the scene proceeds:
- *  a `local-peer` is a full root in the current virtual workspace and is
- *  opened in place; a `cloud-additional` agent runs beside the workspace's
- *  conversation server-side, so the scene announces it instead. */
+/** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
 export interface TuiCreatedAgent {
   name: string;
   displayName: string;
   kind: 'local-peer' | 'cloud-additional';
-  /** A host-prepared client for a conversation that is not in the workspace
-   * navigator, such as a direct cloud additional-agent facet. */
+  /** For a conversation outside the navigator (e.g. a cloud additional-agent facet). */
   client?: AgentClient;
 }
 
 export interface ChatAppOpts {
   client: AgentClient;
-  /** Seed the message list from client.history() before accepting input. */
   hydrateHistory?: boolean;
   onExit?: () => void | Promise<void>;
-  /** A cloud walk-back fork swaps in a sibling client; the host needs the
-   *  current one so exit cleanup closes the right connection. */
+  /** Walk-back forks swap clients; exit cleanup must close the current one. */
   onClientChange?: (client: AgentClient) => void;
   workspaceSource?: TuiAgentSource;
   onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
-  /** One-click additional agent beside the CURRENT client's conversation —
-   *  no role, no mission form. Wired by the host because creation is a host
-   *  concern (local ref registry / cloud backend client). */
+  /** Host-wired: creation is a host concern. */
   onNewAgent?: (client: AgentClient) => Promise<TuiCreatedAgent>;
   profileMutations?: {
     setModel(spec: string): Promise<{ spec: string }>;
     setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
   };
   tui?: TuiRuntimeOptions;
-  /** The hub as this host first read it. */
   hubData?: TuiHubData;
-  /** How this host re-reads the hub when the open conversation changes. The
-   *  CLI's own reader is the default; it asks the profile authority, which for
-   *  a signed-in machine is a network read. A host that supplies `hubData`
-   *  supplies this too, or its surface reaches past it on the first switch. */
+  /** A host that supplies `hubData` must supply this too. */
   readHub?: (client: AgentClient) => Promise<TuiHubData>;
 }
 
@@ -164,8 +141,6 @@ export type ActiveSurface =
   | { kind: 'takes'; set: AlternateTakeSet }
   | null;
 
-/** The composer title names the open surface — the one line a person reads to
- *  know where they are. */
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
   if (surface === null) return walkbackOpen ? 'Walk back ›' : null;
 
@@ -181,8 +156,6 @@ function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string 
   }
 }
 
-/** Any overlay that takes the composer's keys: a named surface, the
- *  navigation drawer, walk-back, or a consent ask. */
 function anyOverlayOpen(input: {
   activeSurface: ActiveSurface;
   navigationOpen: boolean;
@@ -250,8 +223,7 @@ function ChatScene({
 
   const roster = useAgentRoster(workspaceSource);
   const [navigationOpen, setNavigationOpen] = useState(false);
-  // The client can be swapped mid-session: a cloud walk-back fork returns a
-  // sibling client pointed at the forked agent.
+  // A cloud walk-back fork swaps in a sibling client mid-session.
   const [client, setClient] = useState(initialClient);
   const shellApproval = useShellApproval(client);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
@@ -273,10 +245,7 @@ function ChatScene({
   const settingsOpen = activeSurface?.kind === 'settings';
   const themePickerOpen = activeSurface?.kind === 'theme';
 
-  // The hub describes ONE open workspace, so its state carries that
-  // workspace's identity: a switch resets it synchronously alongside every
-  // other per-client piece, and the refresh effect re-derives it from the
-  // same active target — no second record of which workspace it describes.
+  // The hub carries its workspace's identity so a switch resets it alongside other per-client state.
   const [hub, setHub] = useState<{ identity: string; data: TuiHubData } | null>(
     hubData ? { identity: `${initialClient.mode}:${initialClient.agentName}`, data: hubData } : null,
   );
@@ -299,16 +268,12 @@ function ChatScene({
     });
   }, [promptHistoryKey, updatePreferences]);
 
-  // What the composer SHOWS of that draft. The editor wraps it over display
-  // columns, so these are visual rows, not typed lines — read back from the
-  // editor after anything that re-wraps it.
+  // Editor-wrapped visual rows, not typed lines.
   const [composerRows, setComposerRows] = useState(1);
-  // Each conversation keeps its own composer draft across switches — leaving
-  // saves under the OLD client's key, arriving restores under the new one's.
+  // Drafts are kept per conversation.
   const draftsRef = useRef(new Map<string, string>());
   const [inputState, setInputState] = useState(initialInputState);
 
-  /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
   const profileMutations = suppliedProfileMutations ?? {
     setModel: (spec: string) => setModelPreference(client, spec),
     setReasoningEffort: (effort: ReasoningEffort) =>
@@ -331,8 +296,7 @@ function ChatScene({
     else if (ready) inputRef.current?.focus();
   }, [ready]);
 
-  // Mirrors the input's declarative `focused` condition so a click can reassert
-  // focus without introducing a second focus state.
+  // Mirrors the input's `focused` condition so a click can reassert focus without a second focus state.
   const inputShouldFocusRef = useRef(false);
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
@@ -349,20 +313,16 @@ function ChatScene({
 
   const clientGenerationRef = useRef(0);
   const clientActionCountRef = useRef(0);
-  /** Take sets already hinted at, so a turn without a new convergence is quiet. */
   const hintedTakesRef = useRef<string | null>(null);
   const modelRequestRef = useRef(0);
-  // React effects cannot return their tasks. These refs hold scene-owned work
-  // until lexical cleanup after an abort or client-generation replacement.
+  // Effects cannot return their tasks; these refs hold scene-owned work until cleanup.
   const hubRefreshTaskRef = useRef<Promise<void> | null>(null);
   const connectionTaskRef = useRef<Promise<void> | null>(null);
   const metadataTaskRef = useRef<Promise<void> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
-  // The effort rows are the active model's own levels (#9), read off the
-  // catalog the picker loads; the stored level stays listed even when the
-  // catalog no longer names it.
+  // The stored level stays listed even if the catalog drops it.
   const efforts = useMemo(
     () => effortsForModel(modelCatalog, modelSpec, status),
     [modelCatalog, modelSpec, status],
@@ -438,19 +398,12 @@ function ChatScene({
   const expandPastes = useComposerPaste({ renderer: rendererInstance, input: inputRef,
     enabled: inputShouldFocusRef, limitBytes: client.inlineAttachmentLimitBytes, note: pasteNote });
 
-  // ── Live assistant text segments — the key to chronological interleaving.
-  // Streamed text-deltas flow into a `live` assistant message that sits at its
-  // real position in the array. A tool-call SEALS the active segment so the
-  // next text-delta opens a fresh segment AFTER the tool, giving true
-  // text → tool → text → tool order (rather than buffering all text to a
-  // trailing block that renders after every tool card).
+  // Live assistant segments: a tool-call seals the active segment so the next text-delta opens one after the tool,
+  // keeping text and tools in chronological order.
   const activeSegmentRef = useRef<string | null>(null);
-  /** Whether the current turn streamed any assistant text. When false at
-   *  turn-end, turn.text was synthesized server-side (no deltas) and must be
-   *  appended once so the answer isn't dropped from the live view. */
+  /** If false at turn-end, turn.text is appended once. */
   const turnStreamedTextRef = useRef(false);
 
-  /** Stream-buffer flush target: write coalesced text into the live segment. */
   const writeActiveSegment = useCallback((value: string | null) => {
     const id = activeSegmentRef.current;
 
@@ -460,7 +413,6 @@ function ChatScene({
 
   const stream = useStreamingBuffer(writeActiveSegment);
 
-  /** Open a fresh live assistant segment and route streamed text into it. */
   const beginSegment = useCallback(() => {
     const id = `msg-${++msgIdRef.current}`;
     activeSegmentRef.current = id;
@@ -469,8 +421,7 @@ function ChatScene({
     stream.start();
   }, [stream]);
 
-  /** Seal the live segment in place: stop streaming, keep its text, drop the
-   *  cursor. An empty segment (tool fired before any text) is removed. */
+  /** An empty segment (tool before any text) is removed. */
   const sealSegment = useCallback(() => {
     const id = activeSegmentRef.current;
     activeSegmentRef.current = null;
@@ -484,8 +435,7 @@ function ChatScene({
     }));
   }, [stream]);
 
-  /** All input transitions flow through the one reducer; effects come back to
-   *  the caller so client events and keypresses never race over state. */
+  /** Effects return to the caller so events and keys never race over state. */
   const dispatchInput = useCallback((event: InputMachineEvent): InputEffect[] => {
     const { state, effects } = reduceInput(machineRef.current, event);
     machineRef.current = state;
@@ -494,11 +444,7 @@ function ChatScene({
     return effects;
   }, []);
 
-  /** How many visual rows the editor wrapped the draft into, capped for
-   *  display. The editor is the only thing that knows: it owns the wrap over
-   *  display columns and the cursor's row and column within it. Re-read after
-   *  anything that re-wraps — an edit, or a resize that changes the width the
-   *  same text wraps at. */
+  /** Only the editor knows the wrap; re-read after edits and resizes. */
   const syncComposerRows = useCallback(() => {
     const input = inputRef.current;
 
@@ -514,9 +460,7 @@ function ChatScene({
     syncComposerRows();
   }, [draftEditing.replace, syncComposerRows]);
 
-  /** Send one user prompt, wherever the agent is. @path mentions (plus quoted/~ path
-   *  tokens) become attachments: images and PDFs inline as file parts, other
-   *  files stay path references. */
+  /** @path mentions become attachments: images and PDFs inline, other files as path references. */
   const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
@@ -552,9 +496,7 @@ function ChatScene({
     }
   }, [addError, addMessage, client, nextTier, rememberPrompt]);
 
-  /** Run the draft as a parallel branch of the live turn — never interrupts
-   *  it; progress lands in the status bar and settles into /takes. Falls back
-   *  to a normal send when the turn just finished. */
+  /** Falls back to a normal send when the turn just finished. */
   const performBranch = useCallback(async (input: string) => {
     try {
       const text = input.trim();
@@ -574,8 +516,6 @@ function ChatScene({
     }
   }, [addError, addMessage, client, sendPrompt]);
 
-  /** Fork before the picked user message, truncate the rendered transcript to
-   *  match, and put the message back in the input for editing. */
   const performWalkback = useCallback(async (point: ForkPoint) => {
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
@@ -675,8 +615,6 @@ function ChatScene({
       }
 
       const previous = client;
-      // The draft belongs to the conversation being left, and the one being
-      // entered gets its own back (or a clean line the first time).
       draftsRef.current.set(`${previous.mode}:${previous.agentName}`, inputRef.current?.plainText ?? '');
       preconnectedClientRef.current = candidate;
       preconnectedEventsRef.current = {
@@ -694,8 +632,7 @@ function ChatScene({
       setModelSpec('');
       setModelCatalog([]);
       setBranchTasks({});
-      // A pending next-turn tier belongs to the conversation being left; the
-      // hub is re-derived from the target below. Neither survives a switch.
+      // A pending next-turn tier does not survive a switch.
       setNextTier(null);
       setHub(null);
       setInputState(initialInputState);
@@ -746,9 +683,7 @@ function ChatScene({
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
 
-  /** One-click additional agent — the Agent Hub's `n`. Both backends open the
-   * new conversation in place; cloud supplies a prepared facet client because
-   * that conversation is nested under its parent workspace. */
+  /** Cloud supplies a facet client: the conversation nests under its parent workspace. */
   const createNewAgent = useCallback(async () => {
     if (onNewAgent === undefined || selectionPendingRef.current) return;
 
@@ -811,9 +746,6 @@ function ChatScene({
     return () => { abort.abort(); };
   }, [client, hub, readHub]);
 
-  // The hub's agent rows, live: the current virtual workspace's members from
-  // the same roster the navigator reads, with the open agent's role/tier from
-  // its loaded profile row and its status from this scene.
   const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
     ...hub.data,
     agents: buildAgentHubEntries({
@@ -881,8 +813,6 @@ function ChatScene({
     }
   }, [addError, addMessage, client]);
 
-  /** Enter on a changelog line: revert revertables through the real paths,
-   *  explain informational lines; the overlay refreshes with the new digest. */
   const revertChangelogEntry = useCallback(async (entry: ChangelogEntry) => {
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
@@ -911,8 +841,7 @@ function ChatScene({
     }
   }, [addError, addMessage, client]);
 
-  /** Enter on a take: record the pick (ledger + repoint); a changed answer
-   *  streams its continuation as the next programmatic turn. */
+  /** A changed answer streams its continuation as the next turn. */
   const pickTake = useCallback(async (set: AlternateTakeSet, candidate: AlternateTakeCandidate) => {
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
@@ -1043,8 +972,7 @@ function ChatScene({
   ]);
 
   const runInputEffects = useCallback((effects: InputEffect[]) => {
-    // Steers accepted mid-turn but not delivered return to the composer on
-    // interrupt. A queue restore in the same batch appends instead of replacing.
+    // Undelivered mid-turn steers return to the composer on interrupt; a queue restore in the same batch appends.
     let droppedSteers: string[] = [];
     let action: Promise<void> | undefined;
 
@@ -1173,8 +1101,7 @@ function ChatScene({
           addMessage({ role: 'system', content: undone.text });
 
           if (undone.restored && forkCandidates(messages).length > 0) {
-            // opencode parity: files + conversation together — reuse the
-            // Esc-Esc walk-back picker for the conversation half.
+            // Files plus conversation: reuse the Esc-Esc walk-back picker for the conversation half.
             addMessage({ role: 'system', content: 'Pick a message to also walk back the conversation, or Esc to keep it.' });
             dispatchInput({ type: 'open-walkback' });
           }
@@ -1198,8 +1125,7 @@ function ChatScene({
     }
   }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt]);
 
-  /** The takes affordance after a delegating turn: offered once per set, and
-   *  never for one the owner has already picked from. */
+  /** Once per set, never for one already picked from. */
   const hintAlternateTakes = useCallback(async () => {
     const generation = clientGenerationRef.current;
 
@@ -1251,8 +1177,6 @@ function ChatScene({
   }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
-    // The plan as it now stands — the owner reads it and decides with
-    // /plan approve | /plan changes.
     if (event.event.type === 'plan_updated' && event.event.plan) {
       addMessage({ role: 'system', content: renderPlanReview(event.event.plan) });
 
@@ -1270,8 +1194,7 @@ function ChatScene({
       return next;
     });
 
-    // The settle/error line IS the takes affordance (the running state
-    // lives in the status bar).
+    // The settle/error line is the takes affordance; running state lives in the status bar.
     if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
   }, [addMessage, setBranchTasks]);
 
@@ -1301,8 +1224,6 @@ function ChatScene({
 
         return;
       case 'tool-call':
-        // Seal the preceding text run so this tool — and any text that follows
-        // it — lands at its true chronological position.
         sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
         addMessage({
@@ -1342,11 +1263,7 @@ function ChatScene({
 
         return;
       case 'run-event': {
-        // A `provider_wait` row is the turn saying "the model endpoint told me
-        // to wait" — the difference between a quiet stream that is thinking
-        // and one that is rate-limited. The next phase-setting event
-        // (text-delta, tool-call, step-finish) replaces it as soon as the wait
-        // is over; until then the phase line names the wait honestly.
+        // `provider_wait`: the endpoint asked to wait (rate limit). The next phase-setting event replaces it.
         if (event.event.type === 'provider_wait') {
           const notice = event.event;
 
@@ -1358,8 +1275,7 @@ function ChatScene({
     }
   }, [addMessage, beginSegment, dispatchInput, handleBroadcast, handleTurnEnd, sealSegment, setTurnPhase, stream]);
 
-  // Connect once per client: event subscription, startup resources, initial
-  // hydration. Re-runs when a walk-back fork swaps in a sibling client.
+  // Connect once per client; re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
     const preconnected = preconnectedClientRef.current === client;
 
@@ -1432,8 +1348,7 @@ function ChatScene({
         try {
           await deviceConnect.offerIfUnconnected();
         } catch (cause) {
-          // A courtesy offer, never the user's work: its failure is a
-          // diagnostic, not a conversation line.
+          // A courtesy offer: failure is a diagnostic, not a conversation line.
           diagnostics.failure(
             'tui.device_connect_offer_failed',
             toKinuError({ doing: 'offering the device-connect prompt', cause, otherwise: 'unavailable' }),
@@ -1513,9 +1428,7 @@ function ChatScene({
     return () => { abort.abort(); };
   }, [addMessage, client]);
 
-  // Watch pending device consents while a turn is processing (cloud agents).
-  // The shared watcher presents each consent once (no re-show when a poll tick
-  // races the resolution) and cancels the overlay when the turn settles.
+  // The shared watcher shows each consent once and cancels on settle.
   const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
   useEffect(() => {
     const consents = client.consents;
@@ -1560,17 +1473,15 @@ function ChatScene({
     if (!rendererInstance?.root) return;
     let copied = false;
     rendererInstance.root.onMouseUp = () => {
-      // Defer slightly so the selection is finalized by the renderer.
       setTimeout(() => {
         if (!rendererInstance.hasSelection) { copied = false;
 
  return; }
 
-        if (copied) return; // already copied this selection
+        if (copied) return;
         const selection = rendererInstance.getSelection();
 
         if (!selection) return;
-        // Walk selected renderables and extract text.
         const parts: string[] = [];
 
         for (const r of selection.selectedRenderables ?? []) {
@@ -1586,8 +1497,7 @@ function ChatScene({
           copied = true;
         }
 
-        // A click (to scroll, or to select+copy) moves native focus off the
-        // input; reclaim it so the user can keep typing without a manual click.
+        // A click moves native focus off the input; reclaim it.
         if (inputShouldFocusRef.current) inputRef.current?.focus();
       }, 10);
     };
@@ -1692,10 +1602,7 @@ function ChatScene({
 
     if (result.actionId === null) return;
 
-    // What each action id does lives in the concern's own table: draft-keys
-    // for the composer, surface-keys for the scene and the modal. A handler
-    // owns its preventDefault — whether the editor still sees the key is
-    // behaviour, not bookkeeping.
+    // Each handler owns its preventDefault.
     return await (modalActive ? modalKeys : sceneKeys)[result.actionId]?.(key);
   });
 
@@ -1722,19 +1629,15 @@ function ChatScene({
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
   const surfaceTitle = surfaceTitleFor(activeSurface, inputState.walkbackOpen);
-  // The composer identifies an open surface. Turn progress stays in the
-  // transcript's phase line, so one state is never announced twice.
+  // Turn progress stays in the phase line.
   const composerTitle = surfaceTitle ?? undefined;
 
-  // The placeholder is the one line a person reads before typing. While a
-  // turn runs, what typing does is the one thing worth saying.
   const composerPlaceholder = composerPlaceholderFor(ready, isProcessing);
 
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
   }, [inputFocused]);
-  // A resize re-wraps the same text at a new width, which the editor reports
-  // but no edit announces. The terminal's own dimensions are the trigger.
+  // A resize re-wraps without an edit event.
   useEffect(syncComposerRows, [width, syncComposerRows]);
   inputShouldFocusRef.current = inputFocused;
 
@@ -1922,10 +1825,6 @@ function ChatScene({
         </box>
       )}
 
-      {/* The composer sits on the user fill, as omp's editor does
-          (`surfaceColor: bgFill("userMessageBg")`): what you type lands in
-          the block it will be sent as. The edge is the bubble's; focus turns
-          it gold, the web's `.p-composer:focus-within`. */}
       <box
         style={{
           height: composerRows + 2,
@@ -1978,32 +1877,25 @@ function ChatScene({
 }
 
 
-/** The one line a person reads before typing. While a turn runs, what typing
- *  does is the one thing worth saying. */
 function composerPlaceholderFor(ready: boolean, isProcessing: boolean): string {
   if (!ready) return 'Connecting…';
 
   return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;
 }
 
-/** What the phase line says: the running turn's phase, or the tier the next
- *  turn was pinned to. */
 function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null): string | null {
   if (isProcessing) return turnPhase ?? 'thinking';
 
   return nextTier === null ? null : `next turn · ${nextTier}`;
 }
 
-/** A failure as a transcript entry: the provider's own words, plus the next
- *  command when the failure class implies one. Plain text — the TUI styles
- *  system messages itself, so no ANSI here. */
+/** Plain text: the TUI styles system messages itself. */
 function errorLine(message: string): string {
   const guided = guideFailure({ cause: message });
 
   return guided.hint ? `Error: ${guided.message}\n${guided.hint}` : `Error: ${guided.message}`;
 }
 
-/** Extract the last URL from assistant message content. */
 function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
   const urlRe = /https?:\/\/[^\s)\]}>'"]+/g;
 
@@ -2023,8 +1915,6 @@ function welcomeMessage(agentName: string): DisplayMessage {
   return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
 
-/** The CLI's own hub reader, and the default one: the workspace the client has
- *  open, read through the profile authority. */
 async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   const workspace = client.agentName;
   const [envelope, status] = await Promise.all([loadActiveProfile(), client.status()]);
@@ -2094,8 +1984,6 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   await new Promise<void>(() => {});
 }
 
-/** The effort levels the active model offers: its catalog entry's own list,
- *  plus the stored level when the entry no longer names it. */
 function effortsForModel(
   catalog: readonly AgentModelEntry[],
   spec: string,

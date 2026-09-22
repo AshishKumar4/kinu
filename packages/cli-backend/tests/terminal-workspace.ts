@@ -1,11 +1,4 @@
-/**
- * The workspace and the model a terminal-transition test drives.
- *
- * Shared by the in-process suite and by the child process it kills, because both
- * have to open the SAME workspace: a fixture that bootstrapped its own would
- * prove recovery over a database shaped differently from the one the interrupted
- * turn wrote.
- */
+/** The workspace and model a terminal-transition test drives, shared with the child process it kills. */
 import { Database } from 'bun:sqlite';
 import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
@@ -24,13 +17,7 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 const USAGE = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
-/**
- * The workspace, over whichever database the caller names.
- *
- * `:memory:` for a suite that restarts by constructing a second session; a real
- * path for one that restarts by opening a second PROCESS. The bytes are the same
- * either way, which is the point.
- */
+/** The workspace over the named database: `:memory:` for in-process restarts, a real path for process restarts. */
 export function openTerminalWorkspace(dbPath: string) {
   const db = new Database(dbPath);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -40,17 +27,12 @@ export function openTerminalWorkspace(dbPath: string) {
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
 
-  // What `kinu create` writes for a workspace added without a name: no title,
-  // and an origin that says the system may supply one. An origin nobody
-  // recorded is the owner's, and a title is never owed for it. Written once:
-  // a suite that reopens the file after a kill must find the title it left.
+  // What `kinu create` writes for an unnamed workspace. Written once: a reopen after a kill must find its title.
   if (rt.actor.config.getNameOrigin() === null) rt.actor.config.setDisplayNameOrigin('', 'auto');
 
   return { db, rt };
 }
 
-/** A pending scaffold candidate, sampled on every turn — what makes a turn owe
- *  a shadow trial at all. */
 export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
   await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
   void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
@@ -60,8 +42,6 @@ export async function armShadowTrials(rt: CLIRuntime): Promise<void> {
   rt.actor.config.setShadowSampleRate(1);
 }
 
-/** One competing take set, captured mid-turn the way a real search converge
- *  captures it, waiting to be claimed by whatever turn is credited. */
 export function captureTakes(rt: CLIRuntime, rootId: string, at: number): void {
   void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, task, action, observation, value, visits, depth, status)
     VALUES (${rt.actor.actorId}, ${rootId}, ${rootId}, ${'pick a strategy'}, ${'A'}, ${'go with A'}, 0.9, 3, 1, 'open')`;
@@ -73,26 +53,14 @@ export function captureTakes(rt: CLIRuntime, rootId: string, at: number): void {
 }
 
 /**
- * A streaming model that answers, plus the non-streaming arm the naming lane
- * drives.
- *
- * `titleCalls` is the auto-title observable: the lane makes exactly one round
- * trip each time it runs, so two calls across a restart is the effect having run
- * twice — which a count of rows could not show, because every other effect here
- * is keyed and therefore silently idempotent.
- *
- * `onGenerate` runs INSIDE that round trip, which is the only seam a test has for
- * cutting through the middle of an effect body: the provisional title has landed
- * and the generated one has not.
+ * A streaming model plus the non-streaming naming-lane arm. `titleCalls` counts round trips (keyed effects are
+ * silently idempotent); `onGenerate` runs inside that round trip to cut an effect body mid-way.
  */
 export function scriptedModel(
   answer: string,
   opts: {
     readonly toolCall?: { name: string; input: unknown };
     readonly onGenerate?: () => void | Promise<void>;
-    /** Runs INSIDE the streaming call, before the answer, with that call's
-     *  prompt. The seam a test uses to hold ONE turn open while something else
-     *  happens to the ledger — a retry falling due, another process opening. */
     readonly onStream?: (prompt: LanguageModelV2CallOptions['prompt']) => Promise<void>;
   } = {},
 ) {

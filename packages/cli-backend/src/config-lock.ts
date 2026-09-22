@@ -6,23 +6,11 @@ import { dirname } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
- * The lock acquisitions the CURRENT call already holds, as path → token.
- *
- * A second take of the same path from inside the first is a deadlock in both
- * paths, not just the synchronous one: the holder's `finally` runs when this
- * call returns, and this call is what is waiting. A DIFFERENT call in the same
- * process is not that — it will release — so the discrimination is per async
- * context rather than per pid.
- *
- * The token is compared against the record on disk, so a lineage whose outer
- * hold has already released waits for whoever took it next instead of being
- * refused for a lock it no longer owns.
+ * Acquisitions the current async call already holds (path → token). A nested take
+ * of a held path deadlocks; a different call in the same process will release.
  */
 const heldByCall = new AsyncLocalStorage<ReadonlyMap<string, string>>();
 
-/** How often a blocked acquisition re-reads the lock. Short enough that a
- *  release is picked up as fast as a human notices, long enough that a queue of
- *  waiters costs a handful of `lstat` calls per second between them. */
 const LOCK_POLL_MS = 50;
 
 const LOCK_RECORD_VERSION = 'v1';
@@ -37,14 +25,9 @@ export type ProcessIdentityProbe =
   | { readonly state: 'unreadable' };
 
 /**
- * Which process holds a lock.
- *
- * Pid alone cannot say: pids are reused. The platform tag plus `identity` names
- * one process generation: Linux uses `/proc/<pid>/stat` field 22; Darwin uses
- * the SHA-256 of `/bin/ps -p <pid> -o lstart=` under `LC_ALL=C`. A later caller
- * removes this record only when the kernel reports no pid, or reports the pid
- * with a different generation. The uuid token identifies one lock acquisition
- * and is what release compares.
+ * Pids are reused, so the platform tag plus `identity` names one process
+ * generation: Linux `/proc/<pid>/stat` field 22; Darwin SHA-256 of
+ * `/bin/ps -p <pid> -o lstart=` under `LC_ALL=C`. The token identifies one acquisition.
  */
 export interface LockOwner {
   readonly version: typeof LOCK_RECORD_VERSION;
@@ -65,36 +48,24 @@ interface ProcessIdentity {
   readonly identity: string;
 }
 
-/**
- * Injectable kernel boundary. Linux reads procfs; Darwin executes the absolute
- * `/bin/ps` path with `LC_ALL=C`, so no shell expands a pid and no locale changes
- * the lstart representation that becomes identity. Unsupported systems refuse
- * rather than write a record they could never prove abandoned.
- */
+/** Linux reads procfs; Darwin runs absolute `/bin/ps` with `LC_ALL=C` (no shell,
+ *  no locale drift). Unsupported systems refuse rather than write an unprovable record. */
 export interface ProcessIdentityBoundary {
   self(pid: number): ProcessIdentity;
   liveness(owner: LockOwner): Liveness;
 }
 
-/**
- * The extra arguments a call supplies: none for a synchronous callback, and one
- * nobody can produce for an async one — so `withConfigLock(path, async () => …)`
- * does not compile.
- */
+/** Makes `withConfigLock(path, async () => …)` fail to compile. */
 type RefuseAsync<T> = T extends PromiseLike<unknown> ? [useWithConfigLockAsync: never] : [];
 
-/** An async callback returns a native Promise. A structural `then` detector would
- *  itself be thenable, which is a footgun in this await-aware boundary. */
+/** A structural `then` detector would itself be thenable. */
 const pendingWorkSchema = v.instance(Promise);
 
-/** A lock implementation parameterised by the one platform trust boundary. */
 export interface ConfigLock {
   withSync<T>(configPath: string, fn: () => T, ...refuseAsync: RefuseAsync<T>): T;
   withAsync<T>(configPath: string, fn: () => T | Promise<T>): Promise<T>;
 }
 
-/** Creates the local lock around a specific process-identity source. Production
- *  supplies the host source; Darwin tests supply controlled C-locale ps output. */
 export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
   return {
     withSync<T>(configPath: string, fn: () => T, ..._refuseAsync: RefuseAsync<T>): T {
@@ -104,9 +75,7 @@ export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
       try {
         const result = holding(lockPath, held.token, fn);
 
-        // The type above cannot be the only refusal: `() => Promise<void>` is
-        // assignable to `() => void`, so a callback DECLARED synchronous still
-        // reaches here with pending work behind it.
+        // `() => Promise<void>` is assignable to `() => void`, so the type alone cannot refuse.
         if (v.is(pendingWorkSchema, result)) {
           throw new TypeError('withConfigLock ran a callback that returned pending work, which the '
             + 'lock does not cover. Use withConfigLockAsync.');
@@ -146,8 +115,6 @@ function lockPathFor(configPath: string): string {
   return `${configPath}.lock`;
 }
 
-/** Run the callback with this acquisition added to the call's held set, so a
- *  nested take of the same path is recognised rather than waited on. */
 function holding<T>(lockPath: string, token: string, fn: () => T): T {
   const held = new Map(heldByCall.getStore() ?? []);
   held.set(lockPath, token);
@@ -181,9 +148,7 @@ async function acquireAsync(lockPath: string, boundary: ProcessIdentityBoundary)
   }
 }
 
-/** The record is a symlink target: owner information reaches the filesystem in
- *  the same syscall as the name, so a crash cannot leave an empty lock nothing
- *  can identify. */
+/** Owner info lands in the same syscall as the name, so a crash cannot leave an unidentifiable lock. */
 function tryAcquire(lockPath: string, self: ProcessIdentity, boundary: ProcessIdentityBoundary): Held | null {
   const token = randomUUID();
 
@@ -202,8 +167,7 @@ function tryAcquire(lockPath: string, self: ProcessIdentity, boundary: ProcessId
   return { lockPath, token };
 }
 
-/** No duration removes a lock. A breaker acts only on a process Linux or Darwin
- *  proves gone; that process cannot race its own `finally`. */
+/** No duration removes a lock; only a process the kernel proves gone. */
 function breakAbandonedLock(lockPath: string, boundary: ProcessIdentityBoundary): void {
   const owner = readOwner(lockPath);
 
@@ -211,14 +175,12 @@ function breakAbandonedLock(lockPath: string, boundary: ProcessIdentityBoundary)
   release({ lockPath, token: owner.token });
 }
 
-/** Owner-checked, always. A release cannot remove a lock somebody else owns. */
 function release(held: Held): void {
   if (readOwner(held.lockPath)?.token !== held.token) return;
   tolerate(() => unlinkSync(held.lockPath), 'enoent');
 }
 
-/** Strict versioned record. A Linux record cannot be parsed as Darwin's owner or
- *  vice versa; old unversioned records fail closed rather than being guessed at. */
+/** Strict versioned record; unversioned or cross-platform records fail closed. */
 export function encodeLockOwner(owner: LockOwner): string {
   return `${owner.version} ${owner.platform} ${owner.token} ${String(owner.pid)} ${owner.identity}`;
 }
@@ -253,7 +215,7 @@ function readOwner(lockPath: string): LockOwner | null {
   return target === undefined ? null : decodeLockOwner(target);
 }
 
-/** Linux procfs identity: field 22 is process start ticks since boot. */
+/** Field 22 is process start ticks since boot. */
 export function procStartTicks(stat: string): string | null {
   const close = stat.lastIndexOf(')');
 
@@ -263,21 +225,12 @@ export function procStartTicks(stat: string): string | null {
   return startTicks === undefined || !/^\d+$/u.test(startTicks) ? null : startTicks;
 }
 
-/**
- * Makes the Darwin identity stable across localized systems. ps output itself
- * contains spaces, so the stored identity is its SHA-256 base64url digest; the
- * original exact, trimmed C-locale output is what both sides compare.
- */
 export function darwinStartIdentity(lstart: string): string | null {
   const canonical = lstart.trim();
 
   return canonical === '' ? null : createHash('sha256').update(canonical, 'utf8').digest('base64url');
 }
 
-/**
- * The platform boundary is public so focused tests inject Darwin ps answers on
- * Linux.
- */
 export function createProcessIdentityBoundary(
   platform: SupportedPlatform,
   read: (pid: number) => ProcessIdentityProbe,
@@ -344,21 +297,8 @@ function readDarwinIdentity(pid: number): ProcessIdentityProbe {
 }
 
 /**
- * A wait ends when the holder does, never when a clock does.
- *
- * `breakAbandonedLock` reclaims a lock whose owner the kernel proves gone, and
- * every other holder is one that will release. So a blocked acquisition polls
- * until it gets the lock, and the operator ends it by stopping this process.
- * A 30_000 ms deadline would refuse a config write that would have succeeded,
- * and a config write that gives up part-way through a queue is a lost write.
- *
- * One wait cannot end that way, and it is the one this function refuses: a take
- * of a path THIS CALL already holds, on either path. The holder's `finally`
- * runs when this call returns, so the call waiting is the call that would
- * release. A different call in the same process is not that and is not
- * refused — {@link heldByCall} is per async context, not per pid — and a
- * lineage whose own hold has already been released fails the token comparison
- * and waits for whoever holds it now.
+ * Waits end when the holder does, never on a clock: a timeout would drop a config
+ * write. The one refused wait is a take of a path this call already holds.
  */
 function assertNotSelfHeld(lockPath: string): void {
   const token = heldByCall.getStore()?.get(lockPath);

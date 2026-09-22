@@ -10,19 +10,10 @@ import { updateConfigFile } from '../config';
 export interface UpdateOptions {
   origin?: string;
   force?: boolean;
-  /** The startup check's detached child: tree only, silently. */
   background?: boolean;
 }
 
-/**
- * `kinu update`: install the served build as the CLI tree, then refresh the
- * launcher script. The tree work adopts a tree the background refresh already
- * staged and verified, or stages one now; `--force` stages afresh even when
- * this build is the served one. The launcher is rewritten only here, and only
- * when the served script differs from the installed one.
- */
-/** How the deployment's build reads beside this one: unreachable, current, or
- *  newer than the CLI in hand. */
+/** `kinu update`: install the served build as the CLI tree, then refresh the launcher when the served script differs. */
 function servedVersionLabel(served: { version: string } | null): string {
   if (served === null) return WARN('unreachable');
 
@@ -38,10 +29,7 @@ export async function updateCommand(target: string | undefined, opts: UpdateOpti
   if (opts.background) return refreshInBackground(origin);
   ensureBinDir();
   const path = join(BIN_DIR, 'kinu');
-  // A null served version means an old server without the endpoint (or an
-  // unreachable one): the tree cannot be verified against a stamp nobody
-  // published, so only the launcher is refreshed rather than refusing to do
-  // anything because the *check* failed.
+  // Null: the server lacks the endpoint or is unreachable; only the launcher is refreshed.
   const served = await fetchServedVersion(origin);
 
   if (served) {
@@ -73,10 +61,7 @@ export async function updateCommand(target: string | undefined, opts: UpdateOpti
   console.log(`${OK('✓')} Updated ${ACCENT('kinu')} ${DIM(path)}`);
 }
 
-/** The tree refresh the startup check spawned: silent on success, and silent
- *  when the served build is already installed — this child may be one of
- *  several the day's first commands started. A failure still exits non-zero,
- *  so a log reader can see it. */
+/** Silent unless it fails: several of these may run from the day's first commands. */
 async function refreshInBackground(origin: string): Promise<void> {
   const served = await fetchServedVersion(origin);
 

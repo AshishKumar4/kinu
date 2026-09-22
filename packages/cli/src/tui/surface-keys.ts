@@ -1,10 +1,4 @@
-/**
- * Scene and surface keys: the action ids that flip overlays, cycle tiers and
- * effort, scroll the transcript, and open browsers — everything a keystroke
- * does once it is past the composer. The scene's useKeyboard resolves the id
- * and looks it up here; the scene and modal tables are separate because a
- * modal scope may answer an id the scene would not.
- */
+/** Scene and modal tables are separate: a modal scope may answer an id the scene would not. */
 import { tierIdsOf, TIER_IDS, type TierId } from '@kinu.run/core';
 import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import type { TuiActionId } from './actions';
@@ -27,7 +21,6 @@ function historyScroll(
 }
 
 export interface SurfaceKeyDeps {
-  /** The open modal surface, or null. */
   activeSurface: ActiveSurface;
   setActiveSurface(surface: ActiveSurface): void;
   /** Walk-back is a surface too: modal.close dismisses it like the rest. */
@@ -45,25 +38,21 @@ export interface SurfaceKeyDeps {
   lastUrl(): string | null;
   openBrowser(url: string): void;
   openModelPicker(): void | Promise<void>;
-  /** The hub read, or null while it is in flight. */
   hub: { data: TuiHubData } | null;
   nextTier: TierId | null;
-  /** The turn's own tier, when the backend has reported one. */
   turnTier: TierId | undefined;
   setNextTier(tier: TierId): void;
   toggleToolDetails(): void;
   cycleReasoningEffort(): void | Promise<void>;
   history: ScrollBoxRenderable | null;
-  /** Re-anchor the transcript after a programmatic scroll. */
   rememberScroll(): void;
-  /** Host-provided one-click agent creation; the hub offers its key only then. */
+  /** The hub offers its key only when set. */
   createNewAgent?: () => Promise<void>;
   /** The model overlay re-reads on close, so it asks for another open. */
   bumpModelRequest(): void;
 }
 
-/** The tier `delta` steps from `current` in the catalog's order, wrapping; an
- *  unknown or absent current starts from the first. */
+/** Wraps; an unknown current starts from the first. */
 function cycledTier(tiers: readonly TierId[], current: TierId | undefined, delta: 1 | -1): TierId {
   const index = (Math.max(0, current === undefined ? -1 : tiers.indexOf(current)) + delta + tiers.length) % tiers.length;
 
@@ -75,14 +64,7 @@ export type SceneKeyHandler = (key: KeyEvent) => void | Promise<void>;
 const tierCatalog = (deps: SurfaceKeyDeps): readonly TierId[] =>
   deps.hub ? tierIdsOf(deps.hub.data.profile.envelope.catalog) : TIER_IDS;
 
-/** A hub-opening chord: agents, roles, tiers, and the quick tier row all land
- *  on the same surface with a different first view. The key opens the hub
- *  even while its read is still in flight. Dropping it instead made a
- *  workspace switch swallow the next Alt+A outright: the switch clears the
- *  hub, the re-read is asynchronous (the profile authority is a network read
- *  on a signed-in machine), and a key that lands in that window left the
- *  surface closed with nothing said. The overlay paints as soon as the read
- *  answers; the composer hint carries the open surface meanwhile. */
+/** Opens even while the hub read is in flight: a switch clears and re-reads the hub, and a dropped key would vanish silently. */
 const openHub = (deps: SurfaceKeyDeps, view: TuiHubView) => (key: KeyEvent): void => {
   key.preventDefault();
   deps.setActiveSurface({ kind: 'hub', view });
@@ -100,9 +82,6 @@ const scrollTranscript = (deps: SurfaceKeyDeps, actionId: TuiActionId) => (key: 
   }
 };
 
-/** Scene-scope handlers. Every handler owns its preventDefault for the same
- *  reason the composer handlers do: which keys still reach the editor is
- *  behaviour, not bookkeeping. */
 export function sceneKeyHandlers(deps: SurfaceKeyDeps): Partial<Record<TuiActionId, SceneKeyHandler>> {
   return {
     'settings.toggle': (key) => {
@@ -157,7 +136,6 @@ export function sceneKeyHandlers(deps: SurfaceKeyDeps): Partial<Record<TuiAction
   };
 }
 
-/** Modal-scope handlers: the keys a surface answers while it owns the scene. */
 export function modalKeyHandlers(deps: SurfaceKeyDeps): Partial<Record<TuiActionId, SceneKeyHandler>> {
   return {
     'hub.new-agent': (key) => {

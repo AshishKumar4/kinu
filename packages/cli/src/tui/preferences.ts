@@ -26,8 +26,7 @@ export type OnboardingStepId = (typeof ONBOARDING_STEP_IDS)[number];
 export type WorkspaceLocationChoice = 'cloud' | 'local' | 'both';
 
 export interface TuiPreferences {
-  /** Absent until the person picks one; onboarding's theme step is what
-   *  absence means, and the TUI paints the default meanwhile. */
+  /** Absent means onboarding's theme step. */
   readonly theme?: ThemeSelection;
   readonly keymapPreset: KeymapPresetId;
   readonly keyOverrides: KeymapOverrides;
@@ -67,13 +66,7 @@ export function createFileTuiPreferenceStore(path = join(AGENT_HOME, 'tui.json')
 }
 
 
-/**
- * A theme selection, or nothing. `v.fallback` rather than a bare optional:
- * the file may still hold a selection of a shape this version no longer has
- * (the retired appearance-following one), and a preference file written by an
- * older Kinu must not take the whole TUI down over it. An unreadable value is
- * no selection, which is exactly what onboarding's theme step answers.
- */
+/** `v.fallback`: an unknown stored shape reads as no selection instead of crashing. */
 const ThemeSelectionSchema = v.fallback(
   v.optional(v.strictObject({
     mode: v.literal('theme'),

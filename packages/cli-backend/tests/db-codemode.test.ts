@@ -1,13 +1,5 @@
-// `db.*` through the REAL local codemode sandbox: the model writes a program,
-// `createNodeCodemodeToolFactory` normalizes and runs it in-process with the
-// provider bound as a namespace global, and the rows land in a real workspace
-// SQLite the test reads back through neither the store nor the provider.
-//
-// The subject is the JSON boundary, which the core suite cannot reach: a
-// program's arguments arrive as whatever the sandbox marshals, blobs are base64
-// text on the way in and out, a refusal has to be a value the program can
-// branch on rather than a thrown error that kills the call, and `db.batch`'s
-// rollback has to hold across that boundary too.
+// `db.*` through the real local codemode sandbox: JSON marshalling, base64 blobs,
+// refusals as values, and `db.batch` rollback across that boundary.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -33,21 +25,11 @@ interface Sandbox {
   close(): void;
 }
 
-/** One workspace database, the production schema, and a sandbox whose only
- *  namespace is `db` bound over one actor's store. */
 function sandbox(): Sandbox {
   const db = new Database(':memory:');
-  // The PRODUCTION local adapters, not a fixture pair: `makeSql` is what
-  // decides whether a `RETURNING` write executes and answers its rows on this
-  // backend (runtime.ts documents that exact hazard), and `db.*` counts rows
-  // affected through `RETURNING`.
+  // Production adapters: `makeSql` decides whether a `RETURNING` write executes on this backend.
   const schemaSql = makeWorkspaceSchemaSql(db);
-  // The atomicity primitive is the workspace's OWN (`localTransactions`), not a
-  // one-liner retyped here: `db.batch`'s all-or-nothing guarantee and the
-  // rollback of its evidence are properties of that seam, so a test carrying
-  // its own copy would agree with production by construction and could not
-  // catch it being wrong. Absent, this suite must not run at all rather than
-  // measure a torn write that reports success.
+  // The workspace's own `localTransactions`: a copied primitive would agree with production by construction.
   const transactions = localTransactions(db).storage;
 
   if (transactions === undefined) {
@@ -70,9 +52,7 @@ function sandbox(): Sandbox {
         runId: () => WORKSPACE_RUN_ID,
       });
 
-      // `extraProviders` is the seam the production sites bind a codemode
-      // namespace through (`local-session.ts`, `head-runtime.ts`);
-      // `surface.providers` is the EXECUTOR list and takes a different shape.
+      // `extraProviders` is the production seam for codemode namespaces; `surface.providers` takes executors.
       const factory = createNodeCodemodeToolFactory({ extraProviders: [createDbCodemodeProvider(store)] });
       const tool = factory({ native: {}, craftedTools: () => ({}), providers: [] });
 
@@ -115,9 +95,6 @@ describe('db.* in the local codemode sandbox', () => {
         high: 1,
         tables: ['findings:actor'],
       });
-      // The rows are in the workspace database under the agent prefix, owned by
-      // the actor the sandbox was bound to — read here through neither the
-      // store nor the provider.
       expect(s.sql<{ actor_id: string; id: string; severity: number }>`
         SELECT actor_id, id, severity FROM app_findings ORDER BY id`).toEqual([
         { actor_id: s.actors.main.actorId, id: 'f1', severity: 5 },
@@ -186,8 +163,6 @@ describe('db.* in the local codemode sandbox', () => {
         landed: [{ rowsAffected: 1 }, { rowsAffected: 1 }],
         refusalReason: 'bad_input',
         failedIndex: 1,
-        // `c` is absent: the first operation of the refused batch is gone with
-        // the second, and the earlier batch is untouched.
         keys: ['a', 'b'],
       });
     }
@@ -223,8 +198,6 @@ describe('db.* in the local codemode sandbox', () => {
         },
         mine: 1,
       });
-      // The host tables the program reached for are all still there, with the
-      // rows they had.
       expect(s.sql<{ name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('conversation_entries', 'workspace_actors', 'agent_data_tables')
         ORDER BY name`.map((row) => row.name))
@@ -253,11 +226,8 @@ describe('db.* in the local codemode sandbox', () => {
 
       expect(mine.result).toEqual([{ slot: 'primary', owner: 'main' }]);
       expect(theirs.result).toEqual([{ slot: 'primary', owner: 'scout' }]);
-      // One physical table, one primary key value, two rows.
       expect(s.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_slots`[0]?.n).toBe(2);
 
-      // And the second actor cannot retire the shared physical table while the
-      // first holds rows in it.
       const refusal = {
         success: false, reason: 'denied',
         error: `table \`slots\` was declared by another agent (${s.actors.main.actorId}); delete your own rows instead`,

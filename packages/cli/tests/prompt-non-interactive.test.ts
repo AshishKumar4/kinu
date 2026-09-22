@@ -1,10 +1,6 @@
 /**
- * Regression tests for the installer sign-in freeze: any CLI surface that
- * wants interactive input must either reach a real terminal (/dev/tty) or
- * print instructions and exit — never block on a piped stdin.
- *
- * The CLI is spawned detached (its own session, no controlling terminal),
- * so /dev/tty is unopenable even when the test runner itself has a TTY.
+ * Interactive input must reach /dev/tty or print instructions and exit, never block on piped stdin.
+ * The CLI is spawned detached, so /dev/tty is unopenable even when the runner has a TTY.
  */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { spawn } from "node:child_process";

@@ -1,9 +1,4 @@
-// `kinu debug <name>` — the debugging control plane. Covers both
-// backends (a hand-seeded local workspace, and a stub cloud origin), the
-// exact scenario the read-vs-write MCTS investigation turns on (two search
-// runs, the older one sorting first by created_at — reproducing what the
-// web UI's client-side buildTree() picks when it is not scoped by root_id),
-// and the hard requirement: a planted secret must never appear in the bundle.
+// `kinu debug <name>` over a local and a stub cloud backend; a planted secret must never reach the bundle.
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
@@ -54,13 +49,8 @@ const AKIA = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
 const BEARER_SECRET = 'abcdefghijklmnopqrstuvwxyz';
 
 /**
- * A workspace with exactly the shape the investigation needs: two runs (one
- * that backgrounded a call and was then polled anyway — symptom 1 — and a
- * plain one), two head-runs (older + newer, proving `getHeadRuns` orders
- * correctly), and two MCTS searches where the OLDER root has the lower
- * created_at — the precise condition under which use-kinu.ts's client
- * buildTree() (no root_id scoping, picks whichever depth-0 node sorts first)
- * would show the wrong tree. A secret is planted in a tool result.
+ * Two runs (one polls a job it backgrounded), two head-runs, and two MCTS searches whose older
+ * root sorts first by created_at, where an unscoped client buildTree() shows the wrong tree.
  */
 function seedInvestigationWorkspace(dbPath: string): void {
   const db = new Database(dbPath, { create: true });
@@ -72,21 +62,13 @@ function seedInvestigationWorkspace(dbPath: string): void {
   initMctsSearchTable(execRaw);
   initBackgroundJobsTable(execRaw);
   const sql = makeSql(db);
-  // The actor every private store below belongs to, and the one `kinu debug`
-  // resolves when it reopens this file: the workspace's MAIN actor, issued
-  // through the production directory. The local read models resolve it with
-  // `openWorkspaceMainActor`, so the seed has to register a real workspace
-  // identity rather than only create tables — rows under any other id would
-  // leave the bundle reading an empty workspace.
+  // Rows must belong to the workspace main actor (`openWorkspaceMainActor`), so the seed registers a real identity.
   const actor = createTestActorsOver(db, { name: 'invest' }).main;
 
-  // ── Runs: an older plain run, then the latest — which backgrounds a call
-  // and is polled anyway (agent.jobResult right after the detach handle). ──
   const recorder = new RunEventRecorder(sql, actor);
   recorder.emit('run-old', { type: 'run_start', agentId: 'w', caused_by: 'chat', userMessage: 'first' });
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 0, usage: { input: 10, output: 5 } });
-  // A second turn on the same run whose provider reported nothing at all — the
-  // shape that must not disappear into `tokensIn += 0` and read as a free turn.
+  // A turn whose provider reported nothing must not read as a free turn.
   recorder.emit('run-old', { type: 'turn_end', turnIndex: 1 });
   recorder.emit('run-old', { type: 'run_end', reason: 'completed' });
 
@@ -95,32 +77,25 @@ function seedInvestigationWorkspace(dbPath: string): void {
     type: 'tool_call_end', name: 'agents', args: { action: 'fork', settle: 'mcts' }, toolCallId: 'tc-1',
     outcome: { success: true }, result: { background: true, jobId: 'job-1', kind: 'agents', message: 'contains ' + SECRET_TOKEN },
   });
-  // The model polls the very job it was just told to stop waiting on.
   recorder.emit('run-new', {
     type: 'tool_call_end', name: 'agent', args: { jobResult: 'job-1' }, toolCallId: 'tc-2',
     outcome: { success: true }, result: { status: 'running' },
   });
   recorder.emit('run-new', { type: 'run_end', reason: 'completed' });
 
-  // ── Head runs: older (failed) then newer (completed) — proves ordering. ──
   db.exec(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES ('${actor.actorId}', 'head-old', 'first attempt', 1000)`);
   db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
     VALUES ('${actor.actorId}', 'head-old', NULL, 'head-old', 0, 'investigate', 'first attempt', 'failed', 1000, 'synthesize')`);
   db.exec(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES ('${actor.actorId}', 'head-new', 'second attempt', 9000)`);
   db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
     VALUES ('${actor.actorId}', 'head-new', NULL, 'head-new', 0, 'investigate', 'second attempt', 'completed', 9000, 'synthesize')`);
-  // A THIRD, real split with two actual child heads (id != root_id, unlike
-  // the synthetic self-referencing rows above) — one settled, one still
-  // running — the shape the new "N/M settled" progress readout is for.
   db.exec(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES ('${actor.actorId}', 'head-live', 'third attempt', 12000)`);
   db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
     VALUES ('${actor.actorId}', 'head-live-a', NULL, 'head-live', 0, 'investigate A', 'branch a', 'completed', 12000, 'synthesize')`);
   db.exec(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
     VALUES ('${actor.actorId}', 'head-live-b', NULL, 'head-live', 0, 'investigate B', 'branch b', 'running', 12100, 'synthesize')`);
 
-  // ── MCTS: the OLDER search's root sorts FIRST (lower created_at, same
-  // depth 0) — exactly what the unscoped client buildTree() would return,
-  // discarding every node of the real latest search. ──
+  // The older search's root sorts first, as the unscoped buildTree() would pick.
   const insertNode = db.query(`INSERT INTO search_nodes
     (actor_id, id, parent_id, root_id, task, action, visits, value, depth, status, created_at)
     VALUES (?, ?, ?, ?, 'investigate', ?, 1, 0.5, ?, 'open', ?)`);
@@ -133,21 +108,11 @@ function seedInvestigationWorkspace(dbPath: string): void {
   const mcts = new MctsSearchStore(sql, actor);
   mcts.begin({ rootId: 'search-old', task: 'investigate', engine: 'mcts', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
   mcts.converge('search-old', 0, 1500);
-  // budget=10, checkpointed at iteration=6/budget-remaining=4 — the SAME
-  // invariant mcts/engine.ts holds by construction (iteration + remaining
-  // budget == the original total), and the exact shape that renders as
-  // "iter=6/10 (4 left)" rather than the misleading "iter=6/4" fraction, which
-  // looks like an overrun.
+  // iteration + remaining == budget (the mcts/engine.ts invariant), rendered as "iter=6/10 (4 left)".
   mcts.begin({ rootId: 'search-new', task: 'investigate', engine: 'mcts', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
   mcts.checkpoint('search-new', 0, { iteration: 6, budget: 4, now: 5300 });
 
-  // ── Background jobs: the job the run above detached and got polled, PLUS
-  // one still running — the exact shape a 12-hour-old job with no visible
-  // progress needs a duration/heartbeat readout for. ──
-  // job-1 is the call that run recorded, labelled
-  // `fork(settle=<policy>): <task>` — a label naming a settle no current call
-  // can produce. The bundle reads history, so it has to keep printing rows in
-  // that shape.
+  // A historical `fork(settle=<policy>): <task>` label; the bundle must still print it.
   const jobs = new BackgroundJobStore(sql, actor);
   jobs.create({
     id: 'job-1', kind: 'agents', workMode: 'build',
@@ -155,18 +120,13 @@ function seedInvestigationWorkspace(dbPath: string): void {
     input: `token=${SECRET_KINU_TOKEN}`, now: 5050,
   });
   jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
-  // The remaining secret shapes live in this job's input: an AWS key, an
-  // auth header, and a key/value secret. The bundle must scrub all three.
   jobs.create({
     id: 'job-2', kind: 'agents', workMode: 'build',
     input: `{"api_key": "verysecretvalue1234"} ${AKIA} Authorization: Bearer ${BEARER_SECRET}`,
     now: 5060,
   });
 
-  // ── The records store: two comparable sets, one unfloored with NO descriptor
-  // partition and one partitioned across three cells, five occupants in the
-  // largest. Written through the real writer, because the identity columns the
-  // bundle prints are only trustworthy as something that writer filled. ──
+  // Written through the real writer: the identity columns the bundle prints are only trustworthy from it.
   initExplorationRecordsTable(execRaw);
 
   const CALLS: ObjectiveIdentity = {
@@ -223,15 +183,12 @@ describe('kinu debug — redaction', () => {
     expect(r.exitCode).toBe(0);
 
     const raw = readFileSync(bundle, 'utf8');
-    // Every planted shape is gone: the tool-result token, the job-input
-    // session token, the AWS key, the auth header, the key/value secret.
     expect(raw).not.toContain(SECRET_TOKEN);
     expect(raw).not.toContain(SECRET_KINU_TOKEN);
     expect(raw).not.toContain(AKIA);
     expect(raw).not.toContain(BEARER_SECRET);
     expect(raw).not.toContain('verysecretvalue1234');
     expect(raw).toContain('[REDACTED]');
-    // The rows around them survive: the job id and the benign label.
     expect(raw).toContain('job-2');
     expect(raw).toContain('pick a migration-backfill approach');
   });
@@ -250,30 +207,21 @@ describe('kinu debug — local backend', () => {
     expect(r.stderr).toBe('');
     expect(r.exitCode).toBe(0);
 
-    // Human summary surfaces the exact four-symptom signal.
     expect(r.stdout).toContain('Runs (2)');
     expect(r.stdout).toContain('polled job 1x after backgrounding');
     expect(r.stdout).toContain('Head/fork runs (3');
-    expect(r.stdout).toContain('(1/2 settled)'); // head-live: one head done, one still running
+    expect(r.stdout).toContain('(1/2 settled)');
     expect(r.stdout).toContain('MCTS searches (2');
     expect(r.stdout).toContain('latest vs previous: 3 vs 1 nodes, depth 2 vs 0');
-    // The overrun-audit fix (2026-08-12): iteration + remaining budget is the
-    // search's true total (10), not a fraction that can look exceeded — the
-    // exact "iter=34/26 looks like an overrun" shape from production.
     expect(r.stdout).toContain('iter=6/10 (4 left)');
-    expect(r.stdout).not.toContain('iter=6/4'); // the old, misleading fraction must be gone
-    expect(r.stdout).toMatch(/checkpointed \d+d(?: \d+h)? ago/); // running search: the one real heartbeat
-    expect(r.stdout).toContain('iter=0/1 (1 left)'); // search-old: converged, never checkpointed past begin()
-    // Background jobs: a settled job's real duration (deterministic — both
-    // timestamps are fixture data, not wall-clock) and its descriptive label,
-    // plus a still-running job's duration made explicit rather than left for
-    // the operator to compute from a bare created_at timestamp.
+    expect(r.stdout).not.toContain('iter=6/4');
+    expect(r.stdout).toMatch(/checkpointed \d+d(?: \d+h)? ago/);
+    expect(r.stdout).toContain('iter=0/1 (1 left)');
     expect(r.stdout).toContain('took 2m');
     expect(r.stdout).toContain('fork(settle=mcts): pick a migration-backfill approach');
     expect(r.stdout).toMatch(/job-2 agents running for \d+d(?: \d+h)?/);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
-    // The leaderboard line carries the UNIT and the direction's arrow. A bare real
-    // is the defect: 25.4% read as a reward level when it was a delta.
+    // The leaderboard line carries the unit and direction arrow; a bare real reads as a level, not a delta.
     expect(r.stdout).toContain('Exploration records (2 comparable set(s)');
     expect(r.stdout).toContain('best ↑0.71 fraction of held-out tasks');
     expect(r.stdout).toContain('best ↓23 oracle calls');
@@ -281,8 +229,6 @@ describe('kinu debug — local backend', () => {
     expect(r.stdout).toContain('7 row(s) over 3 cell(s)');
     expect(r.stdout).not.toContain(SECRET_KINU_TOKEN);
 
-    // The bundle file: owner-only permissions, and never the raw secrets —
-    // the hard requirement, asserted directly against the written bytes.
     expect(statSync(bundle).mode & 0o777).toBe(0o600);
     const raw = readFileSync(bundle, 'utf8');
     expect(raw).not.toContain(SECRET_TOKEN);
@@ -302,10 +248,7 @@ describe('kinu debug — local backend', () => {
     expect(counts.get('mcts_node')).toBe(4);
     expect(counts.get('background_job')).toBe(2);
     expect(counts.get('end')).toBe(1);
-    // The records store: 2 comparable sets, 1 + 3 cells, 3 + 7 occupants. The
-    // occupant count is the WALK's total — the reads are paged, so a cell whose
-    // rows arrived in more than one page would still have to total exactly its
-    // population, once each.
+    // Reads are paged; a cell split across pages must still total its population exactly once.
     expect(counts.get('record_objective')).toBe(2);
     expect(counts.get('record_cell')).toBe(4);
     expect(counts.get('record')).toBe(10);
@@ -323,11 +266,9 @@ describe('kinu debug — local backend', () => {
 
     expect(rows.length).toBeGreaterThan(0);
     expect(new Set(rows.map((row) => row.artifactDigest)).size).toBe(rows.length);
-    // `descriptor: null` survives the bundle as null — the NO-PARTITION cell, not
-    // an unnamed one and not a dropped field.
+    // `descriptor: null` is the no-partition cell, kept as null.
     expect(rows.filter((row) => row.descriptor === null)).toHaveLength(3);
     expect(rows.filter((row) => row.descriptor === 'len=short')).toHaveLength(5);
-    // Full per-run event fidelity — the richest source, verbatim.
     const RunEventSchema = v.object({ t: v.literal('run_event'), runId: v.string(), type: v.string() });
 
     const runEvents = records.flatMap((record) => {
@@ -360,20 +301,14 @@ describe('kinu debug — local backend', () => {
     }), JSON.parse(r.stdout));
 
     const newRun = summary.runs.find((run) => run.runId === 'run-new');
-    // Both counters read `tool_call_end` — the row production writes. Seeded as
-    // `tool_call_start` these were 2 and 1 in this test and 0 and 0 on every
-    // real run, because nothing has ever emitted that type.
+    // Both counters read `tool_call_end`, the row production writes; nothing emits `tool_call_start`.
     expect(newRun?.toolCalls).toBe(2);
     expect(newRun?.jobPollsAfterHandle).toBe(1);
-    // What the bundle now says a run cost. The seeded run reported input and
-    // output on one turn and nothing on the next, so the accumulated usage
-    // carries exactly those two fields — `cacheRead` absent, not 0 — and the
-    // silent turn is counted rather than folded in as free.
+    // Accumulated usage carries only reported fields (`cacheRead` absent, not 0); the silent turn is counted.
     const oldRun = summary.runs.find((run) => run.runId === 'run-old');
     expect(oldRun?.usage).toEqual({ input: 10, output: 5 });
     expect(Object.keys(oldRun?.usage ?? {}).sort()).toEqual(['input', 'output']);
     expect(oldRun?.turnsWithoutUsage).toBe(1);
-    // A run with no turn_end at all reports no usage: an empty object, not zeros.
     expect(newRun?.usage).toEqual({});
     expect(newRun?.turnsWithoutUsage).toBe(0);
     const [latest, previous] = summary.mctsSearches;
@@ -460,14 +395,10 @@ describe('kinu debug — cloud backend', () => {
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('skywriter');
-      // The identity fields the bundle wrote still read back onto the summary
-      // through the shared field helpers: name, purpose, version and model.
       expect(r.stdout).toContain('identity  skywriter: p');
       expect(r.stdout).toContain('scaffold  v1  x');
       expect(r.stdout).toContain('Runs (1)');
 
-      // The two RPCs that had NO remote read path before this command needed
-      // them (see rpc-gate.ts) were actually called, not silently skipped.
       expect(calls).toContain('listRuns');
       expect(calls).toContain('getRunEvents');
       expect(calls).toContain('getMctsSearchRuns');

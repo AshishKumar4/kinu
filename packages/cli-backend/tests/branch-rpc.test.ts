@@ -1,6 +1,4 @@
-// Two overlapping `explore` RPCs against one branch worker must each resolve
-// to their own result. Matching a reply to a waiter by method name alone lets
-// the first arriving reply settle every same-method waiter.
+// Overlapping `explore` RPCs must each resolve to their own result, not the first same-method reply.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { test, expect, afterAll } from 'bun:test';
 import { join } from 'node:path';
@@ -51,8 +49,7 @@ test('concurrent explores resolve to their own results', async () => {
       seen += 1;
       const mine = seen;
 
-      // The first HTTP request belongs to the first explore. It answers
-      // slowly, so the second explore's reply arrives over IPC first.
+      // The first request answers slowly so the second reply arrives first.
       if (mine === 1) {
         await new Promise((resolve) => setTimeout(resolve, 400));
 
@@ -72,10 +69,7 @@ test('concurrent explores resolve to their own results', async () => {
     model: 'test-model',
   };
 
-  // The spawner is handed the workspace's ONE database, not a base path it
-  // decorates: `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued
-  // bootstrap does not name, so a fixture that passes anything else gets a
-  // child that exits before `ready` and a startup rejection instead of a reply.
+  // `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued bootstrap does not name.
   const { spawn } = createBranchSpawner(parentDbPath, { llm, parent: parentRuntime.actor });
   const handle = await spawn('rpc-correlation');
 

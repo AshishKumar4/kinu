@@ -11,8 +11,6 @@ import {
 } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
 
-// ─── Helpers: fake spawn + fake fetch ────────────────────────────────────────
-
 function makeSpawn(output: string, exitCode = 0): OpenCodeSpawn {
   return (_args: string[], _opts: { signal?: AbortSignal }) => {
     const encoder = new TextEncoder();
@@ -102,14 +100,7 @@ function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): ty
   }));
 }
 
-/**
- * A minimal but VALID reply for each route these tests drive.
- *
- * A stub `{}` is not a provider response: every call fails on the way back,
- * each test has to ignore that failure, and a provider that reached the right
- * URL and then produced something unusable hides inside it. Decodable replies
- * mean the only failures left are real ones.
- */
+/** A minimal valid reply per route, so a provider that reached the right URL but produced garbage still fails. */
 const FAKE_RESPONSES_REPLY = {
   id: 'resp_1',
   created_at: 1_700_000_000,
@@ -169,16 +160,12 @@ function makeRoutingFetch() {
   return { fetchImpl, requests, requestBodies };
 }
 
-/** Drive one request through the provider. Every caller asserts the request the
- *  provider produced — the URL, the headers, the rewritten body. */
 async function tryCall(
   model: Parameters<typeof generateText>[0]['model'],
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'],
 ): Promise<void> {
   await generateText({ model, prompt: 'hello', maxOutputTokens: 16, providerOptions });
 }
-
-// ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('OpenCode provider', () => {
   test('provider id and label', () => {
@@ -426,10 +413,8 @@ describe('OpenCode provider', () => {
 
     rewriteOpenCodeResponsesBody(body);
 
-    // With store:false NOTHING is persisted server-side, so every
-    // server-assigned id (rs_, msg_, fc_) must be stripped and the item passed
-    // by value — an id-bearing item 404s ("Items are not persisted when
-    // `store` is set to false"), which is exactly the bug this regressed on.
+    // With store:false every server-assigned id (rs_, msg_, fc_) must be stripped and items passed by value;
+    // an id-bearing item 404s.
     expect(body.input).toEqual([
       {
         type: 'reasoning',
@@ -512,10 +497,8 @@ describe('OpenCode provider', () => {
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/responses']);
   });
 
-  // A resumed session resolves its stored model BEFORE any listModels call, so
-  // the metadata map is cold. Defaulting gpt-5.x to Chat Completions breaks it
-  // outright ("use /v1/responses") — the family fallback must win, and it must
-  // not drag the non-reasoning families onto Responses with it.
+  // A resumed session resolves its model before listModels, so the metadata map is cold: the gpt-5.x family
+  // fallback must pick Responses without dragging non-reasoning families along.
   const cold = [
     {
       name: 'cold metadata routes OpenAI reasoning families to Responses (resumed sessions)',
@@ -569,13 +552,11 @@ describe('OpenCode provider', () => {
       fetch: countingFetch,
     }));
 
-    // First call fetches
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
     const countAfterFirst = fetchCount;
 
-    // Second call within TTL should reuse cache
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
-    expect(fetchCount).toBe(countAfterFirst); // no additional fetches
+    expect(fetchCount).toBe(countAfterFirst);
   });
 });

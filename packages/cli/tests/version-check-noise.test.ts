@@ -1,10 +1,5 @@
-// Startup-update-check noise: the once-a-day probe is opportunistic, and an
-// aborted or timed-out probe is an expected condition of a background check,
-// not a failure a user mid-command should read. These tests pin the split:
-// an AbortError from the fetch stays silent; a config that can never be
-// written still says so, every run, because that check can never succeed.
-//
-// Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
+// An aborted or timed-out startup probe stays silent; an unwritable config still reports every run.
+// Env-dependent paths (KINU_HOME) run in subprocesses.
 import { chmodSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -54,7 +49,6 @@ async function runCheck(home: string, fetchExpr: string): Promise<string> {
   return stdout.trim();
 }
 
-/** The subprocess's own JSON report, parsed once at this boundary. */
 function parseRun(out: string): { lines: string[]; outcome: string | null } {
   return v.parse(v.object({
     lines: v.array(v.string()),
@@ -66,9 +60,7 @@ describe('startup update check noise', () => {
   test('an aborted probe prints nothing', async () => {
     const home = configHome();
 
-    // The Mac's exact path: headers arrive, then the body stream aborts when
-    // the probe's own timeout fires — the AbortError escapes through
-    // res.json() inside fetchServedVersion and reaches the catch.
+    // Headers arrive, then the body aborts on the probe's timeout: the AbortError escapes through res.json().
     const out = await runCheck(home, `
       async () => new Response(new ReadableStream({
         start(controller) {
@@ -88,10 +80,7 @@ describe('startup update check noise', () => {
 
   test('an unwritable config still prints its failure', async () => {
     const home = configHome();
-    // The config DIRECTORY becomes unwritable after the CLI has loaded it:
-    // writeSecretFile writes its temporary file beside the config, so a
-    // read-only directory is the exact write that cannot succeed. That
-    // failure is the one the catch must still report.
+    // writeSecretFile writes its temp file beside the config, so a read-only directory is a write that cannot succeed.
     chmodSync(home, 0o500);
 
     try {

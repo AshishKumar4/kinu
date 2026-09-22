@@ -1,35 +1,7 @@
 /**
- * `kinu debug <name>` — the debugging control plane.
- *
- * The gap this closes: every datum a real investigation needs already has a
- * read model (getWorkspaceSnapshot, getRunTimeline, the run_events ledger,
- * getHeadRuns, getMctsTree, listBackgroundJobs, getActivitySnapshot, the
- * Evolution Changelog, scaffold lineage, crafted tools, memory, facts,
- * triggers) — but no single command assembles them, and two of the richest
- * ones (raw per-run `run_events` — the tool-call args/results, context
- * budget, steering, file-edit and head-merge telemetry — and the MCTS
- * search-run ledger) had NO remotely reachable read path for a cloud
- * workspace at all before this file. See rpc-gate.ts (`getRunEvents`,
- * `listRuns`, `getMctsSearchRuns`) and orchestrator.ts (`getMctsTree` now
- * carries `root_id`) for the RPCs this command needed and that did not
- * already exist.
- *
- * `kinu export` already gives a complete, portable, byte-for-byte dump of
- * a workspace (every table, schema + rows) — the right tool for backup and
- * restore. This is deliberately NOT another one: it does not touch the raw
- * archive at all, and instead calls the assembled READ MODELS the rest of
- * the CLI and the web UI already use, decodes them into one ordered,
- * human- or machine-readable narrative, and redacts anything credential-
- * shaped on the way out. Byte-complete and human-assembled are different
- * jobs; this is the second one, extending the inventory rather than
- * duplicating the first.
- *
- * One dispatch shape for both backends: `DebugSource` is the seam (mirrors
- * inspect.ts's `readTarget`, generalized to many calls instead of one) —
- * `cloudDebugSource` calls RPCs, `localDebugSource` reads the workspace's own
- * SQLite directly. `debugCommand` is the ONLY place that knows how to walk a
- * source, redact, page, and render; it does not know or care which backend
- * produced the source.
+ * `kinu debug <name>`: assembles the read models (run ledger, MCTS, jobs, changelog, memory, ...) into one
+ * redacted narrative. Unlike `kinu export` it never touches the raw archive. `DebugSource` is the backend seam;
+ * `debugCommand` alone walks, redacts, pages and renders.
  */
 
 import { appendFileSync } from 'node:fs';
@@ -63,8 +35,7 @@ export interface DebugOpts {
   limit?: string;
 }
 
-/** A single search's raw nodes, as `getMctsTree`/`listLocalMcts` return
- *  them — grouped by run rather than assumed to belong to one known search. */
+/** Grouped by run rather than assumed to belong to one known search. */
 interface RawMctsNode extends JsonObject {
   id: string; parent_id: string | null; root_id: string; depth: number;
   visits: number; value: number; status: string; action: string; created_at: number;
@@ -74,10 +45,7 @@ interface DebugRun extends JsonObject {
   runId: string;
 }
 
-/** One ledger event as a bundle row. `usage` is a domain value rather than a
- *  plain JSON object, so it is projected here — the one place the bundle's
- *  JSON boundary is crossed. Absent stays absent: no key is written for a turn
- *  whose provider reported nothing. */
+/** The one place the bundle's JSON boundary is crossed. Absent usage stays absent. */
 function runEventRecord(event: DebugRunEvent): BundleRecord {
   const { usage, ...rest } = event;
   const record: BundleRecord = { t: 'run_event', ...rest };
@@ -87,13 +55,7 @@ function runEventRecord(event: DebugRunEvent): BundleRecord {
   return record;
 }
 
-/**
- * One comparable set as a bundle row. Projected field by field rather than
- * spread, so what the bundle carries is a decision here rather than whatever the
- * summary happens to hold — and `best` becomes its artifact digest, because the
- * best row is itself written as a `record` below and a nested copy would be a
- * second version of it that could disagree.
- */
+/** Projected field by field; `best` becomes its artifact digest because the best row is written separately. */
 function recordObjectiveRecord(objective: RecordObjectiveSummary): BundleRecord {
   return {
     t: 'record_objective',
@@ -111,9 +73,7 @@ function recordObjectiveRecord(objective: RecordObjectiveSummary): BundleRecord 
   };
 }
 
-/** One leaderboard row. `value` is RAW in the objective's unit — the
- *  `record_objective` row above carries that unit and the direction it is read
- *  in, which is what stops a reader taking a delta for a level. */
+/** `value` is raw in the objective's unit; the `record_objective` row carries unit and direction. */
 function explorationRecordRecord(record: ExplorationRecord): BundleRecord {
   return {
     t: 'record',
@@ -232,17 +192,8 @@ const DebugChangelogViewSchema: v.GenericSchema<DebugChangelogView> = v.object({
 
 const WorkspaceSnapshotSchema = v.object({ status: JsonObjectSchema });
 
-/**
- * The exploration LEADERBOARD's three reads, typed against core's own summaries
- * rather than re-declared.
- *
- * `v.GenericSchema<RecordObjectiveSummary>` is the point: this is a parse at the
- * CLI's wire boundary, and annotating it with core's type means the schema
- * cannot drift from what the read model returns — it stops compiling instead.
- * The two nullable keys are `v.nullable`, never optional: `floorDigest: null` is
- * "declared no floor" and `descriptor: null` is "no descriptor partition", and an
- * absent field would be a third meaning neither read has.
- */
+/** Typed against core's summaries so the schema cannot drift. `v.nullable`, never optional: null means
+ * "declared none", and absence would be a third meaning. */
 const ExplorationRecordSchema: v.GenericSchema<ExplorationRecord> = v.object({
   objectiveId: v.string(), descriptor: v.nullable(v.string()), artifactDigest: v.string(),
   artifact: v.string(), value: v.number(), detail: v.string(),
@@ -266,10 +217,7 @@ const RecordCellSummarySchema: v.GenericSchema<RecordCellSummary> = v.object({
   elite: v.nullable(ExplorationRecordSchema),
 });
 
-/** The one fetch surface `writeBundle` walks — implemented once per backend,
- *  never duplicated by the writer itself. Every method already exists as a
- *  read model somewhere in the codebase; this interface just names the width
- *  a full debug bundle needs from it. */
+/** Implemented once per backend; names the width a full debug bundle needs. */
 interface DebugSource {
   identity(): Promise<JsonObject>;
   messages(limit: number): Promise<JsonObject[]>;
@@ -288,26 +236,16 @@ interface DebugSource {
   facts(limit: number): Promise<JsonObject[]>;
   memoryContent(): Promise<string>;
   /**
-   * The records store — the CUMULATIVE half of exploration, and the one read
-   * model a debug bundle had no path to on either backend.
-   *
-   * Three calls rather than one because the store is a grid the caller walks:
-   * which comparable sets exist, which cells each spans, and then a cell's
-   * population A PAGE AT A TIME. That last one is not a style choice — a cell's
+   * Records store, walked as a grid; a cell is read a page at a time because its
    * population is provably unbounded (`ArchiveAdmission.lean —
-   * separated_cells_are_unboundedly_large`), so a bundle that read a cell whole
-   * would hold an unbounded set in memory to write it out row by row.
+   * separated_cells_are_unboundedly_large`).
    */
   recordObjectives(limit: number): Promise<RecordObjectiveSummary[]>;
   recordCells(handle: RecordObjectiveHandle, limit: number): Promise<RecordCellSummary[]>;
   recordOccupants(
     handle: RecordCellHandle, cursor: SeekCursor | null, limit: number,
   ): Promise<Page<ExplorationRecord>>;
-  /** Best-effort telemetry rollup (percentiles, remaining budgets, the
-   *  activity log). Cloud-only today — `getActivitySnapshot` has no local
-   *  peer; local sources return null and the section is omitted rather than
-   *  faked. `run_events`' own `context_budget`/`turn_steering` rows (fetched
-   *  per-run above) carry the same telemetry at full fidelity either way. */
+  /** Cloud-only; local sources return null and the section is omitted rather than faked. */
   activitySnapshot(): Promise<JsonObject | null>;
 }
 
@@ -319,10 +257,6 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
     messages: (limit) => rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }])
       .then((page) => page.items),
-    // listRuns moved to Page<RunListEntry> + PageRequest; the old positional
-    // [limit] parsed as a request object whose fields are all absent, and the
-    // array schema then refused the page envelope — every bundle read "Runs (0)"
-    // until section failures became visible.
     runs: (limit) => rpc('listRuns', pageSchema(DebugRunSchema), [{ limit }]).then((page) => [...page.items]),
     runEvents: (runId, since, limit) => rpc('getRunEvents', v.array(DebugRunEventSchema), [runId, { since, limit }]),
     headRuns: (limit) => rpc('getHeadRuns', v.array(DebugHeadRunSchema), [limit]),
@@ -340,11 +274,7 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
     recordObjectives: (limit) =>
       rpc('listRecordObjectives', pageSchema(RecordObjectiveSummarySchema), [{ limit }])
         .then((page) => [...page.items]),
-    // Each request is built field by field rather than spread: the handles cross a
-    // JSON boundary, `SeekCursor` is a domain type with no index signature, and a
-    // spread of a whole summary would put a leaderboard row in a request. `cursor`
-    // is absent rather than null for the first page — that is what the request's
-    // optional field means.
+    // Built field by field: `SeekCursor` has no index signature and the handles cross a JSON boundary.
     recordCells: (handle, limit) =>
       rpc('listRecordCells', pageSchema(RecordCellSummarySchema),
         [{ objectiveId: handle.objectiveId, floorDigest: handle.floorDigest, limit }])
@@ -355,8 +285,7 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
         descriptor: handle.descriptor, limit,
       };
 
-      // ABSENT, not `undefined`: JSON has no undefined, and the request's optional
-      // `cursor` means "start at the beginning" by not being there.
+      // Absent, not `undefined`: the optional `cursor` means "start at the beginning" by not being there.
       if (cursor !== null) request.cursor = { after: cursor.after };
 
       return rpc('readRecordCell', pageSchema(ExplorationRecordSchema), [request]);
@@ -399,14 +328,7 @@ function parseLocal<T>(schema: v.GenericSchema<T>, input: { value: unknown }): T
   return v.parse(schema, decodeJsonValue(input));
 }
 
-// ── Redaction ────────────────────────────────────────────────────
-
-/** Kinu's own bearer-token shapes (pta_ access, ptc_ session, pdt_
- *  device — cli/access-token-store.ts, auth-store.ts, user-do.ts) plus the
- *  common provider-key and generic key=secret shapes. One function, applied
- *  to every string leaf written into the bundle — not a per-table allowlist,
- *  because a secret can land in free text (a tool result, a pasted token in
- *  chat) that no schema marks as sensitive. */
+/** Applied to every string leaf, not a per-table allowlist: secrets land in free text no schema marks. */
 const SECRET_PATTERNS: RegExp[] = [
   /\bpt[a-z]_[A-Za-z0-9_-]{16,}\b/g, // Kinu session/access/device tokens
   /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, // Anthropic
@@ -415,9 +337,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\bBearer\s+[A-Za-z0-9._-]{15,}\b/gi,
 ];
 
-/** Key/value patterns keep their two surrounding groups. They stand apart
- *  from SECRET_PATTERNS so the replacement shape is declared, not sniffed
- *  out of the pattern source. */
+/** Kept apart from SECRET_PATTERNS so the replacement shape is declared, not sniffed. */
 const SECRET_KEY_VALUE_PATTERNS: RegExp[] = [
   /("(?:token|secret|password|api[_-]?key|credential|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]{4,}(")/gi,
 ];
@@ -432,8 +352,7 @@ function redactSecrets(text: string): string {
   return out;
 }
 
-/** Deep-walk a value, redacting every string leaf. Applied once, at the
- *  serialization boundary, so no fetch path can forget it. */
+/** Applied once, at the serialization boundary, so no fetch path can forget it. */
 function redactDeep(value: JsonValue): JsonValue {
   const string = v.safeParse(v.string(), value);
 
@@ -451,8 +370,6 @@ function redactDeep(value: JsonValue): JsonValue {
   return redacted;
 }
 
-// ── Bundle records ──────────────────────────────────────────────
-
 interface BundleRecord extends JsonObject {
   t: string;
 }
@@ -462,12 +379,7 @@ interface BundleWriter {
   close(): void;
 }
 
-/** Appends NDJSON to `path`, one record at a time — never holds the bundle
- *  in memory, matching the append-per-page pattern `kinu export` uses.
- *  Owner-only permissions: the bundle carries chat transcripts, tool-call
- *  results and memory content, redacted for known secret shapes but not
- *  guaranteed secret-free (see redactSecrets) — it should not default to
- *  the umask's usual group/world-readable file. */
+/** Appends NDJSON per record, never holding the bundle. Owner-only permissions: redaction is not a guarantee. */
 function fileWriter(path: string): BundleWriter {
   writeSecretFile(path, '');
   let buffered: string[] = [];
@@ -488,8 +400,6 @@ function fileWriter(path: string): BundleWriter {
   };
 }
 
-// ── Investigation summary ──────────────────────────────────────────
-
 interface RunStats {
   runId: string;
   eventCount: number;
@@ -500,11 +410,9 @@ interface RunStats {
   startedAt: number | null;
   endedAt: number | null;
   endReason: string | null;
-  /** What the run's turns reported, absence preserved — a field no turn
-   *  mentioned stays absent instead of reading as a metered zero. */
+  /** A field no turn mentioned stays absent instead of reading as a metered zero. */
   usage: Usage;
-  /** Turns whose provider reported nothing at all. The denominator that stops
-   *  a silent run from reading as a free one. */
+  /** Stops a silent run from reading as a free one. */
   turnsWithoutUsage: number;
   backgroundHandles: string[];
   jobPollsAfterHandle: number;
@@ -537,18 +445,8 @@ interface DebugSummary {
   sectionFailures: Array<{ section: string; message: string }>;
 }
 
-/** Fold one run's raw events into the stats a debugging read actually wants:
- *  who/what caused it, what it cost, and — the direct answer to "did the
- *  agent poll a background job instead of ending its turn" — every
- *  `agent.jobResult` tool call that happened AFTER this run's own events
- *  already contain a `background: true` handle for that job.
- *
- *  Both counters read `tool_call_end`, which is the row production writes. They
- *  were written against `tool_call_start` and no producer has ever emitted it,
- *  so `toolCalls` and `jobPollsAfterHandle` reported 0 on every run ever
- *  debugged — a silent zero in the surface whose job is to explain a run. The
- *  args are read before the result on each row so "after the handle" still
- *  means after: a row cannot be a poll of the handle it is itself announcing. */
+/** `jobPollsAfterHandle` counts `agent.jobResult` calls after this run announced a `background: true` handle.
+ *  Counters read `tool_call_end`, the row production writes; args before result so a row cannot poll itself. */
 function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
   const stats: RunStats = {
     runId, eventCount: events.length, toolCalls: 0, errors: [], causedBy: null, userMessage: null,
@@ -600,10 +498,7 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
   return stats;
 }
 
-/** Group the flat, unscoped node list `getMctsTree` returns into one summary
- *  per root_id — the fix for the client bug in use-kinu.ts's `buildTree`,
- *  which picks whichever depth-0 node sorts first (oldest by created_at) and
- *  silently drops every node not reachable from it. */
+/** One summary per root_id; the flat list mixes searches. */
 function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRun[]): MctsSearchSummary[] {
   const byRoot = new Map<string, RawMctsNode[]>();
 
@@ -631,9 +526,7 @@ function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRu
     });
   }
 
-  // Search runs with a ledger row but zero nodes (a search that began and
-  // never wrote a single node) must still appear — a write-side failure is
-  // exactly what a debugging read has to be able to see.
+  // Searches with zero nodes must still appear: a write-side failure is what a debugging read must see.
   for (const s of searches) {
     if (!byRoot.has(s.rootId)) {
       out.push({
@@ -646,32 +539,16 @@ function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRu
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-// ── The command ──────────────────────────────────────────────────
-
 const DEFAULT_RUNS = 20;
 
 const DEFAULT_EVENT_PAGE = 500;
 
 const DEFAULT_RECORD_PAGE = 200;
 
-/**
- * How many pages of ONE cell a bundle will walk.
- *
- * A bound rather than "until `end`", because the set being walked has no bound
- * of its own: `separated_cells_are_unboundedly_large` means a cell can hold more
- * occupants than a debug bundle should ever write, and a walk with no cap would
- * turn one pathological cell into an unbounded file. The cap TRUNCATES a cell and
- * says nothing false about it — the bundle is a sample of a store, and every
- * other section is limited the same way.
- *
- * Unrelated to `INHERITED_CONTEXT_CAP` (core orchestrator/heads-support.ts), which
- * happens to be the same round number: that one bounds how much context a head
- * inherits, this one bounds how much of one cell a debug bundle writes. Neither
- * decision constrains the other, so they are separate declarations on purpose.
- */
+/** A cell has no bound of its own (`separated_cells_are_unboundedly_large`), so the walk is capped and truncates.
+ * Unrelated to `INHERITED_CONTEXT_CAP` despite the same value. */
 const RECORD_PAGE_CAP = 50;
 
-/** Every record in one cell, page by page, up to the cap. */
 async function writeCellOccupants(
   handle: RecordCellHandle,
   source: DebugSource,
@@ -714,8 +591,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     factCount: 0, errors: [], sectionFailures: [],
   };
 
-  /** A section that cannot be read is a FINDING, never an empty section — a
-   *  bare catch-fallback here once read failing RPCs as empty workspaces. */
+  /** An unreadable section is a finding, never an empty section. */
   const safe = async <T>(section: string, p: Promise<T>, fallback: T): Promise<T> => {
     try {
       return await p;
@@ -738,8 +614,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
 
     for (const m of messages) writer.write({ t: 'message', ...m });
 
-    // Runs + their full event ledger — paginated per run via `since`, so a
-    // run with thousands of events never sits fully in memory at once.
+    // Paged per run via `since`, so a large run never sits fully in memory.
     const runs = await safe('runs', source.runs(runLimit), []);
 
     for (const run of runs) {
@@ -780,11 +655,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     for (const n of mctsNodes) writer.write({ t: 'mcts_node', ...n });
     summary.mctsSearches = summarizeMctsSearches(mctsNodes, mctsSearches);
 
-    // The records store, walked as the grid it is. Every value written here is
-    // RAW in the objective's own unit, and the unit and direction travel with it:
-    // a bundle row carrying a bare real is a number a reader has to guess the
-    // meaning of, which is the whole reason the store now records what it
-    // measured. Occupants are PAGED — a cell's population has no bound.
+    // Values are raw in the objective's unit, which travels with them. Occupants are paged: a cell has no bound.
     summary.recordObjectives = await safe('record_objectives', source.recordObjectives(sectionLimit), []);
 
     for (const objective of summary.recordObjectives) {
@@ -863,10 +734,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
   }
 }
 
-/** Human-readable elapsed duration ("45s", "12m", "3h 4m", "2d 1h") — the
- *  unit an operator reads at a glance, not raw milliseconds or a timestamp
- *  they have to subtract themselves. Negative/NaN inputs (a clock skew, a
- *  malformed row) render as "0s" rather than a confusing negative duration. */
+/** Negative/NaN inputs (clock skew, malformed row) render as "0s". */
 function formatElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
 
@@ -888,14 +756,12 @@ function printJsonSummary(summary: DebugSummary, outPath: string): void {
   printJson(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
 }
 
-/** How a run ended: its own reason, else whether an end was recorded at all. */
 function runStatusTag(run: RunStats): string {
   if (run.endReason !== null && run.endReason !== '') return OK(run.endReason);
 
   return run.endedAt === null ? WARN('no run_end') : OK('ended');
 }
 
-/** How long a background job has been running, or how long it took. */
 function jobDurationTag(job: DebugBackgroundJob): string {
   if (job.status === 'running') return WARN(` for ${formatElapsed(Date.now() - job.createdAt)}`);
 
@@ -942,16 +808,9 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
     for (const s of summary.mctsSearches.slice(0, 5)) {
       const depthTag = s.nodeCount <= 1 ? WARN('single node, no depth') : `${s.nodeCount} nodes, depth ${s.maxDepth}`;
-      // `s.budget` is REMAINING budget (mcts/search-store.ts checkpoints it down
-      // every iteration) — iteration + budget is the search's true total, an
-      // invariant held by construction (mcts/engine.ts increments one and
-      // decrements the other together). Showing iter=N/budget as a fraction
-      // reads as an overrun (34/26) when it is really "34 of 60 done, 26 left".
+      // `s.budget` is remaining: iteration + budget is the true total, so 34/26 means 34 of 60 done.
       const total = s.iteration + s.budget;
-      // `updatedAt` is written by the SAME per-iteration checkpoint — the one
-      // heartbeat this backend actually has. For a still-running search this
-      // is the direct answer to "is it hung or working": fresh means it
-      // checkpointed recently; stale means nothing has landed in a while.
+      // `updatedAt` is the per-iteration checkpoint, the only heartbeat: fresh means working, stale means hung.
       const heartbeat = s.status === 'running' ? `, checkpointed ${formatElapsed(Date.now() - s.updatedAt)} ago` : '';
       console.log(`  ${DIM(new Date(s.updatedAt).toLocaleString())} ${ACCENT(s.rootId.slice(0, 8))} ${s.status} iter=${s.iteration}/${total} (${s.budget} left), ${depthTag}${heartbeat}`);
     }
@@ -966,9 +825,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     console.log(`\n${ACCENT('Exploration records')} (${summary.recordObjectives.length} comparable set(s), newest first)`);
 
     for (const objective of summary.recordObjectives.slice(0, 5)) {
-      // The unit and the arrow are the whole point: a raw value with neither is a
-      // number a reader has to guess the meaning of, and guessing a delta for a
-      // level is how 25.4% came to be read as a reward level.
+      // Without unit and direction a reader can mistake a delta for a level.
       const arrow = objective.direction === 'minimise' ? '↓' : '↑';
 
       const best = objective.best === null
@@ -986,10 +843,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     for (const j of summary.backgroundJobs.slice(0, 10)) {
       const labelTag = j.label ? `: ${DIM(j.label)}` : '';
 
-      // Running jobs carry no heartbeat of their own (background_jobs has only
-      // created_at/settled_at) — this is the honest answer to "how long has
-      // this actually been running", computed rather than left for the
-      // operator to do the timestamp math that hid the 12-hour job.
+      // background_jobs has no heartbeat, only created_at/settled_at; compute the duration for the operator.
       const durationTag = jobDurationTag(j);
 
       console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${durationTag}${labelTag}${j.error ? ERR(`: ${j.error}`) : ''}`);

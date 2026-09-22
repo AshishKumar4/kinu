@@ -43,9 +43,7 @@ const key = (name: string, modifiers: Partial<TuiKeyEvent> = {}): TuiKeyEvent =>
   ...modifiers,
 });
 
-/** What the app's own dispatcher resolves a stroke to. Every TUI surface feeds
- *  keys through `createKeyDispatcher`, so the keymap is asserted at the seam the
- *  product actually uses rather than at a resolver behind it. */
+/** Every TUI surface feeds keys through `createKeyDispatcher`, so the keymap is asserted there. */
 const resolve = (
   registry: KeybindingRegistry,
   event: TuiKeyEvent,
@@ -136,9 +134,7 @@ describe('TUI product registries', () => {
   });
 
   test('the advertised hints resolve on the default keymap exactly as stated', () => {
-    // TUI_ADVERTISED_HINTS is what marketing surfaces (the landing page's
-    // terminal demo) print as the product's keybindings. The default preset
-    // must actually bind them, or the demo advertises keys that do nothing.
+    // TUI_ADVERTISED_HINTS is what the landing page's terminal demo prints: the default preset must bind them.
     const registry = createKeybindingRegistry({ presetId: 'pi-omp' });
 
     for (const { action, keys } of TUI_ADVERTISED_HINTS) {
@@ -147,10 +143,7 @@ describe('TUI product registries', () => {
   });
 
   test('navigator rows draw activity through the shared contract', async () => {
-    // TUI_MARKS.activity is the one activity vocabulary: the real navigator
-    // consumes it here, and the landing page's terminal demo imports the same
-    // constant, so the two surfaces cannot disagree about what running looks
-    // like. Connection marks stay the StatusBar's separate contract.
+    // The landing page's terminal demo imports TUI_MARKS.activity too, so both surfaces share one vocabulary.
     const source = agentSourceFromList(() => [
       { name: 'worker', label: 'worker', mode: 'local', status: 'running', cwd: '/tmp/kinu-activity-probe' },
       { name: 'resting', label: 'resting', mode: 'local', status: 'idle', cwd: '/tmp/kinu-activity-probe' },
@@ -216,10 +209,8 @@ describe('TUI product registries', () => {
   });
 
   test('a selection naming a theme that is gone paints the default instead of crashing', async () => {
-    // `tui.json` is hand-editable and its schema can only check that `themeId`
-    // is a non-empty string, so a deleted or renamed custom theme leaves a live
-    // selection pointing at nothing. That threw inside the provider's useMemo
-    // and took the whole TUI down at first render.
+    // `tui.json` is hand-editable and its schema only checks `themeId` is non-empty, so a deleted custom theme
+    // can leave a selection pointing at nothing.
     expect(await renderedThemeId({ mode: 'theme', themeId: 'deleted-custom-theme' }))
       .toBe('kinu-dark-solid');
   });
@@ -249,16 +240,13 @@ describe('adaptive TUI shell', () => {
     const store = createFileTuiPreferenceStore(path);
     expect(store.read().wideSidebarOpen).toBe(true);
     store.write({ ...store.read(), wideSidebarOpen: false });
-    // A second store on the same file is what a restarted TUI holds: the saved
-    // shape has to survive the parse the reader puts it through.
+    // A second store on the same file is what a restarted TUI holds.
     expect(createFileTuiPreferenceStore(path).read().wideSidebarOpen).toBe(false);
   });
 });
 
 
-/** The theme the provider hands its children, read the way every TUI surface
- *  reads it — through `useTuiTheme` under a mounted provider, so the real
- *  resolution runs. */
+/** Read through `useTuiTheme` under a mounted provider, so the real resolution runs. */
 async function renderedThemeId(
   selection?: ThemeSelection,
 ): Promise<string> {

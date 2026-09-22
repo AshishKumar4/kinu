@@ -404,6 +404,25 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     }
   });
 
+  test('the roster decides the shadow trial and the title subject, the same for every backend', () => {
+    const settled = (evolutionEnabled: boolean, mission: string | null) => declareTerminalRoster({
+      messageId: 'answer-1', status: 'completed', workMode: 'build', continuity: 'conversation',
+      completed: true, userText: 'rotate the staging keys', assistantText: 'a',
+      scopedTurn: {}, recordedAt: 1, evolutionEnabled,
+    }, { shadowTrial: { pendingVersion: 2, trialContext: [] }, autoTitle: { mission } });
+
+    const titleInput = (evolutionEnabled: boolean, mission: string | null) =>
+      settled(evolutionEnabled, mission).find((effect) => effect.name === 'auto_title')?.input;
+
+    // A session with evolution off records no evolution state, so its candidate
+    // is owed no trial either — whether or not its host thought to ask.
+    expect(settled(false, null).map((effect) => effect.name)).not.toContain('shadow_trial');
+    expect(settled(true, null).map((effect) => effect.name)).toContain('shadow_trial');
+    // An unset mission leaves the owner's own words to title the workspace.
+    expect(titleInput(true, null)).toEqual({ subject: 'rotate the staging keys' });
+    expect(titleInput(true, 'Keep the staging keys rotated')).toEqual({ subject: 'Keep the staging keys rotated' });
+  });
+
   test('the roster owes the extension end, then the recording, then the drain', () => {
     // The order the spine runs in, now that it is a roster rather than one call:
     // the extension's effects (memory writes, compaction state) are part of the

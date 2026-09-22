@@ -17,14 +17,8 @@ export interface SanitizeOptions {
 }
 
 /**
- * The terms an FTS query is reduced to before it runs: word tokens with FTS
- * operators and (unless `stopWords` is off) stop words removed. The fallback —
- * an unstripped token list when stripping would empty the query — keeps a
- * stop-words-only search matching the same rows `sanitizeFtsQuery` would.
- *
- * Exported on its own so a non-SQL lexical source (the facts store's in-memory
- * matcher) can apply the exact query-normalization the note index sees,
- * instead of growing a second idea of what a query term is.
+ * Terms an FTS query reduces to (operators and, unless disabled, stop words removed). Exported so
+ * non-SQL lexical matchers share the same query normalization.
  */
 export function ftsQueryTerms(query: string, options?: SanitizeOptions): string[] {
 	const useStopWords = options?.stopWords ?? true;
@@ -57,11 +51,7 @@ export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): stri
 	return tokens.map((t) => `"${t}"`).join(" ");
 }
 
-/**
- * The any-term form of an already-sanitized all-term query, or null when
- * broadening cannot add anything: a single token makes the two queries
- * identical, so the second fetch would return the first page again.
- */
+/** Any-term form of a sanitized query, or null when a single token makes it identical. */
 export function relaxFtsQuery(safeQuery: string): string | null {
 	const tokens = safeQuery.split(" ").filter(Boolean);
 
@@ -69,20 +59,8 @@ export function relaxFtsQuery(safeQuery: string): string | null {
 }
 
 /**
- * The one recall fill policy, shared by every FTS surface: the strict page in
- * rank order, then partial matches in rank order until `capacity` DISTINCT rows
- * are held.
- *
- * A strict row is never displaced — a partial supplements the page, it does not
- * compete for it — and a partial already present is skipped. Broadening only
- * when the strict page came back EMPTY left an underfull page underfull and
- * silently dropped every relevant partial.
- *
- * A `partial` page of `capacity` rows is exactly enough to finish the fill, and
- * this is why the caller need fetch no more: every all-term match is also an
- * any-term match, so `partial` repeats at most the `strict.length` rows already
- * held and therefore still carries the `capacity - strict.length` new ones the
- * page is missing.
+ * Shared recall fill policy: the strict page in rank order, then partial matches until `capacity`
+ * distinct rows. One `capacity`-sized partial page suffices: every strict match is also a partial match.
  */
 export function fillToCapacity<Row>(
 	strict: readonly Row[],

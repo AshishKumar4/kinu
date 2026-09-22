@@ -1,11 +1,4 @@
-/**
- * Cross-implementation store-format parity: the TS engine (cli-backend
- * createHostCheckpoints, importing core/checkpoints/format) and the zero-dep
- * pc-agent daemon engine (which PINS the same format as literals) must read
- * and restore each other's snapshots from one shared store. This test is the
- * enforcement behind both files' "same store format" comments — real git,
- * one store directory, both engines.
- */
+/** Store-format parity: the TS engine and the pc-agent daemon engine (which pins the format as literals) restore each other's snapshots. */
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
@@ -88,7 +81,6 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const id = present(await host.ensureCheckpoint(work), 'the host engine snapshot id');
     expect(id).toBeTruthy();
 
-    // The daemon reads the SAME store: identical id, turn meta, and dir.
     const listed = device.list(AGENT);
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({
@@ -104,8 +96,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const result = device.restore(AGENT, work, id);
     expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('host wrote this');
     expect(existsSync(join(work, 'junk.txt'))).toBe(false);
-    // The daemon's pre-restore safety snapshot is null-turn, same as the
-    // host engine's — so /undo grouping behaves identically on both sides.
+    // Both pre-restore safety snapshots are null-turn, so /undo grouping matches.
     const preRestore = device.list(AGENT).find((e) => e.id === result.preRestoreId);
     expect(preRestore).toMatchObject({ turnId: null, sessionId: null, reason: 'pre-restore' });
   });
@@ -134,7 +125,6 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
   test('both engines write byte-identical store scaffolding (marker + excludes)', async () => {
     const { root, work, host, device } = setup();
 
-    // Two separate dirs so each engine inits its own store from scratch.
     const workB = join(root, 'project-b');
     mkdirSync(workB);
     writeFileSync(join(work, 'x'), '1');
@@ -147,17 +137,13 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     expect(stores).toHaveLength(2);
     const [a, b] = stores.map((name) => join(root, 'shadow', AGENT, name));
     expect(readFileSync(join(a, 'info', 'exclude'), 'utf8')).toBe(readFileSync(join(b, 'info', 'exclude'), 'utf8'));
-    // Marker files differ only by the recorded target dir: each names exactly
-    // the project its store shadows, so a marker aimed at the wrong tree
-    // fails here rather than restoring one project from another's history.
+    // Each marker names exactly the project its store shadows; a wrong-tree marker fails here.
     const markers = [a, b].map((s) => readFileSync(join(s, 'KINU_WORKDIR'), 'utf8').trim()).sort();
     expect(markers).toEqual([work, workB].sort());
   });
 
   test('both engines skip a path they may not read and record it identically', async () => {
-    // The record is what a reader sees in /undo, so "one format regardless of
-    // which side wrote it" has to cover an incomplete snapshot too — otherwise
-    // the two engines describe the same tree differently.
+    // /undo reads this record, so an incomplete snapshot must be described identically by both engines.
     const { root, work, host, device } = setup();
     const workB = join(root, 'project-b');
     const foreign = [join(work, 'systemd-private-1'), join(workB, 'systemd-private-1')];
@@ -180,12 +166,8 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
       const byId = new Map(device.list(AGENT).map((e) => [e.id, e.reason]));
       expect(byId.get(hostId)).toBe('file write [skipped 1 unreadable: systemd-private-1]');
-      // The daemon's own default reason, with the same note appended by the
-      // same encoding.
       expect(byId.get(deviceId)).toBe('pre-mutation [skipped 1 unreadable: systemd-private-1]');
 
-      // And each snapshot still holds the readable file, read back through the
-      // OTHER engine.
       writeFileSync(join(work, 'mine.txt'), 'damaged');
       expect((await host.plan(work, hostId)).files).toEqual([{ path: 'mine.txt', kind: 'modify' }]);
       expect(device.plan(AGENT, workB, deviceId).files).toEqual([]);

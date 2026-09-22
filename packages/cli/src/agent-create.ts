@@ -47,8 +47,7 @@ import { ensureLocalDaemonRunning } from './commands/daemon';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 
 export interface CreateCliAgentInput {
-  /** Required for local agents. Cloud agents are named from their mission
-   *  when this is omitted. */
+  /** Required for local agents; cloud agents are named from their mission. */
   name?: string;
   displayName?: string;
   nameOrigin?: 'user' | 'auto';
@@ -62,10 +61,8 @@ export interface CreateCliAgentInput {
   allowInteractiveAuth?: boolean;
   reasoningEffort?: ReasoningEffort;
   role?: string;
-  /** Physical project directory. Defaults to the invocation cwd. */
   cwd?: string;
-  /** Virtual workspace to join, existing or new. Defaults to the project's own
-   *  label, so two `kinu create` calls in one directory produce peers. */
+  /** Defaults to the project's label, so two `kinu create` calls in one directory produce peers. */
   workspaceId?: string;
 }
 
@@ -79,8 +76,6 @@ export interface CreatedCliAgent {
   dbPath?: string;
   cwd?: string;
   workspaceId?: string;
-  /** Agents already in that virtual workspace — empty when this call opened a
-   *  new one, populated when it joined an existing one as a peer. */
   peers?: string[];
   aliasPath?: string;
 }
@@ -94,9 +89,7 @@ export interface SuggestAgentIdentityOptions {
   generate?: (mission: string, signal?: AbortSignal) => Promise<string>;
 }
 
-/** The workspace's permanent slug plus the best title available for it: the
- *  generated one when the model answers, the mission-derived one otherwise.
- *  The slug never depends on either — it is the id's, and only the id's. */
+/** The slug derives from the id only; the title is generated when possible, mission-derived otherwise. */
 export async function suggestAgentIdentityFromMission(
   mission: string,
   opts: SuggestAgentIdentityOptions = {},
@@ -162,17 +155,12 @@ export function isCloudAuthConfigured(): boolean {
   return Boolean(loadConfigFile().accessToken);
 }
 
-/** Whether ANY inference path exists: a derived endpoint, or any provider the
- *  registry could serve. A config.json that will not parse is a real failure
- *  and propagates — repainting it as "run setup" is how a broken install
- *  looks like a fresh one. */
+/** An unparseable config.json propagates rather than reading as a fresh install. */
 export function isLocalModelConfigured(): boolean {
   try {
     return resolveLLMConfig({}) !== null;
   } catch (error) {
-    // Only the half-set-override diagnostic reads as "not usable yet". Anything
-    // else — a config.json that will not parse, a stored spec that will not
-    // resolve — is a real failure and propagates.
+    // Only the half-set-override diagnostic means "not usable yet".
     if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
     throw error;
   }
@@ -234,39 +222,23 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const llmConfig = requireLLMConfig(input);
   mkdirSync(agentDir(name), { recursive: true });
 
-  // Built under a PARTIAL name and published by the rename — the same shape
-  // `kinu import` restores an archive with (commands/export-import.ts).
-  //
-  // `agent.db` existing is what makes a directory a workspace: it is what the
-  // duplicate-name check above reads, and what the adoption scan
-  // (`listUnplacedLocalAgents`) requires before it will place one. So the rename
-  // is the ONLY visible transition, and everything before it is reversible —
-  // a failure removes the partial below, and a kill leaves behind a partial
-  // nothing reads, which the next create of this name clears. The empty
-  // directory is deliberately left: no reader treats a directory without an
-  // `agent.db` as a workspace, and every other path that creates one (import,
-  // adoption) leaves it the same way.
+  // Built under a partial name and published by the rename (as `kinu import` does). `agent.db` existing is what
+  // makes a directory a workspace, so the rename is the only visible transition; the next create clears a stale partial.
   const partial = `${dbPath}.partial`;
   discardPartialWorkspace(partial);
   const db = new Database(partial, { create: true });
 
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    // Address and title are two fields, because they are two things. The slug
-    // stays `workspace_identity.name` — every path that ADDRESSES this
-    // workspace reads it — while the title heads SOUL.md and MEMORY.md. A
-    // workspace added without a name has no title yet and gets one from its
-    // first prompt.
+    // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
     const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig });
-    // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = rt.actor.config;
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
     const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
 
     if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
-    // Title and whose it is, in one write. The origin is what the title policy
-    // reads to decide whether it may ever name this agent itself.
+    // The origin decides whether the title policy may ever rename this agent.
     agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
 
     if (input.role && input.role !== DEFAULT_ROLE_ID) {
@@ -275,31 +247,14 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
       });
     }
 
-    // Everything this database holds has to be IN it before the rename that
-    // publishes it, and it has to be readable with nothing beside it. A
-    // WAL-mode database keeps its writes in the `-wal` sidecar until a
-    // checkpoint, and `close()` cannot run one while the runtime built above
-    // still holds prepared statements — so without the checkpoint the
-    // published file contains only its header page and its first read fails
-    // SQLITE_IOERR_SHORT_READ.
-    //
-    // The journal mode then LEAVES WAL, because publication removes the
-    // sidecars along with the partial name they were written under. A WAL
-    // database with no `-shm` cannot be read at all — SQLite has to build that
-    // file, a readonly connection may not, and a second connection made while
-    // this process still holds the outstanding statements above gets
-    // SQLITE_IOERR_VNODE instead. So the file is published needing nothing
-    // beside it, and `openWorkspaceCLI` puts a workspace it opens back into
-    // WAL, which is where a RUNNING workspace belongs and where the daemon and
-    // the CLI read it concurrently from.
+    // Checkpoint and leave WAL before publishing: the rename drops the sidecars, and a WAL db without `-shm`
+    // fails to open (SQLITE_IOERR_SHORT_READ / SQLITE_IOERR_VNODE). `openWorkspaceCLI` restores WAL.
     db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
     db.exec('PRAGMA journal_mode = DELETE');
   } catch (error) {
     db.close();
 
-    // Compensation is not allowed to swallow the failure it is compensating
-    // for, and it is not allowed to be swallowed either: a partial that cannot
-    // be removed is a name that will refuse to be created again.
+    // Cleanup failures propagate: an unremovable partial blocks recreating this name.
     try {
       discardPartialWorkspace(partial);
     } catch (cleanupError) {
@@ -314,10 +269,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   }
 
   db.close();
-  // THE PUBLICATION. Past this line the workspace is complete and openable, so
-  // a failure below is no longer a ghost: an agent.db with no ref in the config
-  // is exactly what adoption converges (`kinu list` offers it, and
-  // `adoptUnplacedLocalAgent` places it into this project).
+  // Publication. Past here an unregistered agent.db is converged by adoption (`adoptUnplacedLocalAgent`).
   renameSync(partial, dbPath);
   // The checkpointed (empty) sidecars belong to a name that no longer exists.
   discardPartialWorkspace(partial);
@@ -329,8 +281,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     alias: input.alias === '' ? undefined : input.alias,
     cwd,
     workspaceId,
-    // The database's own durable id from `workspace_identity`, so a ref
-    // records the same identity whether creation wrote it or adoption found it.
+    // The db's durable id, so creation and adoption record the same identity.
     identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
   const aliasPath = input.alias ? writeAliasShim(name, input.alias) : undefined;
@@ -342,20 +293,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   };
 }
 
-/**
- * Add an agent to the virtual workspace already in this directory, with
- * nothing said about it.
- *
- * The owner supplies no name, no mission and no role. It inherits the mission
- * of a peer already in the workspace — the same text the cloud path inherits
- * from its parent workspace — takes a stable slug of its own, and starts with
- * a BLANK title and `auto` origin so its first owner message names it
- * (`autoTitleLocalWorkspace`).
- *
- * Refuses when the workspace has no peer yet: there would be nothing to
- * inherit, and inventing a mission is not the same thing as inheriting one.
- * `kinu create` is the command that opens a workspace; this one joins it.
- */
+/** Join the virtual workspace here with no name, mission or role: inherits a peer's mission, gets a stable
+ * slug and a blank `auto` title. Refuses when there is no peer to inherit from. */
 export async function createLocalPeerAgent(
   input: { cwd?: string; workspaceId?: string; role?: string } = {},
 ): Promise<CreatedCliAgent> {
@@ -374,8 +313,7 @@ export async function createLocalPeerAgent(
   }
 
   const created: CreateCliAgentInput = {
-    // Same permanent-address shape the cloud path mints: a neutral memorable
-    // pair plus id digits, never mission text.
+    // Neutral memorable pair plus id digits, never mission text.
     name: workspaceSlug(crypto.randomUUID()),
     displayName: '',
     nameOrigin: 'auto',
@@ -390,9 +328,7 @@ export async function createLocalPeerAgent(
   return createCliAgent(created);
 }
 
-/** The mission an additional agent in this workspace inherits: the first peer
- * that has one. Placeholder missions are still the workspace's stored brief;
- * refusing them makes an existing missionless workspace look empty. */
+/** First peer with a mission. Placeholder missions count; otherwise a missionless workspace looks empty. */
 function inheritedPeerMission(peers: readonly { name: string }[]): string | null {
   for (const peer of peers) {
     const dbPath = agentDbPath(peer.name);
@@ -412,19 +348,12 @@ function inheritedPeerMission(peers: readonly { name: string }[]): string | null
   return null;
 }
 
-/** What a local rename settled on: the slug it is addressed by, unchanged, and
- *  the title it now shows. */
 export interface RenamedLocalAgent {
   name: string;
   displayName: string;
 }
 
-/**
- * Retitle a local agent on the owner's behalf.
- * Writes the agent's own naming state — the one title store — and marks it
- * the OWNER'S, which is what permanently stops `autoTitleLocalWorkspace`
- * from replacing it, since the shared `planWorkspaceTitle` refuses a `user`
- * origin. */
+/** Marks the title the owner's, which permanently stops `autoTitleLocalWorkspace` replacing it. */
 export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
   const title = displayName.trim();
 
@@ -443,17 +372,14 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
   return { name, displayName: title };
 }
 
-/** Remove an unpublished workspace and the journal files SQLite keeps beside
- *  it. Deliberately not tolerant of a failed removal: see its call site. */
+/** Deliberately intolerant of a failed removal: see its call site. */
 function discardPartialWorkspace(partial: string): void {
   for (const path of [partial, `${partial}-wal`, `${partial}-shm`]) {
     rmSync(path, { force: true });
   }
 }
 
-/** An agent name is a directory under `~/.kinu`, so it is unique per machine.
- *  Say which project and workspace already hold it: creating the same name in a
- *  second project is exactly how a user reaches this. */
+/** Names are directories under `~/.kinu`, unique per machine; say which project holds it. */
 function nameTaken(name: string, dbPath: string, held: { cwd?: string; workspaceId?: string } | null): string {
   const placement = held?.cwd && held.workspaceId
     ? ` It belongs to workspace "${held.workspaceId}" in ${held.cwd}.`
@@ -470,9 +396,7 @@ async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOpti
     system: WORKSPACE_TITLE_SYSTEM_PROMPT,
     prompt: workspaceTitlePrompt(mission),
     abortSignal: opts.signal,
-    // No output cap: reasoning models spend budget on thinking before the
-    // JSON, so a cap starves them into empty text (the fallback-name bug).
-    // Cheapness comes from low reasoning effort, not output caps.
+    // No output cap: reasoning models spend it thinking and return empty text. Cheapness comes from low effort.
   });
 
   return result.text;
@@ -489,16 +413,8 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
   }
 }
 
-/**
- * The spec a fresh local workspace's `actor_config.model` is seeded with.
- *
- * An explicitly named model wins, then the operator's configured default, then
- * the endpoint's own spec — read through cli-backend's `defaultProviderFor`
- * table, the ONE table, in the adapter that owns the endpoint. A second copy
- * here drifts row by row: without the `opencode`, `claude` or `@cf/` rows,
- * creating a workspace against a Claude subscription writes
- * `openai-compat/<model>` and its first turn resolves the wrong provider.
- */
+/** Explicit model, then configured default, then the endpoint's spec via cli-backend's `defaultProviderFor`,
+ * the single table; a local copy drifts and resolves the wrong provider. */
 function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
   const configured = rawModel ?? loadConfigFile().model;
 

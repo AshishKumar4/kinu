@@ -44,7 +44,6 @@ interface InspectOpts {
 }
 
 interface GepaOpts extends InspectOpts {
-  /** Run a pass instead of reading past ones. */
   run?: boolean;
   iterations?: string;
   evalSize?: string;
@@ -100,8 +99,6 @@ const ExecutorOutputSchema: v.GenericSchema<ExecutorOutput> = v.object({
   stdout: v.optional(v.string()), stderr: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()),
 });
 
-
-
 export async function stopCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
 
@@ -139,26 +136,11 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
 }
 
 /**
- * Every logical actor this workspace holds, and optionally what ONE of them did.
- *
- * The terminal's half of owner inspection. A workspace is one database holding
- * N actors — the main agent, its hires, its heads, its swarm nodes — so "which
- * agents are in here" is a question with an answer for the first time, and a
- * dismissed hire's rows are still part of it. Retired actors are listed by
- * default and flagged, because their history is retained on purpose and a
- * lister that hid them would report the workspace as smaller than its archive.
- *
- * NOTHING IS STARTED. Both reads go through the directory row and `actor_id`,
- * never through a handle or a session, which is what makes inspecting a retired
- * actor possible at all — it has no handle left to issue.
- *
- * LOCAL ONLY, stated rather than faked: the cloud workspace answers this
- * through its own authorized inspection surface in the web UI, and there is no
- * RPC on the deployment that returns the actor directory. A cloud target is
- * refused with that reason instead of being shown an empty list.
+ * Every actor in the workspace (retired ones flagged), and optionally one actor's activity.
+ * Reads go through the directory row and `actor_id`, never a handle, so retired actors stay inspectable.
+ * Local only: no deployment RPC returns the actor directory.
  */
-// `async` for `wrapAction`'s contract, not for any awaited work: both reads are
-// synchronous because neither opens an actor.
+// `async` only for `wrapAction`; both reads are synchronous.
 export async function actorsCommand(name: string, actorId?: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
 
@@ -193,22 +175,8 @@ export async function stateCommand(name: string, opts: InspectOpts = {}): Promis
 }
 
 /**
- * What the WHOLE workspace spent, on both axes — the terminal's copy of the web
- * panel's cost block, over the same read model.
- *
- * The default hero figure everywhere else is the turn loop's own cost, and a
- * reader who stops there cannot tell that a judge ensemble, an evolution pass or
- * a fork of exploration heads ran at all. This prints what each KIND of work
- * spent, what each declared MISSION spent, and the share that went on work no
- * turn ran.
- *
- * NO WINDOW, on either arm. Both figures are summed over the whole log by
- * `workspaceSpend`, so there is nothing for `--limit` to bound and nothing for
- * the two surfaces to disagree about. A row window here would NOT buy one
- * number for both surfaces: the deployment clamps the request to its own
- * smaller bound and answers a different question than the one asked. The cloud
- * arm therefore sends no `steps` at all — that argument only ever bounds the
- * step telemetry this command does not print.
+ * Whole-workspace spend by kind of work and by mission. No window: `workspaceSpend` sums the whole log,
+ * and the cloud arm sends no `steps` because the deployment clamps it to a smaller bound.
  */
 export async function spendCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
@@ -233,8 +201,6 @@ export async function spendCommand(name: string, opts: InspectOpts = {}): Promis
   printSpend(spend);
 }
 
-/** The ceiling shown beside a mission's spend, in the unit it was capped in.
- *  An uncapped mission shows none. */
 function capSuffix(limits: MissionBudgetLimits): string {
   if (limits.usd !== undefined) return ` / $${limits.usd.toFixed(2)}`;
 
@@ -262,8 +228,7 @@ function printSpend(spend: WorkspaceSpend): void {
   console.log(`  ${ACCENT('Total'.padEnd(18))} ${spendCells(spend.total.usage, spend.total.usd, spend.total.calls)}`);
 
   if (spend.missions.length > 0) {
-    // Both axes are cumulative now, but they still must not be added: a call
-    // sits in exactly one producer row and in every mission label above it.
+    // Never add the axes: a call sits in one producer row and in every mission label above it.
     console.log(DIM('By mission (a call appears under every label above it)'));
 
     for (const m of spend.missions) {
@@ -288,16 +253,8 @@ function printSpend(spend: WorkspaceSpend): void {
       + 'tokens went on work no turn of this agent ran'));
   }
 
-  // WHY THE DOLLAR COLUMN IS A FLOOR. Both reasons or neither: a call the
-  // catalog could not price at all and a call it priced at a rate published for
-  // a different cache-retention tier bound the SAME figure, and naming one
-  // while hiding the other leaves the number looking better qualified than it
-  // is. `$16.2642` and "$16.2642, and it is short" are different facts, and
-  // without this line `--json` was the only way to tell them apart.
-  //
-  // The same two clauses the web panel renders (ActivitySurface `spendCaveat`),
-  // deliberately in the same words, so two surfaces cannot describe one figure
-  // differently.
+  // The dollar column is a floor: unpriced calls, and calls priced at another cache-retention tier's rate.
+  // Both reasons or neither, in the same words as ActivitySurface `spendCaveat`.
   const floorReasons: string[] = [];
 
   if (spend.total.unpricedCalls > 0) {
@@ -314,8 +271,7 @@ function printSpend(spend: WorkspaceSpend): void {
   }
 }
 
-/** One producer row's numbers. An absent count is printed as an em dash, never
- *  as 0 — a provider that reported nothing did not report nothing spent. */
+/** An absent count prints as an em dash, never 0. */
 function spendCells(usage: Usage, usd: number | undefined, calls: number): string {
   const tokens = usageTotal(usage);
 
@@ -430,10 +386,7 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   if (opts.run) return runGepaPass(name, opts);
   const limit = parseLimit(opts.limit, 20);
 
-  // One run is a record, not a row: it goes to the record printer rather than
-  // leaning on the row formatter's fallback, so `printRows` has exactly one
-  // legal input shape and a producer that answers with something else is a bug
-  // rather than an alternative.
+  // One run is a record, so `printRows` keeps exactly one legal input shape.
   if (runId) {
     const detail = await readTarget(target, {
       cloud: (auth) => cloudRead(auth, target, 'getGepaRun', [runId]),
@@ -453,8 +406,6 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   printRows(data, opts, (item) => formatRunRow(item, GEPA_RUN_ROW));
 }
 
-/** Drive one GEPA optimisation pass, on whichever backend holds the agent.
- *  The pass is core's; each backend only supplies the surface it runs on. */
 async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
   const target = resolveAgentTarget(name);
   const budget: Parameters<typeof runLocalGepa>[1] = {};
@@ -555,13 +506,7 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
   if (data.exitCode !== undefined && data.exitCode !== 0) process.exitCode = data.exitCode;
 }
 
-/** K_align — how often the user had to correct this agent, per 100 graded
- *  turns, split by the scaffold version that served them.
- *
- *  Always printed with the calibration block underneath it: the rate above is
- *  the CLASSIFIER's count of corrections, and how far that is from the real
- *  one is a measurement, not an assumption. Without hand labels the block says
- *  "uncalibrated" rather than leaving the reader to assume the two agree. */
+/** K_align: user corrections per 100 graded turns, by scaffold version. Always printed with calibration: the rate is the classifier's count. */
 export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
 
@@ -628,8 +573,6 @@ export async function webhookCommand(name: string, label: string | undefined, op
   printData(decodeJsonValue({ value: created }), opts);
 }
 
-/** One inspection read off the cloud workspace: the RPC answers with a bare
- *  JSON value, and every command that shows one goes through here. */
 function cloudRead(
   auth: { origin: string; token: string }, target: AgentTarget, method: string, args: JsonValue[] = [],
 ): Promise<JsonValue> {
@@ -658,13 +601,7 @@ function printData(data: JsonValue, opts: InspectOpts): void {
   else printPretty(data);
 }
 
-/** Render a list read. Every producer behind this — five cloud RPCs and their
- *  five local twins — answers with a bare list of rows, so anything else is the
- *  backend and this formatter disagreeing, and it says so. Dumping the raw JSON
- *  instead is how `listRecentEvents`' `{ events: [...] }` envelope shipped:
- *  `kinu inspect events` rendered unformatted against a cloud workspace and
- *  formatted against a local one, with nothing red anywhere. An empty list is a
- *  different answer and keeps its own line. */
+/** Every producer answers a bare list of rows; any other shape is a backend/formatter mismatch and fails loudly. */
 function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): void {
   if (opts.json) {
     printJson(data);
@@ -707,8 +644,7 @@ function formatTimelineRow(item: JsonValue): string {
   return `${formatDate(row.ts ?? row.received_at ?? row.created_at)} ${ACCENT(stringField(row, 'kind') ?? stringField(row, 'type') ?? 'event')} ${DIM(label.slice(0, 120))}`;
 }
 
-/** Which fields a run list carries its identity and its one-line purpose in.
- *  Head runs and GEPA runs render the same row under different names. */
+/** Head runs and GEPA runs render the same row under different field names. */
 interface RunRowFields {
   readonly id: string;
   readonly fallbackId: string;
@@ -734,7 +670,6 @@ function formatExecutorRow(item: JsonValue): string {
 
   return `${ACCENT(stringField(row, 'name') ?? stringField(row, 'id') ?? 'executor')} ${DIM(stringField(row, 'kind') ?? '')} ${stringField(row, 'status') ?? ''} ${DIM(caps)}`;
 }
-
 
 function formatDate(value: JsonValue | undefined): string {
   const parsed = v.safeParse(v.pipe(v.number(), v.finite()), value);

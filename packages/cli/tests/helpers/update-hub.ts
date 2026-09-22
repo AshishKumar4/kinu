@@ -1,13 +1,6 @@
 /**
- * A hub for the daemon's self-update, faked at the two seams the daemon has:
- * the HTTP origin (ticket exchange, the CLI archive and its checksum) and the
- * device socket (HELLO in, UPDATE out, the replaced close). The daemon under
- * test is the real installed file, run under this Bun; nothing inside it is
- * stubbed.
- *
- * The hub's own rule is the production one: a HELLO whose `version` is not
- * the served build gets an UPDATE, and a second socket for the same device
- * closes the first with the hub's "replaced" reason.
+ * A fake update hub at the daemon's two seams (HTTP origin, device socket); the daemon is the real installed
+ * file. Production rule: a HELLO whose `version` is not the served build gets UPDATE; a second socket replaces the first.
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -21,7 +14,6 @@ import SANDBOX_SOURCE from '../../../pc-agent/src/sandbox.js' with { type: 'text
 import PTY_SOURCE from '../../../pc-agent/src/pty.js' with { type: 'text' };
 import UPDATE_SOURCE from '../../../pc-agent/src/update.js' with { type: 'text' };
 
-/** The daemon's files by their installed names, as this CLI ships them. */
 export const DAEMON_FILES = {
   'pc-agent.js': DAEMON_SOURCE,
   'sandbox.js': SANDBOX_SOURCE,
@@ -29,13 +21,11 @@ export const DAEMON_FILES = {
   'update.js': UPDATE_SOURCE,
 } as const;
 
-/** The hub's close reason for a replaced socket, verbatim from core. */
 export const SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 export const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz`;
 
-/** A real tar.gz carrying `kinu/pc-agent/<files>` plus the stamp — the shape
- *  scripts/build-cli-dist.sh publishes. */
+/** Shape scripts/build-cli-dist.sh publishes: `kinu/pc-agent/<files>` plus the stamp. */
 export function daemonArchive(files: Record<string, string>, stamp: string): Uint8Array {
   const work = scratchDir('update-hub-archive');
   mkdirSync(join(work, 'kinu', 'pc-agent'), { recursive: true });
@@ -50,8 +40,6 @@ export function daemonArchive(files: Record<string, string>, stamp: string): Uin
   return new Uint8Array(readFileSync(join(work, 'a.tar.gz')));
 }
 
-/** The HELLO as this hub reads it: the fields the update decision uses,
- *  the rest kept as sent. */
 const HelloSchema = v.looseObject({
   type: v.literal('HELLO'),
   version: v.optional(v.string()),
@@ -60,60 +48,41 @@ const HelloSchema = v.looseObject({
   updateCheck: v.optional(v.boolean()),
 });
 
-/** Any other frame the daemon sends: an RPC answer carries its `id`. */
 const FrameSchema = v.looseObject({ id: v.optional(v.string()) });
 
 export type HubHello = v.InferOutput<typeof HelloSchema>;
 
 export type HubFrame = v.InferOutput<typeof FrameSchema>;
 
-/** What this hub pushes: the daemon's own frame vocabulary. */
 export type HubPush =
   | { type: 'ROTATE'; token: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
   | { id: string; method: string; params: unknown[] };
 
 export interface HubSocket {
-  /** The HELLO this socket opened with, as the daemon sent it. */
   hello: HubHello;
-  /** Every frame after the HELLO, as parsed. */
   frames: HubFrame[];
-  /** How it closed: by the hub (replaced), by the daemon, or not yet. */
   closed: 'hub' | 'daemon' | null;
   send(frame: HubPush): void;
-  /** Ask the daemon something it answers, and wait for the answer. The
-   *  daemon handles frames in order, so an answer proves every frame the hub
-   *  sent before the question has been handled too — the positive signal for
-   *  "nothing else happened". */
+  /** Frames are handled in order, so an answer proves every earlier frame was handled too. */
   settle(): Promise<void>;
-  /** Drop the socket from the hub's side with an ordinary close — a hub
-   *  restart, as the daemon sees one — so the daemon reconnects and HELLOs
-   *  again. Recorded as 'hub'. */
+  /** Ordinary close from the hub side (a hub restart) so the daemon reconnects; recorded as 'hub'. */
   drop(): void;
 }
 
 export interface UpdateHub {
   origin: string;
   served: string;
-  /** Sockets in the order their HELLO arrived. */
   sockets: HubSocket[];
-  /** Every HTTP path asked for, in order. */
   hits: string[];
   close(): Promise<void>;
 }
 
-/**
- * The key the test hub signs releases with, minted once per process. A daemon
- * under test pins its PUBLIC half through its environment
- * ({@link RELEASE_SIGNING_ENV}), the way a machine's own operator would; the
- * production pin never signs anything here.
- */
+/** Per-process release signing key; the daemon pins its public half via {@link RELEASE_SIGNING_ENV}. */
 const signingKey = generateReleaseSigningKey();
 
 export const RELEASE_SIGNING_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
 
-/** The environment a daemon under test is started with, so it verifies the
- *  hub's signatures against the test key. */
 export async function releaseSigningEnv(): Promise<Record<string, string>> {
   return { [RELEASE_SIGNING_ENV]: (await signingKey).publicKeyHex };
 }
@@ -121,13 +90,10 @@ export async function releaseSigningEnv(): Promise<Record<string, string>> {
 export interface UpdateHubOptions {
   served: string;
   archive: Uint8Array;
-  /** Publish a checksum that is not the archive's. */
   corrupt?: boolean;
-  /** Push UPDATE regardless of the HELLO's version and opt-out — the
-   *  daemon's own gates are then what the test reads. */
+  /** The daemon's own gates are then what the test reads. */
   pushAlways?: boolean;
-  /** The hostile hub: a frame whose checksums the test key never signed —
-   *  none at all, or a signature by a key of the hub's own. */
+  /** Checksums the test key never signed: unsigned, or signed by the hub's own key. */
   signing?: 'none' | 'foreign';
 }
 
@@ -201,7 +167,6 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         bySocket.set(ws, socket);
 
-        // Production's accept: a second socket for the device replaces the first.
         for (const earlier of sockets) {
           earlier.closed ??= 'hub';
         }
@@ -224,8 +189,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
             version: opts.served,
             urls: { tarball: PLATFORM_ARTIFACT, checksum: `${PLATFORM_ARTIFACT}.sha256` },
             sha256: digest,
-            // A hub that signs nothing sends the frame the audit's trojan
-            // probe sent: checksums it chose, and no signature over them.
+            // The audit's trojan probe: checksums of the hub's choosing, no signature.
             ...(signed === null ? { checksums } : { checksums: signed.checksums, signature: signed.signature }),
           });
         }
@@ -248,7 +212,6 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
   };
 }
 
-/** Poll until `predicate` answers, or fail with `what` and the daemon log. */
 export async function until<T>(predicate: () => T | null | undefined | false, what: string, log?: () => string, timeoutMs = 15_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
 

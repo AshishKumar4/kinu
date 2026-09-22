@@ -1,8 +1,3 @@
-// The local reader for the durable run-event log. cf serves runs + their
-// events over RPC (listRuns / getRunEvents) and folds them into the Run
-// Timeline spine; locally there was no run_events table at all, so a local
-// workspace had no run history to read. These cover the CLI's readers over a
-// throwaway KINU_HOME — never the owner's real ~/.kinu.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync } from 'node:fs';
 
@@ -15,8 +10,6 @@ import { createTestActor } from '../../core/tests/helpers';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/** Seed an agent.db carrying a recorded run, then read it back through the
- *  CLI's local-inspection module in a child process pinned to that home. */
 function readLocal(expression: string): JsonValue {
   const home = scratchDir('run-events');
   mkdirSync(join(home, 'jarvis'), { recursive: true });
@@ -24,9 +17,7 @@ function readLocal(expression: string): JsonValue {
   const execRaw = (ddl: string) => { db.exec(ddl); };
 
   initRunEventTables(execRaw);
-  // The reader resolves this store's own main actor, and `run_events` is scoped
-  // by it, so the seed registers a real workspace identity rather than only
-  // creating the table.
+  // `run_events` is scoped by the store's main actor, so the seed registers a real workspace identity.
   const actor = createTestActor(makeSql(db), execRaw, 'run-events-workspace', 'jarvis');
 
   const row = (index: number, type: string, extra: JsonObject = {}) => {
@@ -61,8 +52,6 @@ function readLocal(expression: string): JsonValue {
 
 describe('local run-event readers', () => {
   test('listLocalRuns reports the recorded run', () => {
-    // lastTs is the latest event's timestamp: the seed writes rows 0-2, so a
-    // reader that answered the first row's stamp would fail here.
     expect(readLocal(`m.listLocalRuns('jarvis')`)).toEqual([
       { runId: 'run-1', lastTs: new Date(1_700_000_000_000 + 2 * 1000).toISOString(), eventCount: 3 },
     ]);

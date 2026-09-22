@@ -1,18 +1,4 @@
-/**
- * The transcript miner, against fixture sessions in every shape the real
- * `~/.claude/projects` tree contains — including the two schema drifts that
- * matter (interrupts and tool denials moved from a text marker to a field) and
- * the rewound branch that a naive line-order read would splice back in.
- *
- * Fixtures rather than the owner's real transcripts: the real ones are private,
- * they change under the test, and none of the shapes below can be asserted
- * against them without pinning the owner's own history into the repository.
- * The real corpus is what `kinu label mine` reports; this is what proves the
- * reader is reading it correctly.
- *
- * Also asserts the one thing the corpus's privacy actually rests on: that the
- * report paths are ignored by git.
- */
+/** Transcript miner vs fixture sessions: schema drifts and rewound branches. */
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
@@ -26,8 +12,6 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-// ── Fixture builders ─────────────────────────────────────────────
-
 let clock = 0;
 
 let uuidSeq = 0;
@@ -36,8 +20,6 @@ const nextUuid = (): string => `u${++uuidSeq}`;
 
 interface Line extends JsonObject {}
 
-/** A session file builder that keeps the parentUuid chain honest, because that
- *  chain is what the reader walks. */
 class Session {
   readonly lines: Line[] = [];
   private parent: string | null = null;
@@ -70,15 +52,13 @@ class Session {
     return this;
   }
 
-  /** A non-conversational link — turn timings, hook summaries, compaction
-   *  boundaries. Part of the chain, and not part of the conversation. */
+  /** A non-conversational link: part of the chain, not the conversation. */
   system(subtype: string): this {
     this.push({ type: 'system', subtype, content: '' });
 
     return this;
   }
 
-  /** Fork the chain back to an earlier message, the way a rewind does. */
   rewindTo(uuid: string | null): this {
     this.parent = uuid;
 
@@ -113,8 +93,6 @@ const toolUse = (name: string, input: JsonObject) =>
 const toolResult = (content: JsonValue, extra: JsonObject = {}) =>
   ({ type: 'tool_result', content, ...extra });
 
-// ── Reading the conversation ─────────────────────────────────────
-
 describe('the miner reconstructs turns from the live conversation', () => {
   test('a plain session yields one turn per prompt, chained by follow-up', () => {
     const root = newRoot();
@@ -134,7 +112,6 @@ describe('the miner reconstructs turns from the live conversation', () => {
     expect(mined.turns[0].item.assistantResponse).toBe('Added an LRU.');
     expect(mined.turns[0].item.followup).toBe('now wire it into the resolver');
     expect(mined.turns[1].item.followup).toBe('perfect thanks');
-    // The last turn has no follow-up, and says so rather than inventing one.
     expect(mined.turns[2].item.followup).toBeNull();
     expect(mined.turns[0].project).toBe('proj-a');
     expect(mined.turns[0].sessionId).toBe('s1');
@@ -142,8 +119,7 @@ describe('the miner reconstructs turns from the live conversation', () => {
   });
 
   test('a system entry in the chain does not truncate it', () => {
-    // Reading only user/assistant links snapped the walk at the first turn
-    // timing and returned a single message per session.
+    // Walking only user/assistant links would snap at the first turn timing.
     const root = newRoot();
     const s = new Session().user('the first real request').assistant(text('a'));
     s.system('turn_duration');
@@ -181,8 +157,6 @@ describe('the miner reconstructs turns from the live conversation', () => {
   });
 });
 
-// ── Signals, across the versions that record them differently ────
-
 describe('the signals survive schema drift', () => {
   test('an interrupt reads from the field OR the older text marker', () => {
     const root = newRoot();
@@ -207,7 +181,6 @@ describe('the signals survive schema drift', () => {
     for (const project of ['new-cli', 'old-cli']) {
       const first = mined.turns.find((t) => t.project === project && t.item.userMessage.includes('six'));
       expect(first?.signals.interrupted).toBe(true);
-      // The marker is a signal, not a follow-up.
       expect(first?.item.followup).toBe('no, chapter seven first');
     }
   });
@@ -261,8 +234,6 @@ describe('the signals survive schema drift', () => {
   });
 });
 
-// ── What is deliberately not the user ────────────────────────────
-
 describe('the miner keeps the owner apart from everything else', () => {
   test('CLI wrappers, slash commands and agent notices are not prompts', () => {
     const root = newRoot();
@@ -282,8 +253,7 @@ describe('the miner keeps the owner apart from everything else', () => {
     const mined = mineTranscripts({ root });
     expect(mined.turns).toHaveLength(2);
     expect(mined.turns[0].item.followup).toBe('the docs still look wrong');
-    // The `/loop` echo shouts "CURRENT STATE"; read as a follow-up it would
-    // have fired the frustration rule on somebody else's words.
+    // The `/loop` echo shouts "CURRENT STATE"; read as a follow-up it would fire the frustration rule.
     expect(weakLabel(mined.turns[0]).rules).toEqual([]);
   });
 
@@ -300,7 +270,6 @@ describe('the miner keeps the owner apart from everything else', () => {
 
     const mined = mineTranscripts({ root });
     expect(mined.turns.map((t) => t.item.userMessage)).toEqual(['the owner asks', 'the owner again']);
-    // The harness's work is not attributed to the owner's previous request.
     expect(mined.turns[0].item.followup).toBe('the owner again');
     expect(mined.turns[0].item.assistantResponse).toBe('answering');
     expect(mined.skips.nonInteractivePrompts).toBe(1);
@@ -315,8 +284,6 @@ describe('the miner keeps the owner apart from everything else', () => {
     expect(mined.skips.trivialTurns).toBe(2);
   });
 });
-
-// ── Skips are counted, never silent ──────────────────────────────
 
 describe('what the reader could not read is reported', () => {
   test('a malformed line is skipped and counted', () => {
@@ -359,8 +326,6 @@ describe('what the reader could not read is reported', () => {
   });
 });
 
-// ── Selection and determinism ────────────────────────────────────
-
 describe('the corpus a caller asks for is the corpus they get', () => {
   test('--projects filters, and the traversal order is stable', () => {
     const root = newRoot();
@@ -393,21 +358,10 @@ describe('the corpus a caller asks for is the corpus they get', () => {
   });
 });
 
-// ── Privacy ──────────────────────────────────────────────────────
-
 describe('mined artifacts cannot be committed', () => {
   test('git ignores the corpus directory and the dated reports', () => {
-    // The only mechanical guarantee that the owner's private sessions stay out
-    // of the repository. `--no-index` so the answer does not depend on whether
-    // a file happens to exist right now.
-    //
-    // `gitEnv()` rather than `cwd` alone, because `cwd` was not protecting this.
-    // Measured: with GIT_DIR/GIT_WORK_TREE pointed at an unrelated repository,
-    // `git check-ignore --no-index -q .cc-corpus/CC-CORPUS-2026-08-07.md` from
-    // this root answers NOT-IGNORED where the GIT_-free form answers IGNORED. A
-    // hook exports GIT_DIR, so the one assertion standing between the owner's
-    // transcripts and a commit was answerable by a repository nobody named here.
-    // The exit code is the subject, so `gitEnv()` and not the throwing `git()`.
+    // The only mechanical guarantee that private sessions stay out of the repo. `--no-index` avoids depending
+    // on file existence; `gitEnv()` because a hook-exported GIT_DIR would answer for another repository.
     for (const path of [
       '.cc-corpus/CC-CORPUS-2026-08-07.md',
       'CC-CORPUS-2026-08-07.md',
@@ -424,8 +378,6 @@ describe('mined artifacts cannot be committed', () => {
     }
   });
 });
-
-// ── The command the owner types ──────────────────────────────────
 
 describe('kinu label mine', () => {
   test('reports the corpus and its caveats, without a model', () => {
@@ -502,8 +454,7 @@ describe('kinu label mine', () => {
   });
 
   test('score stops before any model call when no rule fired', () => {
-    // The zero-cost half of the paid command: the budget is never opened on a
-    // corpus with nothing to check an answer against.
+    // The budget is never opened on a corpus with nothing to check an answer against.
     const home = newRoot();
     mkdirSync(join(home, 'demo'), { recursive: true });
     writeFileSync(join(home, 'demo', 'agent.db'), '');

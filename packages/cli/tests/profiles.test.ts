@@ -1,9 +1,5 @@
-// The profile authority and cache: signed-out local authority inside
-// config.json, per-account read-only cache outside it, resolution by
-// authenticated identity, CAS updates against the cloud route.
-//
-// Disk-bound scenarios run in a subprocess (config.ts binds KINU_HOME at
-// import); the cloud-api methods run in-process against a local Bun server.
+// Disk-bound scenarios run in a subprocess (config.ts binds KINU_HOME at import);
+// the cloud-api methods run in-process against a local Bun server.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync, writeFileSync } from "node:fs";
 
@@ -28,8 +24,6 @@ function catalogA(): ProfileCatalog {
   };
 }
 
-/** Disjoint content from catalogA, so an entry that reached the wrong store
- *  is visible by its role names alone. */
 function catalogB(): ProfileCatalog {
   return {
     roles: {
@@ -39,7 +33,6 @@ function catalogB(): ProfileCatalog {
   };
 }
 
-/** A server-shaped account envelope, the way a GET response arrives. */
 function accountEnvelope(accountId: string, catalog: ProfileCatalog, version = 1): ProfileCatalogEnvelope {
   return {
     authority: { kind: 'account', accountId },
@@ -57,8 +50,6 @@ const StepOutcomeSchema: v.GenericSchema<StepOutcome> = v.object({
   error: v.optional(v.string()),
 });
 
-/** The envelope as the assertions read it: authority kind, version, and the
- *  role/tier keys, parsed rather than asserted out of untyped JSON. */
 const ParsedEnvelope = v.object({
   authority: v.looseObject({ kind: v.string(), accountId: v.optional(v.string()) }),
   version: v.number(),
@@ -77,11 +68,8 @@ const ParsedAuthoritySource = v.looseObject({
 const ParsedCacheModes = v.object({ cache: v.number(), dir: v.number() });
 
 /**
- * Runs one disk-bound scenario in a clean subprocess with its own KINU_HOME,
- * optionally seeded before the script starts. The `body` script executes via
- * `bun -e`, so every module reference inside it stays a runtime import: a
- * static top-level import would bind THIS process's KINU_HOME before the
- * scenario home exists.
+ * Runs one disk-bound scenario in a subprocess with its own KINU_HOME. `body` runs via `bun -e`, so module
+ * references in it must stay runtime imports: a static import would bind this process's KINU_HOME.
  */
 function runScenario(body: string, opts: {
   setup?: (home: string) => void;
@@ -121,7 +109,6 @@ function runScenario(body: string, opts: {
   return v.parse(v.record(v.string(), StepOutcomeSchema), JSON.parse(proc.stdout.toString()));
 }
 
-/** The step's value as the text the assertion reads. */
 function expectText(step: StepOutcome | undefined): string {
   return v.parse(v.string(), expectOk(step));
 }
@@ -137,8 +124,6 @@ function expectError(step: StepOutcome | undefined, fragment: string): void {
   expect(step?.error ?? '').toContain(fragment);
 }
 
-/** Signed in as `accountId`, with `origin` as the account's cloud origin.
- *  Writes the whole config file, so it runs before anything a scenario keeps. */
 function signedIn(accountId: string, origin: string): string {
   return `
     {
@@ -154,9 +139,7 @@ function signedIn(accountId: string, origin: string): string {
   `;
 }
 
-/** Signed out the way `kinu logout` leaves the file: the session keys are
- *  dropped entirely, which is what the config schema requires (null is not a
- *  string). Everything else on disk survives. */
+/** Session keys are dropped entirely, as `kinu logout` does: the config schema rejects null. */
 const SIGNED_OUT = `
   {
     const { writeFileSync } = await import('node:fs');
@@ -170,13 +153,8 @@ const SIGNED_OUT = `
 `;
 
 /**
- * Fills `accountId`'s cache entry the only way production ever fills it: a
- * signed-in resolution whose fetch the server answered. Nothing else writes
- * that file, so seeding it by hand would pin a shape the product cannot
- * produce.
- *
- * Leaves the scenario signed in as `accountId`. A caller that needs another
- * session runs {@link signedIn} or {@link SIGNED_OUT} after it.
+ * Fills the cache the only way production does: a signed-in resolution the server answered.
+ * Leaves the scenario signed in as `accountId`.
  */
 function cached(accountId: string, catalog: ProfileCatalog, version: number): string {
   return `
@@ -198,8 +176,6 @@ function cached(accountId: string, catalog: ProfileCatalog, version: number): st
 }
 
 describe('local profile authority', () => {
-  /** What a tier edit seeds on a signed-out machine: the six shipped roles,
-   *  and the one tier the edit named. */
   function seededCatalog(model: string): ProfileCatalog {
     return { roles: BUILTIN_PROFILE_CATALOG.roles, tiers: { default: { model } } };
   }
@@ -225,8 +201,6 @@ describe('local profile authority', () => {
     expect(seeded.version).toBe(1);
     expect(seeded.digest).toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('deepseek') })));
     expect(v.parse(ParsedEnvelope, expectOk(steps.reload))).toEqual(seeded);
-    // The envelope lives in config.json under the local slot, and nowhere
-    // does the file claim account authority.
     const onDisk = expectText(steps.configOnDisk);
     expect(onDisk).toContain('"localProfile"');
     expect(onDisk).not.toContain('"account"');
@@ -267,18 +241,14 @@ describe('local profile authority', () => {
     expect(v.parse(ParsedEnvelope, expectOk(steps.second)).version).toBe(2);
     const reloaded = v.parse(ParsedEnvelope, expectOk(steps.reloaded));
     expect(reloaded.catalog.tiers.default.model).toBe('other-model');
-    // Re-derived over the whole new catalog rather than carried from the old.
     expect(reloaded.digest)
       .toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('other-model') })));
-    // Superseded, not merged: the model the first edit wrote leaves no trace.
     expect(expectText(steps.configOnDisk)).not.toContain('deepseek');
   });
 });
 
 describe('account cache isolation', () => {
-  /** Two disjoint account entries, each written by the path that writes them
-   *  in production, then the session cleared so neither id can reach
-   *  config.json and pass for cache data. */
+  /** The session is cleared afterwards so neither id can reach config.json and pass for cache data. */
   const SEED_ACCOUNTS = `
     ${cached('acc-a', catalogA(), 3)}
     ${cached('acc-b', catalogB(), 3)}
@@ -319,7 +289,6 @@ describe('account cache isolation', () => {
     expect(b.authority).toEqual({ kind: 'account', accountId: 'acc-b' });
     expect(Object.keys(b.catalog.roles)).toEqual(['auditor']);
     expect(expectOk(steps.readUnknown)).toBeNull();
-    // KinuConfig holds neither account's data — the cache file does.
     expect(expectText(steps.configText)).not.toContain('acc-a');
     const cacheText = expectText(steps.cacheText);
     expect(cacheText).toContain('acc-a');
@@ -395,7 +364,6 @@ describe('account cache isolation', () => {
     }), expectOk(steps.signInA));
 
     expect(afterSignIn.source).toEqual({ kind: 'account', accountId: 'acc-a' });
-    // Signing in promotes nothing into the local slot.
     expect(afterSignIn.localStillNull).toBeNull();
 
     const switched = v.parse(v.object({
@@ -405,7 +373,6 @@ describe('account cache isolation', () => {
     }), expectOk(steps.switchToB));
 
     expect(switched.source).toEqual({ kind: 'account', accountId: 'acc-b' });
-    // Resolution under B reads only B's entry — A's cache never leaks in.
     expect(switched.cachedRoles).toEqual(['auditor']);
     expect(switched.local).toBeNull();
 
@@ -417,8 +384,6 @@ describe('account cache isolation', () => {
     }), expectOk(steps.logout));
 
     expect(loggedOut.source).toEqual({ kind: 'local' });
-    // Logout promotes nothing: local authority stays absent while both
-    // cached entries survive on disk, keyed to their accounts.
     expect(loggedOut.local).toBeNull();
     expect(loggedOut.cacheStillHoldsA).toBe(true);
     expect(loggedOut.cacheStillHoldsB).toBe(true);
@@ -446,23 +411,17 @@ describe('account cache isolation', () => {
   });
 });
 
-// The one reader a turn resolves through, on both the interactive and the
-// daemon side. Two properties it exists for: a signed-in turn survives an
-// unreachable origin from the cache the fetch would have refreshed, and a
-// signed-out turn sees a catalog edit made after the session started.
+// The one reader a turn resolves through, interactive and daemon: a signed-in turn survives an unreachable
+// origin from cache, and a signed-out turn sees catalog edits made after the session started.
 describe('the turn profile authority reader', () => {
 
-  /** Records diagnostics so the fallback's own report is assertable: a
-   *  fallback nobody can see is a silent substitution. */
   const RECORD_DIAGNOSTICS = `
     const { createRecordingLogger, setDiagnosticsSink } = await import('@kinu.run/core/obs');
     const recorder = createRecordingLogger();
     setDiagnosticsSink(recorder);
   `;
 
-  /** Nothing listens here, so the profile GET fails at connect. A stubbed
-   *  fetch would prove the branch; an unreachable port proves the failure
-   *  shape a real offline machine produces. */
+  /** An unreachable port, not a stubbed fetch, reproduces a real offline machine's failure shape. */
   const DEAD_ORIGIN = 'http://127.0.0.1:1';
 
   const ParsedFallback = v.object({
@@ -487,12 +446,9 @@ describe('the turn profile authority reader', () => {
     `);
 
     const served = v.parse(ParsedFallback, expectOk(steps.resolved));
-    // The turn completed, under this account's own catalog.
     expect(served.envelope.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
     expect(served.envelope.version).toBe(9);
     expect(Object.keys(served.envelope.catalog.roles).sort()).toEqual(['researcher', 'task']);
-    // It reported the substitution, naming the version it ran under, and the
-    // resolution itself carries what answered and what it cost.
     const [fallback, resolved] = served.diagnostics;
     expect(served.diagnostics.map((line) => line.event))
       .toEqual(['profile.account_cache_served', 'profile.authority_read']);
@@ -543,8 +499,6 @@ describe('the turn profile authority reader', () => {
         .map((line) => line.fields.source));
     `);
 
-    // A resident reader never latches an earlier server answer: every turn
-    // checks the account authority, so edits from another machine are visible.
     expect(v.parse(
       v.object({ fetches: v.number(), versions: v.array(v.number()) }),
       expectOk(steps.firstThenRepeat),
@@ -575,9 +529,7 @@ describe('the turn profile authority reader', () => {
       });
     `);
 
-    // acc-a's entry is on disk and stays unread: a cache is keyed to its
-    // account, so an unrelated one is a miss rather than a fallback, and the
-    // connect failure the fetch raised is what reaches the caller.
+    // A cache is keyed to its account: an unrelated entry is a miss, not a fallback.
     expectError(steps.resolved, 'Unable to connect');
     expect(v.parse(
       v.object({ holdsA: v.boolean(), holdsB: v.boolean(), reported: v.number() }),
@@ -609,10 +561,7 @@ describe('the turn profile authority reader', () => {
     }),
   });
 
-  // The defect shape this replaces captured the envelope at construction
-  // (`const local = loadLocalProfileAuthority(); () => local`), so a session
-  // that ALREADY had an authority when it started never saw an edit to it.
-  // That is the case to hold: a reader built before the edit.
+  // A reader built before the edit must still see it.
   test('signed out, a reader built over an existing authority still sees a later /model and /effort', () => {
     const steps = runScenario(`
       const { createProfileAuthorityReader, updateDefaultTier } =
@@ -639,8 +588,6 @@ describe('the turn profile authority reader', () => {
     expect(afterModel.version).toBeGreaterThan(startup.version);
     const afterEffort = v.parse(ParsedDefaultTier, expectOk(steps.afterEffort));
     expect(afterEffort.catalog.tiers.default.reasoningEffort).toBe('high');
-    // Each read is the whole current envelope, not a patch against the one the
-    // session started with.
     expect(afterEffort.catalog.tiers.default.model).toBe('model-chosen-later');
   });
 
@@ -656,16 +603,12 @@ describe('the turn profile authority reader', () => {
       });
     `);
 
-    // Nothing imported yet: the workspace's own configuration decides, and the
-    // reader must not seed a catalog from the global default model.
     expect(expectOk(steps.beforeAnyAuthority)).toBeNull();
-    // The authority the edit CREATED is visible to the reader that predates it.
     expect(v.parse(ParsedDefaultTier, expectOk(steps.afterModel)).catalog.tiers.default.model)
       .toBe('first-model');
   });
 });
 
-/** The only key these scenarios ever seed into a fresh config.json. */
 interface SeededConfig {
   localProfile: unknown;
 }
@@ -736,7 +679,6 @@ describe('malformed profile data fails loudly', () => {
     `);
 
     expectError(steps.misKeyed, 'mismatching authority');
-    // Refused means nothing landed: no entry under either account id.
     expect(expectOk(steps.cacheFile)).toBe(false);
   });
 
@@ -792,11 +734,8 @@ describe('malformed profile data fails loudly', () => {
   });
 });
 
-// ── cloud-api profile methods ────────────────────────────────────────────────
-
 const SERVED_ENVELOPE = accountEnvelope('srv-account', catalogA(), 7);
 
-/** What a canned profile server hands back to the calling test. */
 interface ProfileServerStub {
   origin: string;
   seenRequests: () => SeenRequest[];
@@ -810,7 +749,6 @@ interface SeenRequest {
   body: JsonValue | null;
 }
 
-/** Serves canned /api/cli/profile responses while recording each request. */
 function serveProfile(handler: (body: JsonValue | null) => Response | Promise<Response>): ProfileServerStub {
   const seen: SeenRequest[] = [];
 
@@ -912,8 +850,7 @@ describe('cloud-api profile methods', () => {
     const htmlError = serveProfile(() => new Response('<html>bad gateway</html>', { status: 502 }));
 
     try {
-      // A non-JSON body becomes the message itself: the server's own words
-      // outrank the status line whenever they are readable.
+      // A non-JSON body becomes the message: the server's words outrank the status line.
       await expect(updateCloudProfile(htmlError.origin, 't', { catalog: catalogA(), expectedVersion: 1 }))
         .rejects.toThrow('bad gateway');
     } finally {
@@ -922,15 +859,9 @@ describe('cloud-api profile methods', () => {
   });
 });
 
-/**
- * The `kinu model` / `kinu effort` commands are the user-facing half of the
- * same authority rule the reader tests above pin: whichever store is
- * canonical for this machine's session state receives the write, and a turn
- * started afterwards resolves it.
- */
+/** Whichever store is canonical for the session receives the `kinu model` / `kinu effort` write. */
 describe('control commands route model/effort by session state', () => {
-  /** A bare local workspace: enough for `resolveAgentTarget` to answer
-   *  local — an existing database, no configured ref. */
+  /** An existing database and no configured ref: enough for `resolveAgentTarget` to answer local. */
   const SEED_LOCAL_AGENT = `
     {
       process.env.OPENAI_API_KEY = 'profile-scenario-credential';
@@ -954,8 +885,7 @@ describe('control commands route model/effort by session state', () => {
     }
   `;
 
-  /** The control commands print for the operator; a scenario captures one
-   *  JSON document on stdout, so their output is muted while they run. */
+  /** Command output is muted so a scenario's stdout is one JSON document. */
   const QUIET = `
     async function quiet(fn) {
       const log = console.log;
@@ -1002,7 +932,6 @@ describe('control commands route model/effort by session state', () => {
     const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
     expect(tier.model).toBe('openai/gpt-4o-mini');
     expect(tier.reasoningEffort).toBe('high');
-    // The signed-out slot owns what the commands wrote — nothing else does.
     expect(expectOk(steps.localSlot)).toEqual({ model: 'openai/gpt-4o-mini', reasoningEffort: 'high' });
   });
 
@@ -1083,9 +1012,7 @@ describe('control commands route model/effort by session state', () => {
     expect(expectOk(steps.model)).toBe('set');
     const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
     expect(tier.model).toBe('account-gateway/custom-model');
-    // The signed-out slot stayed untouched: the account store is canonical.
     expect(expectOk(steps.localSlot)).toBeNull();
-    // And the cache a next offline read would fall back to carries it too.
     expect(expectOk(steps.cacheSlot)).toMatchObject({ model: 'account-gateway/custom-model' });
   });
 });

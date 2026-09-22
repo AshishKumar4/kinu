@@ -1,19 +1,7 @@
 /**
- * Who drives one local conversation, at the two PRODUCT surfaces that compete
- * for it: the interactive client `kinu chat`/`shell`/the TUI open, and the
- * scheduler daemon's foreground pass.
- *
- * They really do compete. Every interactive surface auto-starts the resident
- * daemon, so two processes hold one SQLite file open and both drive the same
- * durable work — the pending event drain, the trigger registry, the queued-turn
- * pump — and `EventLog.markConsumed` has no compare-and-set predicate.
- *
- * Both surfaces read `~/.kinu` bound at import, so each scenario runs in its own
- * process with its own `KINU_HOME`. The rival driver is a real sleeping OS
- * process whose pid is written into the lease through the lease's own API: the
- * only fact the lease asks about a holder is whether its pid still exists, so a
- * `sleep` child is genuinely another driver and the surface under test runs
- * against the real `OS_LEASE_PROCESS` with nothing substituted.
+ * Interactive client vs scheduler daemon for one conversation's driver lease: both hold one SQLite
+ * file and `EventLog.markConsumed` has no compare-and-set. The rival is a real `sleep` process
+ * holding the lease, since the lease only asks whether the holder's pid exists.
  */
 import { scratchDir } from '../../test-utils/src/scratch';
 
@@ -30,16 +18,7 @@ function freshDir(prefix: string): string {
   return dir;
 }
 
-/**
- * One agent placed in one project, exactly as `kinu create` records it, then
- * `body` — which runs with the real production modules imported under the
- * scenario's own home.
- *
- * `rivalHolds(kind)` is available to the body: it spawns a sleeping process and
- * gives it the lease. Killing it is left to process exit, which is the honest
- * end for a driver that went away without releasing.
- */
-/** One field the scenario printed, as the text the assertion reads. */
+/** One placed agent, then `body` under the scenario's home; `rivalHolds(kind)` gives the lease to a sleeping process. */
 function printed(result: JsonObject, key: string): string {
   const value = v.parse(v.union([v.string(), v.number(), v.boolean()]), result[key]);
 
@@ -119,11 +98,9 @@ function scenario(body: string): JsonObject {
       ...process.env,
       KINU_HOME: home,
       KINU_PROJECT: project,
-      // The daemon must never be auto-started by a scenario: the rival is the
-      // only other driver here, and it is a scripted one.
+      // The daemon must never auto-start: the scripted rival is the only other driver.
       KINU_SKIP_DAEMON: '1',
-      // An endpoint nothing connects to. Opening a client and taking the lease
-      // must not need the network, and this proves they did not.
+      // An endpoint nothing connects to: opening a client and taking the lease must not need the network.
       KINU_BASE_URL: 'http://127.0.0.1:1/v1',
       KINU_AUTH: 'Bearer offline',
       KINU_MODEL: '@cf/test/model',
@@ -161,7 +138,6 @@ describe('the interactive client and the driver lease', () => {
     expect(result.heldKind).toBe('interactive');
     expect(result.heldPid).toBe(result.us);
     expect(result.heldPid).not.toBe(result.daemonPid);
-    // And it hands the conversation back, so the daemon can drive it again.
     expect(result.releasedOnClose).toBe(true);
   });
 
@@ -180,12 +156,10 @@ describe('the interactive client and the driver lease', () => {
       }));
     `);
 
-    // Two people driving one conversation is the interleaving this prevents, so
-    // the second one is told before it can type into it.
+    // A second person is told before they can type into the conversation.
     expect(result.opened).toBe(false);
     expect(printed(result, 'failure')).toContain(printed(result, 'otherPid'));
     expect(printed(result, 'failure')).toContain('interactive');
-    // The refusal changed nothing, and closing did not evict the live holder.
     expect(result.heldKind).toBe('interactive');
     expect(result.heldPid).toBe(result.otherPid);
   });
@@ -204,8 +178,7 @@ describe('the interactive client and the driver lease', () => {
       log(JSON.stringify({ ownerPid, printed: lines.join('\\n'), heldPid: holder()?.pid ?? null }));
     `);
 
-    // The command never prints a tick it did not perform: it names the holder,
-    // which is also the answer to "why did nothing happen?".
+    // It names the holder instead of printing a tick it did not perform.
     expect(printed(result, 'printed')).toContain('deferred');
     expect(printed(result, 'printed')).toContain('leasebot');
     expect(printed(result, 'printed')).toContain(printed(result, 'ownerPid'));

@@ -1,19 +1,6 @@
 /**
- * The two rules that decide whether an eval run may happen at all: whose
- * credential it uses, and which deployment it is allowed to touch.
- *
- * Both are written against a measured defect, not a hypothetical. On 2026-08-20
- * the owner's production account held 28 workspaces of which 23 were test
- * debris — twenty-two `drill*` rows and one `settle-probe` — because the eval
- * tier borrowed his signed-in session (`scripts/eval-credentials.ts`, before
- * this landed) and nothing anywhere asked whether the origin served real users.
- *
- * The target cases are the red-provable half: delete the allowlist arms from
- * `evalTargetVerdict` and `production origin is refused` fails, because the
- * production origin is read out of `wrangler.jsonc` rather than restated here.
- * That is deliberate — a test that hardcodes the hostname stops testing the
- * deployment the moment the deployment moves, which is exactly what this repo
- * is doing this week.
+ * The production origin is read from `wrangler.jsonc`, not restated, so a moved deployment
+ * fails here.
  */
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -29,12 +16,8 @@ import {
 const WRANGLER = readFileSync(join(import.meta.dirname, '../../cf-backend/wrangler.jsonc'), 'utf8');
 
 /**
- * The deployment's origin, taken from the deployment rather than from a
- * literal. `CLI_PUBLIC_ORIGIN` in `vars` is what the Worker tells every CLI to
- * talk to, which makes it the definition of "the origin". Matched on the key
- * rather than derived from a parse because the file is JSONC and every other
- * reader in the tree (`unit-preview-origin.test.ts`, `scripts/infra-manifest.ts`)
- * reads it the same way.
+ * `CLI_PUBLIC_ORIGIN` is the origin the Worker hands every CLI. Matched on the key, not parsed:
+ * the file is JSONC, and `unit-preview-origin.test.ts` and `scripts/infra-manifest.ts` do the same.
  */
 const DEPLOYMENT_ORIGIN = ((): string => {
   const match = /"CLI_PUBLIC_ORIGIN":\s*"([^"]+)"/.exec(WRANGLER);
@@ -44,9 +27,7 @@ const DEPLOYMENT_ORIGIN = ((): string => {
   return match[1];
 })();
 
-/** A deployment that is NOT ours, for the refused direction. A real hostname
- *  shape rather than `example.com`, so the refusal is exercised on the kind of
- *  origin a mistake would actually produce. */
+/** A foreign origin with a real hostname shape, not `example.com`. */
 const FOREIGN_ORIGIN = 'https://preview.kinu.run';
 
 describe('the eval target allowlist — one deployment, or a loopback, nothing else', () => {
@@ -60,11 +41,8 @@ describe('the eval target allowlist — one deployment, or a loopback, nothing e
     });
   });
 
-  // `workers_dev` is off, so the declared origin is the ONE name that reaches
-  // the Worker. A near-miss — the same host under a different scheme, a
-  // subdomain of it, a port, or a `workers.dev` label that merely contains it —
-  // is a different deployment and gets no credit for looking similar.
-  // `startsWith` or `includes` would pass every line below.
+  // `workers_dev` is off, so the declared origin is the only name reaching the Worker;
+  // `startsWith` or `includes` would pass every near-miss below.
   test.each([
     'http://kinu.run',
     'https://kinu.run.evil.example',
@@ -75,8 +53,7 @@ describe('the eval target allowlist — one deployment, or a loopback, nothing e
     const verdict = evalTargetVerdict(origin);
     expect(verdict.kind).toBe('refused');
 
-    // The refusal names the variable and the one origin, or an operator's only
-    // move is to delete the guard.
+    // The refusal names the variable and the one origin.
     if (verdict.kind === 'refused') {
       expect(verdict.reason).toContain(EVAL_IDENTITY_ENV.origin);
       expect(verdict.reason).toContain(EVAL_DEPLOYMENT_ORIGIN);
@@ -99,9 +76,7 @@ describe('the eval target allowlist — one deployment, or a loopback, nothing e
     if (verdict.kind === 'refused') expect(verdict.reason).toContain('not a URL');
   });
 
-  // An explicitly blanked variable is a mistake, not a request for the default:
-  // `scripts/tbench-arm.sh` refuses the same shape for the same reason — an
-  // empty export overrides a default and then fails much later, far from cause.
+  // A blanked variable is a mistake, not the default (`scripts/tbench-arm.sh` refuses it too).
   test('an empty origin is refused, and the refusal names the variable', () => {
     const verdict = evalTargetVerdict('');
     expect(verdict.kind).toBe('refused');
@@ -110,21 +85,7 @@ describe('the eval target allowlist — one deployment, or a loopback, nothing e
   });
 });
 
-/**
- * A model endpoint arrives as a base URL, and the two variables that carry one
- * hold either shape. `.env.example` documents an AI Gateway;
- * `.github/workflows/eval.yml` held `secrets.EVAL_BASE_URL`, which could hold
- * either.
- *
- * Measured on 2026-08-21: with `KINU_BASE_URL` set to production's inference
- * route and `KINU_AUTH` set to a bearer, `resolveLLMConfig` returns
- * `{ name: 'workers-ai', baseURL: 'https://kinu.run/api/user/ai/v1',
- * Authorization: 'Bearer …' }`, and `resolveLiveModel` calls the same URL an
- * `ai-gateway` target. Neither checked an origin.
- *
- * Every deployment URL below is built by `cloudProxyBaseURL`, the one function
- * that builds that route, so moving the route fails these cases.
- */
+/** Deployment URLs come from `cloudProxyBaseURL`, so moving the route fails these cases. */
 describe('a model endpoint carrying a deployment gets target-checked', () => {
   test('a foreign origin behind the inference route is refused, naming the variable', () => {
     const verdict = evalModelEndpointVerdict(cloudProxyBaseURL(FOREIGN_ORIGIN));
@@ -139,8 +100,7 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
     }
   });
 
-  // The ORIGIN decides first, so an allowed origin needs no path reasoning: the
-  // deployment's URL is allowed whether it carries the inference route or not.
+  // The origin decides first: an allowed origin passes with or without the inference route.
   test.each([
     cloudProxyBaseURL(EVAL_DEPLOYMENT_ORIGIN),
     `${EVAL_DEPLOYMENT_ORIGIN}/v1`,
@@ -158,9 +118,7 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
     });
   });
 
-  // An undeclared origin bearing the inference route is refused, which is what
-  // origin-first buys: a set of Kinu hosts would have read this as a gateway and
-  // handed it the credential.
+  // Origin-first: an undeclared origin behind the inference route is refused, not read as a gateway.
   test('a host belonging to nobody here is refused when it wears the route', () => {
     const verdict = evalModelEndpointVerdict(cloudProxyBaseURL('https://attacker.example'));
     expect(verdict.kind).toBe('checked');
@@ -168,10 +126,8 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
     if (verdict.kind === 'checked') expect(verdict.target.kind).toBe('refused');
   });
 
-  // A gateway fronts a model and no deployment, so it creates nothing and there
-  // is no origin to rule on. Refusing one would break the path `.env.example`
-  // documents and the tier uses for models the account proxy does not front.
-  // The last case is not a URL, so it names no deployment either.
+  // A gateway fronts a model and no deployment, so there is no origin to rule on; the last
+  // case is not a URL.
   test.each([
     'https://gateway.ai.cloudflare.com/v1/acct-id/gw-name/workers-ai/v1',
     'https://api.openai.com/v1',
@@ -181,10 +137,8 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
     expect(evalModelEndpointVerdict(baseUrl)).toEqual({ kind: 'gateway' });
   });
 
-  // The boundary this leaves, stated rather than hidden: a refused origin on any
-  // other path reads as a gateway. It is not reachable as a model endpoint —
-  // `/api/cli/workspaces` serves no completions — and closing it would need the
-  // list of Kinu hosts that origin-first exists to avoid.
+  // Known boundary: a refused origin on another path reads as a gateway; `/api/cli/workspaces`
+  // serves no completions.
   test('a refused origin on another path is not classified as a deployment', () => {
     expect(evalModelEndpointVerdict(`${FOREIGN_ORIGIN}/api/cli/workspaces`))
       .toEqual({ kind: 'gateway' });
@@ -224,9 +178,7 @@ describe('resolveEvalIdentity — the credential is the eval service account or 
     });
   });
 
-  // The whole point of the module: an empty environment yields a SKIP, never a
-  // borrowed session. Before this, the same case reached into
-  // `~/.kinu/config.json` and ran as the owner.
+  // An empty environment yields a skip, never a borrowed session.
   test('an empty environment is absent — no session is borrowed from anyone', () => {
     const resolved = resolveEvalIdentity({});
     expect(resolved.kind).toBe('absent');
@@ -241,8 +193,7 @@ describe('resolveEvalIdentity — the credential is the eval service account or 
     expect(resolveEvalIdentity({ [EVAL_IDENTITY_ENV.token]: '   ' }).kind).toBe('absent');
   });
 
-  // A credential aimed at production is never a skip. Someone meant this to
-  // run, and a silent skip would leave them believing it had.
+  // A production-aimed credential is never a skip; a silent skip would hide that it did not run.
   test('a credential aimed at a foreign deployment is refused, not skipped', () => {
     const resolved = resolveEvalIdentity({
       [EVAL_IDENTITY_ENV.token]: 'pta_eval',
@@ -252,9 +203,7 @@ describe('resolveEvalIdentity — the credential is the eval service account or 
     expect(resolved.kind).toBe('refused');
   });
 
-  // Absence is checked BEFORE the target, so a machine with no credential
-  // reports the credential it lacks rather than an origin it was never going to
-  // reach. Both are true; only one is actionable.
+  // Absence is checked before the target, so the missing credential is what gets reported.
   test('no credential outranks a bad target', () => {
     expect(resolveEvalIdentity({ [EVAL_IDENTITY_ENV.origin]: FOREIGN_ORIGIN }).kind)
       .toBe('absent');
@@ -269,8 +218,7 @@ describe('evalWorkspaceName — every row an eval leaves behind is attributable'
   });
 
   test('a long subject still fits the product address grammar', () => {
-    // The creation gate refuses anything over 31 chars or outside
-    // lowercase-alphanumerics-and-hyphens; this tier failed exactly there.
+    // The creation gate refuses over 31 chars or outside lowercase alphanumerics and hyphens.
     for (const name of [
       evalWorkspaceName('first-run-two-machines-fleet'),
       evalWorkspaceName('first-run-approve-clears-approve'),
@@ -291,12 +239,7 @@ describe('evalWorkspaceName — every row an eval leaves behind is attributable'
   });
 });
 
-/**
- * The constants above are copies of facts that live in `wrangler.jsonc`. These
- * cases are what stops them becoming stale copies — the deployment is the source
- * of truth, and a rename there must fail here rather than quietly point the
- * evals at a Worker that no longer exists.
- */
+/** The constants above copy `wrangler.jsonc`; a rename there must fail here. */
 describe('the eval facts match the deployment', () => {
   test('EVAL_DEPLOYMENT_ORIGIN is the origin wrangler hands its CLIs', () => {
     expect(WRANGLER).toContain(`"CLI_PUBLIC_ORIGIN": "${EVAL_DEPLOYMENT_ORIGIN}"`);
@@ -306,10 +249,8 @@ describe('the eval facts match the deployment', () => {
     expect(WRANGLER).toContain(`"DEV_USER_EMAIL": "${EVAL_SERVICE_EMAIL}"`);
   });
 
-  // `authenticateRequest` synthesizes DEV_USER_EMAIL only for a request that
-  // presents DEV_IDENTITY_SECRET (auth/session.ts), and the admin gate refuses
-  // every `provider: 'dev'` identity (control-plane/admin-caller.ts). Those two
-  // are the locks; a second host would be a third door, so workers.dev stays off.
+  // `authenticateRequest` synthesizes DEV_USER_EMAIL only for DEV_IDENTITY_SECRET (auth/session.ts) and
+  // the admin gate refuses `provider: 'dev'`; a second host would be a third door, so workers.dev stays off.
   test('the deployment has one origin: workers_dev is off', () => {
     expect(WRANGLER).toMatch(/"workers_dev":\s*false/);
     expect(WRANGLER).not.toContain('"env": {');

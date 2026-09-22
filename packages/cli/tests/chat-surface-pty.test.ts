@@ -1,11 +1,4 @@
-/**
- * Defects 4 and 5, proven where they live: on a real terminal's byte stream.
- *
- * The in-process theme suite pins the resolved ink per role through the test
- * renderer's span capture. This test reads the same facts out of the SGR
- * sequences the product writes to a real pty, so a default that paints the
- * canvas and a prose register in ink are what a terminal actually receives.
- */
+/** Theme ink per role, read from the SGR bytes the product writes to a real pty. */
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
 
@@ -33,9 +26,7 @@ describe('the chat surface on a real terminal, fresh install', () => {
     if (canvas === undefined) throw new Error('the default theme must paint a canvas');
     const [red, green, blue] = [1, 3, 5].map((start) => Number.parseInt(canvas.slice(start, start + 2), 16));
     expect(run.raw).toContain(`48;2;${String(red)};${String(green)};${String(blue)}m`);
-    // Defect 5: the agent's body is written in the ink register, not the
-    // dimmer body register, so it reads as prose beside the muted thinking
-    // line and the muted annotations.
+    // The agent body uses the ink register, not the dimmer body register.
     expect(inkBefore(run.raw, 'agent prose reply')).toBe(light.colors.text.strong);
     expect(light.colors.text.strong).not.toBe(light.colors.text.primary);
   });

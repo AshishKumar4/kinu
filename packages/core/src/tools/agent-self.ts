@@ -41,14 +41,15 @@ import { renderThrownChain } from '../obs/index';
 
 type CurriculumStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
-/** The narrow slice of the agent the `agent.*` tools call through to — all
- *  existing methods on both backends, so there's no duplicated logic. */
+/** The narrow slice of the agent the `agent.*` tools call through to, built
+ *  once for both backends by `agentSelfHost` (orchestrator/agent-self-host.ts),
+ *  so every tool answers the same shape on each. */
 export interface AgentSelfHost {
-  proposeCurriculumTasks(count?: number): Promise<ProposedTask[] | { proposals: ProposedTask[] }>;
-  listCurriculumTasks(status?: CurriculumStatus): Promise<ProposedTask[] | { tasks: ProposedTask[] }>;
+  proposeCurriculumTasks(count?: number): Promise<ProposedTask[]>;
+  listCurriculumTasks(status?: CurriculumStatus): Promise<ProposedTask[]>;
   setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<{ ok: boolean }>;
   proposeScaffold(rationale: string, code: string, baseVersion?: number): Promise<ModifyResult>;
-  listScaffoldVersions(limit?: number): Promise<ScaffoldVersionView[]> | ScaffoldVersionView[];
+  listScaffoldVersions(limit?: number): Promise<ScaffoldVersionView[]>;
   createTimerTrigger(opts: {
     cron?: string; atMs?: number; label?: string; payload?: JsonObject;
     missionLabel?: string;

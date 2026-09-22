@@ -1,15 +1,4 @@
-/**
- * Foreground turn diagnostics — where core's shared diagnostics go while a
- * person watches a turn.
- *
- * The default diagnostics sink writes JSON lines to stderr, which on workerd
- * is log collection and under the daemon its journal. In a foreground `kinu
- * chat` or `kinu run` process stderr is the person's own screen, so every
- * diagnostic landed between the reader and their agent — an offline catalog
- * lookup printed raw JSON mid-conversation on every turn. The turn surfaces
- * install this sink instead: the same envelope, appended to the rolling
- * `cli.log` beside `daemon.log`, so nothing is lost and nothing interrupts.
- */
+/** Foreground diagnostics go to `cli.log`: stderr is the person's screen. */
 
 import { join } from 'node:path';
 import { classifyErrorCode, createLineLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
@@ -29,8 +18,7 @@ export function installTurnDiagnostics(): void {
     try {
       appendDaemonLog(TURN_LOG_PATH, `${line}\n`);
     } catch (caught) {
-      // Only an unwritable log file is dropped — a diagnostic must never break
-      // the turn it rides on. Any other failure is a bug and still raises.
+      // Only an unwritable log is dropped; a diagnostic must not break its turn. Other failures raise.
       if (classifyErrorCode({ cause: caught }) !== 'io') throw caught;
     }
   }));

@@ -73,12 +73,8 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
   };
 }
 
-/**
- * One rotation per refresh token, whoever asks. The whole read-check-refresh-write
- * runs inside the lock — the network call included, which is the point: released
- * at the first `await`, the lock lets a second caller submit the same refresh
- * token and race its own replacement into the file.
- */
+/** The network call runs inside the lock: released at the first `await`, a
+ *  second caller could submit the same refresh token and race its replacement. */
 async function refreshUnderLock(
   configPath: string,
   original: OAuthCredential,
@@ -120,9 +116,6 @@ async function refreshUnderLock(
 function needsRefresh(credential: OAuthCredential, opts?: { forceRefresh?: boolean }): boolean {
   if (opts?.forceRefresh) return true;
 
-  // One lead, two places it can be read from: the stored `expiresAt` and the JWT's
-  // own `exp`. These were 5*60_000 and 300 — the same window written twice in
-  // different units, which is how they come to disagree.
   if (credential.expiresAt && Date.now() + CODEX_REFRESH_LEAD_SEC * 1_000 >= credential.expiresAt) return true;
 
   return codexAccessTokenExpiring(credential.accessToken);
@@ -151,11 +144,7 @@ function credentialToConfig(credential: OAuthCredential): StoredCodexCredential 
   };
 }
 
-/**
- * The config file, or `{}` when it has not been written yet. A file that exists
- * but does not parse propagates: reading it as empty would make `save` overwrite
- * every provider credential in it with only the one being saved.
- */
+/** `{}` when absent; a parse failure propagates so `save` cannot wipe other credentials. */
 function readConfig(configPath: string): KinuConfigFile {
   const raw = tolerate(() => readFileSync(configPath, 'utf-8'), 'enoent');
 

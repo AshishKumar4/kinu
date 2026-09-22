@@ -24,8 +24,7 @@ export async function authenticateCli(
   callbacks.started?.({ verificationUrl: flow.verificationUrl, userCode: flow.userCode });
   openBrowser(flow.verificationUrl);
 
-  // The hub owns the request's deadline: once it passes, the poll answers
-  // `expired` by itself, so the wait ends on that answer or on approval.
+  // The hub owns the deadline: the poll answers `expired` by itself.
   const status = await waitForAnswer(async (): Promise<CliAuthPoll | undefined> => {
     const poll = await pollCliAuth(origin, flow.deviceToken);
 
@@ -41,9 +40,7 @@ export async function authenticateCli(
     config.tokenExpiresAt = status.expiresAt;
     config.user = status.user;
   });
-  // Signing in changes which providers a model resolution can reach — the
-  // account's credentials become available through the proxy — so a resident
-  // session's cached provider listing is now stale.
+  // Signing in makes account credentials reachable through the proxy, so cached provider listings are stale.
   bumpProviderRevision();
   callbacks.completed?.(status.user.email);
 }
@@ -84,11 +81,8 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
     try {
       await logout(origin, config.accessToken);
     } catch (error) {
-      // The remote session is the thing that outlives this command when the
-      // revocation cannot land, and the raw token is the ONLY copy of it — the
-      // server stores a hash. Deleting it here would orphan a live 180-day
-      // bearer with nothing able to name it, so it stays as a pending
-      // revocation the next logout (or `kinu sessions revoke --all`) retries.
+      // The raw token is the only copy (the server stores a hash); deleting it would orphan a live 180-day bearer,
+      // so it stays pending for the next logout or `kinu sessions revoke --all`.
       const reason = renderThrownChain({ cause: error });
       console.error(`${WARN('!')} Could not revoke the session at ${origin} (${reason}); it may still be valid.`);
       updateConfigFile((current) => {
@@ -121,15 +115,12 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
   console.log(`${OK('✓')} Signed out`);
 }
 
-/** Revoke a session by the hash the inventory prints. */
 async function revokeSessionCommand(hash: string): Promise<void> {
   const auth = requireAuthConfig();
   await revokeCliSessionByHash(auth.origin, auth.token, hash);
   console.log(`${OK('✓')} Session ${ACCENT(hash.slice(0, 12))}… revoked`);
 }
 
-/** `kinu sessions` — the inventory every orphaned bearer needed: what is still
- *  live on the account, and how to end any of it. */
 export async function sessionsCommand(
   action: string | undefined, hash: string | undefined,
 ): Promise<void> {
@@ -168,7 +159,6 @@ export async function sessionsCommand(
   console.log(DIM('Revoke one: kinu sessions revoke <hash>   All: kinu sessions revoke --all'));
 }
 
-/** The command each platform opens a URL with. */
 function browserOpener(os: string): string {
   if (os === 'darwin') return 'open';
 

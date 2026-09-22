@@ -1,15 +1,6 @@
 /**
- * The CLI's background refresh, driven through its two public entry points:
- * `refreshCliTree` (what `kinu update` and its detached child run) against a
- * stub origin serving real tarballs, and `runStartupUpdateCheck` with the
- * refresh spawn held so the gates in front of it are visible.
- *
- * The origin is the only thing faked. The archives are real tar.gz files
- * built here, `tar` really unpacks them, and the staged `cli.js` really runs
- * under this Bun to answer `--version` — a staged tree that reports the wrong
- * build is a real launch that printed the wrong thing.
- *
- * Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
+ * Only the origin is faked: archives are real tar.gz files and the staged `cli.js` runs under this Bun.
+ * Env-dependent paths (KINU_HOME) run in subprocesses.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -36,7 +27,6 @@ const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arc
 
 const RUNTIME_ARTIFACT = '/downloads/kinu-runtime-cpython.tar.gz';
 
-/** A real tar.gz of `kinu/<files>`, built with the same tar that unpacks it. */
 function tarball(files: Record<string, string>): Uint8Array {
   const work = scratchDir('self-update-archive');
   mkdirSync(join(work, 'kinu', 'node_modules'), { recursive: true });
@@ -53,7 +43,6 @@ function tarball(files: Record<string, string>): Uint8Array {
   return new Uint8Array(readFileSync(join(work, 'a.tar.gz')));
 }
 
-/** A `cli.js` that answers --version with `stamp`. */
 function cliSource(stamp: string): string {
   return `console.log(process.argv[2] === '--version' ? ${JSON.stringify(stamp)} : 'ran');\n`;
 }
@@ -63,15 +52,10 @@ interface StubOrigin {
   hits: string[];
 }
 
-/** The key the stub origin signs its manifest with, minted once per process;
- *  every child CLI pins its public half through the environment, the way a
- *  machine's own operator would. */
+/** Every child CLI pins the public half through the environment. */
 const signingKey = generateReleaseSigningKey();
 
-/** The served side: the SIGNED version JSON, both artifacts and their
- *  checksums. `corrupt` publishes an artifact that is not the signed one;
- *  `signing` withholds the signature or signs with a key of the origin's own
- *  — the hostile deployment of SECURITY-devices C1. */
+/** `signing` models the hostile deployment of SECURITY-devices C1. */
 function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?: boolean; signing?: 'none' | 'foreign' }): StubOrigin {
   const hits: string[] = [];
 
@@ -111,7 +95,6 @@ function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?
   return { origin: `http://localhost:${server.port}`, hits };
 }
 
-/** A home with a `cli/current` whose cli.js reports `stamp`. */
 function installedHome(stamp: string, config: JsonObject = {}): string {
   const home = scratchDir('self-update-home');
   mkdirSync(join(home, 'cli', 'current'), { recursive: true });
@@ -138,7 +121,6 @@ async function runChild(home: string, script: string): Promise<{ stdout: string;
   return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
 }
 
-/** `refreshCliTree` in a child owning `home`; the failure message when it threw. */
 async function refresh(home: string, origin: string, served = SERVED): Promise<string | null> {
   const run = await runChild(home, `
     import { refreshCliTree } from './packages/cli/src/self-update.ts';
@@ -169,22 +151,16 @@ describe('refreshCliTree stages, verifies and swaps', () => {
 
     expect(await refresh(home, stub.origin)).toBeNull();
     expect(currentCli(home)).toBe(cliSource(SERVED));
-    // Both archives unpacked over one tree: the runtime's files sit beside cli.js.
     expect(existsSync(join(home, 'cli', 'current', 'node_modules', '@nimbus-sh', 'runtime-cpython', 'manifest.json'))).toBe(true);
     expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
-    // Nothing staged is left behind: current, prev, and no next-* or download dir.
     expect(cliEntries(home)).toEqual(['current', 'prev']);
-    // The signed manifest first, then every artifact it names — verified
-    // against the checksum it SIGNED, so the origin's own .sha256 files are
-    // never asked for.
+    // Verified against the signed checksums, so the origin's .sha256 files are never fetched.
     expect(stub.hits).toEqual(['/downloads/kinu-version.json', PLATFORM_ARTIFACT, RUNTIME_ARTIFACT]);
   });
 
   test('a refresh for a build already installed adopts nothing and downloads nothing', async () => {
-    // The startup throttle is read-then-fetch-then-write, so two commands
-    // inside one probe window both spawn a refresh. The second must find the
-    // first's work under the lock and stop: a second adopt of the same build
-    // deleted the real previous build and left the freshly landed one as prev.
+    // Two commands inside one probe window both spawn a refresh; the second must find the first's work under
+    // the lock and stop, or it replaces prev with the fresh build.
     const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
     const home = installedHome('1.0.0+old');
     const before = currentCli(home);
@@ -213,9 +189,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 
   test('an unsigned manifest, or one signed by another key, downloads nothing (C1)', async () => {
-    // The hostile deployment: it serves the artifacts, the checksums and the
-    // manifest, and chooses all three. Without Kinu's signature over the
-    // checksums the refresh fetches no artifact at all.
+    // Without Kinu's signature over the checksums the refresh fetches no artifact.
     for (const signing of ['none', 'foreign'] as const) {
       const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime, signing });
       const home = installedHome('1.0.0+old');
@@ -272,9 +246,7 @@ describe('refreshCliTree stages, verifies and swaps', () => {
   });
 });
 
-/** `runStartupUpdateCheck` in a child, with the refresh spawn replaced by a
- *  counter: the check's gates decide whether a refresh STARTS, and that is
- *  the observable here. */
+/** The refresh spawn is a counter: whether a refresh starts is the observable. */
 async function startupCheck(home: string, opts: { isTTY: boolean; origin: string }) {
   const run = await runChild(home, `
     import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
@@ -307,7 +279,6 @@ describe('the startup check starts a refresh only when every gate opens', () => 
     expect(spawned).toBe(1);
     expect(outcome).toBe(`Installing Kinu ${SERVED} in the background; it applies on the next launch.`);
     expect(lines).toEqual([`Installing Kinu ${SERVED} in the background; it applies on the next launch.`]);
-    // The check probes the version only; the refresh child does the downloads.
     expect(stub.hits).toEqual(['/downloads/kinu-version.json']);
   });
 
@@ -338,8 +309,6 @@ describe('the startup check starts a refresh only when every gate opens', () => 
   test('the installed build being the served one: a probe, and no refresh', async () => {
     const home = installedHome('1.0.0+old', { origin: 'https://example.test', accessToken: 'ptc_test', updateCheckedAt: 0 });
 
-    // The served stamp is this very build's VERSION, read from the same place
-    // display.ts reads it.
     const run = await runChild(home, `
       import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
       import { VERSION } from './packages/cli/src/display.ts';

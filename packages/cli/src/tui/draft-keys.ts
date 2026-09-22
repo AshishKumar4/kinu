@@ -1,10 +1,4 @@
-/**
- * Composer-draft keys: prompt-history navigation, undo, external editor,
- * clear, branch, queue. The scene feeds each bound action id to the map this
- * module returns; a handler owns its own preventDefault, because which keys
- * the editor should still see (an Up that stays in the draft, queue.edit-last)
- * is part of the behaviour.
- */
+/** Each handler owns its preventDefault: which keys the editor still sees is behaviour. */
 import type { RefObject } from 'react';
 import type { KeyEvent, TextareaRenderable } from '@opentui/core';
 import type { TuiActionId } from './actions';
@@ -16,10 +10,7 @@ export interface PromptHistoryCursor {
   draft: string;
 }
 
-/** One history navigation. `previous` walks older; the cursor parks the draft
- *  being composed so leaving history returns to it. False is "the editor
- *  keeps the key": no input, a mid-buffer vertical move, or history
- *  exhausted. */
+/** False means the editor keeps the key. */
 function promptHistoryStep(
   input: TextareaRenderable | null,
   history: readonly string[],
@@ -43,37 +34,28 @@ function promptHistoryStep(
 }
 
 export interface ComposerKeyDeps {
-  /** The live editor, read per keystroke. */
   input: RefObject<TextareaRenderable | null>;
-  /** The per-workspace history the cursor walks, newest last. */
+  /** Newest last. */
   promptHistory: readonly string[];
-  /** Stepped history cursor, read per keystroke — a keypress may land before
-   *  the last one has re-rendered, so this is a live read, not a snapshot. */
+  /** Live cursor read: a keypress may land before the last one re-rendered. */
   promptCursor(): PromptHistoryCursor | null;
   setPromptCursor(cursor: PromptHistoryCursor | null): void;
-  /** Swap the composer's draft, resetting every lane that tracks it. */
+  /** Resets every lane that tracks the draft. */
   setInputText(text: string): void;
   undoDraft(): void;
-  /** Open the draft in VISUAL/EDITOR; resolves to the edited text. */
   externalDraft(text: string): Promise<string>;
-  /** Expand collapsed paste placeholders in a draft before it leaves the composer. */
   expandPastes(text: string): string;
-  /** Append a draft to prompt history. */
   rememberPrompt(text: string): void;
-  /** Move the walkback surface up one level and mark the editor busy meanwhile. */
   setSelectionPending(pending: boolean): void;
   focusInput(): void;
   addError(error: { cause: unknown }): void;
   dispatchInput(event: InputMachineEvent): InputEffect[];
   runInputEffects(effects: InputEffect[]): void;
-  /** The draft as the machine should see it while a key is handled. */
   hasUserMessages(): boolean;
   openSurface(surface: ActiveSurface): void;
 }
 
-/** The composer-scope action handlers, keyed by the action id the dispatcher
- *  resolves. Adding a chord means adding a binding and one row here — the
- *  scene's useKeyboard stays a lookup. */
+/** A new chord is a binding plus one row here. */
 export function composerKeyHandlers(deps: ComposerKeyDeps): Partial<Record<TuiActionId, (key: KeyEvent) => void | Promise<void>>> {
   const historyStep = (previous: boolean) => (key: KeyEvent): void => {
     const stepped = promptHistoryStep(deps.input.current, deps.promptHistory, deps.promptCursor(), previous);

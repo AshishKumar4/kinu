@@ -6,30 +6,8 @@ import { decodeLockOwner, withConfigLock } from '../src/config-lock';
 import * as v from 'valibot';
 
 /**
- * The Codex refresh across two real OS PROCESSES, against a token endpoint this
- * test controls.
- *
- * One process cannot prove the property that matters. The defect was a lock
- * released while the refresh was in flight, and the loss it produced — two
- * processes submitting the same refresh token and racing their replacements into
- * one file — belongs to two `kinu` invocations sharing a home directory.
- *
- * Nothing here sleeps. The endpoint IS the barrier: every step waits for a
- * request that only the previous step can send, so the interleaving is
- * constructed rather than hoped for.
- *
- *   1. both children announce themselves and the holder is released first
- *   2. the holder takes the lock and its refresh reaches the endpoint, which
- *      does not answer yet
- *   3. only now is the waiter released, so its first acquisition attempt lands
- *      while the holder is provably inside the refresh AND holding the lock
- *   4. the waiter announces itself and the endpoint answers the holder, which
- *      writes and releases
- *   5. the waiter acquires, finds the rotated credential, and asks nobody
- *
- * A lock that does not cover the refresh fails at step 3: the waiter's first
- * attempt succeeds, it reads the credential the holder has not replaced yet, and
- * a SECOND request reaches the endpoint with the same refresh token.
+ * Codex refresh across two real `kinu` processes sharing a home. The token endpoint is the barrier: the waiter
+ * is released only once the holder's refresh is in flight, so an uncovered refresh sends a second request.
  */
 describe('two kinu processes refreshing one Codex credential', () => {
   const STORE_TS = JSON.stringify(join(import.meta.dir, '../src/codex-auth-store.ts'));
@@ -62,7 +40,6 @@ describe('two kinu processes refreshing one Codex credential', () => {
     return { reached: promise, open: resolve };
   }
 
-  /** The two halves of the unsigned JWT the store reads an expiry out of. */
   type JwtSegment =
     | { readonly alg: string; readonly typ: string }
     | { readonly exp: number };
@@ -77,11 +54,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
     return `${segment({ alg: 'none', typ: 'JWT' })}.${segment({ exp: expSeconds })}.`;
   }
 
-  /**
-   * One child = one `kinu` process. `bun -e` rather than a static import,
-   * because the point is a second OS process with its own module state, its own
-   * file handles and its own view of the lock.
-   */
+  /** One child is one `kinu` process: `bun -e` gives it its own module state, file handles and view of the lock. */
   function spawnChild(role: string, base: string, configPath: string): Bun.Subprocess<'ignore', 'pipe', 'pipe'> {
     return Bun.spawn({
       cmd: [process.execPath, '-e', `
@@ -150,8 +123,6 @@ describe('two kinu processes refreshing one Codex credential', () => {
         if (url.pathname === '/arrive') {
           const role = url.searchParams.get('role') ?? '';
 
-          // The holder goes first; the waiter is released in the test body, once
-          // the holder's refresh has provably reached this endpoint.
           if (role === 'waiter') await releaseWaiter.reached;
 
           return new Response(role);
@@ -167,11 +138,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
         if (submitted.length === 1) {
           refreshReached.open();
-          // Answer only once the waiter is inside its own acquisition, so the
-          // holder cannot finish early and hide the interleaving. A SECOND
-          // request is already the failure this test exists for, so it is
-          // answered at once rather than held — a hang would say less than the
-          // assertion below.
+          // Answer only once the waiter is inside its acquisition; a second request is the failure and is answered at once.
           await armed.reached;
         }
 
@@ -189,9 +156,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
     try {
       await refreshReached.reached;
-      // Step 3: the holder holds the lock and is blocked inside its refresh.
-      // THIS is the moment at which the pre-fix lock was already gone — the
-      // readlink below fails with ENOENT when it is.
+      // Step 3: the holder holds the lock inside its refresh; readlink fails with ENOENT if the lock is gone.
       const record = decodeLockOwner(readlinkSync(`${configPath}.lock`));
       expect(record).not.toBeNull();
       expect(record?.pid).toBe(holder.pid);
@@ -201,29 +166,23 @@ describe('two kinu processes refreshing one Codex credential', () => {
       expect({ code: first.code, stderr: first.stderr }).toEqual({ code: 0, stderr: '' });
       expect({ code: second.code, stderr: second.stderr }).toEqual({ code: 0, stderr: '' });
 
-      // One rotation, carrying the stored refresh token exactly once.
       expect(submitted).toEqual(['refresh-old']);
 
       const results = [first, second].map((outcome) =>
         v.parse(childResultSchema, JSON.parse(outcome.stdout)));
 
       expect(results.map((result) => result.role).sort()).toEqual(['holder', 'waiter']);
-      // Both processes carry the credential that one rotation produced.
       expect(results[0]?.authorization).toBe(`Bearer ${rotated}`);
       expect(results[1]?.authorization).toBe(`Bearer ${rotated}`);
 
-      // The file is valid, rotated, and still carries what it carried before.
       const saved = v.parse(savedSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
       expect(saved.origin).toBe('https://kinu.example');
       expect(saved.providers.codex.accessToken).toBe(rotated);
       expect(saved.providers.codex.refreshToken).toBe('refresh-new-1');
       expect(saved.providers.codex.metadata.accountId).toBe('acct_123');
-      // And no lock outlived either process.
       expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
     } finally {
-      // A failed assertion above must not become a hang: the endpoint is holding
-      // the holder's refresh open on purpose, and `stop(true)` waits for it. Open
-      // every gate, end both children, and let the assertion be the failure.
+      // The endpoint holds the refresh open and `stop(true)` waits for it: open every gate so a failure cannot hang.
       releaseWaiter.open();
       armed.open();
       holder.kill('SIGKILL');
@@ -251,7 +210,6 @@ describe('two kinu processes refreshing one Codex credential', () => {
     try {
       const base = `http://127.0.0.1:${String(server.port)}`;
 
-      // A process that takes the lock, says so, and then never lets go.
       const victim = Bun.spawn({
         cmd: [process.execPath, '-e', `
           const { withConfigLockAsync } = await import(${JSON.stringify(join(import.meta.dir, '../src/config-lock.ts'))});
@@ -270,13 +228,11 @@ describe('two kinu processes refreshing one Codex credential', () => {
       const record = decodeLockOwner(readlinkSync(`${configPath}.lock`));
       expect(record?.pid).toBe(victim.pid);
 
-      // SIGKILL: no unwinding, no release, exactly what a crash leaves behind.
+      // SIGKILL: no unwinding, no release, as a crash leaves it.
       victim.kill('SIGKILL');
       await victim.exited;
 
-      // The next writer takes it over on its FIRST attempt, because the recorded
-      // process is gone. A staleness window made this wait the window out; an
-      // unlink by age made it unsafe for every lock that was merely slow.
+      // The recorded process is gone, so the next writer takes over on its first attempt.
       expect(withConfigLock(configPath, () => 'taken')).toBe('taken');
       expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
     } finally {

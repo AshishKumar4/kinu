@@ -1,29 +1,8 @@
 /**
- * A real pseudo-terminal for the TUI, and a screen read back out of it.
- *
- * Why this exists: `createTestRenderer` writes frames into a buffer and takes
- * keys as bytes on a fake stdin. It never negotiates with a terminal. A real
- * terminal answers the renderer's progressive-enhancement query, and from then
- * on it encodes keys differently — so a key test that passes in process can
- * pass while the same keystroke does something else in a terminal.
- *
- * The driver is Python's `pty` because a pty needs `TIOCSWINSZ` (a TUI with no
- * window size renders nothing) and a controlling terminal in a new session.
- * `script -qefc` gives neither: measured 2026-09-03, it leaves the child at
- * 0x0 with no tty on stdout.
- *
- * THE SCREEN IS A CELL GRID. The renderer paints by moving the cursor and
- * writing only the cells that changed since its last frame, so a word the
- * terminal shows whole need never cross the wire whole. Measured 2026-09-05 on
- * the shipped surface over a real pty: the composer placeholder going from
- * `Connecting…` to `Send a message…` arrived as `CSI 29;31H` `Se`,
- * `CSI 29;34H` `d a message…`. The shared `n` was never rewritten, and a `wait`
- * that searched the stripped stream sat for its whole bound on a placeholder
- * every terminal was displaying. That is what held the first-run tier red on
- * staging on 2026-09-04. So the driver keeps the grid a terminal keeps (cursor
- * moves, erases, wrap, wide cells), every `wait` and every `screen` reads that
- * grid, and a sequence the grid does not model fails the run instead of
- * passing over it.
+ * A real pty for the TUI: a terminal answering the keyboard-protocol query encodes keys differently
+ * from `createTestRenderer`. Python `pty` because the TUI needs `TIOCSWINSZ` and a controlling tty;
+ * `script -qefc` gives neither. The renderer writes only changed cells, so a word shown whole may never
+ * cross the wire whole: every `wait`/`screen` reads a modeled cell grid, and an unmodeled sequence fails the run.
  */
 import { writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -31,13 +10,9 @@ import * as v from 'valibot';
 import { scratchPath } from '@kinu.run/test-utils';
 
 export type PtyStep =
-  /** Read until the screen shows this text, or fail the whole run. */
   | { readonly wait: string; readonly timeout?: number }
-  /** Read until the screen no longer shows this text, or fail the whole run.
-   *  An overlay leaving the screen is the product's own word that whatever it
-   *  covered has its keys back. */
+  /** An overlay leaving is the product's signal that the covered surface has its keys back. */
   | { readonly gone: string; readonly timeout?: number }
-  /** Write bytes into the terminal, exactly as a keyboard would. */
   | { readonly send: string }
   | { readonly sleep: number };
 
@@ -48,8 +23,7 @@ const PtyResultSchema = v.object({
     until: v.picklist(['shown', 'gone']), text: v.string(), met: v.boolean(), afterMs: v.number(),
   })),
   exited: v.boolean(),
-  /** CSI final bytes the screen model met and does not follow; empty on a run
-   *  whose every wait and screen can be trusted. */
+  /** CSI final bytes the screen model does not follow; must be empty for waits and screens to be trusted. */
   unmodelled: v.string(),
 });
 
@@ -286,9 +260,6 @@ print(json.dumps({
 }))
 `;
 
-/** One `wait` or `gone` step's verdict: what the screen had to show (or stop
- *  showing), whether it did before the step's bound, and when the step ended
- *  relative to the run's start. */
 export interface PtyWait {
   readonly until: 'shown' | 'gone';
   readonly text: string;
@@ -297,17 +268,11 @@ export interface PtyWait {
 }
 
 export interface PtyRun {
-  /** Every byte the terminal received, in order. */
   readonly raw: string;
-  /** The screen as the run left it: one line per terminal row, trailing
-   *  blanks cut, exactly what a person looking at the terminal would read. */
   readonly screen: string;
-  /** Each `wait` and `gone` step, in order. The first unmet one ended the run. */
   readonly waits: readonly PtyWait[];
 }
 
-/** The interpreter and the driver file, written where the shared scratch owner
- *  releases it for the whole run. */
 function installDriver() {
   const python = Bun.which('python3');
 
@@ -318,16 +283,9 @@ function installDriver() {
   return { python, driver };
 }
 
-/**
- * Run a TUI entry point on a real pty and drive it with real keystrokes.
- *
- * `home` is the run's `KINU_HOME`, so preferences and themes stay off the
- * developer's own install.
- */
+/** `home` is the run's `KINU_HOME`, keeping preferences and themes off the developer's install. */
 export function runTuiInPty(entry: string, options: {
-  /** Arguments after the entry — the packaged CLI's subcommand and flags. */
   readonly args?: readonly string[];
-  /** Working directory for the child — an unpack dir sits outside the repo. */
   readonly cwd?: string;
   readonly steps: readonly PtyStep[];
   readonly cols?: number;
@@ -335,7 +293,6 @@ export function runTuiInPty(entry: string, options: {
   readonly env?: Readonly<Record<string, string>>;
   readonly term?: string;
 }): PtyRun {
-  // The pty child's KINU_HOME is the driver's own directory.
   const { python, driver } = installDriver();
   const home = join(driver, '..');
 
@@ -357,9 +314,7 @@ export function runTuiInPty(entry: string, options: {
 
   const proc = Bun.spawnSync({
     cmd: [python, driver, JSON.stringify(spec)],
-    // `import.meta.dirname` — not Bun's `import.meta.dir`, which is undefined
-    // under any other runner and turns this resolve into the crash the
-    // first-run tier's vitest process hit.
+    // `import.meta.dirname`, not Bun's `import.meta.dir`, which is undefined under vitest.
     cwd: resolve(import.meta.dirname),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -374,8 +329,7 @@ export function runTuiInPty(entry: string, options: {
   const result = v.parse(PtyResultSchema, JSON.parse(stdout));
 
   if (result.unmodelled !== '') {
-    // A grid the terminal never showed proves nothing either way, so the run
-    // is refused rather than read. Extending the model is the fix.
+    // A grid the terminal never showed proves nothing, so the run is refused.
     throw new Error(`the pty screen model met CSI controls it does not follow (final bytes `
       + `${JSON.stringify(result.unmodelled)}), so no wait over this run can be trusted`);
   }
@@ -385,11 +339,7 @@ export function runTuiInPty(entry: string, options: {
   return { raw, screen: result.screen, waits: result.waits };
 }
 
-/**
- * The screen a `rows` × `cols` terminal shows after receiving `bytes`, read by
- * the same model every `wait` reads. For testing the model against captured
- * renderer output, so a byte pattern that blinded a wait once can be pinned.
- */
+/** The screen after `bytes`, via the same model every `wait` reads; pins byte patterns captured from the renderer. */
 export function screenOf(bytes: string, size: { readonly rows: number; readonly cols: number }): string {
   const { python, driver } = installDriver();
 
@@ -409,11 +359,6 @@ export function screenOf(bytes: string, size: { readonly rows: number; readonly 
 
 const ESC = String.fromCharCode(27);
 
-/**
- * The foreground colour the terminal was left in for a run of text, as
- * `#RRGGBB`. The renderer writes truecolor SGR (`38;2;r;g;b`) before the
- * cells, so the last one before the text is the ink that painted it.
- */
 export function inkBefore(raw: string, text: string): string | null {
   const index = raw.indexOf(text);
 

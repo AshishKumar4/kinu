@@ -99,8 +99,6 @@ describe('role, tier, and agent hubs', () => {
 
         if (view !== 'agents') continue;
         expect(captureCharFrame().toLowerCase()).not.toContain('subordinate');
-        // Entries group under their workspace heading; subordinates indent
-        // under the peer they belong to.
         const lines = captureCharFrame().split('\n').map((line) => line.replaceAll('│', ' ').trim());
         const checkout = lines.findIndex((line) => line === 'checkout');
         const main = lines.findIndex((line) => line.includes('Checkout · main'));
