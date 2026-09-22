@@ -38,7 +38,7 @@ import {
   // Approval
   reviewCommand, gateExec,
 } from '../src/index';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, createTestRuntime, createTestActor } from './helpers';
 
 interface HeadReportIndex {
@@ -177,9 +177,9 @@ describe('v2 e2e: branching heads → merge', () => {
       expect(r.summary).not.toBeNull();
     }
 
-    const cached = journal.readCachedMerge('root-1');
-    expect(cached).not.toBeNull();
-    expect(cached!.mergedNarrative).toBe(result.mergedNarrative);
+    const cached = present(journal.readCachedMerge('root-1'), 'the cached merge for root-1');
+
+    expect(cached.mergedNarrative).toBe(result.mergedNarrative);
   });
 });
 
@@ -207,10 +207,10 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(result.ok).toBe(true);
     expect(result.version).toBe(1);
 
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
-    expect(pending).not.toBeNull();
-    expect(pending!.version).toBe(1);
-    expect(pending!.trialsSoFar).toBe(0);
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
+
+    expect(pending.version).toBe(1);
+    expect(pending.trialsSoFar).toBe(0);
 
     // Verify v0 is still current; v1 is pending.
     const statuses = rt.storage.sql<{ version: number; status: string }>`
@@ -260,17 +260,17 @@ describe('v2 e2e: scaffold shadow rollout', () => {
       });
     }
 
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
-    expect(pending).not.toBeNull();
-    expect(pending!.trialsSoFar).toBe(5);
-    expect(pending!.pendingWins).toBe(5);
-    expect(pending!.currentWins).toBe(0);
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
-    const decision = decidePromotion(pending!, DEFAULT_SHADOW_CONFIG);
+    expect(pending.trialsSoFar).toBe(5);
+    expect(pending.pendingWins).toBe(5);
+    expect(pending.currentWins).toBe(0);
+
+    const decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
     expect(decision.decision).toBe('promote');
     expect(decision.winRate).toBeCloseTo(1, 2);
 
-    const applied = await applyPromotionDecision(rt, pending!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
+    const applied = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(applied.action).toBe('promote');
     expect(applied.newCurrentVersion).toBe(1);
 

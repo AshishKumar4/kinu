@@ -17,6 +17,7 @@ import type { CompletedTurn } from '../src/evolution/types';
 import type { JsonObject } from '../src/index';
 import { makeSqlExec } from './helpers';
 import type { ToolOutcome } from '../src/tools/outcome';
+import { present } from '@kinu.run/test-utils';
 
 function newEventLog(): EventLog {
   const db = new Database(':memory:');
@@ -77,7 +78,7 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     // The real store, so a deferral is exercised against the durable row and
     // the drain replays through the SAME reviewTurn above — exactly the
     // production wiring, settle included.
-    deferTurnReview: (turn, followup, opts) => store.enqueueReview(turn, followup, opts),
+    deferTurnReview: (turn, followup, review) => store.enqueueReview(turn, followup, review),
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(5);
       let reviewed = 0;
@@ -121,10 +122,10 @@ function fakeHost(opts?: { activeTurn?: boolean }) {
 /** What a live turn actually absorbed, read back through the seam the backend
  *  reads: one step boundary, then settle. */
 async function absorb(orch: AgentOrchestrator): Promise<readonly AgentSignal[]> {
-  const prepareStep = orch.turnExtension.prepareStep;
+  const extension = orch.turnExtension;
 
-  if (!prepareStep) throw new Error('Expected orchestrator prepareStep extension');
-  await prepareStep({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
+  if (!extension.prepareStep) throw new Error('Expected orchestrator prepareStep extension');
+  await extension.prepareStep({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
 
   return orch.inbox.settle({ completed: true }).absorbed;
 }
@@ -469,7 +470,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       const stamped = orch.recordedTurn(status, aTurn(0));
       predicted.push(stamped.hadError);
       orch.recordTurn(stamped, 'conversation');
-      recorded.push(store.claim()!.turns[0].hadError);
+      recorded.push(present(store.claim(), 'the claimed window').turns[0].hadError);
     }
 
     expect(recorded).toEqual([false, false, true]);
@@ -489,7 +490,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
     orch.recordTurn(aTurn(0), 'conversation', { id: 'settle:msg-1' });
 
     expect(orch.sessionTurnIndex).toBe(1);
-    expect(store.claim()!.turns).toEqual([aTurn(0)]);
+    expect(present(store.claim(), 'the claimed window').turns).toEqual([aTurn(0)]);
   });
 
   test('recordTurn with no id keeps minting rows — the CLI path is unchanged', () => {
@@ -674,7 +675,8 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(injected[0].text).toContain('arrived while you were idle');
     // Reply-channel binding: the consumed event is bound to the SAME turn id
     // the signal carries — the backend dispatches the live turn's answer by it.
-    const bound = log.query({ turn_id: injected[0].replyTurnId! });
+    const replyTurnId = present(injected[0].replyTurnId, 'the reply turn the signal carries');
+    const bound = log.query({ turn_id: replyTurnId });
     expect(bound.map((event) => event.id)).toHaveLength(1);
     // The delivery is observable (clients get a typed fan-out, not silence):
     // the user's card exists from the moment the batch was DELIVERED, saying
@@ -686,7 +688,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
         type: 'signal_card', id: cardId, state: 'pending',
         metadata: {
           kinuEvent: 'event_drain', kinuAuthor: 'harness',
-          drainTurnId: injected[0].replyTurnId!,
+          drainTurnId: replyTurnId,
         },
         text: injected[0].stepText,
       },
@@ -856,7 +858,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
 
     await runBlock(orch, 'return await tools.summarize(1)', '[crafted:summarize] boom');
     expect(observed).toEqual([{ names: ['summarize'], quality: 0.1 }]);
-    expect(orch.craft.snapshot()!.raised).toBe(1);
+    expect(present(orch.craft.snapshot(), 'the craft snapshot').raised).toBe(1);
 
     // …and a failure that names nothing scores nothing.
     await runBlock(orch, 'return await tools.summarize(1)', 'TypeError: x is not a function');
@@ -873,12 +875,12 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     await runBlock(orch, 'await workspace.createTool("summarize","d","async()=>1"); return tools.summarize(1)');
     // Created and called in one breath earns nothing…
     expect(observed).toEqual([]);
-    expect(orch.craft.snapshot()!.crafted).toEqual(['summarize']);
+    expect(present(orch.craft.snapshot(), 'the craft snapshot').crafted).toEqual(['summarize']);
 
     // …and the next block that reaches for it closes the loop.
     await runBlock(orch, 'return await tools.summarize(2)');
     expect(observed).toHaveLength(1);
-    expect(orch.craft.snapshot()!.reused).toEqual(['summarize']);
+    expect(present(orch.craft.snapshot(), 'the craft snapshot').reused).toEqual(['summarize']);
   });
 
   test('with auto-evolution off the in-episode clock records nothing', async () => {

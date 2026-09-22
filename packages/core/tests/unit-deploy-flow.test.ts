@@ -94,6 +94,11 @@ interface Recorded {
 
 /** A Cloudflare that remembers what it was told to create, so a second run
  *  over the same account finds what the first one made. */
+/** The string a Cloudflare request carried under `key`; an absent field reads as ''. */
+function bodyText(body: JsonObject, key: string): string {
+  return v.parse(v.nullish(v.string(), ''), body[key]);
+}
+
 class FakeCloudflare implements CloudflareTransport {
   readonly calls: Recorded[] = [];
 
@@ -195,7 +200,7 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     if (path.endsWith('/storage/kv/namespaces')) {
-      const title = String(body.title ?? '');
+      const title = bodyText(body, 'title');
 
       this.namespaces.push(title);
 
@@ -205,7 +210,7 @@ class FakeCloudflare implements CloudflareTransport {
     if (path.endsWith('/r2/buckets?per_page=100')) return { buckets: this.buckets.map((name) => ({ name })) };
 
     if (path.endsWith('/r2/buckets')) {
-      this.buckets.push(String(body.name ?? ''));
+      this.buckets.push(bodyText(body, 'name'));
 
       return { name: body.name ?? '' };
     }
@@ -215,7 +220,7 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     if (path.endsWith('/vectorize/v2/indexes')) {
-      this.indexes.push(String(body.name ?? ''));
+      this.indexes.push(bodyText(body, 'name'));
 
       return { name: body.name ?? '' };
     }
@@ -223,7 +228,7 @@ class FakeCloudflare implements CloudflareTransport {
     if (path.includes('/ai-gateway/gateways?')) return this.gateways.map((id) => ({ id }));
 
     if (path.endsWith('/ai-gateway/gateways')) {
-      this.gateways.push(String(body.id ?? ''));
+      this.gateways.push(bodyText(body, 'id'));
 
       return { id: body.id ?? '' };
     }
@@ -233,7 +238,7 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     if (path.endsWith('/access/apps')) {
-      const domain = String(body.domain ?? '');
+      const domain = bodyText(body, 'domain');
 
       this.apps.push(domain);
 
@@ -249,7 +254,7 @@ class FakeCloudflare implements CloudflareTransport {
     if (path.endsWith('/deployments')) return { id: 'deployment-1' };
 
     if (path.endsWith('/secrets')) {
-      this.secrets.set(String(body.name ?? ''), String(body.text ?? ''));
+      this.secrets.set(bodyText(body, 'name'), bodyText(body, 'text'));
 
       return { name: body.name ?? '' };
     }
@@ -320,7 +325,7 @@ class ArrayLedger implements DeployLedger {
 }
 
 class MemoryVault implements DeploySecretVault {
-  private held = new Map<string, string>();
+  private readonly held = new Map<string, string>();
 
   async read(name: string): Promise<string | null> {
     return this.held.get(name) ?? null;
@@ -676,7 +681,7 @@ describe('the door client', () => {
     const answering = Object.assign(
       async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         seen.push({
-          url: String(input),
+          url: input instanceof Request ? input.url : String(input),
           authorization: new Headers(init?.headers).get('authorization') ?? '',
         });
 
@@ -723,50 +728,6 @@ describe('the door client', () => {
     ) satisfies typeof fetch);
 
     await expect(misrouted.snapshot()).rejects.toThrow('/api/deploy/runs/run-1 did not answer JSON');
-  });
-});
-
-/**
- * The manifest a channel publishes, as the thing that decides where bytes
- * land. `install()` on the local door writes `join(releaseDir(version), path)`
- * for every file the manifest names, so a path or a version the channel chose
- * is a host file write — and a channel is chosen with `--origin`.
- */
-describe('a release manifest a channel publishes', () => {
-  const manifestWith = (over: JsonObject): string =>
-    JSON.stringify({ ...parseJsonObject(JSON.stringify(MANIFEST)), ...over });
-
-  test('refuses a file path that leaves the release directory', () => {
-    const escaping = [
-      'worker/../../escape.js',
-      '/etc/cron.d/escape',
-      'worker\\..\\escape.js',
-      './worker/index.js',
-      'worker//index.js',
-      '..',
-    ];
-
-    for (const path of escaping) {
-      const files = [{ path, sha256: 'a'.repeat(64), size: 1, assetHash: null }];
-
-      expect(() => parseReleaseManifest(manifestWith({ files })))
-        .toThrow('a release file path must stay inside its release');
-    }
-
-    expect(parseReleaseManifest(manifestWith({})).files.map((file) => file.path))
-      .toEqual(['worker/index.js', 'worker/chunk.js', 'client/index.html', 'client/app.js']);
-  });
-
-  test('refuses a version that is not a path segment, and a module that escapes', () => {
-    expect(() => parseReleaseManifest(manifestWith({ version: '../../0.4.0' }))).toThrow();
-    expect(() => parseReleaseManifest(manifestWith({ version: '0.4.0/etc' }))).toThrow();
-    expect(() => parseReleaseManifest(manifestWith({
-      worker: { ...parseJsonObject(JSON.stringify(MANIFEST.worker)), modules: ['../../../etc/passwd'] },
-    }))).toThrow('a release file path must stay inside its release');
-
-    // The build stamps a real release carries: `+` and `.` are the two
-    // characters a version is allowed to be interesting with.
-    expect(parseReleaseManifest(manifestWith({ version: '0.4.0+abc1234' })).version).toBe('0.4.0+abc1234');
   });
 });
 

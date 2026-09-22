@@ -17,6 +17,7 @@ import {
   parseApprovalGrant,
   type ApprovalGrant,
   type ShellApprovalPolicy,
+  type ApprovalDecision,
   type ShellApprovalRequest,
 } from '../src/index';
 
@@ -25,6 +26,13 @@ const THEIRS = 'device';
 
 /** The agent's own disposable machine. */
 const OURS = 'workspace';
+
+/** Every command reaches the same decision on the owner's machine. */
+function decidesAll(commands: readonly string[], decision: ApprovalDecision): void {
+  for (const command of commands) {
+    expect(reviewCommand(command, THEIRS).decision).toBe(decision);
+  }
+}
 
 describe('reviewCommand — the rule table', () => {
   test('returns allow with no hits for benign commands, everywhere', () => {
@@ -102,9 +110,7 @@ describe('reviewCommand — the rule table', () => {
   });
 
   test('warns on env dumps + secret file reads', () => {
-    expect(reviewCommand('printenv', THEIRS).decision).toBe('warn');
-    expect(reviewCommand('cat ~/.aws/credentials', THEIRS).decision).toBe('warn');
-    expect(reviewCommand('cat .env', THEIRS).decision).toBe('warn');
+    decidesAll(['printenv', 'cat ~/.aws/credentials', 'cat .env'], 'warn');
   });
 
   test('denies cloud-metadata SSRF, on every executor', () => {
@@ -144,41 +150,29 @@ describe('reviewCommand — the rule table', () => {
     }
   });
 
-  test('gates su naming a user without a dash', () => {
-    const r = reviewCommand('su bob', THEIRS);
-    expect(r.decision).toBe('gate');
-    expect(r.hits.some((h) => h.rule === 'su')).toBe(true);
-  });
+  const spellings = [
+    { name: 'gates su naming a user without a dash',
+      command: 'su bob', decision: 'gate', rule: 'su' },
+    { name: 'gates chown to root through short flags',
+      command: 'chown -v root file', decision: 'gate', rule: 'chown-root' },
+    { name: 'gates a force flag after the push target',
+      command: 'git push origin main --force', decision: 'gate', rule: 'git-force-push' },
+    { name: 'gates the setgid mode the way it gates setuid',
+      command: 'chmod 2755 f', decision: 'gate', rule: 'chmod-setuid' },
+    { name: 'denies dd to an nvme device with reversed operands',
+      command: 'dd of=/dev/nvme0n1 if=/dev/zero', decision: 'deny', rule: 'dd-overwrite-disk' },
+    { name: 'denies mkfs spelled with -t',
+      command: 'mkfs -t ext4 /dev/sda', decision: 'deny', rule: 'mkfs-physical-disk' },
+  ] as const;
 
-  test('gates chown to root through short flags', () => {
-    const r = reviewCommand('chown -v root file', THEIRS);
-    expect(r.decision).toBe('gate');
-    expect(r.hits.some((h) => h.rule === 'chown-root')).toBe(true);
-  });
+  for (const spelling of spellings) {
+    test(spelling.name, () => {
+      const r = reviewCommand(spelling.command, THEIRS);
 
-  test('gates a force flag after the push target', () => {
-    const r = reviewCommand('git push origin main --force', THEIRS);
-    expect(r.decision).toBe('gate');
-    expect(r.hits.some((h) => h.rule === 'git-force-push')).toBe(true);
-  });
-
-  test('gates the setgid mode the way it gates setuid', () => {
-    const r = reviewCommand('chmod 2755 f', THEIRS);
-    expect(r.decision).toBe('gate');
-    expect(r.hits.some((h) => h.rule === 'chmod-setuid')).toBe(true);
-  });
-
-  test('denies dd to an nvme device with reversed operands', () => {
-    const r = reviewCommand('dd of=/dev/nvme0n1 if=/dev/zero', THEIRS);
-    expect(r.decision).toBe('deny');
-    expect(r.hits.some((h) => h.rule === 'dd-overwrite-disk')).toBe(true);
-  });
-
-  test('denies mkfs spelled with -t', () => {
-    const r = reviewCommand('mkfs -t ext4 /dev/sda', THEIRS);
-    expect(r.decision).toBe('deny');
-    expect(r.hits.some((h) => h.rule === 'mkfs-physical-disk')).toBe(true);
-  });
+      expect(r.decision).toBe(spelling.decision);
+      expect(r.hits.some((h) => h.rule === spelling.rule)).toBe(true);
+    });
+  }
 
   test('leaves ordinary commands with similar shapes alone', () => {
     for (const cmd of ['shutdown -h now', 'sum file', 'chown user file', 'git push origin main']) {
@@ -275,9 +269,11 @@ describe('reviewCommand — a rule fires on what is invoked, not what is mention
   });
 
   test('a program handed to an interpreter is opaque, so the whole line is matched', () => {
-    expect(reviewCommand('bash -c "rm -rf /home/user"', THEIRS).decision).toBe('gate');
-    expect(reviewCommand('python3 -c "os.system(\'rm -rf /home/user\')"', THEIRS).decision).toBe('gate');
-    expect(reviewCommand('ssh box "sudo reboot"', THEIRS).decision).toBe('gate');
+    decidesAll([
+      'bash -c "rm -rf /home/user"',
+      'python3 -c "os.system(\'rm -rf /home/user\')"',
+      'ssh box "sudo reboot"',
+    ], 'gate');
   });
 
   test('deny rules keep matching the whole line, interpreter or not', () => {
@@ -327,12 +323,22 @@ describe('gateExec', () => {
     expect(await h.run('printenv')).toBe('ran:printenv');
   });
 
-  test('deny never calls exec, whatever the approver would say', async () => {
-    const h = harness(THEIRS, { mode: () => 'strict', requestApproval: async () => 'allow' });
-    const result = await h.run('rm -rf /');
-    expect(h.ran).toEqual([]);
-    expect(result).toContain('rm-rf-root');
-  });
+  const refusals = [
+    { name: 'deny never calls exec, whatever the approver would say',
+      approval: 'allow', command: 'rm -rf /', refusal: 'rm-rf-root' },
+    { name: 'the same command on the owner\'s machine is refused when they say no',
+      approval: 'deny', command: 'rm -rf node_modules', refusal: 'Denied by the owner' },
+  ] as const;
+
+  for (const refused of refusals) {
+    test(refused.name, async () => {
+      const h = harness(THEIRS, { mode: () => 'strict', requestApproval: async () => refused.approval });
+      const result = await h.run(refused.command);
+
+      expect(h.ran).toEqual([]);
+      expect(result).toContain(refused.refusal);
+    });
+  }
 
   test('a gate-tier command asks the channel; approved → exec runs', async () => {
     const asked: ShellApprovalRequest[] = [];
@@ -365,13 +371,6 @@ describe('gateExec', () => {
 
     expect(await h.run('rm -rf node_modules')).toBe('ran:rm -rf node_modules');
     expect(asked).toEqual([]);
-  });
-
-  test('the same command on the owner\'s machine is refused when they say no', async () => {
-    const h = harness(THEIRS, { mode: () => 'strict', requestApproval: async () => 'deny' });
-    const result = await h.run('rm -rf node_modules');
-    expect(h.ran).toEqual([]);
-    expect(result).toContain('Denied by the owner');
   });
 
   test('a gate-tier command with no approver wired is refused, not silently allowed', async () => {
@@ -421,17 +420,19 @@ describe('gateExec — standing grants', () => {
     expect(store.asked).toEqual(['parent']);
   });
 
-  test('the grant does not leak to another rule on the same executor', async () => {
-    const store = grantStore(['rm-recursive@device']);
-    expect(await store.on(THEIRS, 'deny').run('sudo reboot')).toContain('Denied by the owner');
-    expect(store.asked).toEqual([THEIRS]);
-  });
+  const ungranted = [
+    { name: 'the grant does not leak to another rule on the same executor', command: 'sudo reboot' },
+    { name: 'a command tripping a granted AND an ungranted rule still asks', command: 'sudo rm -rf /var/tmp/x' },
+  ] as const;
 
-  test('a command tripping a granted AND an ungranted rule still asks', async () => {
-    const store = grantStore(['rm-recursive@device']);
-    expect(await store.on(THEIRS, 'deny').run('sudo rm -rf /var/tmp/x')).toContain('Denied by the owner');
-    expect(store.asked).toEqual([THEIRS]);
-  });
+  for (const asks of ungranted) {
+    test(asks.name, async () => {
+      const store = grantStore(['rm-recursive@device']);
+
+      expect(await store.on(THEIRS, 'deny').run(asks.command)).toContain('Denied by the owner');
+      expect(store.asked).toEqual([THEIRS]);
+    });
+  }
 
   test('"allow always" remembers exactly the rules it was asked about, and then stops asking', async () => {
     const store = grantStore();
