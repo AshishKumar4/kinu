@@ -59,26 +59,23 @@ describe('auto-GEPA default activation', () => {
     expect(storedCadence(db)).toBe(String(DEFAULT_AUTO_GEPA_EVERY_N_TURNS));
   });
 
-  test('a deliberate disable survives the tick and is not documented as an override', async () => {
-    const { agent, db } = orchestratorHarness();
-    agent.setAutoGepaCadence(0);
+  // A stored 0 is a decision, not an absence: the default must not reach it,
+  // any more than it reaches a cadence the owner picked.
+  const chosen = [
+    { name: 'a deliberate disable survives the tick and is not documented as an override', cadence: 0 },
+    { name: 'a cadence the owner chose is left alone', cadence: 7 },
+  ];
 
-    await agent.tickAutoGepa();
+  for (const { name, cadence } of chosen) {
+    test(name, async () => {
+      const { agent, db } = orchestratorHarness();
+      agent.setAutoGepaCadence(cadence);
 
-    // A stored 0 is a decision, not an absence: the default must not reach it.
-    expect(storedCadence(db)).toBe('0');
-    expect(agent.observeAutoGepaCadence()).toBe(0);
-    expect(evolutionNotes(db)).toEqual([]);
-  });
+      await agent.tickAutoGepa();
 
-  test('a cadence the owner chose is left alone', async () => {
-    const { agent, db } = orchestratorHarness();
-    agent.setAutoGepaCadence(7);
-
-    await agent.tickAutoGepa();
-
-    expect(storedCadence(db)).toBe('7');
-    expect(agent.observeAutoGepaCadence()).toBe(7);
-    expect(evolutionNotes(db)).toEqual([]);
-  });
+      expect(storedCadence(db)).toBe(String(cadence));
+      expect(agent.observeAutoGepaCadence()).toBe(cadence);
+      expect(evolutionNotes(db)).toEqual([]);
+    });
+  }
 });

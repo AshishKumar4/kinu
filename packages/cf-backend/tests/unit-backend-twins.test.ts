@@ -439,18 +439,26 @@ describe('backend twin methods', () => {
 describe('interrupted work is reconciled at start of life on BOTH backends', () => {
   const { cfBodies, cliBody } = scanTwins();
 
-  test('each composition surface settles the fork journal through the one core reconciler', () => {
-    expect(delegatesTo(cliBody, 'reconcileInterruptedForks')).toBe(true);
-    expect(cfBodies.some((body) => delegatesTo(body, 'reconcileInterruptedForks'))).toBe(true);
-  });
+  // The gate is the parity that was missing. Without one the reconciler retires
+  // every interrupted run, which is correct only for a caller with no durable
+  // resume path — and both of these have one.
+  const reached = [
+    {
+      name: 'each composition surface settles the fork journal through the one core reconciler',
+      callee: 'reconcileInterruptedForks',
+    },
+    {
+      name: 'each surface hands that reconciler a RESUME GATE, so neither retires what can resume',
+      callee: 'jobRedriveResumeGate',
+    },
+  ];
 
-  test('each surface hands that reconciler a RESUME GATE, so neither retires what can resume', () => {
-    // The parity that was missing. Without a gate the reconciler retires every
-    // interrupted run, which is correct only for a caller with no durable resume
-    // path — and both of these have one.
-    expect(delegatesTo(cliBody, 'jobRedriveResumeGate')).toBe(true);
-    expect(cfBodies.some((body) => delegatesTo(body, 'jobRedriveResumeGate'))).toBe(true);
-  });
+  for (const { name, callee } of reached) {
+    test(name, () => {
+      expect(delegatesTo(cliBody, callee)).toBe(true);
+      expect(cfBodies.some((body) => delegatesTo(body, callee))).toBe(true);
+    });
+  }
 
   test('neither surface sweeps the job registry outside that gate', () => {
     // The ordering is STRUCTURAL rather than a source-position assertion here:

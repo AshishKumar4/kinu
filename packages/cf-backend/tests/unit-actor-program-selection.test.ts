@@ -23,14 +23,21 @@ import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
 import { createSandboxedExecutor } from '../../cli-backend/src/executor';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-test('the real Think turn uses preselected versioned source, not the live alias', async () => {
-  const harness = orchestratorHarness();
-  const { agent, db } = harness;
-  agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
-    content: [{ type: 'text', text: 'default inference' }], finishReason: { unified: 'stop', raw: undefined },
+/** A turn that answers with one text part. Neither case here reads the answer —
+ *  the selected program writes what the assertions look at — so both stand the
+ *  model up the same way and only name what came back differently. */
+function oneTextTurn(text: string) {
+  return scriptedTurnModel({ doGenerate: () => ({
+    content: [{ type: 'text', text }], finishReason: { unified: 'stop', raw: undefined },
     usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
   }) });
+}
+
+test('the real Think turn uses preselected versioned source, not the live alias', async () => {
+  const harness = orchestratorHarness();
+  const { agent, db } = harness;
+  agent.modelFactory = () => oneTextTurn('default inference');
   await agent.onStart();
   const rt = agent.observeRuntime();
   rt.executor = createSandboxedExecutor();
@@ -50,11 +57,7 @@ test('the real Think turn uses preselected versioned source, not the live alias'
 
 test('the loop\'s stop halts new selected-program effects and preserves its cause', async () => {
   const { agent, db } = orchestratorHarness();
-  agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
-    content: [{ type: 'text', text: 'unused default' }], finishReason: { unified: 'stop', raw: undefined },
-    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-  }) });
+  agent.modelFactory = () => oneTextTurn('unused default');
   await agent.onStart();
   const rt = agent.observeRuntime();
   const executor = createSandboxedExecutor();
