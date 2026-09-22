@@ -265,7 +265,7 @@ export class AgentOrchestrator {
    *  is exactly here. `continuation` marks a turn that continues the previous
    *  one (Think auto-continue / recovery): its signals ride in again rather
    *  than being dropped as answered. */
-  beginTurn<Metadata>(now: number, metadata?: Metadata, continuation = false): void {
+  beginTurn(now: number, metadata?: JsonObject, continuation = false): void {
     this.deps.engine.recoverInterruptedWork();
     this.acc.reset(now);
     this.steering.reset();

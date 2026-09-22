@@ -379,7 +379,7 @@ describe('listRecordCells — the grid, with the no-partition cell distinguished
     });
     const whole = listRecordCells(sql, actor, PASS_HANDLE).items;
     expect(whole.map((cell) => cell.descriptor)).toEqual([null, 'len=long', 'len=medium', 'len=short']);
-    const paged = walk((cursor) => listRecordCells(sql, actor, PASS_HANDLE, cursor, 1));
+    const paged = walk((cursor) => listRecordCells(sql, actor, PASS_HANDLE, { cursor: cursor, limit: 1 }));
     expect(paged.map((cell) => cell.descriptor)).toEqual(whole.map((cell) => cell.descriptor));
     expect(paged.map((cell) => cell.occupants)).toEqual(whole.map((cell) => cell.occupants));
   });
@@ -407,13 +407,13 @@ describe('readRecordCell — an unbounded population, paged', () => {
     // repeats the boundary row. A walk whose page never crosses a tie sees neither.
     const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
-    const whole = readRecordCell(sql, actor, handle, null, 100).items;
+    const whole = readRecordCell(sql, actor, handle, { cursor: null, limit: 100 }).items;
     expect(whole).toHaveLength(5);
     const tied = whole.filter((row) => row.value === 0.5);
     expect(tied.length).toBeGreaterThan(1);
 
     for (const limit of [1, 2, 3, 4]) {
-      const paged = walk((cursor) => readRecordCell(sql, actor, handle, cursor, limit));
+      const paged = walk((cursor) => readRecordCell(sql, actor, handle, { cursor: cursor, limit: limit }));
       const digests = paged.map((row) => row.artifactDigest);
       expect(digests).toEqual(whole.map((row) => row.artifactDigest));
       expect(new Set(digests).size).toBe(whole.length);
@@ -423,14 +423,14 @@ describe('readRecordCell — an unbounded population, paged', () => {
   test('a page that says `more` names its own resume point, and `end` cannot be faked', () => {
     const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
-    const first = readRecordCell(sql, actor, handle, null, 2);
+    const first = readRecordCell(sql, actor, handle, { cursor: null, limit: 2 });
     expect(first.status).toBe('more');
 
     if (first.status !== 'more') return;
     // The cursor is the LAST DELIVERED row's identity, so the next page starts strictly
     // after it — not at it.
     expect(first.next.after).toBe(first.items[1]?.artifactDigest);
-    const second = readRecordCell(sql, actor, handle, first.next, 2);
+    const second = readRecordCell(sql, actor, handle, { cursor: first.next, limit: 2 });
     expect(second.items.map((row) => row.artifactDigest))
       .not.toContain(first.items[1]?.artifactDigest);
     // A FULL page is not an exhausted one: 5 occupants at 2 per page is 2 + 2 + 1, and
@@ -439,7 +439,7 @@ describe('readRecordCell — an unbounded population, paged', () => {
     expect(second.status).toBe('more');
 
     if (second.status !== 'more') return;
-    const third = readRecordCell(sql, actor, handle, second.next, 2);
+    const third = readRecordCell(sql, actor, handle, { cursor: second.next, limit: 2 });
     expect(third.status).toBe('end');
     expect(third.items).toHaveLength(1);
   });
@@ -447,11 +447,11 @@ describe('readRecordCell — an unbounded population, paged', () => {
   test('a cursor for an occupant that left the cell RAISES', () => {
     const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
-    const first = readRecordCell(sql, actor, handle, null, 2);
+    const first = readRecordCell(sql, actor, handle, { cursor: null, limit: 2 });
 
     if (first.status !== 'more') throw new Error('the fixture must page');
     void sql`DELETE FROM exploration_records WHERE artifact_digest = ${first.next.after}`;
-    expect(() => readRecordCell(sql, actor, handle, first.next, 2)).toThrow(StaleCursorError);
+    expect(() => readRecordCell(sql, actor, handle, { cursor: first.next, limit: 2 })).toThrow(StaleCursorError);
   });
 
   test('the unfloored set reads through `IS`, and the floored one is a different set', () => {

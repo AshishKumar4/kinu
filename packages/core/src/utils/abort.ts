@@ -5,9 +5,9 @@
  * Each of the three arms is a real case rather than defensive padding: a
  * caller's own `Error` passes through verbatim, because relabelling it would
  * lose the reason; a bare `controller.abort()` produces the shape every caller
- * of this already handled; and a non-Error reason is named here rather than
- * thrown raw, because a thrown string arrives at a `catch` with no cause chain
- * at all.
+ * of this already handled; and a non-Error reason travels on the cause chain
+ * rather than thrown raw, because a thrown string arrives at a `catch` with no
+ * cause chain at all.
  */
 export function abortCause(signal?: AbortSignal): Error {
   const reason: unknown = signal?.reason;
@@ -16,5 +16,5 @@ export function abortCause(signal?: AbortSignal): Error {
 
   if (reason === undefined) return new DOMException('Aborted', 'AbortError');
 
-  return new Error(`the wait was aborted: ${String(reason)}`);
+  return new Error('the wait was aborted', { cause: reason });
 }

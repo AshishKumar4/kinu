@@ -218,9 +218,7 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
     const stack: ScaffoldArchiveEntry[] = [root];
     const seen = new Set<number>();
 
-    while (stack.length > 0) {
-      const node = stack.pop()!;
-
+    for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
       if (seen.has(node.version)) continue;
       seen.add(node.version);
 
@@ -312,9 +310,9 @@ export function selectEvolutionBase(
   const explorable = archive.filter((e) => e.status === 'historical' || e.status === 'rolled_back');
 
   if (!current) {
-    return explorable.length > 0
-      ? { version: explorable[0]!.version, mode: 'explore' }
-      : (archive.length > 0 ? { version: archive[0]!.version, mode: 'current' } : null);
+    if (explorable.length > 0) return { version: explorable[0].version, mode: 'explore' };
+
+    return archive.length > 0 ? { version: archive[0].version, mode: 'current' } : null;
   }
 
   const exploreShare = Math.min(1, Math.max(0, opts.exploreShare));
@@ -332,7 +330,9 @@ export function selectEvolutionBase(
   const weight = (e: ScaffoldArchiveEntry): number =>
     (clade.get(e.version) ?? 0.5) +
     1 / (1 + e.trials) +
-    (e.pathology === null ? 0 : 1 / (1 + coverage.get(e.pathology)!));
+    // A pathology the archive has never recorded is uncovered, which is what
+    // an absent count means here.
+    (e.pathology === null ? 0 : 1 / (1 + (coverage.get(e.pathology) ?? 0)));
 
   const total = explorable.reduce((acc, e) => acc + weight(e), 0);
   let roll = random() * total;
@@ -343,5 +343,5 @@ export function selectEvolutionBase(
     if (roll <= 0) return { version: e.version, mode: 'explore' };
   }
 
-  return { version: explorable[explorable.length - 1]!.version, mode: 'explore' };
+  return { version: explorable[explorable.length - 1].version, mode: 'explore' };
 }

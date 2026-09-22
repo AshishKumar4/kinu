@@ -376,8 +376,14 @@ function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdic
   const pendingSlot = pendingIsA ? 'a' : 'b';
   const currentSlot = pendingIsA ? 'b' : 'a';
 
+  const winner = ((): ShadowTrialVerdict['winner'] => {
+    if (out.winner === pendingSlot) return 'pending';
+
+    return out.winner === currentSlot ? 'current' : 'tie';
+  })();
+
   return {
-    winner: out.winner === pendingSlot ? 'pending' : out.winner === currentSlot ? 'current' : 'tie',
+    winner,
     rationale: out.rationale,
     currentScore: pendingIsA ? out.scoreB : out.scoreA,
     pendingScore: pendingIsA ? out.scoreA : out.scoreB,

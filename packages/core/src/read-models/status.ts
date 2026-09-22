@@ -131,7 +131,7 @@ export async function getChatHistoryPage(
     if (!role) return [];
 
     const entry: ChatHistoryEntry = {
-      id: row.id, role: transcriptRole(row.id, role, row.metadata),
+      id: row.id, role: transcriptRole({ id: row.id, role, metadata: row.metadata }),
       content: row.content, createdAt: row.recordedAt,
     };
 

@@ -180,7 +180,12 @@ export class TaskListStore {
   }
 
   private addLinked(titles: readonly string[], parentId: string | null, now: number, plan: TaskPlan | null): TaskAddResult {
-    if (parentId !== null) plan = this.sql<TaskPlan>`SELECT plan_id AS id, revision, session_id AS sessionId FROM plan_task_links WHERE actor_id=${this.actorId} AND task_id=${parentId}`[0] ?? null;
+    // A subtask inherits its parent's link rather than the actor's live scope:
+    // the parent decides which plan revision the new row belongs to.
+    const linkedPlan = parentId === null
+      ? plan
+      : this.sql<TaskPlan>`SELECT plan_id AS id, revision, session_id AS sessionId FROM plan_task_links WHERE actor_id=${this.actorId} AND task_id=${parentId}`[0] ?? null;
+
     const parent = parentId === null ? null : this.get(parentId);
 
     if (parentId !== null && !parent) {
@@ -220,7 +225,7 @@ export class TaskListStore {
       void this.sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
         VALUES (${this.actorId}, ${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${now})`;
 
-      if (plan) void this.sql`INSERT INTO plan_task_links(actor_id,task_id,plan_id,revision,session_id) VALUES (${this.actorId},${id},${plan.id},${plan.revision},${plan.sessionId})`;
+      if (linkedPlan) void this.sql`INSERT INTO plan_task_links(actor_id,task_id,plan_id,revision,session_id) VALUES (${this.actorId},${id},${linkedPlan.id},${linkedPlan.revision},${linkedPlan.sessionId})`;
       added.push({ id, parentId, title, status: 'open', createdAt: now, updatedAt: now, note: null });
       seq++;
     }

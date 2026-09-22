@@ -174,6 +174,21 @@ export type SplitPhaseEvent =
  *  would credit work nobody scored. */
 const NO_GROUNDED_SIGNAL = 0.5;
 
+/** One merge synthesis: the reports to fold, why the split happened, and the
+ *  parent context and budget the merge is charged against. `headIds` defaults to
+ *  the ids of the reports and `headScores` to none, which is what an ungrounded
+ *  runtime has to report. */
+export interface MergeRequest {
+  readonly reports: readonly HeadReport[];
+  readonly rationale: string;
+  readonly strategy: MergeStrategy;
+  readonly inheritedContext: readonly SerializedMessage[];
+  readonly parentBudget: HeadBudget;
+  readonly mode: WorkMode;
+  readonly headIds?: readonly HeadId[];
+  readonly headScores?: readonly HeadScore[];
+}
+
 export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
@@ -410,16 +425,16 @@ export class HeadController {
     const headScores = await this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode);
 
     // Synthesize via LLM (k-sample median when grounded; n=1 otherwise).
-    const mergeResult = await this.merge(
+    const mergeResult = await this.merge({
       reports,
-      opts.request.rationale,
+      rationale: opts.request.rationale,
       strategy,
-      opts.inheritedContext,
+      inheritedContext: opts.inheritedContext,
       parentBudget,
-      opts.mode,
-      reports.map((r) => r.id),
+      mode: opts.mode,
+      headIds: reports.map((r) => r.id),
       headScores,
-    );
+    });
 
     if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult, strategy);
     opts.onPhase?.({
@@ -488,7 +503,7 @@ export class HeadController {
 
         const evaluation = await evaluateWithMultiModelJudging({
           task: rationale,
-          trajectory: siblings[i]!,
+          trajectory: siblings[i],
           siblings: siblings.filter((_, j) => j !== i),
           executor: g.executor,
           explorer: g.explorer,
@@ -515,7 +530,7 @@ export class HeadController {
 
     return settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
-      const r = reports[i]!;
+      const r = reports[i];
       // The reason itself, not its `message`: a provider error carries the url
       // and cause that say WHICH judge broke, and AI SDK call errors routinely
       // have an empty message.
@@ -539,16 +554,10 @@ export class HeadController {
    * carries each head's FULL evidence + artifacts (no 6×200-char clipping) so no
    * finding is lost on the way into the merge.
    */
-  async merge(
-    reports: readonly HeadReport[],
-    rationale: string,
-    strategy: MergeStrategy,
-    inheritedContext: readonly SerializedMessage[],
-    parentBudget: HeadBudget,
-    mode: WorkMode,
-    headIds: readonly HeadId[] = reports.map((r) => r.id),
-    headScores: readonly HeadScore[] = [],
-  ): Promise<MergeResult> {
+  async merge(request: MergeRequest): Promise<MergeResult> {
+    const { reports, rationale, strategy, inheritedContext, parentBudget, mode } = request;
+    const headIds = request.headIds ?? reports.map((r) => r.id);
+    const headScores = request.headScores ?? [];
     const grounded = mode !== 'plan' && this.runtime.grounding != null;
     const costSummary = summarizeCost(reports, parentBudget);
     const fileChanges = collectFileChanges(reports);
@@ -577,7 +586,7 @@ export class HeadController {
       };
     }
 
-    const prompt = buildMergePrompt(reports, rationale, strategy, inheritedContext, grounded ? headScores : []);
+    const prompt = buildMergePrompt({ reports, rationale, strategy, inheritedContext, headScores: grounded ? headScores : [] });
 
     const fallback = (errMsg: string): MergeResult => ({
       mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
@@ -652,7 +661,7 @@ export class HeadController {
       return { ok: false, error: firstError?.error ?? 'all merge samples failed' };
     }
 
-    if (samples.length === 1) return { ok: true, output: samples[0]! };
+    if (samples.length === 1) return { ok: true, output: samples[0] };
 
     // Score each candidate synthesis with the grounded judge and keep the
     // median — the same median ensemble the MCTS evaluator uses.
@@ -679,12 +688,12 @@ export class HeadController {
         { sampleIndex: i },
       );
 
-      return { sample: samples[i]!, score: null };
+      return { sample: samples[i], score: null };
     });
 
     const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
 
-    if (usable.length === 0) return { ok: true, output: samples[0]! };
+    if (usable.length === 0) return { ok: true, output: samples[0] };
     const medianScore = median(usable.map((x) => x.score));
 
     // Pick the sample whose score is closest to the median.
@@ -860,13 +869,18 @@ function fallbackNarrative(reports: readonly HeadReport[], rationale: string, er
   return lines.join('\n');
 }
 
-function buildMergePrompt(
-  reports: readonly HeadReport[],
-  rationale: string,
-  strategy: MergeStrategy,
-  inheritedContext: readonly SerializedMessage[],
-  headScores: readonly HeadScore[] = [],
-): string {
+/** What the merge prompt renders: the same reports and framing the merge runs
+ *  on, with the grounded scores the prompt is allowed to show (empty when the
+ *  runtime grounds nothing). */
+interface MergePromptInput {
+  readonly reports: readonly HeadReport[];
+  readonly rationale: string;
+  readonly strategy: MergeStrategy;
+  readonly inheritedContext: readonly SerializedMessage[];
+  readonly headScores: readonly HeadScore[];
+}
+
+function buildMergePrompt({ reports, rationale, strategy, inheritedContext, headScores }: MergePromptInput): string {
   const strategyGuidance = {
     synthesize: 'Synthesize the heads\' findings into a single coherent narrative. Reconcile disagreements explicitly; prefer the head with stronger evidence.',
     best_of: 'Pick the strongest single head\'s narrative. Briefly cite weaker heads only for what they add.',

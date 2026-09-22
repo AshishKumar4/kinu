@@ -94,6 +94,16 @@ function requiredIdentity(value: string): string {
   return value;
 }
 
+/** Where an actor stands. Deletion outranks retirement: a deleted row is gone
+ *  whether or not its retirement ever finished. */
+function actorState(actor: WorkspaceActor): ActorDirectoryResult['state'] {
+  if (actor.deletedAt !== null) return 'deleted';
+
+  if (actor.retiringAt !== null) return 'retiring';
+
+  return 'active';
+}
+
 /** Owns membership. A handle issued elsewhere is not authority over this database. */
 export class WorkspaceActorDirectory {
   private readonly handles = new WeakSet<ActorHandle>();
@@ -480,7 +490,7 @@ export class WorkspaceActorDirectory {
   private result(child: WorkspaceActor): ActorDirectoryResult {
     return {
       reference: { actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId },
-      state: child.deletedAt !== null ? 'deleted' : child.retiringAt !== null ? 'retiring' : 'active',
+      state: actorState(child),
       kind: child.kind, lifetime: child.lifetime, creationId: child.creationId, createdAt: child.createdAt, name: child.name, storageKey: child.storageKey,
     };
   }

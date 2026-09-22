@@ -87,7 +87,7 @@ export function clearBusy(term: TerminalWriter, state: LineTerminalState) {
  */
 export class LineTerminalState {
   #generation = 0;
-  #writtenOutputIds = new Set<string>();
+  readonly #writtenOutputIds = new Set<string>();
   #buffer = '';
   #running = false;
   #busy = false;
@@ -143,7 +143,7 @@ export class LineTerminalState {
     if (this.#buffer === '' || this.#buffer.endsWith('\n')) return false;
     // One code point, not one UTF-16 unit: input arrives by code point, so
     // slicing one unit off an astral character submits a lone surrogate.
-    const points = [...this.#buffer];
+    const points = Array.from(this.#buffer);
     points.pop();
     this.#buffer = points.join('');
 
@@ -384,7 +384,7 @@ export function feedInput(
   data: string,
 ): string | null {
   // By code point, so an astral character stays one unit.
-  const chars = [...data];
+  const chars = Array.from(data);
 
   for (let i = 0; i < chars.length; i += 1) {
     const ch = chars[i];

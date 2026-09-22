@@ -39,7 +39,7 @@ export function copyHeaders(init: HeadersInit | undefined): Headers {
   if (init === undefined) return headers;
 
   if (init instanceof Headers) {
-    init.forEach((value, name) => { headers.append(name, value); });
+    for (const [name, value] of init) headers.append(name, value);
 
     return headers;
   }
@@ -92,7 +92,7 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
 
     const headers = copyHeaders(init?.headers);
 
-    for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
+    for (const [name, value] of Object.entries(auth.headers)) headers.set(name, value);
     const url = input instanceof Request ? input.url : input.toString();
     const rewritten = opts.mutate?.({ url, headers, auth });
 
@@ -137,14 +137,14 @@ export async function catalogModelInfo(
   return models.find((m) => m.id === modelId) ?? null;
 }
 
-export function nonEmptyString<T>(value: T): string | undefined {
-  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
+export function nonEmptyString(input: { value: unknown }): string | undefined {
+  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);
 
   return parsed.success ? parsed.output : undefined;
 }
 
-export function positiveInteger<T>(value: T): number | undefined {
-  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), value);
+export function positiveInteger(input: { value: unknown }): number | undefined {
+  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), input.value);
 
   return parsed.success ? Math.floor(parsed.output) : undefined;
 }
@@ -266,11 +266,11 @@ function readProviderFailure(
   const fields = record.output;
   const status = v.safeParse(StatusFieldSchema, fields);
   const reported = status.success ? status.output.status ?? status.output.statusCode : undefined;
-  const providerCode = nonEmptyString(fields.code) ?? nonEmptyString(fields.type);
+  const providerCode = nonEmptyString({ value: fields.code }) ?? nonEmptyString({ value: fields.type });
 
-  const stated = nonEmptyString(fields.message)
-    ?? nonEmptyString(fields.error_description)
-    ?? nonEmptyString(fields.detail);
+  const stated = nonEmptyString({ value: fields.message })
+    ?? nonEmptyString({ value: fields.error_description })
+    ?? nonEmptyString({ value: fields.detail });
 
   // A gateway wraps the provider's reason and stamps its own code and status on
   // the outside, so the envelope's identifiers still count when the payload

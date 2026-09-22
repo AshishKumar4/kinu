@@ -261,7 +261,7 @@ describe('inherited approval policy', () => {
       },
       (error) => error.message,
       'sandbox',
-      policy,
+      { policy },
     );
 
     return { ran, run: () => run(GATED) };

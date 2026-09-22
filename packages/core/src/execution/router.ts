@@ -12,7 +12,7 @@ import { gateProviderExec } from './approval';
 import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
 
 export class DefaultExecutionRouter implements ExecutionRouter {
-  private providers = new Map<string, ExecutorProvider>();
+  private readonly providers = new Map<string, ExecutorProvider>();
 
   /**
    * Every provider this router hands out — to `shell`'s dispatch via

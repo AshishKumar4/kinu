@@ -76,7 +76,8 @@ export function toHeadStep(step: TraceStepLike): HeadStep | null {
   });
 
   const text = step.text?.trim() ?? "";
-  const reasoning = step.reasoningText?.trim() || undefined;
+  const trimmedReasoning = step.reasoningText?.trim();
+  const reasoning = trimmedReasoning === "" ? undefined : trimmedReasoning;
 
   if (!text && !reasoning && toolCalls.length === 0) return null;
 

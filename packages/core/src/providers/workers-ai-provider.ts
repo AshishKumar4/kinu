@@ -29,7 +29,7 @@ export function createWorkersAIProvider(
       if (developmentBinding) return true;
       const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
 
-      return !!auth?.baseURL;
+      return Boolean(auth?.baseURL);
     },
     unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
     listModels: (deps): Promise<ModelInfo[]> => listModelsDevProviderModels('cloudflare-workers-ai', deps, {

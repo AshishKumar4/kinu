@@ -238,8 +238,8 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
       modelCallsA: foldA.modelCalls, modelCallsB: foldB.modelCalls,
       peakPromptTokensA: foldA.peakPromptTokens, peakPromptTokensB: foldB.peakPromptTokens,
       breachA: foldA.breach, breachB: foldB.breach,
-      errorA: foldA.error || undefined,
-      errorB: foldB.error || undefined,
+      errorA: foldA.error,
+      errorB: foldB.error,
     });
     outcomes.push({ taskId, a: a.map((x) => x.passed), b: b.map((x) => x.passed) });
   }
@@ -314,9 +314,11 @@ export function renderBenchSummary(report: BenchReport): string {
 
 function renderCase(c: BenchCaseScore): string {
   const mark = (passes: number, breach: BudgetBreach | null): string => {
-    const score = c.attempts === 1 ? (passes === 1 ? 'pass' : 'FAIL') : `${passes}/${c.attempts}`;
+    const suffix = breach ? `(${breach})` : '';
 
-    return `${score}${breach ? `(${breach})` : ''}`;
+    if (c.attempts === 1) return `${passes === 1 ? 'pass' : 'FAIL'}${suffix}`;
+
+    return `${passes}/${c.attempts}${suffix}`;
   };
 
   return `${c.taskId.padEnd(28)} A=${mark(c.passesA, c.breachA).padEnd(14)} B=${mark(c.passesB, c.breachB)}` +

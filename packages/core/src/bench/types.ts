@@ -231,8 +231,8 @@ const TokenFigureSchema = v.pipe(
   )),
 );
 
-export function usageTokens<Reported>(usage: Reported): number | undefined {
-  const parsed = v.safeParse(UsageBoundarySchema, usage);
+export function usageTokens(usage: { reported: unknown }): number | undefined {
+  const parsed = v.safeParse(UsageBoundarySchema, usage.reported);
 
   if (!parsed.success) return undefined;
   const input = v.safeParse(TokenFigureSchema, parsed.output.inputTokens);

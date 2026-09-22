@@ -6,6 +6,7 @@ import {
   FILE_TOOL_ACTIONS, MEMORY_FACT_ACTIONS, MEMORY_NOTE_ACTIONS, replayPolicyFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS,
 } from '../src/tools/registry';
 import { toolCallEffect } from '../src/tools/tool-call-summary';
+import type { JsonObject } from '../src/utils/json';
 
 test('the member table is what the grant, the graph and the audit row read', () => {
   const rows: readonly [Parameters<typeof memberEffect>[0], string, 'read' | 'mutate'][] = [
@@ -47,7 +48,7 @@ test('the tool rows restate the native classification — pinned to the tools th
     for (const action of actions) {
       // `tasks.mode` is an action that either reads or switches the role; the
       // member covers both forms, so the probe carries the mutating one.
-      const probe = tool === 'tasks' && action === 'mode' ? { action, role: 'researcher' } : { action };
+      const probe: JsonObject = tool === 'tasks' && action === 'mode' ? { action, role: 'researcher' } : { action };
       const expected = replayPolicyFor(tool) === 'safe' || toolCallEffect(tool, probe) === 'read' ? 'read' : 'mutate';
 
       expect(toolActionEffect(tool, action)).toBe(expected);

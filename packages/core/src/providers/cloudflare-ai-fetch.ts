@@ -71,9 +71,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
 
     if (!auth?.baseURL) return errorResponse(401, opts.missingCredentialMessage);
 
-    const originalUrl = v.is(v.string(), input) ? input
-      : input instanceof URL ? input.toString()
-        : input.url;
+    const originalUrl = input instanceof Request ? input.url : input.toString();
 
     const send = async (resolved: AuthResolution) => {
       // Not `new Headers(init?.headers)`: the DOM HeadersInit union's iterable
@@ -84,7 +82,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
       const incoming = init?.headers;
 
       if (incoming !== undefined) {
-        if (incoming instanceof Headers) incoming.forEach((value, key) => headers.set(key, value));
+        if (incoming instanceof Headers) for (const [key, value] of incoming) headers.set(key, value);
         else if (Symbol.iterator in incoming) {
           for (const [key, value] of incoming) headers.set(key, value);
         } else for (const [key, value] of Object.entries(incoming)) headers.set(key, value);

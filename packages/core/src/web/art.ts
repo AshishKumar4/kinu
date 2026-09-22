@@ -50,14 +50,27 @@ export function seededRandom(seed: number): () => number {
 }
 
 export function clamp(value: number, low: number, high: number): number {
-  return value < low ? low : value > high ? high : value;
+  if (value < low) return low;
+
+  if (value > high) return high;
+
+  return value;
 }
 
-/** The distance between two view points in view widths: `aspect` (height
- *  over width) scales y so a length reads the same in both directions. */
-export function viewDistance(aspect: number, x0: number, y0: number, x1: number, y1: number): number {
-  const dx = x1 - x0;
-  const dy = (y1 - y0) * aspect;
+/** Two view points and the aspect (height over width) that scales y. */
+export interface ViewSpan {
+  readonly aspect: number;
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/** The distance between two view points in view widths: `aspect` scales y so a
+ *  length reads the same in both directions. */
+export function viewDistance(span: ViewSpan): number {
+  const dx = span.x1 - span.x0;
+  const dy = (span.y1 - span.y0) * span.aspect;
 
   return Math.sqrt(dx * dx + dy * dy);
 }

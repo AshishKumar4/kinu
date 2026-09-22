@@ -100,28 +100,28 @@ export interface RemoteMcpTool {
  */
 export function describeMcpTool(
   server: { id: string; name: string },
-  tool: RemoteMcpTool,
+  remote: RemoteMcpTool,
 ): SerializableToolDescriptor {
   const descriptor: SerializableToolDescriptor = {
     serverId: server.id,
     serverName: server.name,
-    name: tool.name,
-    toolKey: mcpToolKey(server.name, tool.name),
-    inputSchema: v.parse(JsonObjectSchema, tool.inputSchema),
+    name: remote.name,
+    toolKey: mcpToolKey(server.name, remote.name),
+    inputSchema: v.parse(JsonObjectSchema, remote.inputSchema),
   };
 
-  const description = nonBlank(sanitizeRemoteProse(tool.description));
+  const description = nonBlank(sanitizeRemoteProse(remote.description));
 
   if (description !== undefined) descriptor.description = description;
 
-  const title = nonBlank(sanitizeRemoteProse(tool.title))
-    ?? nonBlank(sanitizeRemoteProse(tool.annotations?.title));
+  const title = nonBlank(sanitizeRemoteProse(remote.title))
+    ?? nonBlank(sanitizeRemoteProse(remote.annotations?.title));
 
   if (title !== undefined) descriptor.title = title;
 
-  if (tool.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, tool.outputSchema);
+  if (remote.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, remote.outputSchema);
 
-  if (tool.annotations?.readOnlyHint === true) descriptor.readOnly = true;
+  if (remote.annotations?.readOnlyHint === true) descriptor.readOnly = true;
 
   return descriptor;
 }
@@ -252,8 +252,22 @@ export interface McpSurfaceBudget {
  *  closures and schema validators are functions and drop out of
  *  `JSON.stringify`, which leaves the description and the JSON Schema: what the
  *  request actually carries. */
-export function toolSurfaceTokens<Surface>(surface: Surface): number {
+/** What can be priced on the tool-surface scale: an actor's whole tool set, one
+ *  remote descriptor, or a list of them. */
+type ToolSurfacePriceable = ToolSet | SerializableToolDescriptor | readonly SerializableToolDescriptor[];
+
+export function toolSurfaceTokens(surface: ToolSurfacePriceable): number {
   return estimateTokens(JSON.stringify(surface).length);
+}
+
+/** Deterministic catalog order: server name, then tool name. Two turns reading
+ *  the same rows admit the same set, so the surface's content hash holds still. */
+function byServerThenTool(a: SerializableToolDescriptor, b: SerializableToolDescriptor): number {
+  if (a.serverName !== b.serverName) return a.serverName < b.serverName ? -1 : 1;
+
+  if (a.name === b.name) return 0;
+
+  return a.name < b.name ? -1 : 1;
 }
 
 export interface McpDescriptorAdmission {
@@ -290,10 +304,7 @@ export function admitMcpDescriptors(
 ): McpDescriptorAdmission {
   const total = Math.max(0, stepContextLimit(budget) - budget.nativeToolTokens);
 
-  const ordered = [...descriptors].sort((a, b) =>
-    a.serverName === b.serverName
-      ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
-      : (a.serverName < b.serverName ? -1 : 1));
+  const ordered = [...descriptors].sort(byServerThenTool);
 
   const admitted: SerializableToolDescriptor[] = [];
   const lost = new Map<string, number>();

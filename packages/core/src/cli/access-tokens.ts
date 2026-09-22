@@ -150,17 +150,29 @@ export async function verifyAccessToken(sql: SqlExec, token: string): Promise<Ac
   return { ok: true, userId, tokenHash, scopes };
 }
 
+const ListedTokenSchema = v.object({
+  token_hash: v.string(),
+  name: v.string(),
+  scopes: v.string(),
+  created_at: v.number(),
+  last_used_at: v.nullable(v.number()),
+});
+
 export function listAccessTokens(sql: SqlExec): AccessTokenRecord[] {
   return sql.exec(
     `SELECT token_hash, name, scopes, created_at, last_used_at
        FROM user_access_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC`,
-  ).toArray().map((row) => ({
-    tokenHash: String(row.token_hash),
-    name: String(row.name),
-    scopes: parseScopeList(String(row.scopes)),
-    createdAt: Number(row.created_at),
-    lastUsedAt: row.last_used_at === null ? null : Number(row.last_used_at),
-  }));
+  ).toArray().map((row) => {
+    const stored = v.parse(ListedTokenSchema, row);
+
+    return {
+      tokenHash: stored.token_hash,
+      name: stored.name,
+      scopes: parseScopeList(stored.scopes),
+      createdAt: stored.created_at,
+      lastUsedAt: stored.last_used_at,
+    };
+  });
 }
 
 /** Revoke by token name or token hash. Already-revoked or unknown refs report

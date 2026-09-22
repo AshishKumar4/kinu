@@ -105,6 +105,7 @@ import {
 import {
   parseJsonObject,
   type JsonObject,
+  type JsonValue,
 } from '../utils/json';
 import {
   countedMsgSend,
@@ -564,7 +565,7 @@ interface UnifiedRosterResult {
  *  `agents.*` codemode namespace.
  *  Presence-typed so prompt assembly can ask without building the substrate. */
 export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: object }): AgentsToolAction[] {
-  const converse = !!deps.team || !!deps.peers;
+  const converse = deps.team !== undefined || deps.peers !== undefined;
 
   const present = {
     // Structural rather than a choice: a search needs a model to expand with and a
@@ -572,14 +573,27 @@ export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: 
     // not a capability a backend could wire half of, so it gets no deps group of
     // its own — an actor with the exploration substrate can run a configured
     // search, and one without it has no search rung at all.
-    swarm: !!deps.swarm,
+    swarm: deps.swarm !== undefined,
     hire: converse,
     msg: converse,
     list: converse,
-    dismiss: !!deps.team,
+    dismiss: deps.team !== undefined,
   } satisfies Record<AgentsToolAction, boolean>;
 
   return AGENTS_TOOL_ACTIONS.filter((action) => present[action]);
+}
+
+/** How the conversing rung is described: a peer surface gets the full text, a
+ *  subordinates-only surface gets the two actions it actually has, and a surface
+ *  with neither says nothing about conversing at all. */
+function converseRung(deps: AgentsToolDeps): string[] {
+  if (deps.peers) return [DELEGATION_CONVERSE];
+
+  if (deps.team) {
+    return ['msg says something to a subordinate by name without handing it a workstream; list shows the roster.'];
+  }
+
+  return [];
 }
 
 /** The docstring for a given action surface — composed from the same registry
@@ -593,11 +607,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
     ...(deps.swarm ? [DELEGATION_RUNGS.swarm] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.team?.temporary ? [DELEGATION_TASK_LIFETIME] : []),
-    ...(deps.peers
-      ? [DELEGATION_CONVERSE]
-      : deps.team
-        ? ['msg says something to a subordinate by name without handing it a workstream; list shows the roster.']
-        : []),
+    ...converseRung(deps),
   ].join(' ');
 
   const returns = AGENTS_RESULT_PARTS.roster
@@ -1149,7 +1159,7 @@ function nearestField(name: string, candidates: readonly string[]): string | und
  *  behind this is what reports what it actually is. */
 const FieldNamesSchema = v.record(v.string(), v.unknown());
 
-function fieldNames<T>(value: T): readonly string[] {
+function fieldNames(value: JsonValue): readonly string[] {
   const parsed = v.safeParse(FieldNamesSchema, value);
 
   return parsed.success ? Object.keys(parsed.output) : [];
@@ -1161,6 +1171,14 @@ const FIELD_RULE = 'A field the called action cannot act on is refused rather th
 
 function takesSentence(action: AgentsToolAction): string {
   return `action "${action}" takes: ${fieldsOf(action).join(', ')}.`;
+}
+
+/** The field list a name mistake is corrected against: the called action's own
+ *  fields when the call named one, the whole surface's otherwise. */
+function fieldsSentence(action: AgentsToolAction | undefined): string {
+  if (action) return ` ${takesSentence(action)}`;
+
+  return ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`;
 }
 
 /**
@@ -1177,8 +1195,8 @@ function takesSentence(action: AgentsToolAction): string {
  * `budget_usd` on `hire` parsed cleanly and was then ignored, which is the same
  * silence the strict object closes, one layer in.
  */
-function agentsFieldRefusal<T>(input: T): string | undefined {
-  const parsed = v.safeParse(FieldNamesSchema, input);
+function agentsFieldRefusal(call: { input: unknown }): string | undefined {
+  const parsed = v.safeParse(FieldNamesSchema, call.input);
 
   if (!parsed.success) return undefined;
   const declared = v.safeParse(v.picklist(AGENTS_TOOL_ACTIONS), parsed.output['action']);
@@ -1220,10 +1238,7 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
   }
 
   if (problems.length === 0) return undefined;
-
-  const fields = listFields
-    ? action ? ` ${takesSentence(action)}` : ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`
-    : '';
+  const fields = listFields ? fieldsSentence(action) : '';
 
   return `${problems.join(' ')}${fields} ${FIELD_RULE}`;
 }
@@ -1233,12 +1248,12 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
  * tool's own execute and the `agents.*` codemode namespace. Throws a message the
  * caller can correct itself from.
  */
-export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
-  const refusal = agentsFieldRefusal(input);
+export function parseAgentsToolInput(call: { input: unknown }): AgentsToolInput {
+  const refusal = agentsFieldRefusal(call);
 
   if (refusal) throw new Error(refusal);
 
-  return v.parse(AgentsToolInputSchema, input);
+  return v.parse(AgentsToolInputSchema, call.input);
 }
 
 /** A durable job row, at the width the replay parse reads it. */
@@ -1270,9 +1285,9 @@ function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partia
  *  which cap. `extra` is what no field name covers — the row's SETTLEMENT, which a
  *  swarm has no equivalent of, so a translated re-drive returns its candidates
  *  unranked and unsynthesised and says so. */
-function recordDroppedFields<T>(
+function recordDroppedFields(
   kind: string,
-  input: T,
+  input: JsonValue,
   resumed: AgentsToolInput,
   extra: readonly string[],
 ): void {
@@ -1343,7 +1358,7 @@ function translateStoredSwarmContext(row: StoredSwarmContext): StoredSwarmContex
   return { ...row, config: { ...row.config, context: 'inherit' } };
 }
 
-export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
+export function resumableAgentsInput(kind: string, input: JsonValue): AgentsToolInput | null {
   if (kind !== 'agents') return null;
   const rewritten = v.safeParse(StoredSwarmContextSchema, input);
   const parsed = v.safeParse(StoredAgentsInputSchema, rewritten.success ? translateStoredSwarmContext(rewritten.output) : input);
@@ -1398,7 +1413,9 @@ function missionScope(
   let labels: readonly string[] = budget.scope;
 
   if (limits) {
-    const label = input.budget_label?.trim() || `swarm-${nanoid()}`;
+    // A blank label names no sub-ledger; the generated one keeps it addressable.
+    const declared = input.budget_label?.trim();
+    const label = declared === undefined || declared === '' ? `swarm-${nanoid()}` : declared;
     budget.declare(label, limits);
     labels = [label];
   }
@@ -1498,21 +1515,35 @@ function resolveDelegatedProfile(
   }
 }
 
-async function runSwarmAction(
-  deps: AgentsToolDeps,
-  input: AgentsToolInput,
-  mode: WorkMode,
-  toolOptions: AgentsToolCallOptions | undefined,
-  budget?: MissionGovernor,
-): Promise<object> {
-  const swarm = deps.swarm!;
+/** What every action arm is handed: who is wired, what was asked, the turn's
+ *  mode, and the SDK's call options. */
+interface AgentsActionCall {
+  deps: AgentsToolDeps;
+  input: AgentsToolInput;
+  mode: WorkMode;
+  toolOptions: AgentsToolCallOptions | undefined;
+}
+
+interface SwarmActionCall extends AgentsActionCall {
+  /** The mission ledger this search nests under, where one is wired. */
+  budget?: MissionGovernor;
+}
+
+async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmActionCall): Promise<object> {
+  const swarm = deps.swarm;
+
+  // `actionAdmission` refused this call already when no exploration substrate is
+  // wired. Said again here because that fact lives in the enum rather than in
+  // the type, and `unsupported` is the same answer either way.
+  if (!swarm) throw new KinuError('unsupported', 'this actor wires no exploration substrate, so `swarm` has nothing to run');
+
   // THIS CALL IS A RE-DRIVE, or it is not — and the distinction decides where
   // the profile comes from BEFORE anything resolves: a re-drive replays a
   // stored snapshot verbatim and never consults today's catalog, so a catalog
   // edit cannot reach an in-flight tree mid-flight. Read off the options bag
   // for the reason `RESUME_REDRIVE_OPTION` states: the input IS the durable
   // row, and nothing in it could distinguish the two.
-  const redrive = readResumeRedrive(toolOptions);
+  const redrive = readResumeRedrive({ toolOptions });
 
   if (!redrive && !input.preset && !deps.profile) {
     return badInput(`swarm needs \`preset\` — the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
@@ -1697,7 +1728,7 @@ async function runSwarmAction(
     redrive,
   };
 
-  readSpawnStarted(toolOptions)?.();
+  readSpawnStarted({ toolOptions })?.();
   const result = await inWorkMode(mode, () => runSwarm(runDeps, resolved));
 
   if ('reason' in result) throw new KinuError(result.reason, result.error);
@@ -1877,12 +1908,20 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
 
 type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 'swarm'>>;
 
+/** Who `agent` may name on this surface, in the words the schema shows the model. */
+function converseTargets(deps: AgentsToolDeps): string {
+  if (deps.team && deps.peers) {
+    return 'a subordinate here or a peer workspace agent (subordinate names win a collision)';
+  }
+
+  if (deps.team) return 'a subordinate';
+
+  return 'a peer workspace agent';
+}
+
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
-
-  const targets = deps.team && deps.peers
-    ? 'a subordinate here or a peer workspace agent (subordinate names win a collision)'
-    : deps.team ? 'a subordinate' : 'a peer workspace agent';
+  const targets = converseTargets(deps);
 
   const properties: ConverseSchemaProperties = {
     agent: {
@@ -1958,7 +1997,9 @@ function agentsInputProperties(deps: AgentsToolDeps) {
  * accepted where nothing acts on it.
  */
 function requestedTopic(input: AgentsToolInput): { topic: string } {
-  const topic = input.topic?.trim() || 'message';
+  const requested = input.topic?.trim();
+  // A blank topic is no topic: the default is what the transport routes on.
+  const topic = requested === undefined || requested === '' ? 'message' : requested;
 
   return topic === PEER_REPLY_TOPIC
     ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
@@ -2055,13 +2096,11 @@ function assertHireVariant(input: AgentsToolInput): void {
  */
 /** The `hire scope=workspace` route: a whole new workspace, which only the
  *  orchestrator's peer seam may open. */
-async function hireWorkspace(
-  deps: AgentsToolDeps,
-  input: AgentsToolInput,
-  mode: WorkMode,
-  toolOptions: AgentsToolCallOptions | undefined,
-  spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null,
-): Promise<object> {
+interface WorkspaceHireCall extends AgentsActionCall {
+  spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null;
+}
+
+async function hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal }: WorkspaceHireCall): Promise<object> {
   const peers = deps.peers;
 
   if (input.context !== undefined) return badInput('field "context" belongs to a subordinate hire with `role`, not scope="workspace"');
@@ -2103,14 +2142,13 @@ async function hireWorkspace(
 
 /** The `hire` arm's create route: a role resolves to a spawn, durable or
  *  task-lifetime, and the depth cap has already ruled it in. */
-async function hireCreate(
-  deps: AgentsToolDeps,
-  team: TeamToolDeps,
-  input: AgentsToolInput & { role: string; mission: string },
-  mode: WorkMode,
-  lifetime: 'durable' | 'task',
-  toolOptions: AgentsToolCallOptions | undefined,
-): Promise<object> {
+interface CreateHireCall extends AgentsActionCall {
+  team: TeamToolDeps;
+  input: AgentsToolInput & { role: string; mission: string };
+  lifetime: 'durable' | 'task';
+}
+
+async function hireCreate({ deps, team, input, mode, lifetime, toolOptions }: CreateHireCall): Promise<object> {
   const ctx = deps.profile?.();
 
   if (!ctx) {
@@ -2156,7 +2194,7 @@ async function hireCreate(
     return await temporary.run(request);
   }
 
-  const delegated = resolveDelegatedProfile(ctx, input.role!, input.tier);
+  const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
 
   if ('error' in delegated) return badInput(delegated.error);
   // Only an EXPLICIT override rides along: a role's own default tier
@@ -2191,14 +2229,13 @@ function isHireCreateInput(
 /** The `hire` arm: hand work to an existing agent, or create one — subordinate
  *  (durable or task) or a whole workspace. Reuses the dispatch's own guards so
  *  budget and depth accounting stay where the spend is counted. */
+interface HireActionCall extends WorkspaceHireCall {
+  spawnGuard: () => void;
+  isSubordinate: (name: string) => Promise<boolean>;
+}
+
 async function runHireAction(
-  deps: AgentsToolDeps,
-  input: AgentsToolInput,
-  mode: WorkMode,
-  toolOptions: AgentsToolCallOptions | undefined,
-  spawnGuard: () => void,
-  spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null,
-  isSubordinate: (name: string) => Promise<boolean>,
+  { deps, input, mode, toolOptions, spawnGuard, spawnDepthRefusal, isSubordinate }: HireActionCall,
 ): Promise<object> {
   const team = deps.team;
   const peers = deps.peers;
@@ -2213,7 +2250,7 @@ async function runHireAction(
   if (planBar) throw new KinuError(planBar.reason, planBar.error);
 
   if ((input.scope ?? 'subordinate') === 'workspace') {
-    return await hireWorkspace(deps, input, mode, toolOptions, spawnDepthRefusal);
+    return await hireWorkspace({ deps, input, mode, toolOptions, spawnDepthRefusal });
   }
 
   if (!peers && input.scope !== undefined) {
@@ -2299,7 +2336,7 @@ async function runHireAction(
   // subordinate's durable identity with its tier override.
   if (!isHireCreateInput(input)) return badInput('hire requires role and mission');
 
-  return await hireCreate(deps, team, input, mode, lifetime, toolOptions);
+  return await hireCreate({ deps, team, input, mode, lifetime, toolOptions });
 }
 
 export async function dispatchAgentsAction(
@@ -2369,10 +2406,10 @@ export async function dispatchAgentsAction(
   try {
     switch (input.action) {
       case 'swarm':
-        return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
+        return await runSwarmAction({ deps, input, mode, toolOptions, budget: deps.budget });
 
       case 'hire':
-        return await runHireAction(deps, input, mode, toolOptions, spawnGuard, spawnDepthRefusal, isSubordinate);
+        return await runHireAction({ deps, input, mode, toolOptions, spawnGuard, spawnDepthRefusal, isSubordinate });
 
       case 'msg': {
         // ONE action, two ways to say WHO — and they are exclusive, because a
@@ -2501,6 +2538,17 @@ export async function dispatchAgentsAction(
 
 /** Build the `agents` tool for whatever deps this actor wires. At least one
  *  deps group must be present — callers gate on that, not this function. */
+/** How much tree is left below a subordinate this hire creates, stated the way
+ *  head-tools states nesting room, so a caller near the cap can plan around it
+ *  instead of discovering it at a refusal. */
+function nestingRoom(delegation: DelegationBudget): string {
+  if (delegation.maxDepth > 1) {
+    return ` A subordinate you hire can hire its own, ${delegation.maxDepth - 1} level(s) further.`;
+  }
+
+  return ' A subordinate you hire lands on the depth cap and cannot hire its own.';
+}
+
 export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
   const actions = agentsActionsFor(deps);
   const team = deps.team;
@@ -2533,11 +2581,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
               // same kind of derived budget, so a caller near the cap can plan
               // around it instead of discovering it at a refusal. `maxDepth` is
               // the room below THIS actor, and the hire itself spends one of it.
-              + (team
-                ? team.delegation.maxDepth > 1
-                  ? ` A subordinate you hire can hire its own, ${team.delegation.maxDepth - 1} level(s) further.`
-                  : ' A subordinate you hire lands on the depth cap and cannot hire its own.'
-                : ''),
+              + (team ? nestingRoom(team.delegation) : ''),
             ] : []),
             ...(peers ? ['On msg, `event_id` answers an incoming agent message event instead of naming an `agent`.'] : []),
             ...(team ? ['dismiss = retire a subordinate (archived by default — its context is kept).'] : []),
@@ -2561,7 +2605,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       let parsed: AgentsToolInput;
 
       try {
-        parsed = parseAgentsToolInput(input);
+        parsed = parseAgentsToolInput({ input });
       } catch (error) {
         // Reason FIRST, the vocabulary every refusal on this surface uses: a call
         // the parse refused is bad input, not a tool that broke.

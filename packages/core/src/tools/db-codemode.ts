@@ -782,10 +782,12 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         }
 
         statement.text(`${name} IN (`);
-        operation.values.forEach((value, index) => {
+
+        for (const [index, value] of operation.values.entries()) {
           if (index > 0) statement.text(', ');
           statement.value(encodeValue(column, value, where));
-        });
+        }
+
         statement.text(')');
 
         return;
@@ -799,7 +801,12 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         statement.text(`${name} LIKE `).value(encodeValue(column, operation.value, where)).text(` ESCAPE '\\'`);
 
         return;
-      default:
+      case '=':
+      case '!=':
+      case '<':
+      case '<=':
+      case '>':
+      case '>=':
         statement.text(`${name} ${operation.op} `).value(encodeValue(column, operation.value, where));
 
         return;
@@ -832,12 +839,13 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
     if (orderBy.length > 0) {
       statement.text(' ORDER BY ');
-      orderBy.forEach((term, index) => {
+
+      for (const [index, term] of orderBy.entries()) {
         const column = columnOf(resolved, term.column, doing);
 
         if (index > 0) statement.text(', ');
         statement.text(`${quoted(column.name)} ${term.dir === 'desc' ? 'DESC' : 'ASC'}`);
-      });
+      }
     }
 
     statement.text(' LIMIT ').value(query?.limit ?? SELECT_LIMIT_DEFAULT);
@@ -898,11 +906,14 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         statement.text(tuples > 0 ? ', (' : '(');
 
         if (scoped) statement.value(actorId);
-        columns.forEach((column, position) => {
+
+        for (const [position, column] of columns.entries()) {
           if (position > 0 || scoped) statement.text(', ');
           const value = row[column.name];
+
           statement.value(encodeValue(column, value === undefined ? null : value, `${doing}: row ${index}`));
-        });
+        }
+
         statement.text(')');
         tuples += 1;
         index += 1;
@@ -933,12 +944,13 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
     if (op.op === 'update') {
       statement.text(`UPDATE ${quoted(resolved.physical)} SET `);
-      Object.entries(op.set).forEach(([name, value], position) => {
+
+      for (const [position, [name, value]] of Object.entries(op.set).entries()) {
         const column = columnOf(resolved, name, doing);
 
         if (position > 0) statement.text(', ');
         statement.text(`${quoted(column.name)} = `).value(encodeValue(column, value, doing));
-      });
+      }
     }
     else statement.text(`DELETE FROM ${quoted(resolved.physical)}`);
     compileWhere(resolved, op.where, statement, doing);
@@ -1145,7 +1157,8 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
       return commit((record) => {
         const results: AppOpResult[] = [];
-        ops.forEach((op, index) => {
+
+        for (const [index, op] of ops.entries()) {
           const doing = `db.batch operation ${index} (${op.op} ${op.table})`;
 
           try {
@@ -1165,7 +1178,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
             // succeeded AND their `db_op` evidence with them.
             throw cause instanceof KinuError ? new AppBatchError(index, cause) : cause;
           }
-        });
+        }
 
         return results;
       });

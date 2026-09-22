@@ -36,7 +36,7 @@ describe('MCTS in Plan mode', () => {
 
     rt.craftStore.update = () => { craftWrites++; };
 
-    rt.spawnBranch = async () => ({ explore: async (_history, _tools, _languages, mode) => {
+    rt.spawnBranch = async () => ({ explore: async ({ mode }) => {
       branchModes.push(mode);
 
       return { text: '```javascript\nexport const answer = 42;\n```' };

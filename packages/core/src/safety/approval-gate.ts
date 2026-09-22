@@ -466,7 +466,7 @@ function scanCommand(command: string): CommandScan {
   };
 
   for (let i = 0; i < command.length; i++) {
-    const ch = command[i]!;
+    const ch = command[i];
 
     if (quote !== null) {
       if (ch === quote) { quote = null; unquoted += ' '; }
@@ -721,13 +721,22 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
  * failed on the machine, nobody can say — consumes it. A throw settles
  * nothing, because a throw establishes nothing.
  */
+/** What a gated executor tunes: which policy answers the approval question, and
+ *  how a refusal is recognised in the executor's own result shape. */
+export interface ExecGateTuning<R> {
+  readonly policy?: ShellApprovalPolicy;
+  readonly refusalCode?: (result: R) => ErrorCode | null;
+}
+
 export function gateExec<R>(
   execute: (command: string, ...rest: unknown[]) => Promise<R>,
   denyResult: (error: KinuError) => R,
   executor: string,
-  policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
-  refusalCode?: (result: R) => ErrorCode | null,
+  tuning: ExecGateTuning<R> = {},
 ): (...args: unknown[]) => Promise<R> {
+  const policy = tuning.policy ?? STRICT_NO_CHANNEL_POLICY;
+  const refusalCode = tuning.refusalCode;
+
   // A rest-args signature — not `(command: string, ...)` — so the wrapped
   // function stays assignable to `ExecutorProvider['tools'][name].execute`
   // (`(...args: unknown[]) => Promise<unknown>`) as well as to a narrower

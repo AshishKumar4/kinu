@@ -281,17 +281,29 @@ const TURN_GRADED_SCOPE = 'turn_graded';
  * them must resume rather than repeat. */
 const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
 
+/** The outcome IS the signal, priced by where the verdict came from. An
+ *  abandoned turn (only ever an existing ledger row) that errored is the one
+ *  case the error decides; a clean abandonment stays neutral. An ungraded turn
+ *  is priced only when it errored — otherwise there is nothing to price. */
+function turnQuality(outcome: TurnOutcome | null, source: TurnOutcomeSource, hadError: boolean): number | null {
+  if (outcome === null) return hadError ? 0.1 : null;
+
+  if (outcome === 'abandoned' && hadError) return 0.1;
+
+  return outcomeQuality(outcome, source);
+}
+
 export class EvolutionEngine {
-  private rt: AgentRuntime;
+  private readonly rt: AgentRuntime;
   /** The canonical session store: lifetime search trajectories are recorded
    *  there, in their own transcript session, beside the chat. */
   private readonly history: SessionHistory;
-  private config: EvolutionConfig;
-  private listeners: EvolutionListener[] = [];
+  private readonly config: EvolutionConfig;
+  private readonly listeners: EvolutionListener[] = [];
   /** Operator-tuned actor_config (MCTS overrides for lifetime evolution) —
    *  also the home of the durable closed-window count the lifetime timescale
    *  paces itself by. */
-  private agentConfig: AgentConfigStore;
+  private readonly agentConfig: AgentConfigStore;
   /** Every completed turn still owed evolution work: its open-window
    *  membership and its typed review obligation, one row per turn.
    *  AgentOrchestrator owns the cadence policy; the engine owns the ledger,
@@ -619,14 +631,8 @@ export class EvolutionEngine {
       // what it is not is counted as a success.
     }
 
-    // Quality: the outcome IS the signal, priced by where the verdict came
-    // from. An abandoned turn (only ever an existing ledger row) that
-    // errored is the one case the error decides; a clean abandonment stays
-    // neutral. Pure, and computed BEFORE the writes so all of them fit in one
-    // commit.
-    const quality: number | null = outcome
-      ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome, source))
-      : (turn.hadError ? 0.1 : null);
+    // Pure, and computed BEFORE the writes so all of them fit in one commit.
+    const quality = turnQuality(outcome, source, turn.hadError);
 
     // Craft EMA — real-outcome observations on the crafted tools this turn used,
     // as the in-episode craft clock observed them. Crafted tools are
@@ -688,7 +694,7 @@ export class EvolutionEngine {
       }
 
       if (gradedKey !== null && !graded) {
-        recordEffectDone(this.rt.storage.sql, this.rt.actor, TURN_GRADED_SCOPE, gradedKey);
+        recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_GRADED_SCOPE, key: gradedKey });
       }
 
       announce();
@@ -754,7 +760,7 @@ export class EvolutionEngine {
         );
 
         if (reflectionKey !== null) {
-          recordEffectDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, reflectionKey);
+          recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_REVIEW_STEP_SCOPE, key: reflectionKey });
         }
 
         this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
@@ -1099,7 +1105,7 @@ export class EvolutionEngine {
    *  false — nothing warrants reflection. */
   private sessionWarrantsReflection(session: CompletedSession): boolean {
     if (session.turns.some(t => t.hadError || t.feedback === 'negative')) return true;
-    const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => !!id);
+    const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
 
     return hasNegativeOutcome(this.rt.storage.sql, this.rt.actor, turnIds);
   }
@@ -1123,7 +1129,7 @@ export class EvolutionEngine {
       `Focus on actionable changes to your behavior.`,
     );
 
-    const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => !!id);
+    const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => id !== undefined && id !== '');
     const corroborated = hasNegativeOutcome(this.rt.storage.sql, this.rt.actor, turnIds);
     recordLesson(this.rt.storage.sql, this.rt.actor, {
       turnIds,
@@ -1138,6 +1144,16 @@ export class EvolutionEngine {
     if (windowsClosed >= 3) {
       await this.maybeEvolveScaffold(reflection);
     }
+  }
+
+  /** The live file IS the current version's content; only an archived stepping
+   *  stone needs the versioned-backup read (v0 has no backup). */
+  private async readBaseScaffold(base: EvolutionBaseSelection | null, currentScaffold: string): Promise<string | null> {
+    if (base === null) return null;
+
+    if (base.mode === 'current') return currentScaffold;
+
+    return readScaffoldVersion(this.rt, base.version);
   }
 
   /** Propose a scaffold improvement based on session patterns.
@@ -1188,11 +1204,7 @@ export class EvolutionEngine {
       exploreShare: this.agentConfig.getScaffoldExploreShare(),
     });
 
-    // The live file IS the current version's content; only an archived
-    // stepping stone needs the versioned-backup read (v0 has no backup).
-    const baseCode = base
-      ? (base.mode === 'current' ? currentScaffold : await readScaffoldVersion(this.rt, base.version))
-      : null;
+    const baseCode = await this.readBaseScaffold(base, currentScaffold);
 
     // What keeps going wrong, as named cells the proposal can target. The
     // cells are deterministic (evolution/pathology.ts); the model only gets
@@ -1458,7 +1470,7 @@ export class EvolutionEngine {
       }
 
       if (patternKey !== null) {
-        recordEffectDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, patternKey);
+        recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_REVIEW_STEP_SCOPE, key: patternKey });
         // Only needed while the marker is absent.
         void this.rt.storage.sql`DELETE FROM pattern_extractions
           WHERE actor_id = ${this.rt.actor.actorId} AND effect_key = ${patternKey}`;

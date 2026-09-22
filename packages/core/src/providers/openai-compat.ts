@@ -39,7 +39,7 @@ function credKeyFor(providerId: string): string {
   return providerId;
 }
 
-export function createOpenAICompatProvider(providerId: string = 'openai-compat'): ModelProvider {
+export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelProvider {
   const credKey = credKeyFor(providerId);
 
   return {
@@ -102,13 +102,13 @@ export async function discoverOpenAICompatibleModels(
     const id = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.id);
 
     if (!id.success) return [];
-    const contextWindow = positiveInteger(value.context_window);
+    const contextWindow = positiveInteger({ value: value.context_window });
     const name = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.name);
 
     return [{
       id: id.output,
       label: name.success ? name.output : id.output,
-      contextWindow: contextWindow || undefined,
+      contextWindow,
     }];
   });
 }

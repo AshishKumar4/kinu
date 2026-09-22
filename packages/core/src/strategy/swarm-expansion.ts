@@ -490,7 +490,7 @@ export function branchSeed(input: {
     // does not consume at all.
     parts.push(`This node is a fan-in over ${String(input.aggregated.length)} parents: ${
       input.aggregated
-        .map((parent) => `${parent.id} scored ${parent.score === null ? 'nothing' : parent.score.toFixed(3)}`)
+        .map((fanIn) => `${fanIn.id} scored ${fanIn.score === null ? 'nothing' : fanIn.score.toFixed(3)}`)
         .join('; ')
     }.`);
     parts.push(aggregatedAnswers(input.aggregated).trim());

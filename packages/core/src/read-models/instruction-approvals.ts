@@ -169,7 +169,11 @@ function instructionAnchor(row: InstructionSourceRow): string {
 function compareRows(a: InstructionSourceMeta, b: InstructionSourceMeta): number {
   if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
 
-  return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+  if (a.path < b.path) return -1;
+
+  if (a.path > b.path) return 1;
+
+  return 0;
 }
 
 /**
@@ -288,10 +292,10 @@ export async function gatherApprovableInstructions(input: {
   }));
 
   for (let index = 0; index < skills.length; index += 1) {
-    const skill = skills[index]!;
+    const skill = skills[index];
 
     if (skill.bodyRef.kind !== 'file') continue;
-    sources.push({ path: skill.bodyRef.path, kind: 'skill', bytes: sizes[index]! });
+    sources.push({ path: skill.bodyRef.path, kind: 'skill', bytes: sizes[index] });
   }
 
   for (const unread of discovery.unread) {

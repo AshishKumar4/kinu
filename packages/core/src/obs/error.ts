@@ -39,7 +39,7 @@
  * docs/OBSERVABILITY.md § "Why not neverthrow".
  */
 
-import { classify, errnoCode } from './expected-failure';
+import { classify, errnoCode, scalarText } from './expected-failure';
 
 /**
  * Why an operation did not do what it was asked.
@@ -210,8 +210,9 @@ export function refusalOf(error: KinuError): Refusal {
  * would break it at the display boundary instead of at the throw site, which is
  * the same loss one frame later.
  *
- * A thrown non-`Error` is rendered as the last link rather than dropped, and a
- * cycle terminates: a chain cannot revisit an error it has already rendered.
+ * A thrown non-`Error` is rendered as the last link rather than dropped when it
+ * has words of its own, and a cycle terminates: a chain cannot revisit an error
+ * it has already rendered.
  */
 export function renderCauseChain(error: Error): string {
   const parts: string[] = [];
@@ -246,7 +247,9 @@ export function renderCauseChain(error: Error): string {
       continue;
     }
 
-    if (cause !== undefined && cause !== null) push(String(cause));
+    const spoken = scalarText({ value: cause });
+
+    if (spoken !== null) push(spoken);
     link = null;
   }
 

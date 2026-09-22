@@ -945,6 +945,14 @@ export interface PromptSectionTrialResult {
   vetoReason?: string;
 }
 
+function trialWinner(pendingScore: number, currentScore: number): 'current' | 'pending' | 'tie' {
+  if (pendingScore > currentScore) return 'pending';
+
+  if (pendingScore < currentScore) return 'current';
+
+  return 'tie';
+}
+
 /**
  * The offline half: score the pending section against the incumbent on turns it
  * was never selected on, then let the calibrated rule decide.
@@ -990,8 +998,7 @@ async function runPromptSectionTrials(
       instanceId: instance.id,
       currentScore: current.score,
       pendingScore: candidate.score,
-      winner: candidate.score > current.score ? 'pending'
-        : candidate.score < current.score ? 'current' : 'tie',
+      winner: trialWinner(candidate.score, current.score),
       feedback: candidate.feedback,
     });
     trialsRun += 1;

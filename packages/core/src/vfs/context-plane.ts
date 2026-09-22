@@ -91,10 +91,33 @@ function stagedEntries(history: SessionHistory, selection: ContextSelection | nu
   return { entries, blocked, staged };
 }
 
+interface WorkingVersionFacts {
+  readonly actorId: string; readonly selection: ContextSelection | null; readonly pending: PendingContextProposal | undefined;
+  readonly blocked: StagedContextDeferral | undefined; readonly claim: StoredActorClaim | null;
+}
+
 /** The working file's revision token: everything a later write must find unchanged, in the order contextRevision reads it back. */
-const workingVersion = (actorId: string, selection: ContextSelection | null, pending: PendingContextProposal | undefined, blocked: StagedContextDeferral | undefined, claim: StoredActorClaim | null): string =>
+const workingVersion = ({ actorId, selection, pending, blocked, claim }: WorkingVersionFacts): string =>
   token([actorId, selection?.contextId ?? null, selection?.revision ?? 0, pending?.proposal_id ?? null,
     blocked ?? null, claim?.turnId ?? null, claim?.epoch ?? null, claim?.status ?? null]);
+
+/** The header's status: a staged proposal is what the file shows; with none, the selection says whether there is a context at all. */
+function headerStatus(staged: boolean, selection: ContextSelection | null): ContextFileHeader['status'] {
+  if (staged) return 'staged';
+
+  if (selection === null) return 'empty';
+
+  return 'active';
+}
+
+/** The entries a revision token addresses: a staged proposal's preview at that revision, or the revision's own entries. */
+function revisionEntries(history: SessionHistory, selection: ContextSelection | null, stagedProposalId: string | null): readonly ContextEntry[] {
+  if (selection === null) return [];
+
+  if (stagedProposalId !== null) return history.proposals.previewAt(stagedProposalId, selection);
+
+  return history.context.entries(selection);
+}
 
 /** The tool-pairing view of a message, or undefined when it carries no tool parts: only structured assistant and tool content can pair. */
 const pairingView = (message: JsonObject): PairingView | undefined =>
@@ -245,12 +268,12 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const { entries, blocked, staged } = stagedEntries(history, selection, pending);
     const claim = resolved.stores.claims.latestTurn();
     const revision = selection?.revision ?? 0;
-    const version = workingVersion(resolved.stores.claims.actorId, selection, pending, blocked, claim);
+    const version = workingVersion({ actorId: resolved.stores.claims.actorId, selection, pending, blocked, claim });
     const head = selection === null ? undefined : history.context.revisions(selection.contextId).find(row => row.revision === revision);
 
     const header: ContextFileHeader = {
       actor: resolved.stores.claims.actorId, contextId: selection?.contextId ?? null, revision, proposalId: pending?.proposal_id ?? null,
-      version, messages: entries.length, status: staged ? 'staged' : selection === null ? 'empty' : 'active',
+      version, messages: entries.length, status: headerStatus(staged, selection),
       effectiveAt: claim?.status === 'admitted' ? 'step' : 'turn', turn: claim?.status === 'admitted' ? claim.turnId : null,
     };
 
@@ -281,14 +304,13 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
     if (selection === null && (version !== 0 || proposalId !== null)) throw new KinuError('bad_input', 'empty context revision has content');
 
-    const entries = selection === null ? [] : proposalId !== null && blocked !== 'history_rewritten'
-      ? history.proposals.previewAt(proposalId, selection) : history.context.entries(selection);
-
+    const stagedProposalId = blocked === 'history_rewritten' ? null : proposalId;
+    const entries = revisionEntries(history, selection, stagedProposalId);
     const metadata = selection === null ? undefined : history.context.revisions(selection.contextId).find(row => row.revision === version);
     const proposal = proposalId === null ? null : history.proposals.inspect(proposalId);
 
     const header: ContextFileHeader = { actor, contextId, revision: version, proposalId, version: versionToken, messages: entries.length,
-        status: proposalId !== null && blocked !== 'history_rewritten' ? 'staged' : selection === null ? 'empty' : 'active',
+        status: headerStatus(stagedProposalId !== null, selection),
         effectiveAt: status === 'admitted' ? 'step' : 'turn', turn: status === 'admitted' ? turn : null };
 
     if (blocked !== null) Object.assign(header, { blocked });
@@ -458,9 +480,9 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const history = resolved.stores.claims.history;
 
     const assertOwner = () => {
-      const current = working(located(path));
+      const latest = working(located(path));
 
-      if (current.target.author !== resolved.author) throw new KinuError('denied', 'context edit authority changed');
+      if (latest.target.author !== resolved.author) throw new KinuError('denied', 'context edit authority changed');
       assertBase();
     };
 

@@ -130,7 +130,10 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
 
         if (exhausted.exhausted) {
           const failure = new KinuError('denied', 'Cannot split: budget exhausted (' + exhausted.reason + ').');
-          capture.recordToolCall('split_subheads', { rationale, heads }, failure.message, failedToolOutcome({ cause: failure }), options.toolCallId);
+          capture.recordToolCall({
+            name: 'split_subheads', args: { rationale, heads }, result: failure.message,
+            outcome: failedToolOutcome({ cause: failure }), toolCallId: options.toolCallId,
+          });
           throw failure;
         }
 
@@ -140,7 +143,10 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           });
 
           for (const id of result.childHeadIds) capture.childHeadIds.push(id);
-          capture.recordToolCall('split_subheads', { rationale, heads }, 'merged ' + result.headCount, { success: true }, options.toolCallId);
+          capture.recordToolCall({
+            name: 'split_subheads', args: { rationale, heads }, result: 'merged ' + result.headCount,
+            outcome: { success: true }, toolCallId: options.toolCallId,
+          });
           const lines: string[] = [result.narrative];
 
           if (result.decisions.length) {
@@ -163,7 +169,10 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
 
           return lines.join('\n');
         } catch (err) {
-          capture.recordToolCall('split_subheads', { rationale, heads }, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }), options.toolCallId);
+          capture.recordToolCall({
+            name: 'split_subheads', args: { rationale, heads }, result: renderThrownChain({ cause: err }),
+            outcome: failedToolOutcome({ cause: err }), toolCallId: options.toolCallId,
+          });
           throw err;
         }
       },

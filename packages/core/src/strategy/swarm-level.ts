@@ -151,6 +151,17 @@ export interface LevelSlot {
   readonly assignment: BranchAssignment | null;
 }
 
+/** What each member of the level is told to pursue: a grant's own rationales
+ *  where the branch proposal supplied them, the journalled briefs on a re-entry,
+ *  and otherwise the generated diversity angles. */
+function levelBriefs(grant: BranchGrant | null, resumed: ResumedWave | null, width: number): readonly string[] {
+  if (grant) return grant.proposal.branches.map((branch) => branch.rationale);
+
+  if (resumed) return resumed.members[0]?.briefs ?? [];
+
+  return Array.from({ length: width }, (_unused, index) => diversityAngle(index, width));
+}
+
 /** Plan fresh slots or reopen unfinished slots under their durable ids.
  * A re-entry reads briefs from all journalled siblings, including settled ones. */
 export function planLevel(input: {
@@ -162,11 +173,7 @@ export function planLevel(input: {
 }): readonly LevelSlot[] {
   const { resolved, resumed, grant, width } = input;
 
-  const briefs = grant
-    ? grant.proposal.branches.map((branch) => branch.rationale)
-    : resumed
-      ? resumed.members[0]?.briefs ?? []
-      : Array.from({ length: width }, (_unused, index) => diversityAngle(index, width));
+  const briefs = levelBriefs(grant, resumed, width);
 
   /** The slots this call fills, and the pending row behind each where there is one.
    *  Annotated so both arms are checked against one shape rather than widened by a

@@ -10,10 +10,10 @@ export function truncate(s: string, n: number): string {
 }
 
 /** Render a generic evaluation input for a reflection prompt. */
-export function renderInput<Input>(input: Input): string {
-  const text = v.safeParse(v.string(), input);
+export function renderInput(instance: { input: unknown }): string {
+  const text = v.safeParse(v.string(), instance.input);
 
   if (text.success) return text.output;
 
-  return JSON.stringify(input) ?? String(input);
+  return JSON.stringify(instance.input) ?? String(instance.input);
 }

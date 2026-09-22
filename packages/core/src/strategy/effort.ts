@@ -50,7 +50,7 @@ export const REASONING_EFFORT_FOR_STAGE = {
  *  native reasoning_effort request field; no duplicate wire-format option is
  *  carried here. Missing effort leaves provider defaults untouched. */
 export function workersAIEffortOption(
-  effort?: ReasoningEffort | undefined,
+  effort?: ReasoningEffort,
 ) {
   if (!effort) return {};
 

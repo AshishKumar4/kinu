@@ -36,7 +36,7 @@ export const PlanReviewSchema = v.object({
   id: v.string(), sessionId: v.string(), revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
   content: v.string(), status: PlanReviewStatusSchema,
   annotations: v.pipe(JsonArraySchema, v.rawTransform(({ dataset, addIssue, NEVER }): readonly PlanReviewAnnotation[] => {
-    const admitted = admitPlanReviewAnnotations(dataset.value);
+    const admitted = admitPlanReviewAnnotations({ value: dataset.value });
 
     if (!admitted.ok) {
       addIssue({ message: admitted.error });
@@ -172,8 +172,8 @@ function admitMathTargets(value: JsonValue | undefined): OptionalAdmission<reado
   return { ok: true, value: targets };
 }
 
-export function admitPlanReviewAnnotations<T>(value: T): AnnotationAdmission {
-  const parsed = v.safeParse(JsonArraySchema, value);
+export function admitPlanReviewAnnotations(input: { value: unknown }): AnnotationAdmission {
+  const parsed = v.safeParse(JsonArraySchema, input.value);
 
   if (!parsed.success) return { ok: false, error: 'annotations must be an array' };
   const annotations: PlanReviewAnnotation[] = [];
@@ -245,7 +245,7 @@ export function admitPlanReviewAnnotations<T>(value: T): AnnotationAdmission {
 
 function toPlanReview(row: PlanReviewRow): PlanReview {
   const parsed: unknown = JSON.parse(row.annotations_json);
-  const admission = admitPlanReviewAnnotations(parsed);
+  const admission = admitPlanReviewAnnotations({ value: parsed });
 
   if (!admission.ok) throw new Error(`invalid stored plan annotations: ${admission.error}`);
 
@@ -314,8 +314,8 @@ export function validatePlanEdits(existingLines: readonly string[], edits: reado
   const sorted = [...edits].sort((a, b) => a.start - b.start);
 
   for (let i = 1; i < sorted.length; i++) {
-    const previous = sorted[i - 1]!;
-    const current = sorted[i]!;
+    const previous = sorted[i - 1];
+    const current = sorted[i];
 
     if (previous.start > lineCount) continue;
     const previousEnd = previous.end ?? lineCount;
@@ -413,6 +413,17 @@ export class PlanReviewStore {
     return rows[0] ? toPlanReview(rows[0]) : null;
   }
 
+  /** The revision a write in this store just produced. Absent means the write
+   *  did not land, which is a failure of this call and not a stale revision —
+   *  the caller renders it the same way it renders every other refusal. */
+  private written(id: string, revision: number): PlanReviewResult {
+    const plan = this.get(id, revision);
+
+    if (!plan) return { ok: false, error: `plan ${id} revision ${revision} did not survive its write`, plan: null };
+
+    return { ok: true, plan };
+  }
+
   /** The latest non-superseded revision, including an approved revision so a
    * reload can keep rendering the plan the owner accepted. */
   getActive(sessionId: string): PlanReview | null {
@@ -463,10 +474,10 @@ export class PlanReviewStore {
           AND status='changes_requested'`;
     }
 
-    return { ok: true, plan: this.get(id, revision)! };
+    return this.written(id, revision);
   }
 
-  saveAnnotations<T>(id: string, revision: number, annotations: T): PlanReviewResult {
+  saveAnnotations(id: string, revision: number, annotations: { value: unknown }): PlanReviewResult {
     const current = this.get(id, revision);
 
     if (!current) return { ok: false, error: `plan ${id} revision ${revision} was not found`, plan: null };
@@ -482,7 +493,7 @@ export class PlanReviewStore {
 
     let encoded: string;
 
-    try { encoded = JSON.stringify(annotations); }
+    try { encoded = JSON.stringify(annotations.value); }
     catch (error) {
       return { ok: false, error: `annotations must be JSON-serializable: ${renderThrownChain({ cause: error })}`, plan: current };
     }
@@ -504,7 +515,7 @@ export class PlanReviewStore {
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
 
-    return { ok: true, plan: this.get(id, revision)! };
+    return this.written(id, revision);
   }
 
   decide(
@@ -535,7 +546,8 @@ export class PlanReviewStore {
       return { ok: false, error: `plan revision is already ${current.status}`, plan: current };
     }
 
-    const normalizedFeedback = feedback?.trim() || null;
+    const trimmedFeedback = feedback?.trim();
+    const normalizedFeedback = trimmedFeedback === undefined || trimmedFeedback === '' ? null : trimmedFeedback;
 
     if (decision === 'request_changes' && !normalizedFeedback) {
       return { ok: false, error: 'request_changes requires non-empty feedback', plan: current };
@@ -547,7 +559,7 @@ export class PlanReviewStore {
       SET status=${status}, feedback=${normalizedFeedback}, updated_at=${now}, decided_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
 
-    return { ok: true, plan: this.get(id, revision)! };
+    return this.written(id, revision);
   }
 
   markHandoffAccepted(id: string, revision: number): PlanReviewResult {
@@ -571,7 +583,7 @@ export class PlanReviewStore {
         WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_accepted=0`;
     }
 
-    return { ok: true, plan: this.get(id, revision)! };
+    return this.written(id, revision);
   }
 
   handoffAttempt(id: string, revision: number): number {

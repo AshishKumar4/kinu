@@ -219,18 +219,31 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       try {
         const json = v.parse(TavilyResponseSchema, await res.json());
 
-        const results: WebSearchResult[] = (json.results ?? [])
-          .filter((r) => r.url && isSafeUrl(r.url))
-          .slice(0, limit)
-          .map((r, i) => ({
-            title: r.title?.trim() || r.url!,
-            url: r.url!,
-            snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
-            date: r.published_date || undefined,
-            position: i + 1,
-          }));
+        const safe = (json.results ?? []).flatMap((r) => {
+          const url = r.url;
 
-        return { query, answer: json.answer?.trim() || undefined, results, source: 'tavily' };
+          return url !== undefined && isSafeUrl(url) ? [{ ...r, url }] : [];
+        });
+
+        const results: WebSearchResult[] = safe
+          .slice(0, limit)
+          .map((r, i) => {
+            // A blank title is one the index did not supply; the url names the
+            // result instead of an empty line.
+            const title = r.title?.trim();
+
+            return {
+              title: title === undefined || title === '' ? r.url : title,
+              url: r.url,
+              snippet: stripBase64Images((r.content ?? '').trim()).slice(0, 600),
+              date: r.published_date === '' ? undefined : r.published_date,
+              position: i + 1,
+            };
+          });
+
+        const answer = json.answer?.trim();
+
+        return { query, answer: answer === '' ? undefined : answer, results, source: 'tavily' };
       } catch (error) {
         if (signal?.aborted === true) throw error;
         throw new WebFetchError('Tavily search returned an unreadable response', false, { cause: error });
@@ -464,7 +477,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
         planAllowed: true,
         description: 'web.search(query, { limit? }) → { results: [{ title, url, snippet, date, position }], answer?, source }',
         execute: async (...args: unknown[]) => {
-          const query = String(args[0] ?? '');
+          const query = stringArgument({ value: args[0] });
           const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
           const opts = parsedOpts.success ? parsedOpts.output : undefined;
 
@@ -476,10 +489,19 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
       fetch: {
         planAllowed: true,
         description: 'web.fetch(url) → { url, title?, retrievedAt, markdown }',
-        execute: async (...args: unknown[]) => provider.fetch(String(args[0] ?? ''), { signal: readExecSignal({ context: args[1] }) }),
+        execute: async (...args: unknown[]) => provider.fetch(stringArgument({ value: args[0] }), { signal: readExecSignal({ context: args[1] }) }),
       },
     },
   };
+}
+
+/** A codemode argument as the text it holds. Anything that is not a string —
+ *  a number, an object, a missing argument — states no query and no url, and
+ *  the empty string is what the provider refuses by name. */
+function stringArgument(input: { value: unknown }): string {
+  const parsed = v.safeParse(v.string(), input.value);
+
+  return parsed.success ? parsed.output : '';
 }
 
 function clampLimit(limit: number | undefined): number {

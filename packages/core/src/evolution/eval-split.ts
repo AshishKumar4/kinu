@@ -294,6 +294,14 @@ function advisorDraw(row: AdvisorNegativeRow): EvalDraw {
   };
 }
 
+function splitDegeneracy(negatives: number, holdoutCount: number, valSize: number): OutcomeSplitDegeneracy | null {
+  if (negatives === 0) return valSize === 0 ? 'no_labeled_turns' : 'no_negatives';
+
+  if (holdoutCount === 0) return 'no_held_out_negatives';
+
+  return null;
+}
+
 /** Draw a budgeted, DISJOINT train/val split from the graded turns.
  *
  *  Negatives come first (up to half the budget — they are the optimization
@@ -367,10 +375,9 @@ export async function buildOutcomeEvalSplit(
 
   for (const [i, row] of accepted.slice(0, acceptedCount).entries()) val.push(await toInstance(ledgerDraw(row), i, 'pos'));
 
-  const degeneracy: OutcomeSplitDegeneracy | null =
-    drawnNegatives.length === 0
-      ? (val.length === 0 ? 'no_labeled_turns' : 'no_negatives')
-      : holdoutCount === 0 ? 'no_held_out_negatives' : null;
-
-  return { train, val, heldOutNegatives: holdoutCount, degeneracy };
+  return {
+    train, val,
+    heldOutNegatives: holdoutCount,
+    degeneracy: splitDegeneracy(drawnNegatives.length, holdoutCount, val.length),
+  };
 }

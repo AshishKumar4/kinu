@@ -78,13 +78,20 @@ export interface ExperienceEntry extends PublishableCandidate {
  *  that is the loop source AND the rationale, which lands in the importing
  *  workspace's day log and changelog. */
 export function misevolutionSourceOf(payload: ExperiencePayload): string {
+  return payloadText(payload, ': ');
+}
+
+/** The payload as text. `factSeparator` is the whole difference between the two
+ *  readings: the tripwire reads a fact the way it lands in the facts block
+ *  (`key: value`), and a search hit shows it as an assignment (`key = value`). */
+function payloadText(payload: ExperiencePayload, factSeparator: string): string {
   switch (payload.kind) {
     case 'craft':
       return `${payload.description}\n${payload.code}`;
     case 'lesson':
       return payload.text;
     case 'fact':
-      return `${payload.key}: ${JSON.stringify(payload.value)}`;
+      return `${payload.key}${factSeparator}${JSON.stringify(payload.value)}`;
     case 'scaffold':
       return `${payload.rationale}\n${payload.code}`;
   }
@@ -93,22 +100,9 @@ export function misevolutionSourceOf(payload: ExperiencePayload): string {
 /** A short human/LLM-readable rendering of the payload — what a search hit
  *  shows so the agent can judge an entry before importing it. */
 export function describePayload(payload: ExperiencePayload, maxChars = 400): string {
-  const text = describeText(payload);
+  const text = payloadText(payload, ' = ');
 
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
-}
-
-function describeText(payload: ExperiencePayload): string {
-  switch (payload.kind) {
-    case 'craft':
-      return `${payload.description}\n${payload.code}`;
-    case 'lesson':
-      return payload.text;
-    case 'fact':
-      return `${payload.key} = ${JSON.stringify(payload.value)}`;
-    case 'scaffold':
-      return `${payload.rationale}\n${payload.code}`;
-  }
 }
 
 /** Free-text projection of an entry, materialized into the library's

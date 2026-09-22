@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
-import type { RawSqlExec, SqlExec } from '../types/primitives';
+import type { RawSqlExec, SqlExec, SqlExecRow } from '../types/primitives';
 import { JsonValueSchema, parseJsonValue, renderIssues, type JsonValue } from '../utils/json';
 import type { SlateBindingRequest } from './bindings';
 
@@ -95,6 +95,19 @@ export function routeSlateStorageCall(request: SlateBindingRequest): SlateStorag
   }
 }
 
+/** Both `slate_state` columns are `TEXT NOT NULL`, so a row that fails these
+ *  is not one this table wrote. */
+const StateValue = v.object({ value: v.string() });
+
+const StateEntry = v.object({ key: v.string(), value: v.string() });
+
+/** One row as the pair `list` answers with. */
+function stateEntry(row: SqlExecRow): [string, JsonValue] {
+  const { key, value } = v.parse(StateEntry, row);
+
+  return [key, parseJsonValue(value)];
+}
+
 /**
  * A slate's durable KV over the workspace object's `slate_state` table.
  * Values are stored as JSON text; `updated_at` is wall time for the host's
@@ -106,7 +119,7 @@ export class SqliteSlateStateStore {
   get(slateId: string, key: string): { value: JsonValue } | null {
     const row = this.db.exec('SELECT value FROM slate_state WHERE slate_id = ? AND key = ?', slateId, key).toArray()[0];
 
-    return row === undefined ? null : { value: parseJsonValue(String(row.value)) };
+    return row === undefined ? null : { value: parseJsonValue(v.parse(StateValue, row).value) };
   }
 
   put(slateId: string, key: string, value: JsonValue): void {
@@ -127,7 +140,7 @@ export class SqliteSlateStateStore {
 
     if (prefix === undefined || prefix === '') {
       return this.db.exec('SELECT key, value FROM slate_state WHERE slate_id = ? ORDER BY key LIMIT ?', slateId, limit).toArray()
-        .map((row) => [String(row.key), parseJsonValue(String(row.value))]);
+        .map(stateEntry);
     }
 
     // The smallest key strictly above every key `prefix` begins: the prefix
@@ -140,6 +153,6 @@ export class SqliteSlateStateStore {
       ? this.db.exec('SELECT key, value FROM slate_state WHERE slate_id = ? AND key >= ? ORDER BY key LIMIT ?', slateId, prefix, limit).toArray()
       : this.db.exec('SELECT key, value FROM slate_state WHERE slate_id = ? AND key >= ? AND key < ? ORDER BY key LIMIT ?', slateId, prefix, bound, limit).toArray();
 
-    return rows.map((row) => [String(row.key), parseJsonValue(String(row.value))]);
+    return rows.map(stateEntry);
   }
 }

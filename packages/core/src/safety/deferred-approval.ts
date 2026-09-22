@@ -450,8 +450,8 @@ export interface DeferredApprovalQueueDeps {
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id. Injected so a host keeps its own id vocabulary and
    *  tests stay deterministic. */
-  newId?(): string;
-  now?(): number;
+  newId?: () => string;
+  now?: () => number;
   /** Told when an action is parked and when a batch is decided — the host's
    *  activity line and client fan-out. Never throws into the gate. */
   announce?(event: DeferredApprovalNotice): void;

@@ -19,6 +19,8 @@
  * is its own root.
  */
 
+import type { JsonValue } from './utils/json';
+
 /** Every directory a Kinu spill lands in — the single source of truth for
  *  the addresses a "go read the rest" recipe resolves to. Producers build
  *  their paths from here, and {@link citesSpillAddress} recognises a tool call
@@ -140,7 +142,7 @@ export class TurnContextBudget {
  * accumulator is holding something other than a tool input, and reporting that
  * as "cites no spill" would retire the defect as a metric of zero.
  */
-export function citesSpillAddress<Args>(args: Args): boolean {
+export function citesSpillAddress(args: JsonValue | undefined): boolean {
   const text = JSON.stringify(args);
 
   if (!text) return false;

@@ -150,6 +150,16 @@ function pool(segments: ReadonlyArray<AlignmentSegment>): AlignmentTotals {
   };
 }
 
+/** Direction only when the two intervals do not overlap; anything else is the
+ *  'flat' this ledger can defend. */
+function intervalTrend(from: RateInterval, to: RateInterval): AlignmentTrend {
+  if (to.highPer100 < from.lowPer100) return 'improving';
+
+  if (to.lowPer100 > from.highPer100) return 'worsening';
+
+  return 'flat';
+}
+
 /**
  * The trend, decided by whether the earliest and latest reliable segments'
  * 95% intervals overlap. Non-overlap is a deliberately conservative test —
@@ -169,13 +179,8 @@ function decideTrend(
     return { trend: 'insufficient', deltaPer100: null, comparedVersions: null };
   }
 
-  const trend: AlignmentTrend =
-    to.rate.highPer100 < from.rate.lowPer100 ? 'improving'
-    : to.rate.lowPer100 > from.rate.highPer100 ? 'worsening'
-    : 'flat';
-
   return {
-    trend,
+    trend: intervalTrend(from.rate, to.rate),
     deltaPer100: to.rate.per100 - from.rate.per100,
     comparedVersions: { from: from.scaffoldVersion, to: to.scaffoldVersion },
   };

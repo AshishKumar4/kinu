@@ -98,6 +98,15 @@ function reservedSlate(slates: readonly WorkspaceOverviewSlate[]): WorkspaceOver
   return null;
 }
 
+/** Live work outranks work left open, which outranks nothing happening. */
+function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['activity'] {
+  if (working) return 'working';
+
+  if (unfinished) return 'unfinished';
+
+  return 'idle';
+}
+
 export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
   let decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0);
   let hasUpdates = false;
@@ -114,7 +123,7 @@ export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): Workspa
 
   return {
     observedAt: inputs.observedAt,
-    activity: inputs.working ? 'working' : inputs.unfinished ? 'unfinished' : 'idle',
+    activity: activityOf(inputs.working, inputs.unfinished),
     decisionsWaiting,
     hasUpdates,
 

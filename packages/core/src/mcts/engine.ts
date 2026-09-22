@@ -137,7 +137,9 @@ export async function runMCTS(
     rootId = resumed.rootId;
     rootMsgId = resumed.rootMsgId;
     initialPhase = { iteration: resumed.iteration, budget: resumed.budget, rootId, rootMsgId, task };
-    searchEpoch = search!.reclaim(rootId) ?? resumed.epoch;
+    // `resumed` exists only because the store answered for it; a store that
+    // declines to reclaim and one that is absent both leave the stored epoch.
+    searchEpoch = search?.reclaim(rootId) ?? resumed.epoch;
   } else {
     rootId = nanoid();
     rootMsgId = await recordNode(session, rt.storage.sql, rt.actor, {
@@ -194,7 +196,7 @@ export async function runMCTS(
       // the search — selection skips depth-capped nodes and the budget
       // keeps flowing to the shallower frontier. Break only when nothing is
       // selectable (frontier exhausted or every open node is at the cap).
-      const selected = selectNode(rt.storage.sql, rt.actor, rootId, W, maxDepth);
+      const selected = selectNode(rt.storage.sql, rt.actor, rootId, { explorationWeight: W, maxDepth });
 
       if (!selected) break;
 
@@ -237,13 +239,13 @@ export async function runMCTS(
         // diverge by construction, not just by sampling temperature (DO-NOW #1).
         const explorationResults = await abortable(
           Promise.allSettled(branchHandles.map((handle, i) =>
-            handle.explore(
+            handle.explore({
               priorHistory,
               craftedTools,
-              rt.executor.languages,
+              languages: rt.executor.languages,
               mode,
-              siblingAngles(i, N_BRANCHES),
-            ),
+              siblings: siblingAngles(i, N_BRANCHES),
+            }),
           )),
           config.signal,
           abortBranches,
@@ -351,62 +353,62 @@ export async function runMCTS(
         const evaluations: Array<BranchEvaluation | null> = [];
 
         for (const [i, r] of scoreResults.entries()) {
-          if (r.status === 'fulfilled') {
-            const language = r.value.unrunnableLanguage;
-
-            if (language !== undefined && !reportedUngroundedLanguages.has(language)) {
-              reportedUngroundedLanguages.add(language);
-              report({
-                type: 'grounding-unavailable',
-                language,
-                canRun: [...rt.executor.languages],
-                iteration,
-                remainingBudget: phase.budget,
-              });
-            }
-
-            // The ensemble this branch ACTUALLY ran. `judgeSamples` is only the
-            // request: it shares one per-evaluation call pool with check
-            // generation, so a request the pool cannot fund is realised lower,
-            // and this is the only field carrying the realised number. Reported
-            // from the evaluator's own answer rather than predicted from the
-            // knobs, and only when the ensemble was reached at all: a cascade
-            // that short-circuited before judging attempted zero samples, which
-            // is not a clamp.
-            const realised = r.value.judgeSamplesAttempted;
-
-            if (realised > 0) {
-              // On the ledger row as well as in the diagnostic, because the surface
-              // reads the row: an event nobody can query later is not a field a run's
-              // parameters carry. The store keeps the smallest any branch reached.
-              search?.observeJudgeEnsemble(rootId, realised);
-            }
-
-            if (realised > 0 && realised < judgeSamples && !reportedClampedEnsembles.has(realised)) {
-              reportedClampedEnsembles.add(realised);
-              diagnostics.event('mcts.judge_ensemble_clamped', {
-                rootId,
-                mode,
-                iteration,
-                judgeSamplesRequested: judgeSamples,
-                judgeSamplesRealised: realised,
-                maxEvalLLMCalls,
-              });
-            }
-
-            scores.push(r.value.score);
-            observations.push(executionObservation(r.value.execution));
-            evaluations.push(r.value);
+          if (r.status !== 'fulfilled') {
+            report({
+              type: 'branch-failed', stage: 'evaluate', iteration,
+              branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: r.reason }),
+            });
+            scores.push(0);
+            observations.push(null);
+            evaluations.push(null);
             continue;
           }
 
-          report({
-            type: 'branch-failed', stage: 'evaluate', iteration,
-            branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: r.reason }),
-          });
-          scores.push(0);
-          observations.push(null);
-          evaluations.push(null);
+          const language = r.value.unrunnableLanguage;
+
+          if (language !== undefined && !reportedUngroundedLanguages.has(language)) {
+            reportedUngroundedLanguages.add(language);
+            report({
+              type: 'grounding-unavailable',
+              language,
+              canRun: [...rt.executor.languages],
+              iteration,
+              remainingBudget: phase.budget,
+            });
+          }
+
+          // The ensemble this branch ACTUALLY ran. `judgeSamples` is only the
+          // request: it shares one per-evaluation call pool with check
+          // generation, so a request the pool cannot fund is realised lower,
+          // and this is the only field carrying the realised number. Reported
+          // from the evaluator's own answer rather than predicted from the
+          // knobs, and only when the ensemble was reached at all: a cascade
+          // that short-circuited before judging attempted zero samples, which
+          // is not a clamp.
+          const realised = r.value.judgeSamplesAttempted;
+
+          if (realised > 0) {
+            // On the ledger row as well as in the diagnostic, because the surface
+            // reads the row: an event nobody can query later is not a field a run's
+            // parameters carry. The store keeps the smallest any branch reached.
+            search?.observeJudgeEnsemble(rootId, realised);
+          }
+
+          if (realised > 0 && realised < judgeSamples && !reportedClampedEnsembles.has(realised)) {
+            reportedClampedEnsembles.add(realised);
+            diagnostics.event('mcts.judge_ensemble_clamped', {
+              rootId,
+              mode,
+              iteration,
+              judgeSamplesRequested: judgeSamples,
+              judgeSamplesRealised: realised,
+              maxEvalLLMCalls,
+            });
+          }
+
+          scores.push(r.value.score);
+          observations.push(executionObservation(r.value.execution));
+          evaluations.push(r.value);
         }
 
         // RECORD nodes — action plus the observation it earned, which is the
@@ -497,16 +499,15 @@ export async function runMCTS(
             });
           }
 
+          // A branch that threw leaves `result` undefined, which the schema
+          // rejects exactly as it rejects a malformed answer.
+          const parsed = v.safeParse(BranchReflectionSchema, result);
           let reflection = '';
 
-          if (result) {
-            const parsed = v.safeParse(BranchReflectionSchema, result);
-
-            if (parsed.success) {
-              await charge(parsed.output.usage);
-              config.reportModelCall?.({ source: 'mcts', usage: parsed.output.usage ?? {} });
-              reflection = parsed.output.text.trim();
-            }
+          if (parsed.success) {
+            await charge(parsed.output.usage);
+            config.reportModelCall?.({ source: 'mcts', usage: parsed.output.usage ?? {} });
+            reflection = parsed.output.text.trim();
           }
 
           throwIfAborted(config.signal);
@@ -525,16 +526,15 @@ export async function runMCTS(
         await pruneLowValueBranches(rt, rootId, pruneThreshold, minVisitsForPrune);
         throwIfAborted(config.signal);
 
-        // EXTRACT crafted tools from winners
-        if (mode === 'build') {
-          for (let i = 0; i < N_BRANCHES; i++) {
-            const score = scores[i] ?? 0;
-            const code = offeredCode[i];
+        // EXTRACT crafted tools from winners. Plan mode offers no code at all
+        // (`offeredCode` is all null above), so the mode rides the same filter.
+        for (let i = 0; i < N_BRANCHES; i++) {
+          const score = scores[i] ?? 0;
+          const code = offeredCode[i];
 
-            if (score > craftExtractionThreshold && code?.kind === 'runnable'
-                && isCraftable(code.language)) {
-              await maybeStoreCraftedTool(rt, code.code, score);
-            }
+          if (mode === 'build' && score > craftExtractionThreshold && code?.kind === 'runnable'
+              && isCraftable(code.language)) {
+            await maybeStoreCraftedTool(rt, code.code, score);
           }
         }
 
@@ -549,7 +549,7 @@ export async function runMCTS(
         });
         // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
         // continue from the remaining budget against the persisted tree (B6).
-        search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
+        search?.checkpoint(rootId, searchEpoch, { iteration: phase.iteration, budget: phase.budget, now: Date.now() });
 
         // The checkpoint above is durable but silent: nothing reached Workers Logs
         // or `wrangler tail` per iteration, so a durably-checkpointed search running
@@ -586,7 +586,7 @@ export async function runMCTS(
     // the acceptance floor. A false result closed the tree without a terminal
     // node, so it must settle as `no_acceptable_candidate`.
     try {
-      const result = await converge(rt, session, rootId, minAcceptableScore, takesEpsilon, mode);
+      const result = await converge(rt, session, rootId, { minAcceptable: minAcceptableScore, takesEpsilon, mode });
 
       if (result.converged) {
         search?.converge(rootId, searchEpoch, Date.now());

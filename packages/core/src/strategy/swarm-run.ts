@@ -448,9 +448,9 @@ export async function runSwarm(
    * Refused here, before the ledger row and before any node, in the vocabulary
    * the rest of this function refuses in.
    */
-  const scheduler = policy === 'pareto'
-    ? pareto === null ? null : { kind: 'pareto' as const, axes: pareto.axes }
-    : { kind: 'frontier' as const, policy };
+  const paretoScheduler = pareto === null ? null : { kind: 'pareto' as const, axes: pareto.axes };
+
+  const scheduler = policy === 'pareto' ? paretoScheduler : { kind: 'frontier' as const, policy };
 
   if (scheduler === null) {
     return unsupported('advance:"pareto" orders its frontier by the axes an instanced or vector '

@@ -151,11 +151,11 @@ const ActionEnumSchema = v.object({
   }),
 });
 
-export function observedActionEnum<Tool>(tool: Tool): Set<string> {
+export function observedActionEnum(tool: { inputSchema?: unknown } | undefined): Set<string> {
   const parsedTool = v.safeParse(ToolSchema, tool);
 
   if (!parsedTool.success) return new Set();
-  const raw = schemaJson(parsedTool.output.inputSchema);
+  const raw = schemaJson({ schema: parsedTool.output.inputSchema });
   const parsedAction = v.safeParse(ActionEnumSchema, raw);
 
   return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
@@ -184,11 +184,11 @@ export function wiredProducers(rt: {
 
 /** Unwrap an AI-SDK schema wrapper (jsonSchema(...) carries the raw object on
  *  jsonSchema; a plain object schema is already raw). */
-function schemaJson<Schema>(schema: Schema): JsonObject | null {
-  const wrapped = v.safeParse(v.object({ jsonSchema: JsonObjectSchema }), schema);
+function schemaJson(input: { schema: unknown }): JsonObject | null {
+  const wrapped = v.safeParse(v.object({ jsonSchema: JsonObjectSchema }), input.schema);
 
   if (wrapped.success) return wrapped.output.jsonSchema;
-  const direct = v.safeParse(JsonObjectSchema, schema);
+  const direct = v.safeParse(JsonObjectSchema, input.schema);
 
   return direct.success ? direct.output : null;
 }

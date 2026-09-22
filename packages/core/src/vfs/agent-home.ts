@@ -49,6 +49,7 @@
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import * as v from 'valibot';
 import { WORKSPACE_ROOT } from './workspace-path';
 
 /**
@@ -394,7 +395,10 @@ export function restoreAgentTmpConfinements(
   let restored = 0;
 
   for (const row of sql.exec(`SELECT agent_name, uid FROM ${IDENTITY_TABLE}`)) {
-    const agentName = String(row.agent_name);
+    // TEXT PRIMARY KEY, and this module is the column's only writer: a row
+    // holding anything else belongs to a table we did not make, and confining
+    // the wrong principal is not a recoverable guess.
+    const agentName = v.parse(v.string(), row.agent_name);
 
     if (!root.exists(agentTmpRoot(agentName))) continue;
     confiner.confinePrincipal(Number(row.uid), agentTmpStorageRoot(agentName));

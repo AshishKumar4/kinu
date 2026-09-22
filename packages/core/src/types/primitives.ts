@@ -91,7 +91,7 @@ export interface VFS {
   ): Promise<{ ok: true; revision: VfsRevision } | { ok: false; revision: VfsRevision }>;
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
   /** Exact immutable version or refusal; never substitutes the current file. */
-  readFileAtRevision?(path: string, revision: VfsRevision, range?: { offset: number; length: number }): Promise<Uint8Array | string>;
+  readFileAtRevision?: (path: string, revision: VfsRevision, range?: { offset: number; length: number }) => Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<VfsEntryStat | null>;
@@ -107,7 +107,7 @@ export interface Storage {
   /** Raw DDL execution (CREATE TABLE, CREATE INDEX) */
   execRaw: RawSqlExec;
   /** Atomic synchronous writes on the SAME connection as sql; rolls back on throw. */
-  transactionSync<T>(write: () => T): T;
+  transactionSync: <T>(write: () => T) => T;
 }
 
 /**

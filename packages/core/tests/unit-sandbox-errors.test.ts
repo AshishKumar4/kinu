@@ -43,7 +43,7 @@ test('recovered host failures retain each binding in the census without failing 
     return { result: 'recovered' };
   });
 
-  const outcome = successfulToolOutcome('eval', output);
+  const outcome = successfulToolOutcome('eval', { output });
   expect(outcome.success).toBe(true);
   const census = censusToolFailures([{ type: 'tool_call_end', runId: 'shell', eventIndex: 0, timestamp: new Date(0).toISOString(), name: 'eval', toolCallId: 'call', outcome }]);
   expect(census.byKey).toEqual([['file·unavailable', 1], ['shell·exit_1', 1]]);

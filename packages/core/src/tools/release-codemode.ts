@@ -267,7 +267,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
  * decided the old schema's action enum.
  */
 export function createReleaseCodemodeProvider(deps: () => ReleaseToolDeps): CodemodeProvider {
-  const hasEngine = !!deps().engine;
+  const hasEngine = deps().engine !== undefined;
   const actions = releaseToolActions(hasEngine);
   const tools: CodemodeProvider['tools'] = {};
 

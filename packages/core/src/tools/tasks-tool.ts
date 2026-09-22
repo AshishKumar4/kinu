@@ -106,6 +106,17 @@ function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): T
   return result;
 }
 
+/** `note` is three-valued: absent leaves the note alone, `null` clears it, a
+ *  string sets it. The declared type is a claim — this is model input. */
+function readNote(note: string | null | undefined): string | null | undefined {
+  if (note === undefined || note === null) return note;
+  const parsed = v.safeParse(v.string(), note);
+
+  if (!parsed.success) throw new KinuError('bad_input', 'tasks.update requires `note` — a string, or null to clear');
+
+  return parsed.output;
+}
+
 /** `tasks.update` — a status move, a note write, or both on one task. */
 function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number): TaskUpdated {
   if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
@@ -119,13 +130,7 @@ function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number):
     throw new KinuError('bad_input', 'tasks.update requires `status` or `note`');
   }
 
-  const noteParsed = args.note === undefined ? undefined : (args.note === null ? null : v.safeParse(v.string(), args.note));
-
-  if (noteParsed !== undefined && noteParsed !== null && !noteParsed.success) {
-    throw new KinuError('bad_input', 'tasks.update requires `note` — a string, or null to clear');
-  }
-
-  const note = noteParsed === undefined || noteParsed === null ? noteParsed : noteParsed.output;
+  const note = readNote(args.note);
   const task = taskList.update(args.id, { status: status?.output, note }, now);
 
   if (!task) throw new KinuError('missing', 'no task ' + args.id);

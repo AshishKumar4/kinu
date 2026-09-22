@@ -660,7 +660,7 @@ function selectEffectiveTurnOutcomes(
     SELECT *, 1 AS eff_rn FROM turn_outcomes
       WHERE actor_id = ${actorId} AND turn_id IS NULL
     ORDER BY created_at DESC, id DESC
-    LIMIT ${limit === undefined ? -1 : limit}`;
+    LIMIT ${limit ?? -1}`;
 
   return ranked.map(toOutcomeRow);
 }

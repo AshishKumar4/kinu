@@ -309,7 +309,7 @@ function harness(executor: string, policy: ShellApprovalPolicy) {
     },
     (message) => `blocked:${message}`,
     executor,
-    policy,
+    { policy },
   );
 
   return { ran, run: (cmd: string) => gated(cmd) };

@@ -46,13 +46,13 @@ export function createScaffoldCandidateSurface(
   }, binding.callScope, binding.signal, binding.assertActive);
 
   const request = async () => {
-    const context = await resolveOperationProfile({ actor: binding.rt.actor, resolve: binding.profile });
-    const route = resolveModelRoute('scaffold', context.profile);
-    const tools = candidateTools(binding, context);
+    const operation = await resolveOperationProfile({ actor: binding.rt.actor, resolve: binding.profile });
+    const route = resolveModelRoute('scaffold', operation.profile);
+    const tools = candidateTools(binding, operation);
     const modelContext = await binding.modelContext(route.model);
 
     return {
-      context,
+      context: operation,
       options: {
         model: binding.bindModel(route.model), spec: route.model, modelContext,
         tools: () => tools, spend: binding.spend,

@@ -1101,14 +1101,13 @@ function resourceName(inputs: DeployInputs, base: string): string {
 /** The `Content-Type` the asset is served with. A closed table, so an
  *  extension nobody listed falls to the byte stream rather than to a wrong
  *  claim about what the file is. */
-function contentTypeOf(path: string): string {
-  const extension = extensionOf(path);
+/** The same closed table as a lookup. The key is an arbitrary string read off
+ *  a path, so `.get()` returning `string | undefined` is the honest signature —
+ *  the reason `CODE_BY_ERROR_NAME` is a Map in obs/error.ts. */
+const CONTENT_TYPE_BY_EXTENSION = new Map<string, string>(Object.entries(ASSET_CONTENT_TYPES));
 
-  // SAFETY: `Object.hasOwn` checked own-key membership in ASSET_CONTENT_TYPES —
-  // the exact invariant `keyof typeof ASSET_CONTENT_TYPES` states.
-  return Object.hasOwn(ASSET_CONTENT_TYPES, extension)
-    ? ASSET_CONTENT_TYPES[extension as keyof typeof ASSET_CONTENT_TYPES]
-    : 'application/octet-stream';
+function contentTypeOf(path: string): string {
+  return CONTENT_TYPE_BY_EXTENSION.get(extensionOf(path)) ?? 'application/octet-stream';
 }
 
 function extensionOf(path: string): string {

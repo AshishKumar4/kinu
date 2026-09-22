@@ -343,7 +343,7 @@ describe('v2 e2e: approval gate', () => {
       },
       (msg) => `DENIED:${msg}`,
       'device',
-      { mode: () => 'strict', requestApproval: async () => 'allow' },
+      { policy: { mode: () => 'strict', requestApproval: async () => 'allow' } },
     );
 
     expect(await gated('ls')).toBe('ran:ls');

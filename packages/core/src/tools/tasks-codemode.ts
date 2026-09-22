@@ -79,11 +79,14 @@ export function createTasksCodemodeProvider(
         description: 'Move one task to active/done/dropped by id.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
           const status = v.safeParse(TaskStatusSchema, args[1]);
+          const id = v.safeParse(v.string(), args[0]);
+
+          if (!id.success) throw new KinuError('bad_input', 'tasks.update(id, status) takes the task id as a string');
 
           return decodeJsonValue({
             value: run({
               action: 'update',
-              id: String(args[0] ?? ''),
+              id: id.output,
               status: status.success ? status.output : undefined,
             }),
           });

@@ -183,7 +183,7 @@ export function sleepTimeWindow(
     lastRunTurn,
     newestId: newest?.id ?? null,
     turns: since.slice(0, SLEEP_TIME_CADENCE.everyTurns).reverse(),
-    inputPending: newestFirst.length > 0 && newestFirst[0]!.role === 'user',
+    inputPending: newestFirst.length > 0 && newestFirst[0].role === 'user',
   };
 }
 

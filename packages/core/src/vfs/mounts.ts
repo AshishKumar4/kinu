@@ -217,7 +217,7 @@ export async function readTailWithVfsOps(
 	const window = await files.readRange(path, offset, length);
 	let start = 0;
 
-	if (offset > 0) while (start < window.length && (window[start]! & 0xc0) === 0x80) start++;
+	if (offset > 0) while (start < window.length && (window[start] & 0xc0) === 0x80) start++;
 
 	return new TextDecoder().decode(start === 0 ? window : window.subarray(start));
 }
@@ -591,9 +591,7 @@ export function withMountTable(
 		},
 		writeFileIfRevision(path, data, expectedRevision) {
 			return mutate(path, 'written', (files, native) => {
-				const conditional = files.writeFileIfRevision;
-
-				if (!conditional) {
+				if (!files.writeFileIfRevision) {
 					throw makeVfsError(
 						'ENOTSUP',
 						'this file plane does not support revision-checked writes',
@@ -601,7 +599,7 @@ export function withMountTable(
 					);
 				}
 
-				return conditional.call(files, native, data, expectedRevision);
+				return files.writeFileIfRevision(native, data, expectedRevision);
 			});
 		},
 		readdir(path) {

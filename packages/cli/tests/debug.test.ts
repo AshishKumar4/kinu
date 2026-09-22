@@ -139,7 +139,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // "iter=6/10 (4 left)" rather than the misleading "iter=6/4" fraction, which
   // looks like an overrun.
   mcts.begin({ rootId: 'search-new', task: 'investigate', engine: 'mcts', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
-  mcts.checkpoint('search-new', 0, 6, 4, 5300);
+  mcts.checkpoint('search-new', 0, { iteration: 6, budget: 4, now: 5300 });
 
   // ── Background jobs: the job the run above detached and got polled, PLUS
   // one still running — the exact shape a 12-hour-old job with no visible

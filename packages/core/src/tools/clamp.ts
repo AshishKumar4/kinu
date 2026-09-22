@@ -169,7 +169,7 @@ export function withClampedToolResult(
     execute: async (input, options) => {
       const output = await execute(input, options);
       const clamped = await clampSerializedToolResult({ output }, opts);
-      const outcome = successfulToolOutcome(opts.producer ?? '', output);
+      const outcome = successfulToolOutcome(opts.producer ?? '', { output });
       const text = v.safeParse(v.string(), clamped);
 
       return text.success && outcome.failures !== undefined
@@ -186,11 +186,9 @@ export function withClampedToolResults(
   tools: ToolSet,
   opts: ClampToolResultOptions,
 ): ToolSet {
-  // SAFETY: The ToolSet contract guarantees every source value and every
-  // wrapper result is a ToolSet entry; Object.fromEntries preserves those values.
   return Object.fromEntries(
     Object.entries(tools).map(([name, entry]) => [name, withClampedToolResult(entry, opts)]),
-  ) as ToolSet;
+  );
 }
 
 function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined {
@@ -209,8 +207,8 @@ function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined 
       const serialized = JSON.stringify(input.output);
 
       if (serialized !== undefined) return parseJsonValue(serialized);
-    } catch (error) {
-      return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
+    } catch (serializeFailure) {
+      return `unserializable tool output: ${renderThrownChain({ cause: serializeFailure })}`;
     }
 
     return `unserializable tool output: ${renderThrownChain({ cause: error })}`;

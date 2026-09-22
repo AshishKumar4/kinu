@@ -155,9 +155,11 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
   const quotas = shares.map((share) => even + Math.floor(share));
   let unassigned = proportional - shares.reduce((n, share) => n + Math.floor(share), 0);
 
-  for (const { i } of shares
+  const byRemainder = shares
     .map((share, i) => ({ i, remainder: share - Math.floor(share) }))
-    .sort((a, b) => b.remainder - a.remainder)) {
+    .sort((a, b) => b.remainder - a.remainder);
+
+  for (const { i } of byRemainder) {
     if (unassigned <= 0) break;
     quotas[i]++;
     unassigned--;
@@ -329,7 +331,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
     '',
   ];
 
-  items.forEach((item, index) => {
+  for (const [index, item] of items.entries()) {
     lines.push(
       `### ${index + 1}/${items.length} ${item.outcomeId}`,
       'verdict:',
@@ -337,7 +339,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
       renderLabelingEvidence(item),
       '',
     );
-  });
+  }
 
   return lines.join('\n');
 }
@@ -367,7 +369,7 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
   let verdicts = 0;
   let blocks = 0;
 
-  text.split('\n').forEach((line, i) => {
+  for (const [i, line] of text.split('\n').entries()) {
     const header = BLOCK_HEADER.exec(line);
 
     if (header) {
@@ -377,33 +379,33 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
       if (seen.has(current)) errors.push(`line ${i + 1}: turn ${current} appears more than once`);
       seen.add(current);
 
-      return;
+      continue;
     }
 
     const verdict = VERDICT_LINE.exec(line);
 
-    if (!verdict) return;
+    if (!verdict) continue;
 
     if (current === null) {
       errors.push(`line ${i + 1}: a verdict before any turn`);
 
-      return;
+      continue;
     }
 
     verdicts++;
     const raw = verdict[1];
 
-    if (raw === '') return;
+    if (raw === '') continue;
     const label = byKey.get(raw.toLowerCase());
 
     if (label === undefined) {
       errors.push(`line ${i + 1}: "${raw}" is not a verdict — use ${[...byKey.keys()].join(', ')}`);
 
-      return;
+      continue;
     }
 
     labels.push({ outcomeId: current, label });
-  });
+  }
 
   if (blocks === 0) errors.push('no turns found — is this a Kinu labeling file?');
 

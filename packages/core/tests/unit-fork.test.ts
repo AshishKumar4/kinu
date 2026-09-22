@@ -25,7 +25,7 @@ import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 function forkInto(src: TestWorkspace, tgt: TestWorkspace, opts: {
   untilMessageId: string; targetWorkspaceId?: string; targetWorkspaceName?: string; now?: number;
 }) {
-  return forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
+  return forkWorkspaceStorage(src, tgt, {
     untilMessageId: opts.untilMessageId,
     targetWorkspaceId: opts.targetWorkspaceId ?? 'TGT',
     targetWorkspaceName: opts.targetWorkspaceName ?? 'my-fork',
@@ -312,7 +312,7 @@ describe('forkWorkspaceStorage', () => {
     await inB.say({ id: 'b3', role: 'user', text: 'in B' });
     await inB.say({ id: 'b4', role: 'assistant', text: 'from B' });
 
-    await forkWorkspaceStorage(b.sql, b.vfs, c.sql, c.vfs, {
+    await forkWorkspaceStorage(b, c, {
       untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000,
       sourceArtifactDirectory: TARGET_ARTIFACTS, targetArtifactDirectory: TARGET_ARTIFACTS,
     });

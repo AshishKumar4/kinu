@@ -122,6 +122,19 @@ export interface ThresholdDeps {
 
 const TIMED_OUT = Symbol('timed-out');
 
+/** A lexical settlement boundary over work a race may abandon: the outcome is a
+ *  VALUE either way, so the loser of the race is still observed and its
+ *  rejection is never an unhandled one. */
+function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unknown }> {
+  return (async () => {
+    try {
+      return { value: await promise };
+    } catch (cause) {
+      return { error: cause };
+    }
+  })();
+}
+
 export async function withBackgroundThreshold<T>(
   kind: string,
   exec: () => Promise<T>,
@@ -132,15 +145,7 @@ export async function withBackgroundThreshold<T>(
   const { promise: timeout, resolve: expire } = Promise.withResolvers<typeof TIMED_OUT>();
   const cancel = (deps.clock ?? REAL_CLOCK).after(thresholdMs, () => { expire(TIMED_OUT); });
 
-  // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
-  const settled = (async () => {
-    try {
-      return { value: await promise };
-    } catch (cause) {
-      return { error: cause };
-    }
-  })();
-
+  const settled = settlement(promise);
   const winner = await Promise.race([settled, timeout]);
 
   cancel();
@@ -196,15 +201,7 @@ export async function withSpawnDetach<T>(
   const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
   const promise = exec(announce);
 
-  // Wrap with a lexical settlement boundary so the abandoned race branch is observed.
-  const settled = (async () => {
-    try {
-      return { value: await promise };
-    } catch (cause) {
-      return { error: cause };
-    }
-  })();
-
+  const settled = settlement(promise);
   const winner = await Promise.race([settled, started]);
 
   if (winner !== SPAWNED) {
@@ -244,8 +241,8 @@ const SpawnStartedOptionsSchema = v.object({
 
 /** The spawn announcement out of a tool-call options bag, if the background
  *  wrapper armed one. */
-export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
-  const parsed = v.safeParse(SpawnStartedOptionsSchema, toolOptions);
+export function readSpawnStarted(input: { toolOptions: unknown }): (() => void) | undefined {
+  const parsed = v.safeParse(SpawnStartedOptionsSchema, input.toolOptions);
   const fn = parsed.success ? parsed.output[SPAWN_STARTED_OPTION] : undefined;
 
   return fn;
@@ -272,8 +269,8 @@ const DeviceRequestOptionsSchema = v.object({
 /** This invocation's ownership holder out of a tool-call options bag, if the
  *  background wrapper armed one — narrowed to the two members a tool may use,
  *  so the claim stays the runner's. */
-export function readDeviceRequestChannel<T>(toolOptions: T): DeviceRequestChannel | undefined {
-  const parsed = v.safeParse(DeviceRequestOptionsSchema, toolOptions);
+export function readDeviceRequestChannel(input: { toolOptions: unknown }): DeviceRequestChannel | undefined {
+  const parsed = v.safeParse(DeviceRequestOptionsSchema, input.toolOptions);
 
   return parsed.success ? parsed.output[DEVICE_REQUEST_OPTION] : undefined;
 }
@@ -300,8 +297,8 @@ const ResumeRedriveOptionsSchema = v.object({
 });
 
 /** Whether this tool call is a job re-drive. False for every other caller. */
-export function readResumeRedrive<T>(toolOptions: T): boolean {
-  const parsed = v.safeParse(ResumeRedriveOptionsSchema, toolOptions);
+export function readResumeRedrive(input: { toolOptions: unknown }): boolean {
+  const parsed = v.safeParse(ResumeRedriveOptionsSchema, input.toolOptions);
 
   return parsed.success && parsed.output[RESUME_REDRIVE_OPTION] === true;
 }

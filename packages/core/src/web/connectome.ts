@@ -281,11 +281,40 @@ function sine(angle: number): number {
   return SINE[(Math.floor(angle * SINE_SCALE) % SINE_STEPS + SINE_STEPS) % SINE_STEPS] ?? 0;
 }
 
+/** How many children a shoot spawns for one roll: two where the rim opens the
+ *  canopy, usually one, and rarely none so a branch can simply end. */
+function branchChildren(roll: number, rim: number): number {
+  if (roll < 0.35 + 0.45 * rim) return 2;
+
+  if (roll < 0.95) return 1;
+
+  return 0;
+}
+
 /** The flash envelope: full within FLASH_ATTACK, gone FLASH_DECAY later. */
 function envelope(age: number): number {
   if (age < FLASH_ATTACK) return age / FLASH_ATTACK;
 
   return clamp(1 - (age - FLASH_ATTACK) / FLASH_DECAY, 0, 1);
+}
+
+/** One signal released onto an edge: where it starts, the edge it takes, the
+ *  corner it is aimed at (-1 for none), how many hops it may travel and how
+ *  bright it rides. */
+interface SignalLaunch {
+  from: number;
+  edgeId: number;
+  toward: number;
+  hops: number;
+  strength: number;
+}
+
+/** One stroke's look for this frame: the edge it draws and the light on it. */
+interface StrokeLook {
+  edge: Edge;
+  glow: number;
+  tone: number;
+  alpha: number;
 }
 
 export class Connectome {
@@ -460,7 +489,8 @@ export class Connectome {
       const b = this.nodes[edge.b];
 
       if (a === undefined || b === undefined) continue;
-      const cornerness = a.corner === flashCorner ? a.cornerness : b.corner === flashCorner ? b.cornerness : 0;
+      const flashedEnd = [a, b].find((end) => end.corner === flashCorner);
+      const cornerness = flashedEnd?.cornerness ?? 0;
       const flashed = lift * cornerness;
       const focused = a.corner === focusCorner ? focus * a.cornerness * 0.3 : 0;
       const held = Math.max(a.hold, b.hold);
@@ -469,7 +499,7 @@ export class Connectome {
       const alpha = FIBRE_ALPHA * (0.35 + 0.65 * edge.rim) * (0.8 + 0.2 * breath) * (1 + 0.25 * focused / 0.3) * (1 + 1.2 * flashed) * (1 - edge.cover);
 
       if (alpha <= 0.003) continue;
-      count = this.pushStroke(count, edge, glow, held > 0.02 ? TONE_BRIGHT : TONE_ACCENT, alpha);
+      count = this.pushStroke(count, { edge, glow, tone: held > 0.02 ? TONE_BRIGHT : TONE_ACCENT, alpha });
     }
 
     return {
@@ -484,7 +514,7 @@ export class Connectome {
   }
 
   private distance(x0: number, y0: number, x1: number, y1: number): number {
-    return viewDistance(this.aspect, x0, y0, x1, y1);
+    return viewDistance({ aspect: this.aspect, x0, y0, x1, y1 });
   }
 
   /** How far a point is from the nearest edge of the view, in view widths. */
@@ -602,10 +632,14 @@ export class Connectome {
     if (shoot.generation >= MAX_GENERATION) return;
     const rim = this.rimOf(x, y);
     const roll = this.random();
-    const children = roll < 0.35 + 0.45 * rim ? 2 : roll < 0.95 ? 1 : 0;
+    const children = branchChildren(roll, rim);
 
     for (let child = 0; child < children; child += 1) {
-      const side = children === 2 ? (child === 0 ? -1 : 1) : (this.random() < 0.5 ? -1 : 1);
+      // A pair splits left and right; a lone child picks its side, and only it
+      // draws — the draw order is what makes one seed one figure.
+      let side = child === 0 ? -1 : 1;
+
+      if (children !== 2) side = this.random() < 0.5 ? -1 : 1;
       const turn = children === 2 ? SPREAD * (0.6 + 0.8 * this.random()) : SPREAD * 0.5 * this.random();
       shoots.push({ from, heading: heading + side * turn, length: Math.max(SEGMENT_FLOOR, shoot.length * RATIO), generation: shoot.generation + 1, curl: -shoot.curl * (0.5 + this.random()) });
     }
@@ -678,6 +712,34 @@ export class Connectome {
     second.edges.push(id);
   }
 
+  /** The nearest node of ANOTHER tree within FUSE_REACH of this one, or -1 when
+   *  no tree reaches it. Only the origin's own cell and its eight neighbours are
+   *  read: a node further than one cell away is further than the reach. */
+  private nearestOfAnotherTree(origin: Node, grid: Map<number, number[]>, cell: number): number {
+    const column = Math.floor((origin.hx + 0.02) / cell);
+    const row = Math.floor((origin.hy * this.aspect + 0.02) / cell);
+    let nearest = -1;
+    let nearestGap = FUSE_REACH;
+
+    for (let dc = -1; dc <= 1; dc += 1) {
+      for (let dr = -1; dr <= 1; dr += 1) {
+        for (const b of grid.get((column + dc) * 4_096 + row + dr) ?? []) {
+          const other = this.nodes[b];
+
+          if (other === undefined || other.tree === origin.tree) continue;
+          const gap = this.distance(origin.hx, origin.hy, other.hx, other.hy);
+
+          if (gap < nearestGap) {
+            nearestGap = gap;
+            nearest = b;
+          }
+        }
+      }
+    }
+
+    return nearest;
+  }
+
   /** Every tip within FUSE_REACH of a fibre of another tree fuses with the
    *  nearest such node, through a grid so the mat's size does not square
    *  the cost; then every edge that still ends at a tip becomes a tip edge. */
@@ -703,26 +765,7 @@ export class Connectome {
       const origin = this.nodes[a];
 
       if (origin === undefined) continue;
-      let nearest = -1;
-      let nearestGap = FUSE_REACH;
-      const column = Math.floor((origin.hx + 0.02) / cell);
-      const row = Math.floor((origin.hy * this.aspect + 0.02) / cell);
-
-      for (let dc = -1; dc <= 1; dc += 1) {
-        for (let dr = -1; dr <= 1; dr += 1) {
-          for (const b of grid.get((column + dc) * 4_096 + row + dr) ?? []) {
-            const other = this.nodes[b];
-
-            if (other === undefined || other.tree === origin.tree) continue;
-            const gap = this.distance(origin.hx, origin.hy, other.hx, other.hy);
-
-            if (gap < nearestGap) {
-              nearestGap = gap;
-              nearest = b;
-            }
-          }
-        }
-      }
+      const nearest = this.nearestOfAnotherTree(origin, grid, cell);
 
       if (nearest >= 0) this.link(a, nearest, MAX_GENERATION);
     }
@@ -910,7 +953,7 @@ export class Connectome {
     const edge = node?.edges[0];
 
     if (node !== undefined && edge !== undefined) {
-      this.launch(nearest, edge, -1, 10, AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW));
+      this.launch({ from: nearest, edgeId: edge, toward: -1, hops: 10, strength: AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW) });
     }
   }
 
@@ -955,7 +998,7 @@ export class Connectome {
         }
       }
 
-      if (best !== null) this.launch(id, best, -1, 14, 1.5);
+      if (best !== null) this.launch({ from: id, edgeId: best, toward: -1, hops: 14, strength: 1.5 });
     }
   }
 
@@ -1008,7 +1051,7 @@ export class Connectome {
       const node = this.nodes[id];
       const edge = node?.edges[0];
 
-      if (node !== undefined && node.corner === corner && node.cornerness > 0.2 && edge !== undefined) this.launch(id, edge, -1, 10, 1.6);
+      if (node !== undefined && node.corner === corner && node.cornerness > 0.2 && edge !== undefined) this.launch({ from: id, edgeId: edge, toward: -1, hops: 10, strength: 1.6 });
     }
   }
 
@@ -1057,7 +1100,9 @@ export class Connectome {
       const edge = this.chooseEdge(from, -1, working ? this.focusCorner : -1);
       const amplitude = AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW);
 
-      if (edge !== null) this.launch(from, edge, working ? this.focusCorner : -1, working ? 24 : 8 + Math.floor(this.random() * 8), amplitude);
+      if (edge !== null) {
+        this.launch({ from, edgeId: edge, toward: working ? this.focusCorner : -1, hops: working ? 24 : 8 + Math.floor(this.random() * 8), strength: amplitude });
+      }
     }
   }
 
@@ -1081,7 +1126,9 @@ export class Connectome {
 
     for (const id of options) {
       const edge = this.edges[id];
-      const far = this.nodes[edge === undefined ? -1 : edge.a === from ? edge.b : edge.a];
+
+      if (edge === undefined) continue;
+      const far = this.nodes[edge.a === from ? edge.b : edge.a];
 
       if (far === undefined) continue;
       const gap = this.distance(far.hx, far.hy, targetX, targetY);
@@ -1095,7 +1142,8 @@ export class Connectome {
     return best;
   }
 
-  private launch(from: number, edgeId: number, toward: number, hops: number, strength: number): void {
+  private launch(signal: SignalLaunch): void {
+    const { from, edgeId, toward, hops, strength } = signal;
     const edge = this.edges[edgeId];
 
     if (edge === undefined || this.signals.length >= this.signalCap) return;
@@ -1154,7 +1202,8 @@ export class Connectome {
     return true;
   }
 
-  private pushStroke(count: number, edge: Edge, glow: number, tone: number, alpha: number): number {
+  private pushStroke(count: number, look: StrokeLook): number {
+    const { edge, glow, tone, alpha } = look;
     this.strokes = grown(this.strokes, (count + 1) * STROKE_STRIDE);
     const at = count * STROKE_STRIDE;
     const strokes = this.strokes;

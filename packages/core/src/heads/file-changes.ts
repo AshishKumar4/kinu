@@ -86,7 +86,7 @@ export class HeadFileChanges implements WriteObserver {
 
     for (const [path, t] of this.touched) {
       if (t.baseline === null && t.current === null) continue;
-      const status: FileStatus = t.baseline === null ? 'added' : t.current === null ? 'removed' : 'changed';
+      const status = changeStatus(t);
 
       if (t.binary) {
         out.push({ path, status, added: 0, removed: 0, binary: true });
@@ -100,6 +100,17 @@ export class HeadFileChanges implements WriteObserver {
 
     return out.sort((a, b) => a.path.localeCompare(b.path));
   }
+}
+
+/** Which side of the change has no file: absent at the baseline the head found is
+ *  an add, absent now is a delete, and a path present on both sides is a change
+ *  whatever its contents did in between. */
+function changeStatus(touched: Touched): FileStatus {
+  if (touched.baseline === null) return 'added';
+
+  if (touched.current === null) return 'removed';
+
+  return 'changed';
 }
 
 /** A trailing newline ENDS the last line rather than starting a phantom empty

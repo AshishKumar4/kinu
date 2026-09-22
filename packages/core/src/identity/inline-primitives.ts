@@ -20,6 +20,7 @@ import type { CraftedTool } from '../types/craft';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
+import * as v from 'valibot';
 
 /** Database interface — satisfied by bun:sqlite Database */
 export interface AgentDatabase {
@@ -38,7 +39,7 @@ export function wrapDatabase(db: AgentDatabase) {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
     // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
     // native type); bun:sqlite only binds TypedArrays — coerce.
-    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
+    const bound = values.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare<T>(query);
 
@@ -61,7 +62,7 @@ export function wrapDatabase(db: AgentDatabase) {
 export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
   const sql = {
     exec(query: string, ...bindings: unknown[]) {
-      const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
+      const bound = bindings.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding ?? null));
       const stmt = db.prepare(query);
 
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return db.prepare<never>(query).all(...bound);
@@ -103,9 +104,8 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
   return {
     async write(path, content) { await vfs.writeFile(path, content); },
     async append(path, content) {
-      // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
       const existing = await vfs.exists(path)
-        ? await vfs.readFile(path, { encoding: 'utf8' }) as string
+        ? v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }))
         : '';
 
       await vfs.writeFile(path, existing + content);
@@ -114,8 +114,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       // Asked rather than caught: an unreadable file must not index as an
       // absent one, or the chunk table silently diverges from the filesystem.
       if (!await vfs.exists(path)) return;
-      // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
-      const content = await vfs.readFile(path, { encoding: 'utf8' }) as string;
+      const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
       const now = Date.now();
       // Replace the file's chunk set rather than appending to it, and keep the
       // FTS shadow in step: a row this path adds must be findable by the FTS5
@@ -144,8 +143,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
     async read(path) {
       if (!await vfs.exists(path)) return null;
 
-      // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
-      return await vfs.readFile(path, { encoding: 'utf8' }) as string;
+      return v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
     },
     tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
   };

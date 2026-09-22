@@ -17,7 +17,7 @@ import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { FactsStore } from '../memory/facts';
-import { listScaffoldArchive } from '../scaffold/archive';
+import { listScaffoldArchive, type ScaffoldStatus } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/shadow';
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
@@ -35,7 +35,7 @@ import {
   type RefinementDisposition, type RefinementStage,
 } from './refinement';
 import { describePathology } from './pathology';
-import { formatScoreInterval, lossInterval } from '../utils/stats';
+import { formatScoreInterval, lossInterval, type ScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
 import { renderThrownChain, tolerate } from '../obs/index';
 
@@ -148,17 +148,25 @@ function scaffoldStatusChangeAt(sql: SqlExecutor, actor: ActorHandle): Map<numbe
   return byVersion;
 }
 
+const SCAFFOLD_VERB: Record<ScaffoldStatus, string> = {
+  current: 'Promoted scaffold',
+  pending: 'Proposed scaffold',
+  rolled_back: 'Rolled back scaffold',
+  historical: 'Superseded scaffold',
+};
+
+const SCAFFOLD_SUMMARY: Record<ScaffoldStatus, string> = {
+  current: 'I improved how I work',
+  pending: 'I am testing an improvement to how I work',
+  rolled_back: 'I reverted a change to how I work',
+  historical: 'I replaced an earlier way of working',
+};
+
 function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
   const archive = listScaffoldArchive(sql, actor, 100).filter((e) => e.version > 0);
   const changedAt = scaffoldStatusChangeAt(sql, actor);
 
   return archive.map((e) => {
-    const verb =
-      e.status === 'current' ? 'Promoted scaffold'
-      : e.status === 'pending' ? 'Proposed scaffold'
-      : e.status === 'rolled_back' ? 'Rolled back scaffold'
-      : 'Superseded scaffold';
-
     const record = e.trials > 0
       ? `shadow ${e.wins}W-${e.losses}L-${e.ties}T${e.winRate != null ? ` · win-rate ${pct(e.winRate)}` : ''}`
       : 'shadow untried';
@@ -173,21 +181,14 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
 
     const revertable = e.status === 'current' || e.status === 'pending';
 
-    const summary =
-      e.status === 'current'
-        ? `I improved how I work${e.trials > 0 ? ` (won ${e.wins} of ${e.trials} trial runs)` : ''}`
-        : e.status === 'pending'
-          ? 'I am testing an improvement to how I work'
-          : e.status === 'rolled_back'
-            ? 'I reverted a change to how I work'
-            : 'I replaced an earlier way of working';
+    const won = e.status === 'current' && e.trials > 0 ? ` (won ${e.wins} of ${e.trials} trial runs)` : '';
 
     const entry: ChangelogEntry = {
       id: `scaffold:v${e.version}:${e.status}`,
       kind: 'scaffold',
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
-      summary,
-      evidence: `${verb} v${e.version}${trial} — ${e.rationale} · ${record}${targeting}`,
+      summary: `${SCAFFOLD_SUMMARY[e.status]}${won}`,
+      evidence: `${SCAFFOLD_VERB[e.status]} v${e.version}${trial} — ${e.rationale} · ${record}${targeting}`,
       scaffoldVersion: e.version,
     };
 
@@ -249,6 +250,19 @@ type FactChangelogEntry = ChangelogEntry & {
   revert: Extract<ChangelogRevertAction, { type: 'fact_forget' }>;
 };
 
+/** Facts written before the value was JSON-encoded are stored as raw text —
+ *  the one parse failure this read treats as a value. */
+function factValueText(valueJson: string): string {
+  const decoded = tolerate(() => parseJsonValue(valueJson), 'malformed-input');
+  const text = v.safeParse(v.string(), decoded);
+
+  if (text.success) return text.output;
+
+  if (decoded === undefined) return valueJson;
+
+  return JSON.stringify(decoded);
+}
+
 function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactChangelogEntry[] {
   actor.assertCurrent();
 
@@ -261,14 +275,7 @@ function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactC
     ORDER BY last_observed_at DESC LIMIT ${limit}`;
 
   return rows.map((r) => {
-    // Facts written before the value was JSON-encoded are stored as raw text —
-    // the one parse failure this read treats as a value.
-    const decoded = tolerate(() => parseJsonValue(r.value_json), 'malformed-input');
-    const text = v.safeParse(v.string(), decoded);
-
-    const value = text.success
-      ? text.output
-      : decoded === undefined ? r.value_json : JSON.stringify(decoded);
+    const value = factValueText(r.value_json);
 
     return {
       id: `fact:${r.key}`,
@@ -320,6 +327,20 @@ function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Chang
     }));
 }
 
+const SECTION_VERB: Record<ScaffoldStatus, string> = {
+  current: 'Promoted',
+  pending: 'Proposed',
+  rolled_back: 'Rolled back',
+  historical: 'Superseded',
+};
+
+const SECTION_SUMMARY: Record<ScaffoldStatus, string> = {
+  current: 'I reworded my own',
+  pending: 'I am testing new wording for my',
+  rolled_back: 'I reverted new wording for my',
+  historical: 'I replaced earlier wording for my',
+};
+
 /** Evolved prompt sections. The one self-change that moves what the model reads
  *  on every turn, so the evidence line leads with the byte trade — the operator
  *  auditing prompt growth should not have to open a diff to see it. */
@@ -336,24 +357,13 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
       ? `shadow ${String(record.wins)}W-${String(record.losses)}L-${String(record.ties)}T`
       : 'shadow untried';
 
-    const verb =
-      row.status === 'current' ? 'Promoted'
-      : row.status === 'pending' ? 'Proposed'
-      : row.status === 'rolled_back' ? 'Rolled back'
-      : 'Superseded';
-
-    const summary =
-      row.status === 'current' ? `I reworded my own ${row.sectionId} guidance`
-      : row.status === 'pending' ? `I am testing new wording for my ${row.sectionId} guidance`
-      : row.status === 'rolled_back' ? `I reverted new wording for my ${row.sectionId} guidance`
-      : `I replaced earlier wording for my ${row.sectionId} guidance`;
-
     const entry: ChangelogEntry = {
       id: `prompt_section:${row.sectionId}:v${String(row.version)}:${row.status}`,
       kind: 'prompt_section',
       at: row.writtenAt,
-      summary,
-      evidence: `${verb} ${row.sectionId} v${String(row.version)} — ${row.rationale} · ${size} · ${trial}`,
+      summary: `${SECTION_SUMMARY[row.status]} ${row.sectionId} guidance`,
+      evidence:
+        `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)} — ${row.rationale} · ${size} · ${trial}`,
     };
 
     // Informational once it is already off: a rolled_back or historical row is
@@ -476,31 +486,38 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
   });
 }
 
+type ReplayDirection = 'improved' | 'declined' | 'held' | 'reached';
+
+/** A move is only called improved/declined when the two intervals don't
+ *  overlap. Two noisy means crossing is not a direction. */
+function replayDirection(current: ScoreInterval, previous: ScoreInterval | undefined): ReplayDirection {
+  if (previous === undefined) return 'reached';
+
+  if (current.lo > previous.hi) return 'improved';
+
+  if (current.hi < previous.lo) return 'declined';
+
+  return 'held';
+}
+
+const REPLAY_MOVE: Record<ReplayDirection, string> = {
+  improved: 'improved to',
+  declined: 'declined to',
+  held: 'held within noise at',
+  reached: 'reached',
+};
+
 function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   const rows = listReplayEvals(sql, actor, limit + 1);
 
   return rows.slice(0, limit).map((r, index) => {
-    const previous = rows[index + 1];
-
-    // A move is only called improved/declined when the two intervals don't
-    // overlap. Two noisy means crossing is not a direction.
-    const direction = previous
-      ? r.interval.lo > previous.interval.hi ? 'improved'
-        : r.interval.hi < previous.interval.lo ? 'declined'
-          : 'held'
-      : 'reached';
-
-    const scoreSummary = direction === 'reached'
-      ? `Self-test score reached ${formatScoreInterval(r.interval)}`
-      : direction === 'held'
-        ? `Self-test score held within noise at ${formatScoreInterval(r.interval)}`
-        : `Self-test score ${direction} to ${formatScoreInterval(r.interval)}`;
+    const direction = replayDirection(r.interval, rows.at(index + 1)?.interval);
 
     return {
       id: `replay:${r.id}`,
       kind: 'replay' as const,
       at: r.ranAt,
-      summary: scoreSummary,
+      summary: `Self-test score ${REPLAY_MOVE[direction]} ${formatScoreInterval(r.interval)}`,
       evidence: `Replay eval — score ${formatScoreInterval(r.interval)} · ` +
         `loss ${formatScoreInterval(lossInterval(r.interval))}` +
         (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
@@ -659,7 +676,8 @@ export function renderChangelogText(
     (opts.unseenCount ? ` · ${opts.unseenCount} unseen` : '') + ')';
 
   const lines = [header];
-  entries.forEach((e, i) => {
+
+  for (const [i, e] of entries.entries()) {
     const when = new Date(e.at).toISOString().slice(0, 16).replace('T', ' ');
     lines.push(`${String(i + 1).padStart(3)}. ${CHANGE_KIND_GLYPH[e.kind]} ${e.summary}`);
     lines.push(`      ${when}${e.evidence ? ` · ${e.evidence}` : ''}${e.revert ? ' · revertable' : ''}`);
@@ -668,7 +686,7 @@ export function renderChangelogText(
       lines.push(`      - ${item.summary}`);
       lines.push(`        ${item.evidence}`);
     }
-  });
+  }
 
   return lines.join('\n');
 }

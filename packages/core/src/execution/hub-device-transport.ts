@@ -184,9 +184,12 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
       try {
         const cwd = opts.cliCwd();
+        const first = params.at(0);
 
-        const effectiveParams: JsonValue[] = method === 'exec' && cwd
-          ? [`cd ${shellQuote(cwd)} && ${String(params[0] ?? '')}`]
+        // Only a string first param is a command to prefix a `cd` onto; any
+        // other shape belongs to a method the daemon parses itself.
+        const effectiveParams: JsonValue[] = method === 'exec' && cwd && v.is(v.string(), first)
+          ? [`cd ${shellQuote(cwd)} && ${first}`]
           : params;
 
         // Mutating methods carry the pre-mutation snapshot hint; the daemon
@@ -235,7 +238,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           ? undefined
           : v.parse(JsonValueSchema, JSON.parse(rawResult));
       } catch (err) {
-        if (isDeviceNotConnectedError(err)) {
+        if (isDeviceNotConnectedError({ cause: err })) {
           snapshot = { ...snapshot, connected: false };
           checkedAt = opts.clock.now();
         }
@@ -243,7 +246,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // Several machines are live and the call named none. The hub's
         // message already names them; the class is the caller's, not the
         // transport's, so it is fixed here before the executor's `io` wrap.
-        if (isDeviceAmbiguityError(err)) {
+        if (isDeviceAmbiguityError({ cause: err })) {
           throw new KinuError('bad_input', renderThrownChain({ cause: err }), { cause: err });
         }
 

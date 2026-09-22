@@ -207,6 +207,18 @@ interface PeerBackHolder {
   mode: WorkMode;
 }
 
+/** One message on its way onto the outbox, in this hub's own vocabulary — the
+ *  row's snake_case column names are the store's, not the caller's. */
+interface OutboundPeerMessage {
+  readonly receiverAgent: string;
+  readonly receiverUserId: string;
+  readonly topic: string;
+  readonly body: JsonValue;
+  readonly mode: WorkMode;
+  /** The sender is waiting on a `peer_back` reply for this one. */
+  readonly replyExpected: boolean;
+}
+
 export interface PeerHubDeps {
   /** The agent's own storage (`outbox_peer` lives next to agent_log). */
   sql: SqlExec;
@@ -349,7 +361,11 @@ export class PeerHub {
 
   /** Fire-and-forget. */
   async send(input: { agent: string; userId: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome> {
-    const id = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, false);
+    const id = await this.enqueue({
+      receiverAgent: input.agent, receiverUserId: input.userId, topic: input.topic,
+      body: input.message, mode: input.mode, replyExpected: false,
+    });
+
     await this.dispatchOutbox();
     const row = this.outbox.status(id);
 
@@ -364,7 +380,11 @@ export class PeerHub {
   async ask(input: {
     agent: string; userId: string; topic: string; message: string; mode: WorkMode; signal?: AbortSignal;
   }): Promise<PeerAskOutcome> {
-    const askId = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, true);
+    const askId = await this.enqueue({
+      receiverAgent: input.agent, receiverUserId: input.userId, topic: input.topic,
+      body: input.message, mode: input.mode, replyExpected: true,
+    });
+
     const wait = this.registerWaiter(askId, input.signal);
     await this.dispatchOutbox();
     const row = this.outbox.status(askId);
@@ -420,31 +440,25 @@ export class PeerHub {
       return { delivered: false, detail: `malformed peer_back holder_addr: ${renderThrownChain({ cause: error })}` };
     }
 
-    await this.enqueue(holder.agent_name, holder.user_id, PEER_REPLY_TOPIC, {
-      in_reply_to: holder.ask_id,
-      content: payload,
-    }, holder.mode, false);
+    await this.enqueue({
+      receiverAgent: holder.agent_name, receiverUserId: holder.user_id, topic: PEER_REPLY_TOPIC,
+      body: { in_reply_to: holder.ask_id, content: payload },
+      mode: holder.mode, replyExpected: false,
+    });
     await this.dispatchOutbox();
 
     // Durable handoff: the outbox owns retries from here on.
     return { delivered: true };
   }
 
-  private async enqueue(
-    receiverAgent: string,
-    receiverUserId: string,
-    topic: string,
-    body: JsonValue,
-    mode: WorkMode,
-    replyExpected: boolean,
-  ): Promise<string> {
+  private async enqueue(message: OutboundPeerMessage): Promise<string> {
     const { id } = await this.outbox.queue({
-      receiver_agent_name: receiverAgent,
-      receiver_user_id: receiverUserId,
-      topic,
-      body,
-      mode,
-      reply_expected: replyExpected,
+      receiver_agent_name: message.receiverAgent,
+      receiver_user_id: message.receiverUserId,
+      topic: message.topic,
+      body: message.body,
+      mode: message.mode,
+      reply_expected: message.replyExpected,
     }, { now: this.now() });
 
     return id;

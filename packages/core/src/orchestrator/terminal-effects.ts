@@ -804,7 +804,8 @@ export class TerminalEffectLedger {
   claim(sequenceId: string, owed: readonly OwedEffect[]): void {
     this.deps.actor.assertCurrent();
     const now = this.deps.now();
-    owed.forEach((effect, index) => {
+
+    for (const [index, effect] of owed.entries()) {
       const key = terminalEffectKey(effect.name, effect.scope);
 
       // Looked up by NAME AND SCOPE, not by the key this build would compute.
@@ -818,7 +819,7 @@ export class TerminalEffectLedger {
           AND effect_name = ${effect.name} AND scope = ${effect.scope}
         LIMIT 1`[0];
 
-      if (existing !== undefined) return;
+      if (existing !== undefined) continue;
 
       const encoded = JSON.stringify(effect.input);
       void this.deps.sql`INSERT INTO terminal_effects
@@ -826,7 +827,7 @@ export class TerminalEffectLedger {
          attempts, next_attempt_at, claimed_at, settled_at)
         VALUES (${this.actorId}, ${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index},
                 ${encoded}, ${effect.lane}, 'pending', ${null}, 0, ${now}, ${now}, ${null})`;
-    });
+    }
   }
 
   /** Run a claimed roster: arm, inline pass, then the detached tail. */

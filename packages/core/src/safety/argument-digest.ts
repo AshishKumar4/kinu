@@ -25,7 +25,7 @@ export function stableStringify(value: JsonValue): string {
   if (!isJsonObject(value)) return JSON.stringify(value);
   const keys = Object.keys(value).sort();
 
-  return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key]!)).join(',') + '}';
+  return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}';
 }
 
 /** Hex SHA-256 of a string, or of raw bytes. `hexChars` truncates the output

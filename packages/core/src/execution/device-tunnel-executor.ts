@@ -164,9 +164,9 @@ async function terminateDeviceExec(
 
     return answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING;
   } catch (err) {
-    if (isDeviceUnknownMethodError(err)) return EXEC_CANCEL_UNSUPPORTED;
+    if (isDeviceUnknownMethodError({ cause: err })) return EXEC_CANCEL_UNSUPPORTED;
 
-    if (isDeviceNotConnectedError(err)) return EXEC_CANCEL_UNCONFIRMED;
+    if (isDeviceNotConnectedError({ cause: err })) return EXEC_CANCEL_UNCONFIRMED;
 
     return execCancelFailed(renderThrownChain({ cause: err }));
   }
@@ -268,8 +268,12 @@ function readDeviceSelection(input: { context: unknown }): string | undefined {
 
   if (!parsed.success) return undefined;
   const named = v.is(v.string(), parsed.output) ? parsed.output : parsed.output.device;
+  const trimmed = named?.trim();
 
-  return named?.trim() || undefined;
+  // A blank name is a call that named no machine, not a machine called ''.
+  if (trimmed === undefined || trimmed === '') return undefined;
+
+  return trimmed;
 }
 
 /** What one tool call resolved to: the machine it is for, or the refusal to
@@ -436,13 +440,13 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isAbortError(err)) throw err;
 
-          if (isDeviceNotConnectedError(err)) return refusalOf(new KinuError('unavailable', NOT_CONNECTED));
+          if (isDeviceNotConnectedError({ cause: err })) return refusalOf(new KinuError('unavailable', NOT_CONNECTED));
 
           // The machine cannot run a command under the tier it was given. That
           // is a REFUSAL with a named cause and a fix, not a transport fault,
           // and the message already reads as one — prefixing it with the
           // command would bury the sentence that says what to do about it.
-          if (isSandboxUnavailableError(err)) {
+          if (isSandboxUnavailableError({ cause: err })) {
             return refusalOf(new KinuError('denied', renderThrownChain({ cause: err })));
           }
 
@@ -469,7 +473,7 @@ export function createDeviceTunnelExecutor(
 
           return v.parse(v.string(), await view.readFile(path, { encoding: 'utf8' }));
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
 
           return refusalText(deviceFailure({ doing: `device readFile ${path}`, cause: err }));
         }
@@ -499,7 +503,7 @@ export function createDeviceTunnelExecutor(
 
           return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
 
           return refusalText(deviceFailure({ doing: `device writeFile ${path}`, cause: err }));
         }
@@ -524,9 +528,9 @@ export function createDeviceTunnelExecutor(
 
           return await view.readdir(path ?? await view.homeDir());
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
 
-          return refusalText(deviceFailure({ doing: `device readdir ${path || '/'}`, cause: err }));
+          return refusalText(deviceFailure({ doing: `device readdir ${path ?? '/'}`, cause: err }));
         }
       },
     },
@@ -553,7 +557,7 @@ export function createDeviceTunnelExecutor(
 
           return await view.exists(path);
         } catch (err) {
-          if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+          if (isDeviceNotConnectedError({ cause: err })) return NOT_CONNECTED_REFUSAL;
 
           return refusalText(deviceFailure({ doing: `device exists ${path}`, cause: err }));
         }
@@ -619,7 +623,7 @@ export function createDeviceTunnelExecutor(
       } catch (err) {
         // Classified rather than a bare `Error`, so a caller that catches this
         // lifecycle failure reads the same `unavailable` the tools return.
-        if (isDeviceNotConnectedError(err)) throw new KinuError('unavailable', NOT_CONNECTED, { cause: err });
+        if (isDeviceNotConnectedError({ cause: err })) throw new KinuError('unavailable', NOT_CONNECTED, { cause: err });
         throw err;
       }
     },

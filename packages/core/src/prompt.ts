@@ -216,7 +216,9 @@ const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.valu
  *  gave one; otherwise the neutral phrase, because a row that says "device"
  *  names an API namespace and not a computer anyone owns. */
 function deviceDisplayName(exec: PromptExecutorInfo): string {
-  return exec.label?.trim() || "your user's PC";
+  const label = exec.label?.trim();
+
+  return label === undefined || label === '' ? "your user's PC" : label;
 }
 
 /** Which namespace's prose a selectable executor gets. The switch is here rather
@@ -335,7 +337,9 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
  * caches it per activation); a caller that does not gets the default.
  */
 function readSoulForPrompt(override?: string): string {
-  return override?.trim() || FALLBACK_PURPOSE;
+  const soul = override?.trim();
+
+  return soul === undefined || soul === '' ? FALLBACK_PURPOSE : soul;
 }
 
 /** Skill BODIES belong in the stable prefix (an activation-set change is a

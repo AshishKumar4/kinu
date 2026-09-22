@@ -106,12 +106,7 @@ export function parseSkillFile(
   const disable_model_invocation =
     (fm['disable-model-invocation'] ?? fm.disable_model_invocation ?? false) === true;
 
-  // `user-invocable: false` blocks `/skill-name` from the user's message.
-  // Default true (matches Anthropic spec).
-  const user_invocable =
-    fm['user-invocable'] !== undefined ? fm['user-invocable'] !== false
-    : fm.user_invocable !== undefined  ? fm.user_invocable !== false
-    : true;
+  const user_invocable = userInvocable(fm);
 
   // auto_activate is the Kinu-only keyword-fire flag. We force it false
   // when the author asked us not to model-invoke — the two contradict
@@ -128,7 +123,7 @@ export function parseSkillFile(
 
   const ext: JsonObject = {};
 
-  for (const [k, v] of Object.entries(fm)) if (!known.has(k)) ext[k] = v;
+  for (const [key, value] of Object.entries(fm)) if (!known.has(key)) ext[key] = value;
 
   return {
     ok: true,
@@ -157,7 +152,7 @@ export function stringifySkillFile(skill: ParsedSkill): string {
 
   if (!skill.user_invocable) fm['user-invocable'] = false;
 
-  for (const [k, v] of Object.entries(skill.ext)) fm[k] = v;
+  for (const [key, value] of Object.entries(skill.ext)) fm[key] = value;
 
   return stringifyMarkdownFrontmatter({ frontmatter: fm, body: skill.body });
 }
@@ -190,10 +185,28 @@ export function skillNameProblem(name: string): string | null {
 
 // ── helpers ──────────────────────────────────────────────────────
 
-function asString(value: JsonValue | undefined): string {
-  const parsed = v.safeParse(v.string(), value);
+/** `user-invocable: false` blocks `/skill-name` from the user's message; the
+ *  snake spelling is the same field, and an absent one leaves the skill
+ *  user-invocable (Anthropic spec default). */
+function userInvocable(fm: JsonObject): boolean {
+  if (fm['user-invocable'] !== undefined) return fm['user-invocable'] !== false;
 
-  return parsed.success ? parsed.output : value == null ? '' : String(value);
+  if (fm.user_invocable !== undefined) return fm.user_invocable !== false;
+
+  return true;
+}
+
+/** A frontmatter scalar as the text it states. A mapping or a list states no
+ *  text, so it reads as ABSENT rather than as `[object Object]`: the author
+ *  gets "`description` is required" instead of a skill described by a type
+ *  name. */
+function asString(value: JsonValue | undefined): string {
+  const text = v.safeParse(v.string(), value);
+
+  if (text.success) return text.output;
+  const scalar = v.safeParse(v.union([v.number(), v.boolean()]), value);
+
+  return scalar.success ? String(scalar.output) : '';
 }
 
 /**
@@ -207,7 +220,7 @@ function asString(value: JsonValue | undefined): string {
  * both dialects with one rule, since our own values never contain spaces.
  */
 function asStringArray(value: JsonValue): string[] {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (Array.isArray(value)) return value.map((item) => asString(item).trim()).filter(Boolean);
   const parsed = v.safeParse(v.string(), value);
 
   if (parsed.success && parsed.output.trim()) return parsed.output.trim().split(/\s+/).filter(Boolean);

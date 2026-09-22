@@ -25,6 +25,7 @@
  */
 
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
+import * as v from 'valibot';
 import type { VFS } from '../types/primitives';
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
@@ -149,11 +150,7 @@ async function sanitizeUserMessage(
   const parts: UserPart[] = [];
 
   for (const part of content) {
-    const replacement =
-      part.type === 'image' ? await sanitizeImagePart(part, policy)
-      : part.type === 'file' ? await sanitizeFilePart(part, policy)
-      : part.type === 'text' ? await sanitizeTextPart(part, policy)
-      : null;
+    const replacement = await sanitizePart(part, policy);
 
     if (replacement) changed = true;
     parts.push(replacement ?? part);
@@ -181,6 +178,18 @@ async function sanitizeAssistantMessage(
 }
 
 /** The replacement TextPart for an image part, or null to pass it through. */
+/** The replacement one user part needs, or null when it passes through as it
+ *  is. Only the three carrier kinds can hold an attachment. */
+async function sanitizePart(part: UserPart, policy: AttachmentPolicy): Promise<TextPart | null> {
+  if (part.type === 'image') return await sanitizeImagePart(part, policy);
+
+  if (part.type === 'file') return await sanitizeFilePart(part, policy);
+
+  if (part.type === 'text') return await sanitizeTextPart(part, policy);
+
+  return null;
+}
+
 async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   if (policy.accepts.has('image')) return null;
 
@@ -240,7 +249,7 @@ function oversizeForInlineDocument(data: FilePart['data']): boolean {
   return bytes !== null && bytes > OVERSIZE_ACCEPTED_DOC_MAX_BYTES;
 }
 
-function estimatePayloadBytes(data: FilePart['data'] | ImagePart['image']): number | null {
+function estimatePayloadBytes(data: FilePart['data']): number | null {
   if (data instanceof URL) return null;
 
   if (data instanceof Uint8Array) return data.byteLength;
@@ -293,7 +302,7 @@ async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Prom
 }
 
 async function replaceMedia(
-  data: FilePart['data'] | ImagePart['image'],
+  data: FilePart['data'],
   mediaType: string,
   filename: string | undefined,
   policy: AttachmentPolicy,
@@ -377,11 +386,16 @@ async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<bo
 /** A part whose data is a remote URL carries no payload to store — reference
  *  the URL itself (equally byte-stable). */
 function remoteReference(
-  data: FilePart['data'] | ImagePart['image'],
+  data: FilePart['data'],
   mediaType: string,
   filename: string | undefined,
 ): TextPart {
-  const url = data instanceof URL ? data.toString() : String(data);
+  // Only a URL or the string form of one reaches here (`decodePayload` answers
+  // `remote` for nothing else); bytes have no address to name.
+  let url = '';
+
+  if (data instanceof URL) url = data.toString();
+  else if (v.is(v.string(), data)) url = data;
   const name = filename ?? url;
 
   return {
@@ -397,7 +411,7 @@ type DecodedPayload =
 /** Decode every DataContent carrier to raw bytes: data URLs (base64 or
  *  percent-encoded), bare base64 strings (the DataContent contract), and
  *  binary views. Remote http(s) URLs have no local payload. */
-function decodePayload(data: FilePart['data'] | ImagePart['image']): DecodedPayload {
+function decodePayload(data: FilePart['data']): DecodedPayload {
   if (data instanceof URL) return { kind: 'remote' };
 
   if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };

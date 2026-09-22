@@ -74,7 +74,7 @@ export function renderReflectionPrompt<I, E>(opts: {
     const o = outcomeById.get(inst.id);
 
     if (!o) continue;
-    const inputStr = renderInput(inst.input);
+    const inputStr = renderInput(inst);
     traceLines.push(
       `--- instance ${inst.id} (score ${o.score.toFixed(2)}) ---`,
       // Windows, not head truncations: a rollout's decisive step is usually

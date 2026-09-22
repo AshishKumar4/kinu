@@ -6,6 +6,7 @@
 
 import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives';
+import type { JsonValue } from '../../utils/json';
 
 const WINDOW_MS = 60_000;
 
@@ -41,7 +42,7 @@ export function initWebhookRateLimitTables(sql: SqlExec): void {
   `);
 }
 
-export function normalizeWebhookRateLimitPerMin<Value>(value: Value): number {
+export function normalizeWebhookRateLimitPerMin(value: JsonValue | undefined): number {
   const parsed = v.safeParse(RateLimitInputSchema, value);
 
   if (!parsed.success) {

@@ -20,6 +20,16 @@ const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
 
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
+/** Code-unit order on the entry name. The captured tree is content-addressed,
+ *  so the walk order is part of the ref and must not become locale-aware. */
+function byName(left: { name: string }, right: { name: string }): number {
+  if (left.name < right.name) return -1;
+
+  if (left.name > right.name) return 1;
+
+  return 0;
+}
+
 export function slateDirectory(id: SlateId): string {
   const name = v.safeParse(SlateDirectoryName, id.value);
 
@@ -56,7 +66,7 @@ export class SlateFiles {
     const entries: TreeEntry[] = [];
 
     const walk = (directory: string, relative: string): void => {
-      for (const entry of this.vfs.readdir(directory).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)) {
+      for (const entry of this.vfs.readdir(directory).sort(byName)) {
         const absolute = `${directory}/${entry.name}`;
         const path = relative === '' ? entry.name : `${relative}/${entry.name}`;
         const stat = this.vfs.lstat(absolute);

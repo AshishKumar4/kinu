@@ -27,6 +27,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { present } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../prompting/step-prune';
 import { estimateTokens } from '../llm';
 import {
@@ -49,7 +50,10 @@ import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
  *  proves a body was — or was not — fetched. */
 interface VfsCalls { readFile: string[]; stat: string[]; readdir: string[] }
 
-interface MemoryVfs extends SkillsVfs { calls: VfsCalls }
+/** `readdir` is a required FUNCTION FIELD here, not the optional method the
+ *  port declares: this fixture always lists, and a test that swaps the lister
+ *  out holds the one it replaced. */
+interface MemoryVfs extends SkillsVfs { calls: VfsCalls; readdir: (path: string) => Promise<string[]> }
 
 function memoryVfs(
   initial: Record<string, string> = {},
@@ -88,7 +92,7 @@ function memoryVfs(
       for (const k of files.keys()) {
         if (!k.startsWith(prefix)) continue;
         // A nested path lists as its first segment — the folder — once.
-        const head = k.slice(prefix.length).split('/')[0]!;
+        const head = k.slice(prefix.length).split('/')[0];
 
         if (!out.includes(head)) out.push(head);
       }
@@ -314,19 +318,20 @@ body
     expect(r.skill.auto_activate).toBe(false);
   });
 
-  test('parses user-invocable: false', () => {
-    const r = parseSkillFile(`---
-name: ops-only
-description: x
-user-invocable: false
----
-body
-`);
+  // Stated or absent, `user-invocable` is one rule: only a real `false` closes
+  // the skill to `/skill-name`.
+  for (const c of [
+    { name: 'parses user-invocable: false', frontmatter: 'name: ops-only\ndescription: x\nuser-invocable: false', invocable: false },
+    { name: 'defaults user_invocable to true', frontmatter: 'name: normal\ndescription: x', invocable: true },
+  ]) {
+    test(c.name, () => {
+      const r = parseSkillFile(`---\n${c.frontmatter}\n---\nbody\n`);
 
-    expect(r.ok).toBe(true);
+      expect(r.ok).toBe(true);
 
-    if (r.ok) expect(r.skill.user_invocable).toBe(false);
-  });
+      if (r.ok) expect(r.skill.user_invocable).toBe(c.invocable);
+    });
+  }
 
   test('only a real boolean opts in or out: a quoted "false" is a string, not a flag', () => {
     const quoted = parseSkillFile(`---
@@ -346,19 +351,6 @@ body
     expect(quoted.skill.auto_activate).toBe(false);
     expect(quoted.skill.disable_model_invocation).toBe(false);
     expect(quoted.skill.user_invocable).toBe(true);
-  });
-
-  test('defaults user_invocable to true', () => {
-    const r = parseSkillFile(`---
-name: normal
-description: x
----
-body
-`);
-
-    expect(r.ok).toBe(true);
-
-    if (r.ok) expect(r.skill.user_invocable).toBe(true);
   });
 
   test('preserves unknown front-matter keys in ext (forward-compat)', () => {
@@ -832,12 +824,12 @@ describe('discoverSkills', () => {
 
   test('an absent /shared mount is no shared skills, not a failed discovery', async () => {
     const v = memoryVfs({ [`${SKILLS_DIR}/own.md`]: skillFile('own', 'O') });
-    const readdir = v.readdir!;
+    const listed = v.readdir;
 
     v.readdir = async (p) => {
       if (p.startsWith('/shared')) throw makeVfsError('ENXIO', '/shared — the shared Drive mounts once the workspace has an owner', p);
 
-      return readdir(p);
+      return await listed(p);
     };
 
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
@@ -858,18 +850,17 @@ describe('discoverSkills', () => {
   });
 
   test('the slates built-in ships the authoring doctrine', () => {
-    const skill = BUILTIN_SKILLS.find((s) => s.name === 'slates');
+    const skill = present(BUILTIN_SKILLS.find((s) => s.name === 'slates'), 'the slates built-in skill');
 
-    expect(skill).toBeDefined();
-    expect(skill!.auto_activate).toBe(true);
-    expect(skill!.keywords).toEqual(expect.arrayContaining(['slate', 'dashboard']));
+    expect(skill.auto_activate).toBe(true);
+    expect(skill.keywords).toEqual(expect.arrayContaining(['slate', 'dashboard']));
 
     for (const fragment of [
       'class Slate extends SlateObject', 'this.storage', 'this.sql',
       'kinu:slate', 'slate://', 'env.agent.send', 'env.ai.run',
       'persists across code edits, restarts and eviction',
     ]) {
-      expect(skill!.body).toContain(fragment);
+      expect(skill.body).toContain(fragment);
     }
   });
 
@@ -929,7 +920,7 @@ describe('discoverSkills', () => {
       memoryVfs(files, { entryOrder: (n) => [...n].sort() }),
       memoryVfs(files, { entryOrder: (n) => [...n].sort().reverse() }),
       // The shared directory lists empty; only the workspace's three rotate.
-      memoryVfs(files, { entryOrder: (n) => (n.length === 3 ? [n[1]!, n[2]!, n[0]!] : n) }),
+      memoryVfs(files, { entryOrder: (n) => (n.length === 3 ? [n[1], n[2], n[0]] : n) }),
     ];
 
     const orders = await Promise.all(views.map(async (v) => {
@@ -941,11 +932,11 @@ describe('discoverSkills', () => {
       };
     }));
 
-    expect(orders[0]!.names).toEqual(['apex', 'audit-implementation', 'mid', 'slates', 'zulu']);
+    expect(orders[0].names).toEqual(['apex', 'audit-implementation', 'mid', 'slates', 'zulu']);
 
     for (const o of orders) {
-      expect(o.names).toEqual(orders[0]!.names);
-      expect(o.rendered).toBe(orders[0]!.rendered);
+      expect(o.names).toEqual(orders[0].names);
+      expect(o.rendered).toBe(orders[0].rendered);
     }
   });
 

@@ -73,7 +73,7 @@ function stripComments(lines: readonly string[]): string[] {
     let quote: string | null = null;
 
     for (let i = 0; i < line.length; i++) {
-      const ch = line[i]!;
+      const ch = line[i];
 
       if (inBlock) {
         if (ch === '*' && line[i + 1] === '/') { inBlock = false; i++; }
@@ -107,7 +107,7 @@ function bridgeCallsIn(code: readonly string[], from: number, to: number): strin
   const found: string[] = [];
 
   for (const match of code.slice(from, to).join('\n').matchAll(BRIDGE_CALL)) {
-    const name = match[1]!;
+    const name = match[1];
 
     if (!found.includes(name)) found.push(name);
   }
@@ -122,7 +122,7 @@ function noteAbove(lines: readonly string[], index: number): string | null {
   const block: string[] = [];
 
   for (let i = index - 1; i >= 0; i--) {
-    const line = lines[i]!.trim();
+    const line = lines[i].trim();
 
     if (line.length === 0) {
       if (block.length > 0) break;
@@ -132,7 +132,7 @@ function noteAbove(lines: readonly string[], index: number): string | null {
     const prose = PROSE_COMMENT.exec(line);
 
     if (!prose) break;
-    const text = prose[1]!.trim();
+    const text = prose[1].trim();
 
     if (!SEPARATOR.test(text)) block.unshift(text);
   }
@@ -144,6 +144,15 @@ function noteAbove(lines: readonly string[], index: number): string | null {
   return sentence.length > 160 ? `${sentence.slice(0, 159)}…` : sentence;
 }
 
+/** Which of DECLARATION's alternatives matched, read off its groups. */
+function declarationKind(star: string, fn: string, cls: string): ScaffoldSite['kind'] {
+  if (fn) return star ? 'generator' : 'function';
+
+  if (cls) return 'class';
+
+  return 'binding';
+}
+
 /**
  * Index the live scaffold source into its top-level sites. Statements before
  * the first declaration are reported as one `<module>` site, and only when
@@ -153,17 +162,14 @@ export function indexScaffoldSites(source: string): ScaffoldSite[] {
   const lines = source.split('\n');
   const code = stripComments(lines);
   const heads: { name: string; kind: ScaffoldSite['kind']; index: number }[] = [];
-  code.forEach((line, index) => {
+
+  for (const [index, line] of code.entries()) {
     const match = DECLARATION.exec(line);
 
-    if (!match) return;
+    if (!match) continue;
     const [, , star, fn, cls, binding] = match;
-    heads.push({
-      name: (fn ?? cls ?? binding)!,
-      kind: fn ? (star ? 'generator' : 'function') : cls ? 'class' : 'binding',
-      index,
-    });
-  });
+    heads.push({ name: (fn ?? cls ?? binding), kind: declarationKind(star, fn, cls), index });
+  }
 
   const sites: ScaffoldSite[] = heads.map((head, i) => ({
     name: head.name,

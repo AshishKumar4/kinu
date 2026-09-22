@@ -24,6 +24,7 @@ import { nowMs } from '../utils/date';
 import { createVercelAILLM } from '../llm';
 import { buildRuntime } from '../runtime-builder';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
+import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
 import type { ActorHandle } from './actor-handle';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from './workspace-actors';
 
@@ -45,20 +46,25 @@ export interface WorkspaceBirthConfig {
   scaffold?: string;
 }
 
+/** The newborn workspace's storage, its actor and the model it speaks to —
+ *  everything {@link buildComponents} needs to assemble one runtime. */
+interface WorkspaceComponents {
+  readonly db: AgentDatabase;
+  readonly sql: SqlExecutor;
+  readonly execRaw: RawSqlExec;
+  readonly workspace: WorkspaceBundle;
+  readonly actor: ActorHandle;
+  readonly llm: LLMProviderConfig;
+}
+
 /** Create VFS, Memory, CraftStore, Schedule from database + LLM config */
-function buildComponents(
-  db: AgentDatabase,
-  sql: SqlExecutor,
-  execRaw: RawSqlExec,
-  workspace: ReturnType<typeof createInlineWorkspace>,
-  actor: ActorHandle,
-  config: { llm: LLMProviderConfig },
-) {
+function buildComponents(components: WorkspaceComponents) {
+  const { db, sql, execRaw, workspace, actor } = components;
   const vfs = workspace.vfs;
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
-  const llm = createVercelAILLM(config.llm);
+  const llm = createVercelAILLM(components.llm);
   const schedule = createInlineSchedule(sql, actor);
 
   return buildRuntime({
@@ -119,7 +125,8 @@ export async function createWorkspace(
   // The two documents a model reads open under the name a PERSON uses, and
   // under the product's name while the workspace has none. `config.name` heads
   // neither: it is the address.
-  const heading = config.title?.trim() || UNTITLED_WORKSPACE_NAME;
+  const titled = config.title?.trim();
+  const heading = titled === undefined || titled === '' ? UNTITLED_WORKSPACE_NAME : titled;
 
   // SOUL.md — the workspace's canonical identity document, embodied by its
   // default agent. seedSoul also seeds the mission a listing reads.
@@ -137,9 +144,7 @@ export async function createWorkspace(
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  const runtime = buildComponents(db, sql, execRaw, workspace, actor, {
-    llm: config.llm,
-  });
+  const runtime = buildComponents({ db, sql, execRaw, workspace, actor, llm: config.llm });
 
   await resetWorkspaceBaseline(runtime);
 

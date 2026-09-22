@@ -182,8 +182,8 @@ export function formatProfileValidationIssues(issues: readonly v.BaseIssue<unkno
 /** Parse and cross-check a catalog from storage or the network. Throws,
  *  naming the offending paths, on any shape violation — including a role or
  *  catalog that duplicates fields the record keys and envelope already own. */
-export function validateProfileCatalog<Input>(input: Input): ProfileCatalog {
-  const parsed = v.safeParse(ProfileCatalogSchema, input);
+export function validateProfileCatalog(input: { value: unknown }): ProfileCatalog {
+  const parsed = v.safeParse(ProfileCatalogSchema, input.value);
 
   if (!parsed.success) {
     throw new Error(`invalid profile catalog: ${formatProfileValidationIssues(parsed.issues)}`);
@@ -193,8 +193,8 @@ export function validateProfileCatalog<Input>(input: Input): ProfileCatalog {
 }
 
 /** Same contract for a whole envelope: authority, CAS version, digest, catalog. */
-export function validateProfileCatalogEnvelope<Input>(input: Input): ProfileCatalogEnvelope {
-  const parsed = v.safeParse(ProfileCatalogEnvelopeSchema, input);
+export function validateProfileCatalogEnvelope(input: { value: unknown }): ProfileCatalogEnvelope {
+  const parsed = v.safeParse(ProfileCatalogEnvelopeSchema, input.value);
 
   if (!parsed.success) {
     throw new Error(`invalid profile catalog envelope: ${formatProfileValidationIssues(parsed.issues)}`);

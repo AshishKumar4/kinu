@@ -108,6 +108,17 @@ export function driveFailure(input: { cause: unknown }): DriveFailure {
   return { code: code ?? 'io', error: renderThrownChain(input) };
 }
 
+/** Does this segment hold a C0 control, which no path a UI can spell does?
+ *  Read by code unit: a surrogate pair's halves are both far above the control
+ *  range, so a name holding an emoji is never refused for one. */
+function hasControlCharacter(segment: string): boolean {
+  for (let i = 0; i < segment.length; i++) {
+    if (segment.charCodeAt(i) < 0x20) return true;
+  }
+
+  return false;
+}
+
 /**
  * A tenant path as the Drive accepts it: absolute, no `.`/`..` segments, no
  * empty segments, no control characters. `/` is the root. Refused rather than
@@ -120,7 +131,7 @@ export function normalizeDrivePath(raw: string): string {
   if (segments.length === 1 && segments[0] === '') return '/';
 
   for (const segment of segments) {
-    if (segment === '' || segment === '.' || segment === '..' || [...segment].some((ch) => ch.charCodeAt(0) < 0x20)) {
+    if (segment === '' || segment === '.' || segment === '..' || hasControlCharacter(segment)) {
       throw new KinuError('bad_input', `drive path has an illegal segment: ${JSON.stringify(raw)}`);
     }
   }
@@ -210,13 +221,8 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
     const target = await linkTarget(drive, full);
     const isDir = stat?.isDir ?? false;
 
-    // A link is a skill when what it points at is one UNDER THE LINK'S NAME —
-    // the name discovery will read it by.
-    const skillProblem = isReservedDrivePath(full)
-      ? `${full} is a reserved Drive folder`
-      : isDir || target !== undefined ? await skillFolderProblem(drive, target ?? full, name) : 'not a folder';
-
-    const kind = target !== undefined ? 'symlink' : isDir ? 'folder' : 'file';
+    const skillProblem = await listedSkillProblem(drive, { path: full, name, isDir, target });
+    const kind = listedKind(isDir, target);
 
     const entry: DriveEntry = {
       name,
@@ -235,10 +241,40 @@ export async function listDrive(drive: MossaicVfs, rawPath: string): Promise<Dri
     const aDir = a.kind !== 'file' ? 0 : 1;
     const bDir = b.kind !== 'file' ? 0 : 1;
 
-    return aDir - bDir || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    if (aDir !== bDir) return aDir - bDir;
+
+    if (a.name < b.name) return -1;
+
+    return a.name > b.name ? 1 : 0;
   });
 
   return { path, entries };
+}
+
+/** One listed entry's kind: a link is shown as the link it is, whatever it
+ *  points at, because that is what the user put there. */
+function listedKind(isDir: boolean, target: string | undefined): DriveEntry['kind'] {
+  if (target !== undefined) return 'symlink';
+
+  if (isDir) return 'folder';
+
+  return 'file';
+}
+
+/** Why a listed entry is not a skill, or null when it is one. A link is a skill
+ *  when what it points at is one UNDER THE LINK'S NAME — the name discovery
+ *  will read it by. */
+async function listedSkillProblem(
+  drive: MossaicVfs,
+  entry: { path: string; name: string; isDir: boolean; target: string | undefined },
+): Promise<string | null> {
+  if (isReservedDrivePath(entry.path)) return `${entry.path} is a reserved Drive folder`;
+
+  if (entry.isDir || entry.target !== undefined) {
+    return await skillFolderProblem(drive, entry.target ?? entry.path, entry.name);
+  }
+
+  return 'not a folder';
 }
 
 /** A new, empty folder; an existing entry of that name is refused, never reused. */

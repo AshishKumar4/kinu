@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { TierIdSchema } from '../types/profile';
-import { renderIssues } from '../utils/json';
+import { renderIssues, type JsonPrimitive } from '../utils/json';
 import { SLATE_INLINE_HEIGHT } from './host-context';
 import { SLATE_READ_MODELS } from './read-models';
 
@@ -48,7 +48,12 @@ export type SlateProject = v.InferOutput<typeof Project>;
 
 export type SlateBinding = v.InferOutput<typeof Binding>;
 
-export function parseSlateProject<Input>(input: Input): SlateProject {
+/** A `package.json` document as a caller holds it before it is validated:
+ *  `JSON.parse` output, or a literal written in place — `as const` makes those
+ *  arrays readonly, and a parse boundary has no reason to refuse one. */
+type PackageDocument = JsonPrimitive | readonly PackageDocument[] | { readonly [key: string]: PackageDocument };
+
+export function parseSlateProject(input: PackageDocument): SlateProject {
   const parsed = v.safeParse(Project, input);
 
   if (!parsed.success) throw new KinuError('bad_input', `package.json: ${renderIssues(parsed.issues)}`);

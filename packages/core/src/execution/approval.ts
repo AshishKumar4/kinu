@@ -74,8 +74,7 @@ export function withApprovalGatedShell(
     (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
     (error) => ({ stdout: '', stderr: error.message, exitCode: 1, refusal: refusalOf(error) }),
     'workspace',
-    policy,
-    (result) => result.refusal?.reason ?? null,
+    { policy, refusalCode: (result) => result.refusal?.reason ?? null },
   );
 
   return {
@@ -135,8 +134,7 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
       (command, ...rest) => entry.execute(command, ...rest),
       (error) => refusalOf(error),
       provider.name,
-      policy,
-      (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
+      { policy, refusalCode: (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null },
     );
 
     const execute: ExecutorTool['execute'] = (...args) => {

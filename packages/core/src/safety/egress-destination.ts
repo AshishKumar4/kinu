@@ -134,11 +134,10 @@ function expandIPv6(host: string): readonly number[] | null {
   const sections = host.split('::');
 
   if (sections.length > 2) return null;
-  const head = sections[0] === '' ? [] : sections[0]!.split(':');
-
-  const tail = sections.length === 2
-    ? (sections[1] === '' ? [] : sections[1]!.split(':'))
-    : [];
+  const head = sections[0] === '' ? [] : sections[0].split(':');
+  // Absent when there was no `::` at all; empty when `::` ended the literal.
+  const after = sections.at(1);
+  const tail = after === undefined || after === '' ? [] : after.split(':');
 
   if (sections.length === 1 && head.length !== 8) return null;
   const pieces = [...head, ...tail];
@@ -183,9 +182,9 @@ function isRefusedIPv6(groups: readonly number[]): boolean {
 
   if (groups.every((g) => g === 0)) return true; // ::
 
-  if (groups[0]! >= 0xfe80 && groups[0]! <= 0xfebf) return true; // fe80::/10
+  if (groups[0] >= 0xfe80 && groups[0] <= 0xfebf) return true; // fe80::/10
 
-  if (groups[0]! >= 0xfc00 && groups[0]! <= 0xfdff) return true; // fc00::/7 ULA
+  if (groups[0] >= 0xfc00 && groups[0] <= 0xfdff) return true; // fc00::/7 ULA
   // Embedded IPv4: ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible). The
   // first six groups are zero (mapped keeps group 5 = 0xffff), the last two
   // groups are the IPv4 address in 16-bit pieces.
@@ -195,8 +194,8 @@ function isRefusedIPv6(groups: readonly number[]): boolean {
   if (mapped || compatible) {
     // The two tail groups are the embedded IPv4 in 16-bit pieces; both carry
     // one octet pair, so the four octets are split out of them exactly.
-    const high = groups[6]!;
-    const low = groups[7]!;
+    const high = groups[6];
+    const low = groups[7];
 
     return isRefusedIPv4([high >> 8, high & 0xff, low >> 8, low & 0xff]);
   }

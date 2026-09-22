@@ -211,7 +211,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     return { ok: true, key: storedKey, existed };
   };
 
-  const actions = memoryActionsFor(!!facts);
+  const actions = memoryActionsFor(facts !== undefined);
   const ActionSchema = v.picklist(actions);
 
   return async (args: MemoryToolInput): Promise<JsonValue> => {

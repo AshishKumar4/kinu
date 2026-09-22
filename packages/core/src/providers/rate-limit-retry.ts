@@ -221,7 +221,11 @@ function parseRetryAfter(value: string | null, nowMs: number): number | null {
 function providerHost(input: RequestInfo | URL): string {
   const url = URL.parse(input instanceof Request ? input.url : input.toString());
 
-  return url?.host || 'provider';
+  // A parsed URL with a blank host is a scheme this notice cannot name (data:,
+  // file:), which reads the same as a url that did not parse at all.
+  const host = url?.host;
+
+  return host === undefined || host === '' ? 'provider' : host;
 }
 
 function formatSeconds(ms: number): string {

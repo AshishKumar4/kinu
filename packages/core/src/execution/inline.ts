@@ -246,7 +246,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           return refusalOf(new KinuError('bad_input', 'workspace.readdir: path must be a string'));
         }
 
-        return vfs.readdir(path || '/');
+        // A path that is absent or blank names the workspace root.
+        return vfs.readdir(path === undefined || path === '' ? '/' : path);
       },
     },
 
@@ -484,8 +485,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     tools.slate = {
       planAllowed: true,
       description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
-      execute: async <Input>(input: Input): Promise<JsonValue> => {
-        const parsed = v.safeParse(SlateOperationSchema, input);
+      execute: async (...args: unknown[]): Promise<JsonValue> => {
+        const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
         if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
           'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };

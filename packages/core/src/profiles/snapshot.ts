@@ -95,8 +95,8 @@ const SwarmProfileSnapshotSchema: v.GenericSchema<SwarmProfileSnapshot> = v.stri
 /** Gate a stored snapshot, naming the offending paths when it fails. A blob
  *  this code wrote that no longer parses means the shape moved without its
  *  reader — refuse loudly rather than resume under a half-read profile. */
-export function validateSwarmProfileSnapshot<Input>(input: Input): SwarmProfileSnapshot {
-  const parsed = v.safeParse(SwarmProfileSnapshotSchema, input);
+export function validateSwarmProfileSnapshot(input: { value: unknown }): SwarmProfileSnapshot {
+  const parsed = v.safeParse(SwarmProfileSnapshotSchema, input.value);
 
   if (!parsed.success) {
     throw new Error(

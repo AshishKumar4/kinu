@@ -373,7 +373,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
 
       // Same synchronous pass as the insert, so nothing can observe the row
       // without the tombstone that outlives it.
-      if (opts.id !== undefined) recordEffectDone(sql, actor, APPEND_SCOPE, opts.id, now);
+      if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id }, now);
       sweepSettled();
 
       return id;
@@ -441,14 +441,14 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
     settleReview(rowId) {
       // The tombstone first: settling makes the row sweepable, and after the
       // sweep the row can no longer say that its review ran.
-      recordEffectDone(sql, actor, REVIEW_SCOPE, rowId);
+      recordEffectDone(sql, actor, { scope: REVIEW_SCOPE, key: rowId });
       void sql`UPDATE completed_turns SET review = 'done'
         WHERE actor_id = ${actorId} AND id = ${rowId}`;
       sweepSettled();
     },
 
     recordReviewRan(rowId) {
-      recordEffectDone(sql, actor, REVIEW_SCOPE, rowId);
+      recordEffectDone(sql, actor, { scope: REVIEW_SCOPE, key: rowId });
     },
 
     expireAwaitingReviews(opts) {

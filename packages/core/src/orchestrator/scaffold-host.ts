@@ -176,18 +176,25 @@ function renderMessage(message: ModelMessage): string {
       case 'reasoning':
         return part.text;
       case 'tool-call':
-        return `[tool-call ${part.toolName} ${safeJson(part.input)}]`;
+        return `[tool-call ${part.toolName} ${safeJson({ value: part.input })}]`;
       case 'tool-result':
-        return `[tool-result ${part.toolName} ${safeJson(part.output)}]`;
+        return `[tool-result ${part.toolName} ${safeJson({ value: part.output })}]`;
+
+      // Media and approval traffic are named, never dumped: a scaffold reading
+      // its history needs to know the part was there, not to carry its bytes.
+      case 'file':
+      case 'image':
+      case 'tool-approval-request':
+      case 'tool-approval-response':
       default:
         return `[${part.type}]`;
     }
   }).filter(Boolean).join('\n');
 }
 
-function safeJson<Value>(value: Value): string {
+function safeJson(input: { value: unknown }): string {
   try {
-    return JSON.stringify(value) ?? 'null';
+    return JSON.stringify(input.value) ?? 'null';
   } catch (error) {
     // The clamp precedent: `String()` on a cyclic object is "[object Object]" — the one
     // string that carries nothing at all — so the reason takes its place.

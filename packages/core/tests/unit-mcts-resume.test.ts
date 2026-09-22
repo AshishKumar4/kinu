@@ -420,7 +420,7 @@ describe('a resume prices its remaining budget, not its initial one', () => {
       }),
       budget: 10, now: 1_000,
     });
-    store.checkpoint(rootId, 0, 6, 4, 2_000);
+    store.checkpoint(rootId, 0, { iteration: 6, budget: 4, now: 2_000 });
 
     // $10-in/$50-out prices 10 fresh iterations at ~$0.92 (over the $0.50 cap)
     // but the 4 remaining at ~$0.40 (under it). The resume must run those 4 —
@@ -457,7 +457,7 @@ describe('a repeated begin on a live root throws instead of resetting it', () =>
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 10, branches: 2 }, budget: 10, now: 1_000,
     });
-    store.checkpoint('r1', 0, 5, 5, 2_000);
+    store.checkpoint('r1', 0, { iteration: 5, budget: 5, now: 2_000 });
 
     expect(() => store.begin({
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',

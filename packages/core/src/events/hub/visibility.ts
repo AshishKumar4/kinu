@@ -27,7 +27,7 @@ import { evidenceWindow } from '../../prompts/evidence-window';
 import { SECRET_PATTERNS } from '../../safety/secret-patterns';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
-  type PayloadPolicy, type KinuEvent, type SubordinateReportHandoff,
+  type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubordinateReportHandoff,
 } from './types';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
@@ -129,8 +129,8 @@ export interface StorageTransform {
   opaque_handles?: Array<{ handle: string; size: number; content_type?: string }>;
 }
 
-export function applyVisibilityForStorage<T>(
-  payload: T,
+export function applyVisibilityForStorage(
+  payload: IngressDescriptor['payload'] | JsonValue,
   policy: PayloadPolicy,
   hmacSecret?: string,
 ): StorageTransform {
@@ -326,7 +326,8 @@ function briefForVariant(event: KinuEvent): string {
     const parsed = v.safeParse(JsonObjectSchema, event.payload);
     const visibilityPayload = parsed.success ? parsed.output : {};
     const marker = visibilityPayload._visibility;
-    const size = visibilityPayload.size;
+    const stored = v.safeParse(v.number(), visibilityPayload.size);
+    const size = stored.success ? String(stored.output) : 'unknown';
 
     if (marker === 'hash') {
       const digest = visibilityPayload.sha256;

@@ -411,11 +411,11 @@ interface DeliveredUserSignal extends DeliveredSignal {
 
 /** The card id a turn carries, when a signal started it — the other half of
  *  the round trip {@link Inbox.queue} stamps. */
-export function readSignalId<Metadata>(metadata: Metadata): string | undefined {
+export function readSignalId(metadata: JsonObject | undefined): string | undefined {
   const parsed = v.safeParse(SignalIdMetadataSchema, metadata);
   const id = parsed.success ? parsed.output[SIGNAL_ID_METADATA_KEY] : undefined;
 
-  return id || undefined;
+  return id === '' ? undefined : id;
 }
 
 const isUserSignal = (signal: DeliveredSignal): signal is DeliveredUserSignal =>
@@ -917,10 +917,10 @@ const turnMetadata = (signal: AgentSignal): JsonObject => {
 };
 
 function reportRedeliveryFailure(kind: string) {
-  return <Failure>(failure: Failure): void => {
+  return (...rejection: [unknown]): void => {
     diagnostics.failure(
       'signal.redelivery_failed',
-      toKinuError({ doing: 're-deliver a signal', cause: failure, otherwise: 'io' }),
+      toKinuError({ doing: 're-deliver a signal', cause: rejection[0], otherwise: 'io' }),
       { signal: kind },
     );
   };

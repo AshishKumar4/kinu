@@ -20,12 +20,13 @@ export class PreparedMessageUpdate {
   static async prepare(input: MessageUpdateInput, payloads: SessionPayloads): Promise<PreparedMessageUpdate> {
     if (input.operation === 'content-end') return new PreparedMessageUpdate(input.part, input.operation, null);
 
-    if (input.operation === 'envelope-metadata') {
-      if ('role' in input.value || 'content' in input.value) throw new KinuError('bad_input', 'envelope metadata cannot replace message structure');
+    if (input.operation === 'envelope-metadata' && ('role' in input.value || 'content' in input.value)) {
+      throw new KinuError('bad_input', 'envelope metadata cannot replace message structure');
     }
 
-    if (input.operation === 'replace-content' && v.is(JsonObjectSchema, input.value)) {
-      if (Object.keys(input.value).length === 0 || Object.keys(input.value).some(key => key !== 'output' && key !== 'data' && key !== 'image')) throw new KinuError('bad_input', 'content replacement cannot change part identity');
+    if (input.operation === 'replace-content' && v.is(JsonObjectSchema, input.value)
+      && (Object.keys(input.value).length === 0 || Object.keys(input.value).some(key => key !== 'output' && key !== 'data' && key !== 'image'))) {
+      throw new KinuError('bad_input', 'content replacement cannot change part identity');
     }
 
     if (input.operation === 'metadata') {

@@ -1,4 +1,5 @@
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { nonEmptyString } from './util';
 import type { OAuthCredential } from '../credentials/store';
 import { diagnostics, toKinuError } from '../obs/index';
 import * as v from 'valibot';
@@ -126,7 +127,7 @@ async function fetchCloudflareAccounts(accessToken: string): Promise<CloudflareA
       const id = row.id;
 
       if (!isCloudflareAccountId(id)) return null;
-      const name = row.name?.trim() || id;
+      const name = nonEmptyString({ value: row.name }) ?? id;
 
       return { id, name };
     })
@@ -136,11 +137,11 @@ async function fetchCloudflareAccounts(accessToken: string): Promise<CloudflareA
 export async function cloudflareTokenToCredential(
   token: CloudflareTokenPayload,
 ): Promise<OAuthCredential> {
-  const accessToken = stringValue(token.access_token);
+  const accessToken = stringValue({ value: token.access_token });
 
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
-  const refreshToken = stringValue(token.refresh_token);
+  const refreshToken = stringValue({ value: token.refresh_token });
   // Account discovery is not authentication. A token that sees no account — or
   // an accounts API that is down — must still yield a stored credential with
   // its refresh token: isCloudflareCredentialUsable already reports a missing
@@ -160,7 +161,7 @@ export async function cloudflareTokenToCredential(
   }
 
   const metadata: JsonObject = {
-    tokenType: stringValue(token.token_type) ?? 'bearer',
+    tokenType: stringValue({ value: token.token_type }) ?? 'bearer',
   };
 
   // Every visible account is recorded so a multi-account user can switch to the
@@ -173,7 +174,7 @@ export async function cloudflareTokenToCredential(
     metadata.accountName = accounts[0].name;
   }
 
-  const scopes = scopeList(token.scope);
+  const scopes = scopeList({ value: token.scope });
 
   if (scopes) metadata.scopes = scopes;
 
@@ -200,13 +201,13 @@ export async function refreshCloudflareCredential(
     refresh_token: current.refreshToken,
   });
 
-  const accessToken = stringValue(token.access_token) ?? current.accessToken;
-  const refreshToken = stringValue(token.refresh_token) ?? current.refreshToken;
+  const accessToken = stringValue({ value: token.access_token }) ?? current.accessToken;
+  const refreshToken = stringValue({ value: token.refresh_token }) ?? current.refreshToken;
   const metadata: JsonObject = { ...current.metadata };
-  const scopes = scopeList(token.scope);
+  const scopes = scopeList({ value: token.scope });
 
   if (scopes) metadata.scopes = scopes;
-  metadata.tokenType = stringValue(token.token_type) ?? current.metadata?.tokenType ?? 'bearer';
+  metadata.tokenType = stringValue({ value: token.token_type }) ?? current.metadata?.tokenType ?? 'bearer';
 
   const credential: OAuthCredential = {
     ...current,
@@ -313,7 +314,7 @@ export function cloudflareAccountsFromCredential(credential: OAuthCredential): C
   const accounts = stored.success
     ? stored.output
         .filter((row) => isCloudflareAccountId(row.id))
-        .map((row): CloudflareAccount => ({ id: row.id, name: row.name?.trim() || row.id }))
+        .map((row): CloudflareAccount => ({ id: row.id, name: nonEmptyString({ value: row.name }) ?? row.id }))
     : [];
 
   if (accounts.length > 0) return accounts;
@@ -353,25 +354,31 @@ export function isCloudflareCredentialExpiring(credential: OAuthCredential, skew
   return credential.expiresAt !== undefined && credential.expiresAt <= Date.now() + skewMs;
 }
 
-function cleanEnv<Value>(value: Value): string {
-  return v.is(v.string(), value) ? value.trim() : '';
+function cleanEnv(value: string | undefined): string {
+  return value?.trim() ?? '';
 }
 
-function expiresAtFromToken(token: CloudflareTokenPayload): number | undefined {
-  const raw = token.expires_in;
+/** A lifetime the token endpoint states as a number of seconds or as digits in
+ *  a string; anything else is not a lifetime. */
+const ExpiresInSchema = v.union([
+  v.number(),
+  v.pipe(v.string(), v.trim(), v.nonEmpty(), v.transform(Number)),
+]);
 
-  const seconds = v.is(v.number(), raw)
-    ? raw
-    : v.is(v.string(), raw) && raw.trim()
-      ? Number(raw)
-      : NaN;
+function expiresAtFromToken(token: CloudflareTokenPayload): number | undefined {
+  const parsed = v.safeParse(ExpiresInSchema, token.expires_in);
+
+  if (!parsed.success) return undefined;
+  const seconds = parsed.output;
 
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
 
   return Date.now() + Math.max(0, seconds - 30) * 1000;
 }
 
-function scopeList<Value>(value: Value): string[] | undefined {
+function scopeList(input: { value: unknown }): string[] | undefined {
+  const { value } = input;
+
   if (v.is(v.string(), value)) {
     const scopes = value.trim().split(/\s+/).filter(Boolean);
 
@@ -387,21 +394,25 @@ function scopeList<Value>(value: Value): string[] | undefined {
   return undefined;
 }
 
-function stringValue<Value>(value: Value): string | null {
-  return v.is(v.string(), value) && value.trim() ? value.trim() : null;
+/** A field of an unvalidated payload as the non-empty text it holds, or null —
+ *  a blank string is a field the endpoint filled with nothing. */
+function stringValue(input: { value: unknown }): string | null {
+  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);
+
+  return parsed.success ? parsed.output : null;
 }
 
 function stringField(obj: JsonObject, key: string): string | null {
-  return stringValue(obj[key]);
+  return stringValue({ value: obj[key] });
 }
 
 function firstCloudflareError(obj: JsonObject): string | null {
   const parsed = v.safeParse(CloudflareErrorEnvelopeSchema, obj);
 
   for (const error of parsed.success ? parsed.output.errors ?? [] : []) {
-    const message = error.message?.trim() || null;
+    const message = nonEmptyString({ value: error.message });
 
-    if (message) return message;
+    if (message !== undefined) return message;
   }
 
   return null;

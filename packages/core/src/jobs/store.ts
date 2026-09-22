@@ -91,8 +91,8 @@ function toJob(r: Row): BackgroundJob {
  *  appended to a clipped input turned every resumed fork into a corrupted
  *  string input. Both are model-authored payloads, bounded far below the row
  *  ceiling by the tool-result clamp and provider output limits. */
-export function serializeJobResult<Result>(result: Result): string {
-  try { return JSON.stringify(result ?? null); }
+export function serializeJobResult(input: { value: unknown }): string {
+  try { return JSON.stringify(input.value ?? null); }
   catch (error) {
     return `unserializable job result: ${renderThrownChain({ cause: error })}`;
   }

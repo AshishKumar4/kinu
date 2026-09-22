@@ -77,8 +77,8 @@ export function stringifyMarkdownFrontmatter(
   if (Object.keys(fm).length === 0) return doc.body;
   const lines: string[] = ['---'];
 
-  for (const [k, v] of Object.entries(fm)) {
-    lines.push(...renderEntry(k, v, 0));
+  for (const [key, value] of Object.entries(fm)) {
+    lines.push(...renderEntry(key, value, 0));
   }
 
   lines.push('---', '');
@@ -282,7 +282,7 @@ function renderEntry(key: string, value: JsonValue, indent: number): string[] {
         lines.push(`${pad}  - ${JSON.stringify(item)}`);
       } else {
         const itemString = v.safeParse(v.string(), item);
-        lines.push(`${pad}  - ${itemString.success ? quoteIfNeeded(itemString.output) : String(item)}`);
+        lines.push(`${pad}  - ${itemString.success ? quoteIfNeeded(itemString.output) : JSON.stringify(item)}`);
       }
     }
 
@@ -295,7 +295,7 @@ function renderEntry(key: string, value: JsonValue, indent: number): string[] {
     if (inner.length === 0) return [`${pad}${key}: {}`];
     const lines: string[] = [`${pad}${key}:`];
 
-    for (const [k, v] of inner) lines.push(...renderEntry(k, v, indent + 1));
+    for (const [innerKey, innerValue] of inner) lines.push(...renderEntry(innerKey, innerValue, indent + 1));
 
     return lines;
   }

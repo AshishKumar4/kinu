@@ -108,7 +108,7 @@ export function renderMergePrompt<I, E>(opts: {
 
     for (const id of wins) {
       const inst = instanceById.get(id);
-      const inputStr = inst ? renderInput(inst.input) : '(unknown)';
+      const inputStr = inst ? renderInput(inst) : '(unknown)';
 
       const wText = label === 'A'
         ? `score(A)=${opts.pair.a.scores.get(id)?.toFixed(2) ?? '0'} vs score(B)=${opts.pair.b.scores.get(id)?.toFixed(2) ?? '0'}`

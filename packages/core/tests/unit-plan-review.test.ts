@@ -116,7 +116,7 @@ describe('durable plan review lifecycle', () => {
       mathTargets: [{ blockId: 'math-1', tex: 'x^2', displayMode: false }],
     };
 
-    const saved = store.saveAnnotations('plan-1', 1, [annotation]);
+    const saved = store.saveAnnotations('plan-1', 1, { value: [annotation] });
     expect(saved.ok).toBe(true);
     expect(store.getActive('default')?.annotations).toEqual([annotation]);
   });
@@ -130,15 +130,15 @@ describe('durable plan review lifecycle', () => {
       type: 'COMMENT', originalText: 'Plan', createdA: 1,
     };
 
-    expect(store.saveAnnotations('plan-1', 1, [{ ...base, source: 'external' }])).toMatchObject({
+    expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, source: 'external' }] })).toMatchObject({
       ok: false,
       error: expect.stringContaining('unsupported field'),
     });
-    expect(store.saveAnnotations('plan-1', 1, [{ ...base, endOffset: -1 }])).toMatchObject({
+    expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, endOffset: -1 }] })).toMatchObject({
       ok: false,
       error: expect.stringContaining('offsets'),
     });
-    expect(store.saveAnnotations('plan-1', 1, [{ ...base, type: 'INSTRUCTION' }])).toMatchObject({
+    expect(store.saveAnnotations('plan-1', 1, { value: [{ ...base, type: 'INSTRUCTION' }] })).toMatchObject({
       ok: false,
       error: expect.stringContaining('type'),
     });
@@ -167,7 +167,7 @@ describe('durable plan review lifecycle', () => {
       ok: false,
       error: expect.stringContaining('stale'),
     });
-    expect(store.saveAnnotations('plan-1', 1, {})).toMatchObject({
+    expect(store.saveAnnotations('plan-1', 1, { value: {} })).toMatchObject({
       ok: false,
       error: 'annotations must be an array',
     });

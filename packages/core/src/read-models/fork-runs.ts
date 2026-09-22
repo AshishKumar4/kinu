@@ -119,14 +119,18 @@ export function listForkRuns(
   const after = cursor === null ? null : parseForkAnchor(cursor.after);
   const over = page + 1;
 
-  return seekPage(readRuns(sql, actor.actorId, null, queryPositions(sql, actor.actorId, over, null, after)), page, forkAnchor);
+  const positions = queryPositions({ sql, actorId: actor.actorId, limit: over, rootId: null, after });
+
+  return seekPage(readRuns(sql, actor.actorId, null, positions), page, forkAnchor);
 }
 
 /** One exact run, including runs older than the current page. */
 export function readForkRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ForkRunSummary | null {
   actor.assertCurrent();
 
-  return readRuns(sql, actor.actorId, rootId, queryPositions(sql, actor.actorId, 1, rootId, null))[0] ?? null;
+  const positions = queryPositions({ sql, actorId: actor.actorId, limit: 1, rootId, after: null });
+
+  return readRuns(sql, actor.actorId, rootId, positions)[0] ?? null;
 }
 
 /**
@@ -167,6 +171,14 @@ interface RunPosition {
   readonly startedAt: number;
 }
 
+interface PositionQuery {
+  readonly sql: SqlExecutor;
+  readonly actorId: string;
+  readonly limit: number;
+  readonly rootId: string | null;
+  readonly after: ForkAnchor | null;
+}
+
 /**
  * The page's runs, by position, newest first.
  *
@@ -182,13 +194,7 @@ interface RunPosition {
  * roots into this actor's Exploration list, and starts them at the earliest
  * `created_at` of the stranger's tree.
  */
-function queryPositions(
-  sql: SqlExecutor,
-  actorId: string,
-  limit: number,
-  rootId: string | null,
-  after: ForkAnchor | null,
-): RunPosition[] {
+function queryPositions({ sql, actorId, limit, rootId, after }: PositionQuery): RunPosition[] {
   const at = after?.startedAt ?? null;
   const from = after?.id ?? null;
 
@@ -247,8 +253,11 @@ function readRuns(
     // because a fabricated row is precisely what this read model must not produce.
     if (status === null) return [];
 
-    const task = tree?.task?.trim() || transcripts?.rootTask?.trim()
-      || transcripts?.rationale?.trim() || '(exploration run)';
+    // First of the three that says something: a task trimmed to nothing names
+    // the run no better than an absent one.
+    const task = [tree?.task, transcripts?.rootTask, transcripts?.rationale]
+      .map((candidate) => candidate?.trim())
+      .find((candidate) => candidate !== undefined && candidate !== '') ?? '(exploration run)';
 
     return [{
       id: position.rootId,
@@ -389,7 +398,7 @@ function queryTreeHalves(
 export function runName(rootLabel: string | null, task: string): string {
   const given = rootLabel?.trim();
 
-  return given || shortName(task);
+  return given === undefined || given === '' ? shortName(task) : given;
 }
 
 /** The first clause of a task, cut where the task itself offers a cut — a
@@ -527,11 +536,11 @@ function queryTranscriptHalves(
  * root has no journal row) is judged by its children.
  */
 function transcriptsStatus(transcripts: TranscriptHalf): ForkRunStatus {
-  if (transcripts.rootStatus !== null) {
-    return transcripts.rootStatus === 'running' ? 'running'
-      : transcripts.rootStatus === 'completed' ? 'completed'
-      : 'failed';
-  }
+  if (transcripts.rootStatus === 'running') return 'running';
+
+  if (transcripts.rootStatus === 'completed') return 'completed';
+
+  if (transcripts.rootStatus !== null) return 'failed';
 
   if (transcripts.running > 0) return 'running';
 

@@ -137,15 +137,20 @@ export type BuiltinToolName = {
   [K in CapabilityName]: (typeof TOOL_REACH)[K]['native'] extends true ? K : never
 }[CapabilityName];
 
+/** Whether a name is one the reach table declares. `TOOL_REACH` is a `const`
+ *  object literal in this module and nothing outside it can add a key, so the
+ *  table is the authority on its own key union. */
+function isCapabilityName(name: string): name is CapabilityName {
+  return Object.hasOwn(TOOL_REACH, name);
+}
+
 /**
  * The reach table's own keys, recovered once.
  *
- * SAFETY: `TOOL_REACH` is a `const` object literal declared in this module, so
- * its runtime keys ARE its key union — `Object.keys` loses that in the lib
- * signature and nothing outside this file can add a key. This is the only place
+ * `Object.keys` loses the key union in the lib signature. This is the only place
  * that recovers it, so every derivation below indexes a typed name.
  */
-const CAPABILITY_NAMES = Object.keys(TOOL_REACH) as readonly CapabilityName[];
+const CAPABILITY_NAMES: readonly CapabilityName[] = Object.keys(TOOL_REACH).filter(isCapabilityName);
 
 /**
  * The standing eight, DERIVED. Hand-listing them was membership-checked and not

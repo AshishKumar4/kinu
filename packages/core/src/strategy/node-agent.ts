@@ -646,7 +646,10 @@ export function readNodeReport(input: {
   readonly reported: CapturedReport | null;
   readonly languages: readonly [string, ...string[]];
 }): NodeReport {
-  const conclusion = input.reported?.content.trim() || input.report.summary.trim();
+  // A report captured with nothing in it is no conclusion: the head's own
+  // summary is what the node then stands on.
+  const captured = input.reported?.content.trim() ?? '';
+  const conclusion = captured === '' ? input.report.summary.trim() : captured;
 
   return { candidate: candidateOf(conclusion, input.languages), conclusion };
 }
@@ -738,7 +741,7 @@ async function runNodeLoop(
 
   const runnerDeps: BackgroundJobRunnerDeps = {
     store: deps.actor.stores.jobs,
-    fiber: deps.actor.runtime.schedule.fiber,
+    fiber: deps.actor.runtime.schedule.fiber.bind(deps.actor.runtime.schedule),
     inbox: wakes,
     logActivity: (event, detail) => {
       deps.logger.event('swarm.node_job', {

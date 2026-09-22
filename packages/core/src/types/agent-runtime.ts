@@ -65,25 +65,29 @@ export interface BranchReflection {
   usage?: Usage;
 }
 
+/** Everything one rollout is given: the parent's history, its crafted tools,
+ *  what it may run, the mode it inherits and the angles its siblings took. */
+export interface BranchExplorationRequest {
+  priorHistory: Array<{ role: string; content: string }>;
+  craftedTools: CraftedTool[];
+  /** What the parent executor can run, in preference order. */
+  languages: readonly [string, ...string[]];
+  /** Trusted parent mode. A branch cannot select or downgrade this value. */
+  mode: WorkMode;
+  /** Distinct solution angles assigned to this branch's siblings in the same
+   *  expansion. Threaded so each branch proposes something DISTINCT (MCTS
+   *  branches explore in parallel and never see a sibling's output). Optional
+   *  so backends/tests that don't enforce diversity still satisfy the type. */
+  siblings?: readonly string[];
+}
+
 /**
  * A branch EXPLORES and reflects; it deliberately cannot score itself.
  * Scoring happens at the engine seam (mcts/engine.ts) through the grounded
  * evaluator, so no backend can reintroduce same-model self-rating.
  */
 export interface BranchHandle {
-  explore(
-    priorHistory: Array<{ role: string; content: string }>,
-    craftedTools: CraftedTool[],
-    /** What the parent executor can run, in preference order. */
-    languages: readonly [string, ...string[]],
-    /** Trusted parent mode. A branch cannot select or downgrade this value. */
-    mode: WorkMode,
-    /** Distinct solution angles assigned to this branch's siblings in the same
-     *  expansion. Threaded so each branch proposes something DISTINCT (MCTS
-     *  branches explore in parallel and never see a sibling's output). Optional
-     *  so backends/tests that don't enforce diversity still satisfy the type. */
-    siblings?: readonly string[],
-  ): Promise<BranchExploration>;
+  explore(request: BranchExplorationRequest): Promise<BranchExploration>;
   /**
    * Write a post-mortem on this branch's own attempt.
    *

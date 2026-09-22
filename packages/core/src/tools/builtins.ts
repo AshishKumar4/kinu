@@ -350,12 +350,12 @@ function buildCraftedToolSetFromExecute(
 function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute {
   const compiled = new Map<string, { code: string; execute: CraftedToolExecuteFn }>();
 
-  return (tool) => {
-    const hit = compiled.get(tool.name);
+  return (crafted) => {
+    const hit = compiled.get(crafted.name);
 
-    if (hit && hit.code === tool.code) return hit.execute;
-    const execute = factory(tool);
-    compiled.set(tool.name, { code: tool.code, execute });
+    if (hit && hit.code === crafted.code) return hit.execute;
+    const execute = factory(crafted);
+    compiled.set(crafted.name, { code: crafted.code, execute });
 
     return execute;
   };
@@ -388,6 +388,21 @@ const RUN_RUNTIME_NO_EXEC = 'shell.runtime_no_exec';
 const RUN_ESCALATION_FAILED = 'shell.escalation_failed';
 
 const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
+
+/** What a caller does about a runtime that is not provisioned yet. Each reads as
+ *  a next step rather than a state, because the refusal is a retry in two of the
+ *  three cases and a wiring mistake in the third. */
+function unprovisionedAdvice(runtimeKey: string): string {
+  if (runtimeKey === 'device') {
+    return 'A machine runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.';
+  }
+
+  if (runtimeKey === 'sandbox') {
+    return 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.';
+  }
+
+  return `Runtime "${runtimeKey}" is not registered.`;
+}
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const { rt } = deps;
@@ -559,13 +574,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
         const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
-        throw new KinuError(refusal.code, refusal.message + ': ' + (
-          nickname !== undefined || runtimeKey === 'device'
-            ? 'A machine runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
-            : runtimeKey === 'sandbox'
-              ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
-              : 'Runtime "' + runtimeKey + '" is not registered.'
-        ), { cause: refusal });
+        throw new KinuError(refusal.code, refusal.message + ': '
+          + unprovisionedAdvice(nickname !== undefined ? 'device' : runtimeKey), { cause: refusal });
       }
 
       const execTool = provider.tools.exec;
@@ -658,13 +668,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   tools.memory = permitInPlan(tool({
-    description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
+    description: renderToolSchemaDescription(memoryToolSpec(facts !== undefined)),
     inputSchema: jsonSchema<MemoryToolInput>({
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: [...memoryActionsFor(!!facts)],
+          enum: [...memoryActionsFor(facts !== undefined)],
           description: facts
             ? 'remember/recall/forget a keyed fact, save/search prose notes and remembered facts, or read this agent’s past conversation'
             : 'save a note, search memory notes, or read this agent’s past conversation',
@@ -843,7 +853,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // It is intentionally outside BUILTIN_TOOLS: that registry describes the
   // stable surface every turn can build. This tool exists only on a Plan turn,
   // where ActorAgent wires this dependency and adds the name to activeTools.
-  if (deps.submitPlan) {
+  const submitPlan = deps.submitPlan;
+
+  if (submitPlan) {
     tools.submit_plan = permitInPlan(tool({
       description: [
         'Submit the current Markdown implementation plan for interactive owner review.',
@@ -871,7 +883,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         additionalProperties: false,
       }),
       execute: async ({ edits }: { edits: PlanEdit[] }) => {
-        const result = await deps.submitPlan!.submit(edits);
+        const result = await submitPlan.submit(edits);
 
         if (!result.ok) return result;
 

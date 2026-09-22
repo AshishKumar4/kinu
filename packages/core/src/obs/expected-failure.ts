@@ -12,6 +12,8 @@
  * than asserting against a hardcoded string.
  */
 
+import * as v from 'valibot';
+
 /** A failure a caller may declare as expected. Closed: an unnamed failure is not tolerable. */
 export type ExpectedFailure =
   | 'sqlite-missing-table'
@@ -38,20 +40,40 @@ const SQLITE_TABLE_EXISTS = /\bthere is already another table or index with this
 /** `"x" cannot be parsed as a URL.` — WHATWG URL's TypeError, which carries no `code` in browsers. */
 const UNPARSEABLE_URL = /cannot be parsed as a URL/u;
 
+/** A caught value's words. Only a scalar has any: `String()` on anything else
+ *  is `[object Object]`, which reads as a rendered message and is not one —
+ *  the same boundary `log.ts` draws for a log field's value. */
+const ScalarSchema = v.union([v.string(), v.number(), v.boolean()]);
+
+/**
+ * What a caught value says for itself, or null when it says nothing. The
+ * scalar union rather than a string is load-bearing: a DOMException's `code`
+ * is a legacy NUMBER, and an aborted wait's reason is whatever the canceller
+ * passed.
+ *
+ * Exported for `error.ts`, whose chain renderer ends on a non-`Error` cause.
+ * Not re-exported from `obs/index.ts`: inside this module, not part of the seam.
+ */
+export function scalarText(input: { value: unknown }): string | null {
+  const scalar = v.safeParse(ScalarSchema, input.value);
+
+  return scalar.success ? String(scalar.output) : null;
+}
+
 /**
  * The one reader of a caught error's `code` property. Exported for `error.ts`,
  * which classifies a wider errno set than this module tolerates — a second
  * reader of the same property would be a second answer to "does this error even
- * have a code", and `String()` rather than a `typeof` narrow is load-bearing: a
- * DOMException's `code` is a legacy NUMBER, and its name is what identifies it.
+ * have a code", and reading it as a scalar rather than narrowing to a string is
+ * load-bearing: a DOMException's `code` is a legacy NUMBER, and its name is
+ * what identifies it.
  *
  * Not re-exported from `obs/index.ts`: inside this module, not part of the seam.
  */
 export function errnoCode(error: Error): string | null {
   if (!('code' in error)) return null;
-  const code = error.code;
 
-  return code === undefined || code === null ? null : String(code);
+  return scalarText({ value: error.code });
 }
 
 /**

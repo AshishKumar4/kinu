@@ -14,6 +14,14 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { DEFAULT_CONFIG } from '../config';
 
+/** The two tuned knobs of the selection below. Each defaults to its
+ *  `DEFAULT_CONFIG.mcts` value. */
+export interface UctKnobs {
+  /** The `W` of the UCT formula. */
+  readonly explorationWeight?: number;
+  readonly maxDepth?: number;
+}
+
 /**
  * Select the best open node using UCT with CORRECT natural log.
  *
@@ -47,9 +55,11 @@ export function selectNode(
   sql: SqlExecutor,
   actor: ActorHandle,
   rootId: string,
-  W: number = DEFAULT_CONFIG.mcts.explorationWeight,
-  maxDepth: number = DEFAULT_CONFIG.mcts.maxDepth,
+  knobs: UctKnobs = {},
 ): SearchNode | null {
+  const W = knobs.explorationWeight ?? DEFAULT_CONFIG.mcts.explorationWeight;
+  const maxDepth = knobs.maxDepth ?? DEFAULT_CONFIG.mcts.maxDepth;
+
   // ln(x) in SQLite = log10(x) / log10(e) = log(x) / log(exp(1.0)).
   // parent_visits: real parent's visits for children; the node's own visits
   // (floored) for the root, so the root keeps a non-zero exploration term.

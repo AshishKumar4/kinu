@@ -108,8 +108,17 @@ function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'm
     case 'model':
       body = `Runs a model call on your ${capability.tier} tier. Every call spends your inference.`;
       break;
-    default:
+    case 'web':
+      // `members.ts` names `search` and `fetch` read, so a mutating web member
+      // is one its table does not name and fails closed to mutating.
+      body = `Calls ${member} on the web as you. The web tool does not name it, so what it does is not known here.`;
+      break;
+    case 'rpc':
+    case 'slate':
+      // Neither reaches this text: every rpc member is a read model, and an
+      // app binding's slate row carries no members at all.
       body = `Calls ${member} as you.`;
+      break;
   }
 
   return {
@@ -124,14 +133,20 @@ function graphMember(
   return { member, effect, risk: riskOf(capability, member, effect, workspace) };
 }
 
+interface GraphBindingInput {
+  readonly slate: string;
+  readonly name: string;
+  readonly binding: SlateBinding;
+  readonly catalog: SlateBindingCatalog;
+  readonly workspace: string;
+}
+
 /** One binding as its row on the graph: the capability it reaches, every
  *  member a grant could name classified by effect, and the reason the row
  *  cannot be honoured when the workspace cannot honour it. A problem row
  *  still carries its members — the grant cut includes them, so the call
  *  refuses for the real reason rather than for absence from the grant. */
-function graphBinding(
-  slate: string, name: string, binding: SlateBinding, catalog: SlateBindingCatalog, workspace: string,
-): SlateGraphBinding {
+function graphBinding({ slate, name, binding, catalog, workspace }: GraphBindingInput): SlateGraphBinding {
   const row = (capability: SlateCapability, members: SlateGraphMember[], problem?: string): SlateGraphBinding => {
     const result: SlateGraphBinding = { slate, name, kind: binding.kind, capability, members };
 
@@ -269,7 +284,7 @@ export function slateCapabilityGraph(input: {
     slates.push(id);
 
     for (const [name, binding] of Object.entries(project.slate.bindings)) {
-      bindings.push(graphBinding(id, name, binding, catalog, workspace));
+      bindings.push(graphBinding({ slate: id, name, binding, catalog, workspace }));
 
       if (binding.kind !== 'app' || walked.has(binding.id) || !Object.hasOwn(catalog.slates, binding.id)) continue;
       walk(binding.id, catalog.slates[binding.id]);

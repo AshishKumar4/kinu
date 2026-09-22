@@ -12,6 +12,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
+import { present } from '@kinu.run/test-utils';
 import {
   runGepa, computeParetoFront, sampleParentByWeight, bestAggregate,
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
@@ -768,7 +769,7 @@ describe('runGepa — winner selection over the whole pool', () => {
       reflectionLm: async (p) => {
         prompts.push(p);
 
-        return script[call++]!;
+        return script[call++];
       },
       budget: { maxIterations: 4, maxMetricCalls: 100, minibatchSize: 1 },
       parentSelection: 'best-aggregate',
@@ -794,7 +795,7 @@ describe('runGepa — winner selection over the whole pool', () => {
       reflectionLm: async (p) => {
         prompts.push(p);
 
-        return script[call++]!;
+        return script[call++];
       },
       budget: { maxIterations: 4, maxMetricCalls: 100, minibatchSize: 1 },
       parentSelection: 'best-aggregate',
@@ -835,23 +836,25 @@ describe('runGepa — the Merge operator', () => {
     expect(prompts.findIndex(isMergePrompt)).toBe(2);
   });
 
-  test('a higher cap lets the later cadence slot merge too', async () => {
-    const { merges } = await mergeRun({ useMerge: true, mergeEveryN: 2, maxMergeInvocations: 5 });
-    expect(merges).toHaveLength(2);
-  });
+  const capCases = [
+    { name: 'a higher cap lets the later cadence slot merge too', useMerge: true, expected: 2 },
+    { name: 'useMerge off means the operator never runs', useMerge: false, expected: 0 },
+  ];
 
-  test('useMerge off means the operator never runs', async () => {
-    const { merges } = await mergeRun({ useMerge: false, mergeEveryN: 2, maxMergeInvocations: 5 });
-    expect(merges).toHaveLength(0);
-  });
+  for (const c of capCases) {
+    test(c.name, async () => {
+      const { merges } = await mergeRun({ useMerge: c.useMerge, mergeEveryN: 2, maxMergeInvocations: 5 });
+      expect(merges).toHaveLength(c.expected);
+    });
+  }
 
   test('a merged candidate carries no single parent id', async () => {
     const { result } = await mergeRun({ useMerge: true, mergeEveryN: 2, maxMergeInvocations: 1 });
-    const merged = result.history.find((c) => c.source === 'MERGED');
-    expect(merged).toBeDefined();
+    const merged = present(result.history.find((c) => c.source === 'MERGED'), 'the merged candidate');
+
     // Merge inherits two parents; the candidate type carries one id, so it
     // must stay null rather than pointing at whichever was sampled last.
-    expect(merged!.parentId).toBeNull();
+    expect(merged.parentId).toBeNull();
   });
 
   test('merge charges no rollout cost — only its eval-set scoring', async () => {

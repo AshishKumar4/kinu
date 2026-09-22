@@ -49,7 +49,7 @@ const SANDBOX_TOOL = 'eval';
 /** What a crafted tool with no stored description is labelled. One spelling,
  *  so the advertised set reads the same however it was assembled. */
 export function craftedToolDescription(name: string, description?: string): string {
-  return description || `Crafted tool: ${name}`;
+  return description === undefined || description === '' ? `Crafted tool: ${name}` : description;
 }
 
 /** The first sentence of a tool description — what a declaration's JSDoc
@@ -118,6 +118,7 @@ export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string
         return fields.length === 0 ? 'Record<string, unknown>' : `{ ${fields.join('; ')} }`;
       }
 
+      case undefined:
       default: return 'unknown';
     }
   });
@@ -241,12 +242,25 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
   return out;
 }
 
+/** The `file` tool's codemode members, which are accounted to `file` rather than
+ *  to the namespace that exposed them. */
+const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'];
+
+/** Which native tool a codemode member's failures are filed under. */
+function accountedTool(namespace: string, member: string, owner: string | undefined): string {
+  if (namespace === CRAFTED_TOOL_NAMESPACE) return member;
+
+  if (owner !== undefined) return owner;
+
+  if (member === 'exec') return 'shell';
+
+  return FILE_MEMBERS.includes(member) ? 'file' : `${namespace}.${member}`;
+}
+
 /** The host dispatcher shared by both sandboxes and by caller-scoped slate bindings. */
 export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>) {
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
-
-  const tool = namespace === CRAFTED_TOOL_NAMESPACE ? member
-    : owner?.[0] ?? (member === 'exec' ? 'shell' : ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'].includes(member) ? 'file' : `${namespace}.${member}`);
+  const tool = accountedTool(namespace, member, owner?.[0]);
 
   const call = bindProgramCall({ tool, action: owner === undefined ? null : member }, async (...args: unknown[]) => {
     const value = await invoke(...args);

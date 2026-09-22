@@ -260,7 +260,7 @@ function describeRequest(input: RequestInfo | URL, init?: RequestInit) {
   const fromRequest = input instanceof Request ? input : null;
 
   return {
-    url: fromRequest ? fromRequest.url : String(input),
+    url: input instanceof Request ? input.url : String(input),
     method: init?.method ?? fromRequest?.method ?? 'GET',
     headers: copyHeaders(init?.headers ?? fromRequest?.headers),
   };

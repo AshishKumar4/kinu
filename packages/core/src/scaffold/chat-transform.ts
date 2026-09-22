@@ -213,6 +213,10 @@ async function* scaffoldTurn(
       case 'error':
         yield { type: 'error', message: ev.message };
         break;
+      // A native tool's raw output, carried beside the `model_chunk` stream
+      // that already yields the call and its result to the transcript. This
+      // codec emits what a chat renders, so there is no chunk for it.
+      case 'model_output':
       case 'done':
         break;
     }

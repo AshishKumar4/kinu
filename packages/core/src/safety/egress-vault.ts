@@ -121,19 +121,33 @@ function mintEgressPlaceholder(): string {
   return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
+/** One listed binding as the table declares it. */
+const EgressSecretRowSchema = v.object({
+  id: v.string(),
+  label: v.string(),
+  host: v.string(),
+  placeholder: v.string(),
+  created_at: v.number(),
+  updated_at: v.number(),
+});
+
 /** What the owner and the UI may see: every binding, no secret material. */
 export function listEgressSecrets(sql: SqlExec): EgressSecretSummary[] {
   return sql.exec(
     `SELECT id, label, host, placeholder, created_at, updated_at
        FROM user_egress_secrets ORDER BY id`,
-  ).toArray().map((row) => ({
-    id: String(row.id),
-    label: String(row.label),
-    host: String(row.host),
-    placeholder: String(row.placeholder),
-    createdAt: Number(row.created_at),
-    updatedAt: Number(row.updated_at),
-  }));
+  ).toArray().map((row) => {
+    const binding = v.parse(EgressSecretRowSchema, row);
+
+    return {
+      id: binding.id,
+      label: binding.label,
+      host: binding.host,
+      placeholder: binding.placeholder,
+      createdAt: binding.created_at,
+      updatedAt: binding.updated_at,
+    };
+  });
 }
 
 /**

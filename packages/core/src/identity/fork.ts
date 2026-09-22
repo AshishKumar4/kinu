@@ -169,21 +169,25 @@ export async function snapshotWorkspaceForFork(source: ForkSnapshotSource): Prom
   };
 }
 
+/** One workspace's two storage halves, which always travel together. */
+export interface WorkspaceStore {
+  readonly sql: SqlExecutor;
+  readonly vfs: VFS;
+}
+
 /** Read a source workspace and land it in a target, in one call — the shape a
  *  backend uses when both databases are open in the same process. */
 export async function forkWorkspaceStorage(
-  source: SqlExecutor,
-  sourceVfs: VFS,
-  target: SqlExecutor,
-  targetVfs: VFS,
+  source: WorkspaceStore,
+  target: WorkspaceStore,
   opts: ForkOpts,
 ): Promise<ForkResult> {
   const snapshot = await snapshotWorkspaceForFork({
-    sql: source, vfs: sourceVfs, untilMessageId: opts.untilMessageId,
+    sql: source.sql, vfs: source.vfs, untilMessageId: opts.untilMessageId,
     artifactDirectory: opts.sourceArtifactDirectory,
   });
 
-  return writeForkSnapshot(target, targetVfs, snapshot, {
+  return writeForkSnapshot(target.sql, target.vfs, snapshot, {
     workspaceId: opts.targetWorkspaceId,
     workspaceName: opts.targetWorkspaceName,
     artifactDirectory: opts.targetArtifactDirectory,

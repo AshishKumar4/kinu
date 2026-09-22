@@ -91,7 +91,7 @@ function normalizeWithOrigin(original: string) {
   const origin: number[] = [];
 
   for (let i = 0; i < original.length; i++) {
-    const ch = original[i]!;
+    const ch = original[i];
 
     if (ch === '\r') {
       origin.push(i);
@@ -163,7 +163,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   const matches: Array<{ index: number; start: number; length: number; newText: string }> = [];
 
   for (let i = 0; i < anchors.length; i++) {
-    const { oldText, newText } = anchors[i]!;
+    const { oldText, newText } = anchors[i];
 
     if (oldText.length === 0) {
       return {
@@ -202,8 +202,8 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   const ordered = [...matches].sort((a, b) => a.start - b.start);
 
   for (let i = 1; i < ordered.length; i++) {
-    const prev = ordered[i - 1]!;
-    const cur = ordered[i]!;
+    const prev = ordered[i - 1];
+    const cur = ordered[i];
 
     if (prev.start + prev.length > cur.start) {
       return {
@@ -222,9 +222,9 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   let content = body;
 
   for (let i = ordered.length - 1; i >= 0; i--) {
-    const m = ordered[i]!;
+    const m = ordered[i];
     const insert = ending === '\r\n' ? m.newText.replace(/\n/g, '\r\n') : m.newText;
-    content = content.slice(0, origin[m.start]!) + insert + content.slice(origin[m.start + m.length]!);
+    content = content.slice(0, origin[m.start]) + insert + content.slice(origin[m.start + m.length]);
   }
 
   if (content === body) {

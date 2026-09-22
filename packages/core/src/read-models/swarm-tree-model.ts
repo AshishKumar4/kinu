@@ -9,7 +9,11 @@ import { type ForkNode } from '../protocol';
 
 /** One score ladder for bar grades and swarm-node fills. */
 export function scoreBand(value: number): 'success' | 'warning' | 'danger' {
-  return value >= 0.7 ? 'success' : value >= 0.4 ? 'warning' : 'danger';
+  if (value >= 0.7) return 'success';
+
+  if (value >= 0.4) return 'warning';
+
+  return 'danger';
 }
 
 /**
@@ -33,7 +37,9 @@ export interface ExplorerSelection {
  * label is a single line of it.
  */
 export function cleanNodeLabel(value: string | null | undefined, fallback: string): string {
-	const raw = (value || fallback || "").split("\n").find((line) => line.trim().length > 0) ?? fallback;
+	// A blank label names nothing, so an empty string falls back like an absent one.
+	const text = value === null || value === undefined || value === "" ? fallback : value;
+	const raw = text.split("\n").find((line) => line.trim().length > 0) ?? fallback;
 
 	const cleaned = raw
 		.replace(/^\s{0,3}#{1,6}\s*/, "")

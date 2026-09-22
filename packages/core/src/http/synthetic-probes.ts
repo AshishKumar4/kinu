@@ -81,8 +81,8 @@ async function get(deps: ProbeDeps, path: string): Promise<Response> {
 /** The build a JSON body claims. Written tolerantly on purpose: the health
  *  endpoint's stamp is another module's shape, and a monitor that hard-codes
  *  one spelling turns a rename into a false alarm. */
-function buildStamp<Body>(body: Body): string | null {
-  const parsed = v.safeParse(BuildStampSchema, body);
+function buildStamp(input: { body: unknown }): string | null {
+  const parsed = v.safeParse(BuildStampSchema, input.body);
 
   if (!parsed.success) return null;
   const stamp = parsed.output;
@@ -118,7 +118,7 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
     return fail('GET /api/health reports the worker as not ok');
   }
 
-  const live = buildStamp(body);
+  const live = buildStamp({ body });
 
   if (!live) {
     return fail('GET /api/health carries no build identifier — the live build cannot be identified');
@@ -152,7 +152,7 @@ async function shippedBuild(deps: ProbeDeps): Promise<string> {
   const response = await get(deps, VERSION_MANIFEST);
 
   if (response.status !== 200) throw new Error(`it returned HTTP ${response.status}`);
-  const stamp = buildStamp(await response.json());
+  const stamp = buildStamp({ body: await response.json() });
 
   if (!stamp) throw new Error('it carries no build identifier');
 

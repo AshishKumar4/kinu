@@ -257,6 +257,57 @@ function pointOnCurve(branch: Branch, t: number): readonly [number, number] {
   ];
 }
 
+/** One stroke's look for this frame: the branch it draws, how far along it is
+ *  grown, and the light it carries. */
+interface StrokeLook {
+  branch: Branch;
+  t: number;
+  width: number;
+  glow: number;
+  tone: number;
+  alpha: number;
+}
+
+/** One point drawn on the tree: a tip, a node or a spark. */
+interface NodePoint {
+  x: number;
+  y: number;
+  radius: number;
+  glow: number;
+  tone: number;
+  alpha: number;
+  layer: number;
+}
+
+/** Where a tip would land: the branch it grows from and the heading, length
+ *  and height that put it there. */
+interface TipReach {
+  parent: Branch;
+  heading: number;
+  length: number;
+  y1: number;
+}
+
+/** Children for an attempt that scored at least as well as its parent: mostly
+ *  three, sometimes two or four. */
+function improvedChildren(roll: number): number {
+  if (roll < 0.2) return 2;
+
+  if (roll < 0.7) return 3;
+
+  return 4;
+}
+
+/** Children for an attempt that scored worse: often none, so a weak line ends
+ *  rather than spreading. */
+function worseChildren(roll: number): number {
+  if (roll < 0.4) return 0;
+
+  if (roll < 0.8) return 1;
+
+  return 2;
+}
+
 export class SearchTree {
   static readonly pointer: PointerReach = { radius: POINTER_RADIUS, maxBend: MAX_BEND };
 
@@ -417,7 +468,10 @@ export class SearchTree {
         }
 
         if (branch.parent < 0) {
-          nodeCount = this.pushNode(nodeCount, branch.outX1, branch.outY1, 3.4 * layer.rules.width, 0.6, TONE_BRIGHT, 0.8 * layer.rules.alpha, branch.layer);
+          nodeCount = this.pushNode(nodeCount, {
+            x: branch.outX1, y: branch.outY1, radius: 3.4 * layer.rules.width,
+            glow: 0.6, tone: TONE_BRIGHT, alpha: 0.8 * layer.rules.alpha, layer: branch.layer,
+          });
           continue;
         }
 
@@ -425,11 +479,13 @@ export class SearchTree {
         const glow = clamp(branch.glow + branch.boost * 0.5, 0, 1);
         const recede = clamp((branch.outX1 + 0.04) / HISTORY_X, 0, 1);
         const alpha = clamp(branch.alpha + branch.boost * 0.3, 0, 1) * layer.rules.alpha * recede;
-        count = this.pushStroke(count, branch, easeGrowth(branch.progress), branch.width, glow, branch.tone, alpha);
+        count = this.pushStroke(count, { branch, t: easeGrowth(branch.progress), width: branch.width, glow, tone: branch.tone, alpha });
 
         if (branch.phase === 'alive' && (branch.liveChildren === 0 || branch.id === layer.bestId)) {
           const radius = branch.id === layer.bestId ? 3.2 * layer.rules.width : 1.9 * layer.rules.width;
-          nodeCount = this.pushNode(nodeCount, branch.outX1, branch.outY1, radius, glow, branch.tone, alpha, branch.layer);
+          nodeCount = this.pushNode(nodeCount, {
+            x: branch.outX1, y: branch.outY1, radius, glow, tone: branch.tone, alpha, layer: branch.layer,
+          });
         }
       }
     }
@@ -441,7 +497,10 @@ export class SearchTree {
       const life = 1 - spark.age / spark.life;
       const shiftX = -layer.offset - this.driftX * layer.rules.drift;
       const shiftY = -this.driftY * layer.rules.drift * this.aspect;
-      nodeCount = this.pushNode(nodeCount, spark.x + shiftX, spark.y + shiftY, spark.size * life, 0.7 * life, TONE_EMBER, 0.75 * life * layer.rules.alpha, spark.layer);
+      nodeCount = this.pushNode(nodeCount, {
+        x: spark.x + shiftX, y: spark.y + shiftY, radius: spark.size * life,
+        glow: 0.7 * life, tone: TONE_EMBER, alpha: 0.75 * life * layer.rules.alpha, layer: spark.layer,
+      });
     }
 
     const foreground = this.layers[0];
@@ -460,7 +519,8 @@ export class SearchTree {
     };
   }
 
-  private pushStroke(count: number, branch: Branch, t: number, width: number, glow: number, tone: number, alpha: number): number {
+  private pushStroke(count: number, look: StrokeLook): number {
+    const { branch, t, width, glow, tone, alpha } = look;
     this.strokes = grown(this.strokes, (count + 1) * STROKE_STRIDE);
     const at = count * STROKE_STRIDE;
     const strokes = this.strokes;
@@ -480,7 +540,8 @@ export class SearchTree {
     return count + 1;
   }
 
-  private pushNode(count: number, x: number, y: number, radius: number, glow: number, tone: number, alpha: number, layer: number): number {
+  private pushNode(count: number, point: NodePoint): number {
+    const { x, y, radius, glow, tone, alpha, layer } = point;
     this.nodes = grown(this.nodes, (count + 1) * NODE_STRIDE);
     const at = count * NODE_STRIDE;
     const nodes = this.nodes;
@@ -503,7 +564,7 @@ export class SearchTree {
   }
 
   private distance(x0: number, y0: number, x1: number, y1: number): number {
-    return viewDistance(this.aspect, x0, y0, x1, y1);
+    return viewDistance({ aspect: this.aspect, x0, y0, x1, y1 });
   }
 
   private seedLayer(rules: LayerRules, index: number, seed: number): LayerState {
@@ -776,8 +837,8 @@ export class SearchTree {
     let children: number;
 
     if (parent === undefined) children = 4;
-    else if (improved) children = roll < 0.2 ? 2 : roll < 0.7 ? 3 : 4;
-    else children = roll < 0.4 ? 0 : roll < 0.8 ? 1 : 2;
+    else if (improved) children = improvedChildren(roll);
+    else children = worseChildren(roll);
 
     // Past the view's edge, or behind the headline, an attempt spawns nothing.
     if (branch.x1 - layer.offset > RIGHT_EDGE || this.inKeepOut(branch.x1 - layer.offset, branch.y1)) children = 0;
@@ -809,7 +870,7 @@ export class SearchTree {
       y1 = clamp(parent.y1 + Math.sin(heading) * length / this.aspect, Y_MIN, Y_MAX);
     }
 
-    const away = this.turnAway(layer, parent, heading, length, y1);
+    const away = this.turnAway(layer, { parent, heading, length, y1 });
 
     if (away !== null) {
       heading = away;
@@ -888,7 +949,8 @@ export class SearchTree {
   /** The heading that keeps a tip out of the keep-out, or null when the
    *  one given already does. A tip that would land inside turns to the side
    *  of the box its parent is on, at least a shallow angle, still rightward. */
-  private turnAway(layer: LayerState, parent: Branch, heading: number, length: number, y1: number): number | null {
+  private turnAway(layer: LayerState, tip: TipReach): number | null {
+    const { parent, heading, length, y1 } = tip;
     const box = this.keepOut;
 
     if (box === null || !this.inKeepOut(parent.x1 + Math.cos(heading) * length - layer.offset, y1)) return null;

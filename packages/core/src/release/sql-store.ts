@@ -149,14 +149,14 @@ export function initReleaseTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_release_deployments_change ON release_deployments (change_id, deployed_at DESC)`);
 }
 
-function cleanOptional<Value>(value: Value, max = 512): string | null {
+function cleanOptional(value: string | null | undefined, max = 512): string | null {
   if (value == null) return null;
-  const text = String(value).trim();
+  const text = value.trim();
 
   return text ? text.slice(0, max) : null;
 }
 
-function cleanRequired<Value>(value: Value, label: string, max: number): string {
+function cleanRequired(value: string | null | undefined, label: string, max: number): string {
   const text = cleanOptional(value, max);
 
   if (!text) throw new Error(`${label} is required`);
@@ -164,7 +164,7 @@ function cleanRequired<Value>(value: Value, label: string, max: number): string 
   return text;
 }
 
-function cleanLabel<Value>(value: Value, fallback: string): string {
+function cleanLabel(value: string | null | undefined, fallback: string): string {
   return cleanOptional(value, 120) ?? fallback;
 }
 
@@ -477,14 +477,14 @@ export class ReleaseStore {
     // and breaks its hunk, and a truncation cuts a valid patch mid-hunk.
     // Redaction belongs to the display read (`listChanges`), and an oversized
     // patch is refused rather than silently shortened into a broken one.
-    if (patch.patch != null && String(patch.patch).length > MAX_PATCH_CHARS) {
+    if (patch.patch != null && patch.patch.length > MAX_PATCH_CHARS) {
       throw new Error(
-        `patch is ${String(String(patch.patch).length)} characters, over the ${String(MAX_PATCH_CHARS)} `
+        `patch is ${String(patch.patch.length)} characters, over the ${String(MAX_PATCH_CHARS)} `
         + 'limit — split the change rather than truncating the diff',
       );
     }
 
-    const nextPatch = patch.patch === undefined ? existing.patch : (patch.patch == null ? null : String(patch.patch));
+    const nextPatch = patch.patch === undefined ? existing.patch : patch.patch;
     const nextPreviewUrl = patch.previewUrl === undefined ? existing.previewUrl : cleanOptional(patch.previewUrl, 2048);
     this.sql.run(
       `UPDATE release_changes
@@ -547,7 +547,7 @@ export class ReleaseStore {
       `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at FROM release_checks WHERE id = ?`,
       id,
     )
-      .map(mapReleaseCheck)[0]!;
+      .map(mapReleaseCheck)[0];
   }
 
   /** The binding's declared deploy command for a change (null when the binding
@@ -593,12 +593,12 @@ export class ReleaseStore {
     // The model's release tool is a caller. `null` here means "the git restore
     // this target implies", which is what a commit-target rollback runs and
     // what `rollback()` recomputes for one.
+    const impliedCommand = approvalType === 'rollback' ? null : this.deployCommandForChange(existing);
+
     const digest = deployApprovalDigest({
       approvalType,
       patch: existing.patch,
-      command: opts?.command !== undefined
-        ? opts.command
-        : (approvalType === 'rollback' ? null : this.deployCommandForChange(existing)),
+      command: opts?.command === undefined ? impliedCommand : opts.command,
     });
 
     this.sql.run(
@@ -611,7 +611,7 @@ export class ReleaseStore {
     return this.sql.all(
       ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE id = ?`, id,
-    ).map(mapReleaseApproval)[0]!;
+    ).map(mapReleaseApproval)[0];
   }
 
   decideApproval(
@@ -665,7 +665,7 @@ export class ReleaseStore {
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
        FROM release_deployments WHERE id = ?`,
       id,
-    ).map(mapReleaseDeployment)[0]!;
+    ).map(mapReleaseDeployment)[0];
   }
 
   /** Full ledger view of ONE change — the engine's read surface. */

@@ -148,7 +148,7 @@ export function stripNonCode(source: string): string {
   let i = 0;
 
   while (i < source.length) {
-    const c = source[i]!;
+    const c = source[i];
 
     if (inTemplateText) {
       if (c === '\\') { i += 2; continue; }
@@ -198,7 +198,7 @@ export function stripNonCode(source: string): string {
     if (c === '`') { inTemplateText = true; out.push(' '); i++; continue; }
 
     if (interpolations.length > 0) {
-      const depth = interpolations[interpolations.length - 1]!;
+      const depth = interpolations[interpolations.length - 1];
 
       if (c === '{') interpolations[interpolations.length - 1] = depth + 1;
       else if (c === '}') {

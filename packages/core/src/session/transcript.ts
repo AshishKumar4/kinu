@@ -51,13 +51,37 @@ interface StoredUiMessage {
 export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: () => Promise<Pick<VFS, 'readFile'>>): SessionTranscriptReader {
   const payloads = new SessionPayloadReader(files);
 
-  return new SessionTranscriptReader(sql, authority, sessionId, new SessionMessageReader(sql, authority, payloads), payloads);
+  return new SessionTranscriptReader({
+    sql, actor: authority, sessionId, messages: new SessionMessageReader(sql, authority, payloads), payloads,
+  });
+}
+
+/** Everything a transcript reader is bound to: the actor's SQL, the authority
+ *  its reads are fenced by, the conversation it reads, and the two stores that
+ *  resolve a row's parts and payloads. */
+interface TranscriptStores<A extends ActorReadAuthority, P extends SessionPayloadReader> {
+  readonly sql: SqlExecutor;
+  readonly actor: A;
+  readonly sessionId: string;
+  readonly messages: SessionMessageReader;
+  readonly payloads: P;
 }
 
 /** Public transcript references canonical parts; pruning model context never rewrites this tree. */
 export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAuthority, P extends SessionPayloadReader = SessionPayloadReader> {
-  constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly sessionId: string,
-    protected readonly messages: SessionMessageReader, protected readonly payloads: P) {}
+  protected readonly sql: SqlExecutor;
+  protected readonly actor: A;
+  readonly sessionId: string;
+  protected readonly messages: SessionMessageReader;
+  protected readonly payloads: P;
+
+  constructor(stores: TranscriptStores<A, P>) {
+    this.sql = stores.sql;
+    this.actor = stores.actor;
+    this.sessionId = stores.sessionId;
+    this.messages = stores.messages;
+    this.payloads = stores.payloads;
+  }
 
   async project(id: string): Promise<ConversationProjection | null> {
     const entry = this.read(id);
@@ -370,19 +394,39 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 }
 
+/** One admitted batch of user steers, sharing the message the batch was
+ *  written into: every row's parts point at `reference`, and `parentId` is what
+ *  the FIRST of them hangs off. */
+interface SteerBatch {
+  readonly rows: readonly {
+    readonly id: string;
+    readonly text: string;
+    readonly metadata: JsonObject;
+    readonly files?: ReadonlyArray<PromptFile>;
+  }[];
+  readonly reference: MessageReference;
+  readonly turnId: string;
+  readonly runId: string;
+  readonly parentId: string | null;
+}
+
 export class SessionTranscript extends SessionTranscriptReader<ActorHandle, SessionPayloads> {
   /** `selection` is the actor's working context at record time: an entry that
    *  names no context of its own is stamped with it, so a fork cut at that
    *  entry restores exactly the model context the actor held there. */
   constructor(sql: SqlExecutor, actor: ActorHandle, sessionId: string, messages: SessionMessages, payloads: SessionPayloads,
     private readonly atomic: <T>(write: () => T) => T, private readonly selection: () => ContextSelection | null) {
-    super(sql, actor, sessionId, messages, payloads);
+    super({ sql, actor, sessionId, messages, payloads });
   }
 
-  async prepareSteers(rows: readonly { readonly id: string; readonly text: string; readonly metadata: JsonObject; readonly files?: ReadonlyArray<PromptFile> }[], reference: MessageReference, turnId: string, runId: string, parentId: string | null): Promise<PreparedConversationEntry[]> {
+  async prepareSteers(batch: SteerBatch): Promise<PreparedConversationEntry[]> {
+    const { rows, reference, turnId, runId } = batch;
     const textPart = rows.reduce((count, row) => count + (row.files?.length ?? 0), 0);
     let filePart = 0;
     let start = 0;
+    // Each steer's parent is the one before it, so the batch reads as the chain
+    // the operator typed rather than as siblings of one turn.
+    let parentId = batch.parentId;
     const entries: PreparedConversationEntry[] = [];
 
     for (const row of rows) {

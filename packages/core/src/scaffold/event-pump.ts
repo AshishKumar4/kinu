@@ -36,13 +36,14 @@ export async function* pumpScaffoldEvents(
   const runPromise = run(emit).finally(() => { finished = true; wake(); });
 
   for (;;) {
-    if (queue.length === 0) {
+    const event = queue.shift();
+
+    if (event === undefined) {
       if (finished) break;
       await new Promise<void>((resolve) => { resolveNext = resolve; });
       continue;
     }
 
-    const event = queue.shift()!;
     yield event;
 
     if (event.type === 'done') break;

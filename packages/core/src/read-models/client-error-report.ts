@@ -48,8 +48,8 @@ const IDENTIFIER = /^[A-Za-z_$][\w$]{0,63}$/u;
  * response body, so a SyntaxError from this call would be a bug in this file and
  * has no business being silenced. Anything outside the two propagates.
  */
-function isTolerableSendFailure<Failure>(cause: Failure): boolean {
-  return cause instanceof TypeError || cause instanceof DOMException;
+function isTolerableSendFailure(input: { cause: unknown }): boolean {
+  return input.cause instanceof TypeError || input.cause instanceof DOMException;
 }
 
 /**
@@ -117,6 +117,6 @@ export async function reportRenderFailure(
       keepalive: true,
     });
   } catch (cause) {
-    if (!isTolerableSendFailure(cause)) throw cause;
+    if (!isTolerableSendFailure({ cause })) throw cause;
   }
 }

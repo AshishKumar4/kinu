@@ -155,10 +155,18 @@ export function resolveWorkspaceTitle(opts: {
   purpose?: string;
   slug: string;
 }): string {
-  return (opts.explicit && opts.explicit.trim())
-    || (opts.existing && opts.existing.trim())
-    || deriveWorkspaceTitle(opts.purpose ?? '')
-    || opts.slug;
+  // A blank title is no title at every level: the next source answers for it.
+  const explicit = opts.explicit?.trim();
+
+  if (explicit !== undefined && explicit !== '') return explicit;
+  const existing = opts.existing?.trim();
+
+  if (existing !== undefined && existing !== '') return existing;
+  const derived = deriveWorkspaceTitle(opts.purpose ?? '');
+
+  if (derived !== '') return derived;
+
+  return opts.slug;
 }
 
 /**
@@ -183,7 +191,7 @@ const WorkspaceAddressSchema = v.pipe(v.string(), v.maxLength(WORKSPACE_ADDRESS_
  * folds case, so an address is lowercase or it is ambiguous.
  */
 export function workspaceAddressRefusal(name: string): string | null {
-  if (v.is(WorkspaceAddressSchema, name)) return null;
+  if (v.safeParse(WorkspaceAddressSchema, name).success) return null;
 
   return `the workspace name "${name}" cannot be a preview hostname label`
     + ` (a label holds lowercase letters, digits and hyphens, at most ${WORKSPACE_ADDRESS_MAX} characters, and carries no case)`;
@@ -210,8 +218,11 @@ export function workspaceSlug(id: string): string {
  *  mission's own opening line. Empty when the mission yields neither. */
 export function workspaceTitleFromMission(mission: string): string {
   const persona = extractPersonaName(mission);
+  const named = persona === null ? '' : cleanTitle(persona);
 
-  return (persona && cleanTitle(persona)) || cleanTitle(deriveWorkspaceTitle(mission));
+  if (named !== '') return named;
+
+  return cleanTitle(deriveWorkspaceTitle(mission));
 }
 
 /** Deterministic identity for a new workspace: a neutral permanent slug and

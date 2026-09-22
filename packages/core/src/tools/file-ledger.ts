@@ -65,6 +65,24 @@ interface SeenContent {
   total: number;
 }
 
+/** One ranged read the model was shown. `fingerprint` MUST be `fnv1a64` of the
+ *  file's WHOLE text — see {@link TurnFileLedger.observeRange}. */
+export interface RangeObservation {
+  readonly fingerprint: string;
+  readonly first: number;
+  readonly last: number;
+  readonly total: number;
+  readonly revision?: VfsRevision;
+}
+
+/** What one ledger row holds for a content digest. */
+interface RangeCoverage {
+  readonly fingerprint: string;
+  readonly coveredTo: number;
+  readonly total: number;
+  readonly revision?: VfsRevision;
+}
+
 export class TurnFileLedger {
   /** Digest of every file content the model has been shown this turn, with how
    *  far into it the reads reached. Keyed on CONTENT, not on the path spelling,
@@ -101,7 +119,7 @@ export class TurnFileLedger {
   observeWhole(path: string, content: string, revision?: VfsRevision): void {
     const total = lineCount(content);
 
-    this.record(path, fnv1a64(content), total, total, revision);
+    this.record(path, { fingerprint: fnv1a64(content), coveredTo: total, total, revision });
   }
 
   /**
@@ -118,11 +136,12 @@ export class TurnFileLedger {
    * edit against bytes nobody looked at, which is the one thing this ledger
    * exists to refuse.
    */
-  observeRange(path: string, fingerprint: string, first: number, last: number, total: number, revision?: VfsRevision): void {
-    const existing = this.seen.get(fingerprint);
+  observeRange(path: string, scan: RangeObservation): void {
+    const existing = this.seen.get(scan.fingerprint);
     const covered = existing?.coveredTo ?? 0;
+    const coveredTo = scan.first <= covered + 1 ? Math.max(covered, scan.last) : covered;
 
-    this.record(path, fingerprint, first <= covered + 1 ? Math.max(covered, last) : covered, total, revision);
+    this.record(path, { fingerprint: scan.fingerprint, coveredTo, total: scan.total, revision: scan.revision });
   }
 
   /** An edit landed: what the model knew about the old content it knows about
@@ -135,12 +154,12 @@ export class TurnFileLedger {
       ? total
       : Math.min(previous?.coveredTo ?? 0, total);
 
-    this.record(path, fnv1a64(after), covered, total, revision);
+    this.record(path, { fingerprint: fnv1a64(after), coveredTo: covered, total, revision });
   }
 
-  private record(path: string, fingerprint: string, coveredTo: number, total: number, revision?: VfsRevision): void {
-    this.seen.set(fingerprint, { coveredTo, total });
-    this.seenPaths.set(path, revision);
+  private record(path: string, entry: RangeCoverage): void {
+    this.seen.set(entry.fingerprint, { coveredTo: entry.coveredTo, total: entry.total });
+    this.seenPaths.set(path, entry.revision);
   }
 
   readRevision(path: string): VfsRevision | undefined {

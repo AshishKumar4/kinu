@@ -31,6 +31,17 @@ const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
 
 const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(process.env.${NIMBUS_RANGE_ENV});if(!Number.isSafeInteger(r.offset)||r.offset<0||!Number.isSafeInteger(r.length)||r.length<=0)throw new Error('invalid range');const fd=fs.openSync(r.path,'r');try{const b=Buffer.allocUnsafe(r.length);const n=fs.readSync(fd,b,0,r.length,r.offset);process.stdout.write(b.subarray(0,n).toString('base64'));}finally{fs.closeSync(fd);}`;
 
+/** One ranged read against the origin session: the handle to read through, the
+ *  file, the window inside it, and the identity the read runs as. */
+interface NimbusOriginRangeRead {
+  readonly box: NimbusSandboxHandle;
+  readonly files: NimbusSandboxFiles;
+  readonly path: string;
+  readonly offset: number;
+  readonly length: number;
+  readonly cred?: VfsCred;
+}
+
 /**
  * One window of one file's bytes, off the session's own filesystem.
  *
@@ -44,9 +55,9 @@ const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(proc
  * hosted deployment is on such a handle (the box carries the op on both sides
  * of the RPC).
  */
-async function readNimbusOriginRange(
-  box: NimbusSandboxHandle, files: NimbusSandboxFiles, path: string, offset: number, length: number, cred?: VfsCred,
-): Promise<Uint8Array> {
+async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8Array> {
+  const { box, files, path, offset, length, cred } = read;
+
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
     throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
   }
@@ -158,7 +169,7 @@ export interface NimbusSandboxFiles {
     /** Exactly this window of one file's bytes, without materializing the
      *  file. Absent on an SDK handle that predates it; null when the path is
      *  absent, the same answer `read` gives. */
-    readRange?(path: string, offset: number, length: number): Promise<Uint8Array | null>;
+    readRange?: (path: string, offset: number, length: number) => Promise<Uint8Array | null>;
     /** Whole-file write. The SDK takes no precondition and answers nothing, so
      *  a caller that needs compare-and-write cannot get it here. */
     write(path: string, content: string | Uint8Array): Promise<void>;
@@ -177,8 +188,8 @@ export interface NimbusSandboxFiles {
 export interface NimbusSandboxHandle {
   ready(): Promise<void>;
   exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
-  startProcess?(command: string, options?: NimbusExecOptions): Promise<NimbusStartResult>;
-  runCode?(code: string, options?: NimbusRunCodeOptions): Promise<NimbusExecResult>;
+  startProcess?: (command: string, options?: NimbusExecOptions) => Promise<NimbusStartResult>;
+  runCode?: (code: string, options?: NimbusRunCodeOptions) => Promise<NimbusExecResult>;
   files: NimbusSandboxFiles;
   runtimes?: {
     ensure?(specs: string | string[], options?: { force?: boolean }): Promise<JsonValue | undefined>;
@@ -496,7 +507,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       execute: async (...args: unknown[]): Promise<CommandResult> => {
         if (!box) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
 
-        if (!box.runCode) return refusalOf(new KinuError('unsupported', 'Nimbus SDK handle does not expose runCode'));
+        const runCode = box.runCode;
+
+        if (!runCode) return refusalOf(new KinuError('unsupported', 'Nimbus SDK handle does not expose runCode'));
         const code = parseInput(StringSchema, { value: args[0] });
 
         if (code === undefined) {
@@ -506,7 +519,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
 
         try {
-          return normalizeExec(await touch(() => box.runCode!(code, options)));
+          return normalizeExec(await touch(() => runCode(code, options)));
         } catch (err) {
           return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
         }
@@ -571,12 +584,15 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
           return refusalText(new KinuError('bad_input', 'nimbus listFiles: path must be a string'));
         }
 
+        // A path that is absent or blank names the session root.
+        const directory = path === undefined || path === '' ? root : path;
+
         try {
-          const entries = await touch(() => box.files.list(path || root));
+          const entries = await touch(() => box.files.list(directory));
 
           return entries.map((f) => `${(f.isDir ?? (f.type === 'directory' || f.type === 'dir')) ? 'd' : '-'} ${f.name}${f.size != null ? ` (${f.size}b)` : ''}`).join('\n');
         } catch (err) {
-          return refusalText(nimbusFailure({ doing: `nimbus listFiles ${path || root}`, cause: err }));
+          return refusalText(nimbusFailure({ doing: `nimbus listFiles ${directory}`, cause: err }));
         }
       },
     },
@@ -672,7 +688,9 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       execute: async (...args: unknown[]): Promise<CommandResult> => {
         if (!box) return refusalOf(new KinuError('unavailable', NOT_CONFIGURED));
 
-        if (!box.startProcess) return refusalOf(new KinuError('unsupported', 'Nimbus SDK handle does not expose startProcess'));
+        const startProcess = box.startProcess;
+
+        if (!startProcess) return refusalOf(new KinuError('unsupported', 'Nimbus SDK handle does not expose startProcess'));
         const command = parseInput(StringSchema, { value: args[0] });
 
         if (command === undefined) {
@@ -682,7 +700,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
 
         try {
-          return formatStartResult(await touch(() => box.startProcess!(command, options)), namespace);
+          return formatStartResult(await touch(() => startProcess(command, options)), namespace);
         } catch (err) {
           return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
         }
@@ -702,7 +720,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         // the receiver too, so the SDK method still reads its own `this`.
         const kill = processes.kill.bind(processes);
         const input = parseInput(ProcessInputSchema, { value: args[0] });
-        const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
+        const pid = v.is(v.number(), input) ? input : input?.pid;
 
         if (pid === undefined || !Number.isFinite(pid)) {
           return refusalText(new KinuError('bad_input',
@@ -725,7 +743,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         if (!processes?.logs) return handleLacks('process logs');
         const readLogs = processes.logs.bind(processes);
         const input = parseInput(ProcessInputSchema, { value: args[0] });
-        const pid = input === undefined ? undefined : v.is(v.number(), input) ? input : input.pid;
+        const pid = v.is(v.number(), input) ? input : input?.pid;
 
         if (pid === undefined || !Number.isFinite(pid)) {
           return refusalText(new KinuError('bad_input',
@@ -752,7 +770,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         if (!ports?.expose) return handleLacks('ports');
         const expose = ports.expose.bind(ports);
         const input = parseInput(PortInputSchema, { value: args[0] });
-        const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
+        const port = v.is(v.number(), input) ? input : input?.port;
 
         if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
           return refusalText(new KinuError('bad_input',
@@ -777,7 +795,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         if (!ports?.unexpose) return handleLacks('ports');
         const unexpose = ports.unexpose.bind(ports);
         const input = parseInput(PortInputSchema, { value: args[0] });
-        const port = input === undefined ? undefined : v.is(v.number(), input) ? input : input.port;
+        const port = v.is(v.number(), input) ? input : input?.port;
 
         if (port === undefined || !Number.isFinite(port)) {
           return refusalText(new KinuError('bad_input',
@@ -882,13 +900,17 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       ...(opts.runtimeCatalog ? (['python', 'native_binary'] as const) : []),
     ]),
     isAvailable: () => configured,
-    getStatus: () => ({
-      configured,
-      available: configured,
-      active,
-      status: configured ? (lastError ? 'error' : active ? 'active' : 'idle') : 'not_configured',
-      ...(lastError ? { reason: lastError } : configured ? {} : { reason: NOT_CONFIGURED }),
-    }),
+    // A recorded failure outranks activity, and a handle with no binding
+    // reports why instead of a lifecycle it does not have.
+    getStatus: () => {
+      const seen = { configured, available: configured, active };
+
+      if (!configured) return { ...seen, status: 'not_configured', reason: lastError ?? NOT_CONFIGURED };
+
+      if (lastError !== undefined) return { ...seen, status: 'error', reason: lastError };
+
+      return { ...seen, status: active ? 'active' : 'idle' };
+    },
     connect: async () => { if (!box) throw new Error(NOT_CONFIGURED); await touch(() => box.ready()); },
     disconnect: async () => { active = false; },
     tools,
@@ -922,7 +944,9 @@ ${SESSION_CONTROL_TYPES}
 
       try {
         const result = await touch(() => expose(port));
-        const url = result.url || ports.url?.(port);
+        // A blank url is the SDK declining to name one, same as omitting it.
+        const answered = result.url;
+        const url = answered === undefined || answered === '' ? ports.url?.(port) : answered;
 
         if (!url) {
           return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
@@ -1143,7 +1167,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     /** The origin session's fixed Node reader reads exactly this prefix — the
      *  SDK file methods cannot express a range and would materialize the file. */
     async readRange(path, offset, length) {
-      return readNimbusOriginRange(box, files, path, offset, length, cred);
+      return readNimbusOriginRange({ box, files, path, offset, length, cred });
     },
     async writeFile(path, data) { await files.write(workspacePath(path), data); },
     // NO `writeFileIfRevision`. The SDK's `files.write` takes no precondition

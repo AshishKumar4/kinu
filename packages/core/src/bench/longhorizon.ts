@@ -103,7 +103,7 @@ export interface LongHorizonEntry {
 }
 
 function pick<T>(pool: readonly T[], draw: number): T {
-  return pool[Math.min(pool.length - 1, Math.floor(draw * pool.length))]!;
+  return pool[Math.min(pool.length - 1, Math.floor(draw * pool.length))];
 }
 
 export function longHorizonEntryId(index: number): string {
@@ -236,9 +236,7 @@ export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile
 
   const files: LongHorizonFile[] = [];
 
-  for (const part of [...byPart.keys()].sort((a, b) => a - b)) {
-    const partEntries = byPart.get(part)!;
-
+  for (const [part, partEntries] of [...byPart].sort(([a], [b]) => a - b)) {
     for (let start = 0, n = 0; start < partEntries.length; start += LONGHORIZON_ENTRIES_PER_FILE, n++) {
       const chunk = partEntries.slice(start, start + LONGHORIZON_ENTRIES_PER_FILE);
       files.push({
@@ -285,7 +283,11 @@ export function buildLongHorizonQuestions(spec: LongHorizonSpec): LongHorizonQue
   // Part 1 by construction (markerIndices gives every part a quota): the first
   // part is the one that has been through the most compaction by the time the
   // final ask lands, so it is the hardest place to recall a value from.
-  const verbatimTarget = marked.find((e) => e.part === 1)!;
+  const verbatimTarget = marked.find((e) => e.part === 1);
+
+  if (verbatimTarget === undefined) {
+    throw new Error('long-horizon corpus planted no marker in part 1 — the verbatim ask has no target');
+  }
 
   return [
     {
@@ -387,7 +389,7 @@ export function parseLongHorizonAnswerFile(text: string): Map<string, string> {
     if (!match) continue;
     const [, id, value] = match;
 
-    if (!found.has(id!)) found.set(id!, value!.trim());
+    if (!found.has(id)) found.set(id, value.trim());
   }
 
   return found;
@@ -506,7 +508,7 @@ export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
 
   const [mode, seed, entries, filler, markers, parts] = raw;
 
-  if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${String(mode)}`);
+  if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${JSON.stringify(mode)}`);
 
   if (!v.is(FiniteInteger, seed)) throw new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`);
 

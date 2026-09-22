@@ -872,15 +872,17 @@ declare namespace sandbox {
     homeDir: async () => WORKSPACE_BACKUP_DIR,
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
-    getStatus: () => ({
-      configured: connected,
-      available: connected,
-      active,
-      status: connected ? (active ? 'active' : 'idle') : 'not_configured',
+    getStatus: () => {
+      const seen = { configured: connected, available: connected, active };
+
+      if (!connected) return { ...seen, status: 'not_configured', reason: NOT_CONFIGURED };
+
       // An available sandbox with previews off carries the preview reason so
       // surfaces that hand out preview URLs can say so before anyone tries.
-      ...(connected ? (previews ? {} : { reason: PREVIEWS_NOT_CONFIGURED }) : { reason: NOT_CONFIGURED }),
-    }),
+      if (!previews) return { ...seen, status: active ? 'active' : 'idle', reason: PREVIEWS_NOT_CONFIGURED };
+
+      return { ...seen, status: active ? 'active' : 'idle' };
+    },
     connect: async () => { /* sandbox starts on first RPC */ },
     disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
       filesystem does NOT — the container sleeps after ~10m idle and /workspace

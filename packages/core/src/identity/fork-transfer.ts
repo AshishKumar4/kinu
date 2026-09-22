@@ -225,6 +225,9 @@ export type ForkFileFrame = Extract<ForkFrame, { kind: 'file' }>;
 
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
 
+/** One row of any section, whichever section it came from. */
+export type ForkRowValue = ForkRowFrame['rows'][number];
+
 export type ForkSectionCounts = v.InferOutput<typeof ForkSectionCountsSchema>;
 
 /** A frame before it is sealed. Distributive, so the `kind` discriminant still
@@ -234,13 +237,27 @@ export type UnsealedForkFrame = ForkFrame extends infer F
   : never;
 
 /**
+ * One row section's frame before it is sealed, with the section's name and its
+ * rows typed apart.
+ *
+ * Which rows a section may carry is the WIRE's question, not the caller's:
+ * {@link ForkFrameSchema} is the canonical authority and {@link sealForkFrame}
+ * applies it to every frame on the way out, so a name paired with the wrong
+ * rows is refused there rather than sent. Typing the pair together instead
+ * would mean one copy of the envelope per section, and nine copies drift.
+ */
+type UnsealedForkSectionFrame =
+  Omit<Extract<UnsealedForkFrame, { kind: 'agentConfig' }>, 'kind' | 'rows'>
+  & { kind: ForkRowSection; rows: ForkRowValue[] };
+
+/**
  * The canonical preimage of one frame: everything it carries except its own
  * digest, serialized deterministically.
  *
  * A file frame's bytes are hashed as bytes rather than folded into the JSON, so
  * a range never crosses a wider alphabet on its way into the hash either.
  */
-type ForkFrameSealInput = UnsealedForkFrame & { digest?: string };
+type ForkFrameSealInput = (UnsealedForkFrame | UnsealedForkSectionFrame) & { digest?: string };
 
 export function forkFramePreimage(frame: ForkFrameSealInput): string {
   if (frame.kind === 'file') {
@@ -509,7 +526,7 @@ export async function* forkTransferFrames(
   let seq = 0;
   let stream = FORK_STREAM_SEED;
 
-  const seal = (body: ForkFrameBody): ForkFrame => {
+  const seal = (body: ForkFrameBody | UnsealedForkSectionFrame): ForkFrame => {
     const frame = sealForkFrame(body);
     stream = foldForkStream(stream, frame.digest);
 
@@ -522,11 +539,16 @@ export async function* forkTransferFrames(
   });
 
 
-  const yieldRows = async function* <T>(
+  const yieldRows = async function* <T extends ForkRowValue>(
+    kind: ForkRowSection,
     rows: AsyncIterable<T>,
     payloadBytes: (row: T) => number,
-    frame: (rows: T[]) => ForkFrame,
   ): AsyncGenerator<ForkFrame> {
+    const frame = (batched: T[]): ForkFrame => seal({
+      version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
+      kind, rows: batched,
+    });
+
     let batch: T[] = [];
     let bytes = 0;
 
@@ -551,70 +573,39 @@ export async function* forkTransferFrames(
   for (const section of FORK_ROW_SECTIONS) {
     switch (section) {
       case 'agentConfig':
-        yield* yieldRows(configRows(source.sql), configPayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'agentConfig', rows,
-        }));
+        yield* yieldRows(section, configRows(source.sql), configPayloadBytes);
         break;
       case 'craftedTools':
-        yield* yieldRows(craftedToolRows(source.sql), craftedToolPayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'craftedTools', rows,
-        }));
+        yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
         break;
       case 'memoryChunks':
-        yield* yieldRows(memoryChunkRows(source.sql), memoryChunkPayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'memoryChunks', rows,
-        }));
+        yield* yieldRows(section, memoryChunkRows(source.sql), memoryChunkPayloadBytes);
         break;
       case 'sessionMessages':
-        yield* yieldRows(sessionMessageRows(source.sql, actorId, plan), sessionMessagePayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'sessionMessages', rows,
-        }));
+        yield* yieldRows(section, sessionMessageRows(source.sql, actorId, plan), sessionMessagePayloadBytes);
         break;
       case 'messageParts':
-        yield* yieldRows(messagePartRows(source.sql, actorId, plan), messagePartPayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'messageParts', rows,
-        }));
+        yield* yieldRows(section, messagePartRows(source.sql, actorId, plan), messagePartPayloadBytes);
         break;
       case 'messageUpdates':
         yield* yieldRows(
+          section,
           messageUpdateRows(source.sql, actorId, plan, source.artifactDirectory),
           messageUpdatePayloadBytes,
-          (rows) => seal({
-            version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-            kind: 'messageUpdates', rows,
-          }),
         );
         break;
       case 'conversationEntries':
         yield* yieldRows(
+          section,
           conversationEntryRows(source.sql, actorId, plan, source.artifactDirectory),
           conversationEntryPayloadBytes,
-          (rows) => seal({
-            version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-            kind: 'conversationEntries', rows,
-          }),
         );
         break;
       case 'conversationEntryParts':
-        yield* yieldRows(
-          conversationEntryPartRows(source.sql, actorId, plan),
-          conversationEntryPartPayloadBytes,
-          (rows) => seal({
-            version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-            kind: 'conversationEntryParts', rows,
-          }),
-        );
+        yield* yieldRows(section, conversationEntryPartRows(source.sql, actorId, plan), conversationEntryPartPayloadBytes);
         break;
       case 'contextMembers':
-        yield* yieldRows(contextMemberRows(plan), contextMemberPayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'contextMembers', rows,
-        }));
+        yield* yieldRows(section, contextMemberRows(plan), contextMemberPayloadBytes);
         break;
     }
   }

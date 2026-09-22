@@ -162,7 +162,17 @@ export class SessionProposals {
     const members = new Map(current.map(entry => [entry.entryId, entry]));
 
     for (const change of changes) {
-      this.validateExpected(members.get(change.entry_id), change.expected_message_id === null ? null : { messageId: change.expected_message_id, sequence: change.expected_sequence! });
+      let expected: MessageReference | null = null;
+
+      if (change.expected_message_id !== null) {
+        // The two columns are written together by `open`; one without the other
+        // is a half-written row, the same incompleteness the replacement below
+        // refuses rather than guesses at.
+        if (change.expected_sequence === null) throw new KinuError('io', 'proposal expectation is incomplete');
+        expected = { messageId: change.expected_message_id, sequence: change.expected_sequence };
+      }
+
+      this.validateExpected(members.get(change.entry_id), expected);
       members.delete(change.entry_id);
     }
 

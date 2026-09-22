@@ -327,11 +327,11 @@ describe('two actors, one database: effect_tombstones', () => {
   test('one scope+key is done for one actor and still owed by the other', () => {
     const w = world();
     initEffectTombstoneTable(w.execRaw);
-    recordEffectDone(w.sql, w.a, 'turn_review', 'row-1', 7);
+    recordEffectDone(w.sql, w.a, { scope: 'turn_review', key: 'row-1' }, 7);
     expect(w.count('effect_tombstones')).toBe(1);
     expect(effectAlreadyDone(w.sql, w.a, 'turn_review', 'row-1')).toBe(true);
     expect(effectAlreadyDone(w.sql, w.b, 'turn_review', 'row-1')).toBe(false);
-    recordEffectDone(w.sql, w.b, 'turn_review', 'row-1', 8);
+    recordEffectDone(w.sql, w.b, { scope: 'turn_review', key: 'row-1' }, 8);
     expect(w.count('effect_tombstones')).toBe(2);
     w.close();
   });
@@ -1198,7 +1198,7 @@ describe('a handle whose validation throws is refused before the statement runs'
         userMessage: 'u', assistantResponse: 'a', toolCalls: [], steps: 1,
         durationMs: 1, feedback: null, hadError: false,
       }, { awaitsFollowup: false, id: 'row-1', now: 1 })],
-      ['effect_tombstones', () => recordEffectDone(w.sql, w.revocable, 's', 'k')],
+      ['effect_tombstones', () => recordEffectDone(w.sql, w.revocable, { scope: 's', key: 'k' })],
       ['tool_effect_claims', () => claimToolEffect(w.sql, w.revocable, {
         turnId: 't', callId: 'c', digest: 'd',
       })],

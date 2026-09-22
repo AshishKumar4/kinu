@@ -46,7 +46,7 @@ export interface RuntimeComponents {
    */
   scaffoldPath?: string;
   sql: SqlExecutor;
-  transactionSync<T>(write: () => T): T;
+  transactionSync: <T>(write: () => T) => T;
   execRaw: RawSqlExec;
   vfs: VFS;
   /** Where this agent's own state lives when `vfs` is a shared plane. The CLI
@@ -143,11 +143,11 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     identity,
     craftStore,
     get judgeModel() { return pinned.judge ?? routed.judge; },
-    set judgeModel(llm: LLM | undefined) { pinned.judge = llm; },
+    set judgeModel(model: LLM | undefined) { pinned.judge = model; },
     get fastLlm() { return pinned.fast ?? routed.fast; },
-    set fastLlm(llm: LLM | undefined) { pinned.fast = llm; },
+    set fastLlm(model: LLM | undefined) { pinned.fast = model; },
     get advisorLlm() { return pinned.advisor ?? routed.advisor; },
-    set advisorLlm(llm: LLM | undefined) { pinned.advisor = llm; },
+    set advisorLlm(model: LLM | undefined) { pinned.advisor = model; },
     spawnBranch: components.spawnBranch,
     abortBranch: components.abortBranch,
     executionRouter: components.executionRouter,

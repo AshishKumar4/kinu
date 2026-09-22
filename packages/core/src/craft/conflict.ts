@@ -107,7 +107,7 @@ export async function upsertCraftedTool(
     // better. ONE statement: content and quality move together, so a half-
     // written tool (new body, stale score — or the reverse) is impossible.
     const existingScore = rt.storage.sql<{ score: number }>`
-      SELECT score FROM crafted_tools WHERE name = ${conflicting[0]!}
+      SELECT score FROM crafted_tools WHERE name = ${conflicting[0]}
     `[0]?.score ?? 0;
 
     if (candidate.score > existingScore + 0.1) {
@@ -116,7 +116,7 @@ export async function upsertCraftedTool(
         SET code = ${candidate.code}, description = ${candidate.description},
             params = ${candidate.params == null ? null : JSON.stringify(candidate.params)},
             updated_at = ${nowMs()}, score = ${candidate.score}, last_used_at = ${nowMs()}
-        WHERE name = ${conflicting[0]!}
+        WHERE name = ${conflicting[0]}
       `;
     }
 

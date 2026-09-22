@@ -79,7 +79,7 @@ export function createGatewayBindingFetch(opts: {
 
   return asFetchFunction(async (input, init) => {
     const request = input instanceof Request ? input : undefined;
-    const rawURL = request ? request.url : input.toString();
+    const rawURL = input instanceof Request ? input.url : input.toString();
     const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
 
     // Anything this transport cannot express is a wiring bug, not passthrough
@@ -160,7 +160,7 @@ function collectHeaders(
   request: Request | undefined,
   init: RequestInit | undefined,
 ): GatewayRunRequest['headers'] {
-  const headers = copyHeaders(init?.headers === undefined ? request?.headers : init.headers);
+  const headers = copyHeaders(init?.headers ?? request?.headers);
 
   for (const name of STRIPPED_HEADERS) headers.delete(name);
 

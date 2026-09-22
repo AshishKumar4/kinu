@@ -4,6 +4,7 @@ import type {
 import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
+import type { JsonValue } from '../utils/json';
 import { diagnostics, renderThrownChain } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
 
@@ -189,7 +190,7 @@ export async function getModelsDevModelEndpoint(
   if (!provider) return null;
 
   const model = Object.entries(provider.models ?? {})
-    .find(([key, entry]) => (nonEmptyString(entry.id) ?? key) === modelId)?.[1];
+    .find(([key, entry]) => (nonEmptyString({ value: entry.id }) ?? key) === modelId)?.[1];
 
   const info = providerInfoFromModelsDev(providerId, provider);
   const npm = model?.provider?.npm ?? info.npm;
@@ -279,11 +280,11 @@ async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: num
 function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): ModelsDevProviderInfo {
   return {
     id,
-    name: nonEmptyString(provider.name) ?? id,
-    doc: nonEmptyString(provider.doc),
+    name: nonEmptyString({ value: provider.name }) ?? id,
+    doc: nonEmptyString({ value: provider.doc }),
     env: provider.env?.filter((name) => name.length > 0) ?? [],
-    npm: nonEmptyString(provider.npm),
-    api: nonEmptyString(provider.api),
+    npm: nonEmptyString({ value: provider.npm }),
+    api: nonEmptyString({ value: provider.api }),
   };
 }
 
@@ -296,7 +297,7 @@ function modelInfoFromModelsDev(
 
   if (toolCallOnly && model.tool_call !== true) return null;
 
-  const id = nonEmptyString(model.id) ?? key;
+  const id = nonEmptyString({ value: model.id }) ?? key;
   const capabilities: ModelCapability[] = ['streaming'];
 
   if (model.tool_call === true) capabilities.push('tools');
@@ -319,10 +320,10 @@ function modelInfoFromModelsDev(
 
   return {
     id,
-    label: nonEmptyString(model.name) ?? id,
+    label: nonEmptyString({ value: model.name }) ?? id,
     capabilities,
-    contextWindow: positiveInteger(model.limit?.context),
-    modelOutputLimit: positiveInteger(model.limit?.output),
+    contextWindow: positiveInteger({ value: model.limit?.context }),
+    modelOutputLimit: positiveInteger({ value: model.limit?.output }),
     cost,
     inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
     reasoningEfforts,
@@ -347,7 +348,7 @@ function pricingFromModelsDev(cost: ModelsDevModel['cost']): ModelPricing | unde
 }
 
 /** A USD-per-1M rate. Zero is a real price (free tiers); negative is not. */
-function usdRate<Value>(value: Value): number | undefined {
+function usdRate(value: JsonValue | undefined): number | undefined {
   const rate = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(0)), value);
 
   return rate.success ? rate.output : undefined;
