@@ -1,9 +1,5 @@
-// The subordinate event spine — parent↔facet task/report admission.
-// Mirrors the same-owner peer class: trust `authenticated`; assignments pend at
-// `normal` — the priority the delegation runner selects them by — and reports
-// roll into the orchestrator's next turn (`background`). Round-trips a real
-// EventLog publish → pending → drain to pin the whole admission shape,
-// including which of the two a reactor may take.
+// Subordinate admission: trust `authenticated`; assignments pend at `normal`, reports at
+// `background`, and only reports may be taken by a reactor.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -17,11 +13,7 @@ import { makeSqlExec } from './helpers';
 import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** One hub database and the ONE actor whose rows it holds.
- *
- *  `EventLog` is actor-scoped now, so the handle is part of the fixture rather
- *  than of the reader: a log bound to a fabricated id publishes rows no
- *  production reader resolves. Bound through the production directory. */
+/** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
 interface Hub {
   readonly sql: SqlExec;
   readonly actor: ActorHandle;
@@ -91,8 +83,7 @@ describe('subordinate event derivation', () => {
     const reportEvent: KinuEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };
     // An assignment DOWN is a one-shot facet RPC with no redelivery loop.
     expect(dedupeKeyFor(taskEvent)).toBeNull();
-    // A report UP is replayable durable work on the sending side, so its
-    // sequence is the key that recognises the replay.
+    // A report up is replayable durable work; its sequence recognises the replay.
     expect(dedupeKeyFor(reportEvent)).toBe('subordinate_report:settle:msg-77');
     expect(dedupeKeyFor({
       ...reportEvent,
@@ -155,10 +146,7 @@ describe('subordinate event admission (EventLog round-trip)', () => {
     expect(event.trust).toBe('authenticated');
     expect(event.priority).toBe('normal');
 
-    // An assignment IS the subordinate's whole turn input and belongs to the
-    // delegation runner, so the reactor refuses it: a drain would render the
-    // brief as one line of a "1 event arrived while you were idle" summary and
-    // the child would work from a paraphrase of its own instructions.
+    // The reactor refuses an assignment: a drain would reduce the brief to one summary line.
     expect(buildDrainBatch(pending)).toBeNull();
   });
 

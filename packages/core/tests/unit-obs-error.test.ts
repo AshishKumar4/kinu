@@ -1,19 +1,6 @@
 /**
- * The failure classification.
- *
- * What is being defended: an executor tool that could not do what it was asked
- * returned a descriptive STRING, so a caller could not tell a timeout from a
- * denial from an OOM. Every case here is a distinction that was unavailable
- * before `ErrorCode` existed, and each is provoked rather than asserted against a
- * literal wherever the runtime can be made to produce it — the same method
- * `unit-obs-expected-failure.test.ts` uses, for the same reason: a hardcoded
- * error string tests our memory of a platform, not the platform.
- *
- * The two classes no test can provoke cheaply — an isolate memory kill and a
- * transport refusal — are pinned differently, against `platform-catalog.ts`,
- * which is where this repo keeps observed platform wordings with their
- * provenance. That is what makes the local regexes in `obs/error.ts` a citation
- * rather than a copy.
+ * Failure classification, provoked from the runtime where possible. Unprovokable wordings (isolate
+ * memory kill, transport refusal) are pinned against `platform-catalog.ts` entries.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -30,14 +17,7 @@ import {
 } from '../src/obs/index';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 
-/**
- * The real error an operation raises, narrowed to `Error` here so every assertion
- * below reads the platform's own value rather than an `unknown` it has to widen.
- *
- * Both escapes are failures of the test, not tolerated conditions: an operation
- * that did NOT fail means the provocation stopped provoking, which is exactly how
- * a classifier test rots into asserting nothing.
- */
+/** A provocation that stops failing is a test failure, not a tolerated condition. */
 function raisedBy(operation: () => void): Error {
   try {
     operation();
@@ -49,7 +29,6 @@ function raisedBy(operation: () => void): Error {
   throw new Error('the operation did not fail, so there is nothing to classify');
 }
 
-/** The real DOMException the platform raises for an aborted signal. */
 function provokeAbort(): Error {
   const controller = new AbortController();
   controller.abort();
@@ -57,11 +36,7 @@ function provokeAbort(): Error {
   return raisedBy(() => { controller.signal.throwIfAborted(); });
 }
 
-/** The DOMException `AbortSignal.timeout` raises, which is a DIFFERENT one:
- *  raised through a signal aborted with the same reason the platform mints,
- *  so no timer runs here. Measured 2026-09-15 on bun 1.4.0: an expired
- *  `AbortSignal.timeout(1)`'s reason is a `DOMException` named `TimeoutError`
- *  with the message `The operation timed out.`, exactly this one. */
+/** The `AbortSignal.timeout` DOMException (`TimeoutError`), minted without a timer. */
 function provokeTimeout(): Error {
   const controller = new AbortController();
   controller.abort(new DOMException('The operation timed out.', 'TimeoutError'));
@@ -71,12 +46,8 @@ function provokeTimeout(): Error {
 
 describe('a cancelled wait and an expired deadline are not the same failure', () => {
   test('an aborted signal classifies as cancelled, a timed-out one as timeout', async () => {
-    // Both are DOMExceptions and both carry a legacy NUMERIC `code` (20 and 23),
-    // so the errno-style `code` read that identifies a filesystem error cannot
-    // tell them apart at all. The NAME is the discriminator, and a remote
-    // executor that cannot kill an in-flight command rejects with exactly this
-    // (execution/signal.ts) — so reading `code` there makes the shell tool report
-    // a cancelled wait and a dead transport identically.
+    // Both DOMExceptions carry a numeric `code`; only `name` tells a cancelled wait from a dead
+    // transport.
     const aborted = provokeAbort();
     const timedOut = provokeTimeout();
     expect(aborted).toBeInstanceOf(Error);
@@ -93,9 +64,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
   });
 
   test('errno codes the platform sets, read through the one reader of `code`', () => {
-    // Synthesised deliberately: what is asserted is libuv's `code` CONTRACT, not
-    // a wording, and provoking EACCES or ENOMEM would need a filesystem this test
-    // cannot rely on having.
+    // Synthesised: asserts libuv's `code` contract, not a wording.
     const cases: readonly (readonly [string, ErrorCode])[] = [
       ['EACCES', 'denied'],
       ['EPERM', 'denied'],
@@ -112,9 +81,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
   });
 
   test('a reset connection is `io`: the frame may already have arrived', () => {
-    // Synthesised like the table above: a real reset needs a peer that hung up.
-    // A reset can land after the peer ran the work, so it must not read as
-    // `unavailable` and refund a one-shot grant.
+    // A reset may land after the peer ran the work, so it must not read as `unavailable`.
     const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
     const code = classifyErrorCode({ cause: reset });
     expect(code).toBe('io');
@@ -123,16 +90,12 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
   });
 
   test('a malformed URL is `bad_input`, like malformed JSON', () => {
-    // Provoked: `classify` owns this signature, and a layer that catches the
-    // JSON half alone misses it.
     const badUrl = raisedBy(() => { new URL('notaurl'); });
     expect(classifyErrorCode({ cause: badUrl })).toBe('bad_input');
   });
 
   test('nothing pinned recognises it, and saying so is the point', () => {
-    // Null, never a fallback code. A classifier that guessed would file every
-    // unrecognised failure under one class and the class would stop meaning
-    // anything — which is the defect one level up from the string returns.
+    // Null, never a fallback code.
     expect(classifyErrorCode({ cause: new Error('the disk sang a sad song') })).toBeNull();
     expect(classifyErrorCode({ cause: 'a thrown string' })).toBeNull();
     expect(classifyErrorCode({ cause: undefined })).toBeNull();
@@ -140,15 +103,8 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
 });
 
 describe('the memory wall is classified from the catalogue, not from memory', () => {
-  /**
-   * Every catalogued wording, partitioned by whether a memory entry produces it,
-   * a non-memory entry produces it, or BOTH do.
-   *
-   * Selected by the entry KEY rather than by matching the wording, which would
-   * make the test circular: a message the classifier misses would also be skipped
-   * by the scan. The shared bucket is not a wrinkle — it is a platform fact
-   * discovered by writing this test, and the classifier is required to refuse it.
-   */
+  /** Selected by catalog entry key, not by wording (which would be circular). Wordings shared by
+     *  memory and non-memory entries must classify as null. */
   const isMemoryKey = (key: string): boolean => /oom|memory/u.test(key);
   const wordings = new Map<string, { memory: boolean; other: boolean }>();
 
@@ -170,26 +126,20 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
 
   test('a wording only the memory entries produce classifies as oom', () => {
     const memoryOnly = only('memory');
-    // A non-zero length is part of the assertion: an empty scan is the shape of a
-    // gate that stopped reaching its corpus.
+    // Non-zero length: an empty scan means the gate lost its corpus.
     expect(memoryOnly.length).toBeGreaterThan(0);
 
     for (const message of memoryOnly) {
       expect(classifyErrorCode({ cause: new Error(message) })).toBe('oom');
-      // And through a wrap, because the owner observed it as
-      // `clone failed: Worker exceeded memory limit` — one frame of our prose
-      // outside the platform's own sentence.
+      // Also through a wrap: `clone failed: Worker exceeded memory limit`.
       const wrapped = new Error('clone failed', { cause: new Error(message) });
       expect(classifyErrorCode({ cause: wrapped })).toBe('oom');
     }
   });
 
   test('a wording TWO different limits produce is refused, not guessed', () => {
-    // `Worker exceeded resource limits` is what the client sees for BOTH
-    // `worker.isolate.memory` and `do.cpu_ms_per_invocation`. It names a resource
-    // limit, not which one, so reading it as `oom` would report a CPU-time kill as
-    // a memory kill. The classifier answers null and the call site's `otherwise`
-    // decides — which is the whole reason `otherwise` is required.
+    // `Worker exceeded resource limits` covers both `worker.isolate.memory` and
+    // `do.cpu_ms_per_invocation`, so the classifier answers null and `otherwise` decides.
     expect(shared).toEqual(['Worker exceeded resource limits']);
 
     for (const message of shared) {
@@ -229,15 +179,11 @@ describe('the cause chain is the language `%w` and is never broken', () => {
   });
 
   test('a wrapper that embeds its cause renders those words once', () => {
-    // `toProviderError` puts the refined provider text in its own message and
-    // keeps the raw cause for sinks. Before the join-boundary dedup this
-    // rendered `calling the model: Your account is not active.: Your account
-    // is not active.` on the product surface (packages/cli behavior suite).
+    // The refined provider text must not render twice across the cause-chain join.
     const provider = new Error('Your account is not active.');
     const outer = new Error('calling the model: Your account is not active.', { cause: provider });
     expect(renderCauseChain(outer)).toBe('calling the model: Your account is not active.');
-    // A link that says anything NEW still renders whole — dedup is exact
-    // containment at the tail, never similarity.
+    // Dedup is exact tail containment, never similarity.
     const refined = new Error('calling the model: account inactive', { cause: provider });
     expect(renderCauseChain(refined))
       .toBe('calling the model: account inactive: Your account is not active.');
@@ -246,9 +192,7 @@ describe('the cause chain is the language `%w` and is never broken', () => {
 
 describe('toKinuError', () => {
   test('the message is what we were doing, and the detail is on the cause', () => {
-    // `new Error('what we were doing', { cause: caught })` — AGENTS.md rule 2.
-    // The detail is NOT baked into the message: `renderCauseChain` assembles it
-    // once at the display boundary, so nothing renders beneath itself.
+    // AGENTS.md rule 2: the detail stays out of the message; `renderCauseChain` joins it once.
     const cause = raisedBy(() => { readFileSync('/kinu-does-not-exist/manifest.json'); });
     const wrapped = toKinuError({ doing: 'reading the manifest', cause, otherwise: 'io' });
     expect(wrapped.code).toBe('missing');
@@ -274,8 +218,7 @@ describe('toKinuError', () => {
   });
 
   test('an already-classified cause keeps its class on the way up', () => {
-    // The inner site knew more about the failure than the outer one does.
-    // Re-classifying from outside is how a precise `oom` becomes a generic `io`.
+    // Re-classifying from outside turns a precise `oom` into a generic `io`.
     const inner = new KinuError('oom', 'Worker exceeded memory limit');
     const outer = toKinuError({ doing: 'forking a head', cause: inner, otherwise: 'io' });
     expect(outer.code).toBe('oom');
@@ -293,9 +236,7 @@ describe('toKinuError', () => {
 
 describe('the refusal payload', () => {
   test('the classification LEADS, where no clamp can reach it', () => {
-    // Every seam that shows a tool result to a human or hashes it for steering
-    // bounds it to a head slice, and the prose is the long part. Key order is the
-    // contract, not a formatting preference.
+    // Seams bound tool results to a head slice, so key order is the contract.
     const refusal = refusalOf(new KinuError('unavailable', 'runtime_not_provisioned'));
     expect(Object.keys(refusal)).toEqual(['reason', 'error']);
     expect(JSON.stringify(refusal)).toStartWith('{"reason":');
@@ -315,14 +256,13 @@ describe('the refusal payload', () => {
   });
 
   test('a reported exit survives the projection — the census reads 127, never `unavailable`', () => {
-    // The exit is data the substrate already reported, not inference.
     expect(refusalOf(new KinuError('unavailable', 'no such command', { execution: { exitCode: 127 } }))).toEqual({
       reason: 'unavailable',
       error: 'no such command',
       execution: { exitCode: 127 },
     });
 
-    // And without one, no field is invented: the same two-key shape as before.
+    // Without one, no field is invented.
     const plain = refusalOf(new KinuError('unavailable', 'runtime_not_provisioned'));
     expect(plain).toEqual({ reason: 'unavailable', error: 'runtime_not_provisioned' });
     expect('execution' in plain).toBe(false);
@@ -331,8 +271,7 @@ describe('the refusal payload', () => {
 
 describe('refusing and breaking are opposite facts', () => {
   test('a decision refuses, a defect breaks', () => {
-    // Totality is enforced by the type; what this asserts is the VERDICTS, since
-    // pooling a correct refusal with a defect is worse than reporting no rate.
+    // Totality is type-enforced; this asserts the verdicts.
     for (const code of ['bad_input', 'denied', 'budget'] as const) {
       expect(CODE_IS_REFUSAL[code]).toBe(true);
     }

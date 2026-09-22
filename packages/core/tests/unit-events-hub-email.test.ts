@@ -1,6 +1,3 @@
-// Email events in the hub — trust/priority derivation, dedupe, rendering,
-// email_thread reply channels, the drain path, and the CHECK-widening
-// rebuild that lets live DOs accept the new enum members.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -19,11 +16,7 @@ import { makeSqlExec } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** One hub database and the ONE actor whose rows it holds.
- *
- *  `EventLog` is actor-scoped now, so the handle is part of the fixture rather
- *  than of the reader: a log bound to a fabricated id publishes rows no
- *  production reader resolves. Bound through the production directory. */
+/** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
 interface Hub {
   readonly sql: SqlExec;
   readonly actor: ActorHandle;
@@ -74,10 +67,8 @@ describe('email trust + priority derivation', () => {
     expect(deriveFields(emailDescriptor('owner'))).toEqual({
       trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
     });
-    // Allowlisted senders run at external trust, but the body stays readable
-    // ('redact', not the external default 'hash') — the allowlist is an
-    // explicit owner grant and the body is the turn input. Execution is
-    // still gated by the external trust.
+    // Allowlisted senders: external trust, but body 'redact' (not 'hash') since the allowlist is an
+    // explicit owner grant.
     expect(deriveFields(emailDescriptor('allowlisted'))).toEqual({
       trust: 'external', priority: 'background', payload_visibility: 'redact',
     });
@@ -96,7 +87,6 @@ describe('email dedupe', () => {
     expect(r2.admitted).toBe(false);
     expect(r2.id).toBe(r1.id);
 
-    // A different message admits.
     const r3 = log.publish({
       descriptor: emailDescriptor('owner', { message_id: '<msg-2@example.com>' }), now: 6000,
     });
@@ -215,10 +205,7 @@ describe('email_thread reply channels', () => {
   });
 });
 
-/**
- * The inbox itself — the gate, the shared rate window, and the one thing an
- * agent can otherwise never learn: that its inbox is refusing mail right now.
- */
+/** The inbox gate, the shared rate window, and telling the agent its inbox is refusing mail. */
 describe('the agent inbox', () => {
   const NOW = 1_700_000_000_000;
 

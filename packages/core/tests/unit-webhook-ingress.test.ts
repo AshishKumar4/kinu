@@ -1,11 +1,5 @@
-// Webhook ingress — the gate, end to end over a real hub (EventLog +
-// ReplyChannelStore + TriggerRegistry + rate windows on in-memory SQLite).
-//
-// Every rejection asserts its exact HTTP status AND its exact reason string,
-// because this is the surface an operator debugs a failing integration
-// against: "signature mismatch" and "timestamp out of window" are different
-// answers to the same 401 and must stay different. The matrix below is the
-// full set of refusals the gate can produce.
+// Webhook ingress over a real hub. Every rejection asserts exact status and reason: operators
+// debug integrations against the reason, and one 401 has several.
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import {
@@ -23,16 +17,7 @@ function makeSql(db: Database): SqlExec {
   return makeSqlExec(db);
 }
 
-/**
- * A real actor over the same database the hub stores are bound to.
- *
- * The hub tables are actor-keyed: a trigger produces events into ITS actor's
- * inbox, a reply channel answers an event that actor admitted, and `revokeAll`
- * means "everything this actor registered". So one handle is threaded through
- * the registry, the log and the reply store — two handles here would file a
- * delivery in an inbox nothing drains, which reads as a lost webhook rather
- * than as the scoping it is.
- */
+/** Hub tables are actor-keyed; one handle is threaded through registry, log and reply store. */
 function actorOver(db: Database): ActorHandle {
   return createTestActors(taggedSql(db), makeExecRaw(db)).main;
 }
@@ -57,7 +42,6 @@ function hub() {
     onAdmitted: () => { drains += 1; },
   };
 
-  /** Register a webhook exactly as a backend's create route does. */
   const register = async (
     opts: Parameters<typeof registerDurableWebhook>[2],
   ): Promise<string> => (await registerDurableWebhook(triggers, secrets, opts, NOW)).trigger_id;
@@ -171,12 +155,8 @@ describe('webhook ingress admits a verified delivery', () => {
   });
 
   test('the same signed request is admitted ONCE, across a dedupe-bucket boundary', async () => {
-    // The defect: freshness is not single-use. Admission identity was
-    // `webhook:<trigger>:<body hash>:<receiver's 5-minute bucket>`, so a
-    // capture replayed either side of a bucket boundary — with the SAME signed
-    // timestamp, body and signature, still inside the ±5 minute window —
-    // published a second durable event and woke a second turn from one
-    // authorization.
+    // Freshness is not single-use: a capture replayed across a dedupe-bucket boundary inside the
+    // ±5 minute window must not publish a second event.
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const body_text = '{"deploy":"prod"}';
@@ -202,9 +182,7 @@ describe('webhook ingress admits a verified delivery', () => {
   });
 
   test('a re-signed retry of the same event still dedupes on its body', async () => {
-    // The claim is additive, not a replacement: a sender that re-signs its
-    // retry presents a different artifact, and the body-hash dedupe is what
-    // keeps that from becoming a second event.
+    // Additive: a re-signed retry is a different artifact; body-hash dedupe still collapses it.
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const body_text = '{"deploy":"prod"}';
@@ -237,8 +215,7 @@ describe('webhook ingress admits a verified delivery', () => {
     });
     expect(h.claims()).toHaveLength(1);
 
-    // A later delivery, past the first signature's window: the spent claim is
-    // swept because the proof it stood for can no longer be presented.
+    // Past the first signature's window, the spent claim is swept.
     const later = NOW + 6 * 60 * 1000;
     await h.deliver({
       trigger_id, body_text: '{"n":2}', now: later,
@@ -284,12 +261,10 @@ describe('webhook ingress refuses everything else', () => {
     expect(await h.deliver({ trigger_id })).toEqual(rejected('missing bearer'));
     expect(await h.deliver({ trigger_id, bearer_header: 'shhh' })).toEqual(rejected('missing bearer'));
     expect(await h.deliver({ trigger_id, bearer_header: 'Bearer nope' })).toEqual(rejected('bearer mismatch'));
-    // Constant-time compare is length-first: a prefix of the real secret is a
-    // mismatch, not a partial match.
+    // Constant-time compare is length-first: a prefix is a mismatch.
     expect(await h.deliver({ trigger_id, bearer_header: 'Bearer shh' })).toEqual(rejected('bearer mismatch'));
 
-    // Revoked, not "never stored": registration mints a secret for every
-    // bearer webhook, so the empty-store case is reached only by revocation.
+    // Registration mints a secret for every bearer webhook, so an empty store means revoked.
     const revoked = await h.register({ label: 'revoked-secret', auth_mode: 'bearer', secret: 'shhh' });
     h.secrets.deleteByTrigger(revoked);
     expect(await h.deliver({ trigger_id: revoked, bearer_header: 'Bearer shhh' }))
@@ -313,8 +288,7 @@ describe('webhook ingress refuses everything else', () => {
       trigger_id, body_text, hmac_timestamp: 'soon', hmac_signature: await sign(NOW),
     })).toEqual(rejected('timestamp out of window'));
 
-    // The replay window is ±5 minutes, inclusive at the boundary and in both
-    // directions (a clock ahead of the receiver is as valid as one behind).
+    // ±5 minutes, inclusive, in both directions.
     const window = 5 * 60 * 1000;
 
     for (const ts of [NOW - window, NOW + window]) {
@@ -329,9 +303,7 @@ describe('webhook ingress refuses everything else', () => {
       })).toEqual(rejected('timestamp out of window'));
     }
 
-    // A signature over a DIFFERENT body, or under a different timestamp, is a
-    // mismatch — which is what makes the timestamp part of the signed material
-    // rather than a hint.
+    // A different body or timestamp is a mismatch: the timestamp is signed material.
     expect(await h.deliver({
       trigger_id, body_text, hmac_timestamp: String(NOW), hmac_signature: await hmacSha256Hex('k', `${NOW}.{}`),
     })).toEqual(rejected('signature mismatch'));
@@ -342,9 +314,6 @@ describe('webhook ingress refuses everything else', () => {
       trigger_id, body_text, hmac_timestamp: String(NOW), hmac_signature: await hmacSha256Hex('other', `${NOW}.${body_text}`),
     })).toEqual(rejected('signature mismatch'));
 
-    // A REVOKED secret is the only way an hmac trigger meets a delivery with
-    // none: registration stores one for every hmac/bearer webhook, so
-    // "created without a secret" is not a state that exists.
     const revoked = await h.register({ label: 'revoked-secret', auth_mode: 'hmac', secret: 'k' });
     h.secrets.deleteByTrigger(revoked);
     expect(await h.deliver({
@@ -414,11 +383,7 @@ describe('webhook registration', () => {
   });
 
   test('an hmac webhook created with no secret gets a minted one, not an unusable trigger', async () => {
-    // The defect: `secret` was optional on every schema and the store was
-    // written only when the caller supplied one, so `kinu triggers … webhook`
-    // (auth_mode defaults to hmac) reported a created webhook whose every
-    // delivery answered `no hmac secret configured`, with no route able to set
-    // one afterwards.
+    // `secret` is minted when omitted, since `auth_mode` defaults to hmac and no route can set one later.
     const h = hub();
 
     const created = await registerDurableWebhook(
@@ -466,8 +431,7 @@ describe('webhook registration', () => {
       h.triggers, refusing, { label: 'ci', auth_mode: 'hmac' }, NOW,
     )).rejects.toThrow(/secret could not be stored/);
 
-    // Fail-closed: what survives is a revoked row, not an ingress nothing can
-    // authenticate against.
+    // Fail-closed: a revoked row survives, not an unauthenticatable ingress.
     expect(h.triggers.list().map((row) => row.state)).toEqual(['revoked']);
   });
 
@@ -498,8 +462,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
 
     expect(cancelTrigger({ registry: h.triggers, trigger_id, now: NOW, caller: 'owner', secrets: h.secrets })).toEqual({ ok: true, changed: true });
 
-    // The plaintext is gone from storage the moment the trigger closed — one
-    // host call, one transaction on the single-threaded SQLite both backends run.
+    // Plaintext is gone from storage in the same transaction that closes the trigger.
     expect(await h.secrets.get(present(spec.secret_id, 'the stored secret id'))).toBeNull();
     // The audit half survives, and it never carried the secret.
     const row = present(h.triggers.get(trigger_id), 'the registered trigger');
@@ -520,9 +483,6 @@ describe('revocation closes the trigger and deletes its secret together', () => 
 
   test('a model turn cannot close the owner-created ingress whose id it can read', async () => {
     const h = hub();
-    // `registerDurableWebhook` stamps `creator_trust: 'owner'`, and the drain
-    // renders the trigger id into model-visible context for every admitted
-    // delivery — so the id in the model's hand is this one.
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
     const spec: Partial<WebhookTriggerSpec> = present(h.triggers.get(trigger_id), 'the registered trigger').spec;
 
@@ -533,8 +493,6 @@ describe('revocation closes the trigger and deletes its secret together', () => 
       error: 'this trigger was created by the owner; only the owner can revoke it',
     });
 
-    // Refused all the way down: the ingress still accepts, and its credential
-    // was not collected on the way past.
     expect(present(h.triggers.get(trigger_id), 'the registered trigger').state).toBe('active');
     expect(await h.secrets.get(present(spec.secret_id, 'the stored secret id'))).toBe('shhh');
 
@@ -545,8 +503,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
   test('a model turn may still close a schedule of its own making', async () => {
     const h = hub();
 
-    // What `agent.schedule` leaves behind: the model's own timer, not the
-    // owner's ingress. Withholding this would break the tool it needs.
+    // `agent.schedule` leaves the model's own timer, not the owner's ingress.
     const own = await h.triggers.register({
       kind: 'timer_oneshot',
       spec: { atMs: NOW + 60_000 },

@@ -1,12 +1,4 @@
-/**
- * The MCTS view projection must show the LATEST search's tree.
- *
- * Settled searches stay in `search_nodes` forever, so after a failed first
- * attempt the table holds that dead tree beside every later one. The unscoped
- * read served the whole pile and the client rendered the OLDEST root — the
- * owner watched a fresh search run while the page showed one stale node.
- * These tests pin the projection to the most recently written search.
- */
+/** The MCTS projection shows the latest search's tree; settled trees stay in `search_nodes`. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -16,10 +8,8 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { readLatestSearchTree, readSearchNodeDetail } from '../src/read-models/search-tree';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** The ledger and the actor it belongs to. `search_nodes` is keyed
- *  `(actor_id, id)`, so a seed and a read under different handles would come
- *  back empty — which here reads as "no searches yet" and would let a
- *  projection serving the WRONG tree pass every case below. */
+/** `search_nodes` is keyed `(actor_id, id)`: seed and read under one handle, or every case
+ *  passes vacuously on an empty read. */
 function freshDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -46,7 +36,6 @@ function insertNode(
   );
 }
 
-/** A failed first search (root only) and a later, richer one. */
 function seedTwoSearches(db: Database, actor: ActorHandle): void {
   insertNode(db, actor, { id: 'old-root', rootId: 'old-root', status: 'failed', createdAt: 1000 });
   insertNode(db, actor, { id: 'new-root', rootId: 'new-root', createdAt: 2000 });
@@ -67,8 +56,7 @@ describe('readLatestSearchTree', () => {
   test('a resumed search still growing outranks a newer one that died at its root', () => {
     const { db, sql, actor } = freshDb();
     seedTwoSearches(db, actor);
-    // A later attempt started (3000) and stopped at its root; the resumed
-    // new-root search then wrote another node (3500) — that tree is live.
+    // A later attempt stopped at its root (3000); the resumed search wrote 3500, so that tree is live.
     insertNode(db, actor, { id: 'stub-root', rootId: 'stub-root', status: 'failed', createdAt: 3000 });
     insertNode(db, actor, { id: 'new-c', parentId: 'new-b', rootId: 'new-root', depth: 2, createdAt: 3500 });
     expect(readLatestSearchTree(sql, actor).map((r) => r.id))
@@ -88,10 +76,7 @@ describe('readLatestSearchTree', () => {
   });
 });
 
-// One node in full — the projection `kinu inspect mcts <id>` renders, which
-// existed once per backend under two names until it moved here. These pin the
-// three things the two copies each restated: the ancestry order, the child
-// ordering, and that a cyclic parent chain terminates instead of hanging.
+// One node in full: ancestry order, child ordering, and cyclic parent chains terminate.
 describe('readSearchNodeDetail', () => {
   function scored(
     db: Database,

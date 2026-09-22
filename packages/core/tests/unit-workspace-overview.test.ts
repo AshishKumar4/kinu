@@ -1,15 +1,4 @@
-/**
- * The home card's fold: which queue entries block the owner, which merely
- * update them, and what the card is allowed to conclude from the last run.
- *
- * The boundary under test is DECISION vs UPDATE — the number a "Needs you"
- * badge may print vs the existence of unread changes — because folding an
- * update into the attention count is how a busy card manufactures a blocked
- * workspace. The scaffold trial swings on the deployment's own auto-promote
- * switch: a trial the engine applies itself is something to read; one it
- * cannot apply is the owner's call. And a curriculum proposal is NEITHER —
- * the card has no badge for it at all.
- */
+/** Home card fold: a decision may count toward the "Needs you" badge; an update never does. */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -105,9 +94,7 @@ describe('buildWorkspaceOverview', () => {
   test('the tile draws the first slate already addressed; an unaddressed one is not a picture', () => {
     expect(buildWorkspaceOverview(EMPTY).primarySlate).toBeNull();
 
-    // A slate whose URL would have to be minted — nothing has reserved it —
-    // is skipped, not waited for: the card read starts no process, so the
-    // picture is the first slate that can already be pointed at.
+    // An unreserved slate URL is skipped, not waited for: the card read starts no process.
     const overview = buildWorkspaceOverview({
       ...EMPTY,
       slates: [

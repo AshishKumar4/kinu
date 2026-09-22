@@ -1,4 +1,3 @@
-// Reactor decision legality matrix.
 import { describe, test, expect } from 'bun:test';
 import { isLegalDecision, type ReactorDecision } from '../src/events/hub/index';
 

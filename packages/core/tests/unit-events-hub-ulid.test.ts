@@ -1,7 +1,4 @@
-// ULID monotonic mode — `ORDER BY id` must equal creation order even within
-// one millisecond (`agent_log`'s id-ordered scans ride on this: the latest
-// phase is `ORDER BY received_at DESC, id DESC LIMIT 1` and a step trace is
-// `ORDER BY step_idx, id` — hub/log.ts:572,589).
+// Monotonic ULIDs: `ORDER BY id` must equal creation order within one millisecond.
 import { describe, test, expect } from 'bun:test';
 import { isUlid, ulid } from '../src/events/hub/ulid';
 
@@ -14,10 +11,8 @@ describe('ulid', () => {
 
 });
 
-/** `isUlid` gates a security decision — the signed webhook delivery path
- *  refuses a trigger segment it rejects before addressing a Durable Object
- *  (cf-backend/src/events/webhook-route.ts) — so what it REFUSES is the
- *  contract, not only what it accepts. */
+/** `isUlid` gates the signed webhook path before a DO is addressed, so what it refuses is
+ *  the contract. */
 describe('isUlid', () => {
   test('accepts what ulid() mints', () => {
     for (let i = 0; i < 100; i++) expect(isUlid(ulid())).toBe(true);
@@ -32,8 +27,7 @@ describe('isUlid', () => {
     expect(isUlid(`${minted.slice(0, -1)}/`)).toBe(false);
     expect(isUlid(`${minted.slice(0, -1)}-`)).toBe(false);
 
-    // The four letters Crockford base32 excludes, so a transcription error
-    // cannot be mistaken for an id this process could have minted.
+    // The four letters Crockford base32 excludes.
     for (const excluded of ['I', 'L', 'O', 'U']) {
       expect(isUlid(`${minted.slice(0, -1)}${excluded}`)).toBe(false);
     }

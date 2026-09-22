@@ -6,10 +6,7 @@ const BASE = Date.UTC(2026, 5, 2, 10, 17, 30);
 
 describe('nextCronFire', () => {
   test('a six-field Quartz seconds-form expression is refused, not misread', () => {
-    // The arity guard is load-bearing: without it a six-field expression
-    // destructures to its first five fields, reads as all wildcards, and
-    // silently fires every minute on the wrong schedule. Found by the
-    // mutation pilot — deleting the guard survived every existing suite.
+    // Without the arity guard a six-field expression reads as all wildcards and fires every minute.
     expect(nextCronFire('0 */5 * * * *', 1_700_000_000_000)).toBeNull();
     expect(nextCronFire('0 0 12 * * ?', 1_700_000_000_000)).toBeNull();
   });
@@ -70,9 +67,7 @@ describe('nextAlarmTime', () => {
   });
 
   test('CLAMPS a due/past retry to now instead of dropping it', () => {
-    // The asymmetry with triggers is the point: a delivery whose retry time has
-    // already passed must re-arm immediately or it stalls until an unrelated
-    // event wakes the DO.
+    // A past-due retry must re-arm immediately or it stalls until an unrelated event wakes the DO.
     expect(nextAlarmTime(NOW, [], NOW - 60_000)).toBe(NOW);
     expect(nextAlarmTime(NOW, [], NOW)).toBe(NOW);
   });

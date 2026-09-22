@@ -1,11 +1,5 @@
-// BackendHost is the loop contract the backends implement, so a member that no
-// caller ever reaches is not a seam — it is a lie about where a capability
-// lives. `resolveExtraTools` was exactly that: declared here, implemented as a
-// pass-through by the CLI, absent on cf, and called by nobody, while each
-// backend actually merged its MCP tools privately into its own turn config.
-//
-// This guards the whole interface against that class of drift: every declared
-// member must be reached through a `host.` access somewhere in the monorepo.
+// Every declared BackendHost member must be reached through a `host.` access somewhere
+// in the monorepo; an unreached member misstates where a capability lives.
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
