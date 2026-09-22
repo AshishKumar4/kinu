@@ -2038,30 +2038,9 @@ export abstract class ActorAgent extends Agent<Env> {
           await close();
         });
       } catch (cause) {
-        // RELEASED on a handled rejection. An eviction needs no cleanup — nothing
-        // runs after it — but a rejection that leaves this isolate alive with the
-        // sequence still marked in flight makes every retry alarm and recovery
-        // fiber skip it forever, which is the one way this design can wedge.
-        this.terminal.leave(transition);
-        diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
-          doing: "recording that a settled turn's effects had all reported",
-          cause,
-          otherwise: 'io',
-        }), { turnId: transition.turnId, messageId: transition.messageId });
-
-        // RE-ARMED, for the reason the initial arm is. The close carries the
-        // ledger's own final wake, so this rejection can BE that wake failing —
-        // and the fiber is about to be disposed. Without this the rows stay owed
-        // with the alarm that would have carried them already spent.
-        try {
-          await this.terminal.armRecovery(transition, { cause });
-        } catch (recoveryCause) {
-          diagnostics.failure('turn.terminal_transition_recovery_failed', toKinuError({
-            doing: 're-arming the terminal transition after its close failed',
-            cause: recoveryCause,
-            otherwise: 'io',
-          }), { turnId: transition.turnId, messageId: transition.messageId });
-        }
+        // An eviction needs no cleanup — nothing runs after it; a rejection
+        // that leaves this isolate alive does.
+        await this.terminal.closeFailed(transition, { cause });
       } finally {
         if (this._terminalReportedOwner === owner) {
           this._terminalReportedOwner = null;
@@ -4506,7 +4485,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const surface = hostedActorSurface(actor, this.getWebSearchProvider());
+      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider());
       const providers = providersInWorkMode(mode, surface.providers);
       // NARROWED BY THE CHILD'S OWN ROLE, which is what the header above has
       // always promised and what this path did not do: it went straight from the
@@ -4693,7 +4672,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt,
-      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.getWebSearchProvider(), reach,
+      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
@@ -4820,7 +4799,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createWebCodemodeProvider(this.getWebSearchProvider()),
+      createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders('build'),
     ];
@@ -4846,7 +4825,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),
-        webSearch: this.getWebSearchProvider(),
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
         agents: () => this.getAgentsToolDeps(mode),
@@ -5018,14 +4997,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return shell.exec(command);
     });
-  }
-
-  /** The web search + fetch provider — built once per DO lifetime. Key-less by
-   *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
-   *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
-   *  routes through env.AI.toMarkdown when the AI binding is present. */
-  private getWebSearchProvider(): WebSearchProvider {
-    return this.ownedModelServices.getWebSearchProvider();
   }
 
   /** Stored model spec, or null when unset (registry will pick the default). */
@@ -5552,7 +5523,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // The release lane is codemode-only now (release.* — see
         // getCodemodeToolFactory below), not a BuiltinToolDeps field.
         // Web research — key-less default, codemode web.* wired below.
-        webSearch: this.getWebSearchProvider(),
+        webSearch: this.ownedModelServices.getWebSearchProvider(),
       };
 
       if (actorDeps.report) builtinDeps.report = actorDeps.report;

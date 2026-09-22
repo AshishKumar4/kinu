@@ -254,6 +254,8 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return registry.resolveModel(this.judgeSpecCache.spec);
   }
 
+  /** Built once per object. Key-less by default; a stored `tavily` credential
+   *  upgrades search, and HTML→markdown goes through env.AI when it is bound. */
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
     const ai = this.options.env.AI;
