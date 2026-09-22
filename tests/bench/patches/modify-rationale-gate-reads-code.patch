@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/scaffold/modify.ts b/packages/core/src/scaffold/modify.ts
-index abe43d572..675dc70bb 100644
+index 15268086d..99a0217d0 100644
 --- a/packages/core/src/scaffold/modify.ts
 +++ b/packages/core/src/scaffold/modify.ts
-@@ -41,7 +41,7 @@ export async function modifyScaffold(
+@@ -34,7 +34,7 @@ export async function modifyScaffold(
+   const actorId = rt.actor.actorId;
    const minRationaleLength = DEFAULT_CONFIG.scaffold.minRationaleLength;
  
-   // Gate 1: structural validation
 -  if (rationale.length < minRationaleLength) {
 +  if (code.length < minRationaleLength) {
      return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };

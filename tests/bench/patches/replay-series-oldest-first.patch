@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/evolution/replay.ts b/packages/core/src/evolution/replay.ts
-index 0274efaf4..1caa116b6 100644
+index 6982e3dfd..0a7ffb6a0 100644
 --- a/packages/core/src/evolution/replay.ts
 +++ b/packages/core/src/evolution/replay.ts
-@@ -227,7 +227,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
+@@ -182,7 +182,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
      scaffold_version: number | null; details: string;
      score_lo: number | null; score_hi: number | null;
    }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
@@ -10,4 +10,4 @@ index 0274efaf4..1caa116b6 100644
 +      ORDER BY ran_at ASC, id ASC LIMIT ${limit}`;
  
    return rows.map((r) => {
-     // Malformed details are the one tolerable corruption here: the summary
+     // Tolerable: the summary numbers live in the row's own columns.

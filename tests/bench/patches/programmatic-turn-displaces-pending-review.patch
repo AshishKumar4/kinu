@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/session-window.ts b/packages/core/src/evolution/session-window.ts
-index 31bd1f8c6..b3dd60de5 100644
+index 89728c497..9a0e3e3e9 100644
 --- a/packages/core/src/evolution/session-window.ts
 +++ b/packages/core/src/evolution/session-window.ts
-@@ -351,7 +351,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle):
-       // insert returned instead, an eviction between the two would leave the
-       // row at `none` with its review lost, and a replay of the recording would
-       // dispatch it a second time.
+@@ -224,7 +224,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle):
+ 
+       // The review obligation is written in the same insert, so an eviction
+       // cannot lose it and a replay cannot dispatch it twice.
 -      const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
 +      const review = 'awaiting_followup';
        const id = opts.id ?? `turn-${nanoid()}`;
        const now = opts.now ?? nowMs();
-       // DO NOTHING, not a replace: the row the first append wrote is the
+       // DO NOTHING: a replay must not reset the state the original row reached.

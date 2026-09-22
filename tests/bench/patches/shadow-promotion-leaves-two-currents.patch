@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/shadow.ts b/packages/core/src/scaffold/shadow.ts
-index 210632b36..98eee16f5 100644
+index 7e46e7ff3..2c7f8de85 100644
 --- a/packages/core/src/scaffold/shadow.ts
 +++ b/packages/core/src/scaffold/shadow.ts
-@@ -752,7 +752,7 @@ export async function applyPromotionDecision(
+@@ -545,7 +545,7 @@ export async function applyPromotionDecision(
          SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
          WHERE actor_id = ${rt.actor.actorId}
            AND (version = ${pending.version}
 -               OR (status = 'current' AND version != ${pending.version}))`;
 +               OR (status = 'current' AND version = ${pending.version}))`;
-     // Pointer committed. The live file is the rebuildable view, refreshed
-     // after; execution reads the pointer's version file either way.
      await rt.identity.scaffold.write(pendingCode);
+     recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+ 

@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/events/hub/drain.ts b/packages/core/src/events/hub/drain.ts
-index 9cbc276e6..65c0c1ffe 100644
+index 9d5dbea6d..c13e7a998 100644
 --- a/packages/core/src/events/hub/drain.ts
 +++ b/packages/core/src/events/hub/drain.ts
-@@ -82,8 +82,7 @@ function oneLine(value: string): string {
-  * workspace that arms no wake for work it will later agree to drain.
+@@ -42,8 +42,7 @@ function oneLine(value: string): string {
+  * to `drainAssignments`. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
   */
  export function wakesADrain(event: KinuEvent): boolean {
 -  return event.ingress !== 'self_emit'

@@ -1,8 +1,9 @@
 diff --git a/packages/core/src/safety/approval-gate.ts b/packages/core/src/safety/approval-gate.ts
+index 10059eb5c..25ab63e9b 100644
 --- a/packages/core/src/safety/approval-gate.ts
 +++ b/packages/core/src/safety/approval-gate.ts
-@@ -191,8 +191,8 @@
-  */
+@@ -265,8 +265,8 @@ const RULES: Rule[] = [
+ /** Severity rank for the dominant decision; higher is more severe. */
  const SEVERITY = {
    allow: 0,
 -  warn: 1,
@@ -11,4 +12,4 @@ diff --git a/packages/core/src/safety/approval-gate.ts b/packages/core/src/safet
 +  gate: 1,
    deny: 3,
  } satisfies Record<ApprovalDecision, number>;
-
+ 

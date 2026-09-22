@@ -1,10 +1,11 @@
 diff --git a/packages/core/src/execution/device-tunnel-executor.ts b/packages/core/src/execution/device-tunnel-executor.ts
+index f0a2e77de..cc46d9dda 100644
 --- a/packages/core/src/execution/device-tunnel-executor.ts
 +++ b/packages/core/src/execution/device-tunnel-executor.ts
-@@ -589,7 +589,7 @@
-     // No fallback: a device that named no directory throws above rather than
-     // widening to `/`. The daemon enforces the same view a second time, so
-     // this lexical check is the cheap first line, never the boundary.
+@@ -585,7 +585,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
+     const root = await effectiveRoot();
+ 
+     // A device that named no directory threw above rather than widening to `/`.
 -    if (!(path === root || path.startsWith(`${root}/`))) {
 +    if (!(path === root || path.startsWith(root))) {
        throw makeVfsError(

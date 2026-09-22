@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/modify.ts b/packages/core/src/scaffold/modify.ts
-index 65ae2486f..b4fd3dcd7 100644
+index 15268086d..22bb76de7 100644
 --- a/packages/core/src/scaffold/modify.ts
 +++ b/packages/core/src/scaffold/modify.ts
-@@ -120,7 +120,7 @@ export async function modifyScaffold(
-   // Gate 4: source before metadata. Both version files are on disk before
-   // the pending row exists, so a crash at any point leaves either no
-   // proposal or a complete one — never a row whose source is missing.
+@@ -113,7 +113,7 @@ export async function modifyScaffold(
+   }
+ 
+   // Source files land before the pending row, so a crash never leaves a row without source.
 -  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
 +  await scaffoldVfs.writeFile(`${rt.identity.scaffold.path}.v${currentVersion}`, code);
-   // The failure cell the proposal claims to target, read off the code's own
-   // `// pathology: <id>` tag. Parsed HERE rather than at each call site so
-   // every proposal path — session evolution, agent.proposeScaffold, a GEPA
+   void rt.storage.sql`
+     INSERT INTO scaffold_versions
+       (actor_id, version, written_at, rationale, status, parent_version, pathology)

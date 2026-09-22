@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/jobs/store.ts b/packages/core/src/jobs/store.ts
-index 3a36a9333..73add69d3 100644
+index 07dffc4f6..bd68c2093 100644
 --- a/packages/core/src/jobs/store.ts
 +++ b/packages/core/src/jobs/store.ts
-@@ -216,7 +216,7 @@ export class BackgroundJobStore {
+@@ -132,7 +132,7 @@ export class BackgroundJobStore {
    settle(id: string, epoch: number, result: string, now: number): void {
      this.actor.assertCurrent();
      void this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
@@ -10,4 +10,4 @@ index 3a36a9333..73add69d3 100644
 +      WHERE actor_id=${this.actorId} AND id=${id} AND status='running'`;
    }
  
-   /** Mark a running job failed. No-op if already settled or the epoch is stale. */
+   fail(id: string, epoch: number, error: string, now: number): void {

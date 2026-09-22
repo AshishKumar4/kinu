@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/prompting/model-profile.ts b/packages/core/src/prompting/model-profile.ts
-index 91b1f3bd9..46ea1911b 100644
+index d50ceb1b4..aec6a0b97 100644
 --- a/packages/core/src/prompting/model-profile.ts
 +++ b/packages/core/src/prompting/model-profile.ts
 @@ -93,7 +93,7 @@ function inferredCapabilities(model: PromptModelContext | undefined, family: Pro
-   // Last-resort id-substring heuristics for callers that pass only a model id.
+ 
    const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
  
 -  if (text.includes('o4-mini') || text.includes('deepseek-r1')) {

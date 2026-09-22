@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/bench/stats.ts b/packages/core/src/bench/stats.ts
-index cb15ca48d..fc7af96b7 100644
+index 41dcd01a0..55d92d723 100644
 --- a/packages/core/src/bench/stats.ts
 +++ b/packages/core/src/bench/stats.ts
-@@ -489,7 +489,7 @@ export function computeGain(
+@@ -376,7 +376,7 @@ export function computeGain(
      p.stateful >= 0 && p.stateful <= 1 && p.stateless >= 0 && p.stateless <= 1
    ));
  
 -  const headroom = 1 - statelessReward;
 +  const headroom = 1 - statefulReward;
    const normalizedGain = bounded && headroom > 1e-9 ? gain / headroom : null;
-   // Binary-safe significance: the same exact paired test, on sign of the diff.
    const wins = diffs.filter((d) => d > 0).length;
+   const losses = diffs.filter((d) => d < 0).length;

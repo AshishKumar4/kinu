@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/skills/parse.ts b/packages/core/src/skills/parse.ts
-index 89f43f19f..e2578d63b 100644
+index 2be225216..d230d29d5 100644
 --- a/packages/core/src/skills/parse.ts
 +++ b/packages/core/src/skills/parse.ts
-@@ -193,7 +193,7 @@ function userInvocable(fm: JsonObject): boolean {
+@@ -152,7 +152,7 @@ function userInvocable(fm: JsonObject): boolean {
  
    if (fm.user_invocable !== undefined) return fm.user_invocable !== false;
  
@@ -10,4 +10,4 @@ index 89f43f19f..e2578d63b 100644
 +  return false;
  }
  
- /** A frontmatter scalar as the text it states. A mapping or a list states no
+ /** A mapping or list states no text, so it reads as absent rather than `[object Object]`. */

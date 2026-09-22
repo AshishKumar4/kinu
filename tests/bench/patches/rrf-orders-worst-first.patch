@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/memory/vector-store.ts b/packages/core/src/memory/vector-store.ts
-index ccfd96d7b..842266a80 100644
+index 0ee07c799..0f410bca5 100644
 --- a/packages/core/src/memory/vector-store.ts
 +++ b/packages/core/src/memory/vector-store.ts
-@@ -124,7 +124,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
+@@ -85,7 +85,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
      }
    }
  
@@ -10,4 +10,4 @@ index ccfd96d7b..842266a80 100644
 +  return Array.from(byId.values()).sort((a, b) => a.rrfScore - b.rrfScore);
  }
  
- /**
+ /** A cooldown, not a latch: the next use after it re-probes, so transient errors recover. */

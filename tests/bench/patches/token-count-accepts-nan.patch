@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
-index 2e9b8845d..c2c2cb331 100644
+index 423e1a02d..e90d02525 100644
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -223,12 +223,14 @@ const UsageBoundarySchema = v.object({
-  *  quantity, and arithmetic that swallows one stops being a budget at all. */
+@@ -140,12 +140,14 @@ const UsageBoundarySchema = v.object({
+ /** Parsed per field so one garbled figure does not hide the other; `v.finite()` keeps NaN out. */
  const TokenFigureSchema = v.pipe(
    v.union([
 -    v.pipe(v.number(), v.finite()),
