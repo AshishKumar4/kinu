@@ -308,8 +308,8 @@ describe('decode after pruning', () => {
   test('an oversized multipart user turn emits only the re-coalesced raw fragment', () => {
     const compacted = { type: 'text' as const, text: `old requirement ${'x'.repeat(72_000)}` };
     const raw = { type: 'text' as const, text: 'newest requirement stays raw' };
-    const messages: ModelMessage[] = [{ role: 'user', content: [compacted, raw] }];
-    const turns = kinuCodec.encode(messages);
+    const multipartTurn: ModelMessage[] = [{ role: 'user', content: [compacted, raw] }];
+    const turns = kinuCodec.encode(multipartTurn);
 
     const plan = buildPlan(
       turns,
@@ -410,8 +410,8 @@ describe('estimation and transcripts', () => {
 
 describe('conventions', () => {
   test('todo and itemNote conventions are intentionally absent', () => {
-    expect(kinuConventions.todo).toBeUndefined();
-    expect(kinuConventions.itemNote).toBeUndefined();
+    expect('todo' in kinuConventions).toBe(false);
+    expect('itemNote' in kinuConventions).toBe(false);
   });
 
   test('tool metadata exposes names, inputs, and explicit SDK errors', () => {

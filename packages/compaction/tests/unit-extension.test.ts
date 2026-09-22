@@ -110,6 +110,16 @@ function rig(overrides: RigOverrides = {}): Rig {
   };
 }
 
+/** Fat USER turns: no prune stage touches them, so the ladder falls through
+ *  to the checkpoint — the message the manifest must ride on. */
+const fatUser = (i: number): ModelMessage[] => [
+  user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
+  assistant([{ type: 'text', text: `noted ${i}` }]),
+];
+
+const fatHistory = (turns: number): ModelMessage[] =>
+  Array.from({ length: turns }, (_, i) => fatUser(i)).flat();
+
 describe('trigger gating', () => {
   test('under-threshold history is unchanged and persists nothing', async () => {
     const { ports, outcomes, transform } = rig();
@@ -176,23 +186,22 @@ describe('the first rung — superseded ephemeral context', () => {
     expect(outcomes).toHaveLength(0);
   });
 
-  test('when the first rung is not enough the stages below still run', async () => {
-    const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(200) });
-    const result = await transform(history(15, 3_000), { providerReportedTokens: 20_000 });
-    expect(ephemeral.drops).toEqual([200]);
-    expect(result).toBeDefined();
-    expect(outcomes[0]?.outcome).toBe('planned');
-  });
-
-  test('the freed tokens come off the provider total, never below the history floor', async () => {
+  const reliefCases = [
+    { name: 'when the first rung is not enough the stages below still run', freed: 200 },
     // A relief larger than the whole context cannot pretend the history is
     // free: the estimate + system floor still decides, so the ladder runs.
-    const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(1_000_000) });
-    const result = await transform(history(15, 3_000), { providerReportedTokens: 20_000 });
-    expect(ephemeral.drops).toEqual([1_000_000]);
-    expect(result).toBeDefined();
-    expect(outcomes[0]?.outcome).toBe('planned');
-  });
+    { name: 'the freed tokens come off the provider total, never below the history floor', freed: 1_000_000 },
+  ];
+
+  for (const relief of reliefCases) {
+    test(relief.name, async () => {
+      const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(relief.freed) });
+      const result = await transform(history(15, 3_000), { providerReportedTokens: 20_000 });
+      expect(ephemeral.drops).toEqual([relief.freed]);
+      expect(result).toBeDefined();
+      expect(outcomes[0]?.outcome).toBe('planned');
+    });
+  }
 
   test('a REPLAYING plan still gets the rung — the case nothing else can relieve', async () => {
     // The engine's regrowth guard prices the prefix with the overhead recorded
@@ -401,16 +410,6 @@ describe('force trigger', () => {
 });
 
 describe('archive manifest', () => {
-  /** Fat USER turns: no prune stage touches them, so the ladder falls through
-   *  to the checkpoint — the message the manifest must ride on. */
-  const fatUser = (i: number): ModelMessage[] => [
-    user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
-    assistant([{ type: 'text', text: `noted ${i}` }]),
-  ];
-
-  const fatHistory = (turns: number): ModelMessage[] =>
-    Array.from({ length: turns }, (_, i) => fatUser(i)).flat();
-
   test('the checkpoint message carries a manifest line for the archived range', async () => {
     const { archive, ports, transform } = rig();
     const result = await transform(fatHistory(8));
@@ -566,11 +565,6 @@ describe('summaries', () => {
   test('an advanced boundary re-summarizes iteratively from the previous checkpoint', async () => {
     const { prompts, transform } = rig();
 
-    const fatUser = (i: number): ModelMessage[] => [
-      user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
-      assistant([{ type: 'text', text: `noted ${i}` }]),
-    ];
-
     const messages: ModelMessage[] = [];
 
     for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
@@ -602,11 +596,6 @@ describe('summaries', () => {
         throw new Error('rolling summary unavailable');
       },
     });
-
-    const fatUser = (i: number): ModelMessage[] => [
-      user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
-      assistant([{ type: 'text', text: `noted ${i}` }]),
-    ];
 
     const messages: ModelMessage[] = [];
 
@@ -716,11 +705,6 @@ describe('turn cancellation', () => {
     assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]),
   ];
 
-  const fatUserExchange = (i: number): ModelMessage[] => [
-    user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
-    assistant([{ type: 'text', text: `noted ${i}` }]),
-  ];
-
   const assistantRunHistory = (): ModelMessage[] => {
     const messages: ModelMessage[] = [];
 
@@ -788,7 +772,7 @@ describe('turn cancellation', () => {
 
     const messages: ModelMessage[] = [];
 
-    for (let i = 0; i < 8; i++) messages.push(...fatUserExchange(i));
+    for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
 
     const controller = new AbortController();
     await transform(messages, { abortSignal: controller.signal });
@@ -813,7 +797,7 @@ describe('turn cancellation', () => {
 
     const messages: ModelMessage[] = [];
 
-    for (let i = 0; i < 8; i++) messages.push(...fatUserExchange(i));
+    for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
 
     // A resolved summary on a dead turn is still dead: no 'planned' outcome,
     // and the transform settles as the standard abort, not a fallback plan.
@@ -854,7 +838,7 @@ describe('turn cancellation', () => {
 
     const messages: ModelMessage[] = [];
 
-    for (let i = 0; i < 8; i++) messages.push(...fatUserExchange(i));
+    for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
 
     const result = await transform(messages, { abortSignal: new AbortController().signal });
     expect(result).toBeDefined();

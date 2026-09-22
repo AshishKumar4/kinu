@@ -122,11 +122,11 @@ export const kinuCodec: Codec<ModelMessage> = {
 
     if (item.kind === 'text') return item.text;
 
-    if (item.kind === 'reasoning') return `[reasoning]\n${reasoningText(item.handle)}`;
+    if (item.kind === 'reasoning') return `[reasoning]\n${reasoningText(nativeHandle(item.handle))}`;
 
     if (item.kind === 'tool') return formatToolPair(pairOf(item));
 
-    return formatOpaque(item.handle);
+    return formatOpaque(nativeHandle(item.handle));
   },
 
   // Whole-document override: raw JSON of each turn's native messages (binary
@@ -532,7 +532,7 @@ function toolError(pair: ToolPairHandle): string | undefined {
 
   if (output.type === 'error-text') return output.value;
 
-  if (output.type === 'error-json') return previewJson(output.value);
+  if (output.type === 'error-json') return previewJson({ value: output.value });
 
   if (output.type === 'execution-denied') return output.reason ?? 'execution denied';
 
@@ -546,15 +546,15 @@ function charsOfItem(item: Item): number {
 
   if (item.kind === 'synthetic') return item.text.length;
 
-  if (item.kind === 'reasoning') return reasoningText(item.handle).length;
+  if (item.kind === 'reasoning') return reasoningText(nativeHandle(item.handle)).length;
 
   if (item.kind === 'tool') return charsOfPair(pairOf(item));
 
-  return charsOfOpaque(item.handle);
+  return charsOfOpaque(nativeHandle(item.handle));
 }
 
 function charsOfPair(pair: ToolPairHandle): number {
-  let chars = pair.call.toolName.length + jsonLength(pair.call.input);
+  let chars = pair.call.toolName.length + jsonLength({ value: pair.call.input });
 
   if (pair.inlineResult) chars += charsOfResultOutput(pair.inlineResult);
 
@@ -568,35 +568,35 @@ function charsOfResultOutput(part: ToolResultPart): number {
 
   if (output.type === 'text') return output.value.length;
 
-  if (output.type === 'json') return jsonLength(output.value);
+  if (output.type === 'json') return jsonLength({ value: output.value });
 
-  return jsonLength(output);
+  return jsonLength({ value: output });
 }
 
-function charsOfOpaque<Handle>(handle: Handle): number {
-  const value = nativeHandle(handle);
-
+function charsOfOpaque(value: NativeHandle): number {
   if ((isAssistantPart(value) || isUserPart(value))
       && (value.type === 'image' || value.type === 'file')) return ESTIMATED_MEDIA_CHARS;
 
   if (isModelMessage(value)) {
-    return isString(value.content) ? value.content.length : jsonLength(value.content);
+    return isString(value.content) ? value.content.length : jsonLength({ value: value.content });
   }
 
-  return jsonLength(value);
+  return jsonLength({ value });
 }
 
-function reasoningText<Handle>(handle: Handle): string {
+function reasoningText(handle: NativeHandle): string {
   return isAssistantPart(handle) && handle.type === 'reasoning' ? handle.text : '';
 }
 
-function jsonLength<Value>(value: Value): number {
+/** `value` is the provider's own payload: a tool input, a tool output, or a
+ *  message part. Only `JSON.stringify` reads inside it. */
+function jsonLength(input: { value: unknown }): number {
   try {
-    return JSON.stringify(value, binaryReplacer)?.length ?? 0;
+    return JSON.stringify(input.value, binaryReplacer)?.length ?? 0;
   } catch (error) {
     // A value stringify cannot render degrades downstream to exactly this
     // marker-prefixed string, so its length is the honest estimate.
-    return `${renderThrownChain({ cause: error })}: ${String(value)}`.length;
+    return `${renderThrownChain({ cause: error })}: ${String(input.value)}`.length;
   }
 }
 
@@ -607,7 +607,7 @@ function formatToolPair(pair: ToolPairHandle): string {
 
   return [
     `[tool:${pair.call.toolName}] callId=${pair.call.toolCallId}`,
-    `input=${previewJson(pair.call.input)}`,
+    `input=${previewJson({ value: pair.call.input })}`,
     result ? `output=${truncate(resultText(result), TRANSCRIPT_PREVIEW_CHARS)}` : '',
   ]
     .filter(Boolean)
@@ -619,14 +619,12 @@ function resultText(part: ToolResultPart): string {
 
   if (output.type === 'text') return output.value;
 
-  if (output.type === 'json') return previewJson(output.value);
+  if (output.type === 'json') return previewJson({ value: output.value });
 
-  return previewJson(output);
+  return previewJson({ value: output });
 }
 
-function formatOpaque<Handle>(handle: Handle): string {
-  const value = nativeHandle(handle);
-
+function formatOpaque(value: NativeHandle): string {
   if ((isAssistantPart(value) || isUserPart(value)) && value.type === 'image') {
     return `[image ${value.mediaType ?? 'unknown'}]`;
   }
@@ -640,13 +638,16 @@ function formatOpaque<Handle>(handle: Handle): string {
   }
 
   if (isModelMessage(value)) {
-    return `[${value.role}] ${isString(value.content) ? value.content : previewJson(value.content)}`;
+    return `[${value.role}] ${isString(value.content) ? value.content : previewJson({ value: value.content })}`;
   }
 
-  return `[${value.type}] ${previewJson(value)}`;
+  return `[${value.type}] ${previewJson({ value })}`;
 }
 
-function previewJson<Value>(value: Value): string {
+/** `value` is the provider's own payload; see {@link jsonLength}. */
+function previewJson(input: { value: unknown }): string {
+  const value = input.value;
+
   if (value === undefined) return '';
 
   try {

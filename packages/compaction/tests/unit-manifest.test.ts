@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { rangeHash, type Turn } from '@better-compact/core';
+import { present } from '@kinu.run/test-utils';
 import {
   deriveArchiveRange,
   renderArchiveManifest,
@@ -58,8 +59,8 @@ describe('deriveArchiveRange', () => {
   });
 
   test('a grown prefix indexes only what it added, continuing the ordinals', () => {
-    const first = deriveArchiveRange(prefix(4), rangeHash(prefix(4)), '/archive/h1.md', [])!.range;
-    const second = deriveArchiveRange(prefix(9), 'h2', '/archive/h2.md', [first])!;
+    const first = present(deriveArchiveRange(prefix(4), rangeHash(prefix(4)), '/archive/h1.md', []), 'the first archived range').range;
+    const second = present(deriveArchiveRange(prefix(9), 'h2', '/archive/h2.md', [first]), 'the grown prefix derivation');
     expect(second.reset).toBe(false);
     expect(second.range).toMatchObject({
       startTurn: 5,
@@ -74,13 +75,13 @@ describe('deriveArchiveRange', () => {
 
   test('re-planning the same prefix adds nothing', () => {
     const hash = rangeHash(prefix(6));
-    const first = deriveArchiveRange(prefix(6), hash, '/archive/h1.md', [])!.range;
+    const first = present(deriveArchiveRange(prefix(6), hash, '/archive/h1.md', []), 'the first archived range').range;
     expect(deriveArchiveRange(prefix(6), hash, '/archive/h1.md', [first])).toBeNull();
   });
 
   test('a prefix that does not re-hash to the indexed one is a rewritten history', () => {
     const stale = range({ rangeHash: 'not-this-prefix' });
-    const derived = deriveArchiveRange(prefix(6), 'h9', '/archive/h9.md', [stale])!;
+    const derived = present(deriveArchiveRange(prefix(6), 'h9', '/archive/h9.md', [stale]), 'the rewritten-history derivation');
     expect(derived.reset).toBe(true);
     expect(derived.range).toMatchObject({ startTurn: 1, endTurn: 6 });
   });
@@ -89,7 +90,7 @@ describe('deriveArchiveRange', () => {
     const edited = prefix(6);
     edited[0] = turn('rewritten', 'user', 'a different first ask');
     const indexed = range({ rangeHash: rangeHash(prefix(4).slice(0, 4)), endTurn: 4 });
-    const derived = deriveArchiveRange(edited, 'h9', '/archive/h9.md', [indexed])!;
+    const derived = present(deriveArchiveRange(edited, 'h9', '/archive/h9.md', [indexed]), 'the edited-prefix derivation');
     expect(derived.reset).toBe(true);
     expect(derived.range).toMatchObject({ startTurn: 1, endTurn: 6, firstUserAsk: 'a different first ask' });
   });
@@ -100,7 +101,7 @@ describe('deriveArchiveRange', () => {
 
   test('a long user ask is bounded to one line', () => {
     const long = turn('t0', 'user', `first\nline ${'detail '.repeat(60)}`);
-    const derived = deriveArchiveRange([long], 'h1', '/archive/h1.md', [])!;
+    const derived = present(deriveArchiveRange([long], 'h1', '/archive/h1.md', []), 'the single-turn derivation');
     expect(derived.range.firstUserAsk).toHaveLength(120);
     expect(derived.range.firstUserAsk).toEndWith('…');
     expect(derived.range.firstUserAsk).not.toInclude('\n');
