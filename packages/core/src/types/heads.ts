@@ -25,6 +25,12 @@ export interface HeadFileChange {
   /** Set when the content is not text, so lines are not a unit for it and the
    *  counts are omitted rather than fabricated from decoded bytes. */
   readonly binary?: boolean;
+  /** Set when the path was a directory: nothing under it was read, so there
+   *  are no lines to count. */
+  readonly directory?: boolean;
+  /** Set when what the path held before could not be read: the change landed,
+   *  its size is unknown, and the counts are omitted rather than guessed. */
+  readonly unreadable?: boolean;
 }
 
 /** One head's change set as the merge payload carries it. Heads that changed

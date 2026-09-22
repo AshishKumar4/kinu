@@ -521,4 +521,23 @@ describe('UserDO gateway credential derivation', () => {
       restore();
     }
   });
+
+  test('a login whose refresh fails is connected with the failure, never disconnected', async () => {
+    const original = globalThis.fetch;
+    // The issuer cannot be asked: every token refresh meets a 503.
+    globalThis.fetch = asFetchFunction(async () => new Response('upstream unavailable', { status: 503 }));
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, { ...oauthCredential(), expiresAt: Date.now() - 60_000 });
+
+      expect(await harness.userDO.listAIGateways(owner)).toMatchObject({
+        connected: true, gateways: [], error: expect.stringContaining('refreshing the Cloudflare credential'),
+      });
+    } finally {
+      harness.close();
+      globalThis.fetch = original;
+    }
+  });
 });

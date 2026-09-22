@@ -243,7 +243,7 @@ export async function acceptInboundEmail(
   // the same ordering peer ingress uses. A mail longer than the brief budget
   // gets a readable path alongside the brief, because the agent is woken BY
   // this message and the brief alone is a fragment it cannot ask past.
-  const bodyPath = await spillEventContent(deps.vfs, msg.body_text);
+  const spilled = await spillEventContent(deps.vfs, msg.body_text);
 
   const thread = emailThreadAddr(msg);
 
@@ -261,7 +261,8 @@ export async function acceptInboundEmail(
     in_reply_to: boundedMessageId(msg.in_reply_to, 'In-Reply-To'),
     references: thread.references,
     attachments: msg.attachments,
-    body_path: bodyPath ?? undefined,
+    body_path: spilled?.path,
+    body_unsaved: spilled?.unsaved,
   };
 
   const reply_channel_id = deps.replies.open({
