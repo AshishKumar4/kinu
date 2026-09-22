@@ -43,6 +43,7 @@
     "gate:undeclared-imports": "bun scripts/undeclared-imports.ts",
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:complexity": "bun scripts/complexity.ts",
+    "gate:bloat-budget": "bun scripts/bloat-budget.ts",
     "gate:wired": "bun scripts/wired.ts",
     "gate:client-graph": "bun scripts/client-graph.ts",
     "gate:core-layering": "bun scripts/core-layering.ts",
