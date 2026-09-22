@@ -1,25 +1,7 @@
 /**
- * Kinu codec — AI SDK v6 `ModelMessage[]` ⇄ ladder `Turn[]`.
- *
- * Items are views with handles: every encoded item carries its native payload
- * (a content part, or the whole message for string-content/unknown shapes)
- * and decode re-emits untouched payloads VERBATIM — the same object
- * references, so unpruned history round-trips byte-identically and provider
- * options / vendor extensions survive without being modeled. Only what the
- * ladder changed is synthesized.
- *
- * Tool pairing is this codec's job: an assistant `tool-call` part and its
- * `tool-result` (a following `role:'tool'` message's part, or an inline
- * provider-executed result in the same assistant content) become ONE IR tool
- * item, so when the ladder drops it the full native footprint disappears —
- * the call part, the result part, and the carrier tool message if emptied.
- *
- * Identity is id-less (Kinu ModelMessages carry no ids): content-hash keys
- * with occurrence ordinals, stable across requests because durable history is
- * append-only. The turn stamp is derived from the deduped key — stamps seed
- * `assistantRunKey` alongside the turn's own item digest, so they must be
- * content-derived and distinct per turn or two turns whose items differ only
- * in a field the digest does not read would share one summary key.
+ * AI SDK v6 `ModelMessage[]` ⇄ ladder `Turn[]`. Untouched items decode to the same object references,
+ * so unpruned history round-trips byte-identically. A tool call and its result form one IR item, so
+ * dropping it removes every native footprint. Keys are content hashes with occurrence ordinals.
  */
 
 import type {
@@ -64,14 +46,10 @@ type ToolPart = ToolModelMessage['content'][number];
 
 type NativeHandle = ModelMessage | AssistantPart | UserPart | ToolPart;
 
-/** One IR tool item owns the call part and its paired result: when the ladder
- *  drops the item, every native footprint vanishes; when it survives, each
- *  part re-emits verbatim at its original position. */
+/** Call part plus its paired result, dropped or re-emitted together. */
 export interface ToolPairHandle {
   call: ToolCallPart;
-  /** Provider-executed result inline in the same assistant content. */
   inlineResult?: ToolResultPart;
-  /** Result delivered by a following `role:'tool'` message. */
   result?: ToolResultPart;
 }
 
@@ -83,9 +61,7 @@ interface StoredToolPairHandle extends ToolPairHandle {
 
 type ToolItem = Extract<Item, { kind: 'tool' }>;
 
-/** Images/files are priced flat: providers charge by media dimensions, not
- *  payload bytes, and a base64 blob would wildly overprice. Same scale as the
- *  pi adapter's image estimate (~1200 tokens). */
+/** Media is priced flat: providers charge by dimensions, and base64 length would wildly overprice. */
 const ESTIMATED_MEDIA_CHARS = 4_800;
 
 const TRANSCRIPT_PREVIEW_CHARS = 20_000;
@@ -101,9 +77,7 @@ export const kinuCodec: Codec<ModelMessage> = {
     return turns.flatMap(decodeTurn);
   },
 
-  // Chars/4 over the content Kinu actually serializes for the model —
-  // the shared estimation scale (core countTokens); the engine's
-  // measured provider-overhead delta corrects for what chars cannot see.
+  // Chars/4 over what Kinu serializes; the engine's measured provider-overhead delta corrects the rest.
   estimateTurns(turns) {
     const chars = turns.reduce(
       (sum, turn) => sum + turn.items.reduce((acc, item) => acc + charsOfItem(item), 0),
@@ -129,10 +103,7 @@ export const kinuCodec: Codec<ModelMessage> = {
     return formatOpaque(nativeHandle(item.handle));
   },
 
-  // Whole-document override: raw JSON of each turn's native messages (binary
-  // payloads flattened to size placeholders), so the reference transcript is
-  // a lossless read-back surface — the agent recovers EXACT prior text and
-  // tool output instead of a preview.
+  // Raw JSON of each turn's native messages (binary as size placeholders): a lossless read-back surface.
   transcriptDocument(turns) {
     const blocks = turns.map((turn) => {
       const native = turn.handle ? decodeTurn(turn) : { role: turn.role, content: syntheticText(turn.items) };
@@ -159,9 +130,7 @@ export const kinuConventions: Conventions = {
       error: toolError(pair),
     };
   },
-  // No in-band todo surface (task state lives in the jobs subsystem, outside
-  // messages) and no per-item notes — those conventions are simply absent,
-  // so the stages that would need them find nothing to act on.
+  // No in-band todo surface or per-item notes; task state lives in the jobs subsystem.
 };
 
 export const kinuSpec: LadderSpec = {
@@ -177,11 +146,7 @@ export const kinuSpec: LadderSpec = {
   ],
 };
 
-// ── encode ────────────────────────────────────────────────────────────────
-
-/** A Turn is one user message, or one assistant message plus the `tool`
- *  messages that answer it. Non-user messages with no preceding assistant
- *  (headless tool results, stray system messages) form their own run. */
+/** A Turn is one user message, or one assistant message plus its `tool` answers; orphans form their own run. */
 function groupMessages(messages: ModelMessage[]): ModelMessage[][] {
   const groups: ModelMessage[][] = [];
   let run: ModelMessage[] | null = null;
@@ -285,17 +250,11 @@ function bindResult(pendingCalls: Map<string, ToolPairHandle>, result: ToolResul
   return true;
 }
 
-/** Content-derived numeric stamp (48 bits of the key's hash). Ladder range
- *  hashes fold edit-sensitivity into the content-hash key itself; the stamp
- *  exists so assistant-run summary keys (`role:stamp:item-digest` seeds) stay
- *  distinct per turn and stable across requests. */
+/** Content-derived 48-bit stamp; keeps assistant-run summary keys distinct per turn and stable across requests. */
 function stampOf(key: string): number {
   return Number.parseInt(fnv1a64(key).slice(0, 12), 16);
 }
 
-// ── decode ────────────────────────────────────────────────────────────────
-
-/** Reference-identity survival sets over a turn's (possibly pruned) items. */
 interface Survival {
   handles: Set<NativeHandle>;
   results: Set<ToolResultPart>;
@@ -303,7 +262,6 @@ interface Survival {
 
 function decodeTurn(turn: Turn): ModelMessage[] {
   if (turn.handle === undefined) {
-    // Ladder-synthesized turn (reference message, prefix summary).
     const text = syntheticText(turn.items);
 
     if (!text) return [];
@@ -339,8 +297,7 @@ function decodeTurn(turn: Turn): ModelMessage[] {
     }
   }
 
-  // Synthetic replacement text with no assistant message to carry it (a
-  // collapsed headless run) re-emits as a user-role notice.
+  // Synthetic text with no assistant message to carry it re-emits as a user-role notice.
   const synthetic = syntheticText(turn.items);
 
   if (synthetic && !hasAssistant && !group.some((message) => message.role === 'user')) {
@@ -371,8 +328,7 @@ function collectSurvival(items: Item[]): Survival {
   return survival;
 }
 
-/** Rebuild in IR order so a synthetic tool stub occupies the native position
- *  of the tool item it replaced. Untouched messages retain object identity. */
+/** Rebuild in IR order so a synthetic tool stub takes the native position of the item it replaced. */
 function rebuildAssistant(
   message: AssistantModelMessage,
   items: Item[],
@@ -539,8 +495,6 @@ function toolError(pair: ToolPairHandle): string | undefined {
   return undefined;
 }
 
-// ── estimation ────────────────────────────────────────────────────────────
-
 function charsOfItem(item: Item): number {
   if (item.kind === 'text') return item.text.length;
 
@@ -588,19 +542,14 @@ function reasoningText(handle: NativeHandle): string {
   return isAssistantPart(handle) && handle.type === 'reasoning' ? handle.text : '';
 }
 
-/** `value` is the provider's own payload: a tool input, a tool output, or a
- *  message part. Only `JSON.stringify` reads inside it. */
 function jsonLength(input: { value: unknown }): number {
   try {
     return JSON.stringify(input.value, binaryReplacer)?.length ?? 0;
   } catch (error) {
-    // A value stringify cannot render degrades downstream to exactly this
-    // marker-prefixed string, so its length is the honest estimate.
+    // Unstringifiable values degrade downstream to exactly this string.
     return `${renderThrownChain({ cause: error })}: ${String(input.value)}`.length;
   }
 }
-
-// ── transcript rendering ──────────────────────────────────────────────────
 
 function formatToolPair(pair: ToolPairHandle): string {
   const result = pair.result ?? pair.inlineResult;
@@ -644,7 +593,6 @@ function formatOpaque(value: NativeHandle): string {
   return `[${value.type}] ${previewJson({ value })}`;
 }
 
-/** `value` is the provider's own payload; see {@link jsonLength}. */
 function previewJson(input: { value: unknown }): string {
   const value = input.value;
 
@@ -660,8 +608,6 @@ function previewJson(input: { value: unknown }): string {
   }
 }
 
-/** Binary payloads (image/file bytes) flatten to a size placeholder; every
- *  textual field serializes exactly. */
 function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
 

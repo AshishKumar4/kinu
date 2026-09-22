@@ -76,7 +76,6 @@ export async function chunkMarkdown(
 		currentChars += lineLen;
 	}
 
-	// Flush remaining
 	await flushChunk();
 
 	return chunks;

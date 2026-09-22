@@ -1,6 +1,4 @@
-// CraftedTool as agent-utils sees it. Structurally identical to core's
-// (packages/core/src/types/craft.ts); core depends on this package, so the
-// declaration cannot be shared the other way.
+// Structural copy of core's CraftedTool; core depends on this package, so it cannot be shared the other way.
 
 export interface CraftedTool {
   name: string;

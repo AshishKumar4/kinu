@@ -1,20 +1,8 @@
 /**
- * The real engine ports over Kinu's shared storage primitives.
- *
- * Both backends expose the SAME two primitives — a workspace filesystem whose
- * filesystem is Nimbus (DO storage on cf, agent.db on cli) and a
- * SqlExecutor over that same database — so the transcript store and the
- * durable compaction state are built ONCE here and injected as ports.
- * Backends supply only what genuinely differs: the summarizer transport
- * (their model call), the logger sink, and the onOutcome ledger reset.
- *
- * Transcripts live at `.kinu/compaction/<sessionKey>/<rangeHash>.md`
- * — inside the agent's own file plane, so the reference message's citation is
- * directly readable back through the agent's normal file tools
- * (workspace.readFile / the shell). That read-back IS the lossless-recall
- * guarantee; the archive index kept alongside the plan snapshot is what makes
- * it navigable (manifest.ts).
+ * Engine ports over Kinu's shared storage primitives. Transcripts live at
+ * `.kinu/compaction/<sessionKey>/<rangeHash>.md` in the agent's own file plane, readable by its file tools.
  */
+
 
 import { SPILL_DIRS, type ActorHandle, type SqlExecutor, type VFS } from '@kinu.run/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
@@ -23,27 +11,21 @@ import * as v from 'valibot';
 
 const COMPACTION_DIR = SPILL_DIRS.compaction;
 
-/** Path components come from session keys (agent names, `affinity:sessionId`
- *  pairs) and hex range hashes — collapse anything path-hostile. */
 function safeSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-/** The citable transcript path for one compacted range. Pure — the engine
- *  passes it around unbound, and the reference message embeds it verbatim. */
+/** Pure: the reference message embeds this path verbatim. */
 export function compactionTranscriptPath(sessionKey: string, rangeHash: string): string {
   return `${COMPACTION_DIR}/${safeSegment(sessionKey)}/${safeSegment(rangeHash)}.md`;
 }
 
-/** `citablePath` is a property, not a method: the engine passes it around
- *  unbound, so it must carry no receiver. */
+/** `citablePath` is a property: the engine passes it around unbound. */
 export interface VfsTranscriptStore extends TranscriptStore {
   citablePath: (sessionKey: string, rangeHash: string) => string;
 }
 
-/** Transcript store over the workspace VFS. `getVfs` is a thunk because the
- *  cf runtime is built lazily — the VFS is dereferenced per write, never at
- *  registration time. */
+/** `getVfs` is a thunk: the cf runtime is built lazily, so the VFS is dereferenced per write. */
 export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore {
   return {
     citablePath: compactionTranscriptPath,
@@ -67,32 +49,18 @@ export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore 
 }
 
 /**
- * Durable per-session compaction state: the replayable plan snapshot AND the
- * provider-reported prompt-token signal of the last completed turn — the
- * measured trigger the next turn's transform runs on. One row per session;
- * clearing a stale plan keeps the token signal and vice versa.
- *
- * The token signal is only meaningful for the history it measured, so it is
- * bound to the durable-history length at measurement time: history is
- * append-only, so a SHORTER history at read time means a rewrite (undo,
- * restore truncation) happened and the measurement describes a request this
- * history can no longer produce — it reads as absent rather than poisoning
- * the trigger with a huge phantom overhead.
+ * Durable per-session plan snapshot and last prompt-token measurement. A measurement taken against a
+ * longer history than the current one reads as absent: history is append-only, so shorter means rewritten.
  */
 export interface CompactionStateStore {
   plans: PlanStore;
-  /** The archived-range index behind the checkpoint's navigation manifest. */
   archive: ArchiveIndexStore;
-  /** Provider-reported prompt tokens of the session's last completed turn,
-   *  or null when no turn has reported yet — or when `historyLength` is
-   *  shorter than the length the measurement was taken against. */
+  /** Null when none reported or `historyLength` is shorter than at measurement. */
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
   savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
-  /** Arm force-compaction: the session's NEXT turn assembly runs the context
-   *  transform with trigger:'force' (overflow recovery). */
+  /** The next turn assembly runs the transform with trigger:'force'. */
   armForceCompaction(sessionKey: string): void;
-  /** Consume the force-compaction flag — true at most once per arm, so a
-   *  forced rebuild can never loop. */
+  /** True at most once per arm, so a forced rebuild cannot loop. */
   takeForceCompaction(sessionKey: string): boolean;
 }
 
@@ -162,15 +130,8 @@ function parsePlanSnapshot(input: { value: unknown }): PlanSnapshot | null {
 }
 
 /**
- * Bind the compaction state to ONE actor.
- *
- * A session key is an agent name or an `affinity:sessionId` pair minted per
- * actor, so two actors of one workspace present the same key — and the plan
- * snapshot, the measured trigger and the archive index are each what the NEXT
- * turn of that session assembles from. Sharing them would compact one actor's
- * history against another's measurement, and cite another's transcript.
- * `actorId` is captured once and `assertCurrent()` runs before every statement,
- * exactly as the core stores do.
+ * Bind compaction state to one actor: actors of one workspace share session keys, so sharing state would
+ * compact against another actor's measurement. `assertCurrent()` runs before every statement.
  */
 export function createCompactionStateStore(
   sql: SqlExecutor, actor: ActorHandle,

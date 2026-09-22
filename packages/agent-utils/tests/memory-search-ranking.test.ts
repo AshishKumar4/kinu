@@ -1,9 +1,4 @@
-// The FTS search must return its STRONGEST matches. bm25() is negative with
-// more-negative = more relevant; the old score formula (1/(1+|rank|)) was
-// inverted, and the 0.05 minScore floor built on it silently dropped exactly
-// the highest-relevance hits (any |bm25| >= 19) — a recall filter that
-// removed the answers. These tests lock the fix: no relevance floor, and a
-// displayed score monotone WITH relevance.
+// Search must return its strongest matches: no relevance floor, score monotone with relevance.
 import { describe, test, expect } from "bun:test";
 import { present } from "../../test-utils/src/present";
 import { MemoryStore } from "../src/memory/store";
@@ -24,7 +19,7 @@ describe("MemoryStore.search ranking", () => {
 	test("a document saturated with the query terms is still returned", async () => {
 		const { store } = createStore();
 
-		// Dense repetition drives |bm25| far past the old 19 cutoff.
+		// Dense repetition drives |bm25| high; an inverted score with a floor would drop this hit.
 		const dense = Array.from({ length: 120 }, () =>
 			"kinu workspace sandbox provisioning failure diagnosis",
 		).join("\n");

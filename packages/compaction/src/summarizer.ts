@@ -1,29 +1,16 @@
-/**
- * The one summarizer transport both backends inject into
- * `createCompactionExtension`: a generateText call on the active model.
- *
- * The caller owns cancellation. This transport does not turn elapsed time into
- * a provider failure or discard an active fold.
- */
+/** Summarizer transport for `createCompactionExtension`. The caller owns cancellation. */
 
 import { generateText, type LanguageModel } from 'ai';
 import { beginModelOperation, normalizeUsage, type ModelCallSpend } from '@kinu.run/core';
 
 
-/**
- * `spend` carries both the sink and the label — `compaction` for the fold this
- * summarizer exists for. It is the producer that fires precisely when a
- * conversation got expensive, so a workspace total that omitted it understated
- * exactly the sessions an owner asks about. Optional: a backend that wires no
- * sink summarizes exactly as before.
- */
+/** `spend` is optional; when present the fold is recorded under `compaction`. */
 export function createModelSummarizer(
   getModel: () => LanguageModel,
   spend?: ModelCallSpend,
 ): (prompt: string, signal?: AbortSignal) => Promise<string> {
   return async (prompt, signal) => {
-    // Opened before the request. If the process stops, the unmatched start row
-    // names the in-flight fold on the next activation.
+    // Opened before the request so an unmatched start row names an in-flight fold after a crash.
     const operation = beginModelOperation(spend, 'complete');
     let result;
 
@@ -38,8 +25,6 @@ export function createModelSummarizer(
       throw err;
     }
 
-    // A thrown request has no provider usage report. Its failed operation row
-    // records the cause without inventing spend.
     const usage = normalizeUsage(result.totalUsage);
     const modelId = result.response.modelId;
     operation.completed({ usage, modelId });

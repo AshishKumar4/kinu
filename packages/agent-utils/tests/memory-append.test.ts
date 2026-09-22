@@ -1,8 +1,4 @@
-// MemoryStore.appendToFile must never destroy existing content.
-//
-// The old implementation swallowed EVERY read error and rewrote the file
-// with just the appended text — a TEXT-corrupted row (whose read throws a
-// decode error, not ENOENT) silently nuked the whole memory file.
+// appendToFile must not overwrite existing content when a read fails with anything but ENOENT.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
@@ -31,9 +27,6 @@ describe("MemoryStore.appendToFile", () => {
 	});
 
 	test("a non-ENOENT read failure propagates instead of overwriting the file", async () => {
-		// The bug this guards: treating ANY read failure as "no file yet" and
-		// writing over it. Only ENOENT may mean that; anything else must
-		// propagate with the file untouched.
 		const { sql } = createTestDb();
 		const fs = createMemoryVfs({ "memory/MEMORY.md": "# precious notes" });
 		fs.readFile = async () => { throw new Error("EIO: the store is unreachable"); };

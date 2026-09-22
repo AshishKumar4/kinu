@@ -1,7 +1,3 @@
-/** The archive manifest: how a compaction's archived range is derived into a
- *  non-overlapping index entry, how that index renders, and where the rendered
- *  section attaches in the ladder's transformed stream. */
-
 import { describe, expect, test } from 'bun:test';
 import { rangeHash, type Turn } from '@better-compact/core';
 import { present } from '@kinu.run/test-utils';
@@ -22,7 +18,6 @@ function turn(key: string, role: 'user' | 'assistant', text: string): Turn {
   };
 }
 
-/** Six turns alternating user/assistant — the shape a prefix compacts from. */
 function prefix(count: number): Turn[] {
   return Array.from({ length: count }, (_, i) =>
     turn(`t${i}`, i % 2 === 0 ? 'user' : 'assistant', `message ${i}`));

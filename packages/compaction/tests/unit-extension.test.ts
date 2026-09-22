@@ -1,9 +1,3 @@
-/** Extension behavior through the public transformContext seam: trigger
- *  gating, plan build + transcript + reference message, cache-warm replay
- *  determinism, rangeHash refusal on an edited prefix, force rebuilds,
- *  summary upgrades (assistant runs + tuned prefix handoff), and fail-open
- *  summarizer degradation. */
-
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
@@ -23,10 +17,7 @@ import {
 
 const SESSION = 'agent-test-session';
 
-/** Small window + tiny recent-tool budget so modest fixtures overflow. The
- *  rest comes from the library's own custom defaults: the extension forwards
- *  exactly these four knobs, so spelling the others out would pin settings no
- *  assertion here depends on. */
+/** Small window and recent-tool budget so modest fixtures overflow. */
 const profile: CompactionProfile = {
   ...DEFAULT_CUSTOM_COMPACTION,
   preset: 'custom',
@@ -36,16 +27,13 @@ const profile: CompactionProfile = {
   summarizerConcurrency: 2,
 };
 
-/** The ephemeral plane the ladder's first rung prunes, holding
- *  `supersededTokens` worth of superseded blocks. A second drop frees nothing,
- *  exactly as the real ledger's does. */
+/** Fake ephemeral plane; like the real ledger, a second drop frees nothing. */
 function fakeEphemeral(supersededTokens = 0) {
   let remaining = supersededTokens;
   const drops: number[] = [];
 
   return {
     drops,
-    /** More superseded blocks piled up since the last drop. */
     refill(tokens: number) { remaining = tokens; },
     dropSuperseded(): number {
       const freed = remaining;
@@ -110,8 +98,7 @@ function rig(overrides: RigOverrides = {}): Rig {
   };
 }
 
-/** Fat USER turns: no prune stage touches them, so the ladder falls through
- *  to the checkpoint — the message the manifest must ride on. */
+/** Fat user turns: no prune stage touches them, so the ladder falls through to the checkpoint. */
 const fatUser = (i: number): ModelMessage[] => [
   user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
   assistant([{ type: 'text', text: `noted ${i}` }]),
@@ -144,10 +131,7 @@ describe('trigger gating', () => {
   });
 
   test('the system prompt floors the estimate when no provider total exists yet', async () => {
-    // history(6, 4000) estimates ~6.3k tokens against the 8.5k trigger — under
-    // on its own, but the assembled system prompt rides every request unseen
-    // by the message estimate. A ~12k-char system (~3k tokens) must push the
-    // trigger decision over the line; a small one must not.
+    // Under the trigger on history alone; a large system prompt must push it over, a small one must not.
     const messages = history(6, 4_000);
     const small = rig();
     expect(await small.transform(messages)).toBeUndefined();
@@ -164,8 +148,6 @@ describe('the first rung — superseded ephemeral context', () => {
   test('nothing is pruned below the trigger: the ordinary path never touches the plane', async () => {
     const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(5_000) });
 
-    // Repeated turns well under the trigger, each a fresh transform — a
-    // speculative rung would have fired on any of them.
     for (let i = 0; i < 3; i++) {
       expect(await transform(history(3, 200), { providerReportedTokens: 8_499 })).toBeUndefined();
     }
@@ -175,9 +157,7 @@ describe('the first rung — superseded ephemeral context', () => {
   });
 
   test('at the trigger the superseded blocks go FIRST, and what they free can stand the rest of the ladder down', async () => {
-    // 8_600 is over the 8_500 trigger; dropping 500 tokens of superseded
-    // blocks puts the request back under it, so no tool output is touched and
-    // no plan is built — the cheapest rung was the only one needed.
+    // Over the trigger by less than the superseded blocks, so dropping them avoids building a plan.
     const { transform, ephemeral, ports, outcomes } = rig({ ephemeral: fakeEphemeral(500) });
     expect(await transform(history(3, 200), { providerReportedTokens: 8_600 })).toBeUndefined();
     expect(ephemeral.drops).toEqual([500]);
@@ -188,8 +168,6 @@ describe('the first rung — superseded ephemeral context', () => {
 
   const reliefCases = [
     { name: 'when the first rung is not enough the stages below still run', freed: 200 },
-    // A relief larger than the whole context cannot pretend the history is
-    // free: the estimate + system floor still decides, so the ladder runs.
     { name: 'the freed tokens come off the provider total, never below the history floor', freed: 1_000_000 },
   ];
 
@@ -204,10 +182,7 @@ describe('the first rung — superseded ephemeral context', () => {
   }
 
   test('a REPLAYING plan still gets the rung — the case nothing else can relieve', async () => {
-    // The engine's regrowth guard prices the prefix with the overhead recorded
-    // when the plan was built, so ephemeral blocks appended after that are
-    // invisible to it: the plan replays happily while the real request climbs.
-    // Without this rung the plane would grow for the life of the activation.
+    // Replay prices overhead as of plan build, so later ephemeral blocks are invisible to the regrowth guard.
     const ephemeral = fakeEphemeral(1_500);
     const { transform, outcomes } = rig({ ephemeral });
     const messages = history(15, 3_000);
@@ -215,9 +190,6 @@ describe('the first rung — superseded ephemeral context', () => {
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
     expect(ephemeral.drops).toEqual([1_500]);
 
-    // Blocks appended since, then the same history again: the plan replays
-    // byte-stably AND the rung still fires, because the provider is reporting
-    // pressure the regrowth guard structurally cannot see.
     ephemeral.refill(2_000);
     expect(await transform(messages, { providerReportedTokens: 9_000 })).toBeDefined();
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
@@ -240,17 +212,14 @@ describe('plan build', () => {
 
     if (!result) throw new Error('expected a rewrite');
 
-    // Shrunk for real, on the codec's own scale.
     const before = kinuCodec.estimateTurns(kinuCodec.encode(messages));
     const after = kinuCodec.estimateTurns(kinuCodec.encode(result));
     expect(after).toBeLessThan(before * 0.5);
 
-    // The raw tail (from the 2nd-from-last user turn) is byte-verbatim.
     const tail = messages.slice(-6);
 
     for (let i = 0; i < 6; i++) expect(result[result.length - 6 + i]).toBe(tail[i]);
 
-    // A reference message cites the transcript path the plan persisted.
     const snapshot = ports.plans.snapshots.get(SESSION);
 
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
@@ -261,7 +230,6 @@ describe('plan build', () => {
 
     expect(reference).toBeDefined();
 
-    // Transcript holds the raw pruned output for read-back.
     const transcript = ports.transcripts.writes.get(snapshot.transcriptRelativePath);
     expect(transcript).toBeDefined();
     expect(transcript).toContain('output-0');
@@ -308,7 +276,6 @@ describe('replay', () => {
 
     if (!second) throw new Error('expected a rewrite');
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
-    // Same transformed prefix, new tail appended.
     expect(JSON.stringify(second.slice(0, first.length))).toBe(JSON.stringify(first));
     expect(second).toHaveLength(first.length + 2);
   });
@@ -328,10 +295,8 @@ describe('replay', () => {
 
   test('a history rewrite that lands UNDER the trigger fires invalidated and clears the plan', async () => {
     const { ports, outcomes, transform } = rig();
-    await transform(history(15, 3_000)); // planned
-    // The conversation was rewritten to something small (undo / restart
-    // truncation): the cached plan cannot replay and nothing replaces it —
-    // the durable view flips back to raw, and listeners must hear about it.
+    await transform(history(15, 3_000));
+    // A rewritten (shorter) history cannot replay the cached plan; listeners must hear 'invalidated'.
     const rewritten = history(4, 100);
     const result = await transform(rewritten);
     expect(result).toBeUndefined();
@@ -346,8 +311,6 @@ describe('replay', () => {
     const snapshot = ports.plans.snapshots.get(SESSION);
 
     if (!snapshot) throw new Error('expected snapshot');
-    // A foreign snapshot (sessionId=agent-test-session) under another key is
-    // ignored by the ownership check; a fresh plan is built and saved.
     ports.plans.snapshots.set('other-session', snapshot);
 
     const ext = createCompactionExtension({
@@ -384,7 +347,7 @@ describe('replay', () => {
 describe('force trigger', () => {
   test('force rebuilds below the trigger threshold', async () => {
     const { outcomes, transform } = rig();
-    const messages = history(6, 500); // well under trigger
+    const messages = history(6, 500);
     expect(await transform(messages)).toBeUndefined();
     const forced = await transform(messages, { trigger: 'force' });
     expect(forced).toBeDefined();
@@ -399,7 +362,6 @@ describe('force trigger', () => {
     const forced = await transform(messages, { trigger: 'force' });
     expect(forced).toBeDefined();
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'planned']);
-    // The rebuild honors the prior plan as its floor (same range, same transcript path).
     expect(ports.plans.snapshots.get(SESSION)?.transcriptRelativePath).toBe(firstSnapshot?.transcriptRelativePath);
   });
 
@@ -431,7 +393,6 @@ describe('archive manifest', () => {
     });
     expect(ranges[0].firstUserAsk).toStartWith('requirement 0:');
 
-    // Same message as the checkpoint — the manifest is navigation FOR it.
     const checkpoint = result.find(
       (m) => isString(m.content) && m.content.includes('[Context Summary]'),
     );
@@ -492,7 +453,7 @@ describe('archive manifest', () => {
 describe('summaries', () => {
   test('assistant runs collapse through the injected summarizer with the per-run prompt', async () => {
     const { prompts, transform } = rig();
-    // Fat assistant TEXT (not tool output): only the assistant-runs stage can shrink it.
+    // Fat assistant text: only the assistant-runs stage can shrink it.
     const messages: ModelMessage[] = [];
 
     for (let i = 0; i < 8; i++) {
@@ -509,11 +470,7 @@ describe('summaries', () => {
   });
 
   test('collapsing a tool-bearing assistant turn takes the whole native pair, never half of it', async () => {
-    // The ladder's collapse unit is ONE assistant turn, and this codec hangs a
-    // tool call, its result part and the carrier `role:'tool'` message off that
-    // single turn. So a collapse that reaches a tool-bearing turn has to erase
-    // every one of those footprints together: a surviving call with no result
-    // (or a result with no call) is a request the provider rejects outright.
+    // A collapse must erase call, result and carrier together; any orphan is rejected by the provider.
     const { transform } = rig();
     const messages: ModelMessage[] = [user('start')];
 
@@ -535,7 +492,6 @@ describe('summaries', () => {
 
     for (const message of result) {
       if (message.role === 'tool') {
-        // An emptied carrier is as invalid as an orphan result.
         expect(message.content.length).toBeGreaterThan(0);
 
         for (const part of message.content) {
@@ -554,9 +510,7 @@ describe('summaries', () => {
       }
     }
 
-    // Non-vacuous on both sides: turns holding tool calls really were collapsed
-    // away (stubbing alone would leave all eight calls standing), and what the
-    // protected tail kept is still a matched pair.
+    // Non-vacuous: tool-bearing turns were really collapsed, and the kept tail is still a matched pair.
     expect(calls.size).toBeGreaterThan(0);
     expect(calls.size).toBeLessThan(8);
     expect([...results].sort()).toEqual([...calls].sort());
@@ -568,7 +522,7 @@ describe('summaries', () => {
     const messages: ModelMessage[] = [];
 
     for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
-    await transform(messages); // first prefix-summary plan (checkpoint-wrapped)
+    await transform(messages);
     const promptsBeforeGrowth = prompts.length;
 
     const grown = [...messages, ...fatUser(8), ...fatUser(9), ...fatUser(10)];
@@ -610,8 +564,6 @@ describe('summaries', () => {
 
   test('prefix fallback upgrades to the tuned handoff summary and stays sticky', async () => {
     const { ports, prompts, outcomes, transform } = rig();
-    // Fat USER messages: no prune stage touches user turns, so the ladder
-    // must fall through to the last-resort prefix summary.
     const messages: ModelMessage[] = [];
 
     for (let i = 0; i < 8; i++) {
@@ -625,7 +577,6 @@ describe('summaries', () => {
 
     const prefixPrompts = prompts.filter((p) => p.includes('## Active Task'));
     expect(prefixPrompts).toHaveLength(1);
-    // The tuned template got the verbatim latest ask and the transcript.
     expect(prefixPrompts[0]).toContain('requirement 7');
     expect(prefixPrompts[0]).toContain('structured handoff summary');
 
@@ -634,7 +585,6 @@ describe('summaries', () => {
     expect(snapshot?.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)).toBe(true);
     expect(JSON.stringify(result)).toContain('[Context Summary]');
 
-    // Replay keeps the upgraded summary without re-summarizing.
     const promptCount = prompts.length;
     const again = await transform(messages);
     expect(JSON.stringify(again)).toBe(JSON.stringify(result));
@@ -676,7 +626,6 @@ describe('summaries', () => {
     const result = await transform(messages);
     expect(result).toBeDefined();
     expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
-    // Deterministic structured fallback, not the LLM one.
     expect(JSON.stringify(result)).toContain('[Context Summary]');
     expect(JSON.stringify(result)).not.toContain('Summary(');
   });
@@ -694,7 +643,6 @@ describe('summaries', () => {
 
     if (!result) throw new Error('expected a rewrite');
     expect(JSON.stringify(result)).not.toContain('too short');
-    // Collapsed runs fall back to truncated previews of the original text.
     expect(JSON.stringify(result)).toContain('[Assistant turn summary]');
   });
 });
@@ -714,10 +662,7 @@ describe('turn cancellation', () => {
   };
 
   test('summary jobs carry their own invocation\'s signal, not a later transform\'s', async () => {
-    // Hold the FIRST transform's plan load until a second transform has run
-    // to completion on a different session: every summary call A makes after
-    // that must still carry A's signal. A single shared signal slot fails
-    // this by handing every late A call B's signal.
+    // Park A's plan load while B completes; A's later summary calls must still carry A's signal.
     const ports = memoryPorts();
     const loadGate = Promise.withResolvers<void>();
     const innerLoad = ports.plans.load;
@@ -751,8 +696,6 @@ describe('turn cancellation', () => {
     loadGate.resolve();
     await firstTurn;
 
-    // B's calls landed first (A was still parked in the load gate), so the
-    // calls carrying A's signal prove the signal stayed with its invocation.
     expect(seen.length).toBeGreaterThan(1);
     expect(seen[0]?.signal).toBe(second.signal);
     expect(seen.some((call) => call.signal === first.signal)).toBe(true);
@@ -777,8 +720,6 @@ describe('turn cancellation', () => {
     const controller = new AbortController();
     await transform(messages, { abortSignal: controller.signal });
 
-    // The fat-user history reaches the last-resort handoff summary, which
-    // calls summarize directly rather than through the job scheduler.
     expect(seen).toHaveLength(1);
     expect(seen[0]?.signal).toBe(controller.signal);
   });
@@ -799,8 +740,7 @@ describe('turn cancellation', () => {
 
     for (let i = 0; i < 8; i++) messages.push(...fatUser(i));
 
-    // A resolved summary on a dead turn is still dead: no 'planned' outcome,
-    // and the transform settles as the standard abort, not a fallback plan.
+    // A resolved summary on a dead turn still rejects as an abort, not a fallback plan.
     await expect(transform(messages, { abortSignal: controller.signal })).rejects.toMatchObject({
       name: 'AbortError',
     });

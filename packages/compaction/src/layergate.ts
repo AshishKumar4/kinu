@@ -1,17 +1,6 @@
 /**
- * The compaction-ladder layer slice — the @better-compact ladder that actually
- * rewrites history, driven through this package's kinu codec/spec.
- *
- * Core's layer gate declares `compaction-ladder` but cannot measure it (core
- * cannot import this package without a cycle), so the slice lives HERE, on the
- * same generic Layer/gate contract, with its own locked baseline.
- * `scripts/layergate.ts` merges it into the human-facing report;
- * `tests/unit-layergate.test.ts` runs it in CI.
- *
- * Probes are deterministic by construction: turn keys and stamps are
- * content-derived (codec.ts), summaries are injected as literals, and no
- * store, clock or model is touched — buildPlan/transformTurns/
- * replayPlanSnapshot are pure functions of the turns.
+ * Compaction-ladder layer slice. Lives here because core cannot import this package; merged by
+ * `scripts/layergate.ts`. Probes are pure functions of the turns (no store, clock or model).
  */
 
 import type { ModelMessage } from 'ai';
@@ -38,8 +27,6 @@ export interface CompactionLadderSubjects {
 export function createCompactionLadderSubjects(): CompactionLadderSubjects {
   return { kinuCodec, buildPlan, transformTurns, replayPlanSnapshot, matchesPlanSnapshot };
 }
-
-// ── fixtures ─────────────────────────────────────────────────────
 
 function toolExchange(id: string, output: string): ModelMessage[] {
   return [
@@ -79,12 +66,9 @@ const PLAN_INPUTS: Omit<BuildPlanInputs, 'force'> = Object.freeze({
   citablePath: compactionTranscriptPath,
 });
 
-/** The model-visible view of a turn list, for byte-stable comparison. */
 function visible(subjects: CompactionLadderSubjects, turns: Parameters<typeof transformTurns>[0]): string {
   return JSON.stringify(subjects.kinuCodec.decode(turns, []));
 }
-
-// ── the slice ────────────────────────────────────────────────────
 
 export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Object.freeze([
   {
@@ -167,8 +151,7 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
   },
 ]);
 
-/** The single-layer fault — its own slice must crater; the merged matrix in
- *  scripts/layergate.ts proves no core layer moves. */
+/** Single-layer fault: this slice must crater; the merged matrix proves no core layer moves. */
 export const COMPACTION_FAULTS: readonly Fault<CompactionLadderSubjects>[] = Object.freeze([
   {
     id: 'compaction-ladder/rewrite-regresses',
