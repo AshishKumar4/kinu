@@ -22,6 +22,23 @@ const DEFAULT_ENVELOPE: ProfileCatalogEnvelope = {
   catalog: BUILTIN_PROFILE_CATALOG,
 };
 
+/** The registry write the fake user objects here share. `logged` is the call
+ *  line the case reads back and `at` the timestamp its reservation carries. */
+function registerWorkspaceStub(
+  calls: string[],
+  logged: (name: string, displayName?: string) => string,
+  at: number,
+) {
+  return async (_caller: UserCaller, name: string, displayName?: string) => {
+    calls.push(logged(name, displayName));
+
+    return {
+      entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at, archivedAt: null },
+      status: 'created' as const,
+    };
+  };
+}
+
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
   get(): Stub;
@@ -126,14 +143,7 @@ describe('cloud agent ownership safety', () => {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}:${displayName ?? ''}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name, displayName) => `register:${name}:${displayName ?? ''}`, 1),
       async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
@@ -183,11 +193,18 @@ describe('cloud agent ownership safety', () => {
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
-      const entry = await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        purpose: 'Build a hello world app in react',
-      }, {
-        waitUntil: (promise) => background.push(promise),
-        suggestDisplayName: async () => 'React Hello World',
+      const entry = await createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          purpose: 'Build a hello world app in react',
+        },
+        options: {
+          waitUntil: (promise) => background.push(promise),
+          suggestDisplayName: async () => 'React Hello World',
+        },
       });
 
       // The slug is a permanent URL and Durable Object name. It remains
@@ -206,14 +223,14 @@ describe('cloud agent ownership safety', () => {
       await Promise.all(background);
       expect(calls).toContain('auto-title:React Hello World');
 
-      const purposeless = await createCloudWorkspaceForUser(
+      const purposeless = await createCloudWorkspaceForUser({
         env,
-        USER_ID,
-        userStub(env),
-        await testOwner(),
-        {},
-        { waitUntil: (promise) => background.push(promise) },
-      );
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {},
+        options: { waitUntil: (promise) => background.push(promise) },
+      });
 
       // Nothing to name it after, so the memorable pair — its only remaining
       // job. The suffix is 8 hex, not 4: at 4 it shared digits with the two
@@ -223,14 +240,14 @@ describe('cloud agent ownership safety', () => {
       expect(purposeless.displayName).not.toBe(purposeless.name);
       expect(background).toHaveLength(1);
 
-      const explicitlyTitled = await createCloudWorkspaceForUser(
+      const explicitlyTitled = await createCloudWorkspaceForUser({
         env,
-        USER_ID,
-        userStub(env),
-        await testOwner(),
-        { displayName: 'Jarvis', purpose: 'My personal assistant' },
-        { waitUntil: (promise) => background.push(promise) },
-      );
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: { displayName: 'Jarvis', purpose: 'My personal assistant' },
+        options: { waitUntil: (promise) => background.push(promise) },
+      });
 
       expect(explicitlyTitled.displayName).toBe('Jarvis');
       expect(calls).toContain('initial-title:Jarvis:user');
@@ -265,14 +282,7 @@ describe('cloud agent ownership safety', () => {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}:${displayName ?? ''}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name, displayName) => `register:${name}:${displayName ?? ''}`, 1),
       async releaseWorkspaceReservation(_caller: UserCaller, name: string, createdAt: number) {
         calls.push(`release:${name}:${String(createdAt)}`);
 
@@ -316,10 +326,16 @@ describe('cloud agent ownership safety', () => {
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis',
-        displayName: 'Jarvis',
-        purpose: 'Help with software projects',
+      await expect(createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis',
+          displayName: 'Jarvis',
+          purpose: 'Help with software projects',
+        },
       })).rejects.toThrow('Agent owned by a different user');
     } finally {
       globalThis.fetch = originalFetch;
@@ -372,8 +388,14 @@ describe('cloud agent ownership safety', () => {
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+      await expect(createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+        },
       })).rejects.toThrow('Agent owned by a different user');
     } finally {
       globalThis.fetch = originalFetch;
@@ -432,8 +454,14 @@ describe('cloud agent ownership safety', () => {
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+      await expect(createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+        },
       })).rejects.toThrow('the workspace could not seed its soul');
     } finally {
       globalThis.fetch = originalFetch;
@@ -464,14 +492,7 @@ describe('cloud agent ownership safety', () => {
       },
       async listCredentials(_caller: UserCaller) { return []; },
       async ensureWorkspaceCapability() { calls.push('capability'); },
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 5, lastVisited: 5, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name) => `register:${name}`, 5),
       async releaseWorkspaceReservation() { calls.push('release');
 
  return true; },
@@ -501,8 +522,14 @@ describe('cloud agent ownership safety', () => {
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
-      await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+      await createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis', displayName: 'Jarvis', purpose: 'Help with software projects',
+        },
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -567,13 +594,25 @@ describe('cloud agent ownership safety', () => {
     let second;
 
     try {
-      first = await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis', displayName: 'A different title', purpose: 'a different mission',
+      first = await createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis', displayName: 'A different title', purpose: 'a different mission',
+        },
       });
       // The same request again: an idempotent create is a STABLE answer, not
       // merely a non-destructive one.
-      second = await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis', displayName: 'A different title', purpose: 'a different mission',
+      second = await createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis', displayName: 'A different title', purpose: 'a different mission',
+        },
       });
     } finally {
       globalThis.fetch = originalFetch;
@@ -601,14 +640,7 @@ describe('cloud agent ownership safety', () => {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
       async listCredentials() { return []; },
-      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
-        calls.push(`register:${name}`);
-
-        return {
-          entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
-          status: 'created' as const,
-        };
-      },
+      registerWorkspace: registerWorkspaceStub(calls, (name) => `register:${name}`, 1),
       async ensureWorkspaceCapability(name: string, presentedHash: string | null) {
         calls.push(`ensure:${name}:${presentedHash ?? 'none'}`);
       },
@@ -644,10 +676,16 @@ describe('cloud agent ownership safety', () => {
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
-      await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
-        name: 'jarvis',
-        displayName: 'Jarvis',
-        purpose: 'My personal assistant Jarvis',
+      await createCloudWorkspaceForUser({
+        env,
+        userId: USER_ID,
+        userDO: userStub(env),
+        caller: await testOwner(),
+        input: {
+          name: 'jarvis',
+          displayName: 'Jarvis',
+          purpose: 'My personal assistant Jarvis',
+        },
       });
     } finally {
       globalThis.fetch = originalFetch;

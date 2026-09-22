@@ -38,7 +38,7 @@ async function upload(harness: TestUserDO, owner: UserCaller, path: string, part
   let last: DriveAnswer<DriveUploadOutcome> = { ok: true, value: { ok: true } };
 
   for (const [index, part] of parts.entries()) {
-    last = await harness.userDO.drive_writeChunk(owner, { kind: 'file', path }, transferId, offset, part, index === parts.length - 1);
+    last = await harness.userDO.drive_writeChunk(owner, { target: { kind: 'file', path }, transferId, offset, chunk: part, final: index === parts.length - 1 });
     offset += part.byteLength;
   }
 
@@ -111,7 +111,7 @@ describe('the Drive on the UserDO', () => {
     const workspace: UserCaller = { workspaceToken: token };
 
     await expect(harness.userDO.drive_list(workspace, '/')).rejects.toBeInstanceOf(CapabilityDeniedError);
-    await expect(harness.userDO.drive_writeChunk(workspace, { kind: 'file', path: '/x' }, 't', 0, bytes('x'), true))
+    await expect(harness.userDO.drive_writeChunk(workspace, { target: { kind: 'file', path: '/x' }, transferId: 't', offset: 0, chunk: bytes('x'), final: true }))
       .rejects.toBeInstanceOf(CapabilityDeniedError);
     expect(mossaic.stores.size).toBe(0);
 
@@ -128,12 +128,12 @@ describe('the Drive on the UserDO', () => {
     const transferId = crypto.randomUUID();
     const target = { kind: 'file', path: '/big.bin' } as const;
 
-    expect(await harness.userDO.drive_writeChunk(owner, target, transferId, 0, bytes('abc'), false)).toEqual({ ok: true, value: { ok: true } });
-    expect(await harness.userDO.drive_writeChunk(owner, target, transferId, 7, bytes('zzz'), true))
+    expect(await harness.userDO.drive_writeChunk(owner, { target, transferId, offset: 0, chunk: bytes('abc'), final: false })).toEqual({ ok: true, value: { ok: true } });
+    expect(await harness.userDO.drive_writeChunk(owner, { target, transferId, offset: 7, chunk: bytes('zzz'), final: true }))
       .toMatchObject({ ok: false, code: 'bad_input', error: expect.stringContaining('out of sync') });
-    expect(await harness.userDO.drive_writeChunk(owner, { kind: 'file', path: '/other' }, transferId, 3, bytes('x'), true))
+    expect(await harness.userDO.drive_writeChunk(owner, { target: { kind: 'file', path: '/other' }, transferId, offset: 3, chunk: bytes('x'), final: true }))
       .toMatchObject({ ok: false, code: 'bad_input' });
-    expect(await harness.userDO.drive_writeChunk(owner, target, transferId, 3, bytes('def'), true)).toEqual({ ok: true, value: { ok: true } });
+    expect(await harness.userDO.drive_writeChunk(owner, { target, transferId, offset: 3, chunk: bytes('def'), final: true })).toEqual({ ok: true, value: { ok: true } });
 
     const opened = await harness.userDO.drive_startDownload(owner, '/big.bin', 'd1');
 
@@ -152,11 +152,11 @@ describe('the Drive on the UserDO', () => {
     const harness = await signedIn(fakeMossaic(), 'alice@example.com', 'do-alice');
     const archive = packZip([{ path: 'deploy/SKILL.md', bytes: bytes(SKILL('deploy')) }, { path: 'deploy/run.sh', bytes: bytes('echo') }]);
 
-    expect(await harness.userDO.drive_writeChunk(owner, { kind: 'zip', folder: '/unpacked' }, 'u1', 0, archive, true))
+    expect(await harness.userDO.drive_writeChunk(owner, { target: { kind: 'zip', folder: '/unpacked' }, transferId: 'u1', offset: 0, chunk: archive, final: true }))
       .toEqual({ ok: true, value: { ok: true } });
-    expect(await harness.userDO.drive_writeChunk(owner, { kind: 'skill', name: null }, 'u2', 0, archive, true))
+    expect(await harness.userDO.drive_writeChunk(owner, { target: { kind: 'skill', name: null }, transferId: 'u2', offset: 0, chunk: archive, final: true }))
       .toEqual({ ok: true, value: { ok: true, skill: { name: 'deploy', linked: `${DRIVE_SKILLS_DIR}/deploy` } } });
-    expect(await harness.userDO.drive_writeChunk(owner, { kind: 'skill', name: null }, 'u3', 0, archive, true))
+    expect(await harness.userDO.drive_writeChunk(owner, { target: { kind: 'skill', name: null }, transferId: 'u3', offset: 0, chunk: archive, final: true }))
       .toMatchObject({ ok: false, code: 'denied', error: expect.stringContaining('already exists') });
     expect(await harness.userDO.drive_addSkill(owner, SKILL('triage'))).toEqual({ ok: true, value: { name: 'triage', linked: `${DRIVE_SKILLS_DIR}/triage` } });
     expect(await harness.userDO.drive_addSkill(owner, 'no front matter')).toMatchObject({ ok: false, code: 'bad_input' });

@@ -71,7 +71,7 @@ function reader(initialScroll: ConversationScroll | undefined, exhausted: boolea
   const captured: CapturedRef = {};
 
   function Conversation(): null {
-    captured.ref = useGrowingScroll<TestScrollHost>({
+    captured.ref = useGrowingScroll({
       grows: 'up',
       content: 'transcript',
       fetched: 'page',

@@ -34,18 +34,20 @@ const IDENTITY: AuthIdentity = {
 };
 
 const CUSTOM_CATALOG: ProfileCatalog = validateProfileCatalog({
-  roles: {
-    ...BUILTIN_PROFILE_CATALOG.roles,
-    reviewer: {
-      description: 'Review work before it ships.',
-      instructions: 'Find defects and name evidence.',
-      tier: 'deep',
-      preset: 'audit',
+  value: {
+    roles: {
+      ...BUILTIN_PROFILE_CATALOG.roles,
+      reviewer: {
+        description: 'Review work before it ships.',
+        instructions: 'Find defects and name evidence.',
+        tier: 'deep',
+        preset: 'audit',
+      },
     },
-  },
-  tiers: {
-    ...BUILTIN_PROFILE_CATALOG.tiers,
-    deep: { model: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813', reasoningEffort: 'high' },
+    tiers: {
+      ...BUILTIN_PROFILE_CATALOG.tiers,
+      deep: { model: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813', reasoningEffort: 'high' },
+    },
   },
 });
 
@@ -126,7 +128,7 @@ describe('browser profile catalog route', () => {
     const { harness, env } = await setup();
 
     const initialResponse = handled(await handleUserRequest(userRequest(), env, IDENTITY));
-    const initial = validateProfileCatalogEnvelope(await initialResponse.json());
+    const initial = validateProfileCatalogEnvelope({ value: await initialResponse.json() });
     expect(initialResponse.status).toBe(200);
     expect(initial).toEqual({
       authority: { kind: 'account', accountId: USER_ID },
@@ -140,7 +142,7 @@ describe('browser profile catalog route', () => {
       expectedVersion: 0,
     }), env, IDENTITY));
 
-    const written = validateProfileCatalogEnvelope(await putResponse.json());
+    const written = validateProfileCatalogEnvelope({ value: await putResponse.json() });
     expect(putResponse.status).toBe(200);
     expect(written.version).toBe(1);
     expect(written.catalog).toEqual(CUSTOM_CATALOG);
@@ -200,7 +202,7 @@ describe('CLI profile catalog route', () => {
     const { harness, env, token } = await setup();
 
     const initial = handled(await handleCliRequest(cliRequest(token), env));
-    const read = validateProfileCatalogEnvelope(await initial.json());
+    const read = validateProfileCatalogEnvelope({ value: await initial.json() });
     expect(read.version).toBe(0);
     expect(read.authority).toEqual({ kind: 'account', accountId: USER_ID });
 
@@ -209,7 +211,7 @@ describe('CLI profile catalog route', () => {
       expectedVersion: read.version,
     }), env));
 
-    const written = validateProfileCatalogEnvelope(await put.json());
+    const written = validateProfileCatalogEnvelope({ value: await put.json() });
     expect(put.status).toBe(200);
     expect(written.version).toBe(1);
     expect(await harness.userDO.getProfileCatalog(await testOwner())).toEqual(written);

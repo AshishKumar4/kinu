@@ -206,6 +206,21 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   return { env, calls };
 }
 
+/** A user object that accepts THIS suite's token and owns every workspace asked
+ *  about, so a case below can put its whole subject in the agent namespace. */
+function tokenHolderUserDO() {
+  return {
+    idFromName: (n: string) => n,
+    get: () => ({
+      async verifyCliToken(_caller: UserCaller, token: string) {
+        return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
+      },
+      async hasWorkspace(_caller: UserCaller) { return true; },
+      async ensureWorkspaceCapability() {},
+    }),
+  };
+}
+
 function cliRequest(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
 
@@ -342,16 +357,7 @@ describe('CLI control routes', () => {
 
   test('a throwing method surfaces as a 400 with its message', async () => {
     const env = testEnv({
-      UserDO: {
-        idFromName: (n: string) => n,
-        get: () => ({
-          async verifyCliToken(_caller: UserCaller, token: string) {
-            return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
-          },
-          async hasWorkspace(_caller: UserCaller) { return true; },
-          async ensureWorkspaceCapability() {},
-        }),
-      },
+      UserDO: tokenHolderUserDO(),
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({
@@ -372,16 +378,7 @@ describe('CLI control routes', () => {
 describe('shared ownership claim status mapping', () => {
   function envWithClaimFailure(message: string) {
     return testEnv({
-      UserDO: {
-        idFromName: (n: string) => n,
-        get: () => ({
-          async verifyCliToken(_caller: UserCaller, token: string) {
-            return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
-          },
-          async hasWorkspace(_caller: UserCaller) { return true; },
-          async ensureWorkspaceCapability() {},
-        }),
-      },
+      UserDO: tokenHolderUserDO(),
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({ async claimOwner() { throw new Error(message); } }),
@@ -391,15 +388,27 @@ describe('shared ownership claim status mapping', () => {
     });
   }
 
-  test('cross-user collision → 403', async () => {
-    const res = await handleCliRequest(rpcRequest('getAgentStatus'), envWithClaimFailure('Agent owned by a different user (stored=aaaa…, caller=bbbb…)'));
-    expect(res?.status).toBe(403);
-  });
+  // A collision is the caller's and a schema fault is ours; the claim throws
+  // either way, so only the status separates them.
+  const claimFailures = [
+    {
+      name: 'cross-user collision → 403',
+      message: 'Agent owned by a different user (stored=aaaa…, caller=bbbb…)',
+      status: 403,
+    },
+    {
+      name: 'infra failure during claim → 500, not 403',
+      message: 'SQLITE_ERROR: no such table: workspace_identity',
+      status: 500,
+    },
+  ];
 
-  test('infra failure during claim → 500, not 403', async () => {
-    const res = await handleCliRequest(rpcRequest('getAgentStatus'), envWithClaimFailure('SQLITE_ERROR: no such table: workspace_identity'));
-    expect(res?.status).toBe(500);
-  });
+  for (const { name, message, status } of claimFailures) {
+    test(name, async () => {
+      const res = await handleCliRequest(rpcRequest('getAgentStatus'), envWithClaimFailure(message));
+      expect(res?.status).toBe(status);
+    });
+  }
 });
 
 describe('CLI webhook creation step-up gate', () => {

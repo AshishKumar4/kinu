@@ -269,7 +269,7 @@ afterAll(() => {
 describe('the WebGPU renderer uploads the connectome\'s arrays at their strides', () => {
   test('one render writes count*stride floats per stream', async () => {
     const canvas: HTMLCanvasElement = Object.create(null);
-    const outcome = await createWebGpuRenderer(canvas, PALETTE, 1440, 900, 1);
+    const outcome = await createWebGpuRenderer({ canvas, initialPalette: PALETTE, width: 1440, height: 900, ratio: 1 });
 
     if (outcome.kind !== 'renderer') throw new Error(`expected a renderer outcome, got ${outcome.kind}`);
 

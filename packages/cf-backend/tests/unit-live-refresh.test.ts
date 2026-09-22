@@ -228,21 +228,21 @@ describe('workspace live refresh failures', () => {
     let visible = 'stale';
     const errors = reporter();
 
-    const olderRefresh = refreshLiveResource(
-      'jobs',
-      () => older.promise,
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit(TEST_ACTOR, 'jobs'),
-    );
+    const olderRefresh = refreshLiveResource({
+      source: 'jobs',
+      read: () => older.promise,
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
+    });
 
-    const newerRefresh = refreshLiveResource(
-      'jobs',
-      () => newer.promise,
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit(TEST_ACTOR, 'jobs'),
-    );
+    const newerRefresh = refreshLiveResource({
+      source: 'jobs',
+      read: () => newer.promise,
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
+    });
 
     newer.resolve('newer');
     await newerRefresh;
@@ -259,21 +259,21 @@ describe('workspace live refresh failures', () => {
     let visible = 'stale';
     const errors = reporter({ jobs: 'prior failure' });
 
-    const olderRefresh = refreshLiveResource(
-      'jobs',
-      () => older.promise,
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit(TEST_ACTOR, 'jobs'),
-    );
+    const olderRefresh = refreshLiveResource({
+      source: 'jobs',
+      read: () => older.promise,
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
+    });
 
-    const newerRefresh = refreshLiveResource(
-      'jobs',
-      () => newer.promise,
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit(TEST_ACTOR, 'jobs'),
-    );
+    const newerRefresh = refreshLiveResource({
+      source: 'jobs',
+      read: () => newer.promise,
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
+    });
 
     newer.resolve('newer');
     await newerRefresh;
@@ -292,24 +292,24 @@ describe('workspace live refresh failures', () => {
     let visible = 'stale';
     const errors = reporter();
 
-    const priorRefresh = refreshLiveResource(
-      'jobs',
-      () => priorActor.promise,
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit('prior-actor', 'jobs'),
-    );
+    const priorRefresh = refreshLiveResource({
+      source: 'jobs',
+      read: () => priorActor.promise,
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit('prior-actor', 'jobs'),
+    });
 
     admission.activateActor('next-actor');
     visible = 'cleared';
 
-    const nextRefresh = refreshLiveResource(
-      'jobs',
-      () => nextActor.promise,
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit('next-actor', 'jobs'),
-    );
+    const nextRefresh = refreshLiveResource({
+      source: 'jobs',
+      read: () => nextActor.promise,
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit('next-actor', 'jobs'),
+    });
 
     nextActor.resolve('next actor');
     await nextRefresh;
@@ -327,17 +327,17 @@ describe('workspace live refresh failures', () => {
     let requested = false;
     const errors = reporter();
 
-    const refreshFromActorA = () => refreshLiveResource(
-      'jobs',
-      () => {
+    const refreshFromActorA = () => refreshLiveResource({
+      source: 'jobs',
+      read: () => {
         requested = true;
 
         return Promise.resolve('late actor-a result');
       },
-      (value) => { visible = value; },
-      errors.report,
-      admission.admit('actor-a', 'jobs'),
-    );
+      apply: (value) => { visible = value; },
+      report: errors.report,
+      isCurrent: admission.admit('actor-a', 'jobs'),
+    });
 
     admission.activateActor('actor-b');
     visible = 'actor-b';
@@ -373,13 +373,13 @@ describe('workspace live refresh failures', () => {
     const admission = activeAdmission();
     const errors = reporter();
 
-    await refreshLiveResource(
-      'jobs',
-      () => Promise.reject(new Error('jobs RPC unavailable')),
-      (next: string[]) => { jobs = next; },
-      errors.report,
-      admission.admit(TEST_ACTOR, 'jobs'),
-    );
+    await refreshLiveResource({
+      source: 'jobs',
+      read: () => Promise.reject(new Error('jobs RPC unavailable')),
+      apply: (next: string[]) => { jobs = next; },
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'jobs'),
+    });
 
     expect(jobs).toEqual(['already visible']);
     expect(formatWorkspaceError(errors.errors, true)).toEqual({
@@ -397,20 +397,20 @@ describe('workspace live refresh failures', () => {
     const keep = () => {};
 
     await Promise.all([
-      refreshLiveResource(
-        'tools',
-        () => Promise.reject('catalog offline'),
-        keep,
-        errors.report,
-        admission.admit(TEST_ACTOR, 'tools'),
-      ),
-      refreshLiveResource(
-        'slates',
-        () => Promise.reject('catalog offline'),
-        keep,
-        errors.report,
-        admission.admit(TEST_ACTOR, 'slates'),
-      ),
+      refreshLiveResource({
+        source: 'tools',
+        read: () => Promise.reject('catalog offline'),
+        apply: keep,
+        report: errors.report,
+        isCurrent: admission.admit(TEST_ACTOR, 'tools'),
+      }),
+      refreshLiveResource({
+        source: 'slates',
+        read: () => Promise.reject('catalog offline'),
+        apply: keep,
+        report: errors.report,
+        isCurrent: admission.admit(TEST_ACTOR, 'slates'),
+      }),
     ]);
     expect(formatWorkspaceError(errors.errors, true)).toEqual({
       severity: 'partial',
@@ -419,13 +419,13 @@ describe('workspace live refresh failures', () => {
       detail: 'catalog offline',
       retry: 'Retry',
     });
-    await refreshLiveResource(
-      'tools',
-      () => Promise.resolve(['ready']),
-      keep,
-      errors.report,
-      admission.admit(TEST_ACTOR, 'tools'),
-    );
+    await refreshLiveResource({
+      source: 'tools',
+      read: () => Promise.resolve(['ready']),
+      apply: keep,
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'tools'),
+    });
     expect(formatWorkspaceError(errors.errors, true)).toEqual({
       severity: 'partial',
       title: 'Slates could not be refreshed.',
@@ -433,13 +433,13 @@ describe('workspace live refresh failures', () => {
       detail: 'catalog offline',
       retry: 'Retry loading slates',
     });
-    await refreshLiveResource(
-      'slates',
-      () => Promise.resolve(['ready']),
-      keep,
-      errors.report,
-      admission.admit(TEST_ACTOR, 'slates'),
-    );
+    await refreshLiveResource({
+      source: 'slates',
+      read: () => Promise.resolve(['ready']),
+      apply: keep,
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'slates'),
+    });
     expect(formatWorkspaceError(errors.errors, true)).toBeNull();
   });
 });
@@ -622,13 +622,13 @@ describe('loading the workspace snapshot', () => {
       SEEDED,
     );
 
-    await refreshLiveResource(
-      'memoryContent',
-      () => Promise.reject(new Error('MEMORY.md is unreadable')),
-      () => {},
-      errors.report,
-      admission.admit(TEST_ACTOR, 'memoryContent'),
-    );
+    await refreshLiveResource({
+      source: 'memoryContent',
+      read: () => Promise.reject(new Error('MEMORY.md is unreadable')),
+      apply: () => {},
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'memoryContent'),
+    });
     snapshotRead.resolve(undefined);
 
     expect(await loading).toBe('loaded');
@@ -658,13 +658,13 @@ describe('loading the workspace snapshot', () => {
       SEEDED,
     );
 
-    await refreshLiveResource(
-      'memoryContent',
-      () => Promise.resolve('current memory'),
-      (value) => { memoryContent = value; },
-      errors.report,
-      admission.admit(TEST_ACTOR, 'memoryContent'),
-    );
+    await refreshLiveResource({
+      source: 'memoryContent',
+      read: () => Promise.resolve('current memory'),
+      apply: (value) => { memoryContent = value; },
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'memoryContent'),
+    });
     expect(memoryContent).toBe('current memory');
 
     snapshotRead.resolve('stale snapshot');
@@ -720,25 +720,25 @@ describe('device consent resolution', () => {
     const resolutionErrors = consentReporter();
     const refreshErrors = reporter();
 
-    await resolvePendingConsent(
-      'consent-1',
-      'once',
-      () => Promise.reject(new Error('device hub unavailable')),
-      (id) => pending.splice(pending.indexOf(id), 1),
-      resolutionErrors.report,
-      admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
-    );
+    await resolvePendingConsent({
+      consentId: 'consent-1',
+      decision: 'once',
+      resolve: () => Promise.reject(new Error('device hub unavailable')),
+      remove: (id) => pending.splice(pending.indexOf(id), 1),
+      report: resolutionErrors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
+    });
 
     expect(pending).toEqual(['consent-1']);
     expect(resolutionErrors.errors.get('consent-1')).toBe('device hub unavailable');
 
-    await refreshLiveResource(
-      'consents',
-      () => Promise.resolve(['consent-1']),
-      () => {},
-      refreshErrors.report,
-      admission.admit(TEST_ACTOR, 'consents'),
-    );
+    await refreshLiveResource({
+      source: 'consents',
+      read: () => Promise.resolve(['consent-1']),
+      apply: () => {},
+      report: refreshErrors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'consents'),
+    });
     expect(resolutionErrors.errors.get('consent-1')).toBe('device hub unavailable');
   });
 
@@ -747,14 +747,14 @@ describe('device consent resolution', () => {
     const admission = activeAdmission();
     const errors = consentReporter(new Map([['consent-1', 'previous failure']]));
 
-    await resolvePendingConsent(
-      'consent-1',
-      'always',
-      () => Promise.resolve(),
-      (id) => pending.splice(pending.indexOf(id), 1),
-      errors.report,
-      admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
-    );
+    await resolvePendingConsent({
+      consentId: 'consent-1',
+      decision: 'always',
+      resolve: () => Promise.resolve(),
+      remove: (id) => pending.splice(pending.indexOf(id), 1),
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
+    });
 
     expect(pending).toEqual([]);
     expect(errors.errors.get('consent-1')).toBeUndefined();
@@ -768,23 +768,23 @@ describe('device consent resolution', () => {
     const errors = consentReporter();
     const remove = (id: string) => pending.splice(pending.indexOf(id), 1);
 
-    const firstResolution = resolvePendingConsent(
-      'consent-1',
-      'once',
-      () => first.promise,
+    const firstResolution = resolvePendingConsent({
+      consentId: 'consent-1',
+      decision: 'once',
+      resolve: () => first.promise,
       remove,
-      errors.report,
-      admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
-    );
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
+    });
 
-    const secondResolution = resolvePendingConsent(
-      'consent-2',
-      'deny',
-      () => second.promise,
+    const secondResolution = resolvePendingConsent({
+      consentId: 'consent-2',
+      decision: 'deny',
+      resolve: () => second.promise,
       remove,
-      errors.report,
-      admission.admit(TEST_ACTOR, 'consentResolution:consent-2'),
-    );
+      report: errors.report,
+      isCurrent: admission.admit(TEST_ACTOR, 'consentResolution:consent-2'),
+    });
 
     first.reject(new Error('consent-1 unavailable'));
     await firstResolution;

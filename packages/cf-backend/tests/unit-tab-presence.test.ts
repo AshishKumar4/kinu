@@ -69,12 +69,12 @@ const renderStrip = (tabPresence: TabPresence | undefined): string =>
 
 describe('the gated tabs appear only with content', () => {
   test('a fresh workspace shows neither Releases nor Swarms', () => {
-    expect(surfaceHasContent('Releases', FRESH, EMPTY_TREES, [])).toBe(false);
-    expect(surfaceHasContent('Swarms', FRESH, EMPTY_TREES, [])).toBe(false);
+    expect(surfaceHasContent('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(false);
+    expect(surfaceHasContent('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(false);
   });
 
   test('an empty work lane hides the Work tab entirely', () => {
-    expect(surfaceHasContent('Work', FRESH, EMPTY_TREES, [])).toBe(false);
+    expect(surfaceHasContent('Work', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(false);
 
     const html = renderStrip(FRESH);
 
@@ -102,22 +102,22 @@ describe('the gated tabs appear only with content', () => {
 
 
   test('a release change makes Releases appear', () => {
-    expect(surfaceHasContent('Releases', { ...FRESH, releases: true }, EMPTY_TREES, [])).toBe(true);
+    expect(surfaceHasContent('Releases', { tabPresence: { ...FRESH, releases: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
   });
 
   test('an exploration run makes Swarms appear', () => {
-    expect(surfaceHasContent('Swarms', { ...FRESH, explorations: true }, EMPTY_TREES, [])).toBe(true);
+    expect(surfaceHasContent('Swarms', { tabPresence: { ...FRESH, explorations: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
   });
 
 
   test('a search in flight appears through the live trees without waiting for the next refresh', () => {
-    expect(surfaceHasContent('Swarms', FRESH, oneTree(), [])).toBe(true);
+    expect(surfaceHasContent('Swarms', { tabPresence: FRESH, mctsTrees: oneTree(), slates: [] })).toBe(true);
   });
 
   test('an absent presence keeps every tab visible — fixture frames claim nothing about ledgers', () => {
-    expect(surfaceHasContent('Work', undefined, EMPTY_TREES, [])).toBe(true);
-    expect(surfaceHasContent('Releases', undefined, EMPTY_TREES, [])).toBe(true);
-    expect(surfaceHasContent('Swarms', undefined, EMPTY_TREES, [])).toBe(true);
+    expect(surfaceHasContent('Work', { tabPresence: undefined, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
+    expect(surfaceHasContent('Releases', { tabPresence: undefined, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
+    expect(surfaceHasContent('Swarms', { tabPresence: undefined, mctsTrees: EMPTY_TREES, slates: [] })).toBe(true);
   });
 });
 
@@ -125,40 +125,40 @@ describe('Slate tab presence', () => {
   const slates = [{ id: 'overview', title: 'Overview', bindings: [] }];
 
   test('a listed Slate stays open and an unlisted one falls back', () => {
-    expect(surfaceHasContent('slate:overview', FRESH, EMPTY_TREES, slates)).toBe(true);
-    expect(resolveGatedSurface('slate:overview', FRESH, EMPTY_TREES, slates)).toBe('slate:overview');
-    expect(resolveGatedSurface('slate:removed', FRESH, EMPTY_TREES, slates)).toBe('Files');
+    expect(surfaceHasContent('slate:overview', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates })).toBe(true);
+    expect(resolveGatedSurface('slate:overview', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates })).toBe('slate:overview');
+    expect(resolveGatedSurface('slate:removed', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates })).toBe('Files');
   });
 });
 
 describe('an active tab whose content vanishes falls back', () => {
   test('the fallback lands on the first surface that still has content', () => {
     // Work empty → Files; Work live → Work.
-    expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES, [])).toBe('Files');
-    expect(resolveGatedSurface('Releases', { ...FRESH, work: true }, EMPTY_TREES, [])).toBe('Work');
-    expect(resolveGatedSurface('Swarms', FRESH, EMPTY_TREES, [])).toBe('Files');
+    expect(resolveGatedSurface('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Files');
+    expect(resolveGatedSurface('Releases', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Work');
+    expect(resolveGatedSurface('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Files');
   });
 
   test('a live tree keeps an active Swarms tab exactly where it is', () => {
-    expect(resolveGatedSurface('Swarms', FRESH, oneTree(), [])).toBe('Swarms');
+    expect(resolveGatedSurface('Swarms', { tabPresence: FRESH, mctsTrees: oneTree(), slates: [] })).toBe('Swarms');
   });
 
   test('ungated surfaces are never moved', () => {
     // Diffs is not ungated — it renders only while a mounted diff tree
     // exists (`hasDiffs`), the one gate the lane counts cannot carry.
     for (const surface of ['Files', 'Agent', 'Environment'] as const) {
-      expect(resolveGatedSurface(surface, FRESH, EMPTY_TREES, [])).toBe(surface);
+      expect(resolveGatedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe(surface);
     }
   });
 
   test('an empty Work tab resolves away and a live one stays', () => {
-    expect(resolveGatedSurface('Work', FRESH, EMPTY_TREES, [])).toBe('Files');
-    expect(resolveGatedSurface('Work', { ...FRESH, work: true }, EMPTY_TREES, [])).toBe('Work');
+    expect(resolveGatedSurface('Work', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Files');
+    expect(resolveGatedSurface('Work', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Work');
   });
 
   test('content present means no move, even on a gated tab', () => {
-    expect(resolveGatedSurface('Releases', FULL, EMPTY_TREES, [])).toBe('Releases');
-    expect(resolveGatedSurface('Swarms', FULL, EMPTY_TREES, [])).toBe('Swarms');
+    expect(resolveGatedSurface('Releases', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Releases');
+    expect(resolveGatedSurface('Swarms', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] })).toBe('Swarms');
   });
 });
 

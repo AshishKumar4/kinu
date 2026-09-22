@@ -41,6 +41,19 @@ function publicRouteEnv(): Env {
 
 const PUBLIC_ROUTE_ENV = publicRouteEnv();
 
+/** The accounts listing the OAuth attachment reads, and the check that it asked
+ *  the accounts endpoint rather than some other Cloudflare API for it. */
+function oneAccountFetch() {
+  return asFetchFunction(async (input) => {
+    expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+
+    return new Response(JSON.stringify({
+      success: true,
+      result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+}
+
 describe('auth and desktop security invariants', () => {
   test('browser CLI auth approval is an explicit POST, not GET side effect', () => {
     const routes = source('src/cli/routes.ts');
@@ -157,14 +170,7 @@ describe('auth and desktop security invariants', () => {
 
   test('Cloudflare OAuth token attachment stores an account-backed Workers AI credential', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async (input) => {
-      expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
-
-      return new Response(JSON.stringify({
-        success: true,
-        result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    });
+    globalThis.fetch = oneAccountFetch();
 
     try {
       const credential = await cloudflareTokenToCredential({
@@ -186,14 +192,7 @@ describe('auth and desktop security invariants', () => {
 
   test('Cloudflare OAuth token attachment accepts access-token-only responses', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async (input) => {
-      expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
-
-      return new Response(JSON.stringify({
-        success: true,
-        result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
-    });
+    globalThis.fetch = oneAccountFetch();
 
     try {
       const credential = await cloudflareTokenToCredential({

@@ -117,7 +117,7 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
 
         return opened;
       },
-      readExecutorFileChunk: async (executorId, path, transferId, offset, length) => {
+      readExecutorFileChunk: async ({ executorId, path, transferId, offset, length }) => {
         const download = downloads.get(transferId);
 
         if (!download || !download.serves(executorId, path)) {
@@ -137,9 +137,9 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
 
         return Promise.resolve();
       },
-      writeExecutorFileChunk: async (
+      writeExecutorFileChunk: async ({
         executorId, path, transferId, offset, chunk, final, expectedRevision,
-      ) => {
+      }) => {
         let row = uploads.get(transferId);
 
         if (!row || offset === 0) {
@@ -405,18 +405,18 @@ describe("files route — PUT", () => {
     const harness = makeAgent();
     const a = new TextEncoder().encode("AA");
     const b = new TextEncoder().encode("BB");
-    expect(await harness.agent.writeExecutorFileChunk(
-      "workspace", "/home/user/blob.bin", "upload-a", 0, a.subarray(0, 1), false,
-    )).toEqual({ ok: true });
-    expect(await harness.agent.writeExecutorFileChunk(
-      "workspace", "/home/user/blob.bin", "upload-b", 0, b.subarray(0, 1), false,
-    )).toEqual({ ok: true });
-    expect(await harness.agent.writeExecutorFileChunk(
-      "workspace", "/home/user/blob.bin", "upload-a", 1, a.subarray(1), true,
-    )).toEqual({ ok: true });
-    expect(await harness.agent.writeExecutorFileChunk(
-      "workspace", "/home/user/blob.bin", "upload-b", 1, b.subarray(1), true,
-    )).toEqual({ ok: true });
+    expect(await harness.agent.writeExecutorFileChunk({
+      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-a", offset: 0, chunk: a.subarray(0, 1), final: false,
+    })).toEqual({ ok: true });
+    expect(await harness.agent.writeExecutorFileChunk({
+      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-b", offset: 0, chunk: b.subarray(0, 1), final: false,
+    })).toEqual({ ok: true });
+    expect(await harness.agent.writeExecutorFileChunk({
+      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-a", offset: 1, chunk: a.subarray(1), final: true,
+    })).toEqual({ ok: true });
+    expect(await harness.agent.writeExecutorFileChunk({
+      executorId: "workspace", path: "/home/user/blob.bin", transferId: "upload-b", offset: 1, chunk: b.subarray(1), final: true,
+    })).toEqual({ ok: true });
     expect(new TextDecoder().decode(harness.files.get("/home/user/blob.bin")))
       .toBe("BB");
   });
@@ -424,12 +424,14 @@ describe("files route — PUT", () => {
     const harness = makeAgent();
     const first = new TextEncoder().encode("fi");
     const second = new TextEncoder().encode("le");
-    expect(await harness.agent.writeExecutorFileChunk(
-      "workspace", "/home/user/blob.bin", "conditional-upload", 0, first, false, 1,
-    )).toEqual({ ok: true });
-    expect(await harness.agent.writeExecutorFileChunk(
-      "workspace", "/home/user/blob.bin", "conditional-upload", 2, second, true, 2,
-    )).toEqual({
+    expect(await harness.agent.writeExecutorFileChunk({
+      executorId: "workspace", path: "/home/user/blob.bin", transferId: "conditional-upload", offset: 0, chunk: first, final: false,
+      expectedRevision: 1,
+    })).toEqual({ ok: true });
+    expect(await harness.agent.writeExecutorFileChunk({
+      executorId: "workspace", path: "/home/user/blob.bin", transferId: "conditional-upload", offset: 2, chunk: second, final: true,
+      expectedRevision: 2,
+    })).toEqual({
       error: 'file transfer out of sync: expected revision does not match the first chunk',
     });
     expect(harness.files.has("/home/user/blob.bin")).toBe(false);

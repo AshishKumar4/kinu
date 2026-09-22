@@ -156,6 +156,20 @@ export function recordedRetainedHookErrors(): readonly { fiberId: string; error:
   return retainedHookErrors;
 }
 
+/** What a registered sub-agent name answers with here: the facet it stands for
+ *  is workerd-only, so every property throws naming the lookup that minted it. */
+function facetOnlyStub(lookup: string, cls: { name: string }, name: string) {
+  return new Proxy({}, {
+    get: (_target, prop) => {
+      if (prop === 'then') return undefined;
+
+      return async () => {
+        throw new Error(`harness ${lookup}: ${cls.name} "${name}".${String(prop)} needs a facet, which is workerd-only`);
+      };
+    },
+  });
+}
+
 /**
  * Stub the Agent SDK so bun can import the DO-layer src modules that depend on
  * it — the real `agents` dist imports `cloudflare:*` modules that exist only
@@ -586,15 +600,7 @@ export function mockAgentsSdk(): void {
           cls.name, name, Date.now(),
         );
 
-        return new Proxy({}, {
-          get: (_target, prop) => {
-            if (prop === 'then') return undefined;
-
-            return async () => {
-              throw new Error(`harness subAgent: ${cls.name} "${name}".${String(prop)} needs a facet, which is workerd-only`);
-            };
-          },
-        });
+        return facetOnlyStub('subAgent', cls, name);
       }
       /** The read half of the same registry, and the ONLY facet lookup that is
        *  allowed not to create one. The real SDK returns `null` the moment
@@ -611,15 +617,7 @@ export function mockAgentsSdk(): void {
 
         if (!this.hasSubAgent(cls.name, name)) return null;
 
-        return new Proxy({}, {
-          get: (_target, prop) => {
-            if (prop === 'then') return undefined;
-
-            return async () => {
-              throw new Error(`harness getExistingSubAgent: ${cls.name} "${name}".${String(prop)} needs a facet, which is workerd-only`);
-            };
-          },
-        });
+        return facetOnlyStub('getExistingSubAgent', cls, name);
       }
       listSubAgents(cls: { name: string }): Array<{ className: string; name: string; createdAt: number }> {
         return this.#subAgentRegistry().exec(
@@ -795,17 +793,7 @@ export function mockAgentsSdk(): void {
     ...workersModule,
     tracing: {
       enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
-        const index = nativeSpans.length;
-        const attributes = new Map<string, string | number | boolean>();
-        nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
-        openSpans.push(index);
-
-        const close = (): void => {
-          const top = openSpans.lastIndexOf(index);
-
-          if (top >= 0) openSpans.splice(top, 1);
-        };
-
+        const { attributes, close } = openNativeSpan(name);
         let closesLater = false;
 
         try {
@@ -840,16 +828,7 @@ export function mockAgentsSdk(): void {
         name: string,
         fn: (span: NativeSpanStub & { end(): void }) => T,
       ): T => {
-        const index = nativeSpans.length;
-        const attributes = new Map<string, string | number | boolean>();
-        nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
-        openSpans.push(index);
-
-        const close = (): void => {
-          const top = openSpans.lastIndexOf(index);
-
-          if (top >= 0) openSpans.splice(top, 1);
-        };
+        const { attributes, close } = openNativeSpan(name);
 
         return fn({
           isTraced: true,
@@ -878,6 +857,24 @@ const nativeSpans: NativeSpanRecord[] = [];
 
 const openSpans: number[] = [];
 
+/** Record one opened span and hand back the attribute map it collects into plus
+ *  its own close, which retires THIS span wherever it sits in the open stack. */
+function openNativeSpan(name: string) {
+  const index = nativeSpans.length;
+  const attributes = new Map<string, string | number | boolean>();
+  nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
+  openSpans.push(index);
+
+  return {
+    attributes,
+    close: () => {
+      const top = openSpans.lastIndexOf(index);
+
+      if (top >= 0) openSpans.splice(top, 1);
+    },
+  };
+}
+
 /** Spans opened since the last `resetNativeSpans`, in open order. An EMPTY array
  *  is the shape of instrumentation that was never reached, which is the defect a
  *  tracing test exists to catch — so assert a non-zero length before anything
@@ -898,8 +895,8 @@ export function renderNativeSpanTree(): string {
   const lines: string[] = [];
 
   const walk = (parent: number | null, depth: number): void => {
-    nativeSpans.forEach((span, index) => {
-      if (span.parent !== parent) return;
+    for (const [index, span] of nativeSpans.entries()) {
+      if (span.parent !== parent) continue;
 
       const shown = [...span.attributes]
         .filter(([key]) => key !== 'kinu.self_path')
@@ -908,7 +905,7 @@ export function renderNativeSpanTree(): string {
 
       lines.push(`${'  '.repeat(depth)}${span.name}${shown === '' ? '' : `  [${shown}]`}`);
       walk(index, depth + 1);
-    });
+    }
   };
 
   walk(null, 0);

@@ -336,7 +336,7 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
     setVgpuInit(() => Promise.reject(new MockVGPUError({ code: 'VGPU-RING1-UNSUPPORTED', message: 'no adapter' })));
     // The canvas only reaches vgpu's `surface`, which a rejecting init never gets to.
     const canvas: HTMLCanvasElement = Object.create(null);
-    const outcome = await createWebGpuRenderer(canvas, PALETTE, 1200, 600, 1);
+    const outcome = await createWebGpuRenderer({ canvas, initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
     expect(outcome.kind).toBe('unsupported');
   });
@@ -344,7 +344,7 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
   test('any other init failure is a fallback outcome that carries the reason', async () => {
     setVgpuInit(() => Promise.reject(new TypeError('device request was denied')));
     const canvas: HTMLCanvasElement = Object.create(null);
-    const outcome = await createWebGpuRenderer(canvas, PALETTE, 1200, 600, 1);
+    const outcome = await createWebGpuRenderer({ canvas, initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
     expect(outcome.kind).toBe('failed');
 
@@ -354,7 +354,7 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
   test('a live fault disposes the renderer and reaches the fault handler', async () => {
     // The fake `surface` records the canvas without reading it.
     const canvas: HTMLCanvasElement = Object.create(null);
-    const outcome = await createWebGpuRenderer(canvas, PALETTE, 1200, 600, 1);
+    const outcome = await createWebGpuRenderer({ canvas, initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
     if (outcome.kind !== 'renderer') throw new Error('expected a renderer outcome');
 
@@ -381,7 +381,7 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
 
 describe('a device loss mid-run is the same fault the listener reports', () => {
   test('a frame() that throws VGPU-DEVICE-LOST swaps the mount out', async () => {
-    const outcome = await createWebGpuRenderer(Object.create(null), PALETTE, 1200, 600, 1);
+    const outcome = await createWebGpuRenderer({ canvas: Object.create(null), initialPalette: PALETTE, width: 1200, height: 600, ratio: 1 });
 
     if (outcome.kind !== 'renderer') throw new Error(`expected a renderer, got ${outcome.kind}`);
 
