@@ -44,22 +44,17 @@ import {
 } from './core';
 import type { Openat2Report, Stage1Report, Stage2Report } from './core';
 
-type SyscallSymbol = (
-  nr: bigint,
-  a1: bigint,
-  a2: bigint,
-  a3: bigint,
-  a4: bigint,
-  a5: bigint,
-  a6: bigint,
-) => bigint;
+type SyscallSymbol = (nr: bigint, ...args: [bigint, bigint, bigint, bigint, bigint, bigint]) => bigint;
 
 type FcntlSymbol = (fd: number, command: number, value: number) => number;
 
 interface Libc {
   readonly syscall: SyscallSymbol;
   readonly fcntl: FcntlSymbol;
-  readonly errnoLocation: () => Pointer | null;
+  /** Where `errno` lives for this thread. libc answers an address or nothing,
+   *  and nothing means no error class can be read at all — a refusal rather
+   *  than a value, so it is raised here instead of travelling as a null. */
+  readonly errnoAddress: () => Pointer;
 }
 
 /** `syscall` is variadic in libc. We deliberately declare seven i64 arguments
@@ -73,10 +68,18 @@ function libc(): Libc {
     __errno_location: { args: [], returns: 'ptr' },
   });
 
+  const errnoLocation = loaded.symbols.__errno_location;
+
   return {
     syscall: loaded.symbols.syscall,
     fcntl: loaded.symbols.fcntl,
-    errnoLocation: loaded.symbols.__errno_location,
+    errnoAddress: () => {
+      const address = errnoLocation();
+
+      if (address === null) throw new Error('libc returned no errno pointer');
+
+      return address;
+    },
   };
 }
 
@@ -96,12 +99,14 @@ let atomicsWaitUsable = true;
 
 let atomicsWaitRefusal = '';
 
-/** Read the OS error class off a caught Error without casting. */
-function errorCode(error: Error): string | undefined {
-  if (!('code' in error)) return undefined;
-  const code = error.code;
+/** A filesystem error as Node raises one: the OS error class rides on `code`. */
+interface ErrnoError extends Error {
+  readonly code?: string;
+}
 
-  return code === undefined || code === null ? undefined : String(code);
+/** Read the OS error class off a caught Error without casting. */
+function errorCode(error: ErrnoError): string | undefined {
+  return error.code;
 }
 
 function isFsAbsent(error: Error): boolean {
@@ -165,15 +170,20 @@ function syscall(nr: number, ...args: bigint[]): SyscallResult {
   const value = LIBC.syscall(BigInt(nr), a1, a2, a3, a4, a5, a6);
 
   if (value !== -1n) return { ok: true, value };
-  const errnoPointer = LIBC.errnoLocation();
-
-  if (errnoPointer === null) throw new Error('libc returned no errno pointer');
-  const errno = ffiRead.i32(errnoPointer);
+  const errno = ffiRead.i32(LIBC.errnoAddress());
 
   return { ok: false, errno, errnoName: errnoName(errno) };
 }
 
-function mountSyscall(source: string, target: string, type: string, flags: number, data: string): SyscallResult {
+interface Mount {
+  readonly source: string;
+  readonly target: string;
+  readonly type: string;
+  readonly flags: number;
+  readonly data: string;
+}
+
+function mountSyscall({ source, target, type, flags, data }: Mount): SyscallResult {
   return syscall(
     NRS.mount,
     pointer(cString(source)), pointer(cString(target)), pointer(cString(type)), BigInt(flags), pointer(cString(data)),
@@ -648,7 +658,9 @@ function unprivilegedAttempt(root: string, currentUid: number): AttemptRow {
       gid: 65534,
     });
 
-    return v.parse(AttemptRowSchema, JSON.parse(child.stdout.trim() || '{}'));
+    const answered = child.stdout.trim();
+
+    return v.parse(AttemptRowSchema, JSON.parse(answered === '' ? '{}' : answered));
   } catch (error) {
     return {
       label: 'uid=65534',
@@ -696,7 +708,15 @@ function runDaemon(config: DaemonConfig): never {
     fd = openSync('/dev/fuse', FS.O_RDWR);
     clearCloseOnExec(fd);
     const options = fuseMountOptions(fd, uid, gid, ['max_read=1048576']);
-    const direct = mountSyscall('fuse-probe', config.mountpoint, 'fuse', MS_RDONLY | MS_NOSUID | MS_NODEV, options);
+
+    const direct = mountSyscall({
+      source: 'fuse-probe',
+      target: config.mountpoint,
+      type: 'fuse',
+      flags: MS_RDONLY | MS_NOSUID | MS_NODEV,
+      data: options,
+    });
+
     attempts.push({ label: 'current-identity', route: 'direct-syscall', syscallNr: NRS.mount, ok: direct.ok, errnoName: direct.errnoName, detail: direct.ok ? 'mount(2) succeeded' : 'mount(2) refused' });
     let mounted = direct.ok;
 
@@ -1243,7 +1263,15 @@ function stage1(): Stage1Report {
     const execAttempt = spawnSync(join(base.mountpoint, 'exec.sh'), [], { encoding: 'utf8', timeout: 3_000 });
 
     const overlayRoot = join(parent, 'overlay'); mkdirSync(overlayRoot); mkdirSync(join(overlayRoot, 'upper')); mkdirSync(join(overlayRoot, 'work')); mkdirSync(join(overlayRoot, 'merged'));
-    const overlay = mountSyscall('overlay', join(overlayRoot, 'merged'), 'overlay', 0, `lowerdir=${base.mountpoint},upperdir=${join(overlayRoot, 'upper')},workdir=${join(overlayRoot, 'work')}`);
+
+    const overlay = mountSyscall({
+      source: 'overlay',
+      target: join(overlayRoot, 'merged'),
+      type: 'overlay',
+      flags: 0,
+      data: `lowerdir=${base.mountpoint},upperdir=${join(overlayRoot, 'upper')},workdir=${join(overlayRoot, 'work')}`,
+    });
+
     const overlayComposed = overlay.ok;
     const overlayRead = overlayComposed ? readFileSync(join(overlayRoot, 'merged', 'hello.txt'), 'utf8') === 'fuse probe\n' : undefined;
 
