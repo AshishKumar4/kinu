@@ -1,5 +1,4 @@
-// openWorkspaceCLI — the local workspace resume path. It opens a workspace
-// file and reads its identity and SOUL.md.
+// openWorkspaceCLI: the local resume path, reading a workspace's identity and SOUL.md.
 import { scratchDir } from '../../test-utils/src/scratch';
 
 import { join } from 'node:path';

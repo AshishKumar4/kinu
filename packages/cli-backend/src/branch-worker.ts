@@ -1,19 +1,6 @@
 /**
- * Branch worker process — runs inside a forked child process.
- *
- * The branch is a LOGICAL actor on the workspace's ONE database: this process
- * opens that file (the parent has it in WAL, which is what a running workspace
- * is already in), validates its own `workspace_actors` row through the root's
- * directory, and writes its rollout traces there under its own actor id. It
- * owns no store of its own — a second file would be a second state store for
- * one actor, and the parent could not read what its branch wrote.
- *
- * The whole wire lives in branch-protocol.ts. This file parses calls with
- * BranchCallSchema and answers with BranchReplySchema.
- *
- * There is deliberately no 'evaluate' method: branch scoring happens in the
- * parent process at the engine seam (core mcts/evaluation.ts), grounded in
- * execution — branches must not rate themselves.
+ * Branch worker, run in a forked child. Opens the workspace's one database and writes rollout traces
+ * under its own actor id. No 'evaluate' method: scoring happens in the parent, never self-rated.
  */
 
 import { Database } from 'bun:sqlite';
@@ -56,9 +43,7 @@ const localProviderCredentialsSchema = v.object({
   }))),
 });
 
-/** The parent's default endpoint, or null when the parent had none: an empty
- *  KINU_LLM_NAME is that absence, and bare ids then fail at resolution with
- *  the fixes named — exactly as they would in the parent. */
+/** The parent's default endpoint; an empty KINU_LLM_NAME means none. */
 const llmConfig: LLMProviderConfig | null = process.env.KINU_LLM_NAME
   ? {
     name: process.env.KINU_LLM_NAME,
@@ -85,11 +70,7 @@ const bootstrap = v.parse(LocalActorProcessBootstrapSchema, JSON.parse(encodedBo
 
 if (process.env.KINU_ROOT_DB !== bootstrap.rootDbPath) throw new KinuError('denied', 'The branch was pointed at a database its bootstrap does not name.');
 
-// WRITABLE, and the only handle this process opens. The rollout traces below
-// and this actor's directory row are rows in the same file the parent holds;
-// WAL is what lets both processes have it open at once, and a workspace that
-// is being driven is already in WAL (`openWorkspaceCLI`) — set here too
-// because a fixture-created database may not be.
+// Set WAL here too: both processes hold the file, and a fixture-created database may not be in WAL.
 const db = new Database(bootstrap.rootDbPath);
 
 db.exec('PRAGMA journal_mode = WAL');
@@ -119,22 +100,10 @@ const modelResolver = createLocalModelResolver({
     : undefined,
 });
 
-/**
- * This branch's rollout attempt, held for the reflection that grades it.
- *
- * IN PROCESS, and no table. One worker process runs exactly one branch, and
- * `explore` and `reflect` arrive on that same process over the same pipe — so
- * the attempt never has to survive anything. The old per-branch `traces` table
- * existed only because the worker had a database of its own and no way to read
- * the row the engine writes for the same text (`search_nodes.observation`);
- * with the store gone there is nothing left for it to be the second copy of.
- */
+/** This branch's rollout attempt, held in process: one worker runs exactly one branch, so explore and reflect share it. */
 const attempts: string[] = [];
 
-// Crafted tools from the workspace this branch belongs to — the same database,
-// so there is nothing to open. The table is provisioned by the parent runtime
-// before it forks (initWorkspaceSchema), so a failure here is a broken parent
-// rather than an old one.
+// The parent provisions this table before forking (initWorkspaceSchema); a failure here is a broken parent.
 const craftedTools: ExploreToolHint[] = db
   .query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();
 
@@ -187,17 +156,13 @@ process.on('message', async (rawMessage: JsonValue) => {
         });
 
         attempts.push(result.text);
-        // The spend travels back with the proposal: this process resolves its
-        // own model, so the parent's mission ledger cannot see the call any
-        // other way (mcts/engine.ts debits it).
+        // The parent's mission ledger sees this process's spend only through the reply (mcts/engine.ts debits it).
         send({ method: msg.method, id: msg.id, result });
         break;
       }
 
       case BRANCH_REFLECT: {
-        // The branch's own trace table holds the attempt this reflection is
-        // about; `outcome` carries the environment's verdict, which lives on the
-        // engine side and reaches this process no other way.
+        // `outcome` carries the environment's verdict, which reaches this process no other way.
         const attempt = attempts.join('\n');
 
         const result = await reflectRollout(lowEffortRoute(), {
@@ -211,14 +176,11 @@ process.on('message', async (rawMessage: JsonValue) => {
       }
     }
   } catch (err) {
-    // Always carry a message: an empty one reads as "no error" to any
-    // presence-checking caller and hides the real failure.
+    // An empty message reads as "no error" to presence-checking callers.
     send({ method: msg.method, id: msg.id, error: renderThrownChain({ cause: err }) || 'branch worker failed' });
   }
 });
 
-/** A forked worker always has its parent's IPC channel. The throw states the
- *  invariant without a non-null assertion. */
 function send(reply: BranchReply): void {
   if (!process.send) throw new KinuError('unavailable', 'branch worker has no IPC channel to its parent');
   process.send(reply);
@@ -237,7 +199,6 @@ function readStoredModelSpec(): string | null {
   return row?.value ?? null;
 }
 
-/** The stored chat model at rollout effort: what a rollout in this process runs. */
 function lowEffortRoute(): BranchRoute {
   const spec = modelResolver.normalizeSpecSync(readStoredModelSpec());
 

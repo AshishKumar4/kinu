@@ -1,11 +1,5 @@
-// The in-episode craft loop, end to end through the real local backend.
-//
-// The parts are unit-tested in core; what this pins is that they compose into
-// the thing the owner asked for — inside ONE turn, with no user in the loop and
-// no turn boundary crossed, the agent builds itself a tool, calls it, the call
-// is scored by whether it actually ran, and a tool that keeps failing stops
-// being callable before the same turn is over. Real createCLIRuntime (real
-// filesystem, real CraftStore, real eval sandbox), fake streaming model.
+// The in-episode craft loop through the real local backend: within one turn a crafted tool is callable,
+// scored on execution, and dropped once it keeps failing.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -21,9 +15,7 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-/** A model that spends one turn issuing `blocks` in order, one eval
- *  call per step, then answers. This is the long-episode shape in miniature:
- *  many steps, one turn, nobody replying. */
+/** Spends one turn issuing `blocks` in order, one eval call per step, then answers. */
 function scriptedEpisode(blocks: readonly string[]): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
@@ -63,11 +55,8 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
 }
 
 function episode(blocks: readonly string[]) {
-  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
-  // reading the database's own filename back, and refuses a runtime whose path
-  // does not match it (`requireLocalDatabasePath`).
+  // The declared path, not `:memory:`: `createCLIRuntime` refuses a mismatched path (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('in-episode-craft', 'agent.db'), { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
@@ -89,12 +78,8 @@ function craftScore(db: Database, name: string): { score: number; uses: number }
   ).get(name);
 }
 
-/** The turn's craft record, read back the way an analysis would: through the
- *  session's own run-event reader. The run id is not on the session event
- *  stream, so it comes from the durable log the reader indexes. */
 function craftCycleRow(session: LocalAgentSession, rt: CLIRuntime, db: Database) {
-  // `run_events` is actor-scoped, so the run id comes from this session's own
-  // actor rather than from whatever row the table happens to hold first.
+  // `run_events` is actor-scoped, so the run id comes from this session's own actor.
   const row = db.query<{ run_id: string }, [string]>(
     'SELECT run_id FROM run_events WHERE actor_id = ? LIMIT 1',
   ).get(rt.actor.actorId);
@@ -118,8 +103,6 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     await session.send('go');
 
-    // Callable in the SAME turn that crafted it — the contract createTool
-    // advertises, which the CLI could not honour before.
     const toolResults = events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
     );
@@ -127,12 +110,10 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     expect(toolResults).toHaveLength(2);
     expect(toolResults[1].result).toContain('42');
 
-    // Scored on execution, with no follow-up, no turn boundary and no cadence.
     const score = present(craftScore(db, 'doubleIt'), 'the crafted-tool score row for doubleIt');
     expect(score.uses).toBe(1);
     expect(score.score).toBeGreaterThan(CRAFT_NEUTRAL_PRIOR);
 
-    // And the whole loop is legible to a benchmark from the durable log.
     const row = present(craftCycleRow(session, rt, db), 'the turn\'s craft_cycle run event');
     expect(row.crafted).toEqual(['doubleIt']);
     expect(row.reused).toEqual(['doubleIt']);
@@ -151,8 +132,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     const { db, rt, session, events } = episode([
       create, call, call, call, call,
-      // By now the tool is under the injection floor: the sandbox no longer
-      // binds it at all, which is a DIFFERENT failure from the tool throwing.
+      // Under the injection floor the sandbox no longer binds the tool, a different failure from it throwing.
       'return typeof tools.brokenIt;',
     ]);
 
@@ -163,9 +143,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     );
 
     expect(results).toHaveLength(6);
-    // Every call while it was still injected named the tool that raised.
     expect(results[1].result).toContain('[crafted:brokenIt]');
-    // …and the last step no longer sees it.
     expect(results[5].result).toContain('undefined');
 
     const score = present(craftScore(db, 'brokenIt'), 'the crafted-tool score row for brokenIt');
@@ -186,7 +164,6 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     const off = (() => {
       const dbOff = new Database(scratchPath('in-episode-craft-off', 'agent.db'), { create: true });
-      // THE PRODUCTION INITIALIZER, not a copy of its DDL.
       initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
 
       const rt = createCLIRuntime(dbOff, {
@@ -207,9 +184,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     await off.session.send('go');
 
-    // Crafting is a capability, not evolution: the tool is still built and
-    // still callable. Only the SCORING is evolution state, and a run that
-    // records no evolution state records none of it.
+    // Crafting is a capability, not evolution; only the scoring is evolution state.
     const results = off.events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
     );

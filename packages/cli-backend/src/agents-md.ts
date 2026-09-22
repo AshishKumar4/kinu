@@ -1,15 +1,6 @@
 /**
- * AGENTS.md discovery for the local backend — walk up from cwd to the
- * filesystem root, statting every AGENTS.md on the way (the agents.md
- * standard's nearest-file-wins chain). Candidates are ordered root-most first,
- * nearest last — the order core's admission spends and its renderer expects —
- * and only the ones core admits are ever read.
- *
- * Two things gate a candidate before its bytes can reach a prompt. Containment:
- * a file found at `<dir>/AGENTS.md` may only contribute bytes that actually
- * live under `<dir>`. Trust: the bytes that survive are classified by the
- * owner's approval resolver, so unapproved instructions can be placed as
- * reference material rather than as system instructions.
+ * AGENTS.md discovery: walk up from cwd to the filesystem root, root-most first (the order core's
+ * admission expects). Gated by containment (bytes must live under the file's dir) and owner trust.
  */
 
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
@@ -23,25 +14,11 @@ import {
 import * as v from 'valibot';
 
 /**
- * The size of the file `<dir>/AGENTS.md` is allowed to contribute, or null when
- * the entry contributes nothing.
- *
- * `statSync` follows symlinks, so statting the path alone cannot tell an
- * in-tree file from `AGENTS.md -> /etc/passwd`; the escaping link would be
- * admitted and its bytes read straight into the prompt. `lstatSync` answers
- * what the entry IS, and only then is a link resolved.
- *
- * An in-tree symlink stays legal — monorepos share one rule file across
- * packages that way. Only an ESCAPING link is refused: the discovery directory
- * is the authority for the bytes it offers, and a link out of it is a claim
- * that directory cannot make. Containment is per-discovery-directory because
- * the walk deliberately runs to the filesystem root; there is no single
- * workspace root to check against.
+ * Size `<dir>/AGENTS.md` may contribute, or null. `lstatSync` first: `statSync` follows an
+ * escaping link like `AGENTS.md -> /etc/passwd`. In-tree symlinks stay legal (monorepos share them).
  */
-/** A validated candidate records the canonical inode that passed containment.
- * The descriptor is opened only AFTER budget admission, so an oversized file
- * remains metadata-only; fstat then proves the bytes read came from that same
- * inode rather than a path an agent swapped between validation and open. */
+/** The descriptor opens only after budget admission; fstat proves the bytes read came from the
+ *  validated inode, not one swapped between validation and open. */
 type Candidate =
   | {
     readonly kind: 'file';
@@ -53,12 +30,7 @@ type Candidate =
   | { readonly kind: 'unavailable'; readonly reason: string }
   | null;
 
-/** The errno a node:fs throw carries, or undefined when it carries none.
- *
- *  Parsed rather than cast, and shaped like `nodeError` in host-mount.ts so this
- *  package reads one way about the same question. A cast plus a `typeof` check
- *  would assert the shape and then re-check it, which is two statements of the
- *  same doubt. */
+/** The errno a node:fs throw carries, or undefined. */
 const ERRNO_SCHEMA = v.object({ code: v.optional(v.string()) });
 
 function errnoOf(thrown: { readonly error: unknown }): string | undefined {
@@ -68,18 +40,8 @@ function errnoOf(thrown: { readonly error: unknown }): string | undefined {
 }
 
 /**
- * Resolve one candidate without ever letting a bad link fail the turn.
- *
- * ELOOP is the case worth naming. `AGENTS.md -> AGENTS.md`, or a two-link cycle
- * between two of them, makes both `statSync` and `realpathSync` throw, and a
- * throw escaping discovery takes the whole turn with it — one `ln -s` as a
- * denial of service, from a plane the agent writes. A cycle is not an
- * instruction file, so it is reported as unavailable and assembly carries on
- * with the files that are real.
- *
- * Only ENOENT and ELOOP are absorbed, and only here. An EACCES or EIO still
- * propagates: those say something is wrong with the machine, and swallowing them
- * would turn a broken disk into a silently emptier prompt.
+ * Resolve one candidate; a symlink cycle (ELOOP) or ENOENT reports unavailable instead of failing
+ * the turn. EACCES/EIO still propagate: a broken disk must not become a silently emptier prompt.
  */
 function candidateAt(dir: string, path: string): Candidate {
   let entry;
@@ -142,14 +104,7 @@ function candidateAt(dir: string, path: string): Candidate {
   };
 }
 
-/**
- * Discover instruction files from the local tree.
- *
- * `afterAdmission` is a narrow fault-injection seam for the hostile replacement
- * regression: production omits it, while the test swaps the validated target
- * between budget admission and descriptor open to prove no out-of-tree bytes
- * reach the prompt.
- */
+/** `afterAdmission` is a test-only fault-injection seam for the swap-after-admission regression. */
 export function discoverAgentsMd(
   cwd: string,
   limits: ModelWindow,

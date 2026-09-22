@@ -1,5 +1,4 @@
-// Local MCP integration — verifies that the CLI backend can connect to a stdio
-// MCP server, expose its tools, proxy calls, and merge them into a local turn.
+// Local MCP integration: stdio server connect, tool exposure, call proxying, merge into a local turn.
 import { describe, test, expect, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -56,9 +55,7 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
 }
 
 function sessionWithModel(model: LanguageModel) {
-  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
-  // reading the database's own filename back, and refuses a runtime whose path
-  // does not match it (`requireLocalDatabasePath`).
+  // The declared path, not `:memory:`: `createCLIRuntime` refuses a mismatched path (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
@@ -78,11 +75,7 @@ function sessionWithModel(model: LanguageModel) {
 
 describe('connectMcpServers', () => {
   test('keys tools with the same core rule the cf backend uses', async () => {
-    // A prompt or skill that names an MCP tool has to resolve to the same tool
-    // on both backends, so both go through mcpToolKey, via core's
-    // `describeMcpTool`. Keying on a random registration id
-    // (`tool_<nanoid>_<name>`) on one side and the server name on the other
-    // makes no reference to an MCP tool portable.
+    // Both backends key MCP tools through core's `describeMcpTool`, so a prompt naming one is portable.
     const conn = await connectMcpServers(mcpServers());
 
     try {
@@ -95,9 +88,7 @@ describe('connectMcpServers', () => {
   });
 
   test('no configured timeout means no deadline at the SDK seam, not the SDK\'s own 60 s default', async () => {
-    // The SDK reads an ABSENT `timeout` as 60_000 ms, so the only way to spell
-    // "no deadline" to it is the sentinel on every request. Observed at the
-    // seam itself: the options the connector hands the SDK client.
+    // The SDK reads an absent `timeout` as 60_000 ms, so "no deadline" is the sentinel on every request.
     const connect = spyOn(Client.prototype, 'connect');
     const listTools = spyOn(Client.prototype, 'listTools');
     const callTool = spyOn(Client.prototype, 'callTool');
@@ -117,7 +108,6 @@ describe('connectMcpServers', () => {
 
       expect(connect.mock.calls.map(([, options]) => options?.timeout)).toEqual([NO_TIMER_DEADLINE_MS, NO_TIMER_DEADLINE_MS]);
       expect(listTools.mock.calls.map(([, options]) => options?.timeout)).toEqual([NO_TIMER_DEADLINE_MS, NO_TIMER_DEADLINE_MS]);
-      // A server's own configured bound is the one exception, and only for its calls.
       expect(callTool.mock.calls.map(([, , options]) => options?.timeout)).toEqual([NO_TIMER_DEADLINE_MS, 1_234]);
     } finally {
       connect.mockRestore();
@@ -137,7 +127,6 @@ describe('connectMcpServers', () => {
       const started = Date.now();
       stop.abort();
       await expect(running).rejects.toBeInstanceOf(Error);
-      // The rejection is the abort, not a wait for the fixture's own sleep.
       expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       await conn.close();
@@ -211,12 +200,8 @@ describe('LocalAgentSession MCP surface', () => {
 
 describe('LocalAgentSession MCP admission', () => {
   test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
-    // The fixture's `huge` tool carries ~600KB of description and ~600KB of
-    // schema against a ~117k-token step remainder (the 128k stand-in window of
-    // a spec no catalog knows, nothing reserved for an unreported answer, less
-    // the native surface): its schema alone cannot fit, and schemas are never
-    // truncated, so it defers whole. Red before the admission: the turn
-    // carried all 1.2MB and nothing reported a bound.
+    // `huge` carries ~600KB each of description and schema against a ~117k-token step remainder;
+    // schemas are never truncated, so it defers whole.
     let captured: string[] = [];
     const { session, events } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
 
@@ -239,7 +224,6 @@ describe('LocalAgentSession MCP admission', () => {
 
       expect(deferrals).toHaveLength(1);
       expect(deferrals[0]).toContain('mcp: echo deferred:');
-      // The arithmetic the admission reports: what did not fit, out of what.
       expect(deferrals[0]).toContain('did not fit this turn');
       expect(deferrals[0]).toContain('remaining tool budget of');
     } finally {
@@ -248,9 +232,7 @@ describe('LocalAgentSession MCP admission', () => {
   });
 
   test('tools admit in (server, tool) order regardless of config map order', async () => {
-    // The admitted set must be the same on two sessions that configure the
-    // same servers: admission sorts by (server, tool) name, not by the config
-    // object's key order. `zulu` is configured first here and must still lose.
+    // Admission sorts by (server, tool) name, not config key order: `zulu` is configured first and must still lose.
     const { session } = sessionWithModel(capturingModel(() => {}));
 
     try {
@@ -259,9 +241,6 @@ describe('LocalAgentSession MCP admission', () => {
         alpha: { command: 'node', args: [fixtureServer] },
       });
       expect(session.toolNames().filter((name) => isMcpToolKey(name))).toEqual([
-        // `huge` defers on both servers (its schema alone exceeds the
-        // remainder), so the admitted set is the four small tools — still in
-        // (server, tool) order despite `zulu` being configured first.
         'mcp_alpha_echo', 'mcp_alpha_slow',
         'mcp_zulu_echo', 'mcp_zulu_slow',
       ]);

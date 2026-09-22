@@ -1,18 +1,5 @@
-// The mutable scaffold on a LOCAL workspace, end to end through
-// LocalAgentSession — the two properties it pins:
-//
-//   1. A promoted scaffold actually drives the turn. A processTurn that calls
-//      runChat directly leaves a promoted local scaffold with no effect on any
-//      turn at all — the flagship self-evolution feature write-only outside
-//      the cloud.
-//   2. A proposal can be resolved, so the loop cannot deadlock. With no local
-//      shadow evaluation, EvolutionEngine.maybeEvolveScaffold refuses to
-//      propose while a pending version exists — so a local agent proposes
-//      exactly one scaffold ever and then blocks forever.
-//
-// Driven by the authentic createCLIRuntime (real workspace filesystem + in-process
-// executor) with fake models, so the whole path — transform, codemode host
-// bridge, shadow eval, promotion gate — runs for real without a network LLM.
+// The mutable scaffold on a local workspace through LocalAgentSession: a promoted scaffold drives the turn,
+// and a pending proposal resolves, so maybeEvolveScaffold's pending guard cannot deadlock the loop.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -34,7 +21,6 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-/** A streaming LanguageModel stub — the DEFAULT loop's answer. */
 function fakeModel(answer: string): LanguageModel {
   return new TestLanguageModelV2({
     provider: 'fake',
@@ -59,19 +45,12 @@ function fakeModel(answer: string): LanguageModel {
 }
 
 async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
-  // The declared path IS the database: `createCLIRuntime` calls
-  // `requireLocalDatabasePath`, which refuses a runtime whose `dbPath` names a
-  // file its handle is not open on. `scratchPath` is mkdtemp-backed, so each
-  // setup gets its own directory. Same convention as local-session.test.ts.
+  // `createCLIRuntime` refuses a `dbPath` its handle is not open on (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
-  // THE PRODUCTION INITIALIZER, not a copy of its DDL.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
-  // What `kinu create` provisions (identity/create.ts): the scaffold
-  // tables, actor_config, and the v0 scaffold file + archive row — so the
-  // session's cold-start heal is a deterministic no-op here. The
-  // shadow-rollout ledger is deliberately NOT created — LocalAgentSession
-  // must provision it, the way the DO does, or no trial can ever be recorded.
+  // What `kinu create` provisions (identity/create.ts), minus the shadow-rollout ledger,
+  // which LocalAgentSession must provision itself.
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
 
@@ -83,10 +62,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
 
   const events: SessionEvent[] = [];
 
-  // Auto-evolution ON, exactly as a real session has it. The promotion gate IS
-  // auto-evolution: a `--no-auto-evolve` session queues no trial and runs none,
-  // so turning it off here to quieten the classifier would leave the deadlock
-  // tests below proving nothing.
+  // Auto-evolution on: the promotion gate is auto-evolution, so off would leave the deadlock tests proving nothing.
   const session = new LocalAgentSession({
     rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => events.push(e),
   });
@@ -94,7 +70,6 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   return { db, rt, session, events };
 }
 
-/** Install a scaffold version: its code on disk plus the archive row. */
 async function installScaffold(
   rt: AgentRuntime,
   opts: { version: number; status: 'current' | 'pending'; code: string },
@@ -174,8 +149,6 @@ const streamed = (events: SessionEvent[]) =>
     .join('');
 
 describe('a promoted scaffold drives a local turn', () => {
-  // A processTurn that drives runChat directly streams "the default loop
-  // answered" no matter what the scaffold says.
   test('the scaffold answers, not the default loop', async () => {
     const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
@@ -190,7 +163,6 @@ describe('a promoted scaffold drives a local turn', () => {
     expect(streamed(events)).toBe('the scaffold answered: who answers?');
     expect(streamed(events)).not.toContain('default loop');
 
-    // The reply the user saw is what the durable history keeps.
     const rows = await readTranscriptRows(rt.storage.sql, rt.actor, rt.storage.vfs);
 
     expect(rows.map((row) => row.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);
@@ -231,19 +203,13 @@ describe('a promoted scaffold drives a local turn', () => {
 
     await session.send('use a tool');
 
-    // The args reached the tool: a dispatch that dropped them would have left
-    // the action undefined, which answers with an error OBJECT, not a string.
+    // A dispatch that dropped the args would answer with an error object, not a string.
     expect(events.some((e) => e.type === 'tool-call' && e.toolName === 'memory')).toBe(true);
     expect(streamed(events)).toBe('tool returned string');
   });
 });
 
-/**
- * The judge the shadow eval drives. Neutral by construction (see
- * judgeTrialOrderSwapped): each call presents the two outputs in a random
- * order, so this identifies the pending by its marker rather than by slot —
- * a fake that always answered "a" would flip and score every trial a tie.
- */
+/** Identifies the pending by its marker, not by slot: the shadow eval randomizes output order (judgeTrialOrderSwapped). */
 function markerJudge(pendingMarker: string): LLM {
   return {
     stream: async function* () { yield ''; },
@@ -261,9 +227,6 @@ function markerJudge(pendingMarker: string): LLM {
 }
 
 describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => {
-  // With no local code path running shadow evaluation the pending stays
-  // pending forever, and maybeEvolveScaffold's "skip while a pending exists"
-  // guard blocks every future proposal.
   test('sampled shadow eval promotes a winning pending, unblocking the next proposal', async () => {
     const { rt, session, events } = await setup('the default loop answered');
     await installScaffold(rt, {
@@ -282,18 +245,11 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
 
     expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(2);
 
-    // DEFAULT_SHADOW_CONFIG needs 5 decisive trials before it will promote.
-    // Each turn only QUEUES one — the rollout is cadence-lane work, so no turn
-    // here pays for a candidate run. runDueEvolution is that lane's entry (the
-    // scheduler daemon's tick), and end() never joins it: the queue is durable,
-    // so a host that exits mid-drain loses time and nothing else.
+    // DEFAULT_SHADOW_CONFIG needs 5 decisive trials; each turn only queues one, and runDueEvolution drains the lane.
     for (let i = 0; i < 6; i++) await session.send(`turn ${i}`);
     await session.runDueEvolution();
     await session.end();
 
-    // Resolved: nothing is pending, so maybeEvolveScaffold's guard
-    // (evolution/engine.ts — "skip while a pending is in flight") is clear and
-    // the agent can propose again.
     expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(2);
     expect(listScaffoldArchive(rt.storage.sql, rt.actor, 10).find((e) => e.version === 2)?.status).toBe('current');
@@ -310,7 +266,6 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
       version: 2, status: 'pending',
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'PENDING-SCAFFOLD' }; }`,
     });
-    // The judge prefers whatever the LIVE turn produced.
     rt.judgeModel = markerJudge('CURRENT-SCAFFOLD');
 
     const config = rt.actor.config;
@@ -327,20 +282,14 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
   });
 
   test('opening a session heals a scaffold-less workspace (DO onStart parity)', async () => {
-    // A workspace created before scaffold bootstrap landed has no
-    // scaffold/agent.js — engine.maybeEvolveScaffold returns early when it is
-    // absent, silently disabling the whole scaffold-evolution loop. The DO
-    // heals in onStart; the local session must heal identically.
+    // A workspace without scaffold/agent.js silently disables scaffold evolution; the session heals it as the DO does in onStart.
     const { rt, session } = await setup('unused', { provisionScaffold: false });
     expect(await rt.identity.scaffold.exists()).toBe(false);
 
-    // end() joins the tracked bootstrap (orch.settleEvolution).
     await session.end();
 
     expect(await rt.identity.scaffold.exists()).toBe(true);
     expect((await rt.identity.scaffold.read()).length).toBeGreaterThan(0);
-    // The v0 archive row exists, and the agent is still un-evolved: the live
-    // version is 0, so the turn seam stays a pass-through.
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
   });
 
@@ -354,7 +303,6 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     });
 
     expect(session.getShadowStatus().hasPending).toBe(true);
-    // 'auto' refuses to guess on no evidence — the gate is still inconclusive.
     expect(await session.applyScaffoldDecision('auto')).toMatchObject({ ok: false });
 
     expect(await session.applyScaffoldDecision('promote')).toMatchObject({ ok: true, newCurrentVersion: 2 });
@@ -368,8 +316,6 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
       version: 1, status: 'current',
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'CURRENT-SCAFFOLD' }; }`,
     });
-    // The candidate reaches the REAL tool surface, which is the whole risk: a
-    // rollout that is re-driven after an interruption runs these calls again.
     await installScaffold(rt, {
       version: 2, status: 'pending',
       code: `async function run({ task }) {
@@ -391,11 +337,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     await session.runDueEvolution();
     await session.end();
 
-    // Keyed on the TRIAL, both halves of it: the call id is `<trial>#n` in
-    // dispatch order and the claim's turn id is the trial itself. Under the
-    // ambient id the same call was claimed against the last chat turn on a live
-    // drain and against the workspace run id on a replay — two claims for one
-    // call, so an interrupted trial ran the tool a second time.
+    // Claims key on the trial (call id `<trial>#n`, turn id the trial) so a re-driven trial never runs a tool twice.
     const claims = rt.storage.sql<{ turn_id: string; normalized_call_id: string }>`
       SELECT turn_id, normalized_call_id FROM tool_effect_claims
       WHERE turn_id = ${trialId}`;

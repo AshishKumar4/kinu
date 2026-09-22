@@ -1,14 +1,6 @@
-// Claude subscription provider (LOCAL ONLY) — drives the user's Claude Code
-// subscription through Anthropic's OFFICIAL `claude` binary, never the raw API.
-//
-// We spawn `claude -p "<prompt>" --output-format stream-json` with tools OFF so
-// it behaves as a single-turn chat completion. The binary holds and refreshes
-// the subscription OAuth itself — Kinu never reads ~/.claude credentials nor
-// calls api.anthropic.com directly. That is what keeps this compliant: the
-// official client is the auth boundary.
-//
-// This lives in cli-backend (the local backend). The cloud server must never
-// drive subscription calls, so nothing here is reachable from cf-backend.
+// Claude subscription provider, local only: drives the official `claude` binary with tools off.
+// The binary owns the OAuth; Kinu never reads ~/.claude credentials or calls api.anthropic.com.
+// Must stay unreachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2FunctionTool, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import { JsonObjectSchema, JsonValueSchema, usageTotal, type JsonValue } from '@kinu.run/core';
 import { classify, diagnostics, KinuError, renderThrownChain, tolerate } from '@kinu.run/core/obs';
@@ -19,9 +11,7 @@ import { readAllOutcome } from '@kinu.run/core';
 
 export const CLAUDE_CLI_PROVIDER_ID = 'claude';
 
-/** Spec model id → the `claude --model` alias the binary accepts. Aliases
- *  resolve to the latest model in each family, so they don't drift with point
- *  releases the way pinned `claude-opus-4-7` ids do. */
+/** Spec model id → `claude --model` family alias, which tracks the latest point release. */
 interface ModelAliases { [modelId: string]: string }
 
 export interface ClaudeModelProvider extends Omit<ModelProvider, 'createModel' | 'listModels'> {
@@ -47,14 +37,12 @@ const INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claud
 
 const LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription, or use an Anthropic API key.';
 
-/** Minimal child handle the provider needs — narrows `node:child_process` to a
- *  spawn seam so tests can inject a fake `claude` without a PATH shim. */
+/** Spawn seam so tests can inject a fake `claude` without a PATH shim. */
 export interface SpawnedClaude {
   stdout: AsyncIterable<Uint8Array | string>;
   stderr: AsyncIterable<Uint8Array | string>;
   stdin: { end(): void } | null;
   kill(signal?: NodeJS.Signals): void;
-  /** Resolves with Node's authoritative close outcome. */
   exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
 
@@ -79,9 +67,7 @@ const defaultSpawn: ClaudeSpawn = (args, opts) => {
 };
 
 export interface ClaudeCliProviderOptions {
-  /** Spawn seam (tests inject a fake `claude`). Defaults to `node:child_process`. */
   spawn?: ClaudeSpawn;
-  /** Availability probe. Defaults to spawning `claude --version` + `auth status`. */
   probe?: () => Promise<ClaudeAvailability>;
 }
 
@@ -90,10 +76,7 @@ export interface ClaudeAvailability {
   loggedIn: boolean;
 }
 
-/** Probe the local `claude` binary once: is it on PATH, and is a subscription
- *  login present? Shares the exact spawn + `claude auth status` logic the
- *  provider uses, so the providers command and the model resolver never drift.
- *  Tests inject a fake `claude` through the spawn seam. */
+/** Probe once whether `claude` is on PATH and logged in, sharing the provider's spawn logic. */
 export function checkClaudeAvailability(spawn: ClaudeSpawn = defaultSpawn): Promise<ClaudeAvailability> {
   return probeClaude(spawn);
 }
@@ -129,16 +112,12 @@ export function createClaudeCliProvider(opts: ClaudeCliProviderOptions = {}): Cl
   };
 }
 
-/** Availability = binary on PATH AND a subscription login present. The binary
- *  IS the auth check (`claude auth status` reports `loggedIn`), so we never
- *  inspect credential files. A missing login also surfaces at call time. */
+/** `claude auth status` is the auth check; credential files are never inspected. */
 async function probeClaude(spawn: ClaudeSpawn): Promise<ClaudeAvailability> {
   const version = await runToString(spawn, ['--version']);
 
   if (version.code !== 0) return { binary: false, loggedIn: false };
-  // `claude auth status` prints JSON ({ "loggedIn": true, ... }) on stdout; it
-  // takes no --output-format flag. A subscription login is firstParty OAuth the
-  // binary owns — we read only this status, never the credential itself.
+  // `auth status` prints JSON on stdout and takes no --output-format flag.
   const status = await runToString(spawn, ['auth', 'status']);
   let loggedIn = false;
 
@@ -165,11 +144,8 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
   }
 
   child.stdin?.end();
-  // Drained concurrently with the exit so a chatty binary cannot fill the pipe
-  // and deadlock. A missing binary surfaces as a premature-close stream error
-  // rather than a synchronous spawn throw, and the failing exit code is the
-  // authoritative signal — which is why only a read that fails while the probe
-  // itself SUCCEEDED is unexplained, and that one is not ours to absorb.
+  // Drained concurrently with exit so a chatty binary cannot deadlock the pipe. A missing binary
+  // shows as a stream error; only a read failure while the probe succeeded is unexplained.
   const [read, { code }] = await Promise.all([readAllOutcome(child.stdout), child.exit]);
 
   if ('text' in read) return { code, stdout: read.text };
@@ -183,7 +159,6 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
 
   return { code, stdout: '' };
 }
-
 
 function createClaudeCliModel(specModelId: string, spawn: ClaudeSpawn): LanguageModelV2 {
   const alias = MODEL_ALIASES[specModelId] ?? specModelId;
@@ -211,13 +186,8 @@ interface ClaudePrompt {
   prompt: string;
 }
 
-/** Build the `claude -p` invocation. System turns map to --system-prompt; the
- *  conversation is flattened into the prompt arg with role labels so multi-turn
- *  context (including prior tool results, surfaced by Kinu's own loop as
- *  assistant/tool text) is carried faithfully. The binary's own tools stay OFF —
- *  Kinu's eval/run loop wraps this provider — so requested tools ride
- *  the system prompt as a manifest in the block form the stream parser reads
- *  back. */
+/** Build the `claude -p` invocation: system turns → --system-prompt, the rest flattened with
+ *  role labels. The binary's tools stay off; requested tools ride the system prompt as a manifest. */
 export function buildClaudePrompt(options: LanguageModelV2CallOptions): ClaudePrompt {
   const systemParts: string[] = [];
   const turns: string[] = [];
@@ -237,8 +207,7 @@ export function buildClaudePrompt(options: LanguageModelV2CallOptions): ClaudePr
     else if (message.role === 'tool') turns.push(`Tool results:\n${text}`);
   }
 
-  // A single user turn needs no role labels; multi-turn keeps the final user
-  // turn bare (it is the live question) and labels the prior context.
+  // The final user turn stays bare; prior turns get role labels.
   const prompt = turns.length <= 1
     ? (turns[0] ?? '')
     : `${turns.slice(0, -1).join('\n\n')}\n\n${turns[turns.length - 1]}`;
@@ -290,13 +259,8 @@ function claudeArgs(alias: string, built: ClaudePrompt): string[] {
   return args;
 }
 
-// ─── tool-call protocol ─────────────────────────────────────────────────────
-//
-// The binary runs with its own tools off; Kinu's loop executes. So the tools
-// ride the PROMPT as a manifest in the block form Claude models are already
-// trained to emit, and the stream parser lifts those blocks back out as real
-// tool-call parts. Without the parser the block reached the transcript as
-// literal agent text and nothing ever executed.
+// Tool-call protocol: tools ride the prompt in the block form Claude models are trained to emit,
+// and the stream parser lifts those blocks back out as tool-call parts.
 const OPEN_TAGS = ['<function_calls>', '<antml:function_calls>'] as const;
 
 interface OpenBlock {
@@ -305,8 +269,7 @@ interface OpenBlock {
   body: string;
 }
 
-/** The prompt-side half of the protocol: what the model is told, verbatim in
- *  the shape the parser reads back. */
+/** Prompt-side half of the protocol, in the exact shape the parser reads back. */
 function toolProtocol(tools: readonly LanguageModelV2FunctionTool[]): string {
   const manifest = tools.map((t) => {
     const head = t.description ? `- ${t.name}: ${t.description}` : `- ${t.name}`;
@@ -337,8 +300,7 @@ interface ParsedToolCall {
   input: string;
 }
 
-/** XML-unescape a parameter value; a value that IS a JSON array/object rides
- *  as that structure, anything else stays a string. */
+/** XML-unescape a value; a JSON array/object value becomes that structure. */
 function parameterValue(raw: string): JsonValue {
   const decoded = raw
     .replaceAll('&lt;', '<')
@@ -389,23 +351,18 @@ function partialTagTail(text: string, tags: readonly string[]): number {
   return 0;
 }
 
-/** One consumed delta's yield: text safe to stream now, plus any calls whose
- *  blocks closed inside it. */
 interface SplitChunk {
   text: string;
   calls: ParsedToolCall[];
 }
 
-/** Splits the model's text stream into plain text and complete function_calls
- *  blocks. Tags can straddle deltas, so unclassified text is held back only up
- *  to a length that could still become an open tag — everything else streams
- *  immediately. */
+/** Splits text into plain text and complete function_calls blocks. Tags can straddle deltas, so
+ *  only a suffix that could still become an open tag is held back. */
 class ToolCallSplitter {
   private pending = '';
   private block: OpenBlock | null = null;
   private nextId = 1;
 
-  /** Consume one delta → text safe to stream now, plus completed calls. */
   push(delta: string): SplitChunk {
     this.pending += delta;
     const text: string[] = [];
@@ -459,9 +416,7 @@ class ToolCallSplitter {
     return { text: text.join(''), calls };
   }
 
-  /** What remains when the binary's stream ends: held text, and an
-   *  unterminated block's calls if it parsed — otherwise the block streams as
-   *  the text it visibly is rather than vanishing. */
+  /** An unterminated block streams as the text it visibly is rather than vanishing. */
   end(): SplitChunk {
     const text: string[] = [];
     const calls: ParsedToolCall[] = [];
@@ -519,8 +474,7 @@ function runClaudeStream(
       let finishReason: FinishReason = 'stop';
       let stderr = '';
 
-      // A stderr that cannot be read becomes part of the exit message below —
-      // blanking it silently is how an exit-code error loses its only detail.
+      // Unreadable stderr becomes part of the exit message instead of being blanked.
       const collectStderr = readAllOutcome(child.stderr).then((read) => {
         stderr = 'text' in read
           ? read.text
@@ -616,17 +570,8 @@ function runClaudeStream(
 }
 
 /**
- * The turn's usage in the SDK's own dialect.
- *
- * `totalTokens` comes from `usageTotal`, so a result event that carried no
- * usage at all reports NO total rather than a synthesized `0 + 0` — the one
- * number a caller would have read as "this turn was free".
- *
- * `cacheWrite` has no seat on the way out: `LanguageModelV2Usage` models only a
- * cache READ (@ai-sdk/provider dist/index.d.ts:2673-2696), and ai's v2→v3
- * bridge hard-codes `cacheWrite: void 0` with no `raw` at all
- * (node_modules/ai/dist/index.js:828-841). It is not lost, though: it is part
- * of the cache-inclusive `input` total `resultUsage` folds.
+ * Usage in the SDK dialect. No usage reported → no total, never a synthesized 0. `cacheWrite`
+ * has no V2 seat but is included in the cache-inclusive `input` total.
  */
 function finishPart(reason: FinishReason, reported: Usage | undefined): LanguageModelV2StreamPart {
   const usage = reported ?? {};
@@ -643,11 +588,8 @@ function finishPart(reason: FinishReason, reported: Usage | undefined): Language
   };
 }
 
-// ─── stream-json parsing ────────────────────────────────────────────────────
-
 type ClaudeEvent = JsonObject;
 
-/** Split the child's stdout into newline-delimited JSON events. */
 async function* parseNdjson(stream: SpawnedClaude['stdout']): AsyncGenerator<ClaudeEvent> {
   const decoder = new TextDecoder();
   let buffer = '';
@@ -676,14 +618,8 @@ async function* parseNdjson(stream: SpawnedClaude['stdout']): AsyncGenerator<Cla
 }
 
 /**
- * One stream-json line → the event it carries, or null for a line that is not
- * one at all.
- *
- * Only unparseable TEXT is tolerated: the binary shares stdout with anything
- * else it decides to print, and a stray warning line must not end a turn. A
- * line that IS json but not an event object is a change in Claude Code's output
- * format, which propagates — silently reading every event as `{}` would stream
- * an empty answer with a clean finish reason and no way to tell why.
+ * One stream-json line → its event, or null for non-JSON text (stray warnings must not end a turn).
+ * JSON that is not an event object propagates: it signals a Claude Code output-format change.
  */
 function parseEventLine(line: string): ClaudeEvent | null {
   const event = tolerate(() => v.parse(JsonObjectSchema, JSON.parse(line)), 'malformed-input');
@@ -697,8 +633,7 @@ function parseEventLine(line: string): ClaudeEvent | null {
   return null;
 }
 
-/** Incremental text from a partial `stream_event` (content_block_delta →
- *  text_delta). Returns undefined when the event carries no text. */
+/** Incremental text from a `stream_event` text_delta, or undefined. */
 function textDelta(event: ClaudeEvent): string | undefined {
   if (event.type !== 'stream_event') return undefined;
   const inner = jsonObject({ value: event.event });
@@ -717,17 +652,8 @@ function isResult(event: ClaudeEvent): event is ClaudeEvent & { type: 'result' }
 }
 
 /**
- * What the binary said it spent, as the one usage type.
- *
- * Anthropic reports the prompt in three DISJOINT parts — plain input, cache
- * reads and cache writes — while `Usage.input` is the cache-INCLUSIVE total, so
- * the three are folded exactly as @ai-sdk/anthropic folds them. Reading only
- * `input_tokens` under-reported every cached prompt, and Claude Code caches
- * aggressively.
- *
- * The fold is absent unless the binary reported at least one part: `?? 0` on
- * all three would turn a result event that mentioned no usage into a measured
- * zero.
+ * Folds Anthropic's disjoint input, cache-read and cache-write counts into the cache-inclusive
+ * `Usage.input`, as @ai-sdk/anthropic does. Absent unless at least one part was reported.
  */
 function resultUsage(event: ClaudeEvent): Usage {
   const reported = jsonObject({ value: event.usage });
@@ -778,8 +704,7 @@ function resultErrorMessage(event: ClaudeEvent): string {
   return 'Claude CLI returned an error.';
 }
 
-/** The doGenerate result the v2 spec asks for. The spec types it inline, so
- *  this local name is the contract's only home. */
+/** The doGenerate result shape the v2 spec types only inline. */
 interface ClaudeGenerateResult {
   content: Array<
     | { type: 'text'; text: string }
@@ -789,8 +714,6 @@ interface ClaudeGenerateResult {
   usage: LanguageModelV2Usage;
   warnings: [];
 }
-
-// ─── doGenerate (wraps doStream) ────────────────────────────────────────────
 
 async function collectGenerate(
   stream: ReadableStream<LanguageModelV2StreamPart>,

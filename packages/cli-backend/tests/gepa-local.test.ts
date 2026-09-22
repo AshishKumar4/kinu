@@ -1,16 +1,4 @@
-// GEPA on the local backend.
-//
-// The driver lives in core (evolution/control.ts) and a LocalAgentSession
-// supplies the surface, so a self-improvement loop with nothing
-// Cloudflare-shaped in it runs here rather than only in the cloud — a
-// `@callable()` on OrchestratorAgent would confine it there. This runs the
-// whole pass through that session and checks the artifacts it is supposed to
-// leave behind.
-//
-// Deterministic: the chat model answers, the judge scores from a script, and
-// the reflection LM returns a candidate scaffold. Nothing here reaches a
-// network — but every stage between the outcome ledger and gepa_runs is the
-// production code path.
+// GEPA on the local backend: scripted chat model, judge and reflection LM over the production path.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -28,8 +16,7 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-/** A scripted chat model: streams `answer`, and answers non-streaming callers
- *  (the reflection LM) with `completion`. */
+/** Streams `answer`; answers non-streaming callers (the reflection LM) with `completion`. */
 function scriptedModel(answer: string, completion: string): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
@@ -59,8 +46,7 @@ function scriptedModel(answer: string, completion: string): LanguageModel {
   });
 }
 
-/** A candidate scaffold the 4-gate modify pipeline accepts: it delegates to the
- *  host's default loop, which is what a local scaffold has to do. */
+/** Delegates to the host's default loop, which a local scaffold must do to pass the 4-gate modify pipeline. */
 const CANDIDATE_SCAFFOLD = `
 export default async function agent(task, host) {
   const stream = await host.defaultInference();
@@ -69,9 +55,7 @@ export default async function agent(task, host) {
 }
 `.trim();
 
-/** Scores the seed's rollouts low and everything after them high — the shape a
- *  real pass has when reflection finds a genuine improvement, without asking a
- *  scripted judge to discriminate two identical strings. */
+/** Seed rollouts score low, later ones high, so the scripted judge never discriminates identical strings. */
 function risingJudge(seedCalls: number): () => Promise<string> {
   let call = 0;
 
@@ -83,9 +67,7 @@ function risingJudge(seedCalls: number): () => Promise<string> {
 }
 
 async function setup(judge: () => Promise<string>) {
-  // The declared path, not `:memory:`: `createCLIRuntime` binds this actor by
-  // reading the database's own filename back, and refuses a runtime whose path
-  // does not match it (`requireLocalDatabasePath`).
+  // The declared path, not `:memory:`: `createCLIRuntime` refuses a mismatched path (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('gepa-local', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
@@ -98,8 +80,6 @@ async function setup(judge: () => Promise<string>) {
   await seedSoul(rt.storage.vfs, rt.storage.sql, { name: 'gepa-local', mission: 'prove the pass runs locally' });
   await bootstrapScaffold(rt);
 
-  // The judge is core's `LLM` primitive on this backend; every score comes back
-  // from the script, so the pass is deterministic.
   let judgeCalls = 0;
   rt.judgeModel = {
     stream: () => { throw new Error('the judge is asked for completions, not streams'); },
@@ -119,8 +99,6 @@ async function setup(judge: () => Promise<string>) {
   return { db, rt, session, judgeCalls: () => judgeCalls };
 }
 
-/** The ledger GEPA draws its split from: failures to optimise toward, plus
- *  accepted turns as regression guards. */
 function seedOutcomes(sql: ReturnType<typeof makeSql>, actor: ActorHandle, n = 5): void {
   for (let i = 0; i < n; i++) {
     recordTurnOutcome(sql, actor, {
@@ -149,20 +127,16 @@ describe('GEPA runs on the local backend', () => {
     const runId = present(result.runId, 'the completed GEPA run id');
     const selection = present(result.selection, 'the GEPA winner selection');
     const seedScore = present(result.seedScore, 'the GEPA seed score');
-    // The winner is selected out of sample: held-out failures plus guards.
     expect(selection.heldOutNegatives).toBeGreaterThan(0);
     expect(selection.guards).toBeGreaterThan(0);
     expect(seedScore.n).toBe(selection.heldOutNegatives + selection.guards);
     expect(result.bestScore).toBeDefined();
 
-    // The lineage `kinu gepa` and the web surface read.
     const runs = listGepaRuns(rt.storage.sql, rt.actor, 10);
     expect(runs.length).toBe(1);
     expect(runs[0].runId).toBe(runId);
     expect(runs[0].status).toBe('completed');
-    // Reflection really ran: metric calls beyond the seed's out-of-sample
-    // scoring are minibatch rollouts of reflection-proposed candidates. Each
-    // one is a full scaffold execution plus a judge call.
+    // Metric calls beyond the seed's out-of-sample scoring are rollouts of reflection-proposed candidates.
     expect(runs[0].metricCalls).toBeGreaterThan(seedScore.n);
     expect(judgeCalls()).toBe(runs[0].metricCalls);
     const candidates = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_candidates`).get();
@@ -175,7 +149,6 @@ describe('GEPA runs on the local backend', () => {
   test('the pass refuses when the ledger has no failure to optimise toward', async () => {
     const { db, rt, session } = await setup(risingJudge(0));
 
-    // Accepted turns only: nothing to select on but judge noise.
     for (let i = 0; i < 4; i++) {
       recordTurnOutcome(makeSql(db), rt.actor, {
         turnId: `ok-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
@@ -188,7 +161,6 @@ describe('GEPA runs on the local backend', () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain('no corrected/frustrated turns yet');
-    // A refusal costs nothing: no run row, so the lineage stays honest.
     const runs = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_runs`).get();
 
     if (!runs) throw new Error('GEPA run count row is missing');

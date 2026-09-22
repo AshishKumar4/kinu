@@ -12,8 +12,7 @@ server.registerTool(
     : { content: [{ type: 'text', text: `echo: ${text}` }] },
 );
 
-// Deliberately slower than the connect/list startup budget — proves a tool
-// CALL is not held to it.
+// Slower than the connect/list startup budget: a tool call is not held to it.
 server.registerTool(
   'slow',
   { description: 'Sleep, then report.', inputSchema: { ms: z.number() } },
@@ -24,13 +23,8 @@ server.registerTool(
   },
 );
 
-// Deliberately larger than the test session's whole step allocation — proves
-// the descriptor admission bounds what the model is handed. That session runs
-// a spec no catalog knows: the 128k stand-in window, with nothing reserved for
-// an answer nobody reported (#20), less the native surface. BOTH the prose and
-// the schema exceed it on their own (600k chars is ~150k tokens): the schema
-// is atomic (never truncated), so a tool shaped like this defers whole instead
-// of arriving clamped.
+// Larger than the test session's whole step allocation (128k stand-in window); prose and schema each exceed it
+// (600k chars is ~150k tokens), and the atomic schema defers whole instead of arriving clamped.
 const OVERSIZED = 'x'.repeat(600_000);
 
 server.registerTool(

@@ -1,9 +1,5 @@
-// The Node `eval` factory runs the model's code in-process. Two
-// behaviours it must match the CF codemode sandbox on: capture console.* (so it
-// never leaks to the CLI's stdout, which under `kinu exec --json` IS the
-// event stream) and return it as `logs`; and implicit-return a trailing bare
-// expression so the model gets its value.
-// The transform reads JavaScript structure, including multiline expressions.
+// The Node `eval` factory must match the CF codemode sandbox: capture console.* as `logs` (stdout is the
+// `kinu exec --json` event stream) and implicit-return a trailing expression.
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
@@ -122,10 +118,7 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
     expect(out.logs).toEqual(['42']);
   });
 
-  // The shared description tells the model the Node builtins and `require`
-  // are the machine's own, and its example is `require('fs/promises')`. Red on
-  // 2026-09-05: a `new Function` body sees no module scope and Bun has no
-  // `require` global, so the example answered a bare ReferenceError.
+  // A `new Function` body sees no module scope and Bun has no `require` global, yet the description advertises `require`.
   test('require resolves the Node builtins inside the sandbox', async () => {
     const out = await makeTool()({ code: 'const path = require("node:path");\nreturn path.join("a", "b");' });
     expect(out).toEqual({ result: 'a/b' });
@@ -143,18 +136,13 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
     expect(out.logs).toBeUndefined();
   });
 
-  // `shell` is a native top-level tool, not a codemode binding — reaching for
-  // it here is a ReferenceError, and a bare "run is not defined" gives the
-  // model no idea why. Real evidence from production (2026-08-12 debug
-  // audit): a model wrote exactly this and got only the bare V8 message back.
+  // `shell` is a native tool, not a codemode binding; the error must say where it lives, not a bare ReferenceError.
   test('calling the native `shell` tool from inside eval gets an actionable hint, not a bare ReferenceError', async () => {
     const pending = makeTool()({ code: 'return await shell({ runtime: "sandbox", command: "ls" });' });
     await expect(pending).rejects.toThrow('shell is not defined');
     await expect(pending).rejects.toThrow('"shell" is a native Kinu tool');
     await expect(pending).rejects.toThrow('`tools.shell(input)`');
-    // Where the capability actually is now comes from TOOL_REACH, so the
-    // pointer is the namespace rather than one hand-picked member — and it is
-    // right for all eight native tools instead of only `shell`.
+    // The pointer comes from TOOL_REACH, so it is right for every native tool.
     await expect(pending).rejects.toThrow('through the `workspace` namespace');
   });
 
@@ -165,9 +153,6 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
   });
 });
 
-/** A provider namespace whose calls reject, like the host-bridged `workspace.*`
- *  VFS does when the model addresses a path the agent's filesystem has no idea
- *  about. */
 function makeToolWithFailingProvider(error: Error) {
   const calls: string[] = [];
 
@@ -194,10 +179,7 @@ function makeToolWithFailingProvider(error: Error) {
 
 describe('createNodeCodemodeToolFactory — a failing host call can never kill the process', () => {
   test('a FLOATED rejecting provider call does not become an unhandled rejection', async () => {
-    // The production crash: the model forgets `await`, workspace.readdir('/app')
-    // rejects with ENOENT, nothing is handling that promise, and Bun kills the
-    // CLI mid-turn. bun:test fails this test if the rejection escapes, which is
-    // exactly the signal we want.
+    // An unawaited rejecting call must not escape: Bun kills the CLI mid-turn on an unhandled rejection.
     const { execute, calls } = makeToolWithFailingProvider(
       new Error("ENOENT: no such file or directory, scandir '/app'"),
     );
@@ -206,7 +188,6 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
 
     expect(calls).toEqual(['/app']);
     expect(out.result).toBe('kept going');
-    // Give the rejection every chance to surface before the test ends.
     await new Promise((r) => setTimeout(r, 20));
   });
 
@@ -241,13 +222,8 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
   });
 
   test('every wired namespace is DECLARED to the model, not just bound', async () => {
-    // The defect this locks: the description was BUILTIN_TOOL_DESCRIPTIONS
-    // .eval alone, and adaptExecutorProvider collected each provider's
-    // `types` without ever reading one. So the CLI model was handed
-    // `memory.*`, `tasks.*`, `agents.*`, `web.*` and `llm.*` as live callables
-    // and told about none of them — a whole reachable surface it could not
-    // discover. Both a capability provider and an executor provider are
-    // included here because the two arrive by different routes.
+    // Each provider's `types` must reach the description, or its callables are reachable but undiscoverable.
+    // Capability and executor providers arrive by different routes.
     const factory = createNodeCodemodeToolFactory({
       extraProviders: [{
         name: 'memory',
@@ -270,14 +246,11 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     expect(built.description).toContain('save(content: string)');
     expect(built.description).toContain('export declare const workspace: {');
     expect(built.description).toContain('Namespaces bound in this sandbox:');
-    // And the registry doctrine is still there — this added a half, not replaced one.
     expect(built.description).toContain('canonical durable workspace');
   });
 });
 
 describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock', () => {
-  /** A crafted set that changes between calls, the way the CraftStore does
-   *  when the model crafts a tool mid-turn. */
   function makeToolOverStore(store: Map<string, CraftedToolSet[string]['execute']>): ExecuteTool {
     const built = createNodeCodemodeToolFactory()({
       native: {},
@@ -297,7 +270,6 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
     const before = await execute({ code: 'return typeof tools.double;' });
     expect(before.result).toBe('undefined');
 
-    // What workspace.createTool does to the store, mid-turn.
     store.set('double', async (n) => Number(n) * 2);
 
     const after = await execute({ code: 'return await tools.double(21);' });
@@ -314,8 +286,7 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
   });
 
   test('a provider may not take one of the fixed namespaces', async () => {
-    // `new Function` rejects duplicate parameter names, so a provider called
-    // `tools` would be a crash rather than a shadowed name.
+    // `new Function` rejects duplicate parameter names, so a provider named `tools` would crash.
     const provider: CodemodeProvider = {
         name: 'tools',
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },
@@ -334,8 +305,6 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
 });
 
 describe('createNodeCodemodeToolFactory — native tools under tools.<name>', () => {
-  /** A finished surface the way buildActorTools hands it in: the sandbox's own
-   *  entry beside the native tools it declares. */
   function surfaceWith(shellExec: (input: { command: string }) => Promise<string>) {
     return {
       eval: tool({
@@ -354,9 +323,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
   }
 
   test('a native tool is callable as tools.<name>(input) with the native input object', async () => {
-    // The defect this locks, reproduced 2026-09-05: the shared docstring said
-    // every native tool is `tools.<name>(input)` and the CLI bound none of
-    // them, so `tools.shell(...)` answered `tools.shell is not a function`.
+    // The shared docstring promises `tools.<name>(input)` for every native tool.
     const seen: string[] = [];
 
     const built = createNodeCodemodeToolFactory()({

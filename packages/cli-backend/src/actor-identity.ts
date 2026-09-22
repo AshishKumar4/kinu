@@ -1,18 +1,6 @@
 /**
- * Local actor identity — ONE physical database, N logical actors.
- *
- * A local workspace is one SQLite file. Every actor in it — the main agent, a
- * hired subordinate, an ask-by-role temporary, an exploration head (a swarm
- * node seats as one), a branch — is a row in `workspace_actors` on that one
- * database, and that row IS its identity. There is no second identity store:
- * nothing seeds a per-actor `actor_identity` row, because such a row can only
- * exist once per FILE and one file holds every actor a workspace has.
- *
- * So a binding here carries no path. What it carries is the reference the
- * root's directory issued, and the authority to bind a handle to it: the
- * directory is re-validated on every handle touch (`bindActorHandle` calls the
- * validator on `config`/`programState` as well as at bind time), so a retired
- * or re-created actor stops answering the moment its row says so.
+ * Local actor identity: one SQLite file, N logical actors, each a `workspace_actors` row.
+ * The directory re-validates on every handle touch, so a retired actor stops answering at once.
  */
 import { resolve } from 'node:path';
 import type { Database } from 'bun:sqlite';
@@ -33,11 +21,7 @@ interface LocalActorScope {
   readonly path: readonly string[];
 }
 
-/**
- * One actor as its root issued it. No `dbPath`: every local actor lives in the
- * root's database, so a path here could only ever name that one file — and a
- * binding that carried it invited a caller to open a second handle on it.
- */
+/** No `dbPath`: every local actor lives in the root's database; a path would invite a second handle. */
 export interface LocalActorBinding {
   readonly reference: ActorReference;
   readonly name: string;
@@ -49,16 +33,8 @@ export interface LocalActorBinding {
 export type LocalActorConfig =
   | { readonly facet?: undefined; readonly actorBinding?: undefined; readonly actor?: undefined }
   /**
-   * `actor` is the handle the HOST bound, when a host bound one.
-   *
-   * `ActorHost` requires a hosted runtime to carry the very handle it issued,
-   * because releasing the binding revokes THAT handle — a runtime holding a
-   * second binding of the same child would keep authorising statements after
-   * the fence flipped. `bindLocalActor` mints a fresh frozen handle per call,
-   * so deriving one from `actorBinding` here produced a runtime the host
-   * refused, and every hire failed at `completing an admitted actor birth`.
-   * Absent for the process-bootstrapped facet, which has no host in its
-   * isolate and binds its own.
+   * The handle the host bound; `ActorHost` refuses a runtime not carrying the handle it issued,
+   * since release revokes that handle. Absent for the process-bootstrapped facet, which binds its own.
    */
   | { readonly facet: string; readonly actorBinding: LocalActorBinding; readonly actor?: ActorHandle };
 
@@ -70,13 +46,8 @@ export const LocalActorProcessBootstrapSchema = v.strictObject({
 export type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstrapSchema>;
 
 /**
- * What a local actor running in ANOTHER OS process needs to bind itself.
- *
- * `rootDbPath` is the workspace's one database — the same file the parent has
- * open. A separate process cannot share a `bun:sqlite` handle, so it opens that
- * file itself (WAL, which is what a running workspace is already in) and binds
- * its own row over it. It does NOT get a database of its own: a second file
- * would be a second state store for one logical actor.
+ * Binding for a local actor in another OS process. `rootDbPath` is the workspace's one database;
+ * the process opens it itself (WAL) since a `bun:sqlite` handle cannot cross processes.
  */
 export function localActorProcessBootstrap(parent: ActorHandle, binding: LocalActorBinding): LocalActorProcessBootstrap {
   const scope = scopeFor(parent);
@@ -91,8 +62,7 @@ export function localActorProcessBootstrap(parent: ActorHandle, binding: LocalAc
 
 export function localActorMission(rt: AgentRuntime, exec: SqlExec): string | null {
   if (rt.actor.parentActorId === null) return readMission(rt.storage.sql);
-  // The subordinate's OWN descriptor, keyed by its own actor. One workspace
-  // database holds every child's, so the handle is what selects whose.
+  // One workspace database holds every child's descriptor; the handle selects whose.
   const identity = new SubordinateIdentityStore(exec, rt.actor).read();
 
   if (!identity) throw new KinuError('missing', 'The subordinate has no mission identity.');
@@ -127,14 +97,7 @@ export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle 
   return actor;
 }
 
-/**
- * The directory every actor in this tree is a row in, and the one database
- * those rows live on.
- *
- * The ActorHost is built from this pair: `createActorHost` owns admission for
- * every logical actor beneath the root, so the root's directory is the single
- * membership authority and the root's storage is the single physical store.
- */
+/** The directory (single membership authority) and storage (single physical store) `createActorHost` is built from. */
 export function localActorDirectory(root: ActorHandle) {
   const scope = scopeFor(root);
 
@@ -143,14 +106,7 @@ export function localActorDirectory(root: ActorHandle) {
   return { directory: scope.directory, rootDbPath: scope.rootDbPath };
 }
 
-/**
- * Who owns this workspace, and what it is called.
- *
- * Read from `workspace_identity` — the one row a local database has — because
- * that is the only place the pair exists. A subordinate's own descriptor needs
- * both and reads them from here, so no per-actor copy seeded from this row can
- * drift away from it.
- */
+/** Owner and name from `workspace_identity`, the only place the pair exists. */
 export function localActorOwner(actor: ActorHandle) {
   const scope = scopeFor(actor);
 
@@ -177,17 +133,8 @@ function bindScoped(scope: LocalActorScope, reference: ActorReference): LocalAct
 }
 
 /**
- * Give a handle THIS root issued elsewhere its local scope.
- *
- * `actors` maps a handle to the root scope that answers "which directory,
- * which path, whose workspace" for it, and only the handles minted in this
- * module were in it. But `ActorHost` mints the handle a hosted runtime must
- * carry — the release fence is bound to that object — so a runtime built over
- * the host's handle reached `scopeFor` with a handle this map had never seen
- * and every local-identity read failed `missing`. Adopting it here is the
- * honest fix: the scope is the SAME scope, keyed by the reference the host and
- * this module both name, and the directory still validates the handle against
- * the path before anything is answered.
+ * Adopt a handle `ActorHost` minted into this root's scope map; the host's handle carries the
+ * release fence, so without this every local-identity read for it fails `missing`.
  */
 export function adoptLocalActorHandle(
   parent: ActorHandle,
@@ -208,15 +155,7 @@ function bindChild(scope: LocalActorScope, reference: ActorReference, name: stri
   return binding;
 }
 
-/**
- * The identity one issued reference stands for, read back from the directory.
- *
- * The DIRECTORY is the registry: an `ActorHost` hands its dependencies a
- * reference, and the name, storage key, kind and creation time that reference
- * was issued with are all rows there. So nothing here caches bindings by id —
- * a cache would be a second copy of the membership table, and a stale entry in
- * it would let a retired creation keep answering.
- */
+/** Read from the directory each time: a cache would let a retired creation keep answering. */
 export function bindLocalActorReference(caller: ActorHandle, reference: ActorReference): LocalActorBinding {
   return bindScoped(scopeFor(caller), reference);
 }
@@ -244,16 +183,7 @@ export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): Acto
   return registerLocalActorState(parent, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task' });
 }
 
-/**
- * Register a child and return its bound HANDLE, without a runtime.
- *
- * MODULE-LOCAL, because `registerLocalNode` is the only shape that wants a
- * handle and no binding: a swarm node is registered and immediately acted as,
- * with nothing in between to hand a binding to. Every caller outside this
- * module registers with `registerLocalActor` and binds with `bindLocalActor` —
- * the pair a hire and a head already go through, and the one that mints a
- * handle a host can fence.
- */
+/** Module-local: only `registerLocalNode` wants a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
 function registerLocalActorState(parent: ActorHandle, input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] }): ActorHandle {
   const scope = scopeFor(parent);
   const entry = scope.directory.apply(parent, scope.path, { action: 'register', ...input });
@@ -272,13 +202,7 @@ function requireBinding(binding: LocalActorBinding): LocalActorScope {
   return scope;
 }
 
-/**
- * Bind a handle to an actor this root issued.
- *
- * The directory row is the binding authority; comparing it with an identity
- * mirror seeded from that directory adds no independent validation. A singleton
- * identity row cannot represent the N actors sharing this database.
- */
+/** Bind a handle to an actor this root issued; the directory row is the binding authority. */
 export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
   const scope = requireBinding(binding);
   const validate = () => { scope.directory.validate(binding.reference, scope.path); };
@@ -299,8 +223,7 @@ export function requireLocalActorWorkspace(origin: ActorHandle, actor: ActorHand
 
 const retiring = new WeakMap<WorkspaceActorDirectory, Map<string, Promise<void>>>();
 
-/** One retirement: the scope it runs in, the directory row it names, and the
- *  physical cleanup that must succeed before the row is released. */
+/** One retirement; the physical cleanup must succeed before the row is released. */
 interface LocalRetirement {
   scope: LocalActorScope;
   caller: ActorReference;
@@ -338,16 +261,8 @@ export async function retireLocalActor(parent: ActorHandle, name: string, refere
 }
 
 /**
- * Cancel a birth that FAILED, against the record it was admitted under.
- *
- * `cancelCreation`, never `register`. Registering the child and then destroying
- * it is wrong twice over: `register` accepts a name, kind or lifetime that does
- * NOT match the admitted creation (the directory's own `cancelCreation`
- * refuses that as `denied`), and the row it writes passes through `active`, so
- * a roster or inspection read landing between the two statements sees a live
- * child that was never born. This returns the reference so the caller can
- * complete the physical half through whichever host owns the actor's runtime
- * objects.
+ * Cancel a failed birth via `cancelCreation`, never register-then-destroy: `register` accepts
+ * mismatched name/kind/lifetime and its row passes through `active`, visible to concurrent reads.
  */
 export function cancelLocalCreation(
   parent: ActorHandle,

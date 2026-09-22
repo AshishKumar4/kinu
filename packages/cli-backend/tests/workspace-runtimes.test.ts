@@ -1,12 +1,4 @@
-/**
- * The workspace toolchain, asserted through the shell the agent gets.
- *
- * Every assertion here is a command exit code, because that is the only thing
- * that decides whether the agent can do the work: a runtime that is installed
- * but unregistered, or registered against a runner this workspace cannot build,
- * is still `command not found`. Before this suite existed the workspace answered
- * 127 to `python3`, `pip`, `bash` and `npm`, and nothing failed.
- */
+/** The workspace toolchain, asserted through shell exit codes: an unregistered runtime is still `command not found`. */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
@@ -26,12 +18,9 @@ afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
-/** A workspace over a real file, so a reopen sees what the first one wrote. */
 function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): WorkspaceBundle {
   const database = new Database(path);
   databases.push(database);
-  // The same SQL and transaction adapters `createCLIRuntime` opens the real
-  // workspace with, so this measures the production seam rather than a shim.
   const sql = nimbusSql(database);
 
   return createWorkspace({
@@ -53,8 +42,6 @@ describe('workspace runtime provisioning', () => {
     expect(python.exitCode).toBe(0);
     expect(python.stdout).toContain('Python 3.13.14');
 
-    // Not just a version banner — the interpreter evaluates and its stdout comes
-    // back, which is what makes it an executor rather than a string.
     const evaluated = await workspace.shell.exec('python3 -c "print(6*7)"');
     expect(evaluated.exitCode).toBe(0);
     expect(evaluated.stdout.trim()).toBe('42');
@@ -79,7 +66,6 @@ describe('workspace runtime provisioning', () => {
 
     expect(await workspace.shell.exec('npm --version')).toMatchObject({ exitCode: 0, stdout: '10.0.0\n' });
     expect(await workspace.shell.exec('npx --version')).toMatchObject({ exitCode: 0, stdout: '10.0.0\n' });
-    // The npm implementation is Nimbus's own and writes into this filesystem.
     expect(await workspace.shell.exec('npm init -y')).toMatchObject({ exitCode: 0 });
     expect(await workspace.vfs.exists('package.json')).toBe(true);
   });
@@ -87,12 +73,10 @@ describe('workspace runtime provisioning', () => {
   test('nothing is installed until a provisioned command is invoked', async () => {
     const workspace = open(dbPath());
 
-    // The install root the seeder writes. Present before any command runs means
-    // provisioning moved onto the workspace-open path.
+    // Present before any command runs: provisioning happens on the workspace-open path.
     expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes')).toBe(false);
     expect(await workspace.shell.exec('python3 --version')).toMatchObject({ exitCode: 0 });
     expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
-    // Only what was asked for: bash was supplied too and must still be absent.
     expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/bash')).toBe(false);
   });
 
@@ -101,9 +85,7 @@ describe('workspace runtime provisioning', () => {
     const first = open(path);
     expect(await first.shell.exec('python3 --version')).toMatchObject({ exitCode: 0 });
 
-    // A Durable Object that was evicted comes back with the filesystem and an
-    // empty command registry: without boot-time re-registration the runtime is
-    // on disk and invisible.
+    // An evicted Durable Object returns with the filesystem and an empty command registry; boot must re-register.
     const reopened = open(path);
     const python = await reopened.shell.exec('python3 --version');
     expect(python.exitCode).toBe(0);
@@ -121,14 +103,8 @@ describe('workspace runtime provisioning', () => {
   test('git is not claimed locally — @nimbus-sh/core ships no git implementation', async () => {
     const workspace = open(dbPath());
 
-    // Hosted sessions get git from @nimbus-sh/worker (dist/git/commands.js:217),
-    // which needs a Durable Object for its network subcommands and is not a
-    // dependency of @kinu.run/core. This asserts the gap so that closing it has
-    // to be deliberate rather than accidental.
-    //
-    // Asked through the shell's own `type` builtin rather than by running `git`:
-    // it reads the command registry directly, which is the thing under test, and
-    // it does not read as a host-git spawn to anyone — human or lint rule.
+    // Hosted git comes from @nimbus-sh/worker (dist/git/commands.js:217), not @kinu.run/core; the gap is asserted so closing
+    // it is deliberate. Asked via `type`, which reads the command registry rather than spawning host git.
     const resolved = await workspace.shell.exec('type git');
     expect(resolved.exitCode).not.toBe(0);
     expect(`${resolved.stdout}${resolved.stderr}`).toContain('not found');

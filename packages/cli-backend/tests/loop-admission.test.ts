@@ -1,20 +1,6 @@
 /**
- * THE LOOP'S ADMISSION IS DURABLE WITHOUT ITS KICKS.
- *
- * A send that reaches the loop while the slot is held is admitted the moment
- * the slot frees — by the loop's own recheck, not by the one-shot signals
- * that happen to accompany it. Two such signals exist and both are DEAD in
- * every case here: the kick a send makes (`pump()`, a no-op while a pump is
- * running) and the debounced drain timer (the host's `setTimer`, which this
- * suite drops on the floor). What is left is the durable re-drive: the pump's
- * recheck of its queue at turn close, and the next activation's drain of the
- * pending-event ledger at wake. Each case ends at a MODEL CALL carrying the
- * queued text, because 'queued' that never reaches the model is the defect
- * measured live (kinu-logs/bgjob-wake).
- *
- * Red if the re-drive is removed: a pump that ran one item per kick, or a
- * wake that did not read the ledger, leaves the queued turn where the dead
- * kick left it.
+ * A send reaching the loop while the slot is held is admitted by the loop's durable re-drive (turn-close recheck,
+ * wake-time ledger drain), with both one-shot kicks dead. Red if the re-drive is removed.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -40,9 +26,7 @@ const UserLineSchema = v.object({
   content: v.union([v.string(), v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) }))]),
 });
 
-/** The last user line of a prompt that is a MESSAGE — the text the turn was
- *  opened for — skipping the runtime's own context blocks, which ride the
- *  prompt as user lines too. */
+/** The last user line that is a message, skipping runtime context blocks that also ride as user lines. */
 function askedFor(prompt: ReadonlyArray<unknown>): string {
   const lines = prompt.flatMap((message) => {
     const user = v.safeParse(UserLineSchema, message);
@@ -56,8 +40,7 @@ function askedFor(prompt: ReadonlyArray<unknown>): string {
   return lines.filter((line) => !line.startsWith('<') && !line.startsWith('[')).at(-1) ?? '';
 }
 
-/** Call one streams a delta and PARKS until `release` — the slot held. Every
- *  later call answers at once. `asked` records what each call was opened for. */
+/** Call one streams a delta and parks until `release`; later calls answer at once. */
 function holdingModel(release: Promise<void>, asked: string[]): TestLanguageModelV2 {
   let calls = 0;
 
@@ -88,8 +71,7 @@ function holdingModel(release: Promise<void>, asked: string[]): TestLanguageMode
   });
 }
 
-/** The loop's host with its debounced drain timer DEAD: a scheduled drain
- *  never fires, so nothing but the loop's own re-drive can admit what waits. */
+/** The loop's host with its debounced drain timer dead. */
 class DroppedTimerSession extends LocalAgentSession {
   override setTimer(): void {}
 }
@@ -127,13 +109,9 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const events: SessionEvent[] = [];
     const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
 
-    // The slot is held: the user turn is inside its parked model call.
     const userTurn = session.send('hold the slot');
     await waitFor(() => events.some((event) => event.type === 'text-delta'), 'the held turn never reached its model call');
 
-    // The wake arrives at the loop's admission while the slot is held. Its
-    // kick is a no-op (a pump is running) and the drain timer is dead: the
-    // only thing that can run it is the recheck when the slot frees.
     const wake = session.enqueueTurn({
       text: WAKE_TEXT,
       idempotencyKey: 'bg:bgjob-held',
@@ -142,12 +120,9 @@ describe('the loop admits a send queued while the slot is held, with every one-s
 
     expect(asked).toEqual(['hold the slot']);
 
-    // The slot frees.
     gate.resolve();
     await userTurn;
 
-    // The queued wake ran next, as its own turn, and reached the model with
-    // the runner's message.
     await expect(wake).resolves.toEqual({ status: 'queued' });
     await waitFor(() => events.filter((event) => event.type === 'turn-end').length === 2, 'the woken turn never closed');
     expect(asked).toEqual(['hold the slot', WAKE_TEXT]);
@@ -162,10 +137,7 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const db = openDb('wake');
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
 
-    // What the runner's compensation writes when a wake could not be delivered
-    // — the durable retry row — with the process that wrote it gone before its
-    // debounced drain ever fired. This is the ledger as the next activation
-    // finds it.
+    // The runner's durable retry row, left by a process gone before its debounced drain fired.
     new EventLog(makeSqlExec(db), rt.actor).publish({
       descriptor: {
         ingress: 'timer_alarm',
@@ -181,9 +153,6 @@ describe('the loop admits a send queued while the slot is held, with every one-s
       now: Date.now(),
     });
 
-    // The next activation, its own drain timer dead too. The wake's recheck of
-    // the ledger is what admits the retry: one programmatic turn, opened for the
-    // runner's message, reaching the model.
     const gate = Promise.withResolvers<void>();
     gate.resolve();
     const asked: string[] = [];

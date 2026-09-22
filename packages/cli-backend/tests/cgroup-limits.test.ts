@@ -1,7 +1,5 @@
-// Behaviour tests for the cgroup reader — the truth `nproc` cannot tell the
-// model. A benchmark task OOM-died running `make -j$(nproc)` in a 1-CPU/2GB
-// container, so what matters here is (a) both hierarchies are actually read,
-// and (b) an environment with no limit says NOTHING rather than guessing.
+// cgroup limits: a task OOM-died on `make -j$(nproc)` in a 1-CPU/2GB container. Both hierarchies must be read,
+// and no limit means saying nothing.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -9,7 +7,6 @@ import { join } from 'node:path';
 
 import { readCgroupLimits } from '../src/cgroup-limits';
 
-/** A cgroupfs fixture: paths relative to the mount, contents verbatim. */
 function cgroupfs(files: Record<string, string>): string {
   const root = scratchDir('cgroup');
 
@@ -22,7 +19,6 @@ function cgroupfs(files: Record<string, string>): string {
   return root;
 }
 
-/** A /proc/self/cgroup fixture. Its own file, outside the mount. */
 function procSelf(content: string): string {
   const dir = scratchDir('procself');
   const path = join(dir, 'cgroup');
@@ -47,7 +43,7 @@ describe('cgroup v2', () => {
   test('a fractional quota still runs one worker — never zero', () => {
     const root = cgroupfs({ 'cpu.max': '50000 100000\n' });
     expect(readCgroupLimits({ root, procSelfCgroup: procSelf(NAMESPACED) })).toEqual({ cpus: 1 });
-    // …and 2.5 CPUs rounds up too: quota throttles, so the cap is not wasted.
+    // 2.5 CPUs rounds up: quota throttles, so the cap is not wasted.
     const wide = cgroupfs({ 'cpu.max': '250000 100000\n' });
     expect(readCgroupLimits({ root: wide, procSelfCgroup: procSelf(NAMESPACED) })).toEqual({ cpus: 3 });
   });
@@ -64,8 +60,7 @@ describe('cgroup v2', () => {
   });
 
   test('without a cgroup namespace the limits are read at the process\'s own path', () => {
-    // The mount root is the HOST's cgroup here (uncapped); the container's
-    // real limits live at the path /proc/self/cgroup names.
+    // The mount root is the host's uncapped cgroup; container limits live at the path /proc/self/cgroup names.
     const root = cgroupfs({
       'cpu.max': 'max 100000\n',
       'memory.max': 'max\n',

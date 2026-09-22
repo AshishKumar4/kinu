@@ -13,23 +13,15 @@ export interface LocalNodeRuntimeDeps {
 }
 
 /**
- * Readdress the file plane without copying the parent's live model getters.
- *
- * ONE DATABASE, and the node is a logical actor in it: `origin.storage.sql` is
- * the node's SQL too, so its claims, journal steps and program state are its
- * own actor-keyed rows in the workspace's one store. What is genuinely the
- * node's own is its HOME (uid-confined where the plane has a principal
- * registry), its execution router, and — through the mount below — its own
- * `/context`.
+ * Readdress the file plane without copying the parent's live model getters. The
+ * node shares the workspace SQL as its own actor; its home, router, and `/context` are its own.
  */
 export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspace, actor: ActorHandle, source: AgentRuntime, observer?: WriteObserver) => Promise<AgentRuntime> {
   return async (node, actor, origin, observer) => {
     requireLocalActorWorkspace(deps.origin.actor, actor);
     requireLocalActorWorkspace(deps.origin.actor, origin.actor);
 
-    // THIS node's stores, over the shared SQL. A node reading the parent's
-    // claim ledger would present the parent's turns as its own working
-    // history, which is the one thing `/context` must never do.
+    // A node reading the parent's claim ledger would present the parent's turns as its own history.
     const stores = createAgentStores(() => origin.storage.sql, () => actor, (write) => origin.storage.transactionSync(write), async () => {
       requireLocalActorWorkspace(origin.actor, actor);
 
@@ -66,10 +58,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       router = ownRouter;
     } else {
-      // Sharing the origin's plane still means NOT sharing its context. The
-      // origin's table already answers every mount point; this one layer
-      // re-answers `/context` as the node's and delegates everything else,
-      // rather than re-declaring a table the node has no different answer for.
+      // Share the origin's plane but re-answer `/context` as the node's.
       vfs = withMountTable(vfs, [ownContext]);
     }
 

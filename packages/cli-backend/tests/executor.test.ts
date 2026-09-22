@@ -58,12 +58,8 @@ describe('createSandboxedExecutor', () => {
     expect(result.error).toContain('does not support language "ruby"');
   });
 
-  // The TB2.1 nginx hang: the craft probe's code daemonized a server, the
-  // daemon kept the inherited stdout pipe open after the probe exited, and the
-  // EOF-bound read held `kinu exec` until the harness cap killed it. With
-  // file-backed stdio the read completes at EXIT. The daemonization below is
-  // the same shape (sh backgrounds a child holding the wrapper's stdio and
-  // exits); a hang outlives bun's 5s default test timeout and fails red.
+  // A daemonized child holding the wrapper's stdio must not hold `kinu exec` open (file-backed stdio);
+  // a hang outlives bun's 5s default test timeout and fails red.
   test('a daemonized grandchild does not hold the executor past exit', async () => {
     const result = await createSandboxedExecutor().execute(
       'const c = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nc.unref();\n"done"',
@@ -73,9 +69,7 @@ describe('createSandboxedExecutor', () => {
     expect(result).toEqual({ result: 'done' });
   });
 
-  // Red on 2026-09-05: the wrapper ran the expression form, caught its runtime
-  // throw, and ran the statement form too, so a side effect before the throw
-  // landed twice. The form is now chosen by parsing, and the code runs once.
+  // A side effect before a runtime throw must land once, not once per expression/statement form.
   test('a throwing expression runs its side effect once, and the throw is reported', async () => {
     const marker = join(scratchDir('executor-once'), 'count.txt');
     const append = JSON.stringify(`echo x >> ${marker}`);

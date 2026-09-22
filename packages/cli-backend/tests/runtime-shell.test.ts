@@ -1,20 +1,6 @@
 /**
- * The host shell's process contract.
- *
- * These are the assertions an in-process unit test normally cannot make,
- * which is why this class of defect keeps shipping: everything here is about
- * WHEN a call returns and WHAT the runtime still holds afterwards, not about
- * the value. A suite that only inspects return values is structurally blind to
- * it — the bug is in the timing and the handles, and both look identical to a
- * green assertion.
- *
- * The defect these lock: `exec` resolved on the child's `close` event. `close`
- * does not mean "the command finished" — it means "the command finished AND
- * every pipe it handed out has been closed". A shell command that backgrounds
- * anything (`npm run dev &`, `python -m http.server &`, `./server &`) leaves a
- * grandchild holding the inherited stdout pipe, so `close` waits for the
- * SERVER's lifetime. The agent typed one command, got its prompt back in the
- * terminal instantly, and the tool call sat there for as long as the server ran.
+ * The host shell's process contract: `exec` returns when the command exits, not when every inherited pipe closes
+ * (a backgrounded server holds stdout), and leaves nothing keeping the event loop alive.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -37,10 +23,7 @@ describe('createHostShell', () => {
   });
 
   test('returns when the COMMAND finishes, not when a backgrounded child does', async () => {
-    // `sleep 20 &` inherits the stdout pipe this shell reads. The command
-    // itself is over in milliseconds — `echo` runs, `sh` exits — so that is
-    // when the tool call has to come back. Waiting on the inherited pipe
-    // instead measures 20.3s for a command whose own work took ~5ms.
+    // `sleep 20 &` inherits the stdout pipe; the call must return when `sh` exits, not when the pipe closes.
     const shell = createHostShell(process.cwd());
     const started = Date.now();
     const result = await shell.exec('sleep 20 & echo started');
@@ -48,16 +31,12 @@ describe('createHostShell', () => {
 
     expect(result.stdout).toContain('started');
     expect(result.exitCode).toBe(0);
-    // Generous by three orders of magnitude against the correct behaviour
-    // (~50ms) and still an order of magnitude under the broken one.
+    // Generous against the correct ~50ms, still far under the broken ~20s.
     expect(elapsed).toBeLessThan(3_000);
   });
 
   test('a backgrounded child does not keep the host process alive', async () => {
-    // The other half of the same contract, and the half only a real process can
-    // answer: even once `exec` has returned, an un-unref'd child handle or a
-    // still-open pipe keeps node's event loop alive, so a one-shot `kinu
-    // exec` that started a server would refuse to exit until the server died.
+    // Even after `exec` returns, an un-unref'd child or open pipe would keep a one-shot `kinu exec` from exiting.
     const script = `
       import { createHostShell } from ${JSON.stringify(new URL('../src/runtime.js', import.meta.url).pathname)};
       const shell = createHostShell(process.cwd());
@@ -76,10 +55,7 @@ describe('createHostShell', () => {
   });
 
   test('output written before the command exits is not truncated by the early return', async () => {
-    // The failure mode this must not introduce: returning on `exit` instead
-    // of `close` is only correct if everything the command itself wrote is
-    // still collected. A large write goes through the pipe in several chunks,
-    // so this is where a naive early return loses bytes.
+    // Returning on `exit` is only correct if a large multi-chunk write is still fully collected.
     const shell = createHostShell(process.cwd());
     const result = await shell.exec('seq 1 20000');
 

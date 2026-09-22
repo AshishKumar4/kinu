@@ -1,10 +1,4 @@
-/**
- * Shadow-git checkpoint engine — behavior tests against REAL git on this
- * host (no mocks on the engine path). Covers the borrow-list #6 contract:
- * one snapshot per turn at the first mutation, exact restore (content,
- * deletions, additions), the user's own .git untouched, bounded retention,
- * and honest degradation without git.
- */
+/** Shadow-git checkpoint engine against real git: per-turn snapshot, exact restore, user .git untouched, bounded retention. */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs';
 import { scratchDir, git, present } from '@kinu.run/test-utils';
@@ -39,7 +33,7 @@ describe('createHostCheckpoints', () => {
     const first = await engine.ensureCheckpoint(work);
     expect(first).toBeTruthy();
     writeFileSync(join(work, 'a.txt'), 'two');
-    expect(await engine.ensureCheckpoint(work)).toBeNull(); // deduped within the turn
+    expect(await engine.ensureCheckpoint(work)).toBeNull();
 
     engine.beginTurn({ turnId: 'turn-2', sessionId: 'sess-1' });
     const second = await engine.ensureCheckpoint(work);
@@ -59,7 +53,7 @@ describe('createHostCheckpoints', () => {
     engine.beginTurn({ turnId: 't1', sessionId: 's' });
     const first = await engine.ensureCheckpoint(work);
     engine.beginTurn({ turnId: 't2', sessionId: 's' });
-    const second = await engine.ensureCheckpoint(work); // nothing changed
+    const second = await engine.ensureCheckpoint(work);
     expect(second).toBe(first);
     expect(await engine.list()).toHaveLength(1);
   });
@@ -77,7 +71,6 @@ describe('createHostCheckpoints', () => {
 
     expect(id).toBeTruthy();
 
-    // The "agent" then mutates everything: edit, delete, create.
     writeFileSync(join(work, 'src', 'main.ts'), 'CLOBBERED');
     writeFileSync(join(work, 'README.md'), 'CLOBBERED TOO');
     rmSync(join(work, 'doomed.txt'));
@@ -87,8 +80,8 @@ describe('createHostCheckpoints', () => {
     const kinds = Object.fromEntries(plan.files.map((f) => [f.path, f.kind]));
     expect(kinds['src/main.ts']).toBe('modify');
     expect(kinds['README.md']).toBe('modify');
-    expect(kinds['doomed.txt']).toBe('create');     // restore re-creates it
-    expect(kinds['new-junk.txt']).toBe('delete');   // restore removes it
+    expect(kinds['doomed.txt']).toBe('create');
+    expect(kinds['new-junk.txt']).toBe('delete');
     expect(summarizeRestorePlan(plan.files)).toEqual({ modified: 2, created: 1, deleted: 1 });
 
     const result = await engine.restore(work, id);
@@ -99,7 +92,6 @@ describe('createHostCheckpoints', () => {
     expect(readFileSync(join(work, 'doomed.txt'), 'utf8')).toBe('will be deleted by the agent');
     expect(existsSync(join(work, 'new-junk.txt'))).toBe(false);
 
-    // Undo-the-undo: the pre-restore snapshot restores the clobbered state.
     await engine.restore(work, present(result.preRestoreId, 'the pre-restore snapshot id'));
     expect(readFileSync(join(work, 'src', 'main.ts'), 'utf8')).toBe('CLOBBERED');
     expect(existsSync(join(work, 'doomed.txt'))).toBe(false);
@@ -115,9 +107,7 @@ describe('createHostCheckpoints', () => {
 
     writeFileSync(join(work, 'a.txt'), 'damage');
 
-    // The turn is still armed when /undo restores mid-session; the safety
-    // snapshot must NOT inherit it, or /undo groups it with turn-1 and
-    // "/undo 1" after a restore lands back on the pre-turn state.
+    // The turn is still armed during /undo; the safety snapshot must not inherit it or "/undo 1" lands on the pre-turn state.
     const result = await engine.restore(work, id);
     const entries = await engine.list();
     const preRestore = present(entries.find((e) => e.id === result.preRestoreId), 'the pre-restore snapshot entry');
@@ -132,9 +122,7 @@ describe('createHostCheckpoints', () => {
   test("the user's own .git repo is never snapshotted or touched", async () => {
     const { work, engine } = setup();
 
-    // A real user repo in the target dir. `git()` clears the whole GIT_
-    // prefix, not just the config vars: a git hook exports GIT_DIR, and with
-    // it set these `cwd: work` calls read and write the developer's checkout.
+    // `git()` clears every GIT_ var: a hook-exported GIT_DIR would redirect these calls to the developer's checkout.
     git(work, 'init', '--quiet', '-b', 'main');
     writeFileSync(join(work, 'file.txt'), 'v1');
     git(work, 'add', '-A');
@@ -147,12 +135,9 @@ describe('createHostCheckpoints', () => {
     writeFileSync(join(work, 'file.txt'), 'v2');
     await engine.restore(work, id);
 
-    // The user's repo is untouched: same HEAD, fully functional, no shadow
-    // refs leaked into it.
     expect(git(work, 'rev-parse', 'HEAD').trim()).toBe(userHeadBefore);
     const refs = git(work, 'for-each-ref');
     expect(refs).not.toContain('refs/kinu');
-    // And the snapshot itself excluded .git entirely.
     const plan = await engine.plan(work, id);
 
     expect(plan.files.filter((f) => f.path.startsWith('.git/'))).toEqual([]);
@@ -174,20 +159,8 @@ describe('createHostCheckpoints', () => {
   });
 
   /**
-   * THE WINDOW CANNOT HIDE A CHECKPOINT THAT EXISTS.
-   *
-   * Retention is per WORKING DIRECTORY (`DEFAULT_CHECKPOINT_KEEP` = 50) while
-   * the reader's limit is global across every directory — the web client asks
-   * for 200 (WorkspacePage.tsx) and then filters by turn on the CLIENT. So once
-   * the operator has a handful of active directories, total entries pass the
-   * limit and a turn whose checkpoint is STILL RETAINED falls outside the
-   * window. The client saw an empty filter result and rendered it as a fact
-   * about the world: "This turn changed no files on your machine."
-   *
-   * Same class as the availability lie fixed above it, and the same class as the
-   * chat-history incident: a read that silently returns a short window, reported
-   * as an absence. Scaled down here (3 dirs x keep 4, read 6) because the defect
-   * is `limit < total retained`, not the literal 200.
+   * Retention is per directory (`DEFAULT_CHECKPOINT_KEEP`) but the web client's read limit is global,
+   * so a retained checkpoint can fall outside the window and read as "no files changed". Scaled to 3 dirs x keep 4, read 6.
    */
   test('a turn-keyed read finds a checkpoint the global window cannot reach', async () => {
     const { root, engine } = setup({ keep: 4 });
@@ -199,8 +172,6 @@ describe('createHostCheckpoints', () => {
       return dir;
     });
 
-    // The turn under test is the OLDEST, in the FIRST directory, so every
-    // later checkpoint outranks it in a newest-first window.
     const buried = 'turn-buried';
 
     for (const [index, dir] of dirs.entries()) {
@@ -214,25 +185,20 @@ describe('createHostCheckpoints', () => {
       }
     }
 
-    // It survived retention: per-directory pruning keeps 4 and each got 4.
     const everything = await engine.list({ limit: 1000 });
     expect(everything).toHaveLength(12);
     expect(everything.filter((e) => e.turnId === buried)).toHaveLength(1);
 
-    // But the window the client uses cannot see it — this is the lie.
     const windowed = await engine.list({ limit: 6 });
     expect(windowed).toHaveLength(6);
     expect(windowed.filter((e) => e.turnId === buried)).toHaveLength(0);
 
-    // A turn-keyed read finds it regardless of how many newer ones exist, and
-    // the limit cannot bury it, because the store filters before it truncates.
+    // The store filters by turn before it truncates, so the limit cannot bury it.
     const keyed = await engine.list({ turnId: buried, limit: 6 });
     expect(keyed).toHaveLength(1);
     expect(keyed[0].turnId).toBe(buried);
     expect(keyed[0].dir).toBe(dirs[0]);
 
-    // And a turn that genuinely has no checkpoint still reads empty, so the
-    // fix does not make every turn look restorable.
     expect(await engine.list({ turnId: 'never-ran' })).toEqual([]);
   });
 
@@ -241,7 +207,6 @@ describe('createHostCheckpoints', () => {
 
     writeFileSync(join(work, 'a.txt'), 'data');
     engine.beginTurn({ turnId: 't', sessionId: 's' });
-    // Never blocks the mutation path:
     expect(await engine.ensureCheckpoint(work)).toBeNull();
     expect(await engine.list()).toEqual([]);
     expect(await engine.status()).toEqual({ available: false, reason: 'checkpoints unavailable: git not found' });
@@ -257,23 +222,17 @@ describe('createHostCheckpoints', () => {
 
     rmSync(work, { recursive: true, force: true });
     await expect(engine.plan(work, id)).rejects.toThrow('checkpoint staging failed: working directory not found: ');
-    expect(await engine.status()).toEqual({ available: true }); // git is still here
+    expect(await engine.status()).toEqual({ available: true });
   });
 
   test('a path it may not read is skipped and named in the record, not a failed checkpoint', async () => {
-    // The live failure verbatim: `checkpoint staging failed: warning: could not
-    // open directory 'systemd-private-…'`, which accounted for 3 of 4
-    // `eval` failures in one run. A directory owned by someone else is
-    // not a failed checkpoint, and refusing to snapshot is not a reason to
-    // refuse the agent's write.
+    // An unreadable directory (e.g. `systemd-private-…`) is not a failed checkpoint and must not refuse the agent's write.
     const { work, engine } = setup();
     const foreign = join(work, 'systemd-private-9f2c');
 
     try {
       writeFileSync(join(work, 'a.txt'), 'mine');
-      // Sorts AFTER both unreadable entries, so a staging pass that aborts on
-      // the first refusal leaves it out of the snapshot — a checkpoint missing
-      // files restores a tree the user never had.
+      // Sorts after the unreadable entries, so a pass that aborts on the first refusal drops it.
       writeFileSync(join(work, 'zz.txt'), 'also mine');
       mkdirSync(foreign, { recursive: true });
       writeFileSync(join(foreign, 'inside.txt'), 'not mine');
@@ -286,21 +245,16 @@ describe('createHostCheckpoints', () => {
 
       expect(id).toBeTruthy();
 
-      // RECORDED, not swallowed: the snapshot says which paths are missing from
-      // it, so an incomplete restore is explainable rather than surprising.
       const [entry] = await engine.list();
       expect(entry.reason).toBe('file write [skipped 2 unreadable: locked.txt systemd-private-9f2c]');
 
-      // And the readable tree is WHOLE — including the file that sorts after the
-      // refusals, which is what an aborted staging pass would have dropped.
       writeFileSync(join(work, 'a.txt'), 'clobbered');
       rmSync(join(work, 'zz.txt'));
       await engine.restore(work, id);
       expect(readFileSync(join(work, 'a.txt'), 'utf8')).toBe('mine');
       expect(readFileSync(join(work, 'zz.txt'), 'utf8')).toBe('also mine');
 
-      // The unreadable paths are untouched by the restore: absent from the tree
-      // means absent from the restore's business, never "delete it".
+      // Unreadable paths are outside the restore's business, never deleted.
       expect(existsSync(join(work, 'locked.txt'))).toBe(true);
       expect(existsSync(foreign)).toBe(true);
     } finally {
@@ -310,11 +264,7 @@ describe('createHostCheckpoints', () => {
   });
 
   test('the shared temp root is not a work tree, so it is never snapshotted', async () => {
-    // `workdirForPath('/tmp/scratch.js')` finds no project marker above it and
-    // answers `/tmp` — 12,017 entries on this box, belonging to every process
-    // and user on the machine. Tolerating the unreadable ones (above) is what
-    // makes staging that tree SUCCEED, so this is the difference between a
-    // skipped snapshot and copying the box's scratch into the agent's store.
+    // `workdirForPath('/tmp/scratch.js')` answers `/tmp`; tolerating unreadable entries would then copy the box's scratch into the store.
     const { engine } = setup();
 
     expect(engine.workdirForPath(join(tmpdir(), 'scratch.js'))).toBe(tmpdir());
@@ -344,8 +294,7 @@ describe('checkpointed runtime shell', () => {
     try {
       writeFileSync(join(work, 'precious.txt'), 'original');
 
-      // Checkpoint storage is global per agent name, so this fixture mints a
-      // unique one. A stable test name would read valid stores from prior runs.
+      // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
       const rt = createCLIRuntime(db, {
         dbPath: db.filename,
         cwd: work,
@@ -353,7 +302,7 @@ describe('checkpointed runtime shell', () => {
         llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
       });
 
-      // The default is 'strict', which asks a channel this runtime has none of.
+      // The default 'strict' asks a channel this runtime lacks.
       rt.actor.config.setShellApprovalMode('allow_all');
       const shell = rt.shell;
 

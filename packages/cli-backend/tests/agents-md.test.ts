@@ -1,13 +1,5 @@
-// Behavior tests for AGENTS.md discovery — the nearest-file-wins walk-up
-// chain (agents.md standard) feeding core's admission and renderer. Discovery
-// stats every candidate and reads only the ones that fit the model's window,
-// so these tests assert what was READ as much as what was rendered.
-//
-// Two gates sit in front of the read. Containment: a file found at
-// `<dir>/AGENTS.md` may only contribute bytes that live under `<dir>`, so a
-// symlink out of the tree cannot pipe `/etc/passwd` into a prompt. Trust: the
-// bytes that survive are classified by the owner's approval resolver, which is
-// what decides whether they can be placed as system instructions at all.
+// AGENTS.md discovery: containment keeps a symlink from piping outside bytes into a prompt;
+// trust classification decides whether surviving bytes may be system instructions.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect } from 'bun:test';
 import { chmodSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -19,21 +11,15 @@ import {
 } from '@kinu.run/core';
 import { discoverAgentsMd } from '../src/agents-md';
 
-/** Wide enough that admission is never what a chain-order test measures. */
 const WIDE: ModelWindow = { contextWindow: 400_000, modelOutputLimit: 32_000 };
 
-/** A window whose answer reservation is its own declared maximum, so the
- *  instruction budget is the other half of it. */
+/** Answer reservation equals the declared maximum, so the instruction budget is the other half. */
 const NARROW: ModelWindow = { contextWindow: 800, modelOutputLimit: 400 };
 
-/** Derived, never a literal: the same two facts the allocator is built from. */
 const budgetOf = (limits: ModelWindow): number => stepContextLimit(limits) * CHARS_PER_TOKEN;
 
-/** The owner has approved everything — the resolver a test uses when trust is
- *  not the thing it measures, so admission and rendering keep their meaning. */
 const APPROVED: InstructionTrustResolver = () => 'approved';
 
-/** Nobody approved anything: the standing answer for a file with no decision. */
 const UNVERIFIED: InstructionTrustResolver = () => 'unverified';
 
 function makeTree(): string {
@@ -68,7 +54,6 @@ describe('discoverAgentsMd', () => {
     const sources = discoverAgentsMd(nested, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root)).map((f) => f.content))
       .toEqual(['only root']);
-    // A file with no instructions is not worth pointing the model at either.
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
   });
 
@@ -84,10 +69,7 @@ describe('discoverAgentsMd', () => {
     const path = join(root, 'AGENTS.md');
     const oversized = 'B'.repeat(budgetOf(NARROW) + 1);
     writeFileSync(path, oversized);
-    // A trap, not a fixture detail: an lstat still answers the size of a file
-    // with no permission bits, but readFileSync cannot open it and `tolerate`
-    // only swallows ENOENT. A discoverer that reads before it admits therefore
-    // throws EACCES here instead of quietly materializing the whole file.
+    // lstat still sizes an unreadable file, but readFileSync throws EACCES: a read-before-admit discoverer fails here.
     chmodSync(path, 0o000);
 
     const sources = discoverAgentsMd(root, NARROW, APPROVED);
@@ -134,8 +116,6 @@ describe('discoverAgentsMd', () => {
 });
 
 describe('discoverAgentsMd — containment', () => {
-  /** The bytes an escaping link would exfiltrate. Distinctive so a leak can be
-   *  searched for across the whole result rather than one field of it. */
   const SECRET = 'ssh-rsa AAAA-exfiltrated-private-key';
 
   test('an AGENTS.md symlinked to a file outside its directory is not admitted', () => {
@@ -148,7 +128,6 @@ describe('discoverAgentsMd — containment', () => {
     const sources = discoverAgentsMd(root, WIDE, APPROVED);
     expect(sources.admitted.filter((f) => f.path.startsWith(root))).toEqual([]);
     expect(sources.referenced.filter((ref) => ref.path.startsWith(root))).toEqual([]);
-    // Not one field: nowhere in the result, and nowhere in either rendering.
     expect(JSON.stringify(sources)).not.toContain('exfiltrated');
     expect(renderAgentsMdSection(sources, 'system')).not.toContain('exfiltrated');
     expect(renderAgentsMdSection(sources, 'unverified')).not.toContain('exfiltrated');
@@ -174,14 +153,12 @@ describe('discoverAgentsMd — containment', () => {
     const root = makeTree();
     mkdirSync(join(root, 'rules'));
     writeFileSync(join(root, 'rules', 'shared.md'), 'shared monorepo rules');
-    // Legal on purpose: packages share one rule file this way, and the bytes
-    // still belong to the directory that offers them.
+    // Legal: packages share one rule file this way.
     symlinkSync(join(root, 'rules', 'shared.md'), join(root, 'AGENTS.md'));
 
     const sources = discoverAgentsMd(root, WIDE, APPROVED);
     const inTree = sources.admitted.filter((f) => f.path.startsWith(root));
     expect(inTree.map((f) => f.content)).toEqual(['shared monorepo rules']);
-    // Provenance stays the discovered path, not the link target.
     expect(inTree[0]?.path).toBe(join(root, 'AGENTS.md'));
   });
 
@@ -190,9 +167,7 @@ describe('discoverAgentsMd — containment', () => {
     const nested = join(root, 'pkg');
     mkdirSync(nested);
     writeFileSync(join(root, 'AGENTS.md'), 'root rules');
-    // `pkg/AGENTS.md -> ../AGENTS.md` leaves `pkg`, so `pkg` cannot vouch for
-    // it. Nothing is lost: the walk already reaches the root file on its own,
-    // which is why the chain shows it exactly once.
+    // `pkg/AGENTS.md -> ../AGENTS.md` leaves `pkg`; the walk reaches the root file on its own.
     symlinkSync(join(root, 'AGENTS.md'), join(nested, 'AGENTS.md'));
 
     const sources = discoverAgentsMd(nested, WIDE, APPROVED);
@@ -241,8 +216,6 @@ describe('discoverAgentsMd — trust classification', () => {
     });
 
     expect(sources.admitted.map((f) => f.path)).toContain(path);
-    // Content, not a digest: hashing is the authority's business, so discovery
-    // hands over what it read and one module decides how bytes become a digest.
     expect(asked).toContainEqual({ path, content });
   });
 
@@ -262,8 +235,6 @@ describe('discoverAgentsMd — trust classification', () => {
     writeFileSync(path, 'second rules');
     discoverAgentsMd(root, WIDE, capture);
 
-    // Content-addressed approval: the rewrite asks a different question, which
-    // is the whole invalidation story — no cache to clear, no revoke to call.
     expect(seen).toEqual(['first rules', 'second rules']);
   });
 
@@ -279,16 +250,13 @@ describe('discoverAgentsMd — trust classification', () => {
     });
 
     expect(sources.referenced.map((ref) => ref.path)).toContain(join(root, 'AGENTS.md'));
-    // Trust is about bytes. Nothing was read, so there are no bytes to judge.
     expect(asked).not.toContain(join(root, 'AGENTS.md'));
   });
 });
 
 describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
   test('a self-referential AGENTS.md is reported unavailable, not thrown', () => {
-    // One `ln -s AGENTS.md AGENTS.md` must not take the whole turn down: both
-    // statSync and realpathSync throw ELOOP, and a throw escaping discovery is
-    // a one-command denial of service on a plane the agent writes.
+    // A self-link makes statSync and realpathSync throw ELOOP; escaping discovery would be a one-command DoS.
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     symlinkSync(path, path);
@@ -313,8 +281,6 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
   });
 
   test('a cycle does not stop the real files in the chain from being carried', () => {
-    // The property that matters: assembly continues. A broken link costs its own
-    // file and nothing else.
     const root = makeTree();
     const nested = join(root, 'app');
     mkdirSync(nested, { recursive: true });
@@ -328,7 +294,6 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
   });
 
   test('an unavailable path is never handed to the resolver', () => {
-    // Nothing was read, so there are no bytes to classify or to approve.
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     symlinkSync(path, path);
@@ -343,8 +308,6 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
   });
 
   test('an escaping symlink is reported with a reason that names no target', () => {
-    // The reason must not leak the path outside the tree — that content is
-    // exactly what this directory may not speak for.
     const root = makeTree();
     const outside = join(scratchDir('outside'), 'secret.md');
     writeFileSync(outside, 'SECRET-BYTES');

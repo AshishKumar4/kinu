@@ -1,17 +1,5 @@
-// OpenCode bridge provider (LOCAL ONLY) — lets Kinu local agents reuse the
-// model providers and auth tokens configured in a locally-installed opencode
-// CLI. No separate proxy daemon is needed: this provider reads opencode's
-// auth.json at request time, resolves the remote config for upstream provider
-// routes, and proxies chat-completion requests directly.
-//
-// Requires: `opencode` binary on PATH and at least one authenticated provider
-// (run `opencode auth login <origin>`). The provider auto-detects the opencode
-// instance URL from auth.json, so it works with any opencode deployment — not
-// just a specific hosted instance.
-//
-// This lives in cli-backend (the local backend). The cloud server has no
-// access to the local opencode installation, so nothing here is reachable from
-// cf-backend.
+// OpenCode bridge provider (local only): reuses a local opencode install's
+// providers and auth, reading auth.json at request time and proxying requests.
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -78,28 +66,21 @@ const modelMetadataSchema = v.object({
 });
 
 export interface OpenCodeProviderOptions {
-  /** Path to opencode's auth.json. Defaults to ~/.local/share/opencode/auth.json. */
+  /** Defaults to ~/.local/share/opencode/auth.json. */
   authPath?: string;
-  /** opencode binary name or path. Defaults to 'opencode' on PATH. */
   opencodeBin?: string;
-  /** Fetch implementation (tests inject). */
   fetch?: typeof fetch;
-  /** Spawn seam (tests inject a fake opencode). */
   spawn?: OpenCodeSpawn;
-  /** Availability probe (tests inject). */
   probe?: () => Promise<OpenCodeAvailability>;
 }
 
 export interface OpenCodeAvailability {
   binary: boolean;
   authenticated: boolean;
-  /** Discovered models (empty when not authenticated). */
   models?: OpenCodeModelInfo[];
-  /** Default model from the remote config. */
   defaultModel?: string;
 }
 
-/** Minimal spawn contract for running `opencode models --verbose`. */
 export interface OpenCodeSpawn {
   (args: string[], opts: { signal?: AbortSignal }): SpawnedOpenCode;
 }
@@ -115,17 +96,12 @@ export interface SpawnedOpenCode {
 export interface OpenCodeModelInfo {
   /** Full model id as opencode reports it, e.g. "openai/gpt-5.6-sol". */
   id: string;
-  /** Provider prefix, e.g. "openai" or "cloudflare-workers-ai". */
   provider: string;
   /** Upstream model id to send to the provider's endpoint. */
   upstreamModel: string;
-  /** Human-readable label. */
   name: string;
-  /** Context window in tokens, if known. */
   contextWindow?: number;
-  /** Whether opencode identifies the model as a reasoning model. */
   reasoning?: boolean;
-  /** AI SDK package opencode uses for the model's API surface. */
   apiNpm?: string;
 }
 
@@ -182,10 +158,8 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
   const availability = () => (availabilityCache ??= probeFn());
 
   function readCredential(): OpenCodeCredential {
-    // OAuth entries need a separate provider-native path: select the requested
-    // provider's credential, refresh or exchange it, resolve its API base URL,
-    // and use that provider's SDK and required headers (including account IDs).
-    // They cannot supply the hosted route map consumed by this well-known path.
+    // OAuth entries need a provider-native path; they cannot supply the hosted
+    // route map this well-known path consumes.
     if (!existsSync(authPath)) {
       throw new Error(`opencode auth not found at ${authPath}. Run: opencode auth login`);
     }
@@ -225,7 +199,6 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       return configCache.config;
     }
 
-    // 1. Fetch well-known metadata to discover the remote config URL.
     const metaRes = await fetchImpl(`${cred.origin}/.well-known/opencode`);
 
     if (!metaRes.ok) throw new Error(`opencode metadata request failed: HTTP ${metaRes.status}`);
@@ -236,7 +209,7 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       throw new Error('opencode metadata has no remote configuration URL');
     }
 
-    // 2. Fetch the remote config, substituting auth tokens in header values.
+    // Substitute auth tokens in header values.
     const configHeaders = new Headers();
 
     for (const [name, value] of Object.entries(meta.remote_config?.headers ?? {})) {
@@ -248,7 +221,6 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     if (!configRes.ok) throw new Error(`opencode configuration request failed: HTTP ${configRes.status}`);
     const config = v.parse(remoteConfigSchema, await configRes.json());
 
-    // 3. Resolve provider routes (baseURL + auth headers).
     const providers: Record<string, ProviderRoute> = {};
 
     for (const [providerId, provider] of Object.entries(config.provider ?? {})) {
@@ -265,7 +237,6 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
       };
     }
 
-    // 4. Discover models via `opencode models --verbose`.
     const models = await discoverModels(spawnFn);
 
     if (models.length === 0) throw new Error('opencode reports no available models');
@@ -323,14 +294,8 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
     createModel(modelId: string): LanguageModel {
       const metadata = modelMetadata.get(modelId);
 
-      // The metadata map is cold until loadConfig() runs (a resumed session
-      // resolves its stored model before ever listing models), and defaulting
-      // an unknown reasoning model to Chat Completions breaks it outright
-      // (gpt-5.6: "use /v1/responses"). Metadata is authoritative when present;
-      // otherwise fall back to the model family. The map warms itself on the
-      // model's FIRST REQUEST — customFetch resolves the config on the way out,
-      // where a failure reaches the caller instead of disappearing into a
-      // detached warm-up nobody awaited.
+      // The metadata map is cold until loadConfig() runs (a resumed session), and
+      // defaulting a reasoning model to Chat Completions breaks it; fall back to family.
       const useResponsesAPI = metadata
         ? metadata.reasoning === true || metadata.apiNpm === '@ai-sdk/openai'
         : isOpenAIReasoningFamily(modelId);
@@ -340,10 +305,8 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
   };
 }
 
-// ─── Model construction ─────────────────────────────────────────────────────
 
 interface OpenCodeModelSpec {
-  /** The opencode model id, e.g. "openai/gpt-5.6-sol". */
   modelId: string;
   resolveConfig: () => Promise<ResolvedConfig>;
   invalidateCache: () => void;
@@ -353,8 +316,6 @@ interface OpenCodeModelSpec {
 
 function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
   const { modelId, resolveConfig, invalidateCache, fetchImpl, useResponsesAPI } = spec;
-  // We split the model id on the first slash to get the provider prefix and
-  // the upstream model id.
   const slash = modelId.indexOf('/');
 
   if (slash < 0) throw new Error(`Invalid opencode model id: ${modelId}`);
@@ -375,11 +336,9 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
       );
     }
 
-    // Rewrite the URL from placeholder to the upstream baseURL.
     const originalUrl = input instanceof Request ? input.url : input.toString();
     const url = originalUrl.replace(placeholder, route.baseURL);
 
-    // Inject provider auth headers.
     const headers = new Headers(init?.headers);
 
     for (const [name, value] of Object.entries(route.headers)) {
@@ -388,14 +347,11 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
 
     headers.set('content-type', 'application/json');
 
-    // Remap the model id in the request body.
     let body = init?.body;
     const textBody = v.safeParse(v.string(), body);
 
     if (textBody.success) {
-      // The body is the ai-SDK's own request json. Failing to read it means the
-      // model id was never remapped, so the request would reach the provider
-      // naming a model it does not have — a 404 three layers from the cause.
+      // An unparsed body leaves the model id unmapped: a 404 far from the cause.
       const parsed = v.parse(JsonObjectSchema, JSON.parse(textBody.output));
       parsed.model = upstreamModel;
 
@@ -413,8 +369,7 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
 
     const response = await modelFetch(url, { ...init, headers, body, signal: init?.signal });
 
-    // Invalidate cache on auth failure so the next request re-reads auth.json
-    // and re-fetches the remote config (the user may have refreshed tokens).
+    // Drop cache on auth failure so the next request re-reads auth.json.
     if (response.status === 401 || response.status === 403) {
       invalidateCache();
     }
@@ -447,20 +402,18 @@ function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
   }).chatModel(modelId);
 }
 
-/** Cold-map fallback only (metadata wins when loaded): OpenAI's gpt-5.x and
- *  o-series are Responses-API reasoning models; chat-completions rejects them. */
+/** Cold-map fallback only: OpenAI's gpt-5.x and o-series are Responses-API
+ *  reasoning models; chat-completions rejects them. */
 function isOpenAIReasoningFamily(modelId: string): boolean {
   const upstream = modelId.slice(modelId.indexOf('/') + 1);
 
   return /^(gpt-[5-9]|o[0-9])/.test(upstream);
 }
 
-/** Server-assigned Responses item ids: reasoning, message, function/tool call. */
 const SERVER_ITEM_ID = /^(rs_|msg_|fc_|item_)/;
 
 export function rewriteOpenCodeResponsesBody(body: JsonObject): void {
-  // The SDK forwards providerOptions.openai.store/include per call, but a
-  // ModelProvider does not own turn call options, so enforce ZDR here.
+  // A ModelProvider does not own per-turn call options, so enforce ZDR here.
   body.store = false;
   const parsedInclude = v.safeParse(v.array(v.string()), body.include);
   const include = parsedInclude.success ? parsedInclude.output : [];
@@ -486,10 +439,8 @@ export function rewriteOpenCodeResponsesBody(body: JsonObject): void {
       continue;
     }
 
-    // With store:false the server persists nothing, so ANY server-assigned id
-    // in the replayed input (reasoning rs_, assistant message msg_, tool call
-    // fc_) 404s on lookup. Pass every item by value: strip the id, keep the
-    // payload (encrypted_content, call_id, content) intact.
+    // With store:false any server-assigned id in replayed input 404s on lookup;
+    // strip ids, keep payloads.
     const serverId = v.safeParse(v.pipe(v.string(), v.regex(SERVER_ITEM_ID)), object.id);
 
     if (serverId.success) {
@@ -505,15 +456,12 @@ export function rewriteOpenCodeResponsesBody(body: JsonObject): void {
   body.input = input;
 }
 
-// ─── Model discovery ─────────────────────────────────────────────────────────
 
-/** Run `opencode models --verbose` and parse the output into model info. */
 async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo[]> {
   const child = spawnFn(['models', '--verbose'], {});
   child.stdin?.end();
 
-  // Drained concurrently with the exit: the verbose listing is far larger than a
-  // pipe buffer, so awaiting the exit first would deadlock.
+  // The verbose listing exceeds a pipe buffer; awaiting exit first would deadlock.
   const [read, exitCode] = await Promise.all([readAllOutcome(child.stdout), child.exit]);
 
   if (exitCode !== 0) {
@@ -536,7 +484,6 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
   const stdout = read.text;
 
   const models: OpenCodeModelInfo[] = [];
-  // Entries this cannot read, reported with their denominator below.
   const unreadable: string[] = [];
   // The verbose output alternates: "provider/model-id\n{...json...}" per model.
   const header = /^([^\s/]+\/[^\s]+)\n\{/gm;
@@ -553,16 +500,13 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
     try {
       const metadata = v.parse(modelMetadataSchema, JSON.parse(stdout.slice(start, end)));
 
-      // Skip models that can't do text output or tool calls.
       if (metadata?.capabilities?.output?.text === false) continue;
 
       if (metadata?.capabilities?.toolcall === false) continue;
 
       const context = metadata?.limit?.context;
 
-      // Use api.id when available; otherwise strip the provider prefix. An
-      // empty string in any of these three is opencode declaring the field and
-      // filling in nothing, which is the same as omitting it.
+      // Empty strings mean opencode declared the field but left it unset.
       const apiId = metadata.api?.id;
       const apiNpm = metadata.api?.npm;
       const name = metadata.name;
@@ -583,8 +527,7 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
     header.lastIndex = end;
   }
 
-  // An unreadable entry is opencode's output format having changed, and the
-  // symptom — a short or empty model list — reads exactly like a small account.
+  // Unreadable entries mean the output format changed; a short list would look like a small account.
   if (unreadable.length > 0) {
     diagnostics.failure(
       'model.catalog_entries_unreadable',
@@ -624,15 +567,12 @@ function jsonObjectEnd(text: string, start: number): number {
 }
 
 
-// ─── Availability probe ──────────────────────────────────────────────────────
 
 async function probeOpenCode(
   authPath: string,
   spawnFn: OpenCodeSpawn,
 ): Promise<OpenCodeAvailability> {
-  // Check if opencode binary exists. The output is unused — the read is what
-  // lets the child exit — but a read that fails while `--version` itself
-  // SUCCEEDED is not the missing binary the exit code accounts for.
+  // A failed read after a successful `--version` is not a missing binary.
   const versionChild = spawnFn(['--version'], {});
   versionChild.stdin?.end();
 
@@ -650,7 +590,6 @@ async function probeOpenCode(
     );
   }
 
-  // Check if auth.json exists and has a valid token.
   if (!existsSync(authPath)) return { binary: true, authenticated: false };
 
   try {
@@ -676,8 +615,7 @@ async function probeOpenCode(
 }
 
 
-/** Convenience: probe with the real opencode binary + default auth path.
- *  Mirrors `checkClaudeAvailability` — no args, uses PATH + default config. */
+/** Probe with the real opencode binary and default auth path. */
 export async function checkOpenCodeAvailability(): Promise<OpenCodeAvailability> {
   return probeOpenCode(DEFAULT_AUTH_PATH, defaultSpawn);
 }

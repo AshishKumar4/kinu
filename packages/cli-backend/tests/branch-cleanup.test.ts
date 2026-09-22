@@ -1,11 +1,5 @@
-// S18 acceptance, over the ONE workspace database: a branch is a
-// `workspace_actors` row that runs its rollouts in a separate OS process, and
-// it opens NO store of its own. So there is no per-branch `<key>.db` under a
-// `branches/` directory to be swept after the worker exits — the claim is
-// "never written at all" — and the residue that CAN outlive a branch is its
-// directory row. After the worker exits — success, abort, or a startup
-// refusal — that row has given up its name and no file bears the branch's
-// physical key.
+// S18: a branch is a `workspace_actors` row in a separate process with no store of its own;
+// after exit (success, abort, startup refusal) its row has released its name and no file bears its key.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { test, expect, afterAll } from 'bun:test';
 import { readdirSync } from 'node:fs';
@@ -39,7 +33,6 @@ const LANGUAGES: [string, ...string[]] = ['typescript'];
 
 const wireBodySchema = v.record(v.string(), JsonValueSchema);
 
-/** An OpenAI-compatible endpoint whose status code each test chooses. */
 function startModelEndpoint(status: number) {
   const server = Bun.serve({
     port: 0,
@@ -81,25 +74,14 @@ function startModelEndpoint(status: number) {
   };
 }
 
-/**
- * This branch's directory row, in whatever lifecycle state it is now in.
- *
- * Read through the directory THE ROOT HANDLE WAS ISSUED BY, never a second
- * `WorkspaceActorDirectory` over the same file: a handle carries the authority
- * of its issuer, so a fresh instance is a second authority over one workspace
- * — and it has to invent an `ownerUserId` the workspace already records.
- */
+/** This branch's directory row, read through the directory the root handle was issued by; a second instance is a second authority. */
 function branchRow(branchId: string) {
   const { directory } = localActorDirectory(parentRuntime.actor);
 
   return directory.apply(parentRuntime.actor, [], { action: 'resolveCreation', creationId: branchId });
 }
 
-/** Everything in this fixture's own tree named for the branch's physical key —
- *  a per-branch store and its WAL sidecars, if the branch had one. It never
- *  has one, which is why this is asserted while the worker is LIVE as well as
- *  after it exits: a store that is created and then deleted still passes the
- *  after-exit check, and "swept" is not the claim "never written". */
+/** Files named for the branch's physical key; asserted while live too, since "swept" is not "never written". */
 function branchStores(storageKey: string): string[] {
   return readdirSync(dir, { recursive: true }).map(String).filter((entry) => entry.includes(storageKey));
 }
@@ -108,13 +90,10 @@ test('a released branch leaves no store of its own and gives up its name', async
   const endpoint = startModelEndpoint(200);
 
   try {
-    // The workspace's ONE database, not a base path the spawner decorates:
-    // `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued bootstrap
-    // does not name, so anything else is a child that exits before `ready`.
+    // `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued bootstrap does not name.
     const spawner = createBranchSpawner(parentDbPath, { llm: endpoint.llm, parent: parentRuntime.actor });
     const handle = await spawner.spawn('cleanup-success');
     const exploration = await handle.explore({ priorHistory: HISTORY, craftedTools: [], languages: LANGUAGES, mode: 'build' });
-    // The rollout really ran, in the branch's own process, over that database.
     expect(exploration.text).toContain('parse with a PEG');
     const live = branchRow('cleanup-success');
     expect(live.state).toBe('active');
@@ -129,15 +108,11 @@ test('a released branch leaves no store of its own and gives up its name', async
 });
 
 test('a branch that is refused at startup leaves no live actor behind', async () => {
-  // A database path the root's own bootstrap does not name. The worker refuses
-  // it and exits before `ready`, which is the startup failure this case is
-  // about — and the only place a branch can still fail before doing any work.
+  // An unnamed database path: the worker exits before `ready`, the only pre-work failure a branch has.
   const spawner = createBranchSpawner(join(dir, 'missing-parent'), { llm: null, parent: parentRuntime.actor });
   await expect(spawner.spawn('cleanup-crash')).rejects.toThrow();
   const crashed = branchRow('cleanup-crash');
-  // COMPENSATED, not left half-registered: a failed spawn retires and releases
-  // the creation it admitted, so no roster read can see a branch whose process
-  // never started.
+  // A failed spawn retires and releases the creation it admitted.
   expect(crashed.state).toBe('deleted');
   expect(branchStores(crashed.storageKey)).toEqual([]);
 });

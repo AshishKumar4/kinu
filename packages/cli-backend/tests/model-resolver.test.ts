@@ -10,14 +10,7 @@ import * as v from 'valibot';
 import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
 
 describe('createLocalModelResolver', () => {
-  /**
-   * An output cap is not a field this seam sets: completion length is the
-   * model's, bounded by the provider. Neither lane may carry one, and the
-   * endpoint config is not a source for one either — the only shape a cap can
-   * arrive in is a config object that still carries the field, and it has to be
-   * inert. Both lanes are driven because a cap would have to be applied in each
-   * of them separately.
-   */
+  /** Neither lane may set an output cap, and a config object still carrying one must be inert. */
   test('neither lane this seam builds carries an output cap, whatever the config holds', async () => {
     const bodies: JsonObject[] = [];
 
@@ -81,10 +74,7 @@ describe('createLocalModelResolver', () => {
     }
   });
 
-  // This seam is the ONLY place that can see what a judge / fast-tier /
-  // reflection call cost, because `complete` returns text and nothing else. A
-  // call the provider said nothing about still reports: unmeasured spend has to
-  // be visible as unmeasured, never as free.
+  // This seam alone sees judge / fast-tier / reflection spend; unmeasured spend must read as unmeasured, never free.
   test('reports every completed call, silent providers included', async () => {
     const reports: ModelCallReport[] = [];
     let quiet = false;
@@ -100,8 +90,7 @@ describe('createLocalModelResolver', () => {
           choices: [{ index: 0, message: { role: 'assistant', content: ' graded ' }, finish_reason: 'stop' }],
         };
 
-        // The second answer carries NO usage block — a real Workers AI shape, and
-        // the case any `?? 0` on this path would turn into "the judge was free".
+        // No usage block (a real Workers AI shape): any `?? 0` here would call the judge free.
         if (!quiet) reply.usage = { prompt_tokens: 41, completion_tokens: 7, total_tokens: 48 };
 
         return Response.json(reply);
@@ -129,12 +118,8 @@ describe('createLocalModelResolver', () => {
 
     expect(reports).toHaveLength(2);
     expect(reports[0]?.source).toBe('judge');
-    // The spec the caller RESOLVED — what the catalog prices — not the served id.
     expect(reports[0]?.spec).toBe('workers-ai/@cf/test/model');
-    // Through the reader the workspace total actually uses: the measured call
-    // names a token total, and the silent one names NONE — not zero. `cacheRead`
-    // and `reasoning` arrive as the openai-compatible adapter's fabricated zeros
-    // on both, which is normalizeUsage's known shape and not this seam's to fix.
+    // `cacheRead` and `reasoning` arrive as the openai-compatible adapter's fabricated zeros; not this seam's to fix.
     expect(usageTotal(reports[0]?.usage ?? {})).toBe(48);
     expect(usageTotal(reports[1]?.usage ?? {})).toBeUndefined();
   });
@@ -201,8 +186,7 @@ describe('createLocalModelResolver', () => {
       })),
     });
 
-    // The attachment sanitizer's capability source: a text-only model reports
-    // no media modalities, so PDFs (and images) get the VFS treatment.
+    // A text-only model reports no media modalities, so the attachment sanitizer routes PDFs and images to the VFS.
     const info = await resolver.modelInfo('workers-ai/@cf/zai-org/glm-5.2');
     expect(info?.inputModalities).toEqual(['text']);
     expect(info?.contextWindow).toBe(200_000);
@@ -272,13 +256,10 @@ describe('createLocalModelResolver', () => {
   });
 });
 
-// ─── Signed-in cloud source — the worker's /api/user/ai/v1 proxy ───────────
-
 const CLOUD_ORIGIN = 'https://kinu.example.com';
 
 const CLOUD_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
-/** The llm config cli/config.ts derives for a signed-in user with no BYO keys. */
 function proxyLLMConfig(origin = CLOUD_ORIGIN): LLMProviderConfig {
   return {
     name: 'workers-ai',
@@ -386,7 +367,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     const gateway = models.find((m) => m.provider === 'my-gateway' && m.id === 'openai/gpt-4.1');
     expect(gateway?.label).toBe('GPT-4.1');
     expect(gateway?.contextWindow).toBe(1047576);
-    // Other providers' menu rows never leak into the proxy providers.
     expect(models.some((m) => m.provider === 'workers-ai' && m.id.includes('codex'))).toBe(false);
   });
 
@@ -482,16 +462,13 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     });
 
     const providers = await resolver.listProviders();
-    // The workers-ai id is the BYO direct endpoint; the proxy still serves my-gateway.
     expect(providers.find((p) => p.id === 'workers-ai')?.label).toBe('Cloudflare Workers AI (local gateway)');
     expect(providers.find((p) => p.id === 'my-gateway')?.label).toBe('Your AI Gateway');
     expect(providers.find((p) => p.id === 'my-gateway')?.available).toBe(true);
   });
 
   test('the explicit Workers AI endpoint carries the agent replica pin without a signed-in session', async () => {
-    // The benchmark adapters run exactly this way: KINU_BASE_URL + KINU_AUTH in
-    // a container with no `kinu auth`. Measured on the 2026-09-07 pilot: 3
-    // prefix-cache hits in 14 steps when no pin was sent.
+    // Benchmark adapters run this way: KINU_BASE_URL + KINU_AUTH in a container with no `kinu auth`.
     const seen: Array<{ affinity: string | null; auth: string | null }> = [];
 
     const server = Bun.serve({
@@ -520,7 +497,6 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
       await generateText({ model: pinned.resolveModel(null), prompt: 'ping', maxRetries: 0 });
 
-      // A third-party endpoint means nothing by the header, so it is not sent there.
       const elsewhere = createLocalModelResolver({
         llm: endpoint('openai-compat', 'gpt-4o-mini'), credentials: {}, sessionAffinity: 'kinu-harbor',
       });

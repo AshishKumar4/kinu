@@ -1,17 +1,7 @@
 /**
- * Host shadow-git checkpoint engine — the cli-backend implementation of the
- * core FileCheckpoints seam (Hermes checkpoint_manager pattern, see
- * external/hermes-agent/tools/checkpoint_manager.py).
- *
- * Store format (constants + subject/ref encoding) lives in
- * @kinu.run/core/checkpoints/format — the pc-agent daemon writes the same
- * layout (zero-dep mirror, enforced by tests/checkpoint-parity.test.ts) so a
- * machine's checkpoints are one format regardless of which side wrote them.
- *
- * Every snapshot is a parentless commit (content-addressed: unchanged blobs
- * and trees are shared across snapshots). GIT_WORK_TREE points at the target
- * directory and the user's own `.git/` is excluded, so the user's repo is
- * never touched. All git config is isolated (no gpg prompts, no hooks).
+ * Host shadow-git implementation of core's FileCheckpoints seam. Store format lives in
+ * @kinu.run/core/checkpoints/format, shared with the pc-agent daemon (tests/checkpoint-parity.test.ts).
+ * Snapshots are parentless commits; the user's own `.git/` and git config are never touched.
  */
 
 import { createHash } from 'node:crypto';
@@ -36,13 +26,8 @@ const SHA_RE = /^[0-9a-f]{4,64}$/i;
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
 
 /**
- * Directories that are not a work tree, so a whole-tree snapshot of one is
- * never what the caller meant. The filesystem root and the user's home were
- * always here; the SHARED TEMP ROOTS are here because `workdirForPath` resolves
- * a bare `/tmp/x.js` to `/tmp` — no project marker above it — and `/tmp` on this
- * box holds 12,017 entries belonging to every process and user on the machine.
- * Copying those into the agent's checkpoint store is neither the user's project
- * state nor the agent's to read.
+ * Not work trees. Shared temp roots are here because `workdirForPath` resolves a bare `/tmp/x.js`
+ * to `/tmp`, which holds every process's files.
  */
 const UNSNAPSHOTTABLE = new Set([tmpdir(), '/tmp', '/var/tmp'].map((dir) => resolve(dir)));
 
@@ -52,8 +37,7 @@ export interface HostCheckpointsOpts {
   base?: string;
   /** Checkpoints kept per working directory. Default: DEFAULT_CHECKPOINT_KEEP. */
   keep?: number;
-  /** git binary. Default 'git' — tests point this at a missing path to
-   *  exercise the honest degraded mode. */
+  /** git binary. Default 'git'. */
   gitBin?: string;
 }
 
@@ -61,13 +45,10 @@ interface GitResult { code: number; stdout: string; stderr: string }
 
 interface GitEnvironment { [name: string]: string }
 
-/** One staged tree, plus the paths that are NOT in it because this process may
- *  not read them. */
+/** One staged tree, plus the paths omitted because this process may not read them. */
 interface StagedTree { tree: string; unreadable: string[] }
 
-/** A `diff-tree --name-status` letter read in restore direction
- *  current→checkpoint: A = restore re-creates it, D = restore deletes it
- *  (added since), M/T = restore rewrites it. */
+/** A `diff-tree --name-status` letter in restore direction (current→checkpoint). */
 function restoreKindOf(status: string): FileRestoreKind {
   if (status === 'A') return 'create';
 
@@ -76,8 +57,7 @@ function restoreKindOf(status: string): FileRestoreKind {
   return 'modify';
 }
 
-/** execFile reports a failing git in `err.code`. A kill by signal carries no
- *  numeric code and is still a failure, so it reports 1 rather than success. */
+/** A signal kill carries no numeric code and still counts as failure (1). */
 function gitExitCode(err: ExecFileException | null): number {
   if (err === null) return 0;
   const reported = Number(err.code);
@@ -111,9 +91,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     env.GIT_AUTHOR_EMAIL = 'checkpoints@kinu.local';
     env.GIT_COMMITTER_NAME = 'Kinu Checkpoint';
     env.GIT_COMMITTER_EMAIL = 'checkpoints@kinu.local';
-    // Pinned so git's own diagnostics are the strings `diagnoseStaging` parses:
-    // a localized `warning: could not open directory` would read as an
-    // unexplained failure and fail the mutation it precedes.
+    // Pinned locale: `diagnoseStaging` parses git's diagnostics as English strings.
     env.LC_ALL = 'C';
 
     return env;
@@ -123,18 +101,10 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return { ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir };
   }
 
-  /**
-   * No wall clock on a git subprocess. A checkpoint ends when git exits, and
-   * `execFile` reports that exit; a missing binary or a vanished working
-   * directory is a definitive failure this function already answers.
-   *
-   * `maxBuffer` stays: it bounds THIS process's heap against a git that writes
-   * more output than the checkpoint store can hold.
-   */
+  /** No wall clock on git; `maxBuffer` bounds this process's heap against runaway output. */
   function runGit(args: string[], cwd: string, env: GitEnvironment): Promise<GitResult> {
-    // A missing cwd makes spawn fail with the same ENOENT a missing binary
-    // produces — check it here so a vanished workdir can never flip the
-    // engine into the sticky "git not found" degraded mode.
+    // A missing cwd raises the same ENOENT as a missing binary; check it so a vanished workdir
+    // cannot flip the engine into the sticky "git not found" mode.
     if (!existsSync(cwd)) {
       return Promise.resolve({ code: 1, stdout: '', stderr: `working directory not found: ${cwd}` });
     }
@@ -160,9 +130,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     try {
       await runGit(['--version'], homedir(), isolatedEnv());
     } catch (error) {
-      // runGit records a missing binary in `gitAvailable` before it rejects.
-      // A rejection that did NOT record one is something else entirely and
-      // must not be reported as "git is not installed".
+      // A rejection that did not set `gitAvailable` is not a missing git.
       if (gitAvailable !== false) throw error;
     }
 
@@ -213,31 +181,21 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     });
   }
 
-  /** git refuses to run with a missing worktree — fall back to the store base
-   *  for read-only ref operations when the workdir vanished. */
+  /** git refuses a missing worktree; read-only ref ops fall back to the store base. */
   function workdirOrBase(workdir: string): string {
     return existsSync(workdir) ? workdir : base;
   }
 
   /**
-   * Stage the working tree and write it as a tree object.
-   *
-   * `--ignore-errors` so a path this process may not read costs only that path:
-   * without it git aborts at the first refusal and everything after it is
-   * silently missing from the snapshot, which is a checkpoint that restores a
-   * tree the user never had. What it could not read is returned rather than
-   * discarded — see `diagnoseStaging`.
+   * `--ignore-errors` so an unreadable path costs only that path instead of silently truncating the
+   * snapshot; the skipped paths are returned for `diagnoseStaging`.
    */
   async function stageCurrent(gitDir: string, workdir: string): Promise<StagedTree> {
     const env = storeEnv(gitDir, workdir);
     const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
     const diagnosis = diagnoseStaging(add.stderr);
 
-    // A non-zero exit explained ENTIRELY by paths it may not read is not a
-    // failure: everything readable is staged and `write-tree` is clean. An
-    // unexplained diagnostic, or a non-zero exit with nothing to explain it,
-    // still fails — an incomplete snapshot nobody knows about is the defect, so
-    // this throws rather than returning a tree that is quietly short.
+    // A non-zero exit explained entirely by unreadable paths is success; anything unexplained throws.
     if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
       throw new Error(`checkpoint staging failed: ${add.stderr.trim()}`);
     }
@@ -249,10 +207,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return { tree: tree.stdout.trim(), unreadable: diagnosis.unreadable };
   }
 
-  /** Take a snapshot of dir tagged with the given turn meta (null for
-   *  out-of-turn snapshots like pre-restore, matching the daemon mirror).
-   *  Returns the checkpoint id, or the newest existing id when nothing
-   *  changed since it. */
+  /** Snapshot dir with turn meta (null for out-of-turn snapshots, as the daemon does). Returns the
+   *  new id, or the newest existing id when nothing changed. */
   async function snapshot(dir: string, meta: CheckpointTurnMeta | null, reason: string): Promise<string | null> {
     if (snapshotSkipped(dir)) return null;
     const abs = resolve(dir);
@@ -286,8 +242,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return sha;
   }
 
-  /** Bounded retention: drop the oldest refs beyond `keep`, then reclaim the
-   *  now-unreachable objects. */
+  /** Drop refs beyond `keep`, then reclaim unreachable objects. */
   async function pruneStore(gitDir: string, workdir: string, refCount: number): Promise<void> {
     if (refCount <= keep) return;
     const env = storeEnv(gitDir, workdir);
@@ -314,11 +269,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return { gitDir, abs, env };
   }
 
-  /** diff current staged state → checkpoint tree, as restore-direction changes. */
   async function diffToCheckpoint(gitDir: string, abs: string, id: string): Promise<FileRestoreChange[]> {
     const env = storeEnv(gitDir, abs);
-    // An unreadable path is in neither tree, so it appears in no change and the
-    // restore has no business with it.
     const current = await stageCurrent(gitDir, abs);
     const diff = await runGit(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
 
@@ -376,8 +328,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
       entries.sort((a, b) => b.at - a.at);
 
-      // Truncation is LAST, after any turn filter, so a limit can never hide a
-      // checkpoint that exists — see FileCheckpoints.list.
+      // Truncate last, after any turn filter, so a limit never hides a matching checkpoint.
       return entries.slice(0, Math.max(1, query.limit ?? 50));
     },
 
@@ -396,14 +347,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (!existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
       const files = await diffToCheckpoint(gitDir, abs, id);
 
-      // Safety snapshot first, so the restore itself is undoable. Turn meta
-      // is explicitly null: stamping the armed chat turn would merge this
-      // snapshot into that turn's /undo group and break "/undo 1 undoes the
-      // restore" (the daemon mirror passes null for the same reason).
+      // Safety snapshot so the restore is undoable; null turn meta keeps it out of the armed turn's /undo group.
       const preRestoreId = await snapshot(abs, null, 'pre-restore');
 
-      // Remove files created since the checkpoint, then materialize the
-      // checkpoint tree (content + recreated deletions) from the store index.
       for (const change of files) {
         if (change.kind !== 'delete') continue;
         const target = resolve(abs, change.path);
@@ -440,13 +386,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       }
 
       const home = resolve(homedir());
-      // The walk stops at the temp directory: a scratch directory is never a
-      // project root, so a marker AT it is no project and nothing above it is
-      // probed. Both spellings bound it — `resolve` normalizes `..` and never
-      // follows a symlink, so the real path is compared too. Unbounded, one
-      // stray `pyproject.toml` there claimed every host write beneath it:
-      // 24,483 ms for one `device.writeFile`, measured 2026-09-02
-      // (scripts/preflight.ts refuses it).
+      // Stop at the temp directory (both resolved and real path): a marker there claimed every host write
+      // beneath it, 24,483 ms for one `device.writeFile`, measured 2026-09-02 (scripts/preflight.ts refuses it).
       const temp = resolve(tmpdir());
       const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;
       let probe = candidate;
