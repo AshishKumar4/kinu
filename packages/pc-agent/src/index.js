@@ -196,6 +196,14 @@ function errorDetail(err) {
   return message === undefined || message === '' ? err : message;
 }
 
+/** The directory a checkpoint hint names, or undefined when it names none, so
+ *  the caller's own fallback is what `??` reaches. */
+function hintedDir(hint) {
+  const dir = hint.dir ?? '';
+
+  return dir === '' ? undefined : dir;
+}
+
 /** What `sandbox.probe()` answered at start. Read by HELLO and by the exec
  *  frame's own refusal, so it is proved once rather than per command. */
 let SANDBOX_CAPABILITY = { status: sandbox.SANDBOX_STATUS.PROBE_FAILED, detail: 'the sandbox probe has not run yet' };
@@ -588,8 +596,7 @@ function createCheckpoints(opts = {}) {
     ensure(hint, fallbackDir) {
       try {
         if (!hint || !probe()) return null;
-        const hinted = hint.dir ?? '';
-        const dir = hinted === '' ? fallbackDir : hinted;
+        const dir = hintedDir(hint) ?? fallbackDir;
 
         if (!dir) return null;
         const abs = path.resolve(dir);
@@ -1933,8 +1940,7 @@ function handle(msg, ws, ctx) {
 
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
-        const hinted = hint.dir ?? '';
-        checkpoints.ensure(hint, hinted === '' ? checkpoints.workdirForPath(confined) : hinted);
+        checkpoints.ensure(hint, hintedDir(hint) ?? checkpoints.workdirForPath(confined));
       }
 
       fs.mkdirSync(path.dirname(confined), { recursive: true });

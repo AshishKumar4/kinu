@@ -7168,6 +7168,201 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
   };
 }
 
+/** The MCTS explorer page, at one RUN. The one dynamic import this dispatch
+ *  makes, and it stays one: the page pulls d3 and the whole tree renderer, so
+ *  every frame that does not open it must not pay for them.
+ *
+ *  A PAGE owns its own connection, so it takes no `rpc` prop: it reads through
+ *  `useKinu`, and in the gallery that resolves to `gallery-agent-stub`.
+ *  Installing the fixture there is what makes these frames render at all —
+ *  before it they opened a socket to vite and drew an empty body. */
+async function mctsExplorerFrame(run: string): Promise<MountedFrame> {
+  const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
+  serveGalleryRpc(focusRun(run));
+
+  return {
+    entries: [`/mcts/checkout-fixes?run=${run}`],
+    node: <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>,
+  };
+}
+
+/** The workspace settings page. Routed, not bare: the page reads `agentId` off
+ *  the route, and every back-link and breadcrumb it renders is built from it. */
+async function settingsFrame(): Promise<MountedFrame> {
+  const { default: SettingsPage } = await import("@/pages/SettingsPage");
+
+  return {
+    entries: ["/workspace/checkout-fixes/settings"],
+    node: (
+      <Routes>
+        <Route
+          path="/workspace/:agentId/settings"
+          element={<div className="min-h-screen p-bg p-text"><SettingsPage /></div>}
+        />
+      </Routes>
+    ),
+  };
+}
+
+/** The admin control plane. Routed, because the page keeps its tab, the
+ *  selected account and the selected workspace in the URL — an operator sends a
+ *  colleague the exact view they are looking at, and a bare mount could not
+ *  render any of it. */
+async function controlFrame(): Promise<MountedFrame> {
+  const { default: ControlPage } = await import("@/pages/ControlPage");
+
+  return {
+    entries: ["/control"],
+    node: (
+      <Routes>
+        <Route path="/control" element={<div className="h-screen p-bg p-text"><ControlPage /></div>} />
+      </Routes>
+    ),
+  };
+}
+
+/** The home page in the real chrome, not the page alone: the sidebar's own
+ *  route logic decides what it renders at "/", and photographing the page
+ *  without the rail would pass a sidebar the app never shows. The cards read
+ *  their overviews through the store every frame is mounted under. */
+async function homeFrame(): Promise<MountedFrame> {
+  const { default: HomePage } = await import("@/pages/HomePage");
+
+  return {
+    entries: ["/"],
+    node: (
+      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
+      </div>
+    ),
+  };
+}
+
+/** The shipped shell, routed as App.tsx routes it: `Layout` owns the rail, the
+ *  rail owns the account menu, and the menu owns the Feedback affordance. What
+ *  this frame adds over the two bare feedback frames is the ROUTER — the
+ *  report's route and workspace fields are read off a resolved
+ *  `/workspace/:agentId`, not off the gallery's own `/`. */
+function feedbackRoutedFrame(): MountedFrame {
+  return {
+    entries: ["/workspace/checkout-fixes"],
+    node: (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/workspace/:agentId" element={<FeedbackScrollScene />} />
+        </Route>
+      </Routes>
+    ),
+  };
+}
+
+/** A render-time throw in the shipped ErrorBoundary, at a real route.
+ *
+ *  Two things this frame does that no other needs. It calls
+ *  `pageDeployedBuildSha` the way `index.tsx` does, because the report binds
+ *  itself to the build the page LOADED and that read has to happen at load. And
+ *  it rewrites the address bar: the report reads the document's own
+ *  `location.pathname` — which is what a BrowserRouter page has — while the
+ *  gallery routes through a MemoryRouter that leaves the URL at `/`. A
+ *  replaceState is a no-op on the network and makes the two agree. */
+function errorBoundaryFrame(): MountedFrame {
+  primePageDeployedBuildSha();
+  history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
+
+  return {
+    entries: ["/workspace/checkout-fixes"],
+    node: (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path={APP_ROUTES.workspace} element={<RenderFailureScene />} />
+        </Route>
+      </Routes>
+    ),
+  };
+}
+
+/** A code-split route that will not load, in the shipped ErrorBoundary and
+ *  Suspense, under the shipped Layout. `pageDeployedBuildSha` is called as
+ *  `index.tsx` calls it, because the recovery compares the build this page
+ *  loaded against the one the origin serves.
+ *
+ *  Unlike the frame above, this one leaves the address bar ALONE. The
+ *  recovery's last act is `location.reload()`, which reloads whatever is in it:
+ *  a rewritten `/workspace/...` would be served the real `index.html` by Vite's
+ *  SPA fallback, and the gate would be measuring the app instead of the
+ *  fixture. Nothing here reads the path, so there is nothing to gain by moving
+ *  it. */
+function lazyRouteFrame(): MountedFrame {
+  primePageDeployedBuildSha();
+
+  return {
+    entries: ["/workspace/checkout-fixes"],
+    node: (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path={APP_ROUTES.workspace} element={<LazyRouteScene />} />
+        </Route>
+      </Routes>
+    ),
+  };
+}
+
+/** The interactive rig routes like the app so the strip's own navigation is
+ *  exercised: create lands on the new conversation's URL, Main goes back. */
+function agentChatsFrame(): MountedFrame {
+  return {
+    entries: ["/workspace/checkout-fixes"],
+    node: (
+      <Routes>
+        <Route path="/workspace/:agentId" element={<AgentChatsScene />} />
+        <Route path="/workspace/:agentId/agents/:subName" element={<AgentChatsScene />} />
+      </Routes>
+    ),
+  };
+}
+
+/** Owns a real root connection for the plan-arrival hint, so its reads need a
+ *  server; the surfaces themselves still read the frame's own fixture props. */
+function previewTabsFrame(): MountedFrame {
+  serveGalleryRpc(stubRpc);
+
+  return { entries: ["/"], node: <PreviewTabsGallery /> };
+}
+
+/** The workspace page under both app routes, exactly as App.tsx keys them:
+ *  creating an agent navigates to its conversation, and the frame must be able
+ *  to land there. */
+function workspacePageFrame(): MountedFrame {
+  serveGalleryRpc(workspacePageRpc);
+
+  seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
+  scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
+
+  return {
+    entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
+    node: (
+      <Routes>
+        <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+        <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
+      </Routes>
+    ),
+  };
+}
+
+/** `&section=devices` is the deep link a work surface hands over, driven
+ *  through the router rather than through `location.hash`: the page reads the
+ *  hash off `useLocation`, so a MemoryRouter entry is the same input a real URL
+ *  is. */
+function userSettingsStateFrame(): MountedFrame {
+  const section = new URLSearchParams(location.search).get("section");
+
+  return {
+    entries: [section === null ? "/user/settings" : `/user/settings#${section}`],
+    node: <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>,
+  };
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -7244,6 +7439,12 @@ async function mount() {
     ["deploy", deployFrame],
     ["updates", updatesFrame],
     ["app", appShellFrame],
+    ["forkfull", () => mctsExplorerFrame("n000")],
+    ["forkbig", () => mctsExplorerFrame("n000")],
+    ["forkswarmfull", () => mctsExplorerFrame("sw000")],
+    ["settings", settingsFrame],
+    ["control", controlFrame],
+    ["home", homeFrame],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
@@ -7268,20 +7469,6 @@ async function mount() {
     node = <Shell surface="Swarms" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
   }
   else if (frame === "forklive") node = <ForkLiveFrame pinned={pinnedLiveStage(location.search)} />;
-  else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {
-    // The one dynamic import in this dispatch, and it stays one: the page pulls d3
-    // and the whole tree renderer, so every frame that does not open it must not
-    // pay for them. Which RUN it opens is the only thing that differs.
-    const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
-    const run = frame === "forkswarmfull" ? "sw000" : "n000";
-    // A PAGE owns its own connection, so it takes no `rpc` prop: it reads through
-    // `useKinu`, and in the gallery that resolves to `gallery-agent-stub`.
-    // Installing the fixture there is what makes these three frames render at all
-    // — before it they opened a socket to vite and drew an empty body.
-    serveGalleryRpc(focusRun(run));
-    entries = [`/mcts/checkout-fixes?run=${run}`];
-    node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
-  }
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "feedback") {
     node = <FeedbackFrame noise={new URLSearchParams(location.search).get("noise") === "1"} />;
@@ -7289,77 +7476,13 @@ async function mount() {
   else if (frame === "feedbacksecrets") {
     node = <FeedbackSecretsFrame modal={new URLSearchParams(location.search).get("modal") === "1"} />;
   }
-  // The shipped shell, routed as App.tsx routes it: `Layout` owns the rail, the
-  // rail owns the account menu, and the menu owns the Feedback affordance. What
-  // this frame adds over the two above is the ROUTER — the report's route and
-  // workspace fields are read off a resolved `/workspace/:agentId`, not off the
-  // gallery's own `/`.
-  else if (frame === "feedbackrouted") {
-    entries = ["/workspace/checkout-fixes"];
-    node = (
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path="/workspace/:agentId" element={<FeedbackScrollScene />} />
-        </Route>
-      </Routes>
-    );
-  }
-  // A render-time throw in the shipped ErrorBoundary, at a real route.
-  //
-  // Two things this frame does that no other needs. It calls
-  // `pageDeployedBuildSha` the way `index.tsx` does, because the report binds
-  // itself to the build the page LOADED and that read has to happen at load. And
-  // it rewrites the address bar: the report reads the document's own
-  // `location.pathname` — which is what a BrowserRouter page has — while the
-  // gallery routes through a MemoryRouter that leaves the URL at `/`. A
-  // replaceState is a no-op on the network and makes the two agree.
-  else if (frame === "errorboundary") {
-    primePageDeployedBuildSha();
-    history.replaceState(null, "", `/workspace/checkout-fixes${location.search}`);
-    entries = ["/workspace/checkout-fixes"];
-    node = (
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path={APP_ROUTES.workspace} element={<RenderFailureScene />} />
-        </Route>
-      </Routes>
-    );
-  }
-  // A code-split route that will not load, in the shipped ErrorBoundary and
-  // Suspense, under the shipped Layout. `pageDeployedBuildSha` is called as
-  // `index.tsx` calls it, because the recovery compares the build this page
-  // loaded against the one the origin serves.
-  //
-  // Unlike the frame above, this one leaves the address bar ALONE. The recovery's
-  // last act is `location.reload()`, which reloads whatever is in it: a rewritten
-  // `/workspace/...` would be served the real `index.html` by Vite's SPA
-  // fallback, and the gate would be measuring the app instead of the fixture.
-  // Nothing here reads the path, so there is nothing to gain by moving it.
-  else if (frame === "lazyroute") {
-    primePageDeployedBuildSha();
-    entries = ["/workspace/checkout-fixes"];
-    node = (
-      <Routes>
-        <Route element={<Layout />}>
-          <Route path={APP_ROUTES.workspace} element={<LazyRouteScene />} />
-        </Route>
-      </Routes>
-    );
-  }
+  else if (frame === "feedbackrouted") ({ node, entries } = feedbackRoutedFrame());
+  else if (frame === "errorboundary") ({ node, entries } = errorBoundaryFrame());
+  else if (frame === "lazyroute") ({ node, entries } = lazyRouteFrame());
   else if (frame === "palette") node = <Palette />;
   else if (frame === "marks") node = <MarksFrame />;
   else if (frame === "tabs") node = <TabsFrame />;
-  // The interactive rig routes like the app so the strip's own navigation is
-  // exercised: create lands on the new conversation's URL, Main goes back.
-  else if (frame === "agentchats") {
-    entries = ["/workspace/checkout-fixes"];
-    node = (
-      <Routes>
-        <Route path="/workspace/:agentId" element={<AgentChatsScene />} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<AgentChatsScene />} />
-      </Routes>
-    );
-  }
+  else if (frame === "agentchats") ({ node, entries } = agentChatsFrame());
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "coderendering") node = <CodeRenderingFrame />;
   else if (frame === "chat") node = <ChatFrame />;
@@ -7382,9 +7505,7 @@ async function mount() {
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
-  // Owns a real root connection for the plan-arrival hint, so its reads need a
-  // server; the surfaces themselves still read the frame's own fixture props.
-  else if (frame === "previewtabs") { serveGalleryRpc(stubRpc); node = <PreviewTabsGallery />; }
+  else if (frame === "previewtabs") ({ node, entries } = previewTabsFrame());
   else if (frame === "compactpreview") node = <CompactPreviewGallery />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "planreview") node = <PlanReviewFrame />;
@@ -7395,74 +7516,12 @@ async function mount() {
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
-  else if (frame === "workspacepage") {
-    serveGalleryRpc(workspacePageRpc);
-
-    seedFrameTranscript(new URLSearchParams(location.search).get("transcript"));
-    entries = [`/workspace/${WORKSPACE_PAGE_NAME}`];
-    scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
-    // Both app routes, exactly as App.tsx keys them: creating an agent
-    // navigates to its conversation, and the frame must be able to land there.
-    node = (
-      <Routes>
-        <Route path="/workspace/:agentId" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<div className="h-screen p-bg p-text"><WorkspacePage /></div>} />
-      </Routes>
-    );
-  }
-  // `&section=devices` is the deep link a work surface hands over, driven
-  // through the router rather than through `location.hash`: the page reads the
-  // hash off `useLocation`, so a MemoryRouter entry is the same input a real
-  // URL is.
-  else if (frame === "usersettingsstate") {
-    const section = new URLSearchParams(location.search).get("section");
-    entries = [section === null ? "/user/settings" : `/user/settings#${section}`];
-    node = <div className="min-h-screen p-bg p-text"><UserSettingsPage /></div>;
-  }
+  else if (frame === "workspacepage") ({ node, entries } = workspacePageFrame());
+  else if (frame === "usersettingsstate") ({ node, entries } = userSettingsStateFrame());
   // The device row alone, in the three modes its Sandbox switch can land a
   // machine in — the close-up the Devices card renders one at a time.
   else if (frame === "devicesandbox") node = <DeviceSandboxFrame />;
-  else if (frame === "settings") {
-    const { default: SettingsPage } = await import("@/pages/SettingsPage");
-    // Routed, not bare: the page reads `agentId` off the route, and every
-    // back-link and breadcrumb it renders is built from it.
-    entries = ["/workspace/checkout-fixes/settings"];
-    node = (
-      <Routes>
-        <Route
-          path="/workspace/:agentId/settings"
-          element={<div className="min-h-screen p-bg p-text"><SettingsPage /></div>}
-        />
-      </Routes>
-    );
-  }
-  // The admin control plane. Routed, because the page keeps its tab, the
-  // selected account and the selected workspace in the URL — an operator sends a
-  // colleague the exact view they are looking at, and a bare mount could not
-  // render any of it.
-  else if (frame === "control") {
-    const { default: ControlPage } = await import("@/pages/ControlPage");
-    entries = ["/control"];
-    node = (
-      <Routes>
-        <Route path="/control" element={<div className="h-screen p-bg p-text"><ControlPage /></div>} />
-      </Routes>
-    );
-  }
   else if (dynamicFixture !== undefined) ({ node, entries } = await dynamicFixture());
-  else if (frame === "home") {
-    const { default: HomePage } = await import("@/pages/HomePage");
-    // The real chrome, not the page alone: the sidebar's own route logic
-    // decides what it renders at "/", and photographing the page without the
-    // rail would pass a sidebar the app never shows. The cards read their
-    // overviews through the store every frame is mounted under (below).
-    node = (
-      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
-      </div>
-    );
-  }
   else node = <All />;
 
   ({ node, entries } = explore(node, entries, frame));

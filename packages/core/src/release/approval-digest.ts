@@ -27,6 +27,14 @@ export function deployTargetAsCommand(deployTarget: string | null): string | nul
   return /\s/.test(deployTarget.trim()) ? deployTarget.trim() : null;
 }
 
+/** The deploy command an argument supplies, or null when it supplies none. A
+ *  blank argument is no command: the binding's deploy target answers for it. */
+export function suppliedCommand(command: string | undefined): string | null {
+  const trimmed = command === undefined ? '' : command.trim();
+
+  return trimmed === '' ? null : trimmed;
+}
+
 /** The approval type a deploy to `environment` requires. */
 export function approvalTypeForEnvironment(
   environment: ReleaseDeployment['environment'],
