@@ -231,6 +231,7 @@ const WebhookPayloadSchema = v.object({
   body: v.unknown(),
   delivery_id: v.string(),
   body_path: v.optional(v.string()),
+  body_unsaved: v.optional(v.string()),
 });
 
 const ProcessDonePayloadSchema = v.object({
@@ -242,6 +243,8 @@ const ProcessDonePayloadSchema = v.object({
   duration_ms: v.number(),
   full_stdout_handle: v.optional(v.string()),
   full_stderr_handle: v.optional(v.string()),
+  stdout_unsaved: v.optional(v.string()),
+  stderr_unsaved: v.optional(v.string()),
 });
 
 const TimerPayloadSchema = v.object({
@@ -260,6 +263,7 @@ const PeerAgentPayloadSchema = v.object({
   sender_event_id: v.string(),
   reply_expected: v.optional(v.boolean()),
   body_path: v.optional(v.string()),
+  body_unsaved: v.optional(v.string()),
   kinu_mode: WorkModeSchema,
 });
 
@@ -298,6 +302,7 @@ const SubordinateReportPayloadSchema = v.object({
   sequence_id: v.string(),
   task: v.optional(v.string()),
   content_path: v.optional(v.string()),
+  content_unsaved: v.optional(v.string()),
   ...HandoffPayloadEntries,
   kinu_mode: WorkModeSchema,
 });
@@ -322,6 +327,7 @@ const EmailPayloadSchema = v.object({
     size: v.number(),
   })),
   body_path: v.optional(v.string()),
+  body_unsaved: v.optional(v.string()),
 });
 
 const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });

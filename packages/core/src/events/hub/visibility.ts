@@ -368,15 +368,17 @@ function briefForVariant(event: KinuEvent): string {
       // marker, no count, and nothing to read back.
       const p = event.payload;
       const body = JSON.stringify(p.body) ?? 'undefined';
-      const full = p.body_path ? ` — full body: ${p.body_path}` : '';
+      const full = rest('body', p.body_path, p.body_unsaved);
 
       return `${p.http_method} body of ${briefWindow(body)}${full}`;
     }
 
     case 'process_done': {
       const p = event.payload;
+      const stderr = p.stderr_excerpt ? ' stderr: ' + p.stderr_excerpt.slice(0, 100) : '';
+      const full = rest('stdout', p.full_stdout_handle, p.stdout_unsaved) + rest('stderr', p.full_stderr_handle, p.stderr_unsaved);
 
-      return `${p.command.slice(0, 60)} exit=${p.exit_code}${p.stderr_excerpt ? ' stderr: ' + p.stderr_excerpt.slice(0, 100) : ''}`;
+      return `${p.command.slice(0, 60)} exit=${p.exit_code}${stderr}${full}`;
     }
 
     case 'timer': {
@@ -389,7 +391,7 @@ function briefForVariant(event: KinuEvent): string {
       // Peer messages are delegated tasks/answers — the whole delivery, so an
       // oversize body names where its full text was spilled.
       const p = event.payload;
-      const full = p.body_path ? ` — full message: ${p.body_path}` : '';
+      const full = rest('message', p.body_path, p.body_unsaved);
 
       return `${p.topic}: ${briefWindow(JSON.stringify(p.body) ?? 'undefined')}${full}`;
     }
@@ -414,7 +416,7 @@ function briefForVariant(event: KinuEvent): string {
     case 'subordinate_report': {
       const p = event.payload;
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
-      const full = p.content_path ? ` — full report: ${p.content_path}` : '';
+      const full = rest('report', p.content_path, p.content_unsaved);
 
       return `${p.status}${task}: ${briefWindow(p.content)}${full}${renderSubordinateHandoff(p)}`;
     }
@@ -429,7 +431,7 @@ function briefForVariant(event: KinuEvent): string {
         ? ` [${p.attachments.length} attachment${p.attachments.length === 1 ? '' : 's'}]`
         : '';
 
-      const full = p.body_path ? ` — full body: ${p.body_path}` : '';
+      const full = rest('body', p.body_path, p.body_unsaved);
 
       return `"${p.subject}"${attachNote}: ${briefWindow(p.body_text)}${full}`;
     }
@@ -443,4 +445,12 @@ function briefForVariant(event: KinuEvent): string {
       return `${event.payload.method}(...)`;
     }
   }
+}
+
+/** Where the rest of a windowed body lives, or why it lives nowhere. Empty when
+ *  the body fit the brief. */
+function rest(what: string, path: string | undefined, unsaved: string | undefined): string {
+  if (path) return ` — full ${what}: ${path}`;
+
+  return unsaved ? ` — full ${what} could not be saved: ${unsaved}` : '';
 }
