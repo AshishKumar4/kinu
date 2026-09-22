@@ -45,7 +45,7 @@ import { labelCommand } from './commands/label';
 import { exportCommand, importCommand } from './commands/export-import';
 import { ACCESS_TOKEN_SCOPES, tokensCommand } from './commands/tokens';
 import { workspaceDeleteCommand } from './commands/workspace';
-import { printFailure, VERSION } from './display';
+import { printFailure, setCommandExample, VERSION } from './display';
 
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */
@@ -68,35 +68,36 @@ export function buildProgram(): Command {
     .name('kinu')
     .description('Create and chat with self-evolving agent workspaces')
     .version(VERSION, '-v, --version')
+    .helpOption('-h, --help', 'Show help for this command')
     .addHelpCommand(false);
 
   // Shared LLM options
   const llmOpts = (cmd: Command) => cmd
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Model ID (env: KINU_MODEL)')
-    .option('--base-url <url>', 'LLM API base URL (env: KINU_BASE_URL)')
-    .option('--auth <header>', 'Auth header value (env: KINU_AUTH)');
+    .option('--base-url <url>', 'Base URL of your own model endpoint (env: KINU_BASE_URL)')
+    .option('--auth <header>', 'Auth header value for that endpoint (env: KINU_AUTH)');
 
   // ── Account ────────────────────────────────────────────────────
 
   program
     .command('setup')
     .helpGroup(ACCOUNT)
-    .description('Connect your account; optionally configure local-only model credentials')
+    .description('Sign in to Kinu and pick a model provider for local workspaces')
     .option('--origin <url>', 'Kinu app origin')
     .option('--provider <name>', 'Provider: workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, skip')
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
-    .option('--local-model', 'Configure credentials for local-only agents')
+    .option('--local-model', 'Set up a model provider for local workspaces')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
-    .option('-y, --yes', 'Accept recommended setup choices where possible')
+    .option('-y, --yes', 'Take the recommended choice at each prompt where there is one')
     .option('--skip-cloud', 'Skip account sign-in')
-    .addOption(new Option('--account-only', 'Only complete Kinu account sign-in').hideHelp())
+    .addOption(new Option('--account-only', 'Only sign in to Kinu').hideHelp())
     .action(wrapAction(setupCommand));
 
   program
     .command('provider [action] [name]')
     .alias('providers')
     .helpGroup(ACCOUNT)
-    .description('List, connect, or disconnect model and account providers')
+    .description('List, connect or disconnect model providers')
     .option('--origin <url>', 'Kinu app origin')
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
@@ -105,14 +106,14 @@ export function buildProgram(): Command {
   program
     .command('auth')
     .helpGroup(ACCOUNT)
-    .description('Sign the CLI into your Kinu account')
+    .description('Sign in to your Kinu account')
     .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(authCommand));
 
   program
     .command('whoami')
     .helpGroup(ACCOUNT)
-    .description('Show the signed-in Kinu account')
+    .description('Show which Kinu account you are signed in to')
     .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(whoamiCommand));
 
@@ -126,14 +127,14 @@ export function buildProgram(): Command {
   program
     .command('sessions [action] [hash]')
     .helpGroup(ACCOUNT)
-    .description('Manage live CLI sessions (list, revoke, revoke --all)')
+    .description('List or revoke CLI sessions')
     .option('--origin <url>', 'Kinu app origin')
     .action(wrapAction(sessionsCommand));
 
   program
     .command('tokens [action] [name]')
     .helpGroup(ACCOUNT)
-    .description('Manage long-lived CI access tokens (list, create, revoke)')
+    .description('List, create or revoke access tokens for CI')
     .option('--name <name>', 'Token name for create')
     .option('--scopes <scopes>', `Comma-separated scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}`)
     .option('--json', 'Print raw JSON')
@@ -145,26 +146,26 @@ export function buildProgram(): Command {
     program
       .command('create [name]')
       .helpGroup(WORKSPACES)
-      .description('Create a new workspace')
+      .description('Create a workspace')
       .option('--purpose <text>', 'Say what this workspace is for. It seeds SOUL.md')
       .option('--mode <mode>', 'Workspace mode: cloud or local')
-      .option('--alias <name>', 'Create an executable alias command')
+      .option('--alias <name>', 'Also create a shell command with this name that runs the workspace')
       .option('--origin <url>', 'Kinu app origin for first-use sign-in')
-      .option('--join', 'Add an agent to the workspace in this directory. It inherits the mission, so it needs no name or purpose')
-      .option('--no-alias-shim', 'Do not create an alias shim'),
+      .option('--join', 'Add an agent to the workspace in this directory. It takes the workspace mission, so it needs no name or purpose')
+      .option('--no-alias-shim', 'Do not create the alias shell command'),
   ).action(wrapAction(createCommand));
 
   program
     .command('list')
     .helpGroup(WORKSPACES)
-    .description('List all workspaces')
+    .description('List your workspaces')
     .action(wrapAction(listCommand));
 
   llmOpts(
     program
       .command('status <name>')
       .helpGroup(WORKSPACES)
-      .description('Show workspace state and evolution history'),
+      .description('Show a workspace\'s mission, model and evolution state'),
   ).action(wrapAction(statusCommand));
 
   program
@@ -172,39 +173,39 @@ export function buildProgram(): Command {
     .helpGroup(WORKSPACES)
     .description('Manage cloud workspaces')
     .command('delete <name>')
-    .description('Permanently delete a cloud workspace')
+    .description('Delete a cloud workspace for good')
     .option('-y, --yes', 'Skip the confirmation prompt')
     .action(wrapAction(workspaceDeleteCommand));
 
   program
     .command('alias <workspace> [alias]')
     .helpGroup(WORKSPACES)
-    .description('Create an executable command alias for a workspace')
+    .description('Create a shell command that runs a workspace')
     .action(wrapAction(aliasCommand));
 
   program
     .command('unalias <alias>')
     .helpGroup(WORKSPACES)
-    .description('Remove an executable command alias')
+    .description('Remove a workspace\'s shell command')
     .action(wrapAction(unaliasCommand));
 
   program
     .command('aliases')
     .helpGroup(WORKSPACES)
-    .description('List configured workspace aliases')
+    .description('List workspace shell commands')
     .action(wrapAction(aliasesCommand));
 
   program
     .command('export <name>')
     .helpGroup(WORKSPACES)
-    .description('Back up a workspace (local or cloud) to a portable archive')
+    .description('Back up a workspace, local or cloud, to an archive file')
     .option('-o, --output <file>', 'Output file path')
     .action(wrapAction(exportCommand));
 
   program
     .command('import <file>')
     .helpGroup(WORKSPACES)
-    .description('Restore a workspace archive into a local workspace')
+    .description('Restore a workspace archive as a local workspace')
     .option('-n, --name <name>', 'Workspace name (default: the name recorded in the archive)')
     .action(wrapAction(importCommand));
 
@@ -214,9 +215,9 @@ export function buildProgram(): Command {
     program
       .command('run <name> [prompt...]')
       .helpGroup(RUNNING)
-      .description('Run a workspace once, or open chat with no prompt')
+      .description('Run one prompt in a workspace, or open chat when there is no prompt')
       .option('--mode <mode>', 'Output mode: text, json, or rpc', 'text')
-      .option('--transcript-dir <dir>', 'Override transcript storage directory')
+      .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(wrapAction(runCommand));
 
@@ -224,9 +225,9 @@ export function buildProgram(): Command {
     program
       .command('chat [name]')
       .helpGroup(RUNNING)
-      .description('Interactive conversation with a workspace')
-      .option('--classic', 'Use classic readline interface instead of TUI')
-      .option('--transcript-dir <dir>', 'Override transcript storage directory')
+      .description('Chat with a workspace')
+      .option('--classic', 'Use the line-by-line chat instead of the full-screen TUI')
+      .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this chat'),
   ).action(wrapAction(chatCommand));
 
@@ -235,42 +236,42 @@ export function buildProgram(): Command {
       .command('acp <name>')
       .helpGroup(RUNNING)
       .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim, Marimo)')
-      .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
-      .option('--transcript-dir <dir>', 'Override transcript storage directory'),
+      .option('--no-auto-evolve', 'Turn off evolution after turns and sessions (local workspaces)')
+      .option('--transcript-dir <dir>', 'Where to store transcripts'),
   ).action(wrapAction(acpCommand));
 
   llmOpts(
     program
       .command('exec [prompt...]')
       .helpGroup(RUNNING)
-      .description('Run one workspace task headlessly and exit (CI-friendly; executor passthrough lives under `executors`)')
-      .option('-w, --workspace <name>', 'Workspace to run (defaults to the only configured workspace)')
+      .description('Run one task without the TUI and exit, for CI and scripts')
+      .option('-w, --workspace <name>', 'Workspace to run (default: the only one configured)')
       .option('--json', 'Emit line-delimited JSON events')
-      .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
-      .option('--transcript-dir <dir>', 'Override transcript storage directory')
+      .option('--no-auto-evolve', 'Turn off evolution after turns and sessions (local workspaces)')
+      .option('--transcript-dir <dir>', 'Where to store transcripts')
       .option('--no-transcript', 'Do not record a transcript for this run'),
   ).action(wrapAction(execCommand));
 
   program
     .command('executors <name> [executor] [command...]')
     .helpGroup(RUNNING)
-    .description('List executors, or run a command in one')
+    .description('List a workspace\'s executors, or run a command in one')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(executorsCommand));
 
   program
     .command('transcripts [agent]')
     .helpGroup(RUNNING)
-    .description('List recorded terminal transcripts (diagnostics; never conversations)')
-    .option('--transcript-dir <dir>', 'Override transcript storage directory')
+    .description('List terminal transcripts recorded for diagnostics (they cannot be reopened as chats)')
+    .option('--transcript-dir <dir>', 'Where transcripts are stored')
     .option('--path', 'Show transcript file paths')
-    .option('--show <idOrPath>', 'Show a specific transcript path')
+    .option('--show <idOrPath>', 'Show one transcript\'s file path')
     .action(wrapAction(transcriptsCommand));
 
   program
     .command('stop <name>')
     .helpGroup(RUNNING)
-    .description('Stop current cloud work or cancel local background jobs')
+    .description('Stop a cloud workspace\'s current work, or cancel a local workspace\'s background jobs')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(stopCommand));
 
@@ -280,13 +281,13 @@ export function buildProgram(): Command {
     program
       .command('model <name> [spec]')
       .helpGroup(CONFIGURE)
-      .description('Show or change a workspace model'),
+      .description('Show or change a workspace\'s model'),
   ).action(wrapAction(modelCommand));
 
   program
     .command('effort <name> [level]')
     .helpGroup(CONFIGURE)
-    .description('Show or change workspace reasoning effort')
+    .description('Show or change a workspace\'s reasoning effort')
     .action(wrapAction(effortCommand));
 
   llmOpts(
@@ -300,7 +301,7 @@ export function buildProgram(): Command {
     program
       .command('triggers <name> [action] [value]')
       .helpGroup(CONFIGURE)
-      .description('List, schedule, cancel, or create workspace triggers')
+      .description('List, schedule, cancel or create workspace triggers')
       .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
       .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
       .option('--content-type <type>', 'Accepted webhook content type')
@@ -311,7 +312,7 @@ export function buildProgram(): Command {
   program
     .command('webhook <name> <label>')
     .helpGroup(CONFIGURE)
-    .description('Create a durable webhook trigger for a cloud workspace')
+    .description('Create a webhook trigger for a cloud workspace')
     .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
     .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
     .option('--content-type <type>', 'Accepted webhook content type')
@@ -325,10 +326,10 @@ export function buildProgram(): Command {
     program
       .command('evolve <name>')
       .helpGroup(INSPECT)
-      .description('Trigger an MCTS evolution cycle')
+      .description('Run an MCTS search for one improvement to a local workspace')
       .option('--budget <n>', 'MCTS iterations (default: the engine default)')
       .option('--branches <n>', 'Branches per expansion (default: the engine default)')
-      .option('--max-cost <usd>', 'Cost ceiling in USD (default: the engine default)'),
+      .option('--max-cost <usd>', 'Cost limit in USD (default: the engine default)'),
   ).action(wrapAction(evolveCommand));
 
   llmOpts(
@@ -342,28 +343,28 @@ export function buildProgram(): Command {
   program
     .command('actors <name> [actorId]')
     .helpGroup(INSPECT)
-    .description('List every logical actor this workspace holds, or show one by id')
+    .description('List every actor a workspace holds, or show one by id')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(actorsCommand));
 
   program
     .command('state <name>')
     .helpGroup(INSPECT)
-    .description('Show the durable workspace state snapshot')
+    .description('Show the workspace state snapshot')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(stateCommand));
 
   program
     .command('spend <name>')
     .helpGroup(INSPECT)
-    .description('Show what the whole workspace spent, by producer and by mission')
+    .description('Show what a workspace spent, by producer and by mission')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(spendCommand));
 
   program
     .command('memory <name> [query...]')
     .helpGroup(INSPECT)
-    .description('Read or search workspace memory')
+    .description('Read or search a workspace\'s memory')
     .option('--limit <n>', 'Search result limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(memoryCommand));
@@ -371,7 +372,7 @@ export function buildProgram(): Command {
   program
     .command('events <name>')
     .helpGroup(INSPECT)
-    .description('List recent workspace events')
+    .description('List a workspace\'s recent events')
     .option('--variant <name>', 'Filter by event variant')
     .option('--since <time>', 'Filter events after a timestamp or date')
     .option('--limit <n>', 'Event limit')
@@ -381,7 +382,7 @@ export function buildProgram(): Command {
   program
     .command('timeline <name>')
     .helpGroup(INSPECT)
-    .description('List the run/evolution/MCTS timeline')
+    .description('List a workspace\'s runs, evolutions and MCTS searches in order')
     .option('--limit <n>', 'Timeline row limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(timelineCommand));
@@ -389,14 +390,14 @@ export function buildProgram(): Command {
   program
     .command('mcts <name> [nodeId]')
     .helpGroup(INSPECT)
-    .description('Inspect MCTS search history')
+    .description('Show a workspace\'s MCTS search history')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(mctsCommand));
 
   program
     .command('heads <name>')
     .helpGroup(INSPECT)
-    .description('Inspect parallel reasoning branch runs')
+    .description('Show parallel reasoning branch runs')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(headsCommand));
@@ -404,22 +405,22 @@ export function buildProgram(): Command {
   program
     .command('debug <name>')
     .helpGroup(INSPECT)
-    .description('Fetch everything about a workspace into one bundle: identity, messages, runs and ' +
-      'their events, heads, MCTS searches, background jobs, evolution state, memory and facts')
+    .description('Save everything about a workspace to one file: identity, messages, runs and '
+      + 'their events, heads, MCTS searches, background jobs, evolution state, memory and facts')
     .option('-o, --out <file>', 'Bundle output path (default: <name>.debug.jsonl)')
-    .option('--runs <n>', 'How many recent runs/head-runs/searches to page through')
-    .option('--limit <n>', 'Row limit for the smaller sections (messages, jobs, facts, ...)')
-    .option('--json', 'Print the assembled summary as JSON instead of a human report')
+    .option('--runs <n>', 'How many recent runs, head runs and searches to include')
+    .option('--limit <n>', 'Row limit for the smaller sections (messages, jobs, facts and so on)')
+    .option('--json', 'Print the summary as JSON instead of text')
     .action(wrapAction(debugCommand));
 
   program
     .command('gepa <name> [runId]')
     .helpGroup(INSPECT)
-    .description('Inspect GEPA optimisation runs, or run a pass with --run')
+    .description('Show GEPA optimisation runs, or run one pass with --run')
     .option('--run', 'Run one optimisation pass over the scaffold')
     .option('--iterations <n>', 'Reflection iterations (--run)')
     .option('--eval-size <n>', 'Labeled turns to draw the split from (--run)')
-    .option('--metric-calls <n>', 'Metric-call ceiling (--run)')
+    .option('--metric-calls <n>', 'Most metric calls to make (--run)')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(gepaCommand));
@@ -427,15 +428,15 @@ export function buildProgram(): Command {
   program
     .command('alignment <name>')
     .helpGroup(INSPECT)
-    .description('K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals')
+    .description('Show K_align: corrections per 100 graded turns for each scaffold version, with 95% intervals')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(alignmentCommand));
 
   program
     .command('label [action] [name] [file]')
     .helpGroup(INSPECT)
-    .description('Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the ' +
-      'classifier; mine | score for the free behavioural corpus')
+    .description('Label turn outcomes by hand to measure and correct the classifier (export, ingest, '
+      + 'ensemble, report), or build a corpus from Claude Code transcripts (mine, score)')
     .option('--out <file>', 'Where to write the labeling file (export) or the corpus report (mine, score)')
     .option('--size <n>', 'Turns to draw (export)')
     .option('--labeler <name>', 'Who is labeling (ingest)')
@@ -449,7 +450,7 @@ export function buildProgram(): Command {
   program
     .command('release <name>')
     .helpGroup(INSPECT)
-    .description('Inspect the governed release lane: sources, changes, checks, approvals, deployments')
+    .description('Show a workspace\'s release board: sources, changes, checks, approvals and deployments')
     .option('--limit <n>', 'Change limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(releaseCommand));
@@ -459,28 +460,28 @@ export function buildProgram(): Command {
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
-    .description('Link this computer as the desktop execution daemon')
-    .option('--label <name>', 'Name for this device (default: hostname); skips the name prompt')
+    .description('Connect this computer so your agents can run commands on it')
+    .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 
   program
     .command('desktop [action]')
     .helpGroup(THIS_COMPUTER)
-    .description('Connect or inspect the local desktop execution daemon')
-    .option('--label <name>', 'Name for this device (default: hostname); skips the name prompt')
+    .description('Connect this computer, or show its connection status and daemon logs')
+    .option('--label <name>', 'Name for this device (default: the hostname); skips the name prompt')
     .action(wrapAction(desktopCommand));
 
   program
     .command('daemon [action] [workspace]')
     .helpGroup(THIS_COMPUTER)
-    .description('Manage the local scheduler daemon: start, stop, restart, status, logs, run, tick')
+    .description('Start, stop or check the local scheduler daemon, or run one pass by hand with tick')
     .action(wrapAction(daemonCommand));
 
   program
-    .command('deploy [door] [action]')
+    .command('deploy [target] [action]')
     .helpGroup(THIS_COMPUTER)
-    .description('Deploy your own Kinu: `deploy cloudflare` into your Cloudflare account, '
-      + '`deploy local [start|stop|status]` onto this machine')
+    .description('Run your own Kinu: `deploy cloudflare` in your Cloudflare account, '
+      + '`deploy local [start|stop|status]` on this computer')
     .option('--origin <url>', 'Kinu app origin')
     .option('--port <n>', 'Port for the local instance (default 8787)')
     .action(wrapAction(deployCommand));
@@ -488,7 +489,7 @@ export function buildProgram(): Command {
   program
     .command('doctor')
     .helpGroup(THIS_COMPUTER)
-    .description('Inspect local Kinu CLI installation state')
+    .description('Check the installed Kinu CLI: paths, origin and version')
     .action(wrapAction(doctorCommand));
 
   program
@@ -496,7 +497,7 @@ export function buildProgram(): Command {
     .helpGroup(THIS_COMPUTER)
     .description('Update the installed Kinu command')
     .option('--origin <url>', 'Kinu app origin')
-    .option('--force', 'Reinstall even if already current')
+    .option('--force', 'Reinstall even when already up to date')
     // The startup check's detached child: refresh the CLI tree, print nothing,
     // leave the launcher alone.
     .addOption(new Option('--background', 'Stage and swap the CLI tree silently').hideHelp())
@@ -506,10 +507,80 @@ export function buildProgram(): Command {
     .command('uninstall')
     .helpGroup(THIS_COMPUTER)
     .description('Remove the installed Kinu command')
-    .option('--purge', 'Also remove ~/.kinu data')
+    .option('--purge', 'Also delete ~/.kinu and everything in it')
     .action(wrapAction(uninstallCommand));
 
+  for (const [path, example] of COMMAND_EXAMPLES) setCommandExample(commandAt(program, path), example);
+
   return program;
+}
+
+/** One real invocation for each command, by the words a user types after `kinu`. */
+const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
+  ['setup', 'kinu setup --provider codex'],
+  ['provider', 'kinu provider connect openrouter'],
+  ['auth', 'kinu auth'],
+  ['whoami', 'kinu whoami'],
+  ['logout', 'kinu logout'],
+  ['sessions', 'kinu sessions revoke --all'],
+  ['tokens', 'kinu tokens create --name ci --scopes workspace.read,workspace.exec'],
+  ['create', 'kinu create jarvis --mode local --purpose "Keep this repo\'s tests green"'],
+  ['list', 'kinu list'],
+  ['status', 'kinu status jarvis'],
+  ['workspace delete', 'kinu workspace delete jarvis'],
+  ['alias', 'kinu alias jarvis j'],
+  ['unalias', 'kinu unalias j'],
+  ['aliases', 'kinu aliases'],
+  ['export', 'kinu export jarvis -o jarvis.kinu.jsonl'],
+  ['import', 'kinu import jarvis.kinu.jsonl --name jarvis-copy'],
+  ['run', 'kinu run jarvis "summarise yesterday\'s commits"'],
+  ['chat', 'kinu chat jarvis'],
+  ['acp', 'kinu acp jarvis'],
+  ['exec', 'kinu exec -w jarvis --json "run the test suite and report failures"'],
+  ['executors', 'kinu executors jarvis'],
+  ['transcripts', 'kinu transcripts jarvis --path'],
+  ['stop', 'kinu stop jarvis'],
+  ['model', 'kinu model jarvis anthropic/claude-sonnet-4-7'],
+  ['effort', 'kinu effort jarvis high'],
+  ['tools', 'kinu tools jarvis'],
+  ['triggers', 'kinu triggers jarvis every "0 9 * * 1-5"'],
+  ['webhook', 'kinu webhook jarvis github-push --auth-mode hmac --secret "$HOOK_SECRET"'],
+  ['evolve', 'kinu evolve jarvis --budget 4'],
+  ['jobs', 'kinu jobs jarvis'],
+  ['actors', 'kinu actors jarvis'],
+  ['state', 'kinu state jarvis --json'],
+  ['spend', 'kinu spend jarvis'],
+  ['memory', 'kinu memory jarvis deploy steps'],
+  ['events', 'kinu events jarvis --since 2026-09-01 --limit 20'],
+  ['timeline', 'kinu timeline jarvis --limit 20'],
+  ['mcts', 'kinu mcts jarvis'],
+  ['heads', 'kinu heads jarvis --limit 5'],
+  ['debug', 'kinu debug jarvis -o jarvis.debug.jsonl'],
+  ['gepa', 'kinu gepa jarvis --run --iterations 3'],
+  ['alignment', 'kinu alignment jarvis'],
+  ['label', 'kinu label export jarvis --size 20'],
+  ['release', 'kinu release jarvis'],
+  ['connect', 'kinu connect --label studio'],
+  ['desktop', 'kinu desktop status'],
+  ['daemon', 'kinu daemon tick jarvis'],
+  ['deploy', 'kinu deploy local start --port 8787'],
+  ['doctor', 'kinu doctor'],
+  ['update', 'kinu update'],
+  ['uninstall', 'kinu uninstall'],
+];
+
+/** The registered command at `path`; a stale path is a programming error. */
+function commandAt(program: Command, path: string): Command {
+  let command = program;
+
+  for (const name of path.split(' ')) {
+    const next = command.commands.find((child) => child.name() === name);
+
+    if (next === undefined) throw new Error(`No registered command "${path}" to attach an example to`);
+    command = next;
+  }
+
+  return command;
 }
 
 /** Wrap async actions with consistent error handling. The argument tuple stays

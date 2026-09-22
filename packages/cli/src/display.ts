@@ -192,7 +192,7 @@ export function printCreatedCard(name: string, purpose: string, model: string, d
   const w = termWidth();
   const L = (label: string) => DIM(label.padEnd(10));
   console.log('');
-  console.log(`${BRAND} ${DIM('— Workspace Created')}`);
+  console.log(`${BRAND} ${DIM('· workspace created')}`);
   console.log(boxTop(w));
   console.log(boxRow(L('Name:'), ACCENT(name), w));
   console.log(boxRow(L('Mission:'), clipText(purpose, w - 18), w));
@@ -223,7 +223,7 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 }): void {
   const w = termWidth();
   console.log('');
-  console.log(`${BRAND} ${DIM('— Workspace Status')}`);
+  console.log(`${BRAND} ${DIM('· workspace status')}`);
   console.log(boxTop(w));
 
   const L = (label: string) => DIM(label.padEnd(14));
@@ -240,7 +240,7 @@ export function printAgentStatus(info: AgentStatusInfo, dbSize: number, extra?: 
 
   // Evolution section
   console.log(boxRow(L('Scaffold:'), `v${info.scaffoldVersion}`, w));
-  console.log(boxRow(L('MCTS Nodes:'), String(info.searchNodeCount), w));
+  console.log(boxRow(L('MCTS nodes:'), String(info.searchNodeCount), w));
   console.log(boxRow(L('Tasks:'), String(info.taskCount), w));
 
   if (extra?.conversationCount !== undefined) {
@@ -267,13 +267,13 @@ export function printAgentList(agents: Array<{
   dbSize?: number;
 }>): void {
   if (agents.length === 0) {
-    console.log(`\n${DIM('No agents found.')} Create one with: ${ACCENT('kinu create <name>')}\n`);
+    console.log(`\n${DIM('No workspaces yet.')} Create one with: ${ACCENT('kinu create <name>')}\n`);
 
     return;
   }
 
   console.log('');
-  console.log(`${BRAND} ${DIM(`— ${agents.length} agent${agents.length === 1 ? '' : 's'}`)}`);
+  console.log(`${BRAND} ${DIM(`· ${plural(agents.length, 'workspace')}`)}`);
   console.log('');
 
   // Adaptive column widths. NAME is an IDENTIFIER: it is what the user pastes
@@ -346,7 +346,7 @@ export function printSearchTree(nodes: SearchNode[]): void {
     return;
   }
 
-  console.log(`\n${DIM('MCTS Search Tree:')}`);
+  console.log(`\n${DIM('MCTS search tree:')}`);
 
   for (const line of renderSearchTreeLines(nodes)) console.log(line);
   console.log('');
@@ -442,12 +442,12 @@ const UNGROUPED_HEADING = 'Other commands:';
 /** Environment variables that apply to every command. Per-command options are
  *  deliberately not repeated here — `kinu <command> --help` owns those. */
 export const GLOBAL_ENVIRONMENT: ReadonlyArray<readonly [string, string]> = [
-  ['KINU_HOME', 'Workspace + config directory (default ~/.kinu)'],
+  ['KINU_HOME', 'Where Kinu keeps workspaces and config (default ~/.kinu)'],
   ['KINU_ORIGIN', 'Kinu app origin'],
-  ['KINU_TOKEN', 'Account access token (CI)'],
+  ['KINU_TOKEN', 'Account access token, for CI'],
   ['KINU_MODEL', 'Default model ID'],
-  ['KINU_BASE_URL', 'LLM API base URL'],
-  ['KINU_AUTH', 'LLM auth header value'],
+  ['KINU_BASE_URL', 'Base URL of your own model endpoint'],
+  ['KINU_AUTH', 'Auth header value for that endpoint'],
 ];
 
 export const HELP_EXAMPLES: ReadonlyArray<string> = [
@@ -460,6 +460,16 @@ export const HELP_EXAMPLES: ReadonlyArray<string> = [
   'kinu connect',
 ];
 
+/** One real invocation per command, keyed by the command's own object so a
+ *  rename cannot orphan it. `kinu <command> --help` prints it and the CLI
+ *  reference renders it. */
+const COMMAND_EXAMPLES = new WeakMap<Command, string>();
+
+export function setCommandExample(command: Command, example: string): void {
+  COMMAND_EXAMPLES.set(command, example);
+  command.addHelpText('after', `\nExample:\n  $ ${example}`);
+}
+
 export interface HelpEntry {
   /** The registration itself — what a renderer needs for options/aliases. */
   command: Command;
@@ -467,6 +477,8 @@ export interface HelpEntry {
   term: string;
   description: string;
   heading: string;
+  /** The command's registered example; undefined when none was registered. */
+  example: string | undefined;
 }
 
 /** Every runnable command in the tree, in registration order, with its heading
@@ -490,7 +502,7 @@ export function commandEntries(program: Command): HelpEntry[] {
       const heading = cmd.helpGroup() || inherited;
 
       if (children(cmd).length > 0) walk(cmd, `${term} `, heading);
-      else entries.push({ command: cmd, term, description: cmd.description(), heading });
+      else entries.push({ command: cmd, term, description: cmd.description(), heading, example: COMMAND_EXAMPLES.get(cmd) });
     }
   };
 

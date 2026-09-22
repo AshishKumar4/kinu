@@ -31,4 +31,16 @@ describe('docs/CLI.md', () => {
       }
     }
   });
+
+  test('gives every command one example that runs that command', () => {
+    const unexampled = commandEntries(buildProgram())
+      .filter((entry) => {
+        const path = entry.term.split(' ').filter((word) => /^[a-z]/.test(word)).join(' ');
+
+        return !entry.example?.startsWith(`kinu ${path}`);
+      })
+      .map((entry) => entry.term);
+
+    expect(unexampled).toEqual([]);
+  });
 });
