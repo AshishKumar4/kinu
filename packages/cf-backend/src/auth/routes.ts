@@ -5,14 +5,14 @@ import {
 } from './session';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
-  type OAuthProfile,
+  type OAuthProfile, type SessionAuthority,
 } from './store';
 import { escapeHtml, json, KINU_USER_AGENT } from '@kinu.run/core';
 import { authDocument, loginDocument } from '@kinu.run/core';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
-  type OAuthProviderConfig,
+  type OAuthProviderConfig, type OAuthProviderEnv,
 } from './providers';
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -22,7 +22,11 @@ import {
 } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
+import { notifyWorkspacesCredentialsChanged, type CredentialFanoutTarget } from '../user/workspace-access';
+import type { UserDO } from '../user/user-do';
+import type { ObjectNamespace } from '../bindings';
+import type { KvStore } from '@kinu.run/agent-utils';
+import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
@@ -55,7 +59,24 @@ interface MutableTokenEndpointResponse {
   scope?: string;
 }
 
-export async function handleAuthRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
+/** The user-object calls the sign-in path makes: the session store's four, and
+ *  the Cloudflare credential attach with the roster read its fanout needs. */
+export type AuthRoutesAuthority = SessionAuthority
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces'>;
+
+/** Every binding `handleAuthRequest` and its callees read. Nothing is optional
+ *  here that the session port leaves optional: sign-out revokes through
+ *  `AUTH_KV` without a guard, and the Cloudflare callback attaches a credential
+ *  and fans the change out, each addressing an object by name. */
+export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
+  AUTH_KV: KvStore;
+  UserDO: ObjectNamespace<Id, AuthRoutesAuthority>;
+  OrchestratorAgent: ObjectNamespace<Id, CredentialFanoutTarget>;
+  DEV_USER_EMAIL?: string;
+  DEV_IDENTITY_SECRET?: string;
+}
+
+export async function handleAuthRequest<Id>(request: Request, env: AuthRoutesEnv<Id>, ctx?: Pick<ExecutionContext, 'waitUntil'>): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
 
@@ -97,7 +118,7 @@ export async function handleAuthRequest(request: Request, env: Env, ctx?: Execut
   return null;
 }
 
-async function renderLogin(request: Request, env: Env): Promise<Response> {
+async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
   const prompt = url.searchParams.get('prompt') === 'login' ? 'login' : null;
@@ -130,7 +151,7 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function startOAuth(request: Request, env: Env, providerId: string): Promise<Response> {
+async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
 
   if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
@@ -187,14 +208,18 @@ async function startOAuth(request: Request, env: Env, providerId: string): Promi
  * the cookie in the browser would leave one spent half of a one-time pair
  * behind — and a browser that keeps it is a browser that keeps offering it.
  */
-async function finishOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
+async function finishOAuth<Id>(
+  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'> | undefined, providerId: string,
+): Promise<Response> {
   const response = await completeOAuth(request, env, ctx, providerId);
   response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
 
   return response;
 }
 
-async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext | undefined, providerId: string): Promise<Response> {
+async function completeOAuth<Id>(
+  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'> | undefined, providerId: string,
+): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
 
   if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
@@ -273,9 +298,9 @@ async function completeOAuth(request: Request, env: Env, ctx: ExecutionContext |
  * credential unusable, which the "Connect Cloudflare Workers AI" notice
  * already reports on its own.
  */
-async function attachCloudflareWorkersAI(
-  env: Env,
-  ctx: ExecutionContext | undefined,
+async function attachCloudflareWorkersAI<Id>(
+  env: AuthRoutesEnv<Id>,
+  ctx: Pick<ExecutionContext, 'waitUntil'> | undefined,
   userId: string,
   tokens: CloudflareTokenPayload,
 ): Promise<void> {
@@ -331,7 +356,7 @@ async function processOAuthTokenResponse(
  * says the session is still signed in, and a retry that can end it. Nothing
  * here touches the user's other sessions.
  */
-async function logout(request: Request, env: Env): Promise<Response> {
+async function logout<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
   const token = readSessionToken(request);

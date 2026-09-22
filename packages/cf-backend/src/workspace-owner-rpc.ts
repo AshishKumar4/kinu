@@ -19,6 +19,7 @@ import type {
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
+import type { ObjectNamespace } from './bindings';
 
 /**
  * Every method a caller in this Worker reaches on the object that owns a
@@ -70,10 +71,7 @@ export interface WorkspaceOwnerWire {
   liveShareBundleWire(share: string, userId: string): Promise<string>;
 }
 
-export interface WorkspaceOwnerNamespace {
-  idFromName(name: string): DurableObjectId;
-  get(id: DurableObjectId): WorkspaceOwnerWire;
-}
+export type WorkspaceOwnerNamespace<Id = DurableObjectId> = ObjectNamespace<Id, WorkspaceOwnerWire>;
 
 /** The refusal half of an answer on the wire: core's `Refusal` under the
  *  `ok: false` tag, in the one vocabulary `ERROR_CODES` declares. */
@@ -110,8 +108,8 @@ function answeredWire<Schema extends v.GenericSchema>(wire: string, value: Schem
  * answers a `string`, so the recursion no longer crosses the stub and the
  * decode happens once, below.
  */
-export function workspaceOwner(
-  env: { OrchestratorAgent: WorkspaceOwnerNamespace },
+export function workspaceOwner<Id>(
+  env: { OrchestratorAgent: WorkspaceOwnerNamespace<Id> },
   workspaceName: string,
 ): WorkspaceOwnerRpc {
   const owner = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));

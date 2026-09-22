@@ -17,9 +17,11 @@ import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs'
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
-import { listAvailableModels } from './available-models';
+import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import type { WorkspaceEntry, WorkspaceRegistration } from './user-do';
-import { indexNewWorkspace, unindexWorkspace } from '../control-plane/index-feed';
+import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
+import type { OrchestratorAgent } from '../orchestrator';
+import type { ObjectNamespace } from '../bindings';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   /** The account's profile catalog: its `default` tier is the one place the
@@ -53,8 +55,21 @@ export interface CreateCloudWorkspaceOptions {
   suggestDisplayName?: (mission: string) => Promise<string | null>;
 }
 
-export interface CreateCloudWorkspaceRequest {
-  env: Env;
+/** Every call a create makes on the workspace object it is bringing up. */
+export type CloudWorkspaceBirth = Pick<
+  OrchestratorAgent,
+  'claimOwner' | 'setInitialDisplayName' | 'setAutoDisplayName' | 'setSoul' | 'resetWorkspaceBaseline'
+  | 'setModel' | 'setReasoningEffort' | 'setRole' | 'beginGenesisTurn' | 'reportFacetModelCall'
+>;
+
+/** Every binding a create reads: the model menu's, the index feed's, and the
+ *  workspace object it addresses by name. */
+export interface CreateCloudWorkspaceEnv<Id> extends AvailableModelsEnv<Id>, IndexFeedEnv<Id> {
+  OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth>;
+}
+
+export interface CreateCloudWorkspaceRequest<Id> {
+  env: CreateCloudWorkspaceEnv<Id>;
   userId: string;
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
@@ -62,7 +77,9 @@ export interface CreateCloudWorkspaceRequest {
   options?: CreateCloudWorkspaceOptions;
 }
 
-export async function createCloudWorkspaceForUser(request: CreateCloudWorkspaceRequest): Promise<WorkspaceEntry> {
+export async function createCloudWorkspaceForUser<Id>(
+  request: CreateCloudWorkspaceRequest<Id>,
+): Promise<WorkspaceEntry> {
   const { env, userId, userDO, caller, input, options = {} } = request;
   const trimmedPurpose = input.purpose?.trim() ?? '';
   const purpose = trimmedPurpose === '' ? undefined : trimmedPurpose;
@@ -110,7 +127,7 @@ export async function createCloudWorkspaceForUser(request: CreateCloudWorkspaceR
   if (registered.status === 'active') return entry;
 
   try {
-    const initialization: InitializeOrchestratorInput = {
+    const initialization: InitializeOrchestratorInput<Id> = {
       env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
       nameOrigin: identity.nameOrigin, model,
     };
@@ -195,8 +212,8 @@ export async function createCloudWorkspaceForUser(request: CreateCloudWorkspaceR
  * rollback. Returning nothing for both is how a rollback that never ran reads
  * exactly like one that did.
  */
-async function rollbackRegistration(input: {
-  env: Env;
+async function rollbackRegistration<Id>(input: {
+  env: CreateCloudWorkspaceEnv<Id>;
   userId: string;
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
@@ -280,8 +297,8 @@ function createInitialCloudAgentIdentity(
   };
 }
 
-interface CloudAgentNaming {
-  env: Env;
+interface CloudAgentNaming<Id> {
+  env: CreateCloudWorkspaceEnv<Id>;
   userDO: CloudWorkspaceRegistry;
   caller: UserCaller;
   agentName: string;
@@ -290,7 +307,7 @@ interface CloudAgentNaming {
   suggestDisplayName?: (mission: string) => Promise<string | null>;
 }
 
-async function scheduleCloudAgentDisplayNameGeneration(naming: CloudAgentNaming): Promise<void> {
+async function scheduleCloudAgentDisplayNameGeneration<Id>(naming: CloudAgentNaming<Id>): Promise<void> {
   try {
     await applyGeneratedDisplayName(naming);
   } catch (cause) {
@@ -302,7 +319,7 @@ async function scheduleCloudAgentDisplayNameGeneration(naming: CloudAgentNaming)
   }
 }
 
-async function applyGeneratedDisplayName(naming: CloudAgentNaming): Promise<void> {
+async function applyGeneratedDisplayName<Id>(naming: CloudAgentNaming<Id>): Promise<void> {
   const { env, agentName, mission, suggestDisplayName } = naming;
 
   const displayName = suggestDisplayName
@@ -327,7 +344,7 @@ async function applyGeneratedDisplayName(naming: CloudAgentNaming): Promise<void
  * port a facet uses, because the total that has to account for it lives in that
  * Durable Object and not in this Worker.
  */
-async function suggestCloudAgentDisplayName(naming: CloudAgentNaming): Promise<string | null> {
+async function suggestCloudAgentDisplayName<Id>(naming: CloudAgentNaming<Id>): Promise<string | null> {
   const { env, userDO, caller, mission, modelSpec, agentName } = naming;
 
   const provider = createAgentProviderRegistry({ env, userDO: { stub: userDO, caller }, fetch });
@@ -354,8 +371,8 @@ async function suggestCloudAgentDisplayName(naming: CloudAgentNaming): Promise<s
   return parseWorkspaceTitle(result.text);
 }
 
-interface InitializeOrchestratorInput {
-  env: Env;
+interface InitializeOrchestratorInput<Id> {
+  env: CreateCloudWorkspaceEnv<Id>;
   userId: string;
   userDO: CloudWorkspaceRegistry;
   agentName: string;
@@ -367,7 +384,7 @@ interface InitializeOrchestratorInput {
   role?: string;
 }
 
-async function initializeOrchestrator(input: InitializeOrchestratorInput): Promise<void> {
+async function initializeOrchestrator<Id>(input: InitializeOrchestratorInput<Id>): Promise<void> {
   const {
     env, userId, userDO, agentName, displayName, nameOrigin,
     mission, model, reasoningEffort, role,

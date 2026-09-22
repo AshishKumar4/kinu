@@ -379,6 +379,22 @@ const agentRpcMethodsExist: AgentRpcMethodsExist = true;
 
 void agentRpcMethodsExist;
 
+/**
+ * The workspace object as the method-shaped transport reaches it: one member
+ * per table name.
+ *
+ * The member type states PRESENCE, not the signature. `AgentRpcMethodsExist`
+ * above already proves every name is a real method on the class, and restating
+ * the signatures here maps every answer through the stub's result type, which
+ * tsc gives up on — TS2589 at `server.ts`'s `handleCliRequest` call, measured
+ * 2026-09-22 on this tree, the same failure `workspace-owner-rpc.ts` records.
+ * The value read under a name is checked before it is called, and its answer
+ * crosses back as JSON.
+ */
+export type AgentRpcDispatch = {
+  readonly [Method in AgentRpcMethod]: (...args: never[]) => void;
+};
+
 /** The access class for a client-supplied method name; null when the method
  *  is off-table (never dispatch it). */
 export function requiredRpcAccess(method: string): AgentRpcAccess | null {

@@ -5,23 +5,36 @@
 //
 // Ownership-claiming lives in `./workspace-ownership`, which four surfaces ask
 // and only this one creates — see that module's header.
+import type { ActorAgent } from '../actor-agent';
 import type { UserDO } from './user-do';
-import { createCloudWorkspaceForUser, type CreateCloudWorkspaceInput } from './workspace-create';
+import type { ObjectNamespace } from '../bindings';
+import type { OwnerCapabilityEnv } from '@kinu.run/core';
+import {
+  createCloudWorkspaceForUser,
+  type CloudWorkspaceBirth, type CloudWorkspaceRegistry, type CreateCloudWorkspaceEnv,
+  type CreateCloudWorkspaceInput,
+} from './workspace-create';
 import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
-export interface CreateWorkspaceRequest {
+/** Every binding a create route reads: the create's own, and the fanout's
+ *  workspace namespace, which the create already addresses. */
+export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, CredentialFanoutEnv<Id> {
+  OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth & CredentialFanoutTarget>;
+}
+
+export interface CreateWorkspaceRequest<Id> {
   request: Request;
-  env: Env;
+  env: CreateWorkspaceEnv<Id>;
   userId: string;
-  userDO: DurableObjectStub<UserDO>;
-  ctx?: ExecutionContext;
+  userDO: CloudWorkspaceRegistry;
+  ctx?: Pick<ExecutionContext, 'waitUntil'>;
 }
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
-export async function handleCreateWorkspaceRequest(call: CreateWorkspaceRequest): Promise<Response> {
+export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id>): Promise<Response> {
   const { request, env, userId, userDO, ctx } = call;
 
   const body = await safeJson(request, v.object({
@@ -75,6 +88,16 @@ export async function handleCreateWorkspaceRequest(call: CreateWorkspaceRequest)
   }
 }
 
+/** The one call the fanout makes on a workspace object. Named so the fanout
+ *  states its reach and a stand-in workspace satisfies it. */
+export type CredentialFanoutTarget = Pick<ActorAgent, 'onCredentialsChanged'>;
+
+/** What the fanout reads: the roster's workspaces, and the owner secret the
+ *  roster read is authorized with. */
+export interface CredentialFanoutEnv<Id> extends OwnerCapabilityEnv {
+  OrchestratorAgent: ObjectNamespace<Id, CredentialFanoutTarget>;
+}
+
 /** Fan a credential-change notification out to the user's active workspaces so
  *  each drops its cached provider/model state (onCredentialsChanged) —
  *  otherwise a disconnected provider stays "available" until the next
@@ -86,10 +109,10 @@ export async function handleCreateWorkspaceRequest(call: CreateWorkspaceRequest)
  *  never landed is healed at the next use rather than left standing. Each
  *  rejected workspace is named and classified here, so a persistent failure is
  *  a diagnosable line rather than an allSettled outcome nobody reads. */
-export function notifyWorkspacesCredentialsChanged(
-  env: Env,
-  userDO: DurableObjectStub<UserDO>,
-  ctx?: ExecutionContext,
+export function notifyWorkspacesCredentialsChanged<Id>(
+  env: CredentialFanoutEnv<Id>,
+  userDO: Pick<UserDO, 'listActiveWorkspaces'>,
+  ctx?: Pick<ExecutionContext, 'waitUntil'>,
 ): void {
   if (ctx === undefined) {
     throw new Error('Credential fanout requires the request ExecutionContext owner');

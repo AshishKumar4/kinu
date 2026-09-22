@@ -21,17 +21,26 @@ import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
+import type { ObjectNamespace } from '../bindings';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+
+/** The two registry calls the gate makes on the asking user's own object. */
+export type WorkspaceRegistry = Pick<UserDO, 'hasWorkspace' | 'ensureWorkspaceCapability'>;
+
+/** The one call the gate makes on the workspace itself. Generic below rather
+ *  than fixed, because the resolved stub is handed BACK to the caller, which
+ *  reaches the rest of the object through it. */
+export type WorkspaceOwnerClaim = Pick<OrchestratorAgent, 'claimOwner'>;
 
 /** The bindings an ownership question needs, stated structurally so the control
  *  plane can ask it with its own narrower env rather than the generated `Env`. */
-export interface WorkspaceOwnershipEnv extends OwnerCapabilityEnv {
-  UserDO: DurableObjectNamespace<UserDO>;
-  OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
+export interface WorkspaceOwnershipEnv<Id, Agent extends WorkspaceOwnerClaim> extends OwnerCapabilityEnv {
+  UserDO: ObjectNamespace<Id, WorkspaceRegistry>;
+  OrchestratorAgent: ObjectNamespace<Id, Agent>;
 }
 
-export type OwnedWorkspaceResult =
-  | { ok: true; agent: DurableObjectStub<OrchestratorAgent> }
+export type OwnedWorkspaceResult<Agent> =
+  | { ok: true; agent: Agent }
   | { ok: false; status: number; error: string };
 
 /** Positive registry-membership answers this Worker isolate has proven, keyed
@@ -64,11 +73,11 @@ function forgetWorkspaceMembership(userId: string, workspaceName: string): void 
  *  probes cannot register workspaces; 403 only for a genuine cross-user collision;
  *  503 when the platform dropped the call, so a client knows to try again; and
  *  anything else is a surfaced 500 so boot/schema issues stay diagnosable. */
-export async function claimOwnedWorkspace(
-  env: WorkspaceOwnershipEnv,
+export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
+  env: WorkspaceOwnershipEnv<Id, Agent>,
   userId: string,
   workspaceName: string,
-): Promise<OwnedWorkspaceResult> {
+): Promise<OwnedWorkspaceResult<Agent>> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
   // These calls run on every authenticated request for this workspace, and
   // every one is idempotent — a membership read (skipped when this isolate

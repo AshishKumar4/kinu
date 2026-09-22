@@ -17,7 +17,11 @@ import { buildCliInstallCommand } from '@kinu.run/core';
 import { handleCliRequest } from '../src/cli/routes';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
-import { handleAuthRequest } from '../src/auth/routes';
+import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
+import type { CliRoutesEnv } from '../src/cli/routes';
+import {
+  bootstrappedProfile, unreachableAssets, unreachableKv, unreachableNamespace,
+} from './helpers/bindings';
 import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
 import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -32,14 +36,15 @@ function source(path: string): string {
   return readFileSync(join(root, path), 'utf8');
 }
 
-function publicRouteEnv(): Env {
-  const env: Partial<Env> = {};
-
-  // SAFETY: These public static routes return before reading any Worker binding.
-  return env as Env;
-}
-
-const PUBLIC_ROUTE_ENV = publicRouteEnv();
+/** These public static routes answer before reading a Worker binding, so every
+ *  binding the CLI plane declares is built here as a refusal: the first reach
+ *  names itself and fails the test. */
+const PUBLIC_ROUTE_ENV: CliRoutesEnv<string> = {
+  AUTH_KV: unreachableKv('AUTH_KV'),
+  ASSETS: unreachableAssets(),
+  UserDO: unreachableNamespace('UserDO'),
+  OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+};
 
 /** The accounts listing the OAuth attachment reads, and the check that it asked
  *  the accounts endpoint rather than some other Cloudflare API for it. */
@@ -358,39 +363,43 @@ describe('auth and desktop security invariants', () => {
 function cloudflareCallbackEnv() {
   const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
-  const configs = new Map<string, string>();
   const sessions = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
 
-  const userDO = {
-    async ensureProfile(_caller: UserCaller) {},
+  const userDO: AuthRoutesAuthority = {
+    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
     ) { sessions.set(tokenHash, { expiresAt, identity }); },
+    async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
+      const row = sessions.get(tokenHash);
+
+      return row && row.expiresAt > Date.now() ? { identity: row.identity } : null;
+    },
+    async revokeBrowserSession(_caller: UserCaller, tokenHash: string) { sessions.delete(tokenHash); },
     async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },
-    async getConfig(_caller: UserCaller, key: string) { return configs.get(key) ?? null; },
-    async setConfig(_caller: UserCaller, key: string, value: string) { configs.set(key, value); },
+    async listActiveWorkspaces(_caller: UserCaller) { return []; },
   };
 
-  const bindings = {
+  const bindings: AuthRoutesEnv<string> = {
     AUTH_KV: kv,
-    UserDO: { idFromName: (name: string) => name, get: () => userDO },
-    OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({ async onCredentialsChanged() {} }) },
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    OrchestratorAgent: {
+      idFromName: (name) => name,
+      get: () => ({ onCredentialsChanged: async () => ({ ok: true as const }) }),
+    },
     CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
 
-  const env: Partial<Env> = {};
-  Object.assign(env, bindings);
-
-  // SAFETY: the callback reads exactly the constructed KV namespace, the two
-  // namespaces, the OAuth client values and the credential key, all present above.
-  return { env: env as Env, credentials, sessions };
+  return { env: bindings, credentials, sessions };
 }
 
-async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: JsonValue): Promise<Response> {
+async function cloudflareSignIn(
+  env: AuthRoutesEnv<string>, tokenJson: JsonValue, userResult: JsonValue,
+): Promise<Response> {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input, init).url;

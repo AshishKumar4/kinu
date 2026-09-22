@@ -9,11 +9,12 @@
 
 import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
-  SessionAuthorityUnavailableError, deriveUserId, verifySession, type AuthStoreEnv,
+  SessionAuthorityUnavailableError, deriveUserId, verifySession,
+  type AuthStoreEnv, type SessionAuthority,
 } from './store';
 import { isDeployPath } from '@kinu.run/core/deploy';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { UserDO } from '../user/user-do';
+import type { ObjectNamespace } from '../bindings';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import type { AccessTokenScope } from '@kinu.run/core';
 
@@ -164,11 +165,11 @@ export function setCookie(name: string, value: string, expiresAt: number): strin
   return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
 }
 
-export interface AuthEnv extends OwnerCapabilityEnv {
+export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
   AUTH_KV?: KvStore;
   /** Where a session cookie's authority lives: the row that says the session
    *  is still live sits in the signing-in user's own Durable Object. */
-  UserDO?: DurableObjectNamespace<UserDO>;
+  UserDO?: ObjectNamespace<Id, SessionAuthority>;
   DEV_USER_EMAIL?: string;
   /** The shared secret a caller presents to act as `DEV_USER_EMAIL` on a
    *  deployment that is not a developer's own machine. */
@@ -195,7 +196,7 @@ const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0
  *   - dev (DEV_USER_EMAIL set): synthesize identity, no JWT required
  *   - mis-configured: throw 500
  */
-export async function authenticateRequest(request: Request, env: AuthEnv): Promise<AuthIdentity> {
+export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>): Promise<AuthIdentity> {
   const sessionToken = readSessionToken(request);
 
   if (sessionToken) {
@@ -253,7 +254,7 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
 
 /** The bindings a cookie carries no authority without. Checked only on the
  *  cookie path: the dev identity reaches neither. */
-function assertSessionBindings(env: AuthEnv): asserts env is AuthEnv & AuthStoreEnv {
+function assertSessionBindings<Id>(env: AuthEnv<Id>): asserts env is AuthEnv<Id> & AuthStoreEnv<Id> {
   if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
 
   if (!env.UserDO) throw new AuthError(500, 'UserDO binding is not configured');

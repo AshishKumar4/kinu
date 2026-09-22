@@ -48,16 +48,45 @@ import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog } from './available-models';
-import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
+import {
+  handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged, type CreateWorkspaceEnv,
+} from './workspace-access';
+import type { CloudWorkspaceRegistry } from './workspace-create';
+import type { ObjectNamespace } from '../bindings';
 import { err, json, safeJson } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from '@kinu.run/core';
-import { isControlPlaneOperator } from '../control-plane/admin-caller';
+import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
 import * as v from 'valibot';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 
-function getUserDOStub(env: Env, userId: string): DurableObjectStub<UserDO> {
+/** Every call `/api/user/*` makes on the signed-in account's own object. One
+ *  projection of the class per route family, joined here because one dispatcher
+ *  holds one stub for all of them. */
+export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
+  UserDO,
+  'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'getProfileCatalog' | 'putProfileCatalog'
+  | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace'
+  | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
+  | 'setDeviceTier' | 'revokeDeviceConsent'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listActiveWorkspaces'
+  | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow'
+  | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
+  | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
+  | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
+  | 'userMcp_handleOAuthCallback'
+>;
+
+/** Every binding `/api/user/*` reads: the create route's whole reach, the
+ *  operator allowlist the profile read answers with, and the CLI origin the
+ *  setup commands are rendered against. */
+export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv {
+  UserDO: ObjectNamespace<Id, UserRoutesAuthority>;
+  CLI_PUBLIC_ORIGIN?: string;
+}
+
+function getUserDOStub<Id>(env: UserRoutesEnv<Id>, userId: string): UserRoutesAuthority {
   return env.UserDO.get(env.UserDO.idFromName(userId));
 }
 
@@ -70,7 +99,7 @@ const warmedMcpUsers = new Set<string>();
  *  the roster, the owner caller it answers to, and the request URL that
  *  carries the page cursor and limit. */
 interface WorkspaceRosterContext {
-  readonly stub: DurableObjectStub<UserDO>;
+  readonly stub: Pick<UserDO, 'listWorkspaces'>;
   readonly owner: UserCaller;
   readonly url: URL;
 }
@@ -101,11 +130,11 @@ async function listWorkspaceRoster(ctx: WorkspaceRosterContext): Promise<Respons
   }
 }
 
-export async function handleUserRequest(
+export async function handleUserRequest<Id>(
   request: Request,
-  env: Env,
+  env: UserRoutesEnv<Id>,
   identity: AuthIdentity,
-  ctx?: ExecutionContext,
+  ctx?: Pick<ExecutionContext, 'waitUntil'>,
 ): Promise<Response | null> {
   const url = new URL(request.url);
 
@@ -500,7 +529,7 @@ export async function handleUserRequest(
 
 interface McpRoutesContext {
   readonly request: Request;
-  readonly stub: DurableObjectStub<UserDO>;
+  readonly stub: UserRoutesAuthority;
   readonly owner: UserCaller;
   readonly path: string;
   readonly method: string;
