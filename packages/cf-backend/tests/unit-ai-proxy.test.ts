@@ -29,6 +29,16 @@ const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
 
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
+/** The scopes each access token in this suite carries. A bearer that is not one
+ *  of these is not a token at all. */
+function scopesFor(bearer: string): string[] | null {
+  if (bearer === AI_TOKEN) return ['ai.proxy'];
+
+  if (bearer === READ_TOKEN) return ['workspace.read'];
+
+  return null;
+}
+
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 
 const AI_BASE_URL = `${ACCOUNT_ROOT}/ai/v1`;
@@ -80,7 +90,7 @@ function setupEnv(opts: {
       };
     },
     async verifyAccessToken(_caller: UserCaller, bearer: string) {
-      const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
+      const scopes = scopesFor(bearer);
 
       if (!scopes) return { ok: false, error: 'invalid token' };
 

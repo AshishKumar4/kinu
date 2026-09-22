@@ -88,36 +88,35 @@ function keepsReading(source: string): boolean {
 }
 
 describe('program output reaches the terminal as terminal lines', () => {
-  test('a bare LF between two lines arrives as CR LF', () => {
-    const term = new Recorder();
-    writeOutputRow(term, row('a\nb'));
+  const drawnRows = [
     // Red against the pre-fix `term.write(out.stdout)`: that wrote `a\nb\r\n`,
     // so `b` began in the column `a` ended in.
-    expect(term.raw).toBe('a\r\nb\r\n');
-  });
+    { name: 'a bare LF between two lines arrives as CR LF', source: 'a\nb', drawn: 'a\r\nb\r\n' },
+    { name: 'CR LF already in the output is not doubled', source: 'a\r\nb\r\n', drawn: 'a\r\nb\r\n' },
+    {
+      name: 'a lone CR survives, because a progress bar means it',
+      source: '12%\r45%\r100%\n',
+      drawn: '12%\r45%\r100%\r\n',
+    },
+    {
+      name: 'output that ends without a newline still leaves the prompt its own row',
+      source: 'no-trailing-newline',
+      drawn: 'no-trailing-newline\r\n',
+    },
+  ] as const;
+
+  for (const { name, source, drawn } of drawnRows) {
+    test(name, () => {
+      const term = new Recorder();
+      writeOutputRow(term, row(source));
+      expect(term.raw).toBe(drawn);
+    });
+  }
 
   test('a three-line output draws three rows, each at column zero', () => {
     const term = new Recorder();
     writeOutputRow(term, row('a\nb\nc\n'));
     expect(term.rows).toEqual(['a', 'b', 'c', '']);
-  });
-
-  test('CR LF already in the output is not doubled', () => {
-    const term = new Recorder();
-    writeOutputRow(term, row('a\r\nb\r\n'));
-    expect(term.raw).toBe('a\r\nb\r\n');
-  });
-
-  test('a lone CR survives, because a progress bar means it', () => {
-    const term = new Recorder();
-    writeOutputRow(term, row('12%\r45%\r100%\n'));
-    expect(term.raw).toBe('12%\r45%\r100%\r\n');
-  });
-
-  test('output that ends without a newline still leaves the prompt its own row', () => {
-    const term = new Recorder();
-    writeOutputRow(term, row('no-trailing-newline'));
-    expect(term.raw).toBe('no-trailing-newline\r\n');
   });
 
   test('a failing row that repeats its text in both columns is drawn once, in red', () => {
@@ -186,11 +185,22 @@ describe('what the keyboard puts into a command', () => {
     expect(feedInput(term, state, '\r')).toBe('cd /tmp\nls');
   });
 
-  test('a pasted tab is text, so an indented body survives the paste', () => {
-    const state = editor();
-    const term = new Recorder();
-    expect(feedInput(term, state, 'cat <<-EOF\r\tindented\rEOF\r')).toBe('cat <<-EOF\n\tindented\nEOF');
-  });
+  const submitted = [
+    {
+      name: 'a pasted tab is text, so an indented body survives the paste',
+      sent: 'cat <<-EOF\r\tindented\rEOF\r',
+      command: 'cat <<-EOF\n\tindented\nEOF',
+    },
+    { name: 'an astral character stays one character', sent: "echo '🌱'\r", command: "echo '🌱'" },
+  ] as const;
+
+  for (const { name, sent, command } of submitted) {
+    test(name, () => {
+      const state = editor();
+      const term = new Recorder();
+      expect(feedInput(term, state, sent)).toBe(command);
+    });
+  }
 
   test('a backslash at the end of the line opens a continuation line', () => {
     const state = editor();
@@ -243,27 +253,20 @@ describe('what the keyboard puts into a command', () => {
     expect(term.raw).toBe(written);
   });
 
-  test('backspace inside a line erases one character', () => {
-    const state = editor();
-    const term = new Recorder();
-    feedInput(term, state, 'lss');
-    feedInput(term, state, '\x7f');
-    expect(state.buffer).toBe('ls');
-  });
+  const backspaces = [
+    { name: 'backspace inside a line erases one character', typed: 'lss', left: 'ls' },
+    { name: 'backspace after an astral character erases the whole character', typed: '🌱', left: '' },
+  ] as const;
 
-  test('backspace after an astral character erases the whole character', () => {
-    const state = editor();
-    const term = new Recorder();
-    feedInput(term, state, '🌱');
-    feedInput(term, state, '\x7f');
-    expect(state.buffer).toBe('');
-  });
-
-  test('an astral character stays one character', () => {
-    const state = editor();
-    const term = new Recorder();
-    expect(feedInput(term, state, "echo '🌱'\r")).toBe("echo '🌱'");
-  });
+  for (const { name, typed, left } of backspaces) {
+    test(name, () => {
+      const state = editor();
+      const term = new Recorder();
+      feedInput(term, state, typed);
+      feedInput(term, state, '\x7f');
+      expect(state.buffer).toBe(left);
+    });
+  }
 });
 
 describe('when the shell is still reading', () => {

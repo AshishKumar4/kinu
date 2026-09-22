@@ -150,28 +150,26 @@ describe('every settled turn schedules the lane, whatever the turn was', () => {
     hadError: false, feedback: null, turnId: id, sessionId: 'default', origin: 'user',
   });
 
-  test('a completed build turn warms', async () => {
-    const { harness, userPlane } = warmingActor();
-    await harness.agent.harnessSettleSpine({ status: 'completed', turn: turnFor('t-ok') });
-    await joinHarnessFibers();
-    expect(userPlane.warmConnections).toHaveLength(1);
-  });
+  const settles = [
+    { name: 'a completed build turn warms', status: 'completed', turnId: 't-ok', workMode: undefined },
+    {
+      name: 'an aborted turn warms — the next turn still needs its connections',
+      status: 'aborted', turnId: 't-cut', workMode: undefined,
+    },
+    {
+      name: 'a PLAN turn warms, though it opens no improvement lane',
+      status: 'completed', turnId: 't-plan', workMode: 'plan',
+    },
+  ] as const;
 
-  test('an aborted turn warms — the next turn still needs its connections', async () => {
-    const { harness, userPlane } = warmingActor();
-    await harness.agent.harnessSettleSpine({ status: 'aborted', turn: turnFor('t-cut') });
-    await joinHarnessFibers();
-    expect(userPlane.warmConnections).toHaveLength(1);
-  });
-
-  test('a PLAN turn warms, though it opens no improvement lane', async () => {
-    const { harness, userPlane } = warmingActor();
-    await harness.agent.harnessSettleSpine({
-      status: 'completed', turn: turnFor('t-plan'), workMode: 'plan',
+  for (const { name, status, turnId, workMode } of settles) {
+    test(name, async () => {
+      const { harness, userPlane } = warmingActor();
+      await harness.agent.harnessSettleSpine({ status, turn: turnFor(turnId), workMode });
+      await joinHarnessFibers();
+      expect(userPlane.warmConnections).toHaveLength(1);
     });
-    await joinHarnessFibers();
-    expect(userPlane.warmConnections).toHaveLength(1);
-  });
+  }
 
   test('the descriptor read is not where establishment lives', () => {
     // The regression this whole split exists to prevent: hydrating on the read

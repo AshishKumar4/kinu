@@ -212,6 +212,20 @@ async function recorded<T>(run: () => Promise<T>): Promise<{
   }
 }
 
+/** A plain GET at `suffix` under this workspace's terminal path: the status the
+ *  route answers it with, and what the route reached for on the way. */
+async function refusedWithoutTouching(suffix: string, status: number): Promise<void> {
+  const { env, trace } = harness();
+
+  const response = await terminalRequest(
+    new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal${suffix}`), env,
+  );
+
+  expect(response?.status).toBe(status);
+  // Not merely a refusal: a plain GET must not start a container.
+  expect(trace.calls).toEqual([]);
+}
+
 describe('which environments can have a terminal', () => {
   test('the container and the owner machine are the PTY lanes', () => {
     expect(terminalLane('sandbox')).toEqual({ mode: 'pty' });
@@ -349,15 +363,7 @@ describe('attaching a terminal', () => {
   });
 
   test('a request that is not an upgrade touches nothing', async () => {
-    const { env, trace } = harness();
-
-    const response = await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal?executor=sandbox`), env,
-    );
-
-    expect(response?.status).toBe(400);
-    // Not merely a refusal: a plain GET must not start a container.
-    expect(trace.calls).toEqual([]);
+    await refusedWithoutTouching('?executor=sandbox', 400);
   });
 
   test('an executor with no terminal is refused as line mode, carrying no implementation detail', async () => {
@@ -556,14 +562,7 @@ describe('an attached terminal and a container that wants to sleep', () => {
   });
 
   test('a beat is a POST', async () => {
-    const { env, trace } = harness();
-
-    const response = await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`), env,
-    );
-
-    expect(response?.status).toBe(405);
-    expect(trace.calls).toEqual([]);
+    await refusedWithoutTouching('/keepalive?executor=sandbox', 405);
   });
 
   test('a container that has gone away answers the beat with why', async () => {
@@ -624,14 +623,7 @@ describe('the workspace shell', () => {
   });
 
   test('a request that is not an upgrade touches nothing', async () => {
-    const { env, trace } = harness();
-
-    const response = await terminalRequest(
-      new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal?executor=workspace`), env,
-    );
-
-    expect(response?.status).toBe(400);
-    expect(trace.calls).toEqual([]);
+    await refusedWithoutTouching('?executor=workspace', 400);
   });
 
   test('the beat and the reset are guards: a POST is acknowledged, nothing else is reached', async () => {

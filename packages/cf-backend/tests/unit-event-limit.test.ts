@@ -84,61 +84,64 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
 }
 
 describe('the events route closes `limit` before it can reach SQL', () => {
-  test('a negative limit returns the default page, not the table', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=-1')).toEqual({ status: 200, count: 1 });
-    expect(await eventsVia(env, '?limit=-999999')).toEqual({ status: 200, count: 1 });
-  });
+  /** Every `limit` and `since` the route is asked for, and the page each one
+   *  must answer with. The status is 200 throughout: a value the route cannot
+   *  read is a value that was not stated, never a failed query. */
+  const asked = [
+    {
+      name: 'a negative limit returns the default page, not the table',
+      pages: [{ query: '?limit=-1', count: 1 }, { query: '?limit=-999999', count: 1 }],
+    },
+    {
+      name: 'a negative limit stays bounded with a variant filter as well',
+      pages: [{ query: '?limit=-1&variant=chat', count: 1 }],
+    },
+    {
+      name: 'zero returns a row rather than reporting the log as empty',
+      pages: [{ query: '?limit=0', count: 1 }],
+    },
+    {
+      // Not a 400. The run-event route already settled this question: absent and
+      // unreadable are the same statement, and the route does not have to decide
+      // what a garbage query string meant. Forwarded raw, each of these is a 500
+      // from SQLite's datatype mismatch.
+      name: 'unparseable limit text means unstated and answers 200 with the default',
+      pages: [
+        { query: '?limit=abc', count: DEFAULT_PAGE },
+        { query: '?limit=NaN', count: DEFAULT_PAGE },
+        { query: '?limit=Infinity', count: DEFAULT_PAGE },
+      ],
+    },
+    {
+      name: 'an absurdly large limit clamps to the untrusted ceiling',
+      pages: [
+        { query: '?limit=1000000000', count: UNTRUSTED_CEILING },
+        { query: `?limit=${Number.MAX_SAFE_INTEGER}`, count: UNTRUSTED_CEILING },
+      ],
+    },
+    {
+      name: 'a fractional limit truncates instead of failing the query',
+      pages: [{ query: '?limit=2.7', count: 2 }],
+    },
+    {
+      name: 'a legitimate limit is still honoured exactly, and absence takes the default',
+      pages: [{ query: '?limit=37', count: 37 }, { query: '', count: DEFAULT_PAGE }],
+    },
+    {
+      name: 'an unparseable or negative since reads from the start of the log',
+      pages: [{ query: '?since=abc&limit=3', count: 3 }, { query: '?since=-5&limit=3', count: 3 }],
+    },
+  ];
 
-  test('a negative limit stays bounded with a variant filter as well', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=-1&variant=chat')).toEqual({ status: 200, count: 1 });
-  });
+  for (const { name, pages } of asked) {
+    test(name, async () => {
+      const { env } = seededWorkspace();
 
-  test('zero returns a row rather than reporting the log as empty', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=0')).toEqual({ status: 200, count: 1 });
-  });
-
-  test('unparseable limit text means unstated and answers 200 with the default', async () => {
-    // Not a 400. The run-event route already settled this question: absent and
-    // unreadable are the same statement, and the route does not have to decide
-    // what a garbage query string meant. Forwarded raw, each of these is a 500
-    // from SQLite's datatype mismatch.
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=abc'))
-      .toEqual({ status: 200, count: DEFAULT_PAGE });
-    expect(await eventsVia(env, '?limit=NaN'))
-      .toEqual({ status: 200, count: DEFAULT_PAGE });
-    expect(await eventsVia(env, '?limit=Infinity'))
-      .toEqual({ status: 200, count: DEFAULT_PAGE });
-  });
-
-  test('an absurdly large limit clamps to the untrusted ceiling', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=1000000000'))
-      .toEqual({ status: 200, count: UNTRUSTED_CEILING });
-    expect(await eventsVia(env, `?limit=${Number.MAX_SAFE_INTEGER}`))
-      .toEqual({ status: 200, count: UNTRUSTED_CEILING });
-  });
-
-  test('a fractional limit truncates instead of failing the query', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=2.7')).toEqual({ status: 200, count: 2 });
-  });
-
-  test('a legitimate limit is still honoured exactly, and absence takes the default', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?limit=37')).toEqual({ status: 200, count: 37 });
-    expect(await eventsVia(env, ''))
-      .toEqual({ status: 200, count: DEFAULT_PAGE });
-  });
-
-  test('an unparseable or negative since reads from the start of the log', async () => {
-    const { env } = seededWorkspace();
-    expect(await eventsVia(env, '?since=abc&limit=3')).toEqual({ status: 200, count: 3 });
-    expect(await eventsVia(env, '?since=-5&limit=3')).toEqual({ status: 200, count: 3 });
-  });
+      for (const { query, count } of pages) {
+        expect(await eventsVia(env, query)).toEqual({ status: 200, count });
+      }
+    });
+  }
 });
 
 describe('a direct RPC cannot ask for more than the route may', () => {

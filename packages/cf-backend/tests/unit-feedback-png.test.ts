@@ -195,20 +195,24 @@ describe('sanitizePng — what it refuses', () => {
       .toMatchObject({ fault: 'bad-structure' });
   });
 
-  test('a zero dimension', () => {
-    expect(sanitizePng(png(chunk('IHDR', ihdr(0, 4)), PIXELS, chunk('IEND'))))
-      .toMatchObject({ fault: 'bad-structure' });
-  });
-
-  test('a decompression bomb: small bytes declaring an enormous frame', () => {
+  const dimensionCases = [
+    { name: 'a zero dimension', width: 0, height: 4, fault: 'bad-structure' },
     // 30,000 x 30,000 is 900 megapixels — 3.6 GB of RGBA out of a few hundred
     // bytes on the wire. Refused on the header, before anything decodes it.
-    expect(sanitizePng(png(chunk('IHDR', ihdr(30_000, 30_000)), PIXELS, chunk('IEND'))))
-      .toMatchObject({ fault: 'dimensions' });
-  });
+    {
+      name: 'a decompression bomb: small bytes declaring an enormous frame',
+      width: 30_000, height: 30_000, fault: 'dimensions',
+    },
+    {
+      name: 'a single axis past the per-axis bound is refused on its own terms',
+      width: 1, height: 40_000, fault: 'dimensions',
+    },
+  ] as const;
 
-  test('a single axis past the per-axis bound is refused on its own terms', () => {
-    expect(sanitizePng(png(chunk('IHDR', ihdr(1, 40_000)), PIXELS, chunk('IEND'))))
-      .toMatchObject({ fault: 'dimensions' });
-  });
+  for (const { name, width, height, fault } of dimensionCases) {
+    test(name, () => {
+      expect(sanitizePng(png(chunk('IHDR', ihdr(width, height)), PIXELS, chunk('IEND'))))
+        .toMatchObject({ fault });
+    });
+  }
 });

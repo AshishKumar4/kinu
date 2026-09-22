@@ -45,6 +45,7 @@ import {
   PreparedConversationSchema,
   SnapshotSchema,
   type DiagnosticFailure,
+  type HttpCall,
   type PendingSteer,
 } from './two-turn-shapes';
 
@@ -56,6 +57,14 @@ const SignalProbeSchema = v.union([
 const FailuresSchema = v.array(DiagnosticFailureSchema);
 
 const HttpSchema = v.array(HttpCallSchema);
+
+/** The attachment the queue probes splice, byte-stable from the reservation
+ *  through the replay. */
+const ATTACHMENT_URL = 'data:image/png;base64,iVBORw0KGgo=';
+
+function carriesAttachment(call: HttpCall): boolean {
+  return call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === ATTACHMENT_URL));
+}
 
 describe('two real turns over the HTTP model seam', () => {
   it('an ordinary signal arriving at the final model step is not lost at settlement', async () => {
@@ -211,8 +220,7 @@ describe('two real turns over the HTTP model seam', () => {
     // a part — not drop it to the floor.
     const calls = v.parse(HttpSchema, await root.queuedConversation('attach')).filter((call) => call.model === 'probe-queue');
 
-    const spliced = calls.find((call) =>
-      call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === 'data:image/png;base64,iVBORw0KGgo=')));
+    const spliced = calls.find(carriesAttachment);
 
     if (spliced === undefined) throw new Error('no probe-queue call carried the spliced attachment');
 
@@ -240,7 +248,7 @@ describe('two real turns over the HTTP model seam', () => {
       steerId: 'input-QUEUE-B',
       filename: 'chart.png',
       mediaType: 'image/png',
-      url: 'data:image/png;base64,iVBORw0KGgo=',
+      url: ATTACHMENT_URL,
     }]);
 
     const done = await coldRoot.completeQueuedConversation(prepared);
@@ -248,8 +256,7 @@ describe('two real turns over the HTTP model seam', () => {
 
     // The recovered turn's model call carries B's attachment as a file part —
     // the byte-stable url the reservation stored, not a dropped reference.
-    const carried = calls.find((call) =>
-      call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === 'data:image/png;base64,iVBORw0KGgo=')));
+    const carried = calls.find(carriesAttachment);
 
     if (carried === undefined) throw new Error('no replayed probe-queue call carried the attachment');
 

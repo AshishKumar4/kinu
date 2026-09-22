@@ -39,7 +39,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { Visitor, parseSync, type VisitorObject } from 'oxc-parser';
+import { Visitor, parseSync, type Expression, type VisitorObject } from 'oxc-parser';
 import * as v from 'valibot';
 
 import { boundaryOf, eventFamily } from '@kinu.run/core/analytics';
@@ -95,6 +95,17 @@ interface CallSite {
  */
 const StringValued = v.object({ value: v.string() });
 
+/** `f(…)` reads as `f` and `a.b.f(…)` as `f`; a computed callee has no name. */
+function calleeName(callee: Expression): string | null {
+  if (callee.type === 'Identifier') return callee.name;
+
+  if (callee.type === 'MemberExpression' && callee.property.type === 'Identifier') {
+    return callee.property.name;
+  }
+
+  return null;
+}
+
 function callSites(file: string): readonly CallSite[] {
   const text = readFileSync(`${REPO}${file}`, 'utf8');
   const parsed = parseSync(file, text);
@@ -104,11 +115,7 @@ function callSites(file: string): readonly CallSite[] {
   // hold children, so no node is missed and nothing has to guess at the spine.
   const visitor = new Visitor({
     CallExpression(node) {
-      const callee = node.callee.type === 'Identifier'
-        ? node.callee.name
-        : node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier'
-          ? node.callee.property.name
-          : null;
+      const callee = calleeName(node.callee);
 
       if (callee === null) return;
       const first = node.arguments[0];

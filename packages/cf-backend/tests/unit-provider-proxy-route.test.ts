@@ -24,6 +24,16 @@ const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
 
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
+/** The scopes each access token in this suite carries. A bearer that is not one
+ *  of these is not a token at all. */
+function scopesFor(bearer: string): string[] | null {
+  if (bearer === AI_TOKEN) return ['ai.proxy'];
+
+  if (bearer === READ_TOKEN) return ['workspace.read'];
+
+  return null;
+}
+
 const FORWARD_URL = 'https://kinu.example.com/api/user/ai/proxy/forward';
 
 const CREDENTIALS_URL = 'https://kinu.example.com/api/user/ai/proxy/credentials';
@@ -57,7 +67,7 @@ function setupEnv(stored: StoredCredential[]) {
       };
     },
     async verifyAccessToken(_caller: UserCaller, bearer: string) {
-      const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
+      const scopes = scopesFor(bearer);
 
       if (!scopes) return { ok: false, error: 'invalid token' };
 

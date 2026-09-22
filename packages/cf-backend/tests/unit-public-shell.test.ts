@@ -504,6 +504,29 @@ describe('the README demo film', () => {
       }
     };
 
+    /** An application extension: NETSCAPE2.0 carries the film's loop count,
+     *  every other application block is skipped like any other extension. */
+    const readApplicationExtension = (): void => {
+      const size = byteAt(gif, at, 'application extension');
+      const app = takeBlock(gif, at + 1, size, 'application extension');
+
+      at = app.next;
+
+      // NETSCAPE2.0's first sub-block is {1, lo, hi} — the loop count.
+      if (size === 11 && app.body.toString() === 'NETSCAPE2.0'
+        && byteAt(gif, at, 'loop sub-block') === 3) {
+        const loopBlock = takeBlock(gif, at + 1, 3, 'loop sub-block');
+
+        if (loopBlock.body.readUInt8(0) === 1) {
+          loops = loopBlock.body.readUInt16LE(1);
+        }
+
+        at = loopBlock.next;
+      }
+
+      skipSubBlocks('application extension');
+    };
+
     for (;;) {
       const tag = byteAt(gif, at, 'block stream');
 
@@ -553,24 +576,7 @@ describe('the README demo film', () => {
 
           at += 1;
         } else if (label === 0xff) {
-          const size = byteAt(gif, at, 'application extension');
-          const app = takeBlock(gif, at + 1, size, 'application extension');
-
-          at = app.next;
-
-          // NETSCAPE2.0's first sub-block is {1, lo, hi} — the loop count.
-          if (size === 11 && app.body.toString() === 'NETSCAPE2.0'
-            && byteAt(gif, at, 'loop sub-block') === 3) {
-            const loopBlock = takeBlock(gif, at + 1, 3, 'loop sub-block');
-
-            if (loopBlock.body.readUInt8(0) === 1) {
-              loops = loopBlock.body.readUInt16LE(1);
-            }
-
-            at = loopBlock.next;
-          }
-
-          skipSubBlocks('application extension');
+          readApplicationExtension();
         } else {
           skipSubBlocks('extension');
         }

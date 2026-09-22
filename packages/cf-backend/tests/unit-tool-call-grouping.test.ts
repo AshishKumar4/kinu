@@ -198,21 +198,34 @@ describe('what a command is for, from its own argv', () => {
     expect(describeCommand('rg --json "coupon" packages/')).toBe('Searched the tree');
   });
 
-  test('a leading path, env assignments and sudo do not hide the verb', () => {
-    expect(describeCommand('/usr/local/bin/pytest -q')).toBe('Ran tests');
-    expect(describeCommand('CI=1 NODE_ENV=test bun test')).toBe('Ran tests');
-    expect(describeCommand('sudo make install')).toBe('Built');
-  });
+  const argvCases = [
+    {
+      name: 'a leading path, env assignments and sudo do not hide the verb',
+      commands: [
+        ['/usr/local/bin/pytest -q', 'Ran tests'],
+        ['CI=1 NODE_ENV=test bun test', 'Ran tests'],
+        ['sudo make install', 'Built'],
+      ],
+    },
+    {
+      name: 'a command with no known verb says nothing rather than guessing',
+      commands: [
+        ['./scripts/weird-thing.sh --go', ''],
+        ['', ''],
+        ['   ', ''],
+      ],
+    },
+  ] as const;
+
+  for (const { name, commands } of argvCases) {
+    test(name, () => {
+      for (const [command, verb] of commands) expect(describeCommand(command)).toBe(verb);
+    });
+  }
 
   test('git keeps its own verb rather than being flattened', () => {
     expect(describeCommand('git commit -m "fix"')).toBe('Git commit');
     expect(describeCommand('git push origin main')).toBe('Git push');
-  });
-
-  test('a command with no known verb says nothing rather than guessing', () => {
-    expect(describeCommand('./scripts/weird-thing.sh --go')).toBe('');
-    expect(describeCommand('')).toBe('');
-    expect(describeCommand('   ')).toBe('');
   });
 });
 

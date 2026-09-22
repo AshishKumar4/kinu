@@ -296,7 +296,7 @@ try {
   const denials = await settle(first, REFUSALS.map((entry) => entry.step));
   assert.equal(denials.length, REFUSALS.length);
 
-  REFUSALS.forEach((entry, index) => {
+  for (const [index, entry] of REFUSALS.entries()) {
     const outcome = denials[index];
     // THE assertion. `settled === 'rejected'` is what fails when `requireControl`
     // returns a grade instead of throwing: the call resolves, `overview` hands
@@ -328,7 +328,7 @@ try {
       constructorName: outcome.constructorName,
       message: outcome.message,
     });
-  });
+  }
 
   // What the platform did to the error class, measured rather than assumed. The
   // gate's own header says the error "crosses the Worker→DO RPC boundary as its
@@ -352,12 +352,12 @@ try {
     { method: 'overview', caller: 'admin' },
   ]);
 
-  written.forEach((outcome, index) => {
+  for (const [index, outcome] of written.entries()) {
     assert.equal(
       outcome.settled, 'resolved',
       `authorized step ${index} was refused: ${outcome.message}`,
     );
-  });
+  }
 
   const auditRow = written[2].value;
   auditId = auditRow.id;
@@ -559,7 +559,7 @@ assert.ok(
 );
 
 assert.ok(
-  !recorded.some((line) => line.includes('cancelled job-7') || line.includes('affected=1')),
+  !recorded.some((line) => ['cancelled job-7', 'affected=1'].some((detail) => line.includes(detail))),
   `an audit row's detail text reached the operations dataset: ${recorded.join(' | ')}`,
 );
 

@@ -105,6 +105,36 @@ function storedName(h: TestUserDO, id: string): string | undefined {
   return parsed.success ? parsed.output : undefined;
 }
 
+/**
+ * The `authorization` header every request made while `body` runs carried, in
+ * order, with the global restored whatever the body does.
+ *
+ * `typeof globalThis.fetch` carries `preconnect` beside the call signature. The
+ * stub is COMPLETED with the real one's rather than asserted into shape, and the
+ * two parameters take their platform types by inference.
+ */
+async function authorizationsSeenDuring(body: () => Promise<void>): Promise<string[]> {
+  const seen: string[] = [];
+  const real = globalThis.fetch;
+
+  const record = async (
+    _url: Request | URL | RequestInfo,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
+
+    return new Response('{}');
+  };
+
+  globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
+
+  try {
+    await body();
+  } finally { globalThis.fetch = real; }
+
+  return seen;
+}
+
 describe('a server name is one identity, enforced by the database', () => {
   test('a second row under the same name, in any case, is refused', async () => {
     const h = harness();
@@ -512,25 +542,11 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     expect(persistedServerOptions('srv1')).toBe(JSON.stringify({ transport: { type: 'auto' } }));
     expect(liveMcpTransport('srv1')?.requestInit).toBeUndefined();
 
-    const seen: string[] = [];
-    const real = globalThis.fetch;
-
-    const record = async (
-      _url: Request | URL | RequestInfo,
-      init?: RequestInit,
-    ): Promise<Response> => {
-      seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
-
-      return new Response('{}');
-    };
-
-    globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
-
-    try {
+    const seen = await authorizationsSeenDuring(async () => {
       const send = liveMcpFetch('srv1');
       expect(send).not.toBeNull();
       await send?.('https://srv1.example/sse');
-    } finally { globalThis.fetch = real; }
+    });
 
     expect(seen).toEqual(['Bearer sealed']);
     woken.close();
@@ -594,30 +610,13 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     expect(recordedMcpServers().find((server) => server.id === 'srv1')?.transport.fetch).toBe(resolve);
     expect(recordedMcpLifecycle().established.length).toBe(established);
 
-    const seen: string[] = [];
-    const real = globalThis.fetch;
-
-    // `typeof globalThis.fetch` carries `preconnect` beside the call signature.
-    // The stub is COMPLETED with the real one's rather than asserted into shape,
-    // and the two parameters take their platform types by inference.
-    const record = async (
-      _url: Request | URL | RequestInfo,
-      init?: RequestInit,
-    ): Promise<Response> => {
-      seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
-
-      return new Response('{}');
-    };
-
-    globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
-
-    try {
+    const seen = await authorizationsSeenDuring(async () => {
       // Spent through the helper's validated accessor, so the signature is
       // established rather than asserted here.
       const send = recordedMcpFetch('srv1');
       expect(send).not.toBeNull();
       await send?.('https://srv1.example/sse');
-    } finally { globalThis.fetch = real; }
+    });
 
     expect(seen).toEqual(['Bearer rotated']);
     h.close();

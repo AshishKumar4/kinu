@@ -27,11 +27,12 @@ import { openWorkspaceMainActor } from '@kinu.run/core';
 import { declareShadowCandidate, orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
-/** A scripted judge model: answers a valid verdict, reports real usage. */
-function judgeModel(): MockLanguageModelV3 {
+/** A scripted model: hands back exactly `text` as its whole answer, and reports
+ *  real usage so the cost sink has a number to file. */
+function scriptedModel(text: string): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async () => ({
-      content: [{ type: 'text' as const, text: '{"verdict":"accepted"}' }],
+      content: [{ type: 'text' as const, text }],
       finishReason: { unified: 'stop' as const, raw: undefined },
       usage: {
         inputTokens: { total: 41, noCache: 41, cacheRead: undefined, cacheWrite: undefined },
@@ -40,6 +41,11 @@ function judgeModel(): MockLanguageModelV3 {
       warnings: [],
     }),
   });
+}
+
+/** A scripted judge model: answers a valid verdict, reports real usage. */
+function judgeModel(): MockLanguageModelV3 {
+  return scriptedModel('{"verdict":"accepted"}');
 }
 
 /** A registry whose fake-family specs resolve to scripted judges. Only
@@ -233,17 +239,7 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
   test('the title call runs the FAST tier and files a start/end pair under fast', async () => {
     const harness = orchestratorHarness();
 
-    const titleModel = new MockLanguageModelV3({
-      doGenerate: async () => ({
-        content: [{ type: 'text' as const, text: '{"title":"Mission Control"}' }],
-        finishReason: { unified: 'stop' as const, raw: undefined },
-        usage: {
-          inputTokens: { total: 41, noCache: 41, cacheRead: undefined, cacheWrite: undefined },
-          outputTokens: { total: 7, text: 7, reasoning: undefined },
-        },
-        warnings: [],
-      }),
-    });
+    const titleModel = scriptedModel('{"title":"Mission Control"}');
 
     // Only MODEL CONSTRUCTION is substituted. `modelForSource('fast')` runs its
     // real body — `resolveModelRoute` against the profile below, then this

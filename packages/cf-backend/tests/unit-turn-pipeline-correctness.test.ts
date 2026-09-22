@@ -1173,6 +1173,14 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     return harness;
   }
 
+  /** A build turn that settled on anything but `completed` feeds no lane,
+   *  whichever of the two non-completed reasons ended it. */
+  async function noLaneFor(status: 'error' | 'aborted'): Promise<void> {
+    const { agent } = advisorHarness();
+    await agent.harnessSettleSpine({ status, turn: turnOf() });
+    expect(agent.harnessAdvisorNotes()).toBe(0);
+  }
+
   test('a completed build turn earns its review', async () => {
     const { agent } = advisorHarness();
     await agent.harnessSettleSpine({ status: 'completed', turn: turnOf() });
@@ -1182,11 +1190,7 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     expect(agent.harnessAdvisorNotes()).toBe(1);
   });
 
-  test('a FAILED build turn feeds no lane', async () => {
-    const { agent } = advisorHarness();
-    await agent.harnessSettleSpine({ status: 'error', turn: turnOf() });
-    expect(agent.harnessAdvisorNotes()).toBe(0);
-  });
+  test('a FAILED build turn feeds no lane', () => noLaneFor('error'));
 
   test('a completed PLAN turn feeds no lane', async () => {
     const { agent } = advisorHarness();
@@ -1198,11 +1202,7 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     expect(agent.harnessAdvisorNotes()).toBe(0);
   });
 
-  test('an ABORTED build turn feeds no lane', async () => {
-    const { agent } = advisorHarness();
-    await agent.harnessSettleSpine({ status: 'aborted', turn: turnOf() });
-    expect(agent.harnessAdvisorNotes()).toBe(0);
-  });
+  test('an ABORTED build turn feeds no lane', () => noLaneFor('aborted'));
 });
 
 /**

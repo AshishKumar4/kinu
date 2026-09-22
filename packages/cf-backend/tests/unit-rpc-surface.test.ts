@@ -43,7 +43,7 @@ type RpcTarget = UserDOInstance | Leaf | Middle2;
  * the module side. The mechanism tests at the bottom pin the two against each
  * other. A change to one that the other does not share goes red there.
  */
-function rpcReachableNames<Target extends object>(target: Target): string[] {
+function rpcReachableNames(target: RpcTarget): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
 

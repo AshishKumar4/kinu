@@ -207,26 +207,29 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     expect(result.ok).toBe(true);
   });
 
-  test('a platform failure that persists reports 503, not 500', async () => {
-    const result = await claimOwnedWorkspace(
-      envWith({ claimError: new Error(CONNECTION_LOST) }), USER, 'persist-503');
+  const claimFailures = [
+    {
+      name: 'a platform failure that persists reports 503, not 500',
+      message: CONNECTION_LOST, workspace: 'persist-503', status: 503,
+    },
+    {
+      name: 'a genuine ownership collision still reports 403',
+      message: 'collision-403 is owned by a different user', workspace: 'collision-403', status: 403,
+    },
+    {
+      name: 'an application failure is still ours to own, at 500',
+      message: 'no such table: workspace_identity', workspace: 'schema-fault', status: 500,
+    },
+  ] as const;
 
-    expect(result).toMatchObject({ ok: false, status: 503 });
-  });
+  for (const { name, message, workspace, status } of claimFailures) {
+    test(name, async () => {
+      const result = await claimOwnedWorkspace(
+        envWith({ claimError: new Error(message) }), USER, workspace);
 
-  test('a genuine ownership collision still reports 403', async () => {
-    const result = await claimOwnedWorkspace(
-      envWith({ claimError: new Error('collision-403 is owned by a different user') }), USER, 'collision-403');
-
-    expect(result).toMatchObject({ ok: false, status: 403 });
-  });
-
-  test('an application failure is still ours to own, at 500', async () => {
-    const result = await claimOwnedWorkspace(
-      envWith({ claimError: new Error('no such table: workspace_identity') }), USER, 'schema-fault');
-
-    expect(result).toMatchObject({ ok: false, status: 500 });
-  });
+      expect(result).toMatchObject({ ok: false, status });
+    });
+  }
 
   test('a dropped capability reconcile reports 503, a schema fault 500', async () => {
     await expect(claimOwnedWorkspace(

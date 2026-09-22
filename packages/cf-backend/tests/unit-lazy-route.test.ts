@@ -102,6 +102,27 @@ async function stillOpen(pending: Promise<unknown>): Promise<boolean> {
   return first === OPEN;
 }
 
+/** The failure a browser raises for a chunk the origin no longer serves, which
+ *  is the only failure this policy is about. */
+const stale = async (): Promise<never> => { throw new TypeError(ENGINE_MESSAGES.chromium); };
+
+/** A stale load against an origin that has moved on: one reload, the live build
+ *  recorded as claimed, and the promise held open behind it. */
+async function reloadsOnce(run: Drive): Promise<void> {
+  const pending = loadRouteChunk(stale, run.deps);
+  await run.reloaded;
+  expect(await stillOpen(pending)).toBe(true);
+  expect(run.reloads()).toBe(1);
+  expect(run.claimed()).toBe(LIVE);
+}
+
+/** A stale load the policy declines to answer with a reload: the failure reaches
+ *  the caller and the page stays where it is. */
+async function refusesToReload(run: Drive): Promise<void> {
+  await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
+  expect(run.reloads()).toBe(0);
+}
+
 describe('recognising a module that would not load', () => {
   for (const [engine, message] of Object.entries(ENGINE_MESSAGES)) {
     test(`${engine}'s wording reloads once the origin has moved`, async () => {
@@ -153,35 +174,21 @@ describe('recognising a module that would not load', () => {
 });
 
 describe('the one-reload-per-build guard', () => {
-  const stale = async (): Promise<never> => { throw new TypeError(ENGINE_MESSAGES.chromium); };
-
   test('the first attempt for a build reloads and records it', async () => {
-    const run = drive();
-    const pending = loadRouteChunk(stale, run.deps);
-    await run.reloaded;
-    expect(await stillOpen(pending)).toBe(true);
-    expect(run.reloads()).toBe(1);
-    expect(run.claimed()).toBe(LIVE);
+    await reloadsOnce(drive());
   });
 
   test('the second attempt for the same build is an error, not a reload', async () => {
     // The loop bound. Reached when the first reload did not fix it, which means
     // the assumption behind reloading was wrong and the reader deserves the
     // error rather than another round trip.
-    const run = drive({ seed: LIVE });
-    await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
-    expect(run.reloads()).toBe(0);
+    await refusesToReload(drive({ seed: LIVE }));
   });
 
   test('a further build earns its own single reload', async () => {
     // The bound is one reload per build TRANSITION, not one per tab: a tab left
     // open across three deploys may recover from each, once.
-    const run = drive({ seed: 'c0ffee0' });
-    const pending = loadRouteChunk(stale, run.deps);
-    await run.reloaded;
-    expect(await stillOpen(pending)).toBe(true);
-    expect(run.reloads()).toBe(1);
-    expect(run.claimed()).toBe(LIVE);
+    await reloadsOnce(drive({ seed: 'c0ffee0' }));
   });
 });
 
@@ -215,8 +222,6 @@ describe('a chunk that fails for a reason this is not about', () => {
 });
 
 describe('a stale chunk', () => {
-  const stale = async (): Promise<never> => { throw new TypeError(ENGINE_MESSAGES.chromium); };
-
   test('one attempt costs exactly one build read', async () => {
     // The read is a request to our own origin. React re-invokes a rejected lazy's
     // loader on later render attempts, so a policy that read the build on every
@@ -228,12 +233,7 @@ describe('a stale chunk', () => {
   });
 
   test('with the origin on a different build, the page reloads once', async () => {
-    const run = drive();
-    const pending = loadRouteChunk(stale, run.deps);
-    await run.reloaded;
-    expect(await stillOpen(pending)).toBe(true);
-    expect(run.reloads()).toBe(1);
-    expect(run.claimed()).toBe(LIVE);
+    await reloadsOnce(drive());
   });
 
   test('and the promise never settles, so no error flashes over the reload', async () => {
@@ -258,24 +258,18 @@ describe('a stale chunk', () => {
   test('with no build served at all, it is an error and not a reload', async () => {
     // A `vite dev` server publishes no stamp, so there is nothing to compare and
     // no honest claim to make.
-    const run = drive({ live: null });
-    await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
-    expect(run.reloads()).toBe(0);
+    await refusesToReload(drive({ live: null }));
   });
 
   test('with the page unable to name its own build, it is an error and not a reload', async () => {
-    const run = drive({ baseline: null });
-    await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
-    expect(run.reloads()).toBe(0);
+    await refusesToReload(drive({ baseline: null }));
   });
 
   test('with the reload already spent on this build, it is an error', async () => {
     // The loop bound. Reached when the first reload did not fix it, which means
     // the assumption behind reloading was wrong and the reader deserves the
     // error rather than another round trip.
-    const run = drive({ seed: LIVE });
-    await expect(loadRouteChunk(stale, run.deps)).rejects.toThrow(TypeError);
-    expect(run.reloads()).toBe(0);
+    await refusesToReload(drive({ seed: LIVE }));
   });
 
   test('the failure rethrown after a refused reload is still the original', async () => {

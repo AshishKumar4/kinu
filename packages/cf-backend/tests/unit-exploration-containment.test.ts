@@ -112,6 +112,22 @@ function buildSurface(opts?: {
   return { tools, capture };
 }
 
+/** The split stub the budget cases hand to the surface: one body, counting the
+ *  calls it took, with the result it reports supplied by the caller. */
+function countingSplit(
+  calls: { splits: number },
+  result: { narrative: string; headCount: number },
+): (request: HeadSplitRequest) => Promise<HeadSplitResult> {
+  return async () => {
+    calls.splits++;
+
+    return {
+      narrative: result.narrative, decisions: [], unresolvedQuestions: [], blindSpots: [],
+      childHeadIds: [], headCount: result.headCount,
+    };
+  };
+}
+
 describe('head tool surface — containment', () => {
   test('a head has no think / team / peers / report / release tool', () => {
     const { tools } = buildSurface();
@@ -172,21 +188,17 @@ describe('head tool surface — containment', () => {
   test('split_subheads refuses once a caller-requested deadline has passed, and records the refusal', async () => {
     // Wall-clock stays a runtime check: unlike depth it can pass mid-run, so the
     // tool is present and refuses when called.
-    let splits = 0;
+    const calls = { splits: 0 };
 
     const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
-      split: async () => {
-        splits++;
-
-        return { narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 };
-      },
+      split: countingSplit(calls, { narrative: '', headCount: 0 }),
     });
 
     const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
     await expect(split({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }))
       .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('budget exhausted (wall-clock)') });
-    expect(splits).toBe(0);
+    expect(calls.splits).toBe(0);
     // Unrecorded, this refusal left no trace in the journal — so how often a
     // head is stopped mid-plan could not be asked of the ledger.
     expect(capture.toolCalls).toHaveLength(1);
@@ -199,15 +211,11 @@ describe('head tool surface — containment', () => {
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
-    let splits = 0;
+    const calls = { splits: 0 };
 
     const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, spawnedAt: Date.now() - 60 * 60_000 } }),
-      split: async () => {
-        splits++;
-
-        return { narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 2 };
-      },
+      split: countingSplit(calls, { narrative: 'merged', headCount: 2 }),
     });
 
     // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
@@ -217,7 +225,7 @@ describe('head tool surface — containment', () => {
       rationale: 'go deeper',
       heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }],
     });
-    expect(splits).toBe(1);
+    expect(calls.splits).toBe(1);
   });
 
   test('allowedTools narrows the surface further, never widens it', () => {

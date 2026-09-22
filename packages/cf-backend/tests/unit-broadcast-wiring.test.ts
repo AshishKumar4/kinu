@@ -87,6 +87,17 @@ function channelsIn(argument: string): string[] {
   return found;
 }
 
+/** Records one broadcast argument's channels against the file it was found in.
+ *  A file that broadcasts the same channel twice is still one producer. */
+function recordProducers(channels: Map<string, string[]>, argument: string, file: string): void {
+  for (const name of channelsIn(argument)) {
+    const at = channels.get(name) ?? [];
+
+    if (!at.includes(file)) at.push(file);
+    channels.set(name, at);
+  }
+}
+
 /** channel name → the files that broadcast it. */
 function broadcastChannels(): Map<string, string[]> {
   const channels = new Map<string, string[]>();
@@ -96,12 +107,7 @@ function broadcastChannels(): Map<string, string[]> {
       const text = readFileSync(file, 'utf8');
 
       for (const m of text.matchAll(/\bbroadcast\s*\(/g)) {
-        for (const name of channelsIn(callArgument(text, m.index + m[0].length - 1))) {
-          const at = channels.get(name) ?? [];
-
-          if (!at.includes(file)) at.push(file);
-          channels.set(name, at);
-        }
+        recordProducers(channels, callArgument(text, m.index + m[0].length - 1), file);
       }
     }
   }

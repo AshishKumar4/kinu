@@ -11,19 +11,26 @@ import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 describe('device consent prompt data', () => {
-  test('exec consent shows the exact shell command', () => {
-    expect(summarizeDeviceAction('exec', ['echo hi; touch /tmp/x'])).toEqual({
+  const summaries = [
+    {
+      name: 'exec consent shows the exact shell command',
       method: 'exec',
+      param: 'echo hi; touch /tmp/x',
       command: 'echo hi; touch /tmp/x',
-    });
-  });
-
-  test('helper consent shows the method and path as a local action', () => {
-    expect(summarizeDeviceAction('readFile', ['/tmp/a; echo PWNED'])).toEqual({
+    },
+    {
+      name: 'helper consent shows the method and path as a local action',
       method: 'readFile',
+      param: '/tmp/a; echo PWNED',
       command: 'readFile(/tmp/a; echo PWNED)',
+    },
+  ] as const;
+
+  for (const { name, method, param, command } of summaries) {
+    test(name, () => {
+      expect(summarizeDeviceAction(method, [param])).toEqual({ method, command });
     });
-  });
+  }
 
   test('an unanswered prompt does not read as a refusal', () => {
     // Both are failures, but they mean opposite things to an agent running
