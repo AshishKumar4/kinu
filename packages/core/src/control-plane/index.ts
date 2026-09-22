@@ -1,11 +1,4 @@
-/**
- * The operator plane's read models and policies, behind
- * `@kinu.run/core/control-plane`.
- *
- * Pure folds over a caller-supplied SQL handle plus the capability gate every
- * ControlPlaneDO method calls first. The Durable Object keeps what only it can
- * hold: the gate's enforcement point and the storage handle.
- */
+/** `@kinu.run/core/control-plane`: operator read models and the capability gate. */
 export type { ControlPlaneSql, ControlPlaneSqlRow, ControlPlaneSqlValue } from './sql';
 
 export {
