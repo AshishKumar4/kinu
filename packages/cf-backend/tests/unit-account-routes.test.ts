@@ -34,10 +34,10 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
 
       return [];
     },
-    async searchExperience(_caller: UserCaller, options: { kind?: string; limit?: number }) {
+    async searchExperienceWire(_caller: UserCaller, options: { kind?: string; limit?: number }) {
       calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
 
-      return [];
+      return '[]';
     },
     async deleteAccount(_caller: UserCaller, ownerUserId: string) {
       calls.push(`account:delete:${ownerUserId}`);

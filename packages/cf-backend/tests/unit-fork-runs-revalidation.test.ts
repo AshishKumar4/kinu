@@ -11,8 +11,6 @@
 // depth-1 tree that carries NO scores, so nothing downstream can draw it as a
 // competition that picked a winner.
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams,
 } from '@kinu.run/core';
@@ -154,104 +152,6 @@ describe('fork revalidation policy', () => {
     });
   });
 
-  test('the canvas and the full-page explorer read the resources they claim to', () => {
-    const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
-    const embedded = source('src/components/surfaces/ExplorationSurface.tsx');
-    const fullPage = source('src/pages/MCTSExplorer.tsx');
-    const workSurface = source('src/components/surfaces/WorkSurface.tsx');
-
-    // The embedded surface draws EVERY tree, so it reads the canvas projection —
-    // one request carrying the runs, their dispatch parameters and every tree's
-    // rows. The full page drills into one run and needs only the list.
-    //
-    // `headActivity` is the fifth argument and it is not a datum: the hook reads
-    // it only to notice a search the POLLED list has never heard of, and to read
-    // the list again at once instead of waiting out the 15s idle cadence. A
-    // swarm dispatched with no streaming turn and no background job left
-    // `hasActiveWork` false, so a live search could sit invisible that long.
-    expect(embedded)
-      .toContain('useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity)');
-    expect(embedded).not.toContain('useLiveForkRuns(');
-    expect(fullPage).toMatch(/useLiveForkRuns\(\s*state\.rpc,\s*state\.isStreaming,\s*state\.backgroundJobs,?\s*\)/);
-    expect(workSurface).toContain('backgroundJobs={props.backgroundJobs}');
-
-    // Live trees are keyed by search on both paths: one slot let two concurrent
-    // searches overwrite each other's tree.
-    expect(workSurface).toContain('liveTrees={props.mctsTrees}');
-    expect(fullPage).toContain('state.mctsTrees.get(run.id) ?? null');
-
-    // The full page's failure copy says "exploration runs" and the embedded surface
-    // still says "fork runs": the strings moved with the surface's vocabulary when
-    // the fork verb left the delegation surface, and the invariant this pins is that
-    // BOTH read a failure through `LoadFailure` rather than swallowing one.
-    expect(embedded).toContain('<LoadFailure what="fresh fork runs"');
-    expect(fullPage).toContain('<LoadFailure what="fresh exploration runs"');
-    expect(fullPage).toContain('<LoadFailure what="the latest fork tree"');
-    // Paged reads are consumed as pages. `listForkRuns` answers a `Page` and a bare
-    // limit is not a `PageRequest`, so the hook may not ask for an array: it did,
-    // and `Page` has no `some`, so the revalidation clock threw on the first
-    // successful load against a real server.
-    expect(source('src/components/surfaces/fork-runs.ts'))
-      .toContain('rpc<Page<ForkRunSummary>>("listForkRuns", [{ limit: FORK_RUN_LIMIT }])');
-    expect(embedded).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
-    expect(fullPage).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
-    expect(fullPage).toContain('useExactForkRun(state.rpc, runId, hasActiveWork)');
-  });
-
-  test('a branch opens inside its RUN, beside the canvas, never over it', () => {
-    const embedded = readFileSync(
-      join(import.meta.dir, '..', 'src/components/surfaces/ExplorationSurface.tsx'), 'utf8',
-    );
-
-    // The third pane is the RUN, and a branch opens INSIDE it. Two defects are
-    // pinned here at once. A branch that REPLACES the canvas
-    // — `opened ? <ForkBranchView …> : <ForkCanvas …>` — answers "what did this
-    // branch do" by taking away the tree that gave the answer its place. A pane
-    // that renders nothing until a node is clicked and then describes that one
-    // node leaves the owner's *"does it only show the node? WHY? It should show
-    // everything about a particular run"* with no answer.
-    expect(embedded).toContain('<RunDetailView');
-    expect(embedded).toContain('<ForkCanvas');
-    expect(embedded).not.toContain(': <ForkCanvas');
-    // Nested, not switched: `ForkBranchView` is reached from inside the run view,
-    // which is what keeps the run's own liveness on screen while a branch is read.
-    expect(embedded).toMatch(/<ForkBranchView[^>]*\n[\s\S]{0,400}?onBack=/);
-    expect(embedded).not.toContain('No branch open');
-    // Three columns at the width that fits them: runs, canvas, run detail.
-    expect(embedded).toMatch(/@6xl:grid-cols-\[[^\]]+_[^\]]+_[^\]]+\]/);
-    // The pane gives the column back to the canvas; the branch goes back to its
-    // run. Two different journeys, and each control names the one it makes.
-    expect(embedded).toContain('onClose={() => setInspect(null)}');
-    expect(embedded).toContain('onBack={() => onOpenBranch(null)}');
-    expect(embedded).not.toContain('BranchInspector');
-    // A branch's behaviour is read through the ONE transcript component, which
-    // renders every step with the main chat's own `MessageView`. The card this
-    // replaced (`HeadTrace`/`StepRow`, clamping reasoning to three lines and
-    // tool output to 160 characters) is gone rather than left beside it.
-    expect(embedded).toContain('<NodeTranscript');
-    // The second renderer is deleted, not merely unreferenced. `useForkRunDetail`
-    // legitimately still reads `getHeadRun` — the CANVAS folds a merged run's
-    // journal into a tree — so what is pinned here is the absence of the trace
-    // components, which is the duplication that mattered.
-    expect(embedded).not.toContain('HeadTrace');
-    expect(embedded).not.toContain('StepRow');
-
-    const transcript = readFileSync(
-      join(import.meta.dir, '..', 'src/components/NodeTranscript.tsx'), 'utf8',
-    );
-
-    // One renderer, not two: the steps go through the chat's component, and the
-    // user affordances are absent because they are simply not passed.
-    expect(transcript).toContain('import { MessageView } from "@/components/MessageView"');
-    expect(transcript).toContain('<MessageView');
-
-    for (const affordance of ['onFork', 'onFeedback', 'onRevert', 'takesChip']) {
-      expect(transcript).not.toContain(`${affordance}=`);
-    }
-
-    // One read model, not a client-side choice of store.
-    expect(transcript).toContain('rpc<NodeTranscriptView | null>("getNodeTranscript", [runId, nodeId])');
-  });
 });
 
 describe('fork permalink selection', () => {

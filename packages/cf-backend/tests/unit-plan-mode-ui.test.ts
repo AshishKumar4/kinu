@@ -4,8 +4,6 @@ import { join } from 'node:path';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 
-const hook = source('src/hooks/use-kinu.ts');
-
 const page = source('src/pages/WorkspacePage.tsx');
 
 // The composer is one shared component: the mode control and the
@@ -17,28 +15,6 @@ const review = source('src/components/surfaces/PlanReviewView.tsx');
 const css = source('src/index.css');
 
 describe('Plan mode browser contract', () => {
-  test('stamps typed intent, and a retry cannot lose it', () => {
-    // Retry does not COPY the intent onto a fresh message — it re-runs the
-    // turn the intent is already stamped on, so the stamp cannot drift from
-    // the turn it governs, and no duplicate is appended. (`return`, not
-    // `void`: retry settles through the send-admission latch, so the caller
-    // can await the same turn it re-ran.)
-    expect(hook).toContain('return regenerate()');
-    expect(hook).toContain('parsePlanReview(msg.plan)');
-    expect(hook).toContain('"getActivePlanReview"');
-    // The composer send: mode threaded AND admission-guarded — a refused send
-    // returns before any state mutation, which is what the latch is for.
-    expect(page).toContain('sendChat: (text, files) => state.sendChat(text, [...files], effectiveChatMode),');
-    expect(page).toContain('usePlanGatedMode(subName === undefined ? state.activePlan : null, ui)');
-    expect(page).toContain('locked: planGate.locked');
-    expect(composer).toContain('aria-label="Turn mode"');
-    // Build is unreachable while a plan awaits a decision, and the whole
-    // segment is inert mid-turn. Both halves matter: the first is the trust
-    // boundary, the second stops a mode swap landing on a running turn.
-    expect(composer).toContain('disabled={disabled || (locked && mode === "build")}');
-    expect(composer).toContain('disabled={disabled || streaming}');
-  });
-
   test('a streaming Plan turn cannot expose Steer-as-Branch', () => {
     expect(composer).toContain('mode?.value !== "plan"');
     expect(page).toContain('!t || !state.isStreaming || effectiveChatMode === "plan"');

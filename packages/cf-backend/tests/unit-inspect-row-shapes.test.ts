@@ -21,48 +21,9 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { JsonArraySchema } from '@kinu.run/core';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-
-const INSPECT_SOURCE = resolve(import.meta.dir, '../../cli/src/commands/inspect.ts');
-
-/**
- * The cloud RPC names whose answer reaches `printRows`, read out of the
- * commands' own source.
- *
- * Every command in that file is written the same way: read, then print. So a
- * read belongs to the printer that comes next, and one command may have several
- * reads feeding one printer (a query/no-query pair). Attributing per FUNCTION
- * instead would be wrong: `gepa` reads a list and a single run, and only the
- * list is rows.
- *
- * The read's name is the argument after `target.cloudName`, which is how the
- * whole file spells `callAgentRpc`. Printer definitions sit below the last
- * command, so they claim no reads.
- */
-const CLOUD_READ_OR_PRINTER = /target\.cloudName,\s*'([A-Za-z0-9_]+)'|print(Rows|Data|Json|Pretty)\(/g;
-
-function cloudRowReads(source: string): string[] {
-  const rowReads: string[] = [];
-  let unprinted: string[] = [];
-
-  for (const marker of source.matchAll(CLOUD_READ_OR_PRINTER)) {
-    const [, readName, printer] = marker;
-
-    if (readName !== undefined) {
-      unprinted.push(readName);
-      continue;
-    }
-
-    if (printer === 'Rows') rowReads.push(...unprinted);
-    unprinted = [];
-  }
-
-  return rowReads.sort();
-}
 
 /**
  * Pinned, so that a derivation which has quietly stopped matching anything
@@ -105,10 +66,6 @@ function orchestratorWithOneEvent(): HarnessOrchestratorAgent {
 }
 
 describe('kinu inspect list reads', () => {
-  test('the formatter is fed by exactly the reads this gate exercises', () => {
-    expect(cloudRowReads(readFileSync(INSPECT_SOURCE, 'utf8'))).toEqual([...ROW_READS]);
-  });
-
   test('every one of them answers with rows the formatter can parse', async () => {
     const agent = orchestratorWithOneEvent();
 

@@ -8,8 +8,6 @@
 // advertises Workers AI (so the connect CTA stays a fallback, not a ritual).
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
@@ -259,23 +257,4 @@ describe('Workers AI credential refresh', () => {
     expect(await present(reg2.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg2.deps)).toBe(true);
   });
 
-  test('UserDO refreshes expiring Cloudflare credentials and persists the rotation', () => {
-    const userDO = readFileSync(join(import.meta.dir, '..', 'src/user/user-do.ts'), 'utf8');
-    // Proactive refresh on use…
-    expect(userDO).toContain('opts?.forceRefresh || isCloudflareCredentialExpiring(cred)');
-    // …persisted back to storage so the next caller gets the rotated tokens,
-    // through the fenced commit rather than a bare write: a rotation that
-    // returns after the owner disconnected must not reconnect the account.
-    // That behaviour is driven against the real UserDO in
-    // unit-user-authority-races.test.ts; this line is the source gate that the
-    // rotation is persisted at all.
-    expect(userDO).toContain('refreshCloudflareCredential(this.env, current)');
-    expect(userDO).toContain('return await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, next, revision);');
-    // …and the base-URL gate treats expired-but-refreshable as usable.
-    expect(userDO).toContain('if (!isCloudflareCredentialUsable(cred)) return null;');
-    // A terminal invalid_grant strips the dead refresh token so the
-    // credential stops counting as usable and the connect CTA resurfaces.
-    expect(userDO).toContain("err.oauthError === 'invalid_grant'");
-    expect(userDO).toContain("if (refreshed === 'revoked') return null;");
-  });
 });
