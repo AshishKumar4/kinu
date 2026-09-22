@@ -17,13 +17,13 @@ Each 128-byte page occupies the rank of its block offset in ascending order:
 
 | Bytes | Field |
 | --- | --- |
-| 0–7 | Block byte offset, unsigned little-endian |
+| 0 to 7 | Block byte offset, unsigned little-endian |
 | 8 | 1 = chunk, 2 = hole |
-| 9–15 | Zero |
-| 16–47 | Chunk SHA-256, or zero for a hole |
-| 48–79 | Left child SHA-256, or zero for an empty subtree |
-| 80–111 | Right child SHA-256, or zero for an empty subtree |
-| 112–127 | Zero |
+| 9 to 15 | Zero |
+| 16 to 47 | Chunk SHA-256, or zero for a hole |
+| 48 to 79 | Left child SHA-256, or zero for an empty subtree |
+| 80 to 111 | Right child SHA-256, or zero for an empty subtree |
+| 112 to 127 | Zero |
 
 A subtree of ranks `[lo,hi)` has its root at `floor((lo+hi)/2)`. Its children
 occupy `[lo,mid)` and `[mid+1,hi)`. Each lookup halves that interval and reads
