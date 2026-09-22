@@ -13,6 +13,7 @@ import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
+import { requestBodyText } from './helpers/fetch-input';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -91,7 +92,7 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
     }
 
     if (url === 'https://dash.cloudflare.com/oauth2/token') {
-      tokenRequests.push(new URLSearchParams(String(init?.body)));
+      tokenRequests.push(new URLSearchParams(await requestBodyText(input, init)));
 
       return Response.json({
         ...tokens,

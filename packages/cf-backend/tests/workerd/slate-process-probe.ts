@@ -133,9 +133,9 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     const root = '/home/user/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
-    files.writeFile(`${root}/${project.main ?? 'server.ts'}`, source);
+    files.writeFile(`${root}/${v.parse(v.string(), project.main ?? 'server.ts')}`, source);
 
-    if (browser !== undefined) files.writeFile(`${root}/${project.browser ?? 'browser.ts'}`, browser);
+    if (browser !== undefined) files.writeFile(`${root}/${v.parse(v.string(), project.browser ?? 'browser.ts')}`, browser);
 
     const storageStub = this.env.SLATE_PROCESS_PROBE.get(this.ctx.id);
 

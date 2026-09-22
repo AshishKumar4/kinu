@@ -29,6 +29,7 @@
  * refuses the next one.
  */
 import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
   FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
@@ -206,7 +207,7 @@ class ProbeFilePlane implements VFS {
     for (const row of this.exec(
       `SELECT DISTINCT path FROM probe_file_ranges WHERE path LIKE ? ORDER BY path`, `${prefix}%`,
     )) {
-      const rest = String(row.path).slice(prefix.length);
+      const rest = v.parse(v.string(), row.path).slice(prefix.length);
       const slash = rest.indexOf('/');
       names.add(slash < 0 ? rest : rest.slice(0, slash));
     }
@@ -257,7 +258,7 @@ class ProbeFilePlane implements VFS {
     for (const row of this.exec(
       `SELECT DISTINCT path FROM probe_file_ranges ORDER BY path`,
     )) {
-      const path = String(row.path);
+      const path = v.parse(v.string(), row.path);
       const stat = await this.stat(path);
 
       if (stat === null) continue;

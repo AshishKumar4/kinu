@@ -146,7 +146,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     ).toArray();
 
     expect(attempts).toHaveLength(1);
-    expect(v.parse(ReplyAttemptSchema, JSON.parse(String(attempts[0].payload)))).toMatchObject({
+    expect(v.parse(ReplyAttemptSchema, JSON.parse(v.parse(v.string(), attempts[0].payload)))).toMatchObject({
       kind: 'email_thread', outcome: { outcome: 'delivered' },
     });
 
@@ -181,7 +181,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const step = await orch.inbox.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
 
     if (!step?.[1]) throw new Error('expected injected signal step');
-    expect(String(step[1].content)).toContain('Is staging green?');
+    expect(v.parse(v.string(), step[1].content)).toContain('Is staging green?');
 
     // Turn end: the absorbed signal's reply turn id keys the SAME dispatch the
     // queued drain-turn path uses — the live turn's answer threads back.
@@ -226,7 +226,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     expect(sent).toHaveLength(0);
     expect(replies.findOpenByEvent(eventId)?.attempt_count).toBe(1);
     const attempts = sql.exec(`SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`).toArray();
-    expect(v.parse(ReplyAttemptSchema, JSON.parse(String(attempts[0].payload))).outcome.outcome).toBe('failed');
+    expect(v.parse(ReplyAttemptSchema, JSON.parse(v.parse(v.string(), attempts[0].payload))).outcome.outcome).toBe('failed');
   });
 
   test('a turn with no drain-bound email events sends nothing', async () => {

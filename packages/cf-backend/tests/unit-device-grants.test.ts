@@ -507,7 +507,7 @@ describe('durable device request ownership', () => {
 
     const harness = await deviceHarness('ashish@studio', (frame) => {
       if (frame.method === DEVICE_CANCEL_METHOD) {
-        return { requestId: String(frame.params[0]), cancelled: 'unknown' };
+        return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'unknown' };
       }
 
       if (frame.method === DEVICE_EXEC_ACK_METHOD && !ackWorks) {

@@ -161,7 +161,7 @@ describe('a head forks its parent workspace', () => {
     const { rt, head, home } = await hostedHead({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
 
     const found = await workspacePlane(rt).tools.exec.execute('grep -rl needle /home/user/repo');
-    expect(String(found)).toContain('repo/a.ts');
+    expect(v.parse(v.string(), found)).toContain('repo/a.ts');
 
     // The head's OWN shell, and the identity is the observable: its `$HOME` and
     // `$TMPDIR` are the ones the host provisioned for this actor, not the

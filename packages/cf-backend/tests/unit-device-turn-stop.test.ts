@@ -143,7 +143,7 @@ function holdingDaemon(cancelled: 'terminated' | 'unknown' = 'terminated') {
       if (frame.method === 'exec') return held.promise;
 
       if (frame.method === DEVICE_CANCEL_METHOD) {
-        return { requestId: String(frame.params[0]), cancelled };
+        return { requestId: v.parse(v.string(), frame.params[0]), cancelled };
       }
 
       return daemon(frame);
@@ -211,7 +211,7 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
       if (frame.method === DEVICE_CANCEL_METHOD) {
         if (!killWorks) throw new Error('the kernel refused the kill');
 
-        return { requestId: String(frame.params[0]), cancelled: 'terminated' };
+        return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'terminated' };
       }
 
       return daemon(frame);

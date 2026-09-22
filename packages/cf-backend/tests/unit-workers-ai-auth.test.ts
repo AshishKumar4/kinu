@@ -16,6 +16,7 @@ import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '@kinu.ru
 import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
+import { requestBodyText, requestUrl } from './helpers/fetch-input';
 
 
 /** What a rejected `generateText` hands back: the AI SDK's error, whose
@@ -64,8 +65,8 @@ describe('Workers AI credential refresh', () => {
   test('refresh merges rotated tokens into the stored credential shape', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe('https://dash.cloudflare.com/oauth2/token');
-      const body = new URLSearchParams(String(init?.body));
+      expect(requestUrl(input)).toBe('https://dash.cloudflare.com/oauth2/token');
+      const body = new URLSearchParams(await requestBodyText(input, init));
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('cf-refresh-1');
 

@@ -32,6 +32,7 @@ import {
 } from '@kinu.run/core';
 import { pageDeployedBuildSha, reportRenderFailure } from '@kinu.run/core';
 import { APP_ROUTES, routeTemplateOf } from '@kinu.run/core';
+import { requestUrl } from './helpers/fetch-input';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -389,11 +390,11 @@ describe('the payload the browser builds', () => {
     // report below is one a page with no build identity produced.
     Object.assign(globalThis, { location: { pathname: '/workspace/demo' } });
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = requestUrl(input);
 
       if (url.endsWith('/api/health')) throw new TypeError('offline');
 
-      if (init?.method === 'POST') posts.push({ url, body: String(init.body ?? '') });
+      if (init?.method === 'POST') posts.push({ url, body: v.parse(v.string(), init.body ?? '') });
 
       return new Response('{}', { status: 202 });
     });

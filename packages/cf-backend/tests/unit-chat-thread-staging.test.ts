@@ -218,7 +218,7 @@ function threadOverTicks(windows: readonly (readonly UIMessage[])[]): RenderedTi
   function Probe(): null {
     const [tick, setTick] = useState(0);
     const at = Math.min(tick, windows.length - 1);
-    const { transcript, thread } = useChatThread(rpc, windows[at], true);
+    const { transcript, thread } = useChatThread({ rpc, live: windows[at], seeded: true });
     threads.push(thread);
     transcripts.push(transcript);
 

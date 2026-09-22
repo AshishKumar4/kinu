@@ -79,7 +79,7 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   vfs.as(B).writeFile('/tmp/note.txt', 'B bytes');
 
   const keys = [...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp%'")]
-    .map((row) => String(row.path)).sort();
+    .map((row) => v.parse(v.string(), row.path)).sort();
 
   expect(keys).toContain('tmp/agent-a/note.txt');
   expect(keys).toContain('tmp/agent-b/note.txt');
@@ -101,7 +101,7 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   vfs.as(A).rename('/tmp/note.txt', '/tmp/moved.txt');
   expect(vfs.as(A).readFileString('/tmp/moved.txt')).toBe('A bytes');
   expect(vfs.as(B).readFileString('/tmp/note.txt')).toBe('B bytes');
-  expect([...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp/agent-a/%'")].map((row) => String(row.path)))
+  expect([...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp/agent-a/%'")].map((row) => v.parse(v.string(), row.path)))
     .toEqual(['tmp/agent-a/moved.txt']);
 
   // confined chmod: owner triad moves, widening refused, nothing clamped

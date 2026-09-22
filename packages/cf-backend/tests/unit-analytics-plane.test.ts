@@ -488,7 +488,7 @@ describe('the writer holds the limits the platform enforces silently', () => {
     // Against the SCHEMA's own declared bound, which is what the writer clamps
     // to. That the bound is itself inside the platform's 96 is the guard's job,
     // asserted over every shipped schema above.
-    expect(new TextEncoder().encode(String(point.indexes?.[0])).length)
+    expect(new TextEncoder().encode(v.parse(v.string(), point.indexes?.[0])).length)
       .toBeLessThanOrEqual(AGENT_METRICS_SCHEMA.index.maxBytes);
   });
 });

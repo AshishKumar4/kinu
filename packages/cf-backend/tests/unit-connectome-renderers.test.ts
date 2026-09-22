@@ -3,6 +3,7 @@
 // unchanged — the canvas renderer stroking what the frame marks visible,
 // the WebGPU renderer uploading the frame's own arrays at their strides.
 import { afterAll, describe, expect, mock, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   TONE_BRIGHT,
   type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE,
@@ -26,6 +27,27 @@ interface Recording {
   gradients: number;
   readonly styles: Set<string>;
   readonly gradientStyles: string[];
+}
+
+/** The gradient this surface's `createLinearGradient` hands back: it renders
+ *  itself as the text the assertions match, which `CanvasGradient` does not. */
+interface RecordedGradient extends CanvasGradient {
+  readonly stops: readonly { offset: number; color: string }[];
+  toString(): string;
+}
+
+function isRecordedGradient(style: CanvasGradient | CanvasPattern): style is RecordedGradient {
+  return 'stops' in style;
+}
+
+/** The style a canvas call left in `strokeStyle`/`fillStyle`, as the text the
+ *  recording keeps. */
+function styleText(style: string | CanvasGradient | CanvasPattern): string {
+  if (v.is(v.string(), style)) return style;
+
+  if (isRecordedGradient(style)) return style.toString();
+
+  throw new Error('the recording surface was handed a style it never made');
 }
 
 /** A CanvasRenderingContext2D that remembers what was asked of it. */
@@ -52,14 +74,14 @@ function recordingSurface(): StrokeSurface & Recording {
     arc: () => undefined,
     stroke: () => {
       surface.strokes += 1;
-      const style = String(surface.strokeStyle);
+      const style = styleText(surface.strokeStyle);
       styles.add(style);
 
       if (style.startsWith('gradient(')) gradientStyles.push(style);
     },
     fill: () => {
       surface.fills += 1;
-      styles.add(String(surface.fillStyle));
+      styles.add(styleText(surface.fillStyle));
     },
     createLinearGradient: () => {
       surface.gradients += 1;

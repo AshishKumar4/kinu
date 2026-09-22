@@ -1,6 +1,7 @@
 // createHubDeviceTransport — the device runtime's cached/authoritative status
 // over the user-level device hub. This is what beforeTurn refreshes so the
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   nextDeviceRequestId, isDeviceNotConnectedError, isWorkspaceUnattachedError,
   NO_DEVICE_CONNECTED, WORKSPACE_HAS_NO_OWNER, type DeviceStatus, type JsonValue,
@@ -232,7 +233,7 @@ describe('createHubDeviceTransport', () => {
 
     const [method, params, opts] = requiredCall(hub.rpcCalls, 0);
     expect(method).toBe('exec');
-    expect(String(params[0])).toContain('make');
+    expect(v.parse(v.string(), params[0])).toContain('make');
     expect(opts?.requestId).toBe(requestId);
     // A call that needs no cancellation handle sends none, and the tunnel mints
     // its own — one authority, not two.

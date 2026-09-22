@@ -2,6 +2,7 @@
 // refuses. Run against a real bun:sqlite table and the real AES-GCM envelope,
 // so the encryption and the AAD binding are exercised rather than faked.
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
 import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@kinu.run/core';
 import { createCredentialCipher } from '@kinu.run/core';
@@ -56,7 +57,7 @@ describe('the vault stores a secret without ever handing it back', () => {
   test('the stored column is sealed, not plaintext', async () => {
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
-    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
+    const stored = v.parse(v.string(), deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
     expect(stored.startsWith('pce1.')).toBe(true);
     expect(stored).not.toContain(SECRET);
   });
@@ -64,7 +65,7 @@ describe('the vault stores a secret without ever handing it back', () => {
   test('a secret sealed for one binding cannot be opened as another', async () => {
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
-    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
+    const stored = v.parse(v.string(), deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
     await expect(deps.cipher.open(deps.aad('some-other-binding'), stored))
       .rejects.toThrow('Record "test-user-do:egress:some-other-binding" failed to decrypt');
   });
@@ -174,7 +175,7 @@ describe('key rotation', () => {
 
     const rotated: EgressVaultDeps = { sql: deps.sql, cipher: next, aad: deps.aad };
     expect(await rewrapEgressSecrets(rotated)).toBe(true);
-    const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
+    const stored = v.parse(v.string(), deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0].secret);
     expect(stored.startsWith(`pce1.${next.keyId}.`)).toBe(true);
     expect(await next.open(deps.aad('stripe'), stored)).toBe(SECRET);
   });

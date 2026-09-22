@@ -665,7 +665,7 @@ async function api(url: URL, request: Request): Promise<Response> {
     ? {}
     : v.parse(v.record(v.string(), v.unknown()), await request.json());
 
-  const named = (key: string): string => String(body[key] ?? '');
+  const named = (key: string): string => v.parse(v.string(), body[key] ?? '');
 
   if (path.startsWith('/accounts?')) return envelope([{ id: ACCOUNT_ID, name: 'Probe Account' }]);
 

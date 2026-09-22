@@ -4,6 +4,7 @@
 // the real component, so it is covered where it can only be true: against
 // the real browser (scripts/public-pages.test.ts reads `__kinuSearchTree`).
 import { VGPUError as CoreVGPUError } from '@vgpu/core';
+import * as v from 'valibot';
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -37,6 +38,27 @@ interface Recording {
   readonly gradientStyles: string[];
 }
 
+/** The gradient this surface's `createLinearGradient` hands back: it renders
+ *  itself as the text the assertions match, which `CanvasGradient` does not. */
+interface RecordedGradient extends CanvasGradient {
+  readonly stops: readonly { offset: number; color: string }[];
+  toString(): string;
+}
+
+function isRecordedGradient(style: CanvasGradient | CanvasPattern): style is RecordedGradient {
+  return 'stops' in style;
+}
+
+/** The style a canvas call left in `strokeStyle`/`fillStyle`, as the text the
+ *  recording keeps. */
+function styleText(style: string | CanvasGradient | CanvasPattern): string {
+  if (v.is(v.string(), style)) return style;
+
+  if (isRecordedGradient(style)) return style.toString();
+
+  throw new Error('the recording surface was handed a style it never made');
+}
+
 /** A CanvasRenderingContext2D that remembers what was asked of it. */
 function recordingSurface(): StrokeSurface & Recording {
   const styles = new Set<string>();
@@ -61,14 +83,14 @@ function recordingSurface(): StrokeSurface & Recording {
     arc: () => undefined,
     stroke: () => {
       surface.strokes += 1;
-      const style = String(surface.strokeStyle);
+      const style = styleText(surface.strokeStyle);
       styles.add(style);
 
       if (style.startsWith('gradient(')) gradientStyles.push(style);
     },
     fill: () => {
       surface.fills += 1;
-      styles.add(String(surface.fillStyle));
+      styles.add(styleText(surface.fillStyle));
     },
     createLinearGradient: () => {
       surface.gradients += 1;

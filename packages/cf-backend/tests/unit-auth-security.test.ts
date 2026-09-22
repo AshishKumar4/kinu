@@ -23,6 +23,7 @@ import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
+import { requestUrl } from './helpers/fetch-input';
 
 const root = join(import.meta.dir, '..');
 
@@ -156,7 +157,7 @@ describe('auth and desktop security invariants', () => {
   test('Cloudflare OAuth token attachment stores an account-backed Workers AI credential', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input) => {
-      expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+      expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
 
       return new Response(JSON.stringify({
         success: true,
@@ -185,7 +186,7 @@ describe('auth and desktop security invariants', () => {
   test('Cloudflare OAuth token attachment accepts access-token-only responses', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input) => {
-      expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
+      expect(requestUrl(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
 
       return new Response(JSON.stringify({
         success: true,

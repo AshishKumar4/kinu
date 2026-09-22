@@ -26,6 +26,7 @@
  * environment) into a layer whose charter is one platform semantic per class.
  */
 import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 import {
   DeviceRequestLedger, initDeviceInflightTable,
   type DeviceCancelOutcome,
@@ -187,14 +188,14 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
       `SELECT request_id, cancel_claim, cancel_outcome FROM device_inflight_requests
         ORDER BY request_id`,
     ).toArray().map((row) => ({
-      requestId: String(row.request_id),
-      claim: row.cancel_claim === null ? '' : String(row.cancel_claim),
-      // SAFETY: the table's CHECK constraint guarantees `cancel_outcome` is one
-      // of the `DeviceCancelOutcome` members, so a non-null read is validated
-      // by the schema the production ledger created.
+      requestId: v.parse(v.string(), row.request_id),
+      claim: row.cancel_claim === null ? '' : v.parse(v.string(), row.cancel_claim),
+      // The table's CHECK constraint admits only the `DeviceCancelOutcome`
+      // members, so this parse names a row the production ledger could not
+      // have written rather than carrying its text onward.
       settled: row.cancel_outcome === null
         ? null
-        : (String(row.cancel_outcome) as DeviceCancelOutcome),
+        : v.parse(v.picklist(['terminated', 'unknown']), row.cancel_outcome),
     }));
   }
 }

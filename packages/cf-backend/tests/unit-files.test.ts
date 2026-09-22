@@ -11,6 +11,7 @@ import {
   entryRevision, fileTextEditable, nextTreeCache, putFileBytes, sandboxedHtml,
   textRenderOf, viewerKindOf,
 } from "@kinu.run/core";
+import { requestUrl } from './helpers/fetch-input';
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -427,7 +428,7 @@ describe("putFileBytes", () => {
     // here: Bun-types' shape carries a `preconnect` member that a bare function
     // literal lacks, and the shim attaches the no-op the SDK never calls.
     globalThis.fetch = asFetchFunction((url, init) => {
-      calls.push({ url: String(url), init });
+      calls.push({ url: requestUrl(url), init });
 
       return Promise.resolve(reply);
     });

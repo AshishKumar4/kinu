@@ -21,6 +21,7 @@ import { createWorkersAIProvider } from '@kinu.run/core';
 import { createMyGatewayProvider } from '@kinu.run/core';
 import { createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
+import { requestUrl } from './helpers/fetch-input';
 
 const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
   env,
@@ -313,7 +314,7 @@ describe('user-billed providers stay off the platform binding', () => {
       getAuth: async () => userAuth,
       hasCredential: async () => true,
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
-        seen.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization') });
+        seen.push({ url: requestUrl(input), authorization: new Headers(init?.headers).get('authorization') });
 
         return Response.json(completion);
       }),

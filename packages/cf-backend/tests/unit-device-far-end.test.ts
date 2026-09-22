@@ -168,7 +168,7 @@ describe('a completion held past its own cancellation', () => {
       // The command had already finished on the machine when the stop arrived,
       // so the daemon holds no control entry for it: the completion boundary.
       if (frame.method === DEVICE_CANCEL_METHOD) {
-        return { requestId: String(frame.params[0]), cancelled: 'unknown' };
+        return { requestId: v.parse(v.string(), frame.params[0]), cancelled: 'unknown' };
       }
 
       return responder(frame);
