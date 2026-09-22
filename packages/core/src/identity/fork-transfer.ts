@@ -49,8 +49,6 @@ import {
   forkConversationCounts,
   forkConversationEntryPartRows,
   forkConversationEntryRow,
-  forkMessagePartRows,
-  forkMessageUpdateRows,
   forkSessionMessageRow,
   planForkConversation,
   type ForkConversationPlan,
@@ -58,8 +56,6 @@ import {
 import {
   ForkSnapshotHeadSchema,
   ForkSessionMessageRowSchema,
-  ForkMessagePartRowSchema,
-  ForkMessageUpdateRowSchema,
   ForkConversationEntryRowSchema,
   ForkConversationEntryPartRowSchema,
   ForkContextMemberRowSchema,
@@ -72,8 +68,6 @@ import {
   type ForkConversationEntryRow,
   type ForkCraftedToolRow,
   type ForkMemoryChunkRow,
-  type ForkMessagePartRow,
-  type ForkMessageUpdateRow,
   type ForkSessionMessageRow,
 } from './fork-rows';
 import { ForkTargetWriter, type ForkResult } from './fork-writer';
@@ -108,10 +102,9 @@ export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.val
  * The row sections, in the order they must cross.
  *
  * The order is load-bearing, not cosmetic: it is the FOREIGN-KEY order of the
- * canonical store. Message identities precede their parts, parts precede the
- * updates that reference them, public entries precede their part references,
- * and the context membership lands last — so every staged statement commits
- * against rows the target already has. A hosted transfer stages one frame per
+ * canonical store. Messages precede the public entries that reference them,
+ * entries precede their part references, and the context membership lands last
+ * — so every staged statement commits against rows the target already has. A hosted transfer stages one frame per
  * RPC, so there is no transaction spanning the sections to defer a constraint
  * inside.
  */
@@ -120,8 +113,6 @@ export const FORK_ROW_SECTIONS = [
   'craftedTools',
   'memoryChunks',
   'sessionMessages',
-  'messageParts',
-  'messageUpdates',
   'conversationEntries',
   'conversationEntryParts',
   'contextMembers',
@@ -137,8 +128,6 @@ export const ForkSectionCountsSchema = v.object({
   craftedTools: v.number(),
   memoryChunks: v.number(),
   sessionMessages: v.number(),
-  messageParts: v.number(),
-  messageUpdates: v.number(),
   conversationEntries: v.number(),
   conversationEntryParts: v.number(),
   contextMembers: v.number(),
@@ -176,8 +165,6 @@ export const ForkFrameSchema = v.variant('kind', [
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('craftedTools'), rows: v.array(ForkCraftedToolRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('memoryChunks'), rows: v.array(ForkMemoryChunkRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('sessionMessages'), rows: v.array(ForkSessionMessageRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('messageParts'), rows: v.array(ForkMessagePartRowSchema) }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('messageUpdates'), rows: v.array(ForkMessageUpdateRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
@@ -326,23 +313,14 @@ function memoryChunkPayloadBytes(row: ForkMemoryChunkRow): number {
   return utf8Bytes(row.id) + utf8Bytes(row.path) + utf8Bytes(row.hash) + utf8Bytes(row.text);
 }
 
+/** A message's content is the one unbounded field a conversation carries: an
+ *  inline `content_json` is a whole message's parts. */
 function sessionMessagePayloadBytes(row: ForkSessionMessageRow): number {
   return utf8Bytes(row.message_id) + utf8Bytes(row.role)
-    + utf8Bytes(row.native_content_kind) + utf8Bytes(row.origin);
-}
-
-function messagePartPayloadBytes(row: ForkMessagePartRow): number {
-  return utf8Bytes(row.message_id) + utf8Bytes(row.kind)
-    + (row.reply_to_message_id === null ? 0 : utf8Bytes(row.reply_to_message_id));
-}
-
-/** An update's payload is the one unbounded field a conversation carries: an
- *  inline `payload_json` is a whole part's content. */
-function messageUpdatePayloadBytes(row: ForkMessageUpdateRow): number {
-  return utf8Bytes(row.message_id) + utf8Bytes(row.operation)
-    + (row.payload_json === null ? 0 : utf8Bytes(row.payload_json))
-    + (row.payload_path === null ? 0 : utf8Bytes(row.payload_path))
-    + (row.payload_digest === null ? 0 : utf8Bytes(row.payload_digest));
+    + utf8Bytes(row.native_content_kind) + utf8Bytes(row.origin) + utf8Bytes(row.envelope_json)
+    + (row.content_json === null ? 0 : utf8Bytes(row.content_json))
+    + (row.content_path === null ? 0 : utf8Bytes(row.content_path))
+    + (row.content_digest === null ? 0 : utf8Bytes(row.content_digest));
 }
 
 function conversationEntryPayloadBytes(row: ForkConversationEntryRow): number {
@@ -422,26 +400,14 @@ async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChun
 /**
  * The conversation sections, read one unit at a time.
  *
- * One message's parts or one entry's part references at a time, never a
- * section: what bounds a frame is the batching below, and what bounds the
- * SENDER is reading no more than one unit of one section into the isolate.
+ * One message or one entry's part references at a time, never a section: what
+ * bounds a frame is the batching below, and what bounds the SENDER is reading
+ * no more than one unit of one section into the isolate.
  */
 async function* sessionMessageRows(
-  sql: SqlExecutor, actorId: string, plan: ForkConversationPlan,
-): AsyncGenerator<ForkSessionMessageRow> {
-  for (const message of plan.messages) yield forkSessionMessageRow(sql, actorId, message.messageId);
-}
-
-async function* messagePartRows(
-  sql: SqlExecutor, actorId: string, plan: ForkConversationPlan,
-): AsyncGenerator<ForkMessagePartRow> {
-  for (const message of plan.messages) yield* forkMessagePartRows(sql, actorId, message.messageId);
-}
-
-async function* messageUpdateRows(
   sql: SqlExecutor, actorId: string, plan: ForkConversationPlan, artifactDirectory: string,
-): AsyncGenerator<ForkMessageUpdateRow> {
-  for (const message of plan.messages) yield* forkMessageUpdateRows(sql, actorId, message, artifactDirectory);
+): AsyncGenerator<ForkSessionMessageRow> {
+  for (const messageId of plan.messageIds) yield forkSessionMessageRow(sql, actorId, messageId, artifactDirectory);
 }
 
 async function* conversationEntryRows(
@@ -569,24 +535,12 @@ export async function* forkTransferFrames(
         }));
         break;
       case 'sessionMessages':
-        yield* yieldRows(sessionMessageRows(source.sql, actorId, plan), sessionMessagePayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'sessionMessages', rows,
-        }));
-        break;
-      case 'messageParts':
-        yield* yieldRows(messagePartRows(source.sql, actorId, plan), messagePartPayloadBytes, (rows) => seal({
-          version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-          kind: 'messageParts', rows,
-        }));
-        break;
-      case 'messageUpdates':
         yield* yieldRows(
-          messageUpdateRows(source.sql, actorId, plan, source.artifactDirectory),
-          messageUpdatePayloadBytes,
+          sessionMessageRows(source.sql, actorId, plan, source.artifactDirectory),
+          sessionMessagePayloadBytes,
           (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-            kind: 'messageUpdates', rows,
+            kind: 'sessionMessages', rows,
           }),
         );
         break;
@@ -846,8 +800,6 @@ export class ForkTransferReceiver {
     else if (frame.kind === 'craftedTools') this.writer.stageCraftedTools(frame.rows);
     else if (frame.kind === 'memoryChunks') this.writer.stageMemoryChunks(frame.rows);
     else if (frame.kind === 'sessionMessages') this.writer.stageSessionMessages(frame.rows);
-    else if (frame.kind === 'messageParts') this.writer.stageMessageParts(frame.rows);
-    else if (frame.kind === 'messageUpdates') this.writer.stageMessageUpdates(frame.rows);
     else if (frame.kind === 'conversationEntries') this.writer.stageConversationEntries(frame.rows);
     else if (frame.kind === 'conversationEntryParts') this.writer.stageConversationEntryParts(frame.rows);
     else this.writer.stageContextMembers(frame.rows);
@@ -943,8 +895,6 @@ export class ForkTransferReceiver {
       ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
       ['memoryChunks', staged.declared.memoryChunks, taken.memoryChunks],
       ['sessionMessages', staged.declared.sessionMessages, taken.sessionMessages],
-      ['messageParts', staged.declared.messageParts, taken.messageParts],
-      ['messageUpdates', staged.declared.messageUpdates, taken.messageUpdates],
       ['conversationEntries', staged.declared.conversationEntries, taken.conversationEntries],
       ['conversationEntryParts', staged.declared.conversationEntryParts, taken.conversationEntryParts],
       ['contextMembers', staged.declared.contextMembers, taken.contextMembers],

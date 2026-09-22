@@ -36,8 +36,7 @@ const OWNER: ForkWriteTarget = {
  *  to be driven through its file path. */
 const EMPTY_COUNTS: ForkSectionCounts = {
   agentConfig: 0, craftedTools: 0, memoryChunks: 0,
-  sessionMessages: 0, messageParts: 0, messageUpdates: 0,
-  conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
+  sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
   files: 1,
 };
 
@@ -134,8 +133,6 @@ function framesFor(snapshot: ForkSnapshot, opts: {
       craftedTools: snapshot.craftedTools.length,
       memoryChunks: snapshot.memoryChunks.length,
       sessionMessages: snapshot.sessionMessages.length,
-      messageParts: snapshot.messageParts.length,
-      messageUpdates: snapshot.messageUpdates.length,
       conversationEntries: snapshot.conversationEntries.length,
       conversationEntryParts: snapshot.conversationEntryParts.length,
       contextMembers: snapshot.contextMembers.length,
@@ -159,14 +156,6 @@ function framesFor(snapshot: ForkSnapshot, opts: {
 
   for (let at = 0; at < snapshot.sessionMessages.length; at += rowsPerFrame) {
     push({ kind: 'sessionMessages', rows: snapshot.sessionMessages.slice(at, at + rowsPerFrame) });
-  }
-
-  for (let at = 0; at < snapshot.messageParts.length; at += rowsPerFrame) {
-    push({ kind: 'messageParts', rows: snapshot.messageParts.slice(at, at + rowsPerFrame) });
-  }
-
-  for (let at = 0; at < snapshot.messageUpdates.length; at += rowsPerFrame) {
-    push({ kind: 'messageUpdates', rows: snapshot.messageUpdates.slice(at, at + rowsPerFrame) });
   }
 
   for (let at = 0; at < snapshot.conversationEntries.length; at += rowsPerFrame) {
@@ -299,12 +288,10 @@ describe('fork transfer receiver', () => {
     const rowsOf = (ws: TestWorkspace) => ({
       entries: ws.sql<{ id: string; parent_id: string | null; role: string }>`
         SELECT id, parent_id, role FROM conversation_entries ORDER BY rowid`,
-      entryParts: ws.sql<{ entry_id: string; message_id: string; through_sequence: number }>`
-        SELECT entry_id, message_id, through_sequence FROM conversation_entry_parts ORDER BY entry_id, position`,
-      messages: ws.sql<{ message_id: string; role: string; origin: string; sealed_sequence: number | null }>`
-        SELECT message_id, role, origin, sealed_sequence FROM session_messages ORDER BY rowid`,
-      updates: ws.sql<{ message_id: string; sequence: number; operation: string; payload_json: string | null }>`
-        SELECT message_id, sequence, operation, payload_json FROM message_updates ORDER BY message_id, sequence`,
+      entryParts: ws.sql<{ entry_id: string; message_id: string; part_no: number }>`
+        SELECT entry_id, message_id, part_no FROM conversation_entry_parts ORDER BY entry_id, position`,
+      messages: ws.sql<{ message_id: string; role: string; origin: string; sealed_at: number; envelope_json: string; content_json: string | null; content_digest: string | null }>`
+        SELECT message_id, role, origin, sealed_at, envelope_json, content_json, content_digest FROM session_messages ORDER BY rowid`,
       members: ws.sql<{ entry_id: string; position: number; message_id: string }>`
         SELECT entry_id, position, message_id FROM context_memberships WHERE to_revision IS NULL ORDER BY position`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
@@ -367,9 +354,9 @@ describe('fork transfer receiver', () => {
       expect(await tgt.vfs.exists(`${SOURCE_ARTIFACTS}/${artifact.path}`)).toBe(false);
     }
 
-    expect(tgt.sql<{ payload_path: string }>`
-      SELECT payload_path FROM message_updates WHERE payload_path IS NOT NULL`
-      .every((row) => row.payload_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
+    expect(tgt.sql<{ content_path: string }>`
+      SELECT content_path FROM session_messages WHERE content_path IS NOT NULL`
+      .every((row) => row.content_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
   });
 
   test('a chain that never carried the cut entry the head names is refused at publication', async () => {
