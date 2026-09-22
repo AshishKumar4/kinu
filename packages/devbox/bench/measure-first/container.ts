@@ -86,7 +86,8 @@ function objectUrl(key: string): string {
 
 function headerRecord(headers: Headers): { name: string; value: string }[] {
   const out: { name: string; value: string }[] = [];
-  headers.forEach((value, name) => { out.push({ name, value }); });
+
+  for (const [name, value] of headers) out.push({ name, value });
 
   return out;
 }
@@ -131,8 +132,19 @@ async function r2Head(key: string): Promise<void> {
 }
 
 
+/** One range-read cell: the object it walks, the window size, and how many
+ *  requests at what concurrency, from which permutation seed. */
+interface RangeCell {
+  readonly key: string;
+  readonly objectBytes: number;
+  readonly rangeBytes: number;
+  readonly concurrency: number;
+  readonly requests: number;
+  readonly seed: number;
+}
+
 async function r2Range(
-  key: string, objectBytes: number, rangeBytes: number, concurrency: number, requests: number, seed: number,
+  { key, objectBytes, rangeBytes, concurrency, requests, seed }: RangeCell,
 ): Promise<void> {
   const windows = Math.floor(objectBytes / rangeBytes);
 
@@ -275,10 +287,14 @@ async function main(): Promise<number> {
     }
 
     if (verb === 'range') {
-      await r2Range(
-        key, integer(rest[2], 'object bytes'), integer(rest[3], 'range bytes'),
-        integer(rest[4], 'concurrency'), integer(rest[5], 'requests'), integer(rest[6], 'seed'),
-      );
+      await r2Range({
+        key,
+        objectBytes: integer(rest[2], 'object bytes'),
+        rangeBytes: integer(rest[3], 'range bytes'),
+        concurrency: integer(rest[4], 'concurrency'),
+        requests: integer(rest[5], 'requests'),
+        seed: integer(rest[6], 'seed'),
+      });
 
       return 0;
     }

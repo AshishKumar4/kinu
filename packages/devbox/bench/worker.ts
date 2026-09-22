@@ -597,6 +597,16 @@ interface RestoreProbe {
   readonly phases: RestorePhaseStamps;
 }
 
+/** The row one restore phase leaves: opening carries the fresh probe, settling
+ *  stamps the wall time, and every other phase records its own stamp. */
+function restoreProbeAt(probe: RestoreProbe, phase: RestoreClockPhase, atMs: number): RestoreProbe {
+  if (phase === 'opened') return probe;
+
+  if (phase === 'settled') return { ...probe, wallMs: atMs };
+
+  return { ...probe, phases: { ...probe.phases, [phase]: atMs } };
+}
+
 /** The two key spellings, in one place each: four call sites read or write
  *  these rows, and a key spelled twice is a row nobody can find. */
 const operationKey = (token: string): string => `${OPERATION_PREFIX}${token}`;
@@ -661,10 +671,7 @@ class BenchBox extends Devbox<BenchEnv> {
 
     if (probe === undefined) return;
 
-    const row: RestoreProbe = phase === 'opened' ? probe
-      : phase === 'settled' ? { ...probe, wallMs: atMs }
-      : { ...probe, phases: { ...probe.phases, [phase]: atMs } };
-
+    const row = restoreProbeAt(probe, phase, atMs);
     this.#probe = row;
     void this.ctx.storage.put(RESTORE_PROBE_KEY, row)
       .then(async () => await this.ctx.storage.sync())
@@ -992,9 +999,17 @@ export class SnapshotChainBox extends BenchBox {
 
 /** Every driver answer is a JSON object. Generic, so each route keeps its own
  *  concrete answer type and this helper only owns the framing. */
-function json<Answer>(payload: Answer, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
+/** One driver answer: the payload a route built, and the status it answers
+ *  with. Nothing here reads inside the payload — only `JSON.stringify` does,
+ *  and an RPC result carries `Disposable` beside its own fields. */
+interface Answer {
+  readonly payload: unknown;
+  readonly status?: number;
+}
+
+function json(answer: Answer): Response {
+  return new Response(JSON.stringify(answer.payload), {
+    status: answer.status ?? 200,
     headers: { 'content-type': 'application/json' },
   });
 }
@@ -1071,23 +1086,44 @@ async function body(request: Request): Promise<DriverBody> {
 
 
 
+/** Delete everything under `prefix`, one listing page at a time, and answer how
+ *  many keys went. */
+async function purgePrefix(bucket: R2Bucket, prefix: string): Promise<number> {
+  let purged = 0;
+
+  for (;;) {
+    const page = await bucket.list({ prefix });
+    const keys = page.objects.map(object => object.key);
+
+    if (keys.length === 0) return purged;
+    await bucket.delete(keys);
+    purged += keys.length;
+  }
+}
+
+/** One instrument request: the route and its body, and the box it addresses. */
+interface InstrumentRequest {
+  readonly route: string;
+  readonly input: DriverBody;
+  readonly env: BenchEnv;
+  readonly strategy: DevboxStrategyName;
+  readonly box: BenchStub;
+  readonly name: string;
+  /** When the driver call opened, for the durations these routes report. */
+  readonly started: number;
+  readonly url: URL;
+  readonly counter: DurableObjectStub<BenchOpCounter>;
+}
+
 /** Diagnostic reads and fault injection share the instrument route boundary. */
 async function serveInstrumentRoutes(
-  route: string,
-  input: DriverBody,
-  env: BenchEnv,
-  strategy: DevboxStrategyName,
-  box: BenchStub,
-  name: string,
-  started: number,
-  url: URL,
-  counter: DurableObjectStub<BenchOpCounter>,
+  { route, input, env, strategy, box, name, started, url, counter }: InstrumentRequest,
 ): Promise<Response | null> {
   switch (route) {
     case 'GET /state': {
       const state = await box.devboxState();
 
-      return json({
+      return json({ payload: {
         ok: true,
         strategy,
         box: name,
@@ -1095,7 +1131,7 @@ async function serveInstrumentRoutes(
         storePrefix: storePrefixOf(env, strategy, name),
         state,
         ms: Date.now() - started,
-      });
+      } });
     }
 
     case 'GET /restore-probe': {
@@ -1105,7 +1141,7 @@ async function serveInstrumentRoutes(
       // operation for, not the driver's own round trip.
       const probe = await box.readRestoreProbe();
 
-      return json({ ok: probe !== undefined, strategy, box: name, probe, ms: Date.now() - started });
+      return json({ payload: { ok: probe !== undefined, strategy, box: name, probe, ms: Date.now() - started } });
     }
 
     case 'POST /checkpoint-cut': {
@@ -1115,24 +1151,24 @@ async function serveInstrumentRoutes(
 
       const op = input.op ?? '';
 
-      if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+      if (op.length === 0) return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
       const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
       await counter.armCut(op, storePrefixOf(env, strategy, name));
       const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
 
-      return json({ ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, 202);
+      return json({ payload: { ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, status: 202 });
     }
 
     case 'POST /publication-window/open': {
       const token = url.searchParams.get('token') ?? '';
 
-      return json({ ok: true, window: await counter.openPublicationWindow(token, storePrefixOf(env, strategy, name)) });
+      return json({ payload: { ok: true, window: await counter.openPublicationWindow(token, storePrefixOf(env, strategy, name)) } });
     }
 
     case 'POST /publication-window/close':
-      return json({ ok: true, window: await counter.closePublicationWindow(url.searchParams.get('token') ?? '') });
+      return json({ payload: { ok: true, window: await counter.closePublicationWindow(url.searchParams.get('token') ?? '') } });
     case 'GET /fault-cut':
-      return json(await counter.readCut(url.searchParams.get('token') ?? ''));
+      return json({ payload: { ...await counter.readCut(url.searchParams.get('token') ?? '') } });
     case 'POST /fault-cut/kill': {
       const token = url.searchParams.get('token') ?? '';
       const receipt = await counter.readCut(token);
@@ -1141,18 +1177,18 @@ async function serveInstrumentRoutes(
         throw new Error('the publication cut belongs to another box');
       }
 
-      if (receipt.state !== 'held') return json(await counter.finishCut(token, false));
+      if (receipt.state !== 'held') return json({ payload: { ...await counter.finishCut(token, false) } });
       const stopped = await box.killWithoutQuiesce();
 
-      return json(await counter.finishCut(token, stopped));
+      return json({ payload: { ...await counter.finishCut(token, stopped) } });
     }
 
     case 'POST /fault-cut/cancel':
-      return json(await counter.finishCut(url.searchParams.get('token') ?? '', false));
+      return json({ payload: { ...await counter.finishCut(url.searchParams.get('token') ?? '', false) } });
     case 'POST /fault-cut/clear': {
       await counter.clearCut(url.searchParams.get('token') ?? '');
 
-      return json({ ok: true });
+      return json({ payload: { ok: true } });
     }
   }
 
@@ -1162,7 +1198,7 @@ async function serveInstrumentRoutes(
     // before teardown, with full arrays archived.
     const incidents = await box.devboxIncidentReasons();
 
-    return json({ ok: true, strategy, box: name, incidents, ms: Date.now() - started });
+    return json({ payload: { ok: true, strategy, box: name, incidents, ms: Date.now() - started } });
   }
 
   if (route === 'POST /security') {
@@ -1173,15 +1209,15 @@ async function serveInstrumentRoutes(
     // DriverBodySchema stays closed.
     const nonce = input.op ?? '';
 
-    if (nonce.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+    if (nonce.length === 0) return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
 
     if (!/^[A-Za-z0-9-]{8,64}$/.test(nonce)) {
-      return json({ ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, 400);
+      return json({ payload: { ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, status: 400 });
     }
 
     const security = await box.runSecurityCells(nonce);
 
-    return json({ ok: true, strategy, box: name, security, ms: Date.now() - started });
+    return json({ payload: { ok: true, strategy, box: name, security, ms: Date.now() - started } });
   }
 
   return null;
@@ -1189,11 +1225,11 @@ async function serveInstrumentRoutes(
 
 export default {
   async fetch(request: Request, env: BenchEnv): Promise<Response> {
-    if (!authorized(request, env.BENCH_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
+    if (!authorized(request, env.BENCH_TOKEN)) return json({ payload: { ok: false, error: 'unauthorized' }, status: 401 });
 
     const url = new URL(request.url);
 
-    if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
+    if (request.method === 'GET' && url.pathname === '/health') return json({ payload: { ok: true } });
     flushEnv = env;
     const name = url.searchParams.get('box') ?? 'devbox-bench';
     let input: DriverBody;
@@ -1201,26 +1237,26 @@ export default {
     try {
       input = await body(request);
     } catch (error) {
-      return json({ ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, 400);
+      return json({ payload: { ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, status: 400 });
     }
 
     const requested = input.strategy ?? url.searchParams.get('strategy');
     const strategy = parseDevboxStrategyName(requested);
 
     if (strategy === null) {
-      return json({
+      return json({ payload: {
         ok: false,
         error: 'strategy is required: snapshot-chain',
-      }, 400);
+      }, status: 400 });
     }
 
     if (!strategyIsDeployed(env, strategy)) {
-      return json({
+      return json({ payload: {
         ok: false,
         strategy,
         box: name,
         error: 'strategy not deployed in this run',
-      }, 400);
+      }, status: 400 });
     }
 
     const box = boxOf(env, strategy, name);
@@ -1229,7 +1265,10 @@ export default {
 
     try {
       const route = `${request.method} ${url.pathname}`;
-      const aside = await serveInstrumentRoutes(route, input, env, strategy, box, name, started, url, counter);
+
+      const aside = await serveInstrumentRoutes({
+        route, input, env, strategy, box, name, started, url, counter,
+      });
 
       if (aside !== null) return aside;
 
@@ -1237,16 +1276,16 @@ export default {
         case 'POST /create': {
           await box.kickStartup();
 
-          return json({ ok: true, strategy, box: name, ms: Date.now() - started });
+          return json({ payload: { ok: true, strategy, box: name, ms: Date.now() - started } });
         }
 
         case 'GET /head': {
           const key = url.searchParams.get('key') ?? '';
 
-          if (key.length === 0) return json({ ok: false, error: 'key is required' }, 400);
+          if (key.length === 0) return json({ payload: { ok: false, error: 'key is required' }, status: 400 });
           const object = await env.BACKUP_BUCKET.head(key);
 
-          return json({
+          return json({ payload: {
             ok: object !== null,
             key,
             exists: object !== null,
@@ -1255,7 +1294,7 @@ export default {
             // after a new delta is published. Size alone cannot detect rewrite.
             etag: object?.etag ?? '',
             ms: Date.now() - started,
-          }, object === null ? 404 : 200);
+          }, status: object === null ? 404 : 200 });
         }
 
         case 'POST /exec': {
@@ -1268,13 +1307,13 @@ export default {
           if (input.cwd !== undefined) options.cwd = input.cwd;
           const result = await box.exec(input.command ?? 'true', options);
 
-          return json({
+          return json({ payload: {
             ok: result.exitCode === 0,
             exitCode: result.exitCode,
             stdout: result.stdout,
             stderr: result.stderr,
             ms: Date.now() - started,
-          });
+          } });
         }
 
         case 'POST /write': {
@@ -1284,10 +1323,10 @@ export default {
           const path = input.path ?? '';
           const content = input.content ?? '';
 
-          if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
+          if (path.length === 0) return json({ payload: { ok: false, error: 'path is required' }, status: 400 });
           await box.writeFile(path, content);
 
-          return json({ ok: true, path, bytes: content.length, ms: Date.now() - started });
+          return json({ payload: { ok: true, path, bytes: content.length, ms: Date.now() - started } });
         }
 
         // BOTH MINUTE-SCALE ROUTES ARM AND ANSWER 202. The operation runs from a
@@ -1297,13 +1336,13 @@ export default {
         case 'POST /checkpoint': {
           const op = input.op ?? '';
 
-          if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+          if (op.length === 0) return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
           const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
           const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
 
-          return json({
+          return json({ payload: {
             ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started,
-          }, 202);
+          }, status: 202 });
         }
 
 
@@ -1313,18 +1352,18 @@ export default {
           // exactly the work that outlived the request deadline.
           const op = input.op ?? '';
 
-          if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+          if (op.length === 0) return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
           const row = await box.armBenchOperation({ op, operation: 'stop', kind: 'quiesce' });
 
-          return json({
+          return json({ payload: {
             ok: true, token: row.token, state: row.state, ms: Date.now() - started,
-          }, 202);
+          }, status: 202 });
         }
 
         case 'GET /operation': {
           const token = url.searchParams.get('token') ?? '';
 
-          if (token.length === 0) return json({ ok: false, error: 'token is required' }, 400);
+          if (token.length === 0) return json({ payload: { ok: false, error: 'token is required' }, status: 400 });
           const row = await box.readBenchOperation(token);
 
           // AN UNKNOWN TOKEN IS DEFINITIVE, not a slow answer: the row is
@@ -1332,10 +1371,10 @@ export default {
           // box never armed names an operation nobody is running and the poll
           // must stop rather than wait out its deadline.
           if (row === undefined) {
-            return json({ ok: false, token, error: 'no operation is armed under this token' }, 404);
+            return json({ payload: { ok: false, token, error: 'no operation is armed under this token' }, status: 404 });
           }
 
-          return json({
+          return json({ payload: {
             ok: row.state !== 'failed',
             token,
             state: row.state,
@@ -1345,7 +1384,7 @@ export default {
             // The operation's OWN duration, measured inside the callback, so the
             // driver's poll cadence never enters a measured number.
             ms: row.ms,
-          });
+          } });
         }
 
         case 'POST /kill': {
@@ -1353,7 +1392,7 @@ export default {
           // for a recovery replay. See `killWithoutQuiesce`.
           await box.killWithoutQuiesce();
 
-          return json({ ok: true, strategy, box: name, ms: Date.now() - started });
+          return json({ payload: { ok: true, strategy, box: name, ms: Date.now() - started } });
         }
 
         case 'POST /destroy': {
@@ -1363,13 +1402,13 @@ export default {
           // `destroyContainerForBench`.
           const destroyed = await box.destroyContainerForBench();
 
-          return json({ ok: true, strategy, box: name, destroyed, ms: Date.now() - started });
+          return json({ payload: { ok: true, strategy, box: name, destroyed, ms: Date.now() - started } });
         }
 
         case 'POST /wake': {
           await box.kickStartup();
 
-          return json({ ok: true, strategy, box: name, ms: Date.now() - started });
+          return json({ payload: { ok: true, strategy, box: name, ms: Date.now() - started } });
         }
 
         case 'GET /ops': {
@@ -1383,7 +1422,7 @@ export default {
           await flushOps(env);
           await scheduler.wait(750);
 
-          return json({ ok: true, ...summarize(await counter.read()) });
+          return json({ payload: { ok: true, ...summarize(await counter.read()) } });
         }
 
         case 'POST /ops/flush': {
@@ -1396,7 +1435,7 @@ export default {
           await box.flushOpTally();
           await flushOps(env);
 
-          return json({ ok: true, ...summarize(await counter.read()) });
+          return json({ payload: { ok: true, ...summarize(await counter.read()) } });
         }
 
         case 'POST /ops/reset': {
@@ -1404,7 +1443,7 @@ export default {
           await flushOps(env);
           await scheduler.wait(750);
 
-          return json({ ok: true, ...summarize(await counter.reset()) });
+          return json({ payload: { ok: true, ...summarize(await counter.reset()) } });
         }
 
         case 'POST /teardown': {
@@ -1419,23 +1458,16 @@ export default {
             const prefix = input.prefix ?? '';
 
             if (prefix.length === 0 && input.whole !== true) {
-              return json({
+              return json({ payload: {
                 ok: false,
                 error: 'an empty prefix means the whole bucket; pass whole:true to mean it',
-              }, 400);
+              }, status: 400 });
             }
 
-            for (;;) {
-              const page = await env.BACKUP_BUCKET.list({ prefix });
-              const keys = page.objects.map(object => object.key);
-
-              if (keys.length === 0) break;
-              await env.BACKUP_BUCKET.delete(keys);
-              purged += keys.length;
-            }
+            purged = await purgePrefix(env.BACKUP_BUCKET, prefix);
           }
 
-          return json({
+          return json({ payload: {
             ok: true,
             discarded: true,
             purged,
@@ -1447,19 +1479,19 @@ export default {
             // uploads.
             emptyBucketGuaranteed: false,
             ms: Date.now() - started,
-          });
+          } });
         }
 
         default:
-          return json({ ok: false, error: `no route for ${request.method} ${url.pathname}` }, 404);
+          return json({ payload: { ok: false, error: `no route for ${request.method} ${url.pathname}` }, status: 404 });
       }
     } catch (error) {
       // The driver needs the reason, not a 500 with no body: a refusal from the
       // storage path is a result, and losing its text costs the container time
       // the run has already spent.
-      return json({
+      return json({ payload: {
         ok: false, strategy, box: name, error: describeThrown({ cause: error }), ms: Date.now() - started,
-      }, 502);
+      }, status: 502 });
     }
   },
 };

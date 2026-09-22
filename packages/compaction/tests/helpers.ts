@@ -13,7 +13,7 @@ export function assistant(content: AssistantModelMessage['content']): ModelMessa
   return { role: 'assistant', content };
 }
 
-export function toolCall<Input>(id: string, toolName: string, input: Input): ToolCallPart {
+export function toolCall(id: string, toolName: string, input: Record<string, string>): ToolCallPart {
   return { type: 'tool-call', toolCallId: id, toolName, input };
 }
 
@@ -47,12 +47,17 @@ export function history(exchanges: number, outputChars = 3_000): ModelMessage[] 
   return messages;
 }
 
+/** The port members are properties, not methods: a test reads `citablePath`
+ *  off the store to prove it needs no receiver, and replaces `load` to gate it. */
 export interface MemoryTranscriptStore extends TranscriptStore {
   writes: Map<string, string>;
+  citablePath: (sessionKey: string, rangeHash: string) => string;
 }
 
 export interface MemoryPlanStore extends PlanStore {
   snapshots: Map<string, PlanSnapshot>;
+  load: (sessionKey: string) => Promise<PlanSnapshot | null> | PlanSnapshot | null;
+  save: (sessionKey: string, snapshot: PlanSnapshot | null) => Promise<void> | void;
 }
 
 export interface MemoryPorts extends EnginePorts {

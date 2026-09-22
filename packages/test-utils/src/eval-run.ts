@@ -977,23 +977,26 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
 
 /** The version marker every stored record must carry. Validated rather than
  *  trusted: a record is a persisted blob, and a schema bump has to fail loudly
- *  here instead of surfacing as an undefined field inside a comparison. */
-const RecordEnvelopeSchema = v.looseObject({ schema: v.literal(1) });
+ *  here instead of surfacing as an undefined field inside a comparison.
+ *
+ *  The envelope IS the record's identity: schema 1 is only ever produced by
+ *  `writeRunRecord` in this module, from an `EvalRunRecord`. Re-declaring every
+ *  nested field would restate the whole interface as a second declaration free
+ *  to drift from the first. */
+const RunRecordSchema = v.custom<EvalRunRecord>(
+  (raw) => v.is(v.looseObject({ schema: v.literal(1) }), raw),
+  'not an eval run record of schema 1',
+);
 
 export function readRunRecord(path: string): EvalRunRecord {
   const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  const envelope = v.safeParse(RecordEnvelopeSchema, raw);
+  const record = v.safeParse(RunRecordSchema, raw);
 
-  if (!envelope.success) {
-    throw new Error(`${path}: not an eval run record of schema 1 — `
-      + envelope.issues.map((issue) => issue.message).join('; '));
+  if (!record.success) {
+    throw new Error(`${path}: ${record.issues.map((issue) => issue.message).join('; ')}`);
   }
 
-  // SAFETY: the envelope parse above has confirmed this file carries `schema: 1`,
-  // and a schema-1 file is only ever produced by `writeRunRecord` in this module
-  // from an `EvalRunRecord`. Re-validating every nested field would restate the
-  // whole type as a second declaration free to drift from the first.
-  return raw as EvalRunRecord;
+  return record.output;
 }
 
 /**
@@ -1019,6 +1022,17 @@ export function runRecordPaths(root: string): string[] {
   }
 
   return paths.sort();
+}
+
+/** How one covariate row reads: unmeasured, without an opportunity, or its rate. */
+function covariateRate(row: { eligible: number; passed: number; unmeasured: boolean }): string {
+  if (row.unmeasured) {
+    return `unmeasured — ${String(row.eligible)} observed opportunities, ${String(row.passed)} known successes`;
+  }
+
+  if (row.eligible === 0) return 'n/a — no eligible opportunity';
+
+  return `${String(row.passed)}/${String(row.eligible)} = ${(row.passed / row.eligible).toFixed(3)}`;
 }
 
 /**
@@ -1080,11 +1094,7 @@ export function formatRunRecord(record: EvalRunRecord): string {
   lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
 
   for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {
-    const { eligible, passed, unmeasured } = totals(name);
-    lines.push(`    ${name.padEnd(20)} ${unmeasured
-      ? `unmeasured — ${String(eligible)} observed opportunities, ${String(passed)} known successes`
-      : eligible === 0 ? 'n/a — no eligible opportunity'
-        : `${String(passed)}/${String(eligible)} = ${(passed / eligible).toFixed(3)}`}`);
+    lines.push(`    ${name.padEnd(20)} ${covariateRate(totals(name))}`);
   }
 
   return lines.join('\n');

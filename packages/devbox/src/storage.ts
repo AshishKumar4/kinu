@@ -201,11 +201,13 @@ export interface DevboxStorage {
    * and an outcome that had already committed stays `committed`.
    */
   checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome>;
-  /** Release live mounts that the host SDK tracks before the container stops. */
-  detach?(): Promise<void>;
+  /** Release live mounts that the host SDK tracks before the container stops.
+   *  A property, not a method: the metered wrapper and the conformance suite
+   *  read it off the storage and call it through the receiver they chose. */
+  detach?: () => Promise<void>;
   /** Drop the durable bytes and the record pointing at them. Called when the
-   *  box itself is deleted. */
-  discard(): Promise<void>;
+   *  box itself is deleted. A property for the same reason as `detach`. */
+  discard: () => Promise<void>;
 }
 
 /** Where a devbox keeps its bytes.

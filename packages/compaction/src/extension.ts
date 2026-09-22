@@ -105,6 +105,27 @@ export interface CompactionExtensionDeps {
   onOutcome?: (event: CompactionOutcomeEvent) => void;
 }
 
+/** What a forced rebuild starts from. */
+interface ForceRebuildInputs {
+  readonly turns: Turn[];
+  readonly ctx: TransformContext;
+  /** The monotonic floor: pruned tool results stay pruned, summaries are reused. */
+  readonly prior: PlanSnapshot | null;
+  readonly reportedTokens: number;
+  readonly summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>;
+}
+
+/** What the prefix-summary upgrade decides on, and rebuilds from. */
+interface PrefixUpgradeInputs {
+  readonly turns: Turn[];
+  readonly plan: BoundaryContextPlan;
+  readonly prior: PlanSnapshot | null;
+  readonly ctx: TransformContext;
+  readonly reportedTokens: number;
+  /** Published core already spent this turn's rolling attempt. */
+  readonly rollingSummaryAttempted: boolean;
+}
+
 export function createCompactionExtension(deps: CompactionExtensionDeps): KinuExtension {
   const profile = deps.profile ?? COMPACTION_PRESETS.light;
   const engine = createEngine(kinuSpec, deps.ports);
@@ -150,7 +171,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     targetRatio: profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
     providerReportedTokens: reportedTokens,
-    citablePath: deps.ports.transcripts.citablePath,
+    citablePath: (sessionKey, rangeHash) => deps.ports.transcripts.citablePath(sessionKey, rangeHash),
   });
 
   /**
@@ -200,11 +221,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
    *  plan as the monotonic floor (already-pruned tool results stay pruned,
    *  paid-for summaries are reused). */
   async function forceRebuild(
-    turns: Turn[],
-    ctx: TransformContext,
-    prior: PlanSnapshot | null,
-    reportedTokens: number,
-    summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>,
+    { turns, ctx, prior, reportedTokens, summarize }: ForceRebuildInputs,
   ): Promise<ProcessResult> {
     const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens), force: true, priorPlan: prior ?? undefined };
     let plan = buildPlan(turns, inputs, kinuSpec);
@@ -238,12 +255,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
    *  inherited from a prior plan, or when published core already accepted a
    *  rolling summary for an expanded prefix. */
   async function upgradePrefixSummary(
-    turns: Turn[],
-    plan: BoundaryContextPlan,
-    prior: PlanSnapshot | null,
-    ctx: TransformContext,
-    reportedTokens: number,
-    rollingSummaryAttempted: boolean,
+    { turns, plan, prior, ctx, reportedTokens, rollingSummaryAttempted }: PrefixUpgradeInputs,
   ): Promise<Extract<ProcessResult, { outcome: 'planned' }> | null> {
     if (!plan.requiresCustomCompaction) return null;
 
@@ -360,7 +372,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 
       const processed =
         ctx.trigger === 'force'
-          ? await forceRebuild(turns, ctx, prior, reportedTokens, summarize)
+          ? await forceRebuild({ turns, ctx, prior, reportedTokens, summarize })
           : await engine.process({
               sessionKey: ctx.sessionKey,
               turns,
@@ -386,14 +398,14 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 
       const applied =
         processed.outcome === 'planned'
-          ? ((await upgradePrefixSummary(
+          ? ((await upgradePrefixSummary({
               turns,
-              processed.plan,
+              plan: processed.plan,
               prior,
               ctx,
               reportedTokens,
               rollingSummaryAttempted,
-            )) ?? processed)
+            })) ?? processed)
           : processed;
 
       ctx.abortSignal?.throwIfAborted();

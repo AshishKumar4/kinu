@@ -5,6 +5,7 @@
 // removed the answers. These tests lock the fix: no relevance floor, and a
 // displayed score monotone WITH relevance.
 import { describe, test, expect } from "bun:test";
+import { present } from "../../test-utils/src/present";
 import { MemoryStore } from "../src/memory/store";
 import { createTestDb, createMemoryVfs } from "./helpers";
 
@@ -41,11 +42,9 @@ describe("MemoryStore.search ranking", () => {
 		await store.indexFile("memory/strong.md", strong);
 		await store.indexFile("memory/weak.md", weak);
 		const hits = store.search("quantum");
-		const strongHit = hits.find((h) => h.path === "memory/strong.md");
-		const weakHit = hits.find((h) => h.path === "memory/weak.md");
-		expect(strongHit).toBeDefined();
-		expect(weakHit).toBeDefined();
-		expect(hits[0]!.path).toBe("memory/strong.md");
-		expect(strongHit!.score).toBeGreaterThan(weakHit!.score);
+		const strongHit = present(hits.find((h) => h.path === "memory/strong.md"), "the strong file's hit");
+		const weakHit = present(hits.find((h) => h.path === "memory/weak.md"), "the weak file's hit");
+		expect(hits[0].path).toBe("memory/strong.md");
+		expect(strongHit.score).toBeGreaterThan(weakHit.score);
 	});
 });

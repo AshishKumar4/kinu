@@ -320,9 +320,10 @@ export class DurableStore {
     let objects = 0;
     let bytes = 0;
 
-    for (const key of this.#keysUnder(prefix)) {
+    for (const [key, object] of this.objects) {
+      if (!key.startsWith(prefix)) continue;
       objects += 1;
-      bytes += this.objects.get(key)!.bytes.byteLength;
+      bytes += object.bytes.byteLength;
     }
 
     return { objects, bytes };
@@ -657,9 +658,9 @@ export class ContainerDisk {
       return { tree: this.tree(owner.overlay.upper), relative: owner.relative };
     }
 
-    const holder = this.#treeDirAbove(path);
+    const holder = this.#treeAbove(path);
 
-    return holder === undefined ? undefined : { tree: this.trees.get(holder)!, relative: path.slice(holder.length + 1) };
+    return holder === undefined ? undefined : { tree: holder.tree, relative: path.slice(holder.dir.length + 1) };
   }
 
   /** Every file under `dir`, as paths relative to it, through any overlay. */
@@ -704,12 +705,12 @@ export class ContainerDisk {
     const tree = this.trees.get(dir);
 
     if (tree !== undefined) return tree.snapshot();
-    const above = this.#treeDirAbove(dir);
+    const above = this.#treeAbove(dir);
 
     if (above !== undefined) {
-      const prefix = `${dir.slice(above.length + 1)}/`;
+      const prefix = `${dir.slice(above.dir.length + 1)}/`;
 
-      return this.trees.get(above)!.snapshot()
+      return above.tree.snapshot()
         .filter((entry) => entry.path.startsWith(prefix))
         .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }));
     }
@@ -749,7 +750,9 @@ export class ContainerDisk {
    */
   pack(dir: string): Uint8Array {
     const entries = this.snapshot(dir).map((entry): v.InferOutput<typeof ArchiveEntrySchema> => {
-      const metadata = entry.metadata!;
+      const { metadata } = entry;
+
+      if (metadata === undefined) throw new Error(`pack: ${entry.path} carries no metadata to archive`);
 
       const row: v.InferOutput<typeof ArchiveEntrySchema> = {
         path: entry.path,
@@ -765,7 +768,7 @@ export class ContainerDisk {
         row.size = contentSize(entry.content);
         row.runs = paintedSegments(entry.content).segments
           .filter((segment) => !segment.zeros)
-          .map((segment) => [segment.start, bytesToBase64(segment.view!)]);
+          .map((segment) => [segment.start, bytesToBase64(segment.view)]);
       }
 
       return row;
@@ -804,11 +807,11 @@ export class ContainerDisk {
       if (row.kind !== 'file') return base;
       const runs = (row.runs ?? []).map(([offset, body]) => ({ offset, bytes: base64ToBytes(body) }));
       const size = row.size ?? 0;
-      const dense = runs.length === 1 && runs[0]!.offset === 0 && runs[0]!.bytes.byteLength === size;
+      const dense = runs.length === 1 && runs[0].offset === 0 && runs[0].bytes.byteLength === size;
 
       return {
         ...base,
-        content: dense ? { kind: 'dense', bytes: runs[0]!.bytes } : { kind: 'sparse', size, runs },
+        content: dense ? { kind: 'dense', bytes: runs[0].bytes } : { kind: 'sparse', size, runs },
       };
     });
 
@@ -900,13 +903,13 @@ export class ContainerDisk {
     masked.add(owner.relative);
   }
 
-  /** The deepest tree directory above `path`, so a layer mounted inside
-   *  another tree's directory answers for its own names. */
-  #treeDirAbove(path: string): string | undefined {
-    let deepest: string | undefined;
+  /** The deepest tree directory above `path` with the tree it holds, so a
+   *  layer mounted inside another tree's directory answers for its own names. */
+  #treeAbove(path: string): { dir: string; tree: LiveTree } | undefined {
+    let deepest: { dir: string; tree: LiveTree } | undefined;
 
-    for (const dir of this.trees.keys()) {
-      if (path.startsWith(`${dir}/`) && (deepest === undefined || dir.length > deepest.length)) deepest = dir;
+    for (const [dir, tree] of this.trees) {
+      if (path.startsWith(`${dir}/`) && (deepest === undefined || dir.length > deepest.dir.length)) deepest = { dir, tree };
     }
 
     return deepest;
@@ -937,10 +940,10 @@ export class ContainerDisk {
       return undefined;
     }
 
-    const dir = this.#treeDirAbove(path);
+    const above = this.#treeAbove(path);
 
-    if (dir === undefined) return undefined;
-    const node = this.trees.get(dir)!.node(path.slice(dir.length + 1));
+    if (above === undefined) return undefined;
+    const node = above.tree.node(path.slice(above.dir.length + 1));
 
     return node === undefined ? undefined : { node };
   }
@@ -1425,10 +1428,10 @@ function checkpointCommand(
   const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
 
   if (squash !== undefined) {
-    const archive = disk.pack(squash.source!);
+    const archive = disk.pack(squash.source);
 
     try {
-      disk.writeFile(squash.archive!, archive);
+      disk.writeFile(squash.archive, archive);
     } catch (error) {
       // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
       // stderr, exactly as the real command reports it.
@@ -1452,7 +1455,7 @@ function checkpointCommand(
     .exec(command)?.groups;
 
   if (published !== undefined) {
-    const landed = publish(published.archive!, published.mounted!);
+    const landed = publish(published.archive, published.mounted);
 
     // `<exit> <bytes>` on stdout either way, exactly as the real command
     // reports it: dd's own failure is a non-zero code there, not a thrown
@@ -1460,7 +1463,7 @@ function checkpointCommand(
     if (landed === undefined) {
       return {
         stdout: '1 0',
-        stderr: `dd: can't open '${published.archive!}': No such file or directory`,
+        stderr: `dd: can't open '${published.archive}': No such file or directory`,
         exitCode: 0,
       };
     }
@@ -1477,7 +1480,7 @@ function checkpointCommand(
     .exec(command)?.groups;
 
   if (egress !== undefined) {
-    const landed = publishEgress(egress.archive!, egress.url!);
+    const landed = publishEgress(egress.archive, egress.url);
 
     if (landed !== undefined && 'refused' in landed) {
       return { stdout: '1 ', stderr: landed.refused, exitCode: 0 };
@@ -1486,7 +1489,7 @@ function checkpointCommand(
     if (landed === undefined) {
       return {
         stdout: '2 ',
-        stderr: `no archive at ${egress.archive!}`,
+        stderr: `no archive at ${egress.archive}`,
         exitCode: 0,
       };
     }
@@ -1545,17 +1548,17 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
 
   if (layer !== undefined) {
-    const bytes = disk.readFile(layer.archive!);
+    const bytes = disk.readFile(layer.archive);
 
-    if (bytes === undefined) return shellFail(`bad mount point: ${layer.archive!} is absent`);
+    if (bytes === undefined) return shellFail(`bad mount point: ${layer.archive} is absent`);
 
     try {
-      disk.unpack(bytes, layer.point!);
+      disk.unpack(bytes, layer.point);
     } catch (error) {
       return shellFail(`squashfuse: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    disk.mount(layer.point!, { source: layer.archive!, fstype: 'fuse.squashfuse', options: 'ro' });
+    disk.mount(layer.point, { source: layer.archive, fstype: 'fuse.squashfuse', options: 'ro' });
     // The layer is mounted on the container when the isolate may go.
     deaths.reset('attach:after-layer-mount');
 
@@ -1566,9 +1569,9 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
     .exec(command)?.groups;
 
   if (overlay !== undefined) {
-    disk.mountOverlay(unquote(overlay.dir!), {
-      lowers: overlay.lowers!.split(':').map(unquote),
-      upper: unquote(overlay.upper!),
+    disk.mountOverlay(unquote(overlay.dir), {
+      lowers: overlay.lowers.split(':').map(unquote),
+      upper: unquote(overlay.upper),
     });
     deaths.reset('attach:after-overlay');
 
@@ -1662,7 +1665,7 @@ function chainExec(
     const seed = /^cp -a '(?<lower>[^']+)\/\.' '(?<upper>[^']+)\//.exec(command)?.groups;
 
     if (seed !== undefined) {
-      disk.copyTree(seed.lower!, seed.upper!);
+      disk.copyTree(seed.lower, seed.upper);
 
       return ok();
     }
@@ -1892,7 +1895,7 @@ function snapshotChainArm(): ConformanceArm {
       // directory under which the first whole file's path is found.
       const whole = manifest.output.files.filter((file) => file.kind === 'whole');
       const rows = this.disk.snapshot(mountPoint);
-      const first = whole[0] === undefined ? undefined : rows.find((row) => row.kind === 'file' && row.path.endsWith(`/${whole[0]!.p}`));
+      const first = whole[0] === undefined ? undefined : rows.find((served) => served.kind === 'file' && served.path.endsWith(`/${whole[0].p}`));
 
       if (whole[0] === undefined || first === undefined) return 0;
       const sideRelative = first.path.slice(0, first.path.length - whole[0].p.length - 1);
@@ -2081,8 +2084,10 @@ function snapshotChainArm(): ConformanceArm {
           this.disk.mount(at, { source: `r2:${STORE_ROOT}`, fstype: 'fuse.s3fs', options: 'rw' });
 
           for (const key of durable.list(`${STORE_ROOT}/`)) {
-            const relative = key.slice(STORE_ROOT.length + 1);
-            this.disk.serveFromMount(`${at}/${relative}`, mounted.get(key)!);
+            const bytes = mounted.get(key);
+
+            if (bytes === null) throw new Error(`mountStore: the store listed ${key} and then could not read it`);
+            this.disk.serveFromMount(`${at}/${key.slice(STORE_ROOT.length + 1)}`, bytes);
           }
 
           this.#publishing = { at, prefix: `${STORE_ROOT}/` };

@@ -295,21 +295,20 @@ describe('compareRuns — refuses what it cannot attribute', () => {
     expect(comparison.refusals[0].detail).toContain(EVAL_MODELS.pro);
   });
 
-  test('a different evolution position is refused', () => {
-    const arm: EvalArmState = { evolution: false, settle: 'first', tools: FULL_TOOL_SURFACE };
-    const comparison = compareRuns(baseline, run('cand', observations, { arm }), OPTS);
+  const armCases = [
+    { name: 'a different evolution position is refused', evolution: false, settle: 'first', field: 'arm.evolution' },
+    { name: 'a different settle policy is refused', evolution: true, settle: 'best', field: 'arm.settle' },
+  ] as const;
 
-    if (comparison.comparable) throw new Error('expected a refusal');
-    expect(comparison.refusals.map((r) => r.field)).toContain('arm.evolution');
-  });
+  for (const moved of armCases) {
+    test(moved.name, () => {
+      const arm: EvalArmState = { evolution: moved.evolution, settle: moved.settle, tools: FULL_TOOL_SURFACE };
+      const comparison = compareRuns(baseline, run('cand', observations, { arm }), OPTS);
 
-  test('a different settle policy is refused', () => {
-    const arm: EvalArmState = { evolution: true, settle: 'best', tools: FULL_TOOL_SURFACE };
-    const comparison = compareRuns(baseline, run('cand', observations, { arm }), OPTS);
-
-    if (comparison.comparable) throw new Error('expected a refusal');
-    expect(comparison.refusals.map((r) => r.field)).toContain('arm.settle');
-  });
+      if (comparison.comparable) throw new Error('expected a refusal');
+      expect(comparison.refusals.map((r) => r.field)).toContain(moved.field);
+    });
+  }
 
   test('a narrower tool surface is refused, and the reason names the missing tools', () => {
     const tools = FULL_TOOL_SURFACE.slice(0, 3);
@@ -561,11 +560,11 @@ describe('compareRuns — the binary headline is the OUTCOME', () => {
 
 describe('compareRuns — paired cost and latency', () => {
   test('"did it get cheaper" is answerable with an interval', () => {
-    const baseline = run('base', Array.from({ length: 8 }, (_, i) =>
-      scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2)], { tokensIn: 1000, tokensOut: 400, ms: 9000 })));
+    const eightTasks = (id: string, cost: { tokensIn: number; tokensOut: number; ms: number }) =>
+      run(id, Array.from({ length: 8 }, (_, i) => scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2)], cost)));
 
-    const candidate = run('cand', Array.from({ length: 8 }, (_, i) =>
-      scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2)], { tokensIn: 600, tokensOut: 300, ms: 4000 })));
+    const baseline = eightTasks('base', { tokensIn: 1000, tokensOut: 400, ms: 9000 });
+    const candidate = eightTasks('cand', { tokensIn: 600, tokensOut: 300, ms: 4000 });
 
     const { cost } = attributable(compareRuns(baseline, candidate, OPTS));
 
@@ -580,15 +579,14 @@ describe('compareRuns — paired cost and latency', () => {
   });
 
   test('cost averages a task\'s repetitions before differencing it', () => {
-    const baseline = run('base', ['task-a', 'task-b'].flatMap((taskId) => [
-      scored(taskId, 1, [score(SCORER, 4, 2)], { ms: 1000 }),
-      scored(taskId, 2, [score(SCORER, 4, 2)], { ms: 3000 }),
-    ]), { repeats: 2 });
+    const twoRepeats = (id: string, secondMs: number) =>
+      run(id, ['task-a', 'task-b'].flatMap((taskId) => [
+        scored(taskId, 1, [score(SCORER, 4, 2)], { ms: 1000 }),
+        scored(taskId, 2, [score(SCORER, 4, 2)], { ms: secondMs }),
+      ]), { repeats: 2 });
 
-    const candidate = run('cand', ['task-a', 'task-b'].flatMap((taskId) => [
-      scored(taskId, 1, [score(SCORER, 4, 2)], { ms: 1000 }),
-      scored(taskId, 2, [score(SCORER, 4, 2)], { ms: 1000 }),
-    ]), { repeats: 2 });
+    const baseline = twoRepeats('base', 3000);
+    const candidate = twoRepeats('cand', 1000);
 
     const { cost } = attributable(compareRuns(baseline, candidate, OPTS));
     expect(cost.ms.tasks).toBe(2);

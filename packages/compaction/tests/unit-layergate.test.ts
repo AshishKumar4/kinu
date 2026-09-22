@@ -6,6 +6,7 @@
 // the merged matrix in scripts/layergate.ts --matrix.
 import { describe, expect, test } from 'bun:test';
 import { observePipeline, runLayerGate, runFaultMatrix, LOCALIZATION_OWN_MIN_PP } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import {
   COMPACTION_LAYERS, COMPACTION_FAULTS, COMPACTION_LOCKED_BASELINE,
   createCompactionLadderSubjects,
@@ -50,7 +51,7 @@ describe('compaction-ladder layer gate', () => {
 
   test('the fault patches only owned subjects and craters its own slice', async () => {
     for (const fault of COMPACTION_FAULTS) {
-      const owned = COMPACTION_LAYERS.find((layer) => layer.id === fault.layer)!.subjects;
+      const owned = present(COMPACTION_LAYERS.find((layer) => layer.id === fault.layer), `the layer ${fault.layer} the fault names`).subjects;
       expect(fault.patches.every((subject) => owned.includes(subject))).toBe(true);
       expect(fault.patches.length).toBeGreaterThan(0);
     }

@@ -685,8 +685,9 @@ export interface SnapshotChainPorts {
     Promise<{ status: ChangeStatus; version: string }>;
   /** Run one shell command container-side. THE ONLY CONTAINER-SHELL PORT: the
    *  mount flags, the squashfs options and the mount probes are this
-   *  strategy's own vocabulary, so it builds every command itself. */
-  exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+   *  strategy's own vocabulary, so it builds every command itself. A property,
+   *  not a method: the suites read it off the record to wrap it. */
+  exec: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Ephemeral generation id, when the host can observe one. */
   containerGeneration?(): Promise<string | undefined>;
   /** This box's chain root in the store, see {@link chainStoreRoot}. A port
@@ -742,8 +743,9 @@ export interface SnapshotChainPorts {
   /** Extraction-mode checkpoint: the SDK archives a whole tree and moves it
    *  through the binding. LOCAL DEVELOPMENT ONLY. */
   createExtractSnapshot(options: BackupOptions): Promise<DirectoryBackup>;
-  now(): number;
-  log(message: string): void;
+  /** Properties, not methods: the failure-stamp deps carry both by reference. */
+  now: () => number;
+  log: (message: string) => void;
 }
 
 /** Canonical archive options for the extraction path. The TTL is HERE only:
@@ -1053,7 +1055,7 @@ function chainShell(exec: ContainerExec, root: string) {
       // because a probe could not parse would lose more than a full disk.
       if (!Number.isFinite(need) || !Number.isFinite(free)) return null;
 
-      if (free! >= need!) return null;
+      if (free >= need) return null;
 
       return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free.`;
     },
@@ -1098,6 +1100,39 @@ function chainShell(exec: ContainerExec, root: string) {
  * delta-namespace batch, and D5's G3 recorded the same death on 2026-09-13.
  * `tests/support/session-shell.ts` refuses the unscoped form in every fake.
  */
+/** What a chain commit is beyond the record it advances. */
+interface ChainCommitOptions {
+  /** Archive the merged work directory as a new base under a new generation. */
+  readonly rebasing?: boolean;
+  readonly upperMark?: string;
+  readonly kind?: CheckpointKind;
+}
+
+/** The mounts one composed attach must show, as the attach itself names them. */
+interface ComposedMounts {
+  readonly mounts: string;
+  readonly token: string;
+  readonly baseSource: string;
+  readonly deltaSource: string;
+  readonly deltaLayer: string;
+}
+
+/** What the attach log says the upper was restored from. */
+function restoredFrom(haveDelta: boolean, held: boolean, chunked: boolean): string {
+  if (!haveDelta) return 'base';
+
+  if (held) return 'base+delta already in this upper';
+
+  return chunked ? 'base+delta block-composed' : 'base+delta layered';
+}
+
+/** What a commit is, for its log line. */
+function commitWord(rebasing: boolean, first: boolean): string {
+  if (rebasing) return 'rebase';
+
+  return first ? 'base' : 'delta';
+}
+
 function opsBatchCommand(header: string, ops: readonly string[]): string {
   return [header, '(', 'set -e', ...ops, ')'].join('\n');
 }
@@ -1460,7 +1495,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const completedMounts = await shell.readMounts();
 
     if (chunked) {
-      assertComposedMounts(completedMounts, blockToken, mountedBase, deltaSource, deltaLayer);
+      assertComposedMounts({ mounts: completedMounts, token: blockToken, baseSource: mountedBase, deltaSource, deltaLayer });
     }
 
     if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) throw new ContainerChangedDuringAttach();
@@ -1472,9 +1507,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     // Only a legacy layered delta requires collapse. A v2 publication merges
     // retained records with the cumulative upper and writes an immutable key.
-    const restored = !haveDelta
-      ? 'base'
-      : held ? 'base+delta already in this upper' : chunked ? 'base+delta block-composed' : 'base+delta layered';
+    const restored = restoredFrom(haveDelta, held, chunked);
 
     ports.log(
       `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
@@ -1487,7 +1520,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     };
   };
 
-  const assertComposedMounts = (mounts: string, token: string, baseSource: string, deltaSource: string, deltaLayer: string): void => {
+  const assertComposedMounts = ({ mounts, token, baseSource, deltaSource, deltaLayer }: ComposedMounts): void => {
     const block = findMount(mounts, blockLower);
     const base = findMount(mounts, lowerBase);
     const delta = findMount(mounts, deltaLayer);
@@ -1519,9 +1552,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     if (prefix !== 'devbox-block' || !isChainId(baseId) || !isChainId(deltaId)
       || runtime !== ((await ports.containerGeneration?.()) ?? 'unobserved')) throw new Error('composed mount generation mismatch');
-    assertComposedMounts(mounts, `${baseId}:${deltaId}:${runtime}`,
-      mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, baseId)),
-      mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaObjectKey(root, deltaId)), deltaLayerMountPoint(baseId));
+    assertComposedMounts({
+      mounts,
+      token: `${baseId}:${deltaId}:${runtime}`,
+      baseSource: mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, baseId)),
+      deltaSource: mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaObjectKey(root, deltaId)),
+      deltaLayer: deltaLayerMountPoint(baseId),
+    });
   };
 
   const attachChain = async (generation: ChainGeneration): Promise<AttachOutcome> => {
@@ -1904,18 +1941,18 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (normalized !== null) excludes.push(normalized);
     }
 
-    let probe: DeltaProbeEntry[];
+    let upperProbe: DeltaProbeEntry[];
     const observed = await ports.exec(deltaProbeCommand(upperDir, excludes));
 
     try {
-      probe = parseDeltaProbe(observed.stdout);
+      upperProbe = parseDeltaProbe(observed.stdout);
     } catch (error) {
       if (error instanceof DeltaNamespaceProbeFailed) throw new Error(`${error.message}: ${observed.stderr}`, { cause: error });
 
       return fallback('upper-probe-failed', `the upper probe did not answer: ${describe({ cause: error })}`);
     }
 
-    if (probe.length === 0) return fallback('upper-empty', 'the probe listed nothing');
+    if (upperProbe.length === 0) return fallback('upper-empty', 'the probe listed nothing');
     // ROOM TO STAGE IT, asked before staging: the package and the hash
     // scratch are bounded by the upper's own bytes, so a disk short of those
     // stages in tmpfs exactly as the whole-tree archive does.
@@ -1925,7 +1962,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (short !== null) ports.log(`${short} Staging the chunked delta in memory at ${tmpStageDir} instead.`);
     // A `c` entry is a whiteout only when it is the 0/0 device fuse-overlayfs
     // mints; any other device travels whole.
-    const devices = probe.filter((entry) => entry.type === 'c').map((entry) => entry.path);
+    const devices = upperProbe.filter((entry) => entry.type === 'c').map((entry) => entry.path);
     const whiteouts = new Set<string>();
 
     if (devices.length > 0) {
@@ -1935,10 +1972,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       const lines = statted.stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
 
       if (lines.length !== devices.length) return fallback('whiteout-probe-failed', 'the whiteout probe answered short');
-      devices.forEach((path, at) => { if (lines[at] === '0,0') whiteouts.add(path); });
+
+      for (const [at, path] of devices.entries()) if (lines[at] === '0,0') whiteouts.add(path);
     }
 
-    const carried = probe.filter((entry) => entry.type !== 'd' && entry.type !== 'o' && !whiteouts.has(entry.path)).map((entry) => entry.path);
+    const carried = upperProbe.filter((entry) => entry.type !== 'd' && entry.type !== 'o' && !whiteouts.has(entry.path)).map((entry) => entry.path);
     let baseFacts = new Map<string, DeltaBaseFact | null>();
 
     if (carried.length > 0) {
@@ -1953,11 +1991,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       fileBases: [...baseFacts.values()].filter(fact => fact?.kind === 'file').length,
       absentBases: [...baseFacts.values()].filter(fact => fact === null).length }));
 
-    let hashFiles = deltaHashCandidates(probe);
+    let hashFiles = deltaHashCandidates(upperProbe);
     let hashes = new Map<number, DeltaFileHashes>();
 
     if (hashFiles.length > 0) {
-      const sizes = new Map(probe.map((entry) => [entry.path, entry.size] as const));
+      const sizes = new Map(upperProbe.map((entry) => [entry.path, entry.size] as const));
 
       const files = hashFiles.map((path, index) => {
         const fact = baseFacts.get(path);
@@ -1988,7 +2026,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
-    const upperPlan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
+    const upperPlan = planDeltaPublication({ probe: upperProbe, baseFacts, hashes, hashFiles, whiteouts });
 
     for (const [file, hashed] of hashes) {
       let matching = 0;
@@ -2161,9 +2199,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const commitChain = async (
     previous: ChainState | null,
     version: string,
-    rebasing = false,
-    upperMark?: string,
-    kind?: CheckpointKind,
+    { rebasing = false, upperMark, kind }: ChainCommitOptions = {},
   ): Promise<CheckpointOutcome> => {
     const first = previous === null;
     const fresh = first || rebasing;
@@ -2295,7 +2331,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     ports.log(
-      `${DEVBOX_WORKDIR} ${rebasing ? 'rebase' : first ? 'base' : 'delta'} ${chainId} `
+      `${DEVBOX_WORKDIR} ${commitWord(rebasing, first)} ${chainId} `
       + `(${layer.bytes} bytes)`,
     );
 
@@ -2400,7 +2436,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       try {
         // COLLAPSE RATHER THAN APPEND while a delta is served as a layer
         // (header, "What the composition costs").
-        return await commitChain(state, version, (layered && state.deltaFormat !== 'chunked') || shouldRebase(state, kind), mark, kind);
+        return await commitChain(state, version, {
+          rebasing: (layered && state.deltaFormat !== 'chunked') || shouldRebase(state, kind),
+          upperMark: mark,
+          kind,
+        });
       } catch (error) {
         return await commitFailed(state, { cause: error });
       }
@@ -2445,7 +2485,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // the record; commitChain decides it for a box with no record.
       if (state?.mode === 'extract') return await commitExtract(state, version);
 
-      return await commitChain(state, version, shouldRebase(state, kind), undefined, kind);
+      return await commitChain(state, version, { rebasing: shouldRebase(state, kind), kind });
     } catch (error) {
       return await commitFailed(state, { cause: error });
     }

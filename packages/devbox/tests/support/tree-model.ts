@@ -86,13 +86,11 @@ interface ManifestRow {
   size?: number;
 }
 
-interface Segment {
-  readonly zeros: boolean;
-  /** Absolute start offset in the logical file. */
-  readonly start: number;
-  readonly end: number;
-  readonly view?: Uint8Array;
-}
+/** One span of a file's logical bytes: a hole, or the bytes that fill it.
+ *  `start` is the absolute offset in the logical file. */
+type Segment =
+  | { readonly zeros: true; readonly start: number; readonly end: number }
+  | { readonly zeros: false; readonly start: number; readonly end: number; readonly view: Uint8Array };
 
 /** A file's logical bytes as an ordered segment list, plus the logical size. */
 interface LogicalLayout {
@@ -143,7 +141,7 @@ export function paintedSegments(content: FileContent): LogicalLayout {
   const claims: Claim[] = [];
 
   for (let i = content.runs.length - 1; i >= 0; i--) {
-    const run = content.runs[i]!;
+    const run = content.runs[i];
     const start = Math.min(Math.max(run.offset, 0), content.size);
     const end = Math.min(run.offset + run.bytes.byteLength, content.size);
 
@@ -188,15 +186,10 @@ export function metadataOf(seed: Seeded, xattrs: Record<string, string> = {}): P
   };
 }
 
-/** A dense file entry. */
-export function fileEntry(
-  path: string,
-  bytes: Uint8Array,
-  ino: number,
-  metadata: PosixMetadata,
-  mode = 0o644,
-): NodeEntry {
-  return { path, kind: 'file', mode, ino, metadata, content: { kind: 'dense', bytes } };
+/** A dense file entry at the default mode; a fixture wanting another one
+ *  overrides `mode` on the result. */
+export function fileEntry(path: string, bytes: Uint8Array, ino: number, metadata: PosixMetadata): NodeEntry {
+  return { path, kind: 'file', mode: 0o644, ino, metadata, content: { kind: 'dense', bytes } };
 }
 
 export function dirEntry(path: string, ino: number, metadata: PosixMetadata, mode = 0o755): NodeEntry {
@@ -286,11 +279,11 @@ export function fidelityTree(seedValue = 11): NodeEntry[] {
   const entries: NodeEntry[] = [
     dirEntry('src', 1, metadataOf(seed, { 'user.origin': xattrValue('generated') })),
     dirEntry('src/deep', 2, metadataOf(seed), 0o700),
-    fileEntry('src/main.txt', encoder.encode('export const one = 1;\n'), 3, metadataOf(seed), 0o600),
-    fileEntry('src/deep/script.sh', encoder.encode('#!/bin/sh\necho hi\n'), 4, metadataOf(seed, {
+    { ...fileEntry('src/main.txt', encoder.encode('export const one = 1;\n'), 3, metadataOf(seed)), mode: 0o600 },
+    { ...fileEntry('src/deep/script.sh', encoder.encode('#!/bin/sh\necho hi\n'), 4, metadataOf(seed, {
       'user.mime': xattrValue('text/x-shellscript'),
       'security.selinux': xattrValue('unconfined_u:object_r:user_home_t:s0'),
-    }), 0o755),
+    })), mode: 0o755 },
     // ONE INODE, TWO NAMES: a restore that copies them apart changes the
     // partition, not the bytes.
     fileEntry('src/shared.bin', shared, 5, metadataOf(seed)),
@@ -310,8 +303,8 @@ export function fidelityTree(seedValue = 11): NodeEntry[] {
   ];
 
   // The two hardlink names must carry ONE metadata row, as one inode does.
-  const linkMetadata = entries[4]!.metadata;
-  entries[5] = { ...entries[5]!, metadata: linkMetadata };
+  const linkMetadata = entries[4].metadata;
+  entries[5] = { ...entries[5], metadata: linkMetadata };
 
   return sortedByPath(entries);
 }
@@ -337,7 +330,7 @@ export function gigabyteTree(seedValue = 13, denseBytes = 64 * 1024 * 1024): Nod
 }
 
 export function sortedByPath(entries: readonly NodeEntry[]): NodeEntry[] {
-  return [...entries].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return [...entries].sort((a, b) => (a.path < b.path ? -1 : Number(a.path > b.path)));
 }
 
 export function ancestorsOf(path: string): string[] {
@@ -377,7 +370,7 @@ export function logicalDigest(content: FileContent): string {
 
   for (const segment of paintedSegments(content).segments) {
     if (!segment.zeros) {
-      hash.update(segment.view!);
+      hash.update(segment.view);
       continue;
     }
 
@@ -499,7 +492,7 @@ export class LiveTree {
 
   /** File paths only, sorted: the listing the text workspace exposes. */
   filePaths(): string[] {
-    return this.paths().filter((path) => this.#paths.get(path)!.kind === 'file');
+    return [...this.#paths].filter(([, inode]) => inode.kind === 'file').map(([path]) => path).sort();
   }
 
   node(path: string): LiveInode | undefined {
@@ -754,13 +747,13 @@ export class LiveTree {
   /** `rename(2)`: `from` and everything beneath it takes the name `to`, the
    *  inodes unchanged, so a write before the rename still names them. */
   rename(from: string, to: string): void {
-    const moved = [...this.#paths.keys()].filter((path) => path === from || path.startsWith(`${from}/`));
+    const moved = [...this.#paths].filter(([path]) => path === from || path.startsWith(`${from}/`));
 
     if (moved.length === 0) throw new Error(`rename: no node at ${from}`);
-    const inodes = moved.map((path) => this.#paths.get(path)!);
 
-    for (const path of moved) this.#paths.delete(path);
-    moved.forEach((path, index) => this.#place(`${to}${path.slice(from.length)}`, inodes[index]!));
+    for (const [path] of moved) this.#paths.delete(path);
+
+    for (const [path, inode] of moved) this.#place(`${to}${path.slice(from.length)}`, inode);
   }
 
   /** The inode number of the node at `path`, as the daemon indexes it: given
@@ -803,8 +796,7 @@ export class LiveTree {
   snapshot(): NodeEntry[] {
     const out: NodeEntry[] = [];
 
-    for (const path of this.paths()) {
-      const inode = this.#paths.get(path)!;
+    for (const [path, inode] of [...this.#paths].sort(([a], [b]) => (a < b ? -1 : Number(a > b)))) {
       const base = { path, mode: inode.mode, ino: this.#inoOf(inode), metadata: cloneMetadata(inode.metadata) };
 
       if (inode.kind === 'symlink') out.push({ ...base, kind: 'symlink', target: inode.target });
@@ -901,8 +893,7 @@ export function compareTrees(
     if (detail !== null && !refused.has(property)) mismatches.push({ property, path, detail });
   };
 
-  for (const path of [...want.keys()].sort()) {
-    const a = want.get(path)!;
+  for (const [path, a] of [...want].sort(([x], [y]) => (x < y ? -1 : Number(x > y)))) {
     const b = have.get(path);
 
     if (b === undefined) {

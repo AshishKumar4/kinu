@@ -61,6 +61,14 @@ export const HIRE_FORK_FOLLOWUP = 'Check the next release ledger.';
 
 export const HIRE_CHILD_CONTEXT = 'CHILD-ONLY-CONTEXT: the first audit is complete.';
 
+/** What the model says when it calls nothing: the child's two answers, or the
+ *  parent's acknowledgement. */
+function spokenAnswer(child: boolean, followsUp: boolean): string {
+  if (!child) return HIRE_FORK_ACK;
+
+  return followsUp ? 'The next audit is complete.' : HIRE_CHILD_CONTEXT;
+}
+
 export function hireRetentionModel() {
   const childRequests: ScriptedTurnOptions[] = [];
 
@@ -97,7 +105,7 @@ export function hireRetentionModel() {
 
     return {
       content: call ? [{ type: 'tool-call', toolCallId: call.id, toolName: call.name, input: JSON.stringify(call.input) }]
-        : [{ type: 'text', text: child ? followsUp ? 'The next audit is complete.' : HIRE_CHILD_CONTEXT : HIRE_FORK_ACK }],
+        : [{ type: 'text', text: spokenAnswer(child, followsUp) }],
       finishReason: { unified: call ? 'tool-calls' : 'stop', raw: undefined },
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
         outputTokens: { total: 1, text: 1, reasoning: undefined } },

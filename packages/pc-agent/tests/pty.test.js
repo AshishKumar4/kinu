@@ -228,21 +228,20 @@ describe('a device terminal is a real one', () => {
 });
 
 describe('the session registry answers for what it holds', () => {
-  test('a second terminal cannot take a name that is in use', async () => {
-    const h = harness();
-    h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
-    expect(() => h.sessions.open({
-      session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send,
-    })).toThrow('already open');
-  });
+  const secondOpenRefusals = [
+    { name: 'a second terminal cannot take a name that is in use', options: {}, second: 'pane-1', refusal: 'already open' },
+    { name: 'the machine refuses more terminals than it holds', options: { maxSessions: 1 }, second: 'pane-2', refusal: 'holds 1 terminals already' },
+  ];
 
-  test('the machine refuses more terminals than it holds', async () => {
-    const h = harness({ maxSessions: 1 });
-    h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
-    expect(() => h.sessions.open({
-      session: 'pane-2', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send,
-    })).toThrow('holds 1 terminals already');
-  });
+  for (const refusal of secondOpenRefusals) {
+    test(refusal.name, () => {
+      const h = harness(refusal.options);
+      h.sessions.open({ session: 'pane-1', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
+      expect(() => h.sessions.open({
+        session: refusal.second, cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send,
+      })).toThrow(refusal.refusal);
+    });
+  }
 
   test('input, resize and close name the session they cannot find', () => {
     const h = harness();

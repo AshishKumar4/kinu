@@ -34,10 +34,10 @@ export function between(source: string, from: string, to: string, label = 'sourc
 
 /** Index of the quote closing the literal that opens at `at`. */
 function endOfString(src: string, at: number): number {
-  const quote = src[at]!;
+  const quote = src[at];
 
   for (let i = at + 1; i < src.length; i++) {
-    const c = src[i]!;
+    const c = src[i];
 
     if (c === '\\') { i++; continue; }
 
@@ -54,7 +54,7 @@ function endOfTemplateExpr(src: string, at: number): number {
   let depth = 1;
 
   for (let i = at; i < src.length; i++) {
-    const c = src[i]!;
+    const c = src[i];
 
     if (c === '"' || c === "'" || c === '`') { i = endOfString(src, i); continue; }
 
@@ -83,7 +83,7 @@ export function memberBody(source: string, declaration: string, label = 'source'
   let depth = 0;
 
   for (let i = open; i < source.length; i++) {
-    const c = source[i]!;
+    const c = source[i];
 
     if (c === '/' && source[i + 1] === '/') {
       const nl = source.indexOf('\n', i);

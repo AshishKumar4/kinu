@@ -35,10 +35,16 @@ export function compactionTranscriptPath(sessionKey: string, rangeHash: string):
   return `${COMPACTION_DIR}/${safeSegment(sessionKey)}/${safeSegment(rangeHash)}.md`;
 }
 
+/** `citablePath` is a property, not a method: the engine passes it around
+ *  unbound, so it must carry no receiver. */
+export interface VfsTranscriptStore extends TranscriptStore {
+  citablePath: (sessionKey: string, rangeHash: string) => string;
+}
+
 /** Transcript store over the workspace VFS. `getVfs` is a thunk because the
  *  cf runtime is built lazily — the VFS is dereferenced per write, never at
  *  registration time. */
-export function createVfsTranscriptStore(getVfs: () => VFS): TranscriptStore {
+export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore {
   return {
     citablePath: compactionTranscriptPath,
     write: async (relativePath, content) => {

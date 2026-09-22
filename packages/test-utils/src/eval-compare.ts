@@ -411,6 +411,15 @@ function collectScorerSamples(name: string, tasks: readonly TaskPairs[]) {
   return { diffs, baselineEligible, candidateEligible, rateSumBaseline, rateSumCandidate, unmeasuredTasks };
 }
 
+/** Which side of the comparison the scorer had an eligible opportunity on. */
+function scorerReach(baselineEligible: number, candidateEligible: number): ScorerReach {
+  if (baselineEligible > 0 && candidateEligible > 0) return 'both';
+
+  if (baselineEligible > 0) return 'baseline-only';
+
+  return candidateEligible > 0 ? 'candidate-only' : 'neither';
+}
+
 /** Statistical interpretation is separate from repetition/coverage accounting. */
 function compareScorer(
   name: string, tasks: readonly TaskPairs[], opts: ComparisonOptions, alpha: number,
@@ -439,11 +448,7 @@ function compareScorer(
     ? Number.POSITIVE_INFINITY
     : requiredPairs(effect, { dispersion, alpha, power: opts.power });
 
-  const reach: ScorerReach = baselineEligible > 0 && candidateEligible > 0
-    ? 'both'
-    : baselineEligible > 0
-      ? 'baseline-only'
-      : candidateEligible > 0 ? 'candidate-only' : 'neither';
+  const reach = scorerReach(baselineEligible, candidateEligible);
 
   // No effect is ever stated without its interval and its differing-pair count.
   const evidence = boot === null

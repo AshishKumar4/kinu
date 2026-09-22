@@ -92,12 +92,18 @@ function observeBody(value: UploadValue): BodyObservation {
   return bodyObservation(value.byteLength, null);
 }
 
+/** One metered write: what it addresses, what it carries, and the call itself. */
+interface MeteredWrite<Result> {
+  readonly key: string;
+  readonly operation: PublicationOperation;
+  readonly uploadId: string | null;
+  readonly value: UploadValue;
+  readonly run: () => Promise<Result>;
+}
+
 /** Record attempts before the write, including failures after a fully read body. */
 export function meterPublicationBucket(bucket: R2Bucket, sink: PublicationMeterSink): R2Bucket {
-  const measure = async <Result>(
-    key: string, operation: PublicationOperation, uploadId: string | null,
-    value: UploadValue, run: () => Promise<Result>,
-  ): Promise<Result> => {
+  const measure = async <Result>({ key, operation, uploadId, value, run }: MeteredWrite<Result>): Promise<Result> => {
     const id = await sink.begin(key, operation, uploadId);
 
     if (id === null) return await run();
@@ -129,18 +135,23 @@ export function meterPublicationBucket(bucket: R2Bucket, sink: PublicationMeterS
   const multipart = (upload: R2MultipartUpload): R2MultipartUpload => ({
     key: upload.key,
     uploadId: upload.uploadId,
-    uploadPart: async (part, value, options) => await measure(upload.key, 'uploadPart', upload.uploadId, value,
-      async () => await upload.uploadPart(part, value, options)),
-    complete: async (parts) => await measure(upload.key, 'complete', upload.uploadId, null,
-      async () => await upload.complete(parts)),
+    uploadPart: async (part, value, options) => await measure({
+      key: upload.key, operation: 'uploadPart', uploadId: upload.uploadId, value,
+      run: async () => await upload.uploadPart(part, value, options),
+    }),
+    complete: async (parts) => await measure({
+      key: upload.key, operation: 'complete', uploadId: upload.uploadId, value: null,
+      run: async () => await upload.complete(parts),
+    }),
     abort: async () => await upload.abort(),
   });
 
   const delegate: R2Bucket = Object.create(bucket);
 
   return Object.assign(delegate, {
-    put: async (key: string, value: UploadValue, options?: R2PutOptions) =>
-      await measure(key, 'put', null, value, async () => await bucket.put(key, value, options)),
+    put: async (key: string, value: UploadValue, options?: R2PutOptions) => await measure({
+      key, operation: 'put', uploadId: null, value, run: async () => await bucket.put(key, value, options),
+    }),
     createMultipartUpload: async (key: string, options?: R2MultipartOptions) => multipart(await bucket.createMultipartUpload(key, options)),
     resumeMultipartUpload: (key: string, uploadId: string) => multipart(bucket.resumeMultipartUpload(key, uploadId)),
   });

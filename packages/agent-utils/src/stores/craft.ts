@@ -98,7 +98,7 @@ export function initCraftedToolsTables(sql: SqlExecutor): void {
 // ---------------------------------------------------------------------------
 
 export class CraftStore implements CraftedToolProvider {
-	private sql: SqlExecutor;
+	private readonly sql: SqlExecutor;
 
 	constructor(sql: SqlExecutor) {
 		this.sql = sql;
@@ -136,7 +136,9 @@ export class CraftStore implements CraftedToolProvider {
 
 		const now = Date.now();
 		const desc = patch.description ?? existing.description;
-		const paramsJson = patch.params !== undefined ? (patch.params ? JSON.stringify(patch.params) : null) : (existing.params ? JSON.stringify(existing.params) : null);
+		// `params: null` clears them, so only an absent key keeps the existing ones.
+		const params = patch.params === undefined ? existing.params : patch.params;
+		const paramsJson = params ? JSON.stringify(params) : null;
 		const code = patch.code ?? existing.code;
 		const scope = patch.scope ?? existing.scope;
 
@@ -145,7 +147,7 @@ export class CraftStore implements CraftedToolProvider {
 			WHERE name = ${name}
 		`;
 
-		return { name, description: desc, params: patch.params !== undefined ? patch.params : existing.params, code, scope, createdAt: existing.createdAt, updatedAt: now };
+		return { name, description: desc, params, code, scope, createdAt: existing.createdAt, updatedAt: now };
 	}
 
 	delete(name: string): boolean {

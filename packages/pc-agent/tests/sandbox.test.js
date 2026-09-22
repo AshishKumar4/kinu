@@ -314,23 +314,30 @@ describe('one policy, two enforcers', () => {
     }
   });
 
-  test('the agent home answers for the real home, because that is where it is mounted', () => {
-    const policy = view();
-    // The file methods run OUTSIDE the namespace, so `~/x` has to be
-    // translated; inside, the two are the same path.
-    expect(policy.resolvePath('/home/dev/notes.md', 'write'))
-      .toBe('/home/dev/.kinu/agents/ws-1/home/notes.md');
-    expect(policy.insidePath('/home/dev/.kinu/agents/ws-1/home/notes.md')).toBe('/home/dev/notes.md');
-  });
+  const writablePaths = [
+    {
+      // The file methods run OUTSIDE the namespace, so `~/x` has to be
+      // translated; inside, the two are the same path.
+      name: 'the agent home answers for the real home, because that is where it is mounted',
+      asked: '/home/dev/notes.md',
+      outside: '/home/dev/.kinu/agents/ws-1/home/notes.md',
+    },
+    {
+      // Decided BEFORE the home swap: a root inside the real home is re-bound
+      // over the swapped home and is reachable at its own path.
+      name: 'a consented root under the home is itself, not the agent home',
+      asked: '/home/dev/work/client/main.py',
+      outside: '/home/dev/work/client/main.py',
+    },
+  ];
 
-  test('a consented root under the home is itself, not the agent home', () => {
-    const policy = view();
-    // Decided BEFORE the home swap: a root inside the real home is re-bound
-    // over the swapped home and is reachable at its own path.
-    expect(policy.resolvePath('/home/dev/work/client/main.py', 'write'))
-      .toBe('/home/dev/work/client/main.py');
-    expect(policy.insidePath('/home/dev/work/client/main.py')).toBe('/home/dev/work/client/main.py');
-  });
+  for (const writable of writablePaths) {
+    test(writable.name, () => {
+      const policy = view();
+      expect(policy.resolvePath(writable.asked, 'write')).toBe(writable.outside);
+      expect(policy.insidePath(writable.outside)).toBe(writable.asked);
+    });
+  }
 
   test('Kinu\'s own directory is refused even though it sits under the home', () => {
     const policy = view();

@@ -145,7 +145,7 @@ function gpuNodes(devDir = '/dev') {
     if (fs.existsSync(candidate)) found.push(candidate);
   }
 
-  return found.sort();
+  return found.sort((a, b) => (a < b ? -1 : 1));
 }
 
 /**
@@ -400,9 +400,11 @@ function viewFor(options) {
       }
 
       if (decision.access === VIEW_READ_ONLY && mode === 'write') {
+        const consented = roots.length === 0 ? 'none' : roots.join(', ');
+
         const error = new Error(
           `device path '${requested}' is read-only in this device's sandbox; `
-          + `write inside the agent's home or one of the consented directories (${roots.join(', ') || 'none'})`,
+          + `write inside the agent's home or one of the consented directories (${consented})`,
         );
 
         error.code = VIEW_READ_ONLY;

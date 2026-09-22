@@ -38,7 +38,7 @@ describe('the store mount states its own s3fs bounds', () => {
 
     const mounted = [...arm.container.s3fsOptionsByMount.entries()];
     expect(mounted).toHaveLength(1);
-    const [, options] = mounted[0]!;
+    const [, options] = mounted[0];
     const connect = bound(options, 'connect_timeout');
     const silence = bound(options, 'readwrite_timeout');
     const retries = bound(options, 'retries');

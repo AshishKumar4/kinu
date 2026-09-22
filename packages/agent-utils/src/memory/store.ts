@@ -69,14 +69,14 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 }
 
 export class MemoryStore {
-	private vfs: ReadWriteVFS;
-	private sql: SqlExecutor;
-	private memoryDir: string;
-	private logsDir: string;
+	private readonly vfs: ReadWriteVFS;
+	private readonly sql: SqlExecutor;
+	private readonly memoryDir: string;
+	private readonly logsDir: string;
 	readonly curatedFile: string;
-	private indexedPrefixes: string[];
-	private indexedFiles: string[];
-	private snippetMaxChars: number;
+	private readonly indexedPrefixes: string[];
+	private readonly indexedFiles: string[];
+	private readonly snippetMaxChars: number;
 
 	constructor(vfs: ReadWriteVFS, sql: SqlExecutor, config?: MemoryConfig) {
 		this.vfs = vfs;
@@ -281,6 +281,6 @@ export class MemoryStore {
 	}
 }
 
-function isMissingFileError<Failure>(failure: Failure): boolean {
+function isMissingFileError<Failure>(failure: Failure): failure is Failure & Error & { code: "ENOENT" } {
 	return failure instanceof Error && "code" in failure && failure.code === "ENOENT";
 }

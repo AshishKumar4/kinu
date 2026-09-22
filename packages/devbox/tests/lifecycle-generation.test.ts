@@ -1101,7 +1101,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
       await box.exec('true');
       const heartbeats = (): { time: number }[] => container.scheduleRows.filter(row => row.callback === 'devboxHeartbeat');
       expect(heartbeats()).toHaveLength(1);
-      const due = heartbeats()[0]!.time;
+      const due = heartbeats()[0].time;
       now = Math.ceil(due) * 1000 + 500;
 
       await box.devboxHeartbeat();

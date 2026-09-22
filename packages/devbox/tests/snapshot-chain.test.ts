@@ -117,9 +117,9 @@ function layerMountOf(calls: readonly string[], objectKey: string): LayerMount {
     throw new Error(`no layer was mounted for ${objectKey}; calls: ${calls.join(', ')}`);
   }
 
-  const parts = calls[index]!.split(':');
+  const parts = calls[index].split(':');
 
-  return { index, archive: parts[1]!, point: parts[2]! };
+  return { index, archive: parts[1], point: parts[2] };
 }
 
 import {
@@ -312,7 +312,7 @@ function shellLabel(
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
 
-  const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]!);
+  const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]);
 
   if (delta !== undefined) return delta;
 
@@ -363,7 +363,7 @@ function shellLabel(
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
 
   if (layer !== undefined) {
-    return { call: `mountLayer:${layer.archive!}:${layer.point!}`, stdout: '' };
+    return { call: `mountLayer:${layer.archive}:${layer.point}`, stdout: '' };
   }
 
   const overlay = /fuse-overlayfs -o lowerdir=(?<lowers>.+?),upperdir=.+ (?<dir>'[^']+')$/
@@ -371,7 +371,7 @@ function shellLabel(
 
   if (overlay !== undefined) {
     return {
-      call: `overlayAttach:${unquote(overlay.dir!)}:${overlay.lowers!.split(':').length}`,
+      call: `overlayAttach:${unquote(overlay.dir)}:${overlay.lowers.split(':').length}`,
       stdout: '',
     };
   }
@@ -399,7 +399,7 @@ function shellLabel(
 
   if (command.startsWith('stat -c %s')) return { call: 'statBytes', stdout: String(DELTA_BYTES) };
 
-  return { call: `exec:${command.split(' ')[0]!}`, stdout: '' };
+  return { call: `exec:${command.split(' ')[0]}`, stdout: '' };
 }
 
 /**
@@ -719,7 +719,7 @@ function harness(overrides: {
       const refused = sessionShellRefusal(command);
 
       if (refused !== undefined) {
-        calls.push(`sessionKilled:${command.split(' ')[0]!}`);
+        calls.push(`sessionKilled:${command.split(' ')[0]}`);
 
         return Promise.reject(refused);
       }
@@ -732,7 +732,7 @@ function harness(overrides: {
       const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
         .exec(command)?.groups;
 
-      if (egress !== undefined) return Promise.resolve(publishEgress(egress.url!));
+      if (egress !== undefined) return Promise.resolve(publishEgress(egress.url));
 
       // THE S3FS COPY, whatever precedes it in the same command: the
       // publication creates the generation's directory on the mount first
@@ -742,7 +742,7 @@ function harness(overrides: {
       const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
         .exec(command)?.groups;
 
-      if (published !== undefined) return Promise.resolve(publish(published.mounted!));
+      if (published !== undefined) return Promise.resolve(publish(published.mounted));
 
       // THE CONTAINER'S OWN VIEW: the strategy's `mountStoreOnce` reads
       // `/proc/mounts`, so the store mount has to appear there exactly as a real
@@ -2703,7 +2703,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // of a constraint the fake would have failed on.
       // THE ONE MOUNT POINT, read off the calls rather than restated: every
       // mount either role made names the same path.
-      const at = [...new Set(mounts.map((mount) => mount.split(':')[1]!))];
+      const at = [...new Set(mounts.map((mount) => mount.split(':')[1]))];
       expect(at).toHaveLength(1);
       // And a wake that re-attaches releases the store mount first, so a new
       // generation's subtree can take its place at the one mount point.
@@ -3640,7 +3640,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // the wake.
       const one = [...new Set([...firstCalls, ...wakeCalls, ...secondCalls]
         .filter(call => call.startsWith('mountStore:'))
-        .map(call => call.split(':')[1]!))];
+        .map(call => call.split(':')[1]))];
 
       expect(one).toHaveLength(1);
       // Both publications landed, and the wake's attach proved the first one.

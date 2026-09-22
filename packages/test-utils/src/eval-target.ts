@@ -422,7 +422,7 @@ export function absorbingRunId(
     if (open.length > 0) {
       open.sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
 
-      return open[open.length - 1]![0];
+      return open[open.length - 1][0];
     }
 
     // The landing closed its run between write and read (clock skew, a
@@ -430,20 +430,20 @@ export function absorbingRunId(
     const closed = [...ends.entries()].filter(([, ended]) => ended >= landedAt)
       .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));
 
-    if (closed.length > 0) return closed[0]![0];
+    if (closed.length > 0) return closed[0][0];
 
     // No run admits the landing. The caller's send frame said it landed
     // mid-turn, so SOME run answered it — the latest the log holds.
     return [...starts.entries()].sort((a, b) =>
-      a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))[starts.size - 1]![0];
+      a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))[starts.size - 1][0];
   }
 
   // Post-hoc, no landing time: the run open NOW, or — when the last close
   // predates this read — the most recently closed run.
-  const live = [...starts.keys()].filter((runId) => !ends.has(runId))
-    .sort((a, b) => starts.get(a)!.localeCompare(starts.get(b)!) || a.localeCompare(b));
+  const live = [...starts].filter(([runId]) => !ends.has(runId))
+    .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
 
-  if (live.length > 0) return live[live.length - 1]!;
+  if (live.length > 0) return live[live.length - 1][0];
 
   const closed = [...ends.entries()]
     .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));

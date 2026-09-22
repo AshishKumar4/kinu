@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import type { JsonObject, RunEvent } from '@kinu.run/core';
+import type { RunEvent } from '@kinu.run/core';
 import {
   assessAdmissibility, createObservedModelAccumulator, modelClaimRefuted, modelObservedFromEvents,
   publishRunRecord, type EvalObservation,
@@ -21,31 +21,29 @@ import { scratchDir } from '../src/scratch';
 
 let nextIndex = 0;
 
+/** One variant's own fields, the three base fields removed. Distributed over
+ *  the union so each variant keeps its own shape. */
+type EventBody<Variant = RunEvent> = Variant extends RunEvent
+  ? Omit<Variant, 'runId' | 'eventIndex' | 'timestamp'>
+  : never;
+
 /** One stamped event; the caller passes the discriminated body. */
-function event(body: JsonObject): RunEvent {
+function event(body: EventBody): RunEvent {
   nextIndex += 1;
 
-  // SAFETY: each call site passes exactly one variant's own fields beside its
-  // `type` discriminator, and this adds the three base fields every variant
-  // carries.
   return {
     ...body,
     runId: 'run-test',
     eventIndex: nextIndex,
     timestamp: new Date(1_700_000_000_000 + nextIndex * 1_000).toISOString(),
-  } as RunEvent;
+  };
 }
 
 function steps(...modelIds: Array<string | undefined>): RunEvent[] {
   nextIndex = 0;
 
-  return modelIds.map((modelId, step) => {
-    const body: JsonObject = { type: 'step_finish', stepIndex: step, reason: 'stop' };
-
-    if (modelId !== undefined) body['modelId'] = modelId;
-
-    return event(body);
-  });
+  return modelIds.map((modelId, step) =>
+    event({ type: 'step_finish', stepIndex: step, reason: 'stop', modelId }));
 }
 
 /** One scored observation with a task_outcome row — admissible on its own. */
@@ -140,33 +138,29 @@ describe('assessAdmissibility — the model-claim refusal', () => {
 });
 
 describe('publishRunRecord — the record carries the observed model', () => {
-  test('a mismatch is published inadmissible with the observed model on it', () => {
-    const transcripts = scratchDir('model-observed-mismatch');
+  const publishCases = [
+    {
+      name: 'a mismatch is published inadmissible with the observed model on it',
+      scratch: 'model-observed-mismatch', modelId: 'claimed-model', observed: 'serving-model', admissible: false,
+    },
+    {
+      name: 'an agreement is published admissible',
+      scratch: 'model-observed-agreement', modelId: 'serving-a', observed: 'serving-a', admissible: true,
+    },
+  ];
 
-    const record = publishRunRecord({
-      family: 'test', tier: 'flash', modelId: 'claimed-model', modelObserved: 'serving-model',
-      repeats: 1, seed: 1,
-      arm: { evolution: false, settle: 'none', tools: [] },
-      declaredTasks: ['case-a'], observations: [scored()], spend: SPEND,
-      transcripts, repoRoot: join(import.meta.dir, '..', '..', '..'),
+  for (const published of publishCases) {
+    test(published.name, () => {
+      const record = publishRunRecord({
+        family: 'test', tier: 'flash', modelId: published.modelId, modelObserved: published.observed,
+        repeats: 1, seed: 1,
+        arm: { evolution: false, settle: 'none', tools: [] },
+        declaredTasks: ['case-a'], observations: [scored()], spend: SPEND,
+        transcripts: scratchDir(published.scratch), repoRoot: join(import.meta.dir, '..', '..', '..'),
+      });
+
+      expect(record?.modelObserved).toBe(published.observed);
+      expect(record?.admissibility.admissible).toBe(published.admissible);
     });
-
-    expect(record?.modelObserved).toBe('serving-model');
-    expect(record?.admissibility.admissible).toBe(false);
-  });
-
-  test('an agreement is published admissible', () => {
-    const transcripts = scratchDir('model-observed-agreement');
-
-    const record = publishRunRecord({
-      family: 'test', tier: 'flash', modelId: 'serving-a', modelObserved: 'serving-a',
-      repeats: 1, seed: 1,
-      arm: { evolution: false, settle: 'none', tools: [] },
-      declaredTasks: ['case-a'], observations: [scored()], spend: SPEND,
-      transcripts, repoRoot: join(import.meta.dir, '..', '..', '..'),
-    });
-
-    expect(record?.modelObserved).toBe('serving-a');
-    expect(record?.admissibility.admissible).toBe(true);
-  });
+  }
 });

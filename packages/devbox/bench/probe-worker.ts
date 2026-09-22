@@ -41,9 +41,17 @@ interface ProbeEnv extends ProbeBindings {
   PROBE_TOKEN?: string;
 }
 
-function json<Answer>(payload: Answer, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
+/** One driver answer: the payload a route built, and the status it answers
+ *  with. Nothing here reads inside the payload — only `JSON.stringify` does,
+ *  and an RPC result carries `Disposable` beside its own fields. */
+interface Answer {
+  readonly payload: unknown;
+  readonly status?: number;
+}
+
+function json(answer: Answer): Response {
+  return new Response(JSON.stringify(answer.payload), {
+    status: answer.status ?? 200,
     headers: { 'content-type': 'application/json' },
   });
 }
@@ -78,65 +86,65 @@ export default {
     const url = new URL(request.url);
     const route = `${request.method} ${url.pathname}`;
 
-    if (route === 'GET /health') return json({ ok: true });
+    if (route === 'GET /health') return json({ payload: { ok: true } });
 
-    if (route === 'GET /probe/resources') return json({ ok: true, resources: PROBE_RESOURCES });
+    if (route === 'GET /probe/resources') return json({ payload: { ok: true, resources: PROBE_RESOURCES } });
 
-    if (!authorized(request, env.PROBE_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
+    if (!authorized(request, env.PROBE_TOKEN)) return json({ payload: { ok: false, error: 'unauthorized' }, status: 401 });
 
     switch (route) {
       case 'POST /probe/gate': {
         const op = url.searchParams.get('op') ?? '';
 
-        if (op === '') return json({ ok: false, error: 'op is required' }, 400);
+        if (op === '') return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
 
         const probe = env.GateProbe.get(env.GateProbe.idFromName(`gate-${op}`));
 
-        return json({ ok: true, op, stamp: await probe.probe(url.searchParams.get('arm') ?? 'timer-inside') });
+        return json({ payload: { ok: true, op, stamp: await probe.probe(url.searchParams.get('arm') ?? 'timer-inside') } });
       }
 
       case 'GET /probe/gate': {
         const op = url.searchParams.get('op') ?? '';
 
-        if (op === '') return json({ ok: false, error: 'op is required' }, 400);
+        if (op === '') return json({ payload: { ok: false, error: 'op is required' }, status: 400 });
 
         const probe = env.GateProbe.get(env.GateProbe.idFromName(`gate-${op}`));
 
-        return json({ ok: true, op, stamp: await probe.probeReport() });
+        return json({ payload: { ok: true, op, stamp: await probe.probeReport() } });
       }
 
       case 'POST /probe/onstart': {
         const box = url.searchParams.get('box') ?? '';
 
-        if (box === '') return json({ ok: false, error: 'box is required' }, 400);
+        if (box === '') return json({ payload: { ok: false, error: 'box is required' }, status: 400 });
 
         const probe = env.OnStartExecProbe.get(env.OnStartExecProbe.idFromName(`exec-${box}`));
 
-        return json({ ok: true, box, stamp: await probe.probeStart(url.searchParams.get('mode') ?? 'start') });
+        return json({ payload: { ok: true, box, stamp: await probe.probeStart(url.searchParams.get('mode') ?? 'start') } });
       }
 
       case 'GET /probe/onstart': {
         const box = url.searchParams.get('box') ?? '';
 
-        if (box === '') return json({ ok: false, error: 'box is required' }, 400);
+        if (box === '') return json({ payload: { ok: false, error: 'box is required' }, status: 400 });
 
         const probe = env.OnStartExecProbe.get(env.OnStartExecProbe.idFromName(`exec-${box}`));
 
-        return json({ ok: true, box, stamp: await probe.probeReport() });
+        return json({ payload: { ok: true, box, stamp: await probe.probeReport() } });
       }
 
       case 'POST /probe/onstart/destroy': {
         const box = url.searchParams.get('box') ?? '';
 
-        if (box === '') return json({ ok: false, error: 'box is required' }, 400);
+        if (box === '') return json({ payload: { ok: false, error: 'box is required' }, status: 400 });
 
         const probe = env.OnStartExecProbe.get(env.OnStartExecProbe.idFromName(`exec-${box}`));
 
-        return json({ ok: true, box, ...(await probe.destroyProbe()) });
+        return json({ payload: { ok: true, box, ...(await probe.destroyProbe()) } });
       }
 
       default:
-        return json({ ok: false, error: `unknown probe route: ${route}` }, 404);
+        return json({ payload: { ok: false, error: `unknown probe route: ${route}` }, status: 404 });
     }
   },
 };

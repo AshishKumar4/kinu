@@ -22,7 +22,7 @@ export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 	return controller.signal;
 }
 
-export function isAbortError<Failure>(err: Failure): boolean {
+export function isAbortError<Failure>(err: Failure): err is Failure & Error {
 	return err instanceof Error && err.name === "AbortError";
 }
 
