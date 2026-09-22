@@ -5,13 +5,11 @@
     "": {
       "name": "kinu",
       "dependencies": {
-        "@ai-sdk/openai-compatible": "2.0.54",
         "ai": "6.0.214",
         "valibot": "^1.4.1",
         "zod": "^4.3.6",
       },
       "devDependencies": {
-        "@ai-sdk/provider": "3.0.12",
         "@cloudflare/sandbox": "0.12.8",
         "@earendil-works/pi-ai": "0.84.2",
         "@earendil-works/pi-coding-agent": "0.84.2",
