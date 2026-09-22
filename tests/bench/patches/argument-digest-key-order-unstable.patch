@@ -1,5 +1,5 @@
 diff --git a/packages/core/src/safety/argument-digest.ts b/packages/core/src/safety/argument-digest.ts
-index b500e1945..2b7352004 100644
+index 54dbb830e..f3d62104d 100644
 --- a/packages/core/src/safety/argument-digest.ts
 +++ b/packages/core/src/safety/argument-digest.ts
 @@ -23,7 +23,7 @@ export function stableStringify(value: JsonValue): string {
@@ -9,5 +9,5 @@ index b500e1945..2b7352004 100644
 -  const keys = Object.keys(value).sort();
 +  const keys = Object.keys(value);
  
-   return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key]!)).join(',') + '}';
+   return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key])).join(',') + '}';
  }

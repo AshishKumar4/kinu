@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/scaffold/auto-judge.ts b/packages/core/src/scaffold/auto-judge.ts
-index 02b562a..e7c1b12 100644
+index d3c4ed6a2..b43ad940c 100644
 --- a/packages/core/src/scaffold/auto-judge.ts
 +++ b/packages/core/src/scaffold/auto-judge.ts
-@@ -299,7 +299,7 @@ function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdic
+@@ -385,7 +385,7 @@ function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdic
    return {
-     winner: out.winner === pendingSlot ? 'pending' : out.winner === currentSlot ? 'current' : 'tie',
+     winner,
      rationale: out.rationale,
 -    currentScore: pendingIsA ? out.scoreB : out.scoreA,
 +    currentScore: pendingIsA ? out.scoreA : out.scoreB,
