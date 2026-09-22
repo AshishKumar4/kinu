@@ -1,38 +1,10 @@
 /**
- * Scaffold executor — closes the central novelty.
+ * Scaffold executor: runs the agent's mutable loop (`scaffold/agent.js`) in the
+ * codemode sandbox with `host.*` and every parent sandbox as providers.
  *
- * The mutable scaffold (`scaffold/agent.js`) is the agent's own agentic loop,
- * versioned in scaffold_versions, validated through modifyScaffold's 4 gates,
- * and rewritten via maybeEvolveScaffold. Earlier, the scaffold was stored
- * but NEVER executed — every turn ran Think's standard streamText() loop.
- *
- * This module closes the loop. It executes the scaffold through the codemode
- * sandbox (DynamicWorkerExecutor), wiring three providers the scaffold uses:
- *
- *   • rt.*       — bridge to host-side LLM streaming + memory + sandboxes
- *   • host.*     — emit events back to the chat client (text deltas, tool calls)
- *   • workspace.* — existing inline executor (file/memory)
- *
- * Plus any external environments registered on the parent (sandbox.*, device.*).
- *
- * Scaffold contract (v1) — enforced by safety-patterns.ts:
- *
- *   async function* run(rt, task) {
- *     // Both params carry the task string (the live rt object cannot cross
- *     // the sandbox boundary). Reach the host ONLY through host.*:
- *     // host.emit({ type: 'text_delta', text }), host.llmStream(...),
- *     // host.callTool(name, args), host.defaultInference(), host.history(...).
- *     // Yield scaffold events; the driver forwards them to host.emit and
- *     // emits 'done' when the generator returns.
- *   }
- *
- * If the scaffold throws, or finishes without emitting a 'done' event, the
- * run reports ok=false (or synthesizes 'done') and the orchestrator can
- * auto-fall-back to streamText() and queue a rollback.
- *
- * Shadow mode: a pending scaffold version can run alongside the current
- * version for N turns; a judge LLM scores both; auto-promote on uplift.
- * (See scaffold/shadow.ts for the rollout state machine.)
+ * Contract (enforced by safety-patterns.ts): `async function* run(rt, task)`;
+ * both params carry the task string and the host is reachable only via `host.*`.
+ * A throw or missing 'done' reports ok=false (or synthesizes 'done').
  */
 
 import * as v from 'valibot';
@@ -62,12 +34,7 @@ interface SandboxFunctions {
   [name: string]: SandboxFunction;
 }
 
-/**
- * The d.ts the scaffold sandbox sees for the `host` bridge — the ONLY way a
- * scaffold reaches the host (the live runtime object cannot cross the
- * codemode sandbox boundary). Exported so the scaffold-proposal prompt
- * (evolution/engine.ts) documents exactly this contract and cannot drift.
- */
+/** d.ts for the `host` bridge; exported so the proposal prompt (evolution/engine.ts) cannot drift. */
 export const SCAFFOLD_HOST_TYPES = `declare namespace host {
   /** Emit an event back to the chat client. Events: text_delta, tool_call, tool_result, step_finish, done, error, ui_chunk. */
   function emit(event: { type: string; [k: string]: unknown }): Promise<string>;
@@ -104,7 +71,6 @@ export type ScaffoldToolOutput = Extract<UIMessageChunk, { type: 'tool-output-av
 
 export type ScaffoldModelEvent = ChatEvent | { type: 'native-tool-output'; output: ScaffoldToolOutput };
 
-/** What scaffold execution emits back to the caller. */
 export type ScaffoldEvent =
   | { type: 'text_delta'; text: string }
   | { type: 'tool_call'; name: string; args: JsonObject; toolCallId: string }
@@ -112,24 +78,14 @@ export type ScaffoldEvent =
   | { type: 'step_finish'; stepIndex: number; reason?: string }
   | { type: 'done'; result?: JsonValue }
   | { type: 'error'; message: string }
-  /** A ready-made AI-SDK UI message stream chunk, emitted by
-   *  `host.defaultInference()`. Passed through verbatim by the adapter. */
+  /** AI-SDK UI chunk from `host.defaultInference()`, passed through verbatim. */
   | { type: 'ui_chunk'; chunk: JsonValue }
-  /** Native host events never round-trip through authored JSON or its schema. */
   | { type: 'chat_chunk' | 'model_chunk'; streamId: string; chunk: ChatEvent }
   | { type: 'model_output'; streamId: string; output: ScaffoldToolOutput };
 
-/** Callback the host provides — every scaffold emit is forwarded through here. */
 export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
 
-/**
- * Extract the user-visible text carried by a scaffold event: a direct
- * text_delta, or the text-delta inside a ui_chunk emitted by
- * host.defaultInference. Shared by the auto-judge shadow eval and the GEPA
- * metric rollout so a DELEGATING scaffold's output is captured everywhere —
- * collecting only text_delta silently scored host.defaultInference users as
- * empty output.
- */
+/** Visible text of an event, including text-deltas inside ui_chunks, so delegating scaffolds are scored on real output. */
 export function scaffoldEventText(event: ScaffoldEvent): string | null {
   if (event.type === 'text_delta') return event.text;
 
@@ -144,35 +100,26 @@ export function scaffoldEventText(event: ScaffoldEvent): string | null {
   return null;
 }
 
-/** Result of a single scaffold turn execution. */
 export interface ScaffoldRunResult {
   ok: boolean;
-  /** True iff the scaffold called host.emit({type:'done', ...}) before completing. */
+  /** True iff the scaffold emitted 'done' before completing. */
   doneEmitted: boolean;
-  /** Number of events emitted (text deltas, tool calls, etc). */
   emitCount: number;
-  /** All events captured (use for shadow-mode quality comparison). */
   events: ScaffoldEvent[];
-  /** Wall-clock duration in milliseconds. */
   durationMs: number;
-  /** Set if the scaffold threw or codemode rejected. */
   error?: string;
-  /** Whatever the scaffold returned as its final result (if it did). */
   finalResult?: JsonValue;
 }
 
-/** The scaffold events that are JSON by their own declaration: every kind but
- *  the native host chunks, which never round-trip through authored JSON. */
+/** Every event kind except native host chunks. */
 export type ScaffoldJsonEvent = Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>;
 
-/** A run's result as it crosses a process boundary: the same figures, the
- *  JSON-native events in order, and a count of the native chunks left behind. */
+/** A run result for crossing a process boundary; native chunks are only counted. */
 export interface ScaffoldRunReport extends Omit<ScaffoldRunResult, 'events'> {
   events: ScaffoldJsonEvent[];
   nativeEvents: number;
 }
 
-/** The event as the report carries it, or null for a native chunk. */
 function jsonScaffoldEvent(event: ScaffoldEvent): ScaffoldJsonEvent | null {
   switch (event.type) {
     case 'chat_chunk':
@@ -206,7 +153,6 @@ export function scaffoldRunReport(result: ScaffoldRunResult): ScaffoldRunReport 
 }
 
 
-/** Native chat events stay typed; Think UI chunks remain wire-safe JSON. */
 export type ScaffoldDefaultInferenceChunk = { value: JsonValue } | { event: ChatEvent };
 
 export interface ScaffoldHistoryQuery {
@@ -234,7 +180,6 @@ export type ScaffoldHistoryReader = (
   query?: ScaffoldHistoryQuery,
 ) => Promise<ScaffoldHistoryPage>;
 
-/** Cooperative lifetime checks supplied by the host, not by authored code. */
 export interface ScaffoldRunControl {
   readonly signal?: AbortSignal;
   readonly assertActive?: () => void;
@@ -245,49 +190,25 @@ export function assertScaffoldActive(control: ScaffoldRunControl): void {
   control.assertActive?.();
 }
 
-/** Options for a scaffold run. */
 export interface ScaffoldRunOptions extends ScaffoldRunControl {
-  /** The task / user message that drives this turn. */
   task: string;
-  /** The agent runtime — gives the scaffold access to LLM, memory, sandboxes. */
   rt: AgentRuntime;
-  /** The originating invocation's mode, captured by the host rather than by scaffold code. */
+  /** The invocation's mode, captured by the host rather than by scaffold code. */
   workMode?: WorkMode;
-  /** Per-event callback for completed host observations. */
   emit: ScaffoldEmitFn;
-  /** Host-side model execution uses the shared chat loop. Typed events carry
-   * reasoning, tool outcomes and actual SDK response messages. Its model
-   * step/spend owner remains distinct from the default inference turn.
-   * The scaffold-facing call still returns concatenated text. */
+  /** Host-side model execution via the shared chat loop, with its own step/spend owner. Returns concatenated text to the scaffold. */
   llmStream: (opts: {
     system: string;
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     tools?: string[];
   }) => AsyncIterable<ScaffoldModelEvent>;
-  /**
-   * Tool invoker — when the scaffold calls host.callTool(name, args), this
-   * function executes the tool from the parent's ToolSet and returns the
-   * result. The host emits both 'tool_call' and 'tool_result' events.
-   */
+  /** Executes `host.callTool` against the parent's ToolSet; the host emits tool_call and tool_result. */
   callTool?: (name: string, args: JsonObject) => Promise<JsonValue | undefined>;
-  /**
-   * Default-inference bridge — when the scaffold calls host.defaultInference(),
-   * this runs the standard host inference (the AI SDK streamText the agent
-   * would otherwise use) and streams its UI message chunks back as
-   * 'ui_chunk' events. Lets a scaffold delegate to / wrap the default loop
-   * instead of reimplementing the tool-call loop. Absent means this host
-   * capability is unavailable and host.defaultInference returns an error.
-   */
+  /** Runs the default inference for `host.defaultInference()` as 'ui_chunk' events; absent means it returns an error. */
   defaultInference?: () => AsyncIterable<ScaffoldDefaultInferenceChunk>;
-  /**
-   * Read-only history bridge — when the scaffold calls host.history(query),
-   * this returns a budgeted page of the conversation it is the inference loop
-   * for. Absent means the capability is unavailable and host.history returns an
-   * error, exactly like the other optional bridges. Built by
-   * orchestrator/scaffold-host.ts, which owns the budget.
-   */
+  /** Budgeted conversation page for `host.history()` (orchestrator/scaffold-host.ts); absent means it returns an error. */
   history?: ScaffoldHistoryReader;
-  /** Optional: override the scaffold code (for shadow-mode A/B). Default: rt.identity.scaffold.read(). */
+  /** Scaffold code override for shadow runs. Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
 }
 
@@ -332,7 +253,6 @@ const HistoryQuerySchema = v.object({
 });
 
 
-/** Build the codemode provider that bridges scaffold ↔ host. */
 function buildHostProvider(opts: ScaffoldRunControl & {
   workMode: WorkMode;
   emit: ScaffoldEmitFn;
@@ -397,9 +317,6 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       }
     },
     llmStream: async (...args: unknown[]) => {
-      // Returns the full concatenated text. The scaffold may also iterate by
-      // calling llmStream({...}) again for additional turns — that's its
-      // responsibility. We push 'text_delta' events as chunks arrive.
       assertScaffoldActive(opts);
       const parsed = v.safeParse(LlmStreamOptionsSchema, args[0]);
 
@@ -425,10 +342,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       }
     },
     defaultInference: async () => {
-      // Run the agent's standard inference and stream its UI message chunks
-      // back as 'ui_chunk' events. Lets a scaffold delegate to (or wrap) the
-      // default loop without reimplementing it. The chunks are emitted
-      // host-side — they do NOT round-trip through the sandbox per chunk.
+      // Chunks are emitted host-side; they do not round-trip through the sandbox.
       assertScaffoldActive(opts);
 
       if (!defaultInference) {
@@ -505,17 +419,8 @@ function buildHostProvider(opts: ScaffoldRunControl & {
 }
 
 /**
- * Execute the agent's current scaffold for one turn.
- *
- * Wraps the scaffold's `run(...)` invocation in a try/catch. Host-side bridges
- * (LLM streaming, tool calls, emits) are exposed as codemode providers so the
- * scaffold body — which runs inside a sandboxed Worker via DynamicWorkerExecutor
- * — can call them as `host.emit(...)`, `host.llmStream(...)`, `host.callTool(...)`.
- *
- * The run carries NO elapsed deadline (owner ruling: none on scaffold loops).
- * It is awaited to settlement — completion, a thrown scaffold error, or the
- * executor's own definitive failure — and on failure returns ok=false; the
- * orchestrator is expected to fall back to streamText() and queue a rollback.
+ * Execute the agent's current scaffold for one turn. No elapsed deadline; on
+ * failure returns ok=false and the caller falls back and queues a rollback.
  */
 export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult> {
   assertScaffoldActive(opts);
@@ -530,7 +435,6 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
     finalResult: undefined,
   } satisfies { doneEmitted: boolean; finalResult: JsonValue | undefined };
 
-  // 1. Load scaffold code (with optional shadow-mode override).
   let code: string;
 
   try {
@@ -553,10 +457,6 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
     };
   }
 
-  // 2. Build host provider (LLM bridge + emit + callTool + memory + default
-  // inference). Memory is bridged to rt.memory on the host side; the scaffold
-  // reaches it only through host.* (the live `rt` object can't cross the
-  // codemode sandbox boundary).
   const hostProvider = buildHostProvider({
     emit, llmStream, callTool, workMode: mode, signal: opts.signal, assertActive: opts.assertActive,
     defaultInference: opts.defaultInference,
@@ -566,13 +466,10 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
     capturedEvents, state,
   });
 
-  // 3. Build the wrapper code that defines `shell` (from scaffold) and invokes
-  // it with the task (injected as a literal) and the `host` global.
-  // Scaffolds use `host.*` for all host interaction — `rt` is NOT a sandbox
+  // Scaffolds reach the host only via `host.*`; `rt` is not a sandbox
   // global (the live object can't cross the boundary).
   const wrapperCode = buildScaffoldWrapperCode(code, task);
 
-  // 4. Execute through the platform executor (codemode/DynamicWorkerExecutor on CF).
   const exec: Executor = rt.executor;
   const providers = assembleProviders(rt, hostProvider, opts, mode);
 
@@ -598,7 +495,6 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
     };
   }
 
-  // If the scaffold returned but never emitted 'done', synthesize one.
   if (!state.doneEmitted) {
     await emit({ type: 'done', result: state.finalResult });
   }
@@ -613,28 +509,10 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   };
 }
 
-/**
- * Wrap scaffold source so that whether it exports `async function run(...)`
- * or `async function* run(rt, task)`, the wrapper code drives it correctly
- * and emits done at the end.
- *
- * We inject the scaffold source verbatim, then call `shell`. For generator
- * scaffolds, we iterate the generator and forward each yield
- * to host.emit (mapping `{type:'chunk', data}` → text_delta).
- */
+/** Wrap scaffold source with a driver for either `run` shape, forwarding yields to host.emit. */
 function buildScaffoldWrapperCode(scaffoldSource: string, task: string): string {
-  // The scaffold source declares `async function run(...)` or
-  // `async function* run(...)`. We append a driver that invokes it and
-  // handles both shapes uniformly.
-  //
-  // The task is injected as a JSON literal (the live `rt` object cannot cross
-  // the codemode sandbox boundary, so the scaffold uses `host.*` + this task).
-  // `rt` is passed as the literal task string for the 2-arg generator
-  // signature `run(rt, task)` — both params receive the task so a scaffold
-  // can read it from either; neither is the host `rt` object.
-  //
-  // DynamicWorkerExecutor wraps the user code in `(async () => { <code> })()`,
-  // so top-level `async function run(...)` declarations live inside the IIFE.
+  // The task is injected as a JSON literal and passed as both `rt` and `task`.
+  // DynamicWorkerExecutor wraps the code in an async IIFE.
   return `
 ${scaffoldSource}
 
@@ -669,13 +547,6 @@ return __result;
 `;
 }
 
-/**
- * Assemble codemode providers for scaffold execution.
- *
- * Includes:
- *   • host          — the bridge to LLM stream / tool calls / emits
- *   • workspace/etc — every sandbox the parent's ExecutionRouter knows about
- */
 function assembleProviders(
   rt: AgentRuntime,
   hostProvider: { name: string; fns: SandboxFunctions; types?: string },

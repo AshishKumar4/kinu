@@ -1,18 +1,8 @@
 /**
- * AGENTS.md rendering — the one prompt block for the agents.md open standard.
- * Backends discover the files (CLI: walk up from cwd; CF: agent VFS root +
- * active sandbox workspace) and feed them here ordered root-most → nearest.
- *
- * Precedence follows the standard: the file nearest the working directory
- * wins on conflict, root-most files provide defaults.
- *
- * A file is admitted on its METADATA, before anything asks for its bytes:
- * discovery stats each candidate and reads only the ones that fit the budget,
- * spent nearest-first so a giant root file can never crowd out the closest
- * one. A file that does not fit is never read and never clipped — the section
- * names it and its size, and its path is the pointer the model follows with
- * the file tool. Nothing here materializes a file it cannot carry in order to
- * keep a fraction of it.
+ * AGENTS.md rendering. Backends feed files ordered root-most → nearest; the
+ * nearest wins on conflict. Files are admitted on metadata before any read,
+ * nearest-first; a file that does not fit is never read or clipped, only named
+ * with its size so the model can open it.
  */
 
 import type { VFS } from '../types/primitives';
@@ -23,78 +13,48 @@ import type {
   InstructionTrustResolver, VerifiedInstructionTrust,
 } from '../types/instruction-trust';
 
-/** An admitted file: read whole, rendered whole — into whichever tier its bytes
- *  earned. */
 export interface AgentsMdFile {
-  /** Where the file was found — shown to the model as provenance. */
   readonly path: string;
   readonly content: string;
-  /** Whether the owner approved THESE bytes at THIS path. Assigned where the
-   *  bytes are read, because that is the one place the digest is already free. */
+  /** Whether the owner approved these bytes at this path. Assigned where the bytes are read (digest is free there). */
   readonly trust: VerifiedInstructionTrust;
 }
 
-/** A file known by metadata alone. Before admission it is a candidate; after,
- *  it is a file left on disk for the model to open itself. */
 export interface AgentsMdReference {
   readonly path: string;
   readonly bytes: number;
 }
 
-/** A candidate discovery refused to follow, and why.
- *
- *  Distinct from `referenced`, which is a file that WOULD be carried and simply
- *  did not fit: this one is a path discovery declined to resolve at all — a
- *  symlink cycle, or a link escaping the directory that offered it. It is never
- *  read, never approvable, and never allowed to fail the turn; the reason exists
- *  so the owner's surface can say which file is inert instead of leaving a rule
- *  that looks present but does nothing. */
+/** A path discovery declined to resolve (symlink cycle, escaping link). Never read,
+ *  approvable, or turn-failing; the reason lets the owner see which file is inert. */
 export interface AgentsMdUnavailable {
   readonly path: string;
-  /** One clause, safe to display: what discovery declined, never an errno dump
-   *  and never the resolved target of an escaping link. */
+  /** One display-safe clause: never an errno dump or an escaping link's target. */
   readonly reason: string;
 }
 
 export interface AgentsMdSources {
   readonly admitted: ReadonlyArray<AgentsMdFile>;
   readonly referenced: ReadonlyArray<AgentsMdReference>;
-  /** Paths discovery declined to follow. Absent where the plane cannot have
-   *  them: the cloud file planes have no symlinks. */
+  /** Absent where the plane has no symlinks (cloud). */
   readonly unavailable?: ReadonlyArray<AgentsMdUnavailable>;
 }
 
 export interface AgentsMdAdmission {
-  /** Candidates whose bytes may be read, in the given root-most-first order. */
   readonly admit: ReadonlyArray<AgentsMdReference>;
-  /** Candidates that stay on disk, same order. */
   readonly referenced: ReadonlyArray<AgentsMdReference>;
 }
 
-/**
- * Characters of project instructions one request may carry.
- *
- * AGENTS.md rides EVERY step of every turn, so it gets no allocation of its
- * own: it is spent out of the one the step pipeline divides
- * (`stepContextLimit`), read in characters at the canonical estimator's scale
- * (`CHARS_PER_TOKEN`). A share or percentage on top of that would be a number
- * no fact supports.
- */
+/** Project-instruction chars per request, spent out of `stepContextLimit` at `CHARS_PER_TOKEN`; no separate share. */
 function agentsMdCharBudget(limits: ModelWindow): number {
   return admissionBytes(stepContextLimit(limits));
 }
 
 /**
  * Decide which discovered files may be read. `candidates` is root-most first
- * (the order both backends discover in) and both returned lists keep it.
- *
- * The budget is spent NEAREST-FIRST: the nearest file is offered it before any
- * broader one, so the closest instructions are never the ones dropped. A
- * candidate that does not fit what is left is referenced instead of read, and
- * a broader candidate that still fits after it is admitted.
- *
- * Sizes are the file plane's own byte counts, an upper bound on the characters
- * they decode to, so admission never understates what a file would cost.
+ * and both lists keep that order. The budget is spent nearest-first; a broader
+ * candidate that still fits after a skipped one is admitted. Sizes are byte
+ * counts, an upper bound on decoded chars.
  */
 export function admitAgentsMd(
   candidates: ReadonlyArray<AgentsMdReference>,
@@ -115,12 +75,9 @@ export function admitAgentsMd(
   };
 }
 
-/** Which trust tier a render is for. The same content model, the same one
- *  renderer, two placements — approved bytes keep system placement and their
- *  original force, everything else is labelled reference material. */
+/** Approved bytes keep system placement; everything else is labelled reference material. */
 export type InstructionPlacement = 'system' | 'unverified';
 
-/** The same metadata-only omission for every workspace instruction file. */
 export function renderInstructionOmission(
   referenced: ReadonlyArray<AgentsMdReference>, name: string,
 ): string {
@@ -131,17 +88,9 @@ export function renderInstructionOmission(
 }
 
 /**
- * Render the AGENTS.md block for one trust tier. `sources.admitted` must be
- * ordered root-most first, nearest last. Returns '' when this tier has nothing.
- *
- * `system` carries only files the owner approved by digest, in the wording it
- * always had — approved doctrine keeps exactly its old force. It also carries
- * the oversized-file pointers, which are paths and byte counts rather than
- * instructions.
- *
- * `unverified` carries everything else, and says so: these are bytes the
- * agent's own tools can write, so the block names that fact rather than relying
- * on its delimiter to imply it.
+ * Render the AGENTS.md block for one trust tier; `sources.admitted` is root-most
+ * first. Returns '' when empty. `system`: owner-approved files plus oversized-file
+ * pointers. `unverified`: everything else, labelled as agent-writable.
  */
 export function renderAgentsMdSection(
   sources: AgentsMdSources,
@@ -177,25 +126,16 @@ export function renderAgentsMdSection(
   return parts.join('\n\n');
 }
 
-/** A discovery candidate and the file plane that owns its bytes. */
 interface WorkspacePlane {
   readonly files: VFS;
   readonly path: string;
-  /** Provenance label shown to the model — the path plus the plane it is on. */
   readonly label: string;
 }
 
 /**
- * AGENTS.md discovery for cloud workspaces: the canonical workspace provides
- * defaults, and an already-active sandbox contributes its own project rules as
- * the nearest file. Each candidate is statted on the plane that owns its bytes
- * and read only if it is admitted; discovery never provisions a sandbox. A
- * file that is not there is skipped; a read that fails is not reported as an
- * absence.
- *
- * `trust` classifies each file as its bytes arrive. Both of these planes are
- * writable by the agent's own `file` tool and codemode, so neither one is
- * trusted for being where it is.
+ * Cloud AGENTS.md discovery: canonical workspace for defaults, an already-active
+ * sandbox as the nearest file; never provisions a sandbox. A failed read is not
+ * reported as absence. Both planes are agent-writable, so neither is trusted by location.
  */
 export async function collectWorkspaceAgentsMd(
   vfs: VFS,
@@ -222,12 +162,7 @@ export async function collectWorkspaceAgentsMd(
   const found: Array<{ plane: WorkspacePlane; ref: AgentsMdReference }> = [];
 
   for (const { plane, stat } of sized) {
-    // Size zero is NOT treated as an absence. A sandbox file plane derives it
-    // from a directory listing and the SDK may not report one (execution/
-    // sandbox.ts falls back to 0), and dropping the file there would lose real
-    // project instructions silently. Zero always fits, so such a file is read
-    // exactly as it was before admission existed, and an empty one falls out
-    // on content below.
+    // Size zero is not absence: sandbox stat may report 0 (execution/sandbox.ts fallback). Zero fits, so the file is read.
     if (!stat || stat.isDir) continue;
     found.push({ plane, ref: { path: plane.label, bytes: stat.size } });
   }
@@ -240,9 +175,7 @@ export async function collectWorkspaceAgentsMd(
       const raw = await plane.files.readFile(plane.path, { encoding: 'utf8' });
       const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
 
-      // Keyed on the label, which is what the owner approves and what the model
-      // is shown — the plane is part of the identity, so an approval for the
-      // workspace file is not an approval for the sandbox's own copy.
+      // Keyed on the label: an approval for the workspace file does not cover the sandbox copy.
       return { path: ref.path, content: text, trust: trust(ref.path, text) };
     }),
   );
@@ -253,23 +186,12 @@ export async function collectWorkspaceAgentsMd(
   };
 }
 
-/**
- * What the advisor's caller already has: the workspace's file plane and the
- * window the model sees. The review lane itself never reads a file — this is
- * the context-assembly half of the advisor contract, so the admitted text
- * arrives in the review as a string the way the turn record does.
- */
 export interface AdvisorWorkspace {
   readonly vfs: VFS;
   readonly limits: () => Promise<ModelWindow>;
 }
 
-/**
- * Optional workspace guidance (ADVISOR.md) is admitted BEFORE its bytes are
- * read — the same admission the AGENTS.md chain runs, so an oversized file is
- * a path-and-bytes pointer rather than a truncated read. The empty string is
- * absence; an omitted file is the shared omission text.
- */
+/** ADVISOR.md goes through the same admission as AGENTS.md. '' means absent. */
 export async function advisorWorkspaceGuidance(workspace: AdvisorWorkspace | undefined): Promise<string> {
   if (workspace === undefined) return '';
   const path = 'ADVISOR.md';

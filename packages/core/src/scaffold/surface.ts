@@ -1,14 +1,7 @@
 /**
- * The one `Identity['scaffold']` surface: `.vN` files are the canonical
- * source of every version, the `scaffold_versions.status='current'` row is
- * the single current pointer, and the live file is a rebuildable view.
- *
- * `read()` — what execution runs — resolves the current pointer's version
- * file and only falls back to the live view when no archive file exists yet
- * (a workspace between deploy and its first activation bootstrap). Every
- * mutation path writes source files before metadata and refreshes the view
- * after the pointer commits, so a crash between those steps leaves a stale
- * view that the next activation heals without ever changing what runs.
+ * `.vN` files are canonical, the `status='current'` row is the pointer, and the
+ * live file is a rebuildable view. Mutations write source before metadata and
+ * refresh the view after the pointer commits.
  */
 
 import type { SqlExecutor, VFS } from '../types/primitives';
@@ -18,9 +11,7 @@ import { getCurrentScaffoldVersion } from './shadow';
 export interface ScaffoldSurfaceOpts {
   vfs: VFS;
   sql: SqlExecutor;
-  /** Whose pointer this surface resolves. The `.vN` files are shared physical
-   *  storage, but which version is CURRENT is per-actor, so a surface bound to
-   *  the wrong actor would execute a peer's program. */
+  /** The current pointer is per-actor; a wrongly bound surface would run a peer's program. */
   actor: ActorHandle;
   path: string;
 }

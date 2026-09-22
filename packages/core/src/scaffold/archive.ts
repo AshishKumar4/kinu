@@ -1,14 +1,7 @@
 /**
- * Scaffold variant archive — the DGM-style stepping-stone layer.
- *
- * arXiv:2505.22954 (Darwin Gödel Machine): the breakthroughs came from
- * branching off ARCHIVED variants, not only the current best — diversity in
- * the archive is what makes later jumps reachable. Kinu already persists
- * every scaffold version (`scaffold_versions` rows + `agent.js.vN` VFS
- * files); this module is the read model over that single source of truth —
- * lineage (parent_version), shadow-eval scores (aggregated live from
- * scaffold_evaluations), and a selection policy for which version a new
- * proposal should branch from. No second table, no copied state.
+ * Scaffold variant archive (DGM, arXiv:2505.22954): a read model over
+ * `scaffold_versions` and `scaffold_evaluations` with lineage, shadow scores, and
+ * branch-base selection. No second table.
  */
 
 import * as v from 'valibot';
@@ -24,10 +17,7 @@ const VetoDataSchema = v.object({
   surface: v.optional(v.string()),
 });
 
-/**
- * Every scaffold version with its lineage + aggregated shadow-eval record,
- * newest first. The one queryable view of the variant archive.
- */
+/** Every version with lineage and aggregated shadow record, newest first. */
 export function listScaffoldArchive(
   sql: SqlExecutor, actor: ActorHandle, limit = 50,
 ): ScaffoldArchiveEntry[] {
@@ -71,39 +61,28 @@ export function listScaffoldArchive(
   });
 }
 
-/** Why a proposal never became the live scaffold. Both kinds are states the
- *  pipeline already records — this adds no state, only a way to ask. */
+/** Why a proposal never became the live scaffold. */
 export type RejectionKind = 'rolled_back' | 'misevolution_veto';
 
 export interface RejectedProposal {
   kind: RejectionKind;
-  /** null for a veto: it was refused at gate 1, before a version existed. */
+  /** null for a veto: refused before a version existed. */
   version: number | null;
   at: number;
-  /** The proposal's own rationale, or the veto's recorded detail. */
   rationale: string;
-  /** Why it was rejected, derived from the evidence below. */
   reason: string;
   pathology: string | null;
-  /** Shadow record for a rolled-back version; zeroes for a veto. */
+  /** Zeroes for a veto. */
   trials: number;
   wins: number;
   losses: number;
   ties: number;
-  /** What the judge actually said on the trials the pending lost. */
   judgeRationales: string[];
 }
 
 /**
- * Every proposal that was refused, newest first, with the reason.
- *
- * Weng's negative-result preservation: a self-improving system that only
- * records what worked cannot answer "what keeps failing to work". Both halves
- * of the answer were already durable — `scaffold_versions.status =
- * 'rolled_back'` for versions that lost their shadow trial or were discarded,
- * `evolution_events` rows for misevolution vetoes — but nothing joined them to
- * the judge's stated reasons, so nothing could be mined. This is that join and
- * nothing more: a read model, no new table, no new status, no new write path.
+ * Every refused proposal, newest first, with the reason: rolled-back versions
+ * joined to judge reasons, plus misevolution vetoes from `evolution_events`.
  */
 export function listRejectedProposals(
   sql: SqlExecutor, actor: ActorHandle, limit = 50,
@@ -140,9 +119,7 @@ export function listRejectedProposals(
     ORDER BY created_at DESC LIMIT ${limit}`;
 
   for (const veto of vetoes) {
-    // `data` is written by recordMisevolutionVeto in this same package, so a
-    // payload that will not parse is corruption in our own row, not a foreign
-    // format to shrug at.
+    // Written by recordMisevolutionVeto here, so an unparseable payload is corruption.
     const parsed = v.parse(VetoDataSchema, parseJsonValue(veto.data ?? '{}'));
 
     if ((parsed.surface ?? 'scaffold') !== 'scaffold') continue;
@@ -167,37 +144,10 @@ export interface EvolutionBaseSelection {
 }
 
 /**
- * Clade-metaproductivity — a version's score aggregated over its whole
- * descendant subtree (HGM, ICLR 2026): what a lineage went on to PRODUCE
- * predicts a good branch base far better than what the node itself scored.
- * A variant that won its own shadow trial but whose children all regressed is
- * an evolutionary dead end; a middling variant that every good version descends
- * from is the productive one to branch off again.
- *
- * Aggregation: an evidence-weighted pooled mean of `winRate` over the subtree
- * INCLUDING the node itself, weighting each scored version by its observation
- * count. That shape is dictated by what this archive actually holds — a handful
- * of versions with wildly uneven evidence (a version can carry 40 blended
- * observations or a single decisive shadow trial, and untried versions carry
- * none at all). A plain mean over subtree nodes would let one lucky 1-trial
- * child outvote a 40-observation parent; pooling by evidence does not.
- *
- * This is why there is no blend coefficient against the node's own score: the
- * node is already a term in its own pool, weighted by exactly as much evidence
- * as backs it. A well-tried node with one barely-tried child stays close to its
- * own rate; a thinly-tried ancestor of a heavily-tried subtree is dominated by
- * the clade. Both ends fall out of one formula instead of a tuned mix.
- *
- * Cold start is the identity case, not a fallback branch: a version with no
- * descendants pools over itself alone and scores EXACTLY its own win rate, and
- * a version nothing in the window has scored yet returns null so the caller
- * applies the same neutral prior it always did. A lineage-free archive
- * therefore reproduces the pre-clade policy exactly, term for term.
- *
- * Versions unscored (`winRate === null`) contribute nothing rather than an
- * imputed 0.5 — a large barren subtree must not drag a real signal toward the
- * prior. Status is ignored: a `current` or `pending` descendant still counts as
- * something the lineage produced.
+ * Clade-metaproductivity (HGM, ICLR 2026): evidence-weighted pooled `winRate`
+ * over the subtree including the node, so a lucky 1-trial child cannot outvote a
+ * well-tried parent. A leaf scores its own rate; an unscored clade returns null.
+ * Unscored versions contribute nothing; status is ignored.
  */
 function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, number | null> {
   const children = new Map<number, ScaffoldArchiveEntry[]>();
@@ -223,8 +173,7 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
       seen.add(node.version);
 
       if (node.winRate !== null) {
-        // Observations backing this rate: shadow trials plus the real turn
-        // outcomes blendRealOutcomeRates folds in. A scored version has ≥ 1.
+        // Shadow trials plus real outcomes from blendRealOutcomeRates; ≥ 1 when scored.
         const w = Math.max(1, node.trials);
         pooled += node.winRate * w;
         evidence += w;
@@ -242,22 +191,8 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
 }
 
 /**
- * Pathology coverage — how crowded each named failure cell already is.
- *
- * Weng names diversity collapse as a top open problem in evolutionary agent
- * loops, and the quality-diversity line (GSME's WHERE×WHY archive, CodeEvolve's
- * islands) answers it by keeping the search spread across niches instead of
- * pouring it into whichever one is currently winning. Kinu's niches are the
- * pathology cells a proposal names (evolution/pathology.ts), so coverage falls
- * straight out of the archive: 1/(1+n) over the versions sharing a cell, in the
- * same decaying shape as the novelty bonus beside it.
- *
- * A version that named NO cell scores 0, not a shared-bucket bonus. That is
- * the honest reading — it claimed no niche, so it has no coverage to be thin
- * in — and it is also what keeps the term INERT where it has nothing to say:
- * an archive with no pathologies at all adds zero to every weight, so the
- * policy is exactly the pathology-free one, term for term, the same way a
- * lineage-free archive collapses the clade term.
+ * Pathology coverage: 1/(1+n) over versions sharing a failure cell. A version
+ * that named no cell scores 0, so a pathology-free archive adds nothing.
  */
 function pathologyCoverage(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<string, number> {
   const counts = new Map<string, number>();
@@ -271,33 +206,13 @@ function pathologyCoverage(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<st
 }
 
 /**
- * Pick the version a new scaffold proposal should branch from.
+ * Pick the branch base for a new proposal. With probability 1 - exploreShare use
+ * the current version; otherwise sample archived variants weighted by clade score,
+ * a novelty bonus 1/(1+trials), and pathology coverage (DGM + HGM).
  *
- * Policy: with probability (1 - exploreShare) build on the live current —
- * exploitation keeps the lineage's proven trunk improving. With probability
- * exploreShare, branch from an archived variant instead, weighted by its
- * clade-metaproductivity (above), a novelty bonus that decays with trial
- * count (1/(1+trials), never-tried variants score it in full), and a
- * pathology-diversity bonus that decays with how many versions already target
- * the same failure cell (above). This is DGM's archive-sampling insight
- * (arXiv:2505.22954) — rolled-back and historical variants are stepping
- * stones, and the ones we know least about deserve disproportionate
- * exploration — corrected by HGM's: score the stepping stone by what its
- * lineage produced, not by how it did itself. A pure greedy-on-current policy
- * can never reach improvements whose ancestor lost its first shadow trial; a
- * pure own-score policy keeps re-branching from lucky dead ends; and a policy
- * blind to which failure a variant was FOR keeps re-exploring the one cell
- * that already has the most attempts.
- *
- * The three terms are additive and independent: diversity never overrides a
- * clade score, it breaks ties between comparably-productive stepping stones.
- *
- * The clade is always complete inside the caller's window: descendants carry
- * higher version numbers than their parents, and the archive is truncated
- * newest-first, so any candidate present has all of its descendants present.
- *
- * Pure function of the archive list — deterministic under an injected RNG.
- * Returns null when the archive has no rows at all.
+ * Descendants have higher version numbers and the archive is truncated newest-first,
+ * so every candidate's clade is complete. Deterministic under an injected RNG;
+ * null for an empty archive.
  */
 export function selectEvolutionBase(
   archive: ReadonlyArray<ScaffoldArchiveEntry>,
@@ -305,8 +220,7 @@ export function selectEvolutionBase(
 ): EvolutionBaseSelection | null {
   const random = opts.random ?? Math.random;
   const current = archive.find((e) => e.status === 'current');
-  // Pending versions are mid-trial — never a branch base (the single-pending
-  // invariant means a proposal can't land while one is in flight anyway).
+  // Pending versions are mid-trial and never a branch base.
   const explorable = archive.filter((e) => e.status === 'historical' || e.status === 'rolled_back');
 
   if (!current) {
@@ -321,17 +235,13 @@ export function selectEvolutionBase(
     return { version: current.version, mode: 'current' };
   }
 
-  // Both scored over the FULL archive, not just the explorable slice — a
-  // stepping stone's best descendant is usually the live current, and a cell
-  // the current version already targets is a covered cell.
+  // Scored over the full archive: the best descendant is usually the current version.
   const clade = cladeScores(archive);
   const coverage = pathologyCoverage(archive);
 
   const weight = (e: ScaffoldArchiveEntry): number =>
     (clade.get(e.version) ?? 0.5) +
     1 / (1 + e.trials) +
-    // A pathology the archive has never recorded is uncovered, which is what
-    // an absent count means here.
     (e.pathology === null ? 0 : 1 / (1 + (coverage.get(e.pathology) ?? 0)));
 
   const total = explorable.reduce((acc, e) => acc + weight(e), 0);

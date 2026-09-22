@@ -1,23 +1,6 @@
 /**
- * Skills barrel.
- *
- * Public surface:
- *
- *   - types:    `SkillHeader`, `DiscoveredSkill`, `ActiveSkill`, `SkillsIndex`, …
- *   - parse:    `parseSkillFile`, `stringifySkillFile`, `skillNameProblem`
- *   - discover: `discoverSkills` (headers only — no body is read), `skillPath`,
- *               `readSkillBody`, `compareSkillNames`, `SkillsVfs`,
- *               `BUILTIN_SKILLS`, `BUILTIN_SKILL_HEADERS`
- *   - loader:   `resolveActiveSkills`, `extractExplicitInvocations`,
- *               `admitSkillsIndex` + `admitActiveSkills` (the model-window
- *               admission both prompt sections are spent out of)
- *   - render:   `renderActiveSkillsSection` (active bodies),
- *               `renderSkillsIndexSection` (ambient name+description index),
- *               `unionAllowedTools`, `toolAllowedBySkills`
- *
- * Claude-Code SKILL.md compatible. No LLM-facing tool and no codemode
- * namespace: skills are ordinary files under /workspace/skills/, reachable
- * via workspace.readFile/writeFile/readdir/exec in eval.
+ * Skills barrel. Claude-Code SKILL.md compatible; skills are ordinary files under
+ * /workspace/skills/ with no dedicated LLM tool.
  */
 
 export * from './types';

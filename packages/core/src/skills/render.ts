@@ -1,29 +1,7 @@
 /**
- * Render the skills sections that get prepended to the system prompt.
- *
- * Format:
- *
- *   ## Active skills
- *
- *   The following workflow skills are active for this turn. While they
- *   are active, your tool surface is restricted to: <intersection>.
- *
- *   ### <skill-name> (<reason>)
- *   <body>
- *
- *   ### <skill-name> (<reason>)
- *   <body>
- *
- * `restriction` is the explicit `allowed_tools` lists of every active
- * skill UNIONed together. Empty list = no restriction. The actual tool
- * gating happens at the runtime layer (see `tools/builtins.ts`), the
- * prompt just announces it so the LLM doesn't get confused about why a
- * tool is suddenly missing.
- *
- * Neither section takes a budget. What a turn can afford was decided by the
- * admission (loader.ts) against the model's window, and these functions print
- * what it admitted — including the pointers for what it did not, so a skill the
- * turn could not pay for is still visible and still reachable.
+ * Renders the skills prompt sections. Tool gating happens at runtime; the prompt
+ * only announces the restriction. Admission (loader.ts) already fit the content to
+ * the window, so these functions take no budget.
  */
 
 import {
@@ -34,11 +12,7 @@ import {
 import { compareSkillNames } from './discover';
 import type { InstructionPlacement } from '../prompting/agents-md';
 
-/** One ambient-index entry. The only place its shape is decided: the admission
- *  prices entries with this so what it charges is what gets printed.
- *
- *  A workspace file says so. That is provenance, not a verdict — approval is
- *  settled per body against a digest, which the index has not read. */
+/** One ambient-index entry; admission prices entries with this so the charge matches the print. */
 export function skillIndexLine(skill: SkillHeader): string {
   const origin = skill.source === 'builtin' ? '' : ' (workspace file)';
 
@@ -46,23 +20,13 @@ export function skillIndexLine(skill: SkillHeader): string {
 }
 
 
-/** One entry for a file discovery would not open (its size alone exceeds the
- *  turn's whole skills allocation). The name and the path are all we know
- *  without paying the read, and both are worth more to the model than silence. */
+/** Entry for a file too large to open: name and path only. */
 export function unreadSkillLine(file: { name: string; path: string; bytes: number }): string {
   return `- **${file.name}** — front matter not read: ${file.bytes} bytes, larger than this turn's whole skills allocation. `
     + `Read it with workspace.readFile("${file.path}") if you need it.`;
 }
 
-/**
- * The ambient skills catalogue: every available skill's name + description
- * (built-ins + VFS), rendered unconditionally so the model can discover what
- * exists without spending a turn on a list call. Only ACTIVE skills' bodies
- * expand below (renderActiveSkillsSection) — this section is the index, not
- * the content, matching the Agent Skills spec's progressive disclosure: name
- * + description resident at all times, body loaded on activation, nothing
- * else read until asked for.
- */
+/** Ambient catalogue of every skill's name + description; bodies load only on activation. */
 export function renderSkillsIndexSection(index: SkillsIndex): string {
   if (index.lines.length === 0) return '';
 
@@ -87,14 +51,8 @@ export function renderSkillsIndexSection(index: SkillsIndex): string {
 }
 
 /**
- * Render the active skills' bodies for one trust tier.
- *
- * `system` carries built-ins and owner-approved files, and only that tier
- * announces a tool restriction: `allowed_tools` is real policy — it is the
- * input to the gating in `orchestrator/turn-surface.ts` — so bytes the agent
- * could have written must not be able to set it (KINU-N028).
- *
- * `unverified` carries the rest as labelled reference material.
+ * Active skill bodies for one trust tier. Only `system` (built-ins and
+ * owner-approved files) may announce a tool restriction (KINU-N028).
  */
 export function renderActiveSkillsSection(
   activeSet: ActiveSkillSet,
@@ -111,12 +69,7 @@ export function renderActiveSkillsSection(
 
   for (const r of activeSet.reasons) reasonByName.set(r.name, r.reason);
 
-  // RENDER order is name order, not activation order: the same active set must
-  // be byte-identical however it was activated, or an identical turn re-pays a
-  // cold prompt prefix because a keyword fired instead of a slash command.
-  // (Which skills carry bodies at all is the admission's answer, and it spends
-  // in activation priority order — a real priority change there IS a deliberate
-  // cache bust.)
+  // Name order, so the same active set renders byte-identically however it activated (prompt cache).
   const blocks = [...tier]
     .sort((a, b) => compareSkillNames(a.name, b.name))
     .map((skill) => {
@@ -156,15 +109,11 @@ export function renderActiveSkillsSection(
   ].join('\n');
 }
 
-/** The active skills whose `allowed_tools` may bound the turn — built-ins and
- *  owner-approved files. The ONE definition of that set, so the prompt's
- *  announcement and the runtime's gating cannot drift apart. */
+/** Skills whose `allowed_tools` may bound the turn; shared by prompt and runtime gating. */
 export function trustedActiveSkills(activeSet: ActiveSkillSet): ActiveSkill[] {
   return activeSet.active.filter((skill) => skill.trust !== 'unverified');
 }
 
-/** Why a body is missing and how to get it. A built-in has no VFS path to
- *  point at, so it says that instead of naming a file that isn't there. */
 function deferredBodyNote(skill: ActiveSkill): string {
   const cost = `${skillBodyChars(skill.bodyRef)} chars`;
 
@@ -175,8 +124,7 @@ function deferredBodyNote(skill: ActiveSkill): string {
       + 'this skill is built in and has no VFS path; it expands on a turn with fewer active skills';
 }
 
-/** Union of each active skill's allowed_tools, deduplicated, sorted.
- *  Used both in the prompt header and as the input to runtime tool gating. */
+/** Deduplicated, sorted union of active `allowed_tools`; feeds prompt and runtime gating. */
 export function unionAllowedTools(skills: ReadonlyArray<SkillHeader>): string[] {
   const set = new Set<string>();
 
@@ -197,8 +145,7 @@ function describeReason(r?: ActivationReason): string {
   }
 }
 
-/** True iff a tool name passes the active skills' allow-set. Empty allow-
- *  set in the active skills = no restriction (every tool passes). */
+/** An empty allow-set means no restriction. */
 export function toolAllowedBySkills(
   toolName: string,
   allowedUnion: ReadonlyArray<string>,
@@ -212,9 +159,7 @@ export function toolAllowedBySkills(
   return false;
 }
 
-/** Glob-suffix match: `workspace.*` matches `workspace.readFile`; exact
- *  otherwise. A spec-dialect pattern carries its filter in parens
- *  (`Bash(git:*)`), so its head names the family it restricts. */
+/** `workspace.*` matches `workspace.readFile`; `Bash(git:*)` matches by its head. */
 function matchesToolPattern(toolName: string, pattern: string): boolean {
   if (pattern === toolName) return true;
   const paren = pattern.indexOf('(');
@@ -222,12 +167,11 @@ function matchesToolPattern(toolName: string, pattern: string): boolean {
   if (paren > 0 && toolName === pattern.slice(0, paren)) return true;
 
   if (pattern.endsWith('.*')) {
-    const prefix = pattern.slice(0, -1); // keep the trailing dot
+    const prefix = pattern.slice(0, -1);
 
     return toolName.startsWith(prefix);
   }
 
-  // Allow a bare namespace `workspace` to match `workspace.*` too.
   if (!pattern.includes('.') && toolName.startsWith(pattern + '.')) return true;
 
   return false;

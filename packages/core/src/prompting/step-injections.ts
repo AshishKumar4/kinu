@@ -1,28 +1,17 @@
 /**
- * Mid-turn message injection bookkeeping (the Hermes steer-drain shape), shared
- * by both backends' step pipelines: the CLI's user steering and the cf
- * backend's background-event injection ride the same coordinate math.
+ * Mid-turn message injection bookkeeping shared by both backends.
  *
- * streamText rebuilds each step's messages from scratch (a prepareStep
- * override never feeds the next step's input), so every drained injection must
- * be re-applied at the position — in base-message coordinates — where it first
- * entered the conversation. Base coordinates are the step-0 message count,
- * captured before any injection is recorded, so the math holds whatever the
- * turn assembly (ledger weave, turn-local tail) appended. An injection lands
- * at the tail of the step it drains into — after the latest tool results, so
- * role alternation stays provider-safe — and stays at that index for the rest
- * of the turn, keeping the prompt-cache prefix stable across steps.
+ * streamText rebuilds each step's messages from scratch, so every drained
+ * injection is re-applied at its base-coordinate index (step-0 message count).
+ * It lands at the tail of its step, after tool results, and keeps that index
+ * for the turn so the prompt-cache prefix stays stable.
  */
 
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 
-/** A recorded injection: the caller's entry (message + any bookkeeping it
- *  carries) pinned to the base-coordinate index where the model first saw it.
- *  `durable` says whether the entry becomes chat history on replay: the user's
- *  own words do (a landed steer persists verbatim); an event splice does not —
- *  its durable record is its own row, and replaying it beside the answer would
- *  read as an unanswered event next turn. */
+/** `durable`: whether the entry becomes chat history on replay. A steer does; an event
+ *  splice does not (its own row is the record; replaying it reads as an unanswered event). */
 export type RecordedInjection<E extends { readonly message: ModelMessage; readonly durable: boolean }> =
   E & { readonly index: number };
 
@@ -30,16 +19,10 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
   private baseLength = 0;
   private entries: Array<RecordedInjection<E>> = [];
 
-  /** Everything injected so far this turn, in drain order. */
   get recorded(): ReadonlyArray<RecordedInjection<E>> {
     return this.entries;
   }
 
-  /**
-   * The prepareStep body: capture base coordinates at step 0, admit `incoming`
-   * at the current tail, then re-apply every recorded injection. Returns the
-   * rewritten messages, or `undefined` when nothing is injected.
-   */
   drain(ctx: PrepareStepContext, incoming: ReadonlyArray<E>): ModelMessage[] | undefined {
     if (ctx.stepNumber === 0) this.baseLength = ctx.messages.length;
 
@@ -52,10 +35,8 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
     let offset = 0;
 
     for (const entry of this.entries) {
-      // A pinned index is a coordinate of the step that drained it. A later
-      // step's array has grown behind it, and a tool result now standing at
-      // that index answers the call before it; the injection lands after the
-      // pair rather than between its halves.
+      // A tool result now standing at the pinned index answers the call before it;
+      // land after the pair rather than between its halves.
       let at = entry.index + offset;
 
       while (next[at]?.role === 'tool') at += 1;
@@ -66,13 +47,8 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
     return next;
   }
 
-  /**
-   * Replay the recorded injections into the turn's response messages at the
-   * exact positions the model saw them (base-coordinate indices sit at
-   * `index - baseLength` relative to the response array) — the durable-history
-   * merge for backends that persist the spliced conversation. Non-durable
-   * entries are skipped and do not advance `spliced`: they were never history.
-   */
+  /** Replay recorded injections into response messages at the positions the model saw
+   *  them (`index - baseLength`). Non-durable entries are skipped and do not advance `spliced`. */
   replayInto(responseMessages: ReadonlyArray<ModelMessage>): ModelMessage[] {
     const merged = [...responseMessages];
     let spliced = 0;
@@ -88,7 +64,6 @@ export class StepInjections<E extends { readonly message: ModelMessage; readonly
     return merged;
   }
 
-  /** Drop all recorded state — a fresh turn starts clean. */
   reset(): void {
     this.entries = [];
     this.baseLength = 0;

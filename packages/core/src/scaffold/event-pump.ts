@@ -1,23 +1,8 @@
-/**
- * ScaffoldEvent pump — the one place a scaffold run becomes a stream.
- *
- * `runScaffold` reports progress through an `emit(ScaffoldEvent)` callback, but
- * every consumer wants a stream: the DO backend renders an AI-SDK UI message
- * stream (`ui-stream.ts`), the CLI backend renders `runChat`'s ChatEvent stream
- * (`chat-transform.ts`). Both need the same push→pull bridge — kick the run off,
- * drain emitted events as they arrive, stop at `done`, and finish with the
- * `ScaffoldRunResult` so a failed run can be surfaced in the consumer's own
- * vocabulary. That bridge lives here once so the two backends cannot drift.
- */
+/** Push→pull bridge from `runScaffold`'s emit callback to a stream, shared by the DO and CLI backends. */
 
 import type { ScaffoldEvent, ScaffoldEmitFn, ScaffoldRunResult } from './executor';
 
-/**
- * Drive a scaffold run and yield its events in order, returning the run's
- * result. The final `done` event IS yielded (consumers close their envelope on
- * it); nothing is yielded after it. A run that settles without emitting `done`
- * simply ends the stream.
- */
+/** Yields events through `done` inclusive, then returns the run's result. */
 export async function* pumpScaffoldEvents(
   run: (emit: ScaffoldEmitFn) => Promise<ScaffoldRunResult>,
 ): AsyncGenerator<ScaffoldEvent, ScaffoldRunResult> {
@@ -31,8 +16,7 @@ export async function* pumpScaffoldEvents(
 
   const emit: ScaffoldEmitFn = (event) => { queue.push(event); wake(); };
 
-  // Mark finished when the run settles, so the drain loop terminates even if
-  // the scaffold never emits a 'done'.
+  // Ends the drain even if the scaffold never emits 'done'.
   const runPromise = run(emit).finally(() => { finished = true; wake(); });
 
   for (;;) {

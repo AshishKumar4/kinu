@@ -1,28 +1,15 @@
 /**
- * Destination-owned replay normalization.
- *
- * Durable history names what the SOURCE provider emitted. A replay request is a
- * new request to the DESTINATION provider, so source-native tool-call ids and
- * reasoning envelopes do not belong on that wire. Every currently registered
- * provider adapter accepts the portable id grammar in `tool-call-id.ts`.
- * This module replaces every replayed call id with one destination-neutral
- * deterministic id and applies the same map to every result half. It converts
- * foreign reasoning to assistant text and removes the source metadata.
- *
- * This is request-only: history stays faithful to the source provider, while
- * the destination receives one self-consistent transcript. Re-running the
- * normalization over the same request yields the same ids, and completed calls
- * remain completed — nothing executes during this transformation.
+ * Destination-owned replay normalization, request-only: history stays faithful
+ * to the source provider. Rewrites replayed tool-call ids to deterministic
+ * portable ids (`tool-call-id.ts`) and converts foreign reasoning to text.
  */
 
 import type { AssistantContent, AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
 import { toolCallIdFor } from '../providers/tool-call-id';
 import * as v from 'valibot';
 
-/** A reasoning part carries provider-signed state, so it can only be replayed
- *  as reasoning to the provider that signed it. Crossing to any other
- *  destination, its prose goes as plain text and a block with no prose is
- *  dropped — an unsigned reasoning block is rejected by the receiving API. */
+/** Reasoning is provider-signed: replayable only to its signer. Elsewhere its prose
+ *  goes as text; a block with no prose is dropped (unsigned reasoning is rejected). */
 type ReasoningCrossing = 'unchanged' | 'as-text' | 'dropped';
 
 function reasoningCrossing(
@@ -46,22 +33,13 @@ const AnthropicReasoningOptionsSchema = v.object({
 });
 
 
-/**
- * Normalize persisted tool-call ids and reasoning for the destination.
- *
- * Durable history stays unchanged. The returned request uses only content that
- * the destination can replay.
- */
 export function normalizeReplayForDestination(
   messages: readonly ModelMessage[],
   destinationProviderId: string | undefined,
 ): ModelMessage[] | undefined {
-  // A backend that did not resolve a destination must preserve the exact
-  // prepare-step no-op contract. It cannot honestly claim this is a replay
-  // boundary, and normalizing there would create an override by itself.
+  // No resolved destination: preserve the prepare-step no-op contract.
   if (!destinationProviderId) return undefined;
-  /** Original durable id → destination request id. One map spans every
-   * assistant/tool message so the result half cannot drift from its call. */
+  // One map spans every message so the result half cannot drift from its call.
   const ids = new Map<string, string>();
   let calls = 0;
   let changed = false;

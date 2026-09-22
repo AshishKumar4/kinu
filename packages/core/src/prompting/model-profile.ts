@@ -2,7 +2,6 @@ import type { ModelCapability } from '../providers/types';
 
 export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'generic';
 
-/** Same vocabulary as the provider catalogs — one capability taxonomy. */
 export type PromptModelCapability = ModelCapability;
 
 export interface PromptModelContext {
@@ -12,14 +11,9 @@ export interface PromptModelContext {
   reasoning?: boolean;
   capabilities?: readonly string[];
   contextWindow?: number;
-  /** Whether `contextWindow` is a figure measured off this model rather than a
-   *  stand-in for a spec no catalog answered. Absent means the caller is not
-   *  claiming either way and the static table answers for itself
-   *  (`contextWindowForModel`); it never reads as a measurement. */
+  /** Whether `contextWindow` was measured for this model rather than a stand-in. */
   windowMeasured?: boolean;
-  /** The largest answer the resolved model will produce, out of that same
-   *  window. Absent when the catalog has not answered — never the window
-   *  itself, which is a reserve nobody reported (see step-prune.ts). */
+  /** Largest answer out of that window; absent when the catalog has not answered, never the window itself. */
   modelOutputLimit?: number | null;
 }
 
@@ -42,8 +36,6 @@ const GPT_REASONING_CAPABILITIES: PromptModelCapability[] = [
   'json-mode',
 ];
 
-/** Shared by the reasoning-era Kimi line (k2.6, k2.7-code, k3): all report
- *  tools + reasoning + image input + a cached-input rate. */
 const KIMI_CAPABILITIES: PromptModelCapability[] = [
   'tools',
   'streaming',
@@ -91,7 +83,6 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
 }
 
 function inferredCapabilities(model: PromptModelContext | undefined, family: PromptModelFamily): PromptModelCapability[] {
-  // Catalog-reported capabilities (ModelInfo.capabilities) are authoritative.
   if (model?.capabilities?.length) {
     const out = model.capabilities.map(normalizeCapability).filter((c): c is PromptModelCapability => c !== null);
 
@@ -100,15 +91,13 @@ function inferredCapabilities(model: PromptModelContext | undefined, family: Pro
     return out;
   }
 
-  // Last-resort id-substring heuristics for callers that pass only a model id.
   const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
 
   if (text.includes('o4-mini') || text.includes('deepseek-r1')) {
     return ['streaming', 'reasoning'];
   }
 
-  // Whole family, not one pinned version — a new Kimi release must not silently
-  // drop to bare tools+streaming when the catalog is unreachable.
+  // Whole family: a new Kimi release must not drop to bare tools+streaming when the catalog is unreachable.
   if (family === 'kimi') return KIMI_CAPABILITIES;
 
   if (family === 'gpt') return GPT_REASONING_CAPABILITIES;

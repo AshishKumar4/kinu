@@ -1,36 +1,12 @@
 /**
- * Evolved prompt sections: propose, trial, promote — the `scaffold/modify.ts` +
- * `scaffold/shadow.ts` discipline, applied to every addressable section.
- * Nothing here renders anything. `buildSystemPromptSync` reads
- * {@link activePromptSectionOverrides} once per activation, exactly as it reads
- * the soul, and a section with no promoted row renders its built-in template.
- * So the live prompt moves on ONE event — a promotion — and never on a proposal.
+ * Evolved prompt sections: propose, trial, promote (the scaffold discipline).
+ * `buildSystemPromptSync` reads {@link activePromptSectionOverrides} once per
+ * activation, so the live prompt moves only on a promotion.
  *
- * The gates, in the order `proposePromptSection` applies them:
- *
- *   1. Rationale ≥ the same minimum a scaffold proposal owes, because the
- *      operator reading the changelog is owed the same sentence either way.
- *   2. SLOT CONTRACT IDENTITY. A candidate must declare exactly the incumbent's
- *      text slots and boolean flags. This is the gate with no scaffold analog
- *      and the one that matters most: the builder computes slot values from
- *      typed TypeScript, so a candidate that drops `{{workspaceRoot}}` renders
- *      a prompt missing a fact the model needs, and one that invents a slot
- *      throws on the next turn, mid-prompt, for every turn after.
- *   3. Misevolution, the full checklist (`scaffold/misevolution.ts`, which
- *      carries the grounding). A section is prose the model reads every turn,
- *      which is the prompt pathway that gate exists for, and the
- *      Execution-environments section carries the approvals doctrine — so
- *      `consent-weakening` is not hypothetical here.
- *   4. THE SIZE RULE (see {@link checkPromptSizeRule}) plus an absolute ceiling.
- *   5. One pending per section, for the same reason the scaffold allows one:
- *      trials are evidence about ONE candidate.
- *
- * Promotion needs trials. `recordPromptSectionTrial` writes one row per
- * executed comparison and `decidePromotion` — the SAME Monte-Carlo-calibrated
- * rule the scaffold rollout uses, not a second one invented here — reads the
- * record. Auto-promotion is not wired: `applyPromptSectionDecision` is called
- * by whoever drains the trials, and every promotion lands in the Evolution
- * Changelog where the operator can revert it.
+ * `proposePromptSection` gates, in order: rationale minimum; slot-contract
+ * identity with the incumbent; misevolution checklist; size rule plus ceiling;
+ * one pending per section. Promotion uses the scaffold's `decidePromotion` rule
+ * and is not auto-wired; every promotion lands in the Evolution Changelog.
  */
 
 import * as v from 'valibot';
@@ -46,16 +22,7 @@ import { decidePromotion, DEFAULT_SHADOW_CONFIG, type PromotionDecision, type Sc
 import { templateContract, type PromptSection } from './template';
 import { PROMPT_SECTIONS, type PromptSectionOverrides } from './section-templates';
 
-/**
- * The most bytes an evolved section may occupy.
- *
- * About twice the largest section Kinu ships (`executors/section`, 2,341
- * bytes, measured 2026-09-05), so a rewrite has room to restructure a section
- * rather than only edit it, and a runaway is refused before anything pays to
- * score it. The eleven together are 8,505 bytes on the same date; eleven at
- * this ceiling would be 52,800, which is the number that makes the ceiling a
- * real bound rather than a formality.
- */
+/** About twice the largest shipped section, so a runaway is refused before scoring. */
 export const PROMPT_SECTION_MAX_BYTES = 4800;
 
 /** Same bar as a scaffold proposal: the operator reads one changelog. */
@@ -65,21 +32,17 @@ const PromptSectionStatusSchema = v.picklist(['current', 'pending', 'rolled_back
 
 const TrialWinnerSchema = v.picklist(['current', 'pending', 'tie']);
 
-/** One proposed or promoted replacement for a built-in section. */
 export interface PromptSectionVersion {
   readonly sectionId: string;
   readonly version: number;
   readonly source: string;
   readonly rationale: string;
   readonly status: ScaffoldStatus;
-  /** What the incumbent measured when this was proposed — the size rule's
-   *  comparand, kept so the changelog can show the trade that was accepted. */
+  /** The size rule's comparand, kept so the changelog can show the accepted trade. */
   readonly incumbentBytes: number;
   readonly writtenAt: number;
 }
 
-/** A section's pending candidate and the trial record it has accumulated. The
- *  shape `decidePromotion` reads. */
 export interface PendingPromptSection {
   readonly sectionId: string;
   readonly version: number;
@@ -123,13 +86,8 @@ export function initPromptSectionTables(execRaw: RawSqlExec): void {
            ON prompt_section_evaluations(actor_id, section_id, pending_version)`);
 }
 
-/**
- * The promoted source for every section that has one.
- *
- * What the backend hands `buildSystemPromptSync` as `sectionOverrides`. Read
- * once per activation, not per turn: a promotion is an agent event, and the
- * cacheable prefix is allowed to move on one.
- */
+/** The promoted source per section, passed as `sectionOverrides`. Read once per
+ * activation: the cacheable prefix may move on a promotion. */
 export function activePromptSectionOverrides(
   sql: SqlExecutor, actor: ActorHandle,
 ): PromptSectionOverrides {
@@ -146,8 +104,7 @@ export function activePromptSectionOverrides(
   return overrides;
 }
 
-/** What a candidate is measured against: the promoted source if the section has
- *  one, else the template compiled into the bundle. */
+/** The promoted source if any, else the bundled template. */
 export function incumbentSectionSource(
   sql: SqlExecutor, actor: ActorHandle, section: PromptSection<string>,
 ): string {
@@ -161,9 +118,7 @@ export function incumbentSectionSource(
   return rows[0]?.source ?? section.source;
 }
 
-/** The first section with a candidate under trial, or null. The cadence asks
- *  this before starting a new pass: a proposal nobody trials never lands, so
- *  finishing one is always worth more than proposing another. */
+/** First section with a candidate under trial; the cadence finishes one before proposing another. */
 export function firstPendingPromptSection(sql: SqlExecutor, actor: ActorHandle): string | null {
   actor.assertCurrent();
 
@@ -178,39 +133,17 @@ export function firstPendingPromptSection(sql: SqlExecutor, actor: ActorHandle):
 interface PromptSizeRuleInput {
   readonly incumbentBytes: number;
   readonly candidateBytes: number;
-  /** The incumbent's held-out score with its interval. */
   readonly incumbentScore: ScoreInterval;
-  /** The candidate's held-out score with its interval. */
   readonly candidateScore: ScoreInterval;
 }
 
 type PromptSizeVerdict = { ok: true } | { ok: false; reason: string };
 
 /**
- * A candidate longer than the incumbent needs a strictly better score.
- *
- * Every byte of a prompt section is paid on every turn, forever, by every
- * caller. So the two directions are not symmetric and the rule says so:
- *
- *   - At or below the incumbent's size, GEPA's own strictly-better aggregate is
- *     enough. Same behaviour for fewer bytes is a win with nothing to trade.
- *   - ABOVE it, "better" has to mean better than noise: the candidate's score
- *     interval must clear the incumbent's MEAN entirely. A mean that merely
- *     edges ahead inside two overlapping intervals is not a measurement, and
- *     `scaffold-bridge.ts` already says so about scaffolds ("a winner inside
- *     the seed's interval is not evidence of anything"). The difference here is
- *     that a prompt section pays for the ambiguity in tokens rather than in one
- *     revertible file, so the ambiguous case must fall closed.
- *
- * The practical effect is deliberate: on a small eval set the interval is wide,
- * so a longer candidate cannot land at all. Growing the live prompt should need
- * evidence proportional to what it costs, and a handful of judged turns is not
- * that evidence.
- *
- * Not exported: it is gate 4 of `proposePromptSection` and nothing else, and a
- * rule callers could consult without going through the gate is a rule callers
- * could decline to consult. Its cases are tested through the gate, which is
- * where a caller meets it.
+ * A candidate longer than the incumbent needs a strictly better score: its
+ * interval must clear the incumbent's mean. At or below the incumbent's size,
+ * GEPA's strictly-better aggregate suffices. Bytes are paid every turn, so the
+ * ambiguous case falls closed. Gate 4 only; tested through the gate.
  */
 function checkPromptSizeRule(input: PromptSizeRuleInput): PromptSizeVerdict {
   if (input.candidateBytes <= input.incumbentBytes) return { ok: true };
@@ -227,14 +160,7 @@ function checkPromptSizeRule(input: PromptSizeRuleInput): PromptSizeVerdict {
   };
 }
 
-/**
- * Why a proposal was refused, named rather than numbered.
- *
- * `modifyScaffold` reports a gate NUMBER, which its callers can only forward.
- * A section proposal has callers that must branch — the GEPA bridge reports a
- * size-rule refusal differently from a veto, because one is the anti-bloat rule
- * working as designed and the other is a safety event.
- */
+/** Named so callers can branch: the GEPA bridge reports a size-rule refusal differently from a veto. */
 export type ProposeSectionRefusal =
   | 'not_registered'
   | 'rationale_too_short'
@@ -280,8 +206,7 @@ export function proposePromptSection(
     return { ok: false, code: 'unchanged', error: 'candidate is the incumbent, byte for byte' };
   }
 
-  // Gate 2: the slot contract. Parsing the candidate here is also the only
-  // place a malformed template is caught before a turn renders it.
+  // Gate 2: the slot contract. Also the only place a malformed template is caught before rendering.
   const wanted = templateContract(section.id, incumbent);
   let offered;
 
@@ -304,7 +229,7 @@ export function proposePromptSection(
     };
   }
 
-  // Gate 3: misevolution, the full checklist.
+  // Gate 3: misevolution.
   const misevolution = checkMisevolution(source);
 
   if (!misevolution.ok) {
@@ -363,7 +288,6 @@ export function proposePromptSection(
   return { ok: true, version };
 }
 
-/** The section's pending candidate with its trial record, or null. */
 export function getPendingPromptSection(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -401,15 +325,7 @@ export function getPendingPromptSection(
   };
 }
 
-/**
- * Record one executed comparison of the pending section against the incumbent.
- *
- * Scores come from the caller's metric — the same outcome-aware judge GEPA
- * scored the candidate with, run on an instance the candidate was not selected
- * against. A tie is a real verdict and is recorded as one: `decidePromotion`
- * counts only decisive trials, so silently rounding a tie to a win would walk
- * the calibrated ladder on evidence nobody has.
- */
+/** Record one executed comparison. A tie is recorded as a tie: `decidePromotion` counts only decisive trials. */
 export function recordPromptSectionTrial(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -434,30 +350,21 @@ export function recordPromptSectionTrial(
             ${v.parse(TrialWinnerSchema, args.winner)}, ${args.feedback}, ${args.now ?? nowMs()})`;
 }
 
-/** What the accumulated trials say. The scaffold's rule, unchanged: the
- *  thresholds were calibrated by 200k-sim Monte Carlo against this exact
- *  decision shape, and a second set of numbers invented for prompts would be
- *  two policies for one question. */
+/** The scaffold's calibrated rule, unchanged: one policy for one question. */
 export function decidePromptSectionPromotion(pending: PendingPromptSection): PromotionDecision {
   return decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
 }
 
-/** What a decision actually did. `action` is the APPLIED action, never the
- *  requested one: a promotion whose source went bad between acceptance and this
- *  moment comes back as a rollback with the reason attached. */
+/** `action` is the applied action: a promotion whose source went bad comes back as a rollback. */
 export interface AppliedSectionDecision {
   readonly action: 'promote' | 'rollback';
   readonly vetoReason?: string;
 }
 
 /**
- * Apply a decision. Promote flips the pending to `current` and retires whatever
- * was current; rollback marks it `rolled_back`. Either way the pending's trials
- * are done, so the rows stay as the evidence the changelog reads.
- *
- * Re-checks misevolution before promoting, for the same reason
- * `applyPromotionDecision` does: acceptance and promotion are different moments,
- * and the row between them is durable state.
+ * Promote flips pending to `current` and retires the old one; rollback marks it
+ * `rolled_back`. Re-checks misevolution first: the row is durable state between
+ * acceptance and promotion.
  */
 export function applyPromptSectionDecision(
   sql: SqlExecutor,
@@ -496,7 +403,7 @@ export function applyPromptSectionDecision(
   return { action: 'rollback' };
 }
 
-/** The section archive, newest first — what the Evolution Changelog reads. */
+/** Newest first; what the Evolution Changelog reads. */
 export function listPromptSectionVersions(
   sql: SqlExecutor, actor: ActorHandle, limit = 50,
 ): PromptSectionVersion[] {
@@ -521,8 +428,7 @@ export function listPromptSectionVersions(
   }));
 }
 
-/** Decisive win/loss/tie counts per pending version, for the changelog's
- *  evidence line. Keyed `sectionId:version`. */
+/** Keyed `sectionId:version`. */
 export function promptSectionTrialRecord(
   sql: SqlExecutor,
   actor: ActorHandle,

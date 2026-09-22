@@ -1,105 +1,40 @@
 /**
- * Step-boundary tool-output pruning — the intra-turn context budget.
+ * Step-boundary tool-output pruning: the intra-turn context budget, run in
+ * composePrepareStep. Over budget, old tool-result outputs shrink to a head
+ * snippet plus a truncation marker; recent results stay verbatim.
  *
- * Turn-assembly compaction sees only the durable history; NOTHING bounded the
- * context ACROSS the steps of one agentic turn, so a long tool-heavy turn
- * re-pays its own growing tool traffic on every request (production-proven:
- * workspace-1a4e20's revival turn billed 1.5M uncached input tokens across 33
- * steps). This module runs inside the shared per-step pipeline
- * (composePrepareStep — both backends): once the estimated step context
- * crosses a budget derived from the model's context window, OLD tool-result
- * outputs shrink to a head snippet + an explicit truncation marker, while the
- * newest results keep a token budget untouched (better-compact's
- * RECENT_TOOL_RESULT_BUDGET philosophy — the model still sees what it just
- * read).
- *
- * Hard invariants:
- *  - messages are NEVER removed or reordered (step-injection indices, ledger
- *    positions, and tool-call/result pairing all depend on the count) — only
- *    tool-result part CONTENT shrinks, in place;
- *  - deterministic: the truncated form is a pure function of the part's
- *    content, so a part truncated at step N re-truncates to identical bytes at
- *    step N+1;
- *  - BATCHED, which is what makes those identical bytes worth anything. The
- *    SDK rebuilds every step's array from the ORIGINAL history, so this pass
- *    never sees its own previous output and the total it measures grows for
- *    the whole turn. A pass therefore has to decide the boundary afresh each
- *    step, and a boundary that moved by one result per step re-prefilled
- *    everything after it: measured against a Sonnet window (200k/64k → 136k)
- *    with 24k-char results, the pass first fired at step 22 and then fired on
- *    all 18 remaining steps, rewriting 72-77% of every request while a cache
- *    write costs ~12x a cache read. The boundary is quantized to
- *    {@link stepPruneBatchTokens} instead, so it holds still until a whole
- *    batch of new output has arrived and the requests in between are pure
- *    extensions of one another;
- *  - idempotent: an already-truncated output is under the size threshold and
- *    is never re-truncated.
+ * Invariants:
+ *  - messages are never removed or reordered (injection indices, ledger
+ *    positions and call/result pairing depend on it); only result content shrinks;
+ *  - deterministic and idempotent: truncation is a pure function of content, and
+ *    truncated output is under the threshold;
+ *  - batched: the SDK rebuilds each step from the original history, so the
+ *    boundary is quantized to {@link stepPruneBatchTokens} to hold still between
+ *    batches and keep requests cache-extensions of one another.
  */
 
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage, ToolResultPart } from 'ai';
 import { renderThrownChain } from '../obs/index';
 
 /**
- * The window one request occupies, and how much of it the answer may take.
- *
- * `modelOutputLimit` is the resolved model's catalog maximum
- * (ModelCatalogSession.modelOutputLimit), and only ever that. No caller
- * configures a per-call output cap — a reasoning model spends its budget
- * thinking before it emits anything, so `llm.ts` sets none and a gate keeps
- * the SDK's cap option out of every production source
- * (cf-backend/tests/unit-turn-pipeline-correctness.test.ts, "no production
- * source names an output-token cap"). It is a SHARE of `contextWindow`, not
- * capacity beside it: a chat model's window holds the instruction and the
- * answer together.
- *
- * `null` is the catalog saying NOTHING about the answer's size, and it is a
- * third answer rather than a small or a large one. It used to be spelled as the
- * whole window, on the reasoning that an unreported answer may take all of it —
- * which reads as honest and is not: the half bound below then reserved half the
- * window from every model whose allowance nobody had published, and #20 was a
- * 1M-window model refused against 64,000 tokens on exactly that arithmetic.
+ * `modelOutputLimit` is the catalog maximum only (no caller sets an output cap),
+ * a share of `contextWindow`. `null` means unreported, which reserves nothing.
  */
 export interface ModelWindow {
   readonly contextWindow: number;
   readonly modelOutputLimit: number | null;
 }
 
-/**
- * A {@link ModelWindow} that also states where `contextWindow` came from.
- *
- * `windowMeasured: false` says the number is the static table's stand-in for a
- * spec no catalog has answered for. Every budget in this codebase may spend a
- * stand-in — a budget has to produce some number — but the one decision that
- * REFUSES work (orchestrator/turn-context.ts) may not, so the provenance
- * travels with the value rather than being re-derived by whoever needs it.
- */
+/** `windowMeasured: false` marks a static-table stand-in. Budgets may spend it;
+ * the refusal in orchestrator/turn-context.ts may not. */
 export interface ResolvedModelWindow extends ModelWindow {
   readonly windowMeasured: boolean;
 }
 
 /**
- * Tokens held back for the answer.
- *
- * The reservation is the answer's own declared maximum, bounded by half the
- * window. Half is not a tuned share: the instruction and the answer are the
- * only two claimants on one window, and with nothing favouring either, half is
- * the largest reservation that still guarantees the instruction equal room.
- *
- * The bound is load-bearing, not defensive. A published maximum can BE the
- * whole window — models.dev reports 262144/262144 for
- * moonshotai/kimi-k2.7-code and 500000/500000 for xai/grok-4.6 — and
- * subtracting one of those verbatim admits no input at all, which in this
- * module means `limit <= 0` and the pruning pass switching itself off. Maxima
- * below half are facts and are reserved in full: 128000 of 1000000 for
- * anthropic/claude-opus-4-7, 384000 of 1000000 for deepseek/deepseek-v4-pro.
- *
- * AN UNREPORTED MAXIMUM RESERVES NOTHING. The bound above exists to keep a
- * REPORTED allowance from eating the instruction's room; applying it to an
- * absent one halves a window on no evidence at all, and the half it takes away
- * is real input the model would have accepted. The answer is bounded by the
- * provider whatever this function does, so the honest reservation for a figure
- * nobody published is zero, and the request that follows is the provider's to
- * refuse.
+ * Tokens held back for the answer: its reported maximum, bounded by half the
+ * window (a published maximum can equal the whole window and admit no input).
+ * An unreported maximum reserves nothing; the provider bounds the answer anyway.
  */
 export function outputReserveTokens(limits: ModelWindow): number {
   if (limits.modelOutputLimit === null) return 0;
@@ -110,54 +45,23 @@ export function outputReserveTokens(limits: ModelWindow): number {
 }
 
 /**
- * How many tokens one step's request may occupy. This pass shrinks tool outputs
- * toward it, and it is the ONE allocation every other producer of request-bound
- * weight divides.
- *
- * Exported because tool DEFINITIONS are the part of a step's request this
- * module cannot see: they are not messages, they ride every step of the turn,
- * and for MCP a third party writes them. The admission that bounds a remote
- * catalog (`tools/mcp-surface.ts`, applied by both backends) subtracts the
- * actor's own tool surface from THIS number rather than taking a second share
- * of the window, so one allocation exists and moving it moves both.
+ * Tokens one step's request may occupy: the one allocation every request-bound
+ * producer divides. Exported so MCP catalog admission (`tools/mcp-surface.ts`)
+ * subtracts from it instead of taking a second share.
  */
 export function stepContextLimit(limits: ModelWindow): number {
   return Math.max(0, Math.floor(limits.contextWindow)) - outputReserveTokens(limits);
 }
 
-/**
- * The quantum a pass frees, and therefore how much new tool output has to
- * arrive before the next pass moves the boundary again.
- *
- * A SHARE of the allocation rather than a token count: a fixed number is a
- * no-op against a 1M window and clears the whole array on a 32k one. A
- * quarter leaves the request within one quarter of its allocation after a
- * pass — so three quarters of the window is still verbatim recent output,
- * more than the fixed 40k window this replaced ever protected — and buys a
- * quarter of the window's worth of steps before the boundary has to move.
- *
- * Never zero: a window too small to batch still frees something rather than
- * looping over a target it can never meet.
- */
+/** A quarter of the allocation per pass (a fixed count is a no-op on 1M and clears 32k); never zero. */
 function stepPruneBatchTokens(limits: ModelWindow): number {
   return Math.max(1, Math.floor(stepContextLimit(limits) / 4));
 }
 
-/** Head snippet kept from a pruned output. */
 const PRUNED_OUTPUT_HEAD_CHARS = 2_000;
 
 export interface StepPruneBudget extends ModelWindow {
-  /**
-   * Tokens the caller will add to `messages` AFTER this pass, and which the
-   * request therefore carries even though they are not in the array being
-   * measured.
-   *
-   * Today that is the dynamic-context ledger: the pipeline prunes before it
-   * weaves (frozen block positions are coordinates in the pruned array —
-   * prepare-step.ts step 3), so without this the pass prices a request smaller
-   * than the one that gets sent and under-prunes by the ledger's whole size,
-   * which on a long mission turn is the largest single thing it cannot see.
-   */
+  /** Tokens added after this pass (the dynamic-context ledger weaves after pruning); without it the pass under-prunes. */
   reservedTokens?: number;
 }
 
@@ -166,17 +70,10 @@ type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
 type ToolPart = ToolModelMessage['content'][number];
 
 /**
- * Shrink old tool-result outputs when the step context is over budget.
- * Returns a new array with replaced parts (untouched messages keep their
- * object identity), or `undefined` when under budget or nothing shrinkable.
- *
- * The amount freed is the overage rounded UP to a whole
- * {@link stepPruneBatchTokens}. That rounding is the whole point: the overage
- * grows by one tool result per step, so a pass that freed exactly the overage
- * would move the boundary — and re-prefill everything after it — on every
- * step of the turn. Rounded, the target is constant until the overage crosses
- * the next batch line, so the same results are truncated to the same bytes
- * and each request in between is a literal extension of the last.
+ * Shrink old tool-result outputs when the step context is over budget. Returns
+ * a new array (untouched messages keep identity), or `undefined`. The freed
+ * amount is the overage rounded up to a whole {@link stepPruneBatchTokens}, so
+ * the boundary stays put until the next batch line.
  */
 export function pruneStepToolOutputs(
   messages: readonly ModelMessage[],
@@ -211,16 +108,7 @@ export function pruneStepToolOutputs(
   return changed ? next : undefined;
 }
 
-/**
- * The OLDEST tool-result parts whose truncation frees `target` tokens, by
- * reference identity.
- *
- * Oldest-first because the newest results are what the model just read, and
- * the walk stops the moment the target is met — so what stays verbatim is the
- * recent tail, without a from-the-tail window that would slide as the array
- * grows. The newest result is never a candidate: a turn must always be able
- * to see the output of the call it just made, whatever the target asks for.
- */
+/** Oldest-first until `target` is met; the newest result is never a candidate. */
 function resultsToTruncate(messages: readonly ModelMessage[], target: number): Set<ToolResultPart> {
   const candidates: ToolResultPart[] = [];
 
@@ -255,8 +143,6 @@ function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
   return [];
 }
 
-/** The content array with exactly the chosen results truncated, or null when
- *  the walk chose nothing in it. A part it did not choose is the same object. */
 function prunedContent<Part extends AssistantPart | ToolPart>(
   content: readonly Part[], doomed: ReadonlySet<ToolResultPart>,
 ): (Part | ToolResultPart)[] | null {
@@ -274,8 +160,6 @@ function prunedContent<Part extends AssistantPart | ToolPart>(
   return changed ? next : null;
 }
 
-/** Replace exactly the parts the walk chose, in place. Everything else keeps
- *  its object identity, so an untouched message is the same reference. */
 function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>): ModelMessage {
   if (message.role === 'tool') {
     const content = prunedContent(message.content, doomed);
@@ -292,9 +176,7 @@ function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>
   return message;
 }
 
-/** Deterministic per-part truncation: head snippet + marker, error-ness
- *  preserved through the output type. Under-threshold parts (including
- *  already-truncated ones) pass through untouched — idempotence. */
+/** Head snippet + marker, error-ness preserved; under-threshold parts pass through (idempotence). */
 function truncateResultPart(part: ToolResultPart): ToolResultPart {
   const serialized = serializeOutput(part);
 
@@ -310,8 +192,6 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
   return { ...part, output: isError ? { type: 'error-text', value } : { type: 'text', value } };
 }
 
-/** The output's serialized form — what truncation slices and what the
- *  estimate prices. Null for shapes with nothing to shrink. */
 function serializeOutput(part: ToolResultPart): string | null {
   const output = part.output;
 
@@ -333,9 +213,7 @@ function serializedOutputLength(part: ToolResultPart): number {
   return serializeOutput(part)?.length ?? 0;
 }
 
-/** Chars/4 over what the request serializes — the same estimation scale the
- *  compaction engine uses. Media parts are priced flat (providers charge by
- *  dimensions, not payload bytes). */
+/** Chars/4, the compaction engine's scale. Media is priced flat (providers charge by dimensions). */
 const ESTIMATED_MEDIA_CHARS = 4_800;
 
 function estimateMessageTokens(message: ModelMessage): number {
@@ -361,8 +239,6 @@ function estimateMessageTokens(message: ModelMessage): number {
           chars += ESTIMATED_MEDIA_CHARS;
           break;
 
-        // Approval traffic carries no prose of its own, so it is priced by what
-        // it serializes — the same as any part this estimator does not name.
         case 'tool-approval-request':
         case 'tool-approval-response':
         default:
@@ -386,8 +262,7 @@ function jsonLength(input: { value: unknown }): number {
   return safeStringify(input).length;
 }
 
-/** Binary payloads flatten to a size placeholder — never serialize megabytes
- *  of bytes just to measure them. */
+/** Binary payloads flatten to a size placeholder rather than serializing to measure. */
 function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
 
