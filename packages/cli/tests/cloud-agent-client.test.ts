@@ -211,6 +211,14 @@ function chatRequestFrame(mock: MockAgentServer): ChatRequestFrame {
   return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
 }
 
+/** The first chat request the client put on the wire. */
+async function firstChatRequest(mock: MockAgentServer): Promise<ChatRequestFrame> {
+  return waitFor(
+    () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+    'chat request frame',
+  );
+}
+
 function responseChunk(id: string, chunk: JsonObject, done = false) {
   return { type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id, body: JSON.stringify(chunk), done };
 }
@@ -328,10 +336,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send('hello agent', { cwd: '/work/dir' });
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     // Outgoing contract: a single fresh user message, never a mirrored history.
     expect(request.body.trigger).toBe('submit-message');
@@ -375,10 +380,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send({ text: 'describe these', files });
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     const messages = v.parse(ChatMessagesSchema, request.body.messages);
     expect(messages).toHaveLength(1);
@@ -402,10 +404,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send('boom');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: 'model exploded', done: true, error: true });
 
@@ -422,10 +421,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send('run a tool');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'tool-input-available', toolCallId: 't1', toolName: 'shell', input: {} }));
     mock.reply(responseChunk(request.id, { type: 'tool-output-error', toolCallId: 't1', errorText: 'command not found' }));
@@ -443,10 +439,7 @@ describe('CloudAgentClient protocol', () => {
     client.subscribe((event) => events.push(event));
     const turn = client.send('long task');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'partial ' }));
     await waitFor(
@@ -498,10 +491,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send('hello');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: 'someone-elses-turn' });
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id });
@@ -527,10 +517,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send('start the deploy');
 
-    const first = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'first chat request',
-    );
+    const first = await firstChatRequest(mock);
 
     const steered = client.send('use the staging cluster instead');
 
@@ -570,10 +557,7 @@ describe('CloudAgentClient protocol', () => {
 
     const turn = client.send('nothing running');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'ran' }, true));
     await expect(turn).resolves.toMatchObject({ landed: 'turn', text: 'ran' });
@@ -594,10 +578,7 @@ describe('CloudAgentClient protocol', () => {
     // Open the socket via a quick completed turn, then fork while idle.
     const warmup = client.send('hello');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'warmup request',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
     await warmup;
@@ -636,10 +617,7 @@ describe('CloudAgentClient protocol', () => {
     // Open the socket via a quick completed turn (rpc rides the same ws).
     const warmup = client.send('hello');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'warmup request',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
     await warmup;
@@ -709,10 +687,7 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
 
     const turn = client.send('start the deploy');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     expect(client.branch('what if we used blue-green instead?')).toBe(true);
 
@@ -754,10 +729,7 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
 
     const turn = client.send('work');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     expect(client.branch('redirect')).toBe(true);
 
@@ -863,10 +835,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     const turn = client.send('summarize the incident');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'the cause was ' }));
     await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
@@ -903,10 +872,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     const turn = client.send('deploy the hotfix');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'starting' }));
     await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
@@ -936,10 +902,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     const turn = client.send('long migration');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     await dropAndProbe(mock);
     mock.socket().close();
@@ -960,10 +923,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
 
     const turn = client.send('queued work');
 
-    const request = await waitFor(
-      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
-      'chat request frame',
-    );
+    const request = await firstChatRequest(mock);
 
     await dropAndProbe(mock);
 

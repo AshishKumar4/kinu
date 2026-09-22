@@ -10,6 +10,25 @@ import {
 import type { CreateCloudAgentInput } from '../src/cloud-api';
 import * as v from 'valibot';
 
+interface RecordedCreate {
+  input?: CreateCloudAgentInput;
+}
+
+/** A `create` port that records what it was asked for and echoes it back. */
+function recordingCreate(seen: RecordedCreate) {
+  return async (input: CreateCloudAgentInput) => {
+    seen.input = input;
+
+    return {
+      name: input.name ?? 'missing-name',
+      displayName: input.displayName ?? 'missing-display-name',
+      createdAt: 1,
+      lastVisited: 1,
+      archivedAt: null,
+    };
+  };
+}
+
 describe('CLI mission workspace names', () => {
   test('uses the model-proposed title, over a slug the model never chose', async () => {
     const identity = await suggestAgentIdentityFromMission(
@@ -43,7 +62,7 @@ describe('CLI mission workspace names', () => {
   });
 
   test('creates an unnamed cloud workspace with the generated name and display name', async () => {
-    let createdInput: CreateCloudAgentInput | undefined;
+    const seen: RecordedCreate = {};
 
     const created = await createCloudAgentFromMission(
       {
@@ -54,21 +73,11 @@ describe('CLI mission workspace names', () => {
       {
         id: 'abcdef123456',
         generate: async () => JSON.stringify({ title: 'Rust Framework Benchmark' }),
-        create: async (input) => {
-          createdInput = input;
-
-          return {
-            name: input.name ?? 'missing-name',
-            displayName: input.displayName ?? 'missing-display-name',
-            createdAt: 1,
-            lastVisited: 1,
-            archivedAt: null,
-          };
-        },
+        create: recordingCreate(seen),
       },
     );
 
-    expect(createdInput).toEqual({
+    expect(seen.input).toEqual({
       name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       purpose: 'Build a benchmark for Rust web frameworks',
@@ -82,7 +91,7 @@ describe('CLI mission workspace names', () => {
   });
 
   test('preserves an explicit cloud workspace name', async () => {
-    let createdInput: CreateCloudAgentInput | undefined;
+    const seen: RecordedCreate = {};
     await createCloudAgentFromMission(
       {
         name: 'jarvis',
@@ -92,21 +101,11 @@ describe('CLI mission workspace names', () => {
       },
       {
         generate: async () => { throw new Error('explicit names must not be regenerated'); },
-        create: async (input) => {
-          createdInput = input;
-
-          return {
-            name: input.name ?? 'missing-name',
-            displayName: input.displayName ?? 'missing-display-name',
-            createdAt: 1,
-            lastVisited: 1,
-            archivedAt: null,
-          };
-        },
+        create: recordingCreate(seen),
       },
     );
 
-    expect(createdInput).toEqual({
+    expect(seen.input).toEqual({
       name: 'jarvis',
       displayName: 'Jarvis',
       purpose: 'Manage my calendar',
@@ -122,7 +121,8 @@ describe('a cloud workspace name the hub refuses', () => {
     const seen: string[] = [];
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input, init) => {
-      seen.push(String(input) + ' ' + String(init?.method));
+      const url = input instanceof Request ? input.url : String(input);
+      seen.push(url + ' ' + String(init?.method));
 
       return Response.json({ error: refusal }, { status: 400 });
     });
