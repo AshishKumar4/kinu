@@ -486,7 +486,8 @@ export async function hostBranch(
   let trace = '';
 
   return {
-    explore: (priorHistory, craftedTools, languages, mode, siblings) => seams.host.run(reference, async (actor) => {
+    explore: (request) => seams.host.run(reference, async (actor) => {
+      const { priorHistory, craftedTools, languages, mode, siblings } = request;
       const { profile } = await seams.profile({ actor, availableTools: [], workMode: mode });
       const route = resolveModelRoute('mcts', profile);
 

@@ -21,6 +21,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute,
   type SubordinateInspectionAuthority,
 } from '@kinu.run/core';
+import type { AgentRuntime } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
@@ -370,7 +371,7 @@ const ClientRpcFrameSchema = v.object({
   type: v.literal('rpc'), id: v.string(), method: v.string(), args: v.array(JsonValueSchema),
 });
 
-function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
+function parseClientRpcFrame(message: WSMessage): ClientRpcFrame | null {
   if (!v.is(v.string(), message)) return null;
   const json = tolerate<unknown>(() => JSON.parse(message), 'malformed-input');
 
@@ -389,12 +390,6 @@ const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again 
 
 const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
-
-function jsonObject<Input>(input: Input): JsonObject {
-  const parsed = v.safeParse(JsonObjectSchema, input);
-
-  return parsed.success ? parsed.output : {};
-}
 
 const PlanApprovalMetadataSchema = v.looseObject({
   kinuEvent: v.literal('plan_approved'), planId: v.string(),
@@ -487,19 +482,31 @@ function prefixCliCwdContent(content: UserModelMessage['content'], prefix: strin
   return prefix;
 }
 
-/** One activity-log line per compaction engine event: message + compact JSON. */
-function compactionLogDetail<Data>(message: string, data?: Data): string {
-  if (data === undefined) return message;
+/** The compaction engine's per-event detail at our boundary: JSON, or nothing. */
+const CompactionDetailSchema = v.optional(JsonValueSchema);
 
-  try {
-    return `${message} ${JSON.stringify(data)}`;
-  } catch (error) {
+type CompactionDetail = v.SafeParseResult<typeof CompactionDetailSchema>;
+
+/** The compaction outcomes that are not routine. `degraded`/`failed` rather than
+ *  `warn`/`error`: a level is not an outcome, and these two names are shared verbatim
+ *  with `cli-backend/src/local-session.ts`, which adapts the same
+ *  `@better-compact/core` Logger port to the same outcomes. One query reads both. */
+const COMPACTION_OUTCOMES = {
+  warn: { event: 'compaction.degraded', code: 'unavailable', activity: 'compaction_warn' },
+  error: { event: 'compaction.failed', code: 'io', activity: 'compaction_error' },
+} as const;
+
+/** One activity-log line per compaction engine event: message + compact JSON. */
+function compactionLogDetail(message: string, detail: CompactionDetail): string {
+  if (!detail.success) {
     // A detail that cannot serialize (a cycle, a BigInt) must not take the
     // activity-log line down with it: record why and ship the message alone.
-    diagnostics.event('actor.compaction_detail_unserializable', { error: renderThrownChain({ cause: error }) });
+    diagnostics.event('actor.compaction_detail_unserializable', { message });
 
     return message;
   }
+
+  return detail.output === undefined ? message : `${message} ${JSON.stringify(detail.output)}`;
 }
 
 /** The per-actor-class tool deps `getRawTools` wires into the shared
@@ -540,7 +547,7 @@ export interface ActorToolDeps {
  *  right type for a shared list and cannot key an exhaustive table. */
 function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const gate = {
-    [REPORT_TOOL]: !!deps.report,
+    [REPORT_TOOL]: deps.report !== undefined,
   } satisfies Partial<Record<BuiltinToolName, boolean>>;
 
   return BUILTIN_TOOLS.filter((name) => gate[name] ?? true);
@@ -598,14 +605,24 @@ const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable'
  * Web uses the same provider the hosted turn receives. Delegation and the MCP
  * descriptor cache are not lent to a slate.
  */
+/** Every runtime this backend builds carries a vector store (a noop one when
+ *  the Vectorize bindings are absent); a runtime without one did not come from
+ *  `createCFRuntime`. */
+function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
+  return 'vectorStore' in runtime;
+}
+
 function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
-  // SAFETY: this runtime came from `ActorHostDeps.runtimeFor`, which on this
-  // backend IS `createCFRuntime` — the core seam narrows the RETURN type to
-  // `AgentRuntime`, it does not narrow the value, and `CFRuntime` always builds
-  // a vector store (a noop one when the bindings are absent). The alternative
-  // is teaching core about Vectorize to satisfy a cf read, which is backwards:
-  // the whole point of `runtimeFor` is that the BACKEND owns the runtime.
-  const runtime = actor.runtime as CFRuntime;
+  // This runtime came from `ActorHostDeps.runtimeFor`, which on this backend IS
+  // `createCFRuntime` — the core seam narrows the RETURN type to `AgentRuntime`,
+  // it does not narrow the value. The alternative is teaching core about
+  // Vectorize to satisfy a cf read, which is backwards: the whole point of
+  // `runtimeFor` is that the BACKEND owns the runtime.
+  const runtime = actor.runtime;
+
+  if (!isCFRuntime(runtime)) {
+    throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
+  }
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
@@ -873,7 +890,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** One SQL-backed review stream, local to this actor's durable storage. */
   protected get planReviews(): PlanReviewStore {
-    if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql, this.actorHandle());
+    this._planReviews ??= new PlanReviewStore(this.boundSql, this.actorHandle());
 
     return this._planReviews;
   }
@@ -1414,7 +1431,7 @@ export abstract class ActorAgent extends Agent<Env> {
     installAnalyticsDiagnostics(this.env);
   }
   protected installClientMessageGate(): void {
-    const dispatchMessage = this.onMessage;
+    const dispatchMessage = this.onMessage.bind(this);
     this.onMessage = async (connection, message) => {
       if (await this.refuseRevokedSocketAuthority(connection, message)) return;
       const terminal = await this.terminalFor(connection);
@@ -1476,17 +1493,17 @@ export abstract class ActorAgent extends Agent<Env> {
         if (await room.onMessage(connection, message)) return;
       }
 
-      return await dispatchMessage.call(this, connection, message);
+      return await dispatchMessage(connection, message);
     };
 
-    const baseOnConnect = this.onConnect;
-    const baseOnClose = this.onClose;
+    const baseOnConnect = this.onConnect.bind(this);
+    const baseOnClose = this.onClose.bind(this);
 
     this.onConnect = async (connection, ctx) => {
       if (await this.refuseRevokedSocketAuthority(connection, '')) return;
       this.connectionOpened();
 
-      await baseOnConnect.call(this, connection, ctx);
+      await baseOnConnect(connection, ctx);
       const terminal = await this.terminalFor(connection);
 
       if (terminal) await terminal.attachTerminal(connection);
@@ -1498,7 +1515,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (terminal) terminal.terminalClose(connection);
       else this.chatRoomFor(connection)?.onClose(connection);
-      await baseOnClose.call(this, connection, code, reason, wasClean);
+      await baseOnClose(connection, code, reason, wasClean);
 
       // The closing socket is no longer open, so the manager's iterator does
       // not yield it; its id is excluded anyway, because the answer must not
@@ -1509,7 +1526,7 @@ export abstract class ActorAgent extends Agent<Env> {
     };
 
     // The client seeds each room from its durable transcript.
-    const dispatchRequest = this.onRequest;
+    const dispatchRequest = this.onRequest.bind(this);
 
 
     this.onRequest = async (request) => {
@@ -1527,7 +1544,7 @@ export abstract class ActorAgent extends Agent<Env> {
         return Response.json(history);
       }
 
-      return await dispatchRequest.call(this, request);
+      return await dispatchRequest(request);
     };
   }
   /**
@@ -1737,26 +1754,24 @@ export abstract class ActorAgent extends Agent<Env> {
    * from drifting into different answers about an interrupted turn.
    */
   protected get terminal(): TerminalTransitions {
-    if (!this._terminalTransitions) {
-      this._terminalTransitions = new TerminalTransitions({
-        actor: this.actorHandle(),
-        sql: this.boundSql,
-        effects: this.terminalEffectTable(),
-        now: () => Date.now() + this._terminalClockSkewMs,
-        fault: () => this.terminalEffectFault,
-        // A synchronous run inside a Durable Object is already atomic, so this is
-        // the honest identity — but answering through the platform's own primitive
-        // keeps the claim and its whole roster one unit whatever core comes to put
-        // between them.
-        transaction: (body) => this.ctx.storage.transactionSync(body),
-        // The one state the turn-wide release must not run in — an
-        // auto-continuation already calling tools under this turn before it has
-        // a terminal claim of its own. Neither flag alone names it, which is
-        // what {@link turnMayStillRun} is for.
-        turnIsLive: (turnId) => this.turnMayStillRun(turnId),
-        scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
-      });
-    }
+    this._terminalTransitions ??= new TerminalTransitions({
+      actor: this.actorHandle(),
+      sql: this.boundSql,
+      effects: this.terminalEffectTable(),
+      now: () => Date.now() + this._terminalClockSkewMs,
+      fault: () => this.terminalEffectFault,
+      // A synchronous run inside a Durable Object is already atomic, so this is
+      // the honest identity — but answering through the platform's own primitive
+      // keeps the claim and its whole roster one unit whatever core comes to put
+      // between them.
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      // The one state the turn-wide release must not run in — an
+      // auto-continuation already calling tools under this turn before it has
+      // a terminal claim of its own. Neither flag alone names it, which is
+      // what {@link turnMayStillRun} is for.
+      turnIsLive: (turnId) => this.turnMayStillRun(turnId),
+      scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
+    });
 
     return this._terminalTransitions;
   }
@@ -2211,20 +2226,18 @@ export abstract class ActorAgent extends Agent<Env> {
   /** One compaction logger for both compaction entries — the per-turn extension and the
    *  swarm shared-prefix ladder — so the two cannot drift into different outcome names. */
   private readonly compactionLogger: CompactionLogger = {
-    info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, data)),
+    info: (message, data) => this.logActivity('compaction', compactionLogDetail(message, v.safeParse(CompactionDetailSchema, data))),
     debug: (message) => diagnostics.event('compaction.debug', { message }),
-    // `degraded`/`failed` rather than `warn`/`error`: a level is not an outcome, and these two names
-    // are shared verbatim with `cli-backend/src/local-session.ts`, which adapts the same
-    // `@better-compact/core` Logger port to the same outcomes. One query reads both backends.
-    warn: (message, data) => {
-      diagnostics.failure('compaction.degraded', new KinuError('unavailable', message));
-      this.logActivity('compaction_warn', compactionLogDetail(message, data));
-    },
-    error: (message, data) => {
-      diagnostics.failure('compaction.failed', new KinuError('io', message));
-      this.logActivity('compaction_error', compactionLogDetail(message, data));
-    },
+    warn: (message, data) => { this.reportCompaction('warn', message, v.safeParse(CompactionDetailSchema, data)); },
+    error: (message, data) => { this.reportCompaction('error', message, v.safeParse(CompactionDetailSchema, data)); },
   };
+
+  private reportCompaction(outcome: keyof typeof COMPACTION_OUTCOMES, message: string, detail: CompactionDetail): void {
+    const { event, code, activity } = COMPACTION_OUTCOMES[outcome];
+
+    diagnostics.failure(event, new KinuError(code, message));
+    this.logActivity(activity, compactionLogDetail(message, detail));
+  }
 
   /** Better-compact is THE default (and only) compaction path: the staged
    *  pruning ladder runs as a transformContext extension once per turn
@@ -2486,7 +2499,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Scoped access-token connections may chat but never write agent state. */
   override shouldConnectionBeReadonly(connection: Connection, ctx: ConnectionContext): boolean {
     return this.actorRuntimeRefusal() !== null || super.shouldConnectionBeReadonly(connection, ctx)
-      || !!ctx.request.headers.get(CLI_SCOPES_HEADER);
+      || ctx.request.headers.get(CLI_SCOPES_HEADER) !== null;
   }
 
   private _rt: CFRuntime | null = null;
@@ -2505,16 +2518,14 @@ export abstract class ActorAgent extends Agent<Env> {
    */
   private _actorSession: ActorSession | null = null;
   protected get actorSession(): ActorSession {
-    if (!this._actorSession) {
-      this._actorSession = new ActorSession({
-        runtime: this.rt,
-        claims: this.stores.claims,
-        history: this.stores.history,
-        installedBuild: this.installedBuildIdentity(),
-        events: this.stores.eventRecorder,
-        orchestration: this.orchestrationDeps(),
-      });
-    }
+    this._actorSession ??= new ActorSession({
+      runtime: this.rt,
+      claims: this.stores.claims,
+      history: this.stores.history,
+      installedBuild: this.installedBuildIdentity(),
+      events: this.stores.eventRecorder,
+      orchestration: this.orchestrationDeps(),
+    });
 
     return this._actorSession;
   }
@@ -2584,18 +2595,16 @@ export abstract class ActorAgent extends Agent<Env> {
    *  the transcript as the client sees it, and the loop's driver API. */
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
-    if (!this._chatTransport) {
-      this._chatTransport = new ChatWireTransport({
-        sql: this.boundSql,
-        broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
-        getConnection: (id) => this.getConnection(id),
-        history: () => this.chatTranscript.history(),
-        admitted: (id) => this.admittedSend(id),
-        send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
-        interrupt: () => { this.chatLoop.interrupt(); },
-        clear: () => this.clearConversation(),
-      });
-    }
+    this._chatTransport ??= new ChatWireTransport({
+      sql: this.boundSql,
+      broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
+      getConnection: (id) => this.getConnection(id),
+      history: () => this.chatTranscript.history(),
+      admitted: (id) => this.admittedSend(id),
+      send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
+      interrupt: () => { this.chatLoop.interrupt(); },
+      clear: () => this.clearConversation(),
+    });
 
     return this._chatTransport;
   }
@@ -3375,7 +3384,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected _executorsUsedThisTurn = new Set<string>();
   // ── Tool cache: avoid rebuilding the built-in ToolSet + codemode types every turn ──
   protected _cachedTools: ToolSet | null = null;
-  protected _cachedToolsKey: string = "";
+  protected _cachedToolsKey = "";
   // ── User MCP tools cache ─────────────────────────────────────────────
   // Per-user MCP tools live in UserDO. Per turn we fetch the canonical
   // descriptor surface and cache the rebuilt closures against ITS CONTENT
@@ -3524,11 +3533,15 @@ export abstract class ActorAgent extends Agent<Env> {
       if (event.type !== 'run_end') return;
 
       if (event.runId !== this._chatLoop?.currentRunId) return;
+      let outcome: 'ok' | 'refused' | 'failed' = 'ok';
+
+      if (event.reason !== 'completed') outcome = event.error === undefined ? 'refused' : 'failed';
+
       recordTurnRow(this.env, {
         workspace: this.workspaceName(),
         agentKind: this.actorKind(),
         ...this.analyticsModel(),
-        outcome: event.reason === 'completed' ? 'ok' : event.error === undefined ? 'refused' : 'failed',
+        outcome,
         code: '',
         durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
         steps: this.acc.stepCount,
@@ -3692,9 +3705,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // Spec: docs/ARCHITECTURE.md — "Events and ingress"
   private _eventLog: EventLog | null = null;
   protected get eventLog(): EventLog {
-    if (!this._eventLog) {
-      this._eventLog = new EventLog(this.ctx.storage.sql, this.actorHandle());
-    }
+    this._eventLog ??= new EventLog(this.ctx.storage.sql, this.actorHandle());
 
     return this._eventLog;
   }
@@ -3821,61 +3832,59 @@ export abstract class ActorAgent extends Agent<Env> {
   // and the BackendHost programmatic-turn wake. Owns the cancel-controller map.
   private _jobRunner: BackgroundJobRunner | null = null;
   protected get jobRunner(): BackgroundJobRunner {
-    if (!this._jobRunner) {
-      this._jobRunner = new BackgroundJobRunner({
-        store: this.jobs,
-        // The surface decides the FOREGROUND half — who watches the stream
-        // decides what detaching costs. 30s keeps chat responsive; anything
-        // with nobody watching wants its work finished in-turn. The WAKE half
-        // never varies here: a DO outlives every turn (its alarms deliver
-        // wakes with nobody connected, which is the whole recovery design), so
-        // spawn-shaped work detaches on unwatched turns too.
-        policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
-        fiber: this.rt.schedule.fiber,
-        inbox: this.orch.inbox,
-        eventLog: this.eventLog,
-        scheduleDrain: () => this.orch.scheduleDrain(),
-        logActivity: (event, detail) => this.logActivity(event, detail),
-        // The device requests THIS tool call issued, handed to the job that now
-        // owns them — by request id, never by turn. A turn can hold several
-        // parallel device commands and only the detaching call changes hands, so
-        // a turn-wide handover would move work that never left the foreground
-        // and put it beyond the reach of Stop.
-        onDetached: (jobId, requestIds) => this.transferDeviceRequests(jobId, requestIds),
-        // Cancel exactly this job's device work, and REFUSE the cancel when the
-        // device could not confirm it. Throwing is the propagation: the runner
-        // calls this before any job state changes, so a refused cancel leaves the
-        // job running and retryable rather than marking it terminal while the
-        // command it owns is still on somebody's machine.
-        onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
-        // Mission Inbox: a settled background job also notifies the owner
-        // (email on the orchestrator; skips silently when pieces are absent).
-        onSettled: (job) => {
-          const notice = backgroundJobNotice(job);
-          this.notifyOwner(notice.subject, notice.body);
-        },
-        // Evict-resume (B6): re-drive an interrupted job from its durable
-        // checkpoint. A fork re-runs the raw agents tool — MCTS continues its
-        // remaining search budget via the search store; heads re-run from input.
-        // Side-effecting kinds (eval / run) are not safe to blindly
-        // re-execute, so they decline and fall back to the eviction failure.
-        resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal),
-        // What a bounded-out job already produced. Same predicate as `resume` above,
-        // so a kind that cannot be re-driven has nothing partial to read either —
-        // and a SEARCH does: two completed candidates are a harvestable
-        // partial.
-        harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
-          { sql: this.boundSql, actor: this.actorHandle(), ledger: this.mctsSearchStore }, kind, input,
-        )),
-        // The wake for an attempt this activation deliberately did not start.
-        // It arms the actor's ONE terminal-retry row (soonest-wins), so a job
-        // waiting out its backoff costs no timer, no second callback, and no
-        // schedule row of its own — and the tick that row fires re-enters the
-        // job sweep itself, because the fork reconcile behind it runs at most
-        // once per activation and a deferred job outlives that.
-        scheduleResume: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-      });
-    }
+    this._jobRunner ??= new BackgroundJobRunner({
+      store: this.jobs,
+      // The surface decides the FOREGROUND half — who watches the stream
+      // decides what detaching costs. 30s keeps chat responsive; anything
+      // with nobody watching wants its work finished in-turn. The WAKE half
+      // never varies here: a DO outlives every turn (its alarms deliver
+      // wakes with nobody connected, which is the whole recovery design), so
+      // spawn-shaped work detaches on unwatched turns too.
+      policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
+      fiber: (name, fn) => this.rt.schedule.fiber(name, fn),
+      inbox: this.orch.inbox,
+      eventLog: this.eventLog,
+      scheduleDrain: () => this.orch.scheduleDrain(),
+      logActivity: (event, detail) => this.logActivity(event, detail),
+      // The device requests THIS tool call issued, handed to the job that now
+      // owns them — by request id, never by turn. A turn can hold several
+      // parallel device commands and only the detaching call changes hands, so
+      // a turn-wide handover would move work that never left the foreground
+      // and put it beyond the reach of Stop.
+      onDetached: (jobId, requestIds) => this.transferDeviceRequests(jobId, requestIds),
+      // Cancel exactly this job's device work, and REFUSE the cancel when the
+      // device could not confirm it. Throwing is the propagation: the runner
+      // calls this before any job state changes, so a refused cancel leaves the
+      // job running and retryable rather than marking it terminal while the
+      // command it owns is still on somebody's machine.
+      onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
+      // Mission Inbox: a settled background job also notifies the owner
+      // (email on the orchestrator; skips silently when pieces are absent).
+      onSettled: (job) => {
+        const notice = backgroundJobNotice(job);
+        this.notifyOwner(notice.subject, notice.body);
+      },
+      // Evict-resume (B6): re-drive an interrupted job from its durable
+      // checkpoint. A fork re-runs the raw agents tool — MCTS continues its
+      // remaining search budget via the search store; heads re-run from input.
+      // Side-effecting kinds (eval / run) are not safe to blindly
+      // re-execute, so they decline and fall back to the eviction failure.
+      resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal),
+      // What a bounded-out job already produced. Same predicate as `resume` above,
+      // so a kind that cannot be re-driven has nothing partial to read either —
+      // and a SEARCH does: two completed candidates are a harvestable
+      // partial.
+      harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
+        { sql: this.boundSql, actor: this.actorHandle(), ledger: this.mctsSearchStore }, kind, input,
+      )),
+      // The wake for an attempt this activation deliberately did not start.
+      // It arms the actor's ONE terminal-retry row (soonest-wins), so a job
+      // waiting out its backoff costs no timer, no second callback, and no
+      // schedule row of its own — and the tick that row fires re-enters the
+      // job sweep itself, because the fork reconcile behind it runs at most
+      // once per activation and a deferred job outlives that.
+      scheduleResume: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
+    });
 
     return this._jobRunner;
   }
@@ -4101,7 +4110,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Lazy SkillsVfs adapter over rt.storage.vfs — built once, reused. */
   private _skillsVfs: SkillsVfs | null = null;
   private getSkillsVfs(): SkillsVfs {
-    if (!this._skillsVfs) this._skillsVfs = skillsVfsOver(this.rt.storage.vfs);
+    this._skillsVfs ??= skillsVfsOver(this.rt.storage.vfs);
 
     return this._skillsVfs;
   }
@@ -4318,7 +4327,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // passed by reference.
   private _boundSql: SqlExecutor | null = null;
   protected get boundSql(): SqlExecutor {
-    if (!this._boundSql) this._boundSql = bindAgentSql(this);
+    this._boundSql ??= bindAgentSql(this);
 
     return this._boundSql;
   }
@@ -4356,13 +4365,11 @@ export abstract class ActorAgent extends Agent<Env> {
    * (`do.facet.id_is_root_namespace`).
    */
   protected get tracing(): AgentTracing {
-    if (!this._tracing) {
-      this._tracing = createAgentTracing({
-        tracer: createWorkersTracer(),
-        isolateGen: this.isolateGeneration,
-        selfPath: this.selfPath,
-      });
-    }
+    this._tracing ??= createAgentTracing({
+      tracer: createWorkersTracer(),
+      isolateGen: this.isolateGeneration,
+      selfPath: this.selfPath,
+    });
 
     return this._tracing;
   }
@@ -5034,12 +5041,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A fork reaches these through its `parent` executor. They deliberately
    * carry no `@callable`: only a worker-held parent stub can reach them. */
-  private workspaceFileFailure<T, Thrown>(path: string, error: Thrown): ParentRpcResult<T> {
+  private workspaceFileFailure<T>(path: string, thrown: { cause: unknown }): ParentRpcResult<T> {
     return {
       ok: false,
       error: {
-        code: isVfsError(error) ? error.code : 'EIO',
-        message: renderThrownChain({ cause: error }),
+        code: isVfsError(thrown.cause) ? thrown.cause.code : 'EIO',
+        message: renderThrownChain(thrown),
         path,
       },
     };
@@ -5051,7 +5058,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return { ok: true, value: v.is(v.string(), content) ? new TextEncoder().encode(content) : content };
     } catch (error) {
-      return this.workspaceFileFailure(path, error);
+      return this.workspaceFileFailure(path, { cause: error });
     }
   }
 
@@ -5062,7 +5069,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return { ok: true, value: null };
     } catch (error) {
-      return this.workspaceFileFailure(input.path, error);
+      return this.workspaceFileFailure(input.path, { cause: error });
     }
   }
 
@@ -5070,7 +5077,7 @@ export abstract class ActorAgent extends Agent<Env> {
     try {
       return { ok: true, value: await this.rt.localVfs.readdir(path) };
     } catch (error) {
-      return this.workspaceFileFailure(path, error);
+      return this.workspaceFileFailure(path, { cause: error });
     }
   }
 
@@ -5078,7 +5085,7 @@ export abstract class ActorAgent extends Agent<Env> {
     try {
       return { ok: true, value: await this.rt.localVfs.stat(path) };
     } catch (error) {
-      return this.workspaceFileFailure(path, error);
+      return this.workspaceFileFailure(path, { cause: error });
     }
   }
 
@@ -5088,7 +5095,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return { ok: true, value: null };
     } catch (error) {
-      return this.workspaceFileFailure(path, error);
+      return this.workspaceFileFailure(path, { cause: error });
     }
   }
 
@@ -5103,12 +5110,12 @@ export abstract class ActorAgent extends Agent<Env> {
   async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
     const shell = this.rt.shell;
 
-    if (!shell) return this.workspaceFileFailure('', new Error('this workspace has no shell'));
+    if (!shell) return this.workspaceFileFailure('', { cause: new Error('this workspace has no shell') });
 
     try {
       return { ok: true, value: await shell.exec(command) };
     } catch (error) {
-      return this.workspaceFileFailure('', error);
+      return this.workspaceFileFailure('', { cause: error });
     }
   }
 
@@ -5950,7 +5957,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const tools = this.getTools();
     const reads = await this.readTurnInputs(tools);
     this._executorsUsedThisTurn.clear();
-    const body = item.metadata === undefined ? {} : jsonObject(item.metadata);
+    const body = item.metadata ?? {};
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
     // The evolution gate, read WHERE THE TURN OPENS: core derives the same value
@@ -6024,7 +6031,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // This actor's registered extensions, every one: the turn composes its
         // own host over them and adds the orchestrator's inbox extension itself.
         extensions: this.extensions.list(),
-        dynamic: (profile, tools) => this.dynamicContextSnapshot(profile, tools, assembled.memoryTail),
+        dynamic: (profile, turnTools) => this.dynamicContextSnapshot(profile, turnTools, assembled.memoryTail),
         scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       },
       sessionKey: this.name,
