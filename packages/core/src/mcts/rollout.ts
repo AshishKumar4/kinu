@@ -1,13 +1,4 @@
-/**
- * The two model calls a toolless MCTS branch answers: one explore, one
- * reflection.
- *
- * Every branch substrate runs this: a hosted facet, a local child process, and
- * the inline closure a host without facets falls back to. The backend supplies
- * the routed model and its provider options as data and keeps what only it
- * holds, its trace store and its operation frame. The question, the request
- * shape and the reading of the answer live here once.
- */
+/** The two model calls a toolless MCTS branch answers (explore, reflection), shared by every branch substrate. */
 
 import { generateText, type LanguageModel } from 'ai';
 import type { BranchExploration, BranchReflection } from '../types/agent-runtime';
@@ -39,7 +30,6 @@ async function completion(
   return { text: result.text.trim(), usage: normalizeUsage(result.usage) };
 }
 
-/** One candidate approach, asked the way every sibling is asked. */
 export function exploreRollout(route: BranchRoute, input: ExplorePromptInput): Promise<BranchExploration> {
   const { system, user } = explorePrompt(input);
 

@@ -1,13 +1,6 @@
 /**
- * MCTS cost estimation — pre-check before running search.
- * Architecture reference: docs/MCTS.md — "UCT Formula" (budget defaults)
- *
- * The estimate is MODEL-AWARE. It has to be: one blended rate over every model
- * both refuses work that the catalog prices at nothing and waves through work
- * on a model that costs an order of magnitude more, and the second failure is
- * the dangerous one. Rates come from the catalog the repo already reads
- * (models.dev, via ModelInfo.cost → ModelCatalogSession.pricing()) — there is
- * no price table here to rot.
+ * MCTS cost estimation before search, priced per model from the catalog (ModelCatalogSession.pricing()).
+ * Reference: docs/MCTS.md "UCT Formula" (budget defaults).
  */
 
 import type { CostBasis, CostEstimate } from '../types/evaluation';
@@ -20,41 +13,17 @@ import { priceCall } from '../mission-budget';
 export type { CostModel } from '../types/mcts';
 
 /**
- * The projected shape of ONE average search call, across the explore /
- * assertion / judge / reflection mix.
- *
- * Split into input and output because catalog rates are, and the two differ by
- * 3x on the default model: a judge call is nearly all prompt, and charging its
- * completion tokens at the input rate (or the reverse) is how a model-aware
- * estimate would still lie.
- *
- * Deliberately carries NO `cacheRead`. A search that has not started has no
- * warm prefix, and crediting one would understate a cold run by the whole
- * cache discount — 30x on the default model, which is the wrong direction for
- * a spend ceiling to err in.
+ * Projected tokens of one average search call, split input/output as catalog rates are.
+ * No `cacheRead`: a cold search has no warm prefix, and crediting one would understate the ceiling.
  */
 const AVG_CALL_USAGE = { input: 1_500, output: 500 } as const satisfies Usage;
 
-/** Blended tokens per LLM call — the sum of the split above rather than its own
- *  literal, so the fallback path prices exactly the token count the catalog
- *  path does and the two answers stay comparable. */
+/** Sum of the split above, so the fallback prices the same token count as the catalog path. */
 const AVG_TOKENS_PER_CALL = AVG_CALL_USAGE.input + AVG_CALL_USAGE.output;
 
 /**
- * Estimate total LLM calls and approximate USD cost for an MCTS search.
- *
- * Call model (one iteration expands `branches` children from the selected node):
- *   exploration calls = budget × branches
- *                       (branch rollouts are SINGLE-STEP — BranchHandle.explore
- *                        is exactly one LLM call producing one proposal)
- *   evaluation calls  = budget × branches × evalCallsPerBranch
- *                       (grounded scoring: assertion generation + judge
- *                        ensemble, capped by mcts.maxEvalLLMCalls)
- *   reflection calls  = budget × branches × ~30% failure rate
- *
- * `model` absent — or present with no catalog rates — falls back to the blended
- * rate and says so in `basis`, which is what this did for every model before it
- * was model-aware. The gate is a spend ceiling, not an invoice.
+ * Estimate total LLM calls and approximate USD cost for an MCTS search. Without catalog rates for
+ * `model`, falls back to the blended rate and says so in `basis`. A spend ceiling, not an invoice.
  */
 export function estimateCost(
   budget: number,
@@ -87,9 +56,7 @@ function priceProjection(totalCalls: number, model: CostModel | undefined) {
       output: totalCalls * AVG_CALL_USAGE.output,
     };
 
-    // The ONE pricing implementation (mission-budget.priceCall), so a search's
-    // pre-run estimate and the ledger that later debits the same calls cannot
-    // disagree about what a token costs.
+    // Same pricing as the ledger (mission-budget.priceCall), so estimate and debit agree.
     const priced = priceCall(projected, pricing);
 
     if (priced !== undefined) {
@@ -110,8 +77,7 @@ function priceProjection(totalCalls: number, model: CostModel | undefined) {
   };
 }
 
-/** The basis as one human clause. Shared by the estimate's own description and
- *  the engine's refusal, so the two can never describe one figure differently. */
+/** The basis as one human clause, shared by the estimate and the engine's refusal. */
 export function describeCostBasis(basis: CostBasis): string {
   if (basis.source === 'catalog') {
     return `catalog rates for ${basis.model}: `

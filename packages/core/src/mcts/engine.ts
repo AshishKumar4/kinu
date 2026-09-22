@@ -1,13 +1,6 @@
 /**
- * MCTS search engine — the full fiber-backed parallel exploration loop.
- *
- * Architecture reference: docs/MCTS.md — "Search Flow"
- * Paper: LATS arXiv:2310.04406, the PROGRAMMING instantiation (§5.2), where a
- *   node's action is one complete candidate solution rather than a ReAct step,
- *   the simulation phase is skipped, and the environment is a generated assert
- *   suite plus the compiler. Selection/expansion/evaluation/backpropagation/
- *   reflection follow §4.2. In `plan` mode there is no environment to observe,
- *   so the search degrades to Tree of Thoughts (arXiv:2305.10601) with UCT.
+ * MCTS search engine: the fiber-backed parallel exploration loop. Reference: docs/MCTS.md "Search Flow".
+ * LATS arXiv:2310.04406 programming instantiation (§5.2); `plan` mode is Tree of Thoughts with UCT.
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
@@ -37,14 +30,7 @@ import { isoDate } from '../utils/date';
 import * as v from 'valibot';
 import { UsageSchema } from '../usage';
 
-/**
- * The durable fiber one search runs in.
- *
- * Exported for the same reason `BACKGROUND_FIBER_PREFIX` is: this module mints
- * the name and each backend's fiber-recovery hook matches on it, so two
- * literals in two packages would let a rename route an interrupted search into
- * the "no recovery is defined for this lane" branch.
- */
+/** The durable fiber one search runs in; exported because backend fiber-recovery hooks match on it. */
 export const SEARCH_FIBER_NAME = 'mcts';
 
 export const BranchExplorationSchema = v.object({
@@ -78,9 +64,7 @@ export async function runMCTS(
 
   if (search) initMctsSearchTable(rt.storage.execRaw);
 
-  // Resume an unfinished search for this task (one evicted mid-run): continue its
-  // remaining budget against the persisted tree instead of starting over (B6).
-  // The stored config is authoritative for the loop — knobs can't drift on resume.
+  // Resume an unfinished search (B6); the stored config is authoritative for the loop.
   const mode = config.mode ?? 'build';
   const resumed = search?.findResumable(task, mode) ?? null;
 
@@ -102,23 +86,12 @@ export async function runMCTS(
   const reflectionThreshold = defaults.reflectionThreshold;
   const craftExtractionThreshold = defaults.craftExtractionThreshold;
 
-  // `config.costModel`, not `effective.costModel`: this is a host seam (like
-  // `reportModelCall` and `onProgress` below), never a persisted knob, so a
-  // resume must not be able to restore a stale one.
-  // A resume prices what it will still spend — the REMAINING budget — never the
-  // persisted initial one. Spent iterations are gone; refusing on the full
-  // initial budget would turn every price rise after an eviction into a refusal
-  // of work the cap still funds. `effective` keeps the initial budget (the
-  // loop's phase still counts down from the checkpoint); only the gate reads
-  // the remainder.
+  // `config.costModel` is a host seam, never persisted. A resume prices only the remaining budget.
   const estimateBudget = resumed?.budget ?? effective.budget;
   const estimate = estimateCost(estimateBudget, N_BRANCHES, maxEvalLLMCalls, config.costModel?.());
 
   if (estimate.estimatedUSD > maxCostUSD) {
-    // The BASIS is named, not just the number. A refusal that says only
-    // "$19.08 exceeds $10" is unactionable when the $19.08 came from a blended
-    // guess about a model the catalog never priced — the operator cannot tell a
-    // real cap from a mispriced one without it.
+    // The refusal names its pricing basis so a mispriced model is distinguishable from a real cap.
     throw new Error(
       `Estimated cost $${estimate.estimatedUSD.toFixed(2)} exceeds limit $${maxCostUSD} `
       + `(${describeCostBasis(estimate.basis)}). `
@@ -129,16 +102,13 @@ export async function runMCTS(
   let rootId: string;
   let rootMsgId: string;
   let initialPhase: MCTSPhase;
-  // Lease epoch for this executor's search-store writes — bumped when a resume
-  // reclaims a running search (fences the dead executor, §5.3).
+  // Lease epoch for search-store writes; bumped when a resume reclaims a running search (§5.3).
   let searchEpoch = 0;
 
   if (resumed) {
     rootId = resumed.rootId;
     rootMsgId = resumed.rootMsgId;
     initialPhase = { iteration: resumed.iteration, budget: resumed.budget, rootId, rootMsgId, task };
-    // `resumed` exists only because the store answered for it; a store that
-    // declines to reclaim and one that is absent both leave the stored epoch.
     searchEpoch = search?.reclaim(rootId) ?? resumed.epoch;
   } else {
     rootId = nanoid();
@@ -156,46 +126,28 @@ export async function runMCTS(
     initialPhase = { iteration: 0, budget: effective.budget, rootId, rootMsgId, task };
     search?.begin({
       rootId, task, rootMsgId, engine: 'mcts',
-      // The RESOLVED judge knobs, not just the caller-supplied ones. A read of
-      // this row has to be able to say what ensemble the run REQUESTED, and that
-      // is unrecoverable from a blob that omits a knob the caller left at its
-      // default — which is also why the read model refuses to invent one
-      // (read-models/fork-params.ts). What it REALISED is not here: it is
-      // observed per branch and folded onto this row as it happens.
+      // The resolved judge knobs, so the row states what ensemble was requested (read-models/fork-params.ts).
       config: persistableMCTSConfig({ ...effective, judgeSamples, maxEvalLLMCalls }),
       budget: effective.budget, now: Date.now(),
     });
   }
 
-  // The one place a progress event acquires its search identity. Every consumer
-  // reads the tree the event names instead of guessing at "the latest" one.
   const report = (event: MCTSProgressBody): void => config.onProgress?.({ ...event, rootId });
   const { outOfBudget, charge } = missionMeter(config.mission);
   const reportedUngroundedLanguages = new Set<string>();
-  // Realised judge-ensemble sizes already disclosed. A build search has two:
-  // a code-bearing branch pays one of its evaluation calls for the generated
-  // check suite, a prose-only branch does not, so each is stated once rather
-  // than per branch per iteration.
   const reportedClampedEnsembles = new Set<number>();
 
   return rt.schedule.fiber<ConvergenceResult>(SEARCH_FIBER_NAME, async (ctx) => {
-    // The durable search store is the resume source of truth when injected; the
-    // fiber snapshot is the fallback for the inline/no-store path (tests).
+    // The durable search store is the resume source of truth; the fiber snapshot is the no-store fallback.
     const snapshot = v.safeParse(MCTSPhaseSchema, ctx.snapshot);
     const phase = search || !snapshot.success ? initialPhase : snapshot.output;
 
     while (phase.budget > 0) {
       throwIfAborted(config.signal);
 
-      // The mission ledger gates the EXPANSION, not the branch: a branch that
-      // refused its own call would return empty, score 0, and backpropagate
-      // that 0 up the persisted tree. Stopping here settles the tree on what it
-      // actually explored instead.
+      // The mission ledger gates the expansion, not the branch: a refused branch would backpropagate 0.
       if (await outOfBudget()) break;
-      // Depth cap lives in selection (WP-A4): a maxed-out argmax does not abort
-      // the search — selection skips depth-capped nodes and the budget
-      // keeps flowing to the shallower frontier. Break only when nothing is
-      // selectable (frontier exhausted or every open node is at the cap).
+      // Depth cap lives in selection (WP-A4); break only when nothing is selectable.
       const selected = selectNode(rt.storage.sql, rt.actor, rootId, { explorationWeight: W, maxDepth });
 
       if (!selected) break;
@@ -206,7 +158,6 @@ export async function runMCTS(
         iteration, remainingBudget: phase.budget, branches: N_BRANCHES,
       });
 
-      // EXPAND — spawn N branches
       const branchIds = Array.from({ length: N_BRANCHES }, () =>
         `${selected.id.slice(0, 8)}-${nanoid(8)}`,
       );
@@ -221,10 +172,7 @@ export async function runMCTS(
         abortBranches,
       );
 
-      // The expansion owns its branch agents for exactly this iteration:
-      // they explore, get scored, reflect, and are then released. On the CLI
-      // these are child processes — leaking them keeps the search's caller
-      // alive long after the tree is done.
+      // Branch agents live for exactly this iteration; on the CLI a leak keeps the caller alive.
       try {
         throwIfAborted(config.signal);
 
@@ -234,9 +182,7 @@ export async function runMCTS(
 
         const craftedTools = rt.craftStore.list();
 
-        // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest).
-        // Each branch is handed its siblings' distinct angles so the N proposals
-        // diverge by construction, not just by sampling temperature (DO-NOW #1).
+        // allSettled: one branch failure does not kill the rest. Sibling angles diversify proposals.
         const explorationResults = await abortable(
           Promise.allSettled(branchHandles.map((handle, i) =>
             handle.explore({
@@ -254,26 +200,13 @@ export async function runMCTS(
         throwIfAborted(config.signal);
 
         const explorations = explorationResults.map((r, i) => {
-          // A branch runs behind a backend seam (a facet RPC on cf, a forked
-          // worker locally), so a "fulfilled" result is still untrusted input:
-          // a malformed one must score 0 like any other failure, never crash
-          // the search after its nodes are already recorded.
+          // A fulfilled branch result is still untrusted input: a malformed one scores 0.
           const exploration = r.status === 'fulfilled'
             ? v.safeParse(BranchExplorationSchema, r.value)
             : null;
 
           if (exploration?.success) {
-            // Reported HERE and not in the charge loop below, because this is the
-            // only place that knows the branch completed a call: a rejected or
-            // malformed one is mapped to empty text, and an absent `usage` on
-            // THAT is a failure rather than a silent provider. Unconditional,
-            // unlike the charge — the mission port is a cap that no-ops without a
-            // label, so an unlabelled search's rollouts were captured off the
-            // wire and then dropped. `{}` when the branch reported no usage: the
-            // call still happened, and the coverage fraction is made of exactly
-            // these. No `spec`/`modelId`: a branch resolves its own model in
-            // another process and reports neither, and inventing one would name
-            // a model this search cannot see.
+            // Reported here, the only place that knows the branch completed a call; `{}` when no usage.
             config.reportModelCall?.({ source: 'mcts', usage: exploration.output.usage ?? {} });
 
             return exploration.output;
@@ -290,8 +223,7 @@ export async function runMCTS(
           return { text: '' };
         });
 
-        // Charged per rollout, from the provider's own report, so the ledger is
-        // current when the next expansion's guard reads it.
+        // Charged per rollout so the next expansion's guard reads a current ledger.
         for (const exploration of explorations) await charge(exploration.usage);
 
         const offeredCode = explorations.map(({ text }) => mode === 'plan'
@@ -300,20 +232,7 @@ export async function runMCTS(
 
         const proposals = explorations.map(e => e.text);
 
-        // EVALUATE — the engine-level seam every backend shares: branches only
-        // explore; scoring happens HERE through the one grounded evaluator
-        // (execution verdicts via rt.executor + judge ensemble via
-        // rt.judgeModel ?? rt.llm, sibling-relative). Evaluation failures score
-        // 0, not neutral 0.5; otherwise failed infrastructure can look like a
-        // balanced optimum and converge falsely.
-        //
-        // Runs BEFORE the nodes are recorded, because a node's observation is
-        // the environment's reply to its action and cannot be written before
-        // the environment has answered. Recording first also left a whole
-        // expansion of unscored `open` children behind whenever an abort landed
-        // between the two phases — visits=0 nodes that a resumed search's UCT
-        // argmax then selects and expands under, and that pruning can never
-        // reach (it needs visits >= minVisitsForPrune).
+        // Failures score 0, not 0.5. Runs before recording: a node's observation is the environment's reply.
         report({
           type: 'phase', phase: 'evaluate',
           iteration, remainingBudget: phase.budget, branches: N_BRANCHES,
@@ -325,8 +244,7 @@ export async function runMCTS(
               task,
               trajectory: exploration.text,
               siblings: proposals.filter((p, j) => j !== i && p.length > 0),
-              // Close the band loophole (WP-A5): if a sibling attempted code,
-              // this prose-only branch is capped at the fail ceiling.
+              // WP-A5: if a sibling attempted code, a prose-only branch is capped at the fail ceiling.
               siblingsProducedCode: offeredCode.some((code, j) =>
                 j !== i && code?.kind === 'runnable'),
               executionPolicy: mode === 'plan' ? 'judge-only' : 'grounded',
@@ -343,13 +261,7 @@ export async function runMCTS(
 
         throwIfAborted(config.signal);
         const scores: number[] = [];
-        // What the environment said back to each branch, indexed alongside the
-        // scores. Null for a branch that never reached it — prose, plan mode,
-        // an unrunnable language, or an evaluation that failed outright.
         const observations: Array<string | null> = [];
-        // Each branch's own evaluation, same indexing — the bounded facts a
-        // node row persists so a search that earns no answer is diagnosable
-        // from the tree alone. Null where the evaluation failed outright.
         const evaluations: Array<BranchEvaluation | null> = [];
 
         for (const [i, r] of scoreResults.entries()) {
@@ -377,20 +289,11 @@ export async function runMCTS(
             });
           }
 
-          // The ensemble this branch ACTUALLY ran. `judgeSamples` is only the
-          // request: it shares one per-evaluation call pool with check
-          // generation, so a request the pool cannot fund is realised lower,
-          // and this is the only field carrying the realised number. Reported
-          // from the evaluator's own answer rather than predicted from the
-          // knobs, and only when the ensemble was reached at all: a cascade
-          // that short-circuited before judging attempted zero samples, which
-          // is not a clamp.
+          // The realised ensemble size, reported only when judging was reached.
           const realised = r.value.judgeSamplesAttempted;
 
           if (realised > 0) {
-            // On the ledger row as well as in the diagnostic, because the surface
-            // reads the row: an event nobody can query later is not a field a run's
-            // parameters carry. The store keeps the smallest any branch reached.
+            // Also on the ledger row, which the surface reads; the store keeps the smallest reached.
             search?.observeJudgeEnsemble(rootId, realised);
           }
 
@@ -411,8 +314,6 @@ export async function runMCTS(
           evaluations.push(r.value);
         }
 
-        // RECORD nodes — action plus the observation it earned, which is the
-        // pair a child expansion inherits through session.getHistory(msg_id).
         const childNodeIds: string[] = [];
 
         for (let i = 0; i < N_BRANCHES; i++) {
@@ -440,7 +341,6 @@ export async function runMCTS(
           `;
         }
 
-        // BACKPROPAGATE
         for (let i = 0; i < N_BRANCHES; i++) {
           const nodeId = childNodeIds[i];
           const score = scores[i];
@@ -450,10 +350,7 @@ export async function runMCTS(
           }
         }
 
-        // REFLECT — write a failure lesson to memory for each below-threshold
-        // branch. Pruning is separate: it scans the whole open population for
-        // settled low-value nodes (pruneLowValueBranches), so it isn't confined
-        // to this iteration's freshly-expanded children.
+        // Reflect below-threshold branches to memory; pruning scans the whole open population separately.
         const reflecting = mode === 'build'
           ? scores.filter(score => score < reflectionThreshold).length
           : 0;
@@ -465,8 +362,7 @@ export async function runMCTS(
           });
         }
 
-        // A reflection is another model call on the far side, so the rollouts
-        // just debited above can be what takes the budget away from it.
+        // A reflection is another model call, so the budget may already be spent.
         const mayReflect = mode === 'build' && !(await outOfBudget());
 
         for (let i = 0; mayReflect && i < N_BRANCHES; i++) {
@@ -476,18 +372,8 @@ export async function runMCTS(
           const handle = branchHandles[i];
 
           if (!handle) continue;
-          // A reflection is an optional memory side-effect on an already-scored
-          // branch. Its model call fails the same way exploration does (that is
-          // what allSettled above tolerates), so letting it throw would discard
-          // a search whose branches are already recorded and backpropagated —
-          // and a malformed resolve is the same untrusted input a malformed
-          // exploration is, so it yields no lesson rather than a TypeError.
-          //
-          // The verdict travels with the question. LATS prompts the reflection
-          // "with the trajectory AND final reward" (§4.2); a branch's own trace
-          // table holds only what it proposed, so asking "what went wrong?"
-          // without the environment's answer asks a model to guess at a runtime
-          // error the engine already read. Null when nothing executed.
+          // A reflection is optional: its failure or malformed result yields no lesson, never a thrown search.
+          // The verdict travels with the question (LATS §4.2); null when nothing executed.
           let result: BranchReflection | undefined;
 
           try {
@@ -499,8 +385,6 @@ export async function runMCTS(
             });
           }
 
-          // A branch that threw leaves `result` undefined, which the schema
-          // rejects exactly as it rejects a malformed answer.
           const parsed = v.safeParse(BranchReflectionSchema, result);
           let reflection = '';
 
@@ -512,8 +396,6 @@ export async function runMCTS(
 
           throwIfAborted(config.signal);
 
-          // An empty reflection carries no lesson — writing it just litters
-          // MEMORY.md with duplicate bare "### Failure lesson" headers.
           if (reflection) {
             await rt.memory.append(
               'memory/MEMORY.md',
@@ -526,8 +408,6 @@ export async function runMCTS(
         await pruneLowValueBranches(rt, rootId, pruneThreshold, minVisitsForPrune);
         throwIfAborted(config.signal);
 
-        // EXTRACT crafted tools from winners. Plan mode offers no code at all
-        // (`offeredCode` is all null above), so the mode rides the same filter.
         for (let i = 0; i < N_BRANCHES; i++) {
           const score = scores[i] ?? 0;
           const code = offeredCode[i];
@@ -547,16 +427,9 @@ export async function runMCTS(
           rootMsgId: phase.rootMsgId,
           task: phase.task,
         });
-        // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
-        // continue from the remaining budget against the persisted tree (B6).
+        // Durable, epoch-fenced checkpoint for resume (B6).
         search?.checkpoint(rootId, searchEpoch, { iteration: phase.iteration, budget: phase.budget, now: Date.now() });
 
-        // The checkpoint above is durable but silent: nothing reached Workers Logs
-        // or `wrangler tail` per iteration, so a durably-checkpointed search running
-        // for HOURS produced no visible sign of life. Gated on `search`, matching the
-        // checkpoint call itself, so the fiber-snapshot-only and test paths stay
-        // quiet. An `event` and not a `failure`: an iteration completing is not a
-        // failure, and `failure` would demand a classification there is none of.
         if (search) {
           diagnostics.event('mcts.checkpoint_reached', {
             rootId,
@@ -575,16 +448,8 @@ export async function runMCTS(
       }
     }
 
-    // CONVERGE — the durable settle record must never run ahead of the work it
-    // claims. converge() awaits real I/O (a summary call, memory writes) before
-    // it closes the tree, so writing 'converged' first left a search recorded as
-    // settled with its whole tree still open whenever that I/O failed or the
-    // process died mid-flight. Order: close the tree, then record the outcome.
-    // A crash between the two is safe in one direction only — a closed tree with
-    // a still-'running' row is inert (nothing is selectable) and resumable.
-    // The status is equally load-bearing: `converged` means a candidate cleared
-    // the acceptance floor. A false result closed the tree without a terminal
-    // node, so it must settle as `no_acceptable_candidate`.
+    // Close the tree, then record the outcome: the settle record must never run ahead of the work.
+    // A false result settles as `no_acceptable_candidate`.
     try {
       const result = await converge(rt, session, rootId, { minAcceptable: minAcceptableScore, takesEpsilon, mode });
 
@@ -596,9 +461,7 @@ export async function runMCTS(
 
       return result;
     } catch (err) {
-      // The budget is spent, so a resume would re-enter with nothing left to
-      // explore and fail again. Retire the tree and settle the search as failed
-      // rather than leaving a poison-pill 'running' row for this task.
+      // Budget spent: retire the tree and settle as failed rather than leave a poison-pill 'running' row.
       abandonSearchTree(rt.storage.sql, rt.actor, rootId);
       search?.fail(rootId, searchEpoch, Date.now());
       throw err;
@@ -606,8 +469,6 @@ export async function runMCTS(
   });
 }
 
-/** Fixed scalar facts only. Proposal text stays in `observation`; bounded
- * execution feedback stays in the session message. */
 function nodeEvaluationDiagnostics(
   evaluation: BranchEvaluation | null | undefined,
 ): NodeEvaluationDiagnostics | null {
@@ -657,10 +518,7 @@ async function abortable<T>(
       try {
         await onAbort();
       } catch (cause) {
-        // The abort sweep itself failed — infrastructure, not the search's
-        // own work. Recorded so the sweep's failure is stated rather than
-        // surfacing as an unhandled rejection after the race has already
-        // thrown for the abort.
+        // The abort sweep itself failed; recorded rather than surfacing as an unhandled rejection.
         diagnostics.failure(
           'mcts.abort_sweep_failed',
           toKinuError({ doing: 'abort MCTS branches on signal', cause, otherwise: 'cancelled' }),

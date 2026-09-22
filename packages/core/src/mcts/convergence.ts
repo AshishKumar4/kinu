@@ -1,11 +1,6 @@
 /**
- * MCTS convergence — committing the winning branch.
- *
- * Architecture reference: docs/MCTS.md — "Pruning and convergence"
- *
- * BUG-4: When winner.value < MIN_ACCEPTABLE_SCORE, converge() returns
- * { converged: false }. The architecture doc does NOT specify what happens next
- * (no retry policy, no fallback). This is a documented behavioral underspecification.
+ * MCTS convergence: committing the winning branch. Reference: docs/MCTS.md "Pruning and convergence".
+ * Below MIN_ACCEPTABLE_SCORE, converge() returns { converged: false }; no retry policy is specified.
  */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -23,9 +18,7 @@ import { isoDate } from '../utils/date';
 import type { WorkMode } from '../types/turn';
 
 export interface ConvergeOptions {
-  /** The acceptance floor a winner must clear. */
   readonly minAcceptable?: number;
-  /** The near-tie window the takes ledger records rivals within. */
   readonly takesEpsilon?: number;
   readonly mode?: WorkMode;
 }
@@ -52,10 +45,7 @@ export async function converge(
     throw new Error('No viable nodes — all branches failed or were pruned');
   }
 
-  // DO-NOW #3: when the top candidates are within takesEpsilon the judge could
-  // not separate them, so argmax(value) is noise. Break the near-tie with a
-  // discriminating execution test over the candidates' code (same executor the
-  // EVALUATE phase used); the test-passer becomes the winner, else value order.
+  // Near-tie within takesEpsilon: break it with an execution test over the candidates' code.
   const selectedId = mode === 'plan'
     ? argmaxWinner.id
     : await selectWinnerByTest(population, argmaxWinner, takesEpsilon, {
@@ -67,23 +57,8 @@ export async function converge(
     ? argmaxWinner
     : population.find((n) => n.id === selectedId) ?? argmaxWinner;
 
-  // A search that could not tell its branches apart did not converge on one.
-  //
-  // With no value signal every node carries the same number, so `ORDER BY value
-  // DESC` degenerates to row order and the "winner" is whichever row SQLite
-  // returned first — while the result still cleared `minAcceptable` and
-  // reported success. Measured against this selector: at zero signal a 42-node
-  // tree returns a node no better than one of 42 independent samples, and the
-  // agreement between what it picked and the genuinely best node is 0%.
-  //
-  // The test is exact equality across DISTINCT approaches, not an epsilon: two
-  // near-tied branches are a real near-tie the takes ledger exists to record,
-  // whereas two textually different proposals scoring byte-identically means
-  // the scorer is not a function of the proposal. `findNearTiedRivals` supplies
-  // the population — it already drops the root, same-path refinements and
-  // textual duplicates — but its epsilon window is one-sided and keeps rivals
-  // scoring ABOVE the winner, which is the normal state after the execution
-  // tie-break promotes a lower-value passer. Only the exact ties count.
+  // Distinct approaches scoring exactly equal mean the scorer carries no signal: not converged.
+  // Only exact ties count; findNearTiedRivals' epsilon window also keeps rivals above the winner.
   const indistinguishable = findNearTiedRivals(population, winner, 0)
     .filter((rival) => rival.value === winner.value);
 
@@ -110,7 +85,6 @@ export async function converge(
     };
   }
 
-  // BUG-4: Below-threshold → converge reports failure, not hallucinated success
   if (winner.value < minAcceptable) {
     if (mode === 'build') {
       await rt.memory.append(
@@ -159,14 +133,11 @@ export async function converge(
       await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.value);
     }
 
-    // The near-tied rivals of the answer the user is about to see. Capturing
-    // them is the only preference signal this turn produces, so a capture that
-    // fails settles nothing quietly.
+    // Rivals are the turn's only preference signal, so a capture failure must surface.
     captureAlternateTakes(rt.storage.sql, rt.actor, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
   }
 
-  // Close the tree: the winner becomes terminal and every other open node in
-  // this search is pruned, so a settled tree can never be re-entered.
+  // Close the tree: winner terminal, every other open node pruned.
   void rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
@@ -188,23 +159,14 @@ export async function converge(
   };
 }
 
-/**
- * Retire every still-open node of a search that produced no winner — the
- * below-threshold path here, and the engine's handler for a convergence that
- * threw. A search is settled exactly when its tree has no open nodes left, so
- * this is what makes the durable 'failed' record honest.
- */
+/** Retire every open node of a search with no winner; a search is settled when no open nodes remain. */
 export function abandonSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): void {
   actor.assertCurrent();
   void sql`UPDATE search_nodes SET status = 'failed'
       WHERE actor_id = ${actor.actorId} AND root_id = ${rootId} AND status = 'open'`;
 }
 
-/** Record the task outcome into task_history — the per-task ledger behind the
- *  agent-info "Tasks" stat and scaffold error-rate monitoring. Both the scaffold
- *  version and task_history come from the workspace schema every backend
- *  initializes, so neither is optional: a search that cannot write its own
- *  outcome must say so rather than leave the ledger short one settled task. */
+/** Record the task outcome into task_history; a write failure throws rather than leaving the ledger short. */
 async function recordTaskOutcome(
   rt: AgentRuntime,
   task: string,
