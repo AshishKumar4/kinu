@@ -18,11 +18,11 @@ import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon } from "@ph
 import type { AgentTask, AgentTaskTree, TaskStatus } from "@kinu.run/core";
 
 const STATUS_META = {
-  open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open" },
-  active: { icon: CircleIcon, tone: "p-accent", label: "Active" },
-  done: { icon: CheckCircleIcon, tone: "p-success", label: "Done" },
-  dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped" },
-} satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string }>;
+  open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open", weight: "regular", text: "p-text-2" },
+  active: { icon: CircleIcon, tone: "p-accent", label: "Active", weight: "fill", text: "p-text font-medium" },
+  done: { icon: CheckCircleIcon, tone: "p-success", label: "Done", weight: "fill", text: "p-text-3 line-through" },
+  dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped", weight: "regular", text: "p-text-3 line-through" },
+} satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string; weight: "fill" | "regular"; text: string }>;
 
 /** Settled items stay legible but stop competing with the work in hand. */
 export function isSettled(status: TaskStatus): boolean {
@@ -45,15 +45,11 @@ function TaskRow({ task, depth, owner }: { task: AgentTask; depth: number; owner
     >
       <Icon
         size={13}
-        weight={task.status === "active" ? "fill" : task.status === "done" ? "fill" : "regular"}
+        weight={meta.weight}
         className={`${meta.tone} shrink-0 mt-0.5`}
       />
       <code className="p-annotation p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
-      <span
-        className={`p-row-text min-w-0 break-words ${
-          isSettled(task.status) ? "p-text-3 line-through" : task.status === "active" ? "p-text font-medium" : "p-text-2"
-        }`}
-      >
+      <span className={`p-row-text min-w-0 break-words ${meta.text}`}>
         {task.title}
         {owner && <span className="p-meta p-text-3"> · {owner}</span>}
         {task.note && <span className="block p-meta p-text-3 mt-0.5">{task.note}</span>}

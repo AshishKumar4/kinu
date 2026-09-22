@@ -25,7 +25,8 @@ import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
 import {
   addSkill, deleteDriveEntry, listDrive, makeDriveFolder, markAsSkill, mossaicVfs, packDriveFolder, receiveDriveUpload,
-  renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget, type MossaicVfs, type SharedLibrary,
+  renameDriveEntry, SKILL_FOLDER_FILE, type DriveListing, type DriveUploadOutcome, type DriveUploadTarget,
+  type MarkedSkill, type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
 import { KinuError, renderThrownChain, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
@@ -58,7 +59,10 @@ const STATUS: Readonly<Record<ErrorCode, number>> = {
   bad_input: 400, denied: 403, missing: 404, unsupported: 415, budget: 413, unavailable: 503, timeout: 504, cancelled: 400, oom: 507, io: 500,
 };
 
-function answer<Body>(body: Body, status = 200): Response {
+/** Every JSON body this stub answers with. */
+type DriveAnswerBody = DriveListing | DriveUploadOutcome | MarkedSkill | { error: string };
+
+function answer(body: DriveAnswerBody, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
@@ -125,8 +129,9 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
 
       case "PUT /skills": {
         const bytes = new Uint8Array(await request.arrayBuffer());
+        const { skill } = await receiveDriveUpload(drive, { kind: "skill", name: url.searchParams.get("name") }, bytes);
 
-        return answer((await receiveDriveUpload(drive, { kind: "skill", name: url.searchParams.get("name") }, bytes)).skill);
+        return answer(skill ?? { ok: true });
       }
 
       case "PUT /files": {

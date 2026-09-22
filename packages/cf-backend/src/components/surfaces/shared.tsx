@@ -15,6 +15,12 @@ import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
 
+const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
+  add: { tone: "p-badge-success px-3", mark: "+" },
+  del: { tone: "p-badge-danger px-3", mark: "−" },
+  ctx: { tone: "p-text-3 px-3", mark: " " },
+};
+
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
  *  scaffold-version diff (Self) and the workspace change-set (Output).
  *  `truncated` marks a bounded body, so a partial hunk never reads as the whole
@@ -25,11 +31,15 @@ import { SlateInlineContext } from "@/components/slates/context";
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
     <pre className="p-t-code overflow-x-auto max-h-[360px] overflow-y-auto m-0">
-      {lines.map((l, i) => (
-        <div key={i} className={l.kind === "add" ? "p-badge-success px-3" : l.kind === "del" ? "p-badge-danger px-3" : "p-text-3 px-3"}>
-          <span className="select-none opacity-40 mr-2">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>{l.text || " "}
-        </div>
-      ))}
+      {lines.map((l, i) => {
+        const { tone, mark } = DIFF_LINE[l.kind];
+
+        return (
+          <div key={i} className={tone}>
+            <span className="select-none opacity-40 mr-2">{mark}</span>{l.text || " "}
+          </div>
+        );
+      })}
       {truncated && (
         <div className="p-text-3 px-3 italic">
           {lines.length === 0
@@ -44,9 +54,9 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
 
 /** One code well for fences, tool inputs and source viewers. Unknown grammars
  * stay readable as plain text. One cached highlighter loads grammars on demand. */
-export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
+export function CodeBlock({ children, className }: { children: string; className?: string }) {
   const { status, copy } = useCopy();
-  const code = String(children).replace(/\n$/, "");
+  const code = children.replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
 
   const { resource, reload } = useAsyncResource(useCallback(async () => {
@@ -178,7 +188,7 @@ function remarkSlateLinks() {
     if (children === undefined) return;
 
     for (let i = 0; i < children.length; i++) {
-      const child = children[i]!;
+      const child = children[i];
 
       if (child.type === 'text') {
         const parts = split(child);
@@ -209,14 +219,14 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
       // node's position (react-markdown puts a fence inside a <pre>), which
       // `pre` below unwraps, so the check here is on the content itself: a
       // fence is the thing that spans lines.
-      code({ className, children, ...props }) {
-        const text = String(children ?? "");
+      code({ node, className, children, ...props }) {
+        const source = (node?.children ?? []).map((child) => (child.type === "text" ? child.value : "")).join("");
 
-        if (!className && !text.includes("\n")) {
+        if (!className && !source.includes("\n")) {
           return <code className="p-code-inline" {...props}>{children}</code>;
         }
 
-        return <CodeBlock className={className}>{children}</CodeBlock>;
+        return <CodeBlock className={className}>{source}</CodeBlock>;
       },
       a({ href, children }) {
         const id = slateLinkId(href ?? '');
@@ -351,6 +361,41 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
 }
 
 
+interface HistoryBoundaryProps {
+  loading: boolean;
+  error: string | null;
+  exhausted: boolean;
+  onRetry: () => void;
+}
+
+function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBoundaryProps) {
+  if (error !== null) {
+    return (
+      <>
+        <WarningCircleIcon size={13} className="p-danger shrink-0" />
+        <span className="p-text-3">Could not load earlier messages.</span>
+        <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
+      </>
+    );
+  }
+
+  if (loading) {
+    return <span className="flex items-center gap-2 p-text-3"><Loader size="sm" />Loading earlier messages…</span>;
+  }
+
+  if (exhausted) {
+    return (
+      <>
+        <span className="h-px flex-1 p-border border-t" />
+        <span className="p-text-3 p-meta">Beginning of the conversation</span>
+        <span className="h-px flex-1 p-border border-t" />
+      </>
+    );
+  }
+
+  return null;
+}
+
 /**
  * The top of the transcript: what is above the oldest message on screen.
  *
@@ -364,29 +409,10 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
  * before it was pinned, which is small, constant, and accumulates once per
  * page for as long as someone keeps scrolling.
  */
-export function HistoryBoundary({ loading, error, exhausted, onRetry }: {
-  loading: boolean;
-  error: string | null;
-  exhausted: boolean;
-  onRetry: () => void;
-}) {
+export function HistoryBoundary(props: HistoryBoundaryProps) {
   return (
     <div className="flex h-7 items-center justify-center gap-2 text-xs">
-      {error ? (
-        <>
-          <WarningCircleIcon size={13} className="p-danger shrink-0" />
-          <span className="p-text-3">Could not load earlier messages.</span>
-          <button onClick={onRetry} className="p-accent hover:underline">Retry</button>
-        </>
-      ) : loading ? (
-        <span className="flex items-center gap-2 p-text-3"><Loader size="sm" />Loading earlier messages…</span>
-      ) : exhausted ? (
-        <>
-          <span className="h-px flex-1 p-border border-t" />
-          <span className="p-text-3 p-meta">Beginning of the conversation</span>
-          <span className="h-px flex-1 p-border border-t" />
-        </>
-      ) : null}
+      <HistoryBoundaryNotice {...props} />
     </div>
   );
 }

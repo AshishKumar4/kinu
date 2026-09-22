@@ -47,6 +47,9 @@ const DEVICE_URL = 'https://3000-device-aaaaaaaaaaaaaaaa.preview.example.test/';
 
 const NOTHING = () => {};
 
+/** What a fixture RPC answers with: JSON, plus the plan records the surfaces read. */
+type ReplyValue = JsonValue | PlanReview | readonly ReplyValue[] | { readonly [key: string]: ReplyValue };
+
 /**
  * The one way this gate can make the SERVER speak.
  *
@@ -83,7 +86,7 @@ export function PreviewTabsGallery() {
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
   const rpc: Rpc = useCallback(async <T,>(method: string, _args?: unknown[]): Promise<T> => {
-    const reply = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(value)).json<T>();
+    const reply = (value: ReplyValue): Promise<T> => new Response(JSON.stringify(value)).json<T>();
 
     if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', additions: 1, deletions: 0, diff: '+export const ready = true;' }] : [] });
@@ -95,28 +98,28 @@ export function PreviewTabsGallery() {
       // trigger, never a discovery read.
       if (failHistory) throw new Error('Plan history temporarily unavailable');
 
-      const owner = (name: string, retired = false) => ({ actorId: `actor-${name}`, name, retired });
+      const ownerOf = (name: string, retired = false) => ({ actorId: `actor-${name}`, name, retired });
 
       const rootPlans = plan ? [
-        { owner: owner('main'), plan, tasks: [] },
-        { owner: owner('main'), plan: { ...ROOT_PLAN, revision: 1, status: 'superseded' as const, content: '# Earlier dashboard plan' }, tasks: [] },
+        { owner: ownerOf('main'), plan, tasks: [] },
+        { owner: ownerOf('main'), plan: { ...ROOT_PLAN, revision: 1, status: 'superseded' as const, content: '# Earlier dashboard plan' }, tasks: [] },
       ] : [];
 
       return reply({
         plans: [
           ...rootPlans,
-          { owner: owner('courier'), plan: ARRIVAL_PLAN, tasks: [] },
+          { owner: ownerOf('courier'), plan: ARRIVAL_PLAN, tasks: [] },
           {
-            owner: owner('worker'), plan: workerPlan,
+            owner: ownerOf('worker'), plan: workerPlan,
             tasks: [{ id: 't1', parentId: null, title: 'Deliver worker', status: 'active', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
           },
           {
-            owner: owner('nested'), plan: { ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved' as const, handoffAccepted: true },
+            owner: ownerOf('nested'), plan: { ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved' as const, handoffAccepted: true },
             tasks: [{ id: 't2', parentId: null, title: 'Deliver nested', status: 'done', createdAt: 1, updatedAt: 1, note: null, subtasks: [] }],
           },
-          { owner: owner('archive', true), plan: { ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved' as const, handoffAccepted: true }, tasks: [] },
+          { owner: ownerOf('archive', true), plan: { ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved' as const, handoffAccepted: true }, tasks: [] },
         ],
-        tasks: [{ owner: owner('main'), plan: null, tasks: [] }],
+        tasks: [{ owner: ownerOf('main'), plan: null, tasks: [] }],
       });
     }
     else if (method === 'decidePlanReview') {
@@ -129,7 +132,8 @@ export function PreviewTabsGallery() {
     else if (method === 'listAgentTasks') return reply([]);
     else if (method === 'getEvolutionChangelog') return reply({ entries: [], unseenCount: 0, seenAt: 0 });
     else if (method === 'markChangelogSeen') return reply({ seenAt: 0 });
-    else throw new Error('Unexpected preview gallery RPC: ' + method);
+
+    throw new Error('Unexpected preview gallery RPC: ' + method);
   }, [plan, diff, failHistory, workerPlan]);
 
   const workerRpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {

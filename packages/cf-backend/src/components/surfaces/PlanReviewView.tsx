@@ -20,7 +20,13 @@ import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
+
+const COPY_ICON = {
+  idle: CopyIcon,
+  copied: CheckIcon,
+  failed: WarningCircleIcon,
+} satisfies Record<CopyStatus, typeof CopyIcon>;
 
 function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
   if (value === "DELETION") return AnnotationType.DELETION;
@@ -30,7 +36,7 @@ function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
   return AnnotationType.COMMENT;
 }
 
-function parsePlanAnnotations<Values>(values: Values): Annotation[] {
+function parsePlanAnnotations(values: readonly PlanReviewAnnotation[]): Annotation[] {
   const admission = admitPlanReviewAnnotations(values);
 
   if (!admission.ok) return [];
@@ -346,6 +352,8 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
   };
 
   const updatedAt = new Date(plan.updatedAt);
+  const CopyStateIcon = COPY_ICON[copyStatus];
+  const retryLabel = plan.status === "approved" ? "Retry implementation" : "Retry revision";
 
   return (
     <section
@@ -400,11 +408,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
               size="sm"
               variant="ghost"
               onClick={() => copy(plan.content)}
-              icon={copyStatus === "copied"
-                ? <CheckIcon size={13} />
-                : copyStatus === "failed"
-                  ? <WarningCircleIcon size={13} />
-                  : <CopyIcon size={13} />}
+              icon={<CopyStateIcon size={13} />}
               aria-live="polite"
             >
               {copyLabel(copyStatus)}
@@ -529,7 +533,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
               onClick={() => decide(plan.status === "approved" ? "approve" : "request_changes")}
               disabled={decisionBusy !== null || saving}
             >
-              {decisionBusy ? <Loader size="sm" /> : plan.status === "approved" ? "Retry implementation" : "Retry revision"}
+              {decisionBusy ? <Loader size="sm" /> : retryLabel}
             </FilledButton>
           )}
         </div>

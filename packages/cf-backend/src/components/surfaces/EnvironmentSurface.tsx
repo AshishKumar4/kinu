@@ -153,40 +153,68 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
       </div>
 
       {/* Selected environment's terminal. */}
-      {selectedMount === null ? (
-        <div className="flex-1 min-h-0" />
-      ) : selectedExec?.granted === false ? (
-        <div className="flex-1 min-h-0">
-          <NeedsApprovalMount exec={selectedExec} />
-        </div>
-      ) : !selectedMount.live ? (
-        <div className="flex-1 min-h-0">
-          <UnavailableMount mount={selectedMount} exec={selectedExec} onConnectDevice={onConnectDevice} />
-        </div>
-      ) : (
-        <>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border shrink-0">
-            <TerminalIcon size={12} className="p-text-3" />
-            <span className="p-meta p-text-3">Terminal ·</span>
-            <span className="p-annotation p-text-3">{executorLabel(selectedMount.name)}</span>
-          </div>
-          <div className="flex-1 min-h-0">
-            {selectedExec ? (
-              <TerminalPane
-                workspace={workspaceName}
-                executor={selectedExec.name}
-                outputs={executorOutputs.get(selectedExec.name) ?? []}
-                onExecute={(cmd) => onExecute(selectedExec.name, cmd)}
-              />
-            ) : (
-              <div className="h-full flex items-center justify-center text-xs p-text-3">
-                This environment has no command lane.
-              </div>
-            )}
-          </div>
-        </>
-      )}
+      <SelectedEnvironmentPane
+        mount={selectedMount}
+        exec={selectedExec}
+        workspace={workspaceName}
+        executorOutputs={executorOutputs}
+        onExecute={onExecute}
+        onConnectDevice={onConnectDevice}
+      />
     </div>
+  );
+}
+
+/** Under the cards: the selected environment's terminal, or the one reason it
+ *  has none. */
+function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onExecute, onConnectDevice }: {
+  mount: MountInfo | null;
+  exec: ExecutorInfo | undefined;
+  workspace: string;
+  executorOutputs: Map<string, ExecutorOutput[]>;
+  onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
+  onConnectDevice: () => void;
+}) {
+  if (mount === null) return <div className="flex-1 min-h-0" />;
+
+  if (exec?.granted === false) {
+    return (
+      <div className="flex-1 min-h-0">
+        <NeedsApprovalMount exec={exec} />
+      </div>
+    );
+  }
+
+  if (!mount.live) {
+    return (
+      <div className="flex-1 min-h-0">
+        <UnavailableMount mount={mount} exec={exec} onConnectDevice={onConnectDevice} />
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border shrink-0">
+        <TerminalIcon size={12} className="p-text-3" />
+        <span className="p-meta p-text-3">Terminal ·</span>
+        <span className="p-annotation p-text-3">{executorLabel(mount.name)}</span>
+      </div>
+      <div className="flex-1 min-h-0">
+        {exec ? (
+          <TerminalPane
+            workspace={workspace}
+            executor={exec.name}
+            outputs={executorOutputs.get(exec.name) ?? []}
+            onExecute={(cmd) => onExecute(exec.name, cmd)}
+          />
+        ) : (
+          <div className="h-full flex items-center justify-center text-xs p-text-3">
+            This environment has no command lane.
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 

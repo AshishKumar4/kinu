@@ -140,12 +140,13 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
   const chip = focus.readyChip;
 
-  const workAvailable = surfaceHasContent("Work", props.tabPresence, props.mctsTrees, props.slates);
+  const [hasDiffs, setHasDiffs] = useState(false);
+  const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasDiffs };
+  const workAvailable = surfaceHasContent("Work", content);
 
   useEffect(() => {
     if (props.planFocus && workAvailable) focus.navigate("Work");
   }, [props.planFocus, workAvailable, focus.navigate]);
-  const [hasDiffs, setHasDiffs] = useState(false);
 
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
   const openPort = surface.startsWith("preview:") ? ports.find(port => surface === `preview:${port.executor}:${port.port}`) : undefined;
@@ -154,10 +155,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
   useEffect(() => {
     const duplicate = surface.startsWith("preview:workspace:") ? props.slates?.find(slate => `preview:workspace:${slate.port}` === surface) : undefined;
 
-    const resolved = duplicate ? slateSurface(duplicate.id)
-      : surface.startsWith("preview:") && !openPort
-        ? firstVisibleSurface(props.tabPresence, props.mctsTrees, props.slates, hasDiffs)
-        : resolveGatedSurface(surface, props.tabPresence, props.mctsTrees, props.slates, hasDiffs);
+    const gated = surface.startsWith("preview:") && !openPort
+      ? firstVisibleSurface(content)
+      : resolveGatedSurface(surface, content);
+
+    const resolved = duplicate ? slateSurface(duplicate.id) : gated;
 
     if (resolved !== surface) focus.navigate(resolved);
   }, [surface, focus.navigate, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
@@ -202,6 +204,20 @@ export function WorkSurface(props: WorkSurfaceProps) {
     if (tab.left < left) container.scrollLeft += tab.left - left;
     else if (tab.right > right) container.scrollLeft += tab.right - right;
   }, [surface]);
+  // A preview fills its pane; a read surface scrolls inside its own padding.
+  const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
+
+  let slatePanel: ReactNode = null;
+
+  if (openSlate !== null) {
+    if (openSlate === props.unmappedSlate) {
+      slatePanel = <UnmappedBindingsPanel slate={openSlate} title={openSlateSummary?.title ?? openSlate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />;
+    } else if (openSlateSummary === undefined) {
+      slatePanel = <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />;
+    } else {
+      slatePanel = props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />;
+    }
+  }
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
@@ -225,13 +241,14 @@ export function WorkSurface(props: WorkSurfaceProps) {
           })}
           {ports.map(port => {
             const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
-            const title = port.name || `${port.executor} :${port.port}`;
+            // An unnamed port, and one named with nothing, are titled by where it is.
+            const title = port.name === undefined || port.name === "" ? `${port.executor} :${port.port}` : port.name;
 
             return <button key={kind} onClick={() => focus.navigate(kind)} title={title} aria-label={title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
           })}
-          {SURFACES.filter(s => surfaceHasContent(s, props.tabPresence, props.mctsTrees, props.slates, hasDiffs)).map(s => (
+          {SURFACES.filter(s => surfaceHasContent(s, content)).map(s => (
             <button key={s} onClick={() => focus.navigate(s)} title={s} aria-label={s}
               aria-current={surface === s ? "true" : undefined}
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
@@ -272,7 +289,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         </div>
       </div>
 
-      <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6"}`}>
+      <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : bodyFit}`}>
         <div className={surface === "Work" ? "" : "hidden"}>
           <ErrorBoundary label="Work">
             {/* Keyed by workspace, never by agent: Work is the workspace's own
@@ -332,11 +349,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
-          {openSlate !== null && (openSlate === props.unmappedSlate
-            ? <UnmappedBindingsPanel slate={openSlate} title={openSlateSummary?.title ?? openSlate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />
-            : openSlateSummary
-              ? (props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />)
-              : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
+          {slatePanel}
         </ErrorBoundary>
       </div>
       <div className={surface === "Diffs" ? "flex-1 min-h-0" : "hidden"}>

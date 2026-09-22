@@ -93,11 +93,11 @@ export function ExplorationSurface({
   const {
     resource, reload, runs, params, trees, journals, resolutions, frontiers,
     exhausted, loadingMore, pageError, loadMore,
-  } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity);
+  } = useExplorationCanvas({ rpc, isStreaming, backgroundJobs, liveTrees, headActivity });
 
   // The list is the scroll container in both layouts, so the trigger lives on it
   // rather than on the canvas beside it.
-  const listRef = useGrowingScroll<HTMLDivElement>({
+  const listRef = useGrowingScroll({
     grows: "down", content: runs, fetched: runs, onReachEdge: loadMore,
   });
 
@@ -113,7 +113,7 @@ export function ExplorationSurface({
 
   // The newest fork is what the operator came to look at, so it is focused on
   // arrival; once they pick another, a later poll must not move the focus.
-  const focused = runs.find((run) => run.id === focusedRunId) ?? runs[0]!;
+  const focused = runs.find((run) => run.id === focusedRunId) ?? runs[0];
   /**
    * What the detail pane is showing. The focused run wherever nothing has been
    * opened, so the pane is never empty and choosing a run from the list always
@@ -855,6 +855,8 @@ function ForkCanvas({
    *  bottom of the key. */
   const budget = Math.max(0, cell.h - CARD_BORDER - chrome.h);
   const canvasH = natural === null ? budget : Math.min(budget, natural);
+  /** Until both axes are known the graph has no box to draw in. */
+  const measured = size.w > 0 && canvasH > 0;
 
   return (
     // Two boxes, not one. The outer is the column's whole height and is what
@@ -877,7 +879,7 @@ function ForkCanvas({
             `flex-1` alone gives a three-node merge the whole column, which is the
             fixed-height-card defect from the other direction. */}
         <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
-          {regions.length === 0 ? (
+          {regions.length === 0 && (
             <div className="h-full flex items-center justify-center px-6 text-center p-t-status p-text-3">
               {/* Said in the present tense for a search that is still going, because
                   the past tense is a false claim about it: "each stopped before its
@@ -887,7 +889,8 @@ function ForkCanvas({
                 ? "The search has not written a branch yet."
                 : "These searches wrote no branches. Each stopped before its first expansion."}
             </div>
-          ) : size.w > 0 && canvasH > 0 ? (
+          )}
+          {regions.length > 0 && (measured ? (
             <SwarmTree
               regions={regions} width={size.w} height={canvasH}
               selectedRunId={focusedId} selection={selection}
@@ -897,7 +900,7 @@ function ForkCanvas({
             />
           ) : (
             <div className="h-full flex items-center justify-center p-t-status p-text-3">Sizing canvas…</div>
-          )}
+          ))}
           {expandTo && (
             <Link to={expandTo} title="Open the selected search full-screen"
               className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-0.5 p-t-control p-text-3 hover:p-text transition-colors">
@@ -934,9 +937,8 @@ export function SwarmConfigDisclosure(
 ) {
   if (resolution === undefined && paramRows.length === 0) return null;
 
-  const name = resolution === undefined
-    ? "config"
-    : resolution.kind === "custom" ? resolution.label : resolution.preset;
+  const resolved = resolution?.kind === "custom" ? resolution.label : resolution?.preset;
+  const name = resolved ?? "config";
 
   return (
     <details data-swarm-config className="group shrink-0 min-w-0">
@@ -975,11 +977,13 @@ function SwarmResolutionBody(
     judges: string | null;
   },
 ) {
-  const caps = resolution?.kind === "preset"
-    ? resolution.depth === 1
+  let caps: string | null = null;
+
+  if (resolution?.kind === "preset") {
+    caps = resolution.depth === 1
       ? `flat · ${resolution.branches} ${resolution.branches === 1 ? "branch" : "branches"}`
-      : `depth ${resolution.depth} · branches ${resolution.branches}`
-    : null;
+      : `depth ${resolution.depth} · branches ${resolution.branches}`;
+  }
 
   return (
     <div data-swarm-resolution={resolution?.kind ?? "none"}

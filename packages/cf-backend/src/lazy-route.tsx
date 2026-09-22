@@ -70,9 +70,8 @@ const STALE_CHUNK_MESSAGES = [
   'unable to preload css for',
 ] as const;
 
-/** Whether a caught value is a module that would not load. */
-function isStaleChunkFailure<Failure>(cause: Failure): boolean {
-  if (!(cause instanceof Error)) return false;
+/** Whether a caught error is a module that would not load. */
+function isStaleChunkFailure(cause: Error): boolean {
   const message = cause.message.toLowerCase();
 
   return STALE_CHUNK_MESSAGES.some((known) => message.includes(known));
@@ -159,7 +158,7 @@ export async function loadRouteChunk<Module>(
   try {
     return await load();
   } catch (cause) {
-    if (!isStaleChunkFailure(cause)) throw cause;
+    if (!(cause instanceof Error) || !isStaleChunkFailure(cause)) throw cause;
     // The origin first, because it is the read that costs a request; the page's
     // own baseline was captured at load and is already resolved.
     const live = await deps.live();

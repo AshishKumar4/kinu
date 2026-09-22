@@ -27,6 +27,15 @@ interface GepaCandidate { id: string; parentId: string | null; aggregateScore: n
 
 interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
 
+/** A run's dot. Any status the engine has not named yet reads as neutral. */
+function runDot(status: string): string {
+  if (status === "completed") return "p-dot-success";
+
+  if (status === "running") return "p-dot-warning";
+
+  return "p-dot-neutral";
+}
+
 export function GepaView({ rpc }: { rpc: Rpc }) {
   const [sel, setSel] = useState<string | null>(null);
   const [detail, setDetail] = useState<AsyncResource<GepaRunDetail>>({ status: "loading" });
@@ -38,10 +47,10 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
     setDetail({ status: "loading" });
 
     try {
-      const detail = await rpc<GepaRunDetail>("getGepaRun", [runId]);
-      setDetail(loadSucceeded(detail));
+      const runDetail = await rpc<GepaRunDetail>("getGepaRun", [runId]);
+      setDetail(loadSucceeded(runDetail));
     } catch (cause) {
-      setDetail((previous) => loadFailed(previous, cause));
+      setDetail((previous) => loadFailed(previous, { cause }));
     }
   }, [rpc]);
 
@@ -65,18 +74,19 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
         {runs.map((r) => (
           <button key={r.runId} onClick={() => open(r.runId)}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
-            <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "running" ? "p-dot-warning" : "p-dot-neutral"}`} />
+            <span className={`size-1.5 rounded-full shrink-0 ${runDot(r.status)}`} />
             <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
             <span className="p-meta p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
           </button>
         ))}
       </div>
 
-      {sel && (loadedDetail === null ? (
+      {sel !== null && loadedDetail === null && (
         detail.status === "error"
           ? <LoadFailure what="this run's candidates" message={detail.message} onRetry={() => open(sel)} />
           : <div className="flex justify-center py-4"><Loader size="sm" /></div>
-      ) : (
+      )}
+      {sel !== null && loadedDetail !== null && (
         <div className="space-y-2">
           <div className="p-meta p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
           {/* Candidate aggregate-score bars; Pareto-front + winner highlighted. */}
@@ -88,12 +98,13 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
               // shown with its interval so two candidates aren't read apart on
               // a gap the eval set can't resolve.
               const ci = scoreInterval(Object.values(c.scores));
+              const barTone = onPareto ? "p-dot-info" : "p-dot-neutral";
 
               return (
                 <div key={c.id} className="flex items-center gap-2 p-meta">
                   <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
                   <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
-                    <div className={`h-full ${isWinner ? "p-dot-success" : onPareto ? "p-dot-info" : "p-dot-neutral"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
+                    <div className={`h-full ${isWinner ? "p-dot-success" : barTone}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
                   </div>
                   <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
                   <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{ci.lo.toFixed(2)}–{ci.hi.toFixed(2)}]</span>
@@ -102,7 +113,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
             })}
           </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -220,6 +231,7 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
           {rows.map((r, i) => {
             const prev = rows[i + 1]; // next-oldest
             const evolved = prev != null && prev.scaffoldVersion !== r.scaffoldVersion;
+            const belowSuccess = r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger";
 
             return (
               <div key={r.id} className="flex items-center gap-2 p-meta">
@@ -228,7 +240,7 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
                   <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
                 )}
                 <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${r.interval.lo.toFixed(2)}–${r.interval.hi.toFixed(2)} over ${r.sampleSize} turns`}>
-                  <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
+                  <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : belowSuccess}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
                 </div>
                 <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
                 <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{r.interval.lo.toFixed(2)}–{r.interval.hi.toFixed(2)}]</span>
@@ -351,7 +363,14 @@ function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; thre
   ].join(" ");
 
   const floorY = y(threshold).toFixed(2);
-  const dotColor = (s: number) => s >= 0.7 ? "var(--c-success)" : s >= 0.4 ? "var(--c-warning)" : "var(--c-danger)";
+
+  const dotColor = (s: number): string => {
+    if (s >= 0.7) return "var(--c-success)";
+
+    if (s >= 0.4) return "var(--c-warning)";
+
+    return "var(--c-danger)";
+  };
 
   return (
     <div className="rounded-lg border p-border p-surface p-2">

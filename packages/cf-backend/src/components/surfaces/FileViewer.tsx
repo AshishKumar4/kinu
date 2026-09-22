@@ -48,7 +48,8 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
   /** What the body shows right now. One value, so the body below is a single
    *  dispatch instead of three conditions that each have to re-check the other
    *  two. */
-  const body: TextRender | "edit" = draft !== null ? "edit" : asSource ? "source" : render;
+  const shownAs: TextRender = asSource ? "source" : render;
+  const body: TextRender | "edit" = draft !== null ? "edit" : shownAs;
 
   /**
    * The read, through the app's one tri-state fetch primitive.
@@ -71,10 +72,10 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
 
   /** `null` IS the loading state: the body must never paint before the answer,
    *  or a reader (and the browser gate) sees an empty file that is not empty. */
-  const file: FileText | null =
-    resource.status === "ready" ? resource.value
-    : resource.status === "error" ? { error: resource.message }
-    : null;
+  let file: FileText | null = null;
+
+  if (resource.status === "ready") file = resource.value;
+  else if (resource.status === "error") file = { error: resource.message };
 
   useEffect(() => {
     setDraft(null);
@@ -188,42 +189,77 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
           <embed src={rawHref} type="application/pdf" className="w-full h-full" title={name} />
         )}
         {kind === "text" && (
-          file === null ? <div className="h-full flex items-center justify-center"><Loader size="base" /></div>
-          : file.error ? (
-            <div className="p-4 text-xs space-y-2">
-              <div className="p-danger break-words">{file.error}</div>
-              <a href={downloadHref} className="inline-flex items-center gap-1 p-accent hover:underline">
-                <DownloadSimpleIcon size={12} />Download instead
-              </a>
-            </div>
-          ) : body === "edit" ? (
-            <textarea
-              data-files-editor
-              autoFocus
-              value={draft ?? ""}
-              onChange={(e) => setDraft(e.currentTarget.value)}
-              spellCheck={false}
-              className="w-full h-full resize-none bg-transparent p-3 p-t-code p-text outline-hidden"
-            />
-          ) : body === "markdown" ? (
-            <div className="p-3 text-xs p-text-2"><MarkdownContent content={content} /></div>
-          ) : body === "html" ? (
-            <iframe
-              data-files-html-preview
-              title={name}
-              sandbox=""
-              referrerPolicy="no-referrer"
-              srcDoc={sandboxedHtml(content)}
-              className="w-full h-full border-0 bg-white"
-            />
-          ) : (
-            <div className="px-3">
-              <CodeBlock className={`language-${name.slice(name.lastIndexOf(".") + 1)}`}>{content}</CodeBlock>
-              {file.truncated && <p className="text-xs p-text-4">… preview truncated. Download the full file.</p>}
-            </div>
-          )
+          <TextBody
+            file={file}
+            body={body}
+            draft={draft}
+            onDraft={setDraft}
+            content={content}
+            name={name}
+            downloadHref={downloadHref}
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+/** The text pane: what the read has to say first, then the form the reader
+ *  asked for. */
+function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
+  file: FileText | null;
+  body: TextRender | "edit";
+  draft: string | null;
+  onDraft: (text: string) => void;
+  content: string;
+  name: string;
+  downloadHref: string;
+}) {
+  if (file === null) return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
+
+  if (file.error) {
+    return (
+      <div className="p-4 text-xs space-y-2">
+        <div className="p-danger break-words">{file.error}</div>
+        <a href={downloadHref} className="inline-flex items-center gap-1 p-accent hover:underline">
+          <DownloadSimpleIcon size={12} />Download instead
+        </a>
+      </div>
+    );
+  }
+
+  if (body === "edit") {
+    return (
+      <textarea
+        data-files-editor
+        autoFocus
+        value={draft ?? ""}
+        onChange={(e) => onDraft(e.currentTarget.value)}
+        spellCheck={false}
+        className="w-full h-full resize-none bg-transparent p-3 p-t-code p-text outline-hidden"
+      />
+    );
+  }
+
+  if (body === "markdown") return <div className="p-3 text-xs p-text-2"><MarkdownContent content={content} /></div>;
+
+  if (body === "html") {
+    return (
+      <iframe
+        data-files-html-preview
+        title={name}
+        sandbox=""
+        referrerPolicy="no-referrer"
+        srcDoc={sandboxedHtml(content)}
+        className="w-full h-full border-0 bg-white"
+      />
+    );
+  }
+
+  return (
+    <div className="px-3">
+      <CodeBlock className={`language-${name.slice(name.lastIndexOf(".") + 1)}`}>{content}</CodeBlock>
+      {file.truncated && <p className="text-xs p-text-4">… preview truncated. Download the full file.</p>}
     </div>
   );
 }

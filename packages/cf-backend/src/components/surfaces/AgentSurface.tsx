@@ -49,6 +49,26 @@ export interface AgentSurfaceProps {
   rpc: Rpc;
 }
 
+/** How each declared reach reads: its badge word, the sentence behind it, and
+ *  the tone it takes on an agent that wires it. */
+const EXPOSURE: Record<ToolInfo["exposure"], { label: string; reach: string; tone: string }> = {
+  native: {
+    label: "native",
+    reach: "The model can call this tool.",
+    tone: "p-badge-neutral",
+  },
+  codemode: {
+    label: "code mode",
+    reach: "Only an eval program can call this tool.",
+    tone: "p-accent-subtle p-accent",
+  },
+  both: {
+    label: "native · code mode",
+    reach: "The model can call this tool, and so can an eval program.",
+    tone: "p-accent-subtle p-accent",
+  },
+};
+
 /**
  * Says how the model reaches a capability, and whether this agent has it.
  *
@@ -67,19 +87,13 @@ export interface AgentSurfaceProps {
  * (`wired`), so neither word has to carry it.
  */
 function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
-  const label = exposure === "both" ? "native · code mode" : exposure === "native" ? "native" : "code mode";
-
-  const reach = exposure === "both"
-    ? "The model can call this tool, and so can an eval program."
-    : exposure === "native"
-      ? "The model can call this tool."
-      : "Only an eval program can call this tool.";
+  const { label, reach, tone } = EXPOSURE[exposure];
 
   return (
     <>
       <span
         className={`inline-flex items-center rounded-full px-1.5 py-0.5 p-t-status ${
-          wired ? (exposure === "native" ? "p-badge-neutral" : "p-accent-subtle p-accent") : "p-badge-neutral p-text-3"
+          wired ? tone : "p-badge-neutral p-text-3"
         }`}
         title={reach}
       >
@@ -163,6 +177,10 @@ export function AgentSurface(
     ? <LoadFailure what={what} onRetry={onRetryLoad} />
     : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>;
 
+  // "Nothing here" is only a claim about a snapshot that arrived.
+  const noMemories = as === null ? unloaded("memory") : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" />;
+  const noTools = as === null ? unloaded("tools") : <EmptyState icon={<PackageIcon size={28} />} title="No tools yet" />;
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Identity */}
@@ -192,10 +210,10 @@ export function AgentSurface(
               ["MCTS Nodes", String(as.searchNodeCount)],
               ["Messages", String(as.messageCount)],
               ["Created", new Date(as.createdAt).toLocaleString()],
-            ]).map(([l, v]) => (
+            ]).map(([l, value]) => (
               <div key={l} className={`grid grid-cols-[96px_minmax(0,1fr)] gap-3.5 py-2.5 border-b border-dashed border-[var(--c-dash)] last:border-0 items-baseline ${l === "Model" ? "font-mono" : ""}`}>
                 <span className="text-xs p-text-4">{l}</span>
-                <span className={`p-row-text p-text-2 min-w-0 break-words ${l === "Model" ? "p-annotation p-text-3" : "text-right"}`}>{v}</span>
+                <span className={`p-row-text p-text-2 min-w-0 break-words ${l === "Model" ? "p-annotation p-text-3" : "text-right"}`}>{value}</span>
               </div>
             ))}
           </div>
@@ -210,7 +228,7 @@ export function AgentSurface(
             <input value={memorySearch} onChange={(e) => { setMemorySearch(e.target.value); onSearchMemory(e.target.value); }}
               placeholder="Search memory…" className="w-full rounded-lg border p-border p-elevated pl-9 pr-3 py-2 text-sm p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)] placeholder:p-text-3 transition-all" />
           </div>
-          {!memorySearch && memoryContent ? (
+          {memorySearch === "" && (memoryContent === "" ? noMemories : (
             <div className="p-card p-4">
               <div className="flex items-center gap-2 mb-3">
                 <DatabaseIcon size={13} className="p-accent" />
@@ -221,18 +239,15 @@ export function AgentSurface(
                 <MarkdownContent content={memoryContent} />
               </div>
             </div>
-          ) : !memorySearch ? (
-            as === null
-              ? unloaded("memory")
-              : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" />
-          ) : memory.length === 0 ? (
+          ))}
+          {memorySearch !== "" && (memory.length === 0 ? (
             <EmptyState icon={<MagnifyingGlassIcon size={28} />} title="No results" />
           ) : memory.map((entry, i) => (
             <div key={i} className="p-card p-3">
               <span className="p-annotation p-accent">{entry.updatedAt}</span>
               <p className="text-xs p-text-2 line-clamp-4 whitespace-pre-wrap mt-1 leading-relaxed">{entry.content}</p>
             </div>
-          ))}
+          )))}
         </div>
       </Section>
 
@@ -266,9 +281,7 @@ export function AgentSurface(
         <div className="space-y-2">
           {tools.length > 0
             ? tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)
-            : as === null
-              ? unloaded("tools")
-              : <EmptyState icon={<PackageIcon size={28} />} title="No tools yet" />}
+            : noTools}
         </div>
       </Section>
 

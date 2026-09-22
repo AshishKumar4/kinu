@@ -27,11 +27,13 @@ import type { SurfaceKind } from "./WorkSurface";
  * prefix reconstructs the strip's own surface id, not a guessed string.
  */
 function focusSurfaceOf(previewFocus: string | null | undefined): SurfaceKind | null {
-  return previewFocus?.startsWith("slate:")
-    ? `${SLATE_PREFIX}${previewFocus.slice(6)}`
-    : previewFocus?.startsWith("preview:")
-      ? `preview:${previewFocus.slice(8)}`
-      : null;
+  if (previewFocus === null || previewFocus === undefined) return null;
+
+  if (previewFocus.startsWith("slate:")) return `${SLATE_PREFIX}${previewFocus.slice(6)}`;
+
+  if (previewFocus.startsWith("preview:")) return `preview:${previewFocus.slice(8)}`;
+
+  return null;
 }
 
 /**
