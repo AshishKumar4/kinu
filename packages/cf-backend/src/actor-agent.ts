@@ -68,9 +68,9 @@ import {
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
   // already owns; nothing about it is Cloudflare-shaped.
-  advanceRefinementLane, refinementDebtRequest, type RefinementDeps,
+  refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
-  advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn, ADVISOR_LANE_FIBER,
+  reviewRecordedTurn,
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   advisorWorkspaceGuidance,
   // canonical tool + prompt surface — single source of truth
@@ -159,8 +159,8 @@ import {
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills + per-turn surface (core turn-surface)
-  resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver,
-  type ActiveSkillSet, type SkillsVfs,
+  resolveTurnSkills, filterToolNamesBySkills,
+  type ActiveSkillSet,
   // Heads support (inherited-context digest)
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
@@ -185,8 +185,6 @@ import {
   // Automatic titling — one policy for every root that can be talked to
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, catalogModelInfo, countRequestInputTokens,
-  // Model-capability attachment sanitization (the PDF-400 fix)
-  type MediaModality,
   // Shared catalog view of the resolved model
   ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
@@ -196,19 +194,18 @@ import {
   collectWorkspaceAgentsMd, type AgentsMdSources,
   InstructionApprovalStore, trustOfInstructionApprovals,
   type InstructionApproval, type InstructionTrustResolver,
-  listInstructionApprovals, gatherApprovableInstructions,
-  openInstructionSource, admitInstructionDecision,
+  InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
-  stepContextLimit, type ResolvedModelWindow,
+  type ResolvedModelWindow,
   reasoningEffortOptions,
   // memory.* / tasks.* — codemode projections of the same-named native tools
-  JsonObjectSchema, JsonValueSchema, changeActiveRole,
+  JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
-  resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
+  resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   beginModelOperation, toolSurfaceTokens, McpToolSurfaceSchema,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
@@ -1586,13 +1583,17 @@ export abstract class ActorAgent extends Agent<Env> {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
 
-          const completed = v.parse(CompletedTurnSchema, turn);
           this.settleEvolutionInBackground();
-          // AWAITED to its CHECKPOINT, not to its finish. The lane is durable from
-          // that instant, so completing this row before it left a cut in between
-          // with a null snapshot and a review recovery terminalized as an error —
-          // a review nobody ran and nobody was owed.
-          await this.reviewTurnInBackground(completed, v.parse(AdvisorRecoverySnapshotSchema, advisor));
+          const snapshot = v.parse(AdvisorRecoverySnapshotSchema, advisor);
+          // AWAITED to the lane's checkpoint, not its finish. The snapshot was
+          // recorded at the settle: `runFiber` awaits `keepAlive()` before its
+          // body, and a later turn's tool set must not bleed into this review.
+          await this.actorSession.startAdvisorLane({
+            turn: v.parse(CompletedTurnSchema, turn),
+            snapshot: advisor,
+            carry: (name, body) => this.runFiber(name, body),
+            review: async () => { await this.runAdvisorReview(snapshot); },
+          });
 
           return { status: 'completed' };
         },
@@ -2413,16 +2414,13 @@ export abstract class ActorAgent extends Agent<Env> {
           // row AND the wake that re-drives what it owed. The loop names the
           // instant; the tick keeps a row while the turn is open.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          modelWindow: () => ({
-            contextWindow: this.sessionContextWindow(),
-            modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-          }),
+          modelWindow: () => this.modelCatalog.window(),
           steerSkills: (text) => steerSkillsBlock({
-            vfs: this.getSkillsVfs(),
+            vfs: this.rt.storage.vfs,
             config: this.config,
             userText: text,
             trust: this.instructionTrust(),
-            limits: { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+            limits: this.modelCatalog.window(),
             alreadyActive: new Set(this._turnActiveSkills?.active.map((skill) => skill.name) ?? []),
           }),
         },
@@ -2565,7 +2563,7 @@ export abstract class ActorAgent extends Agent<Env> {
         // The refinement lane runs on the ONE off-turn cadence pass, beside the
         // promotion gate's trials. Every actor wires it: a facet accrues
         // evolution debt like any agent, and its refiner is the port above.
-        refinementLane: () => this.runRefinementLane(),
+        refinementLane: async () => { await refinementPass(this.refinementDeps); },
         sinks: {
           logActivity: (e, d) => {
             // Time to first token, at the accumulator's own once-only latch —
@@ -2860,111 +2858,6 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  private readonly _advisorReviewTasks = new Map<string, AsyncTaskOwner>();
-
-  /**
-   * The advisor lane: one review of the turn that just ended, started on its
-   * own durable lane. Resolves once that lane has CHECKPOINTED, not once the
-   * review is done.
-   *
-   * Detached because it is a model call on a path the turn queue is holding,
-   * and durable because a deploy or an alarm-boundary reset would otherwise
-   * take the review with it, leaving no row and no event. A reviewer that
-   * FAILS leaves a turn with no advice, never a failed turn.
-   *
-   * The caller is a terminal effect, and what it owes is a recoverable review
-   * rather than a finished one. Resolving at the checkpoint is what makes those
-   * the same thing: before it, an eviction between the effect's completion and
-   * the fiber's first tick left recovery reading a null snapshot and
-   * terminalizing a review that never ran. After it, the fiber is re-drivable
-   * on its own.
-   *
-   * The stash carries the WHOLE review: the completed turn, the tool names it
-   * ran with, the severity floor and the dedupe window. That snapshot is what
-   * makes {@link recoverAdvisorLane} a re-drive rather than an obituary.
-   * `AdvisorRecoverySnapshotSchema` mirrors the lane's own deps through the same
-   * `CompletedTurnSchema` the `completed_turns` table persists a turn with, so
-   * the size policy lives upstream where the turn's parts are clamped.
-   *
-   * The snapshot is recorded by the roster at the settle, BEFORE the fiber
-   * starts: `runFiber` awaits `keepAlive()` before it runs the body, and a
-   * read inside would come after that await, which is how a later turn's tool
-   * set would bleed into this turn's review.
-   *
-   * Governed off the TURN's labels rather than the governor's active scope, as
-   * the engine's own review is: this runs after the turn ended, when the active
-   * scope is either empty or some later turn's. There is no completion gate on
-   * this backend (it is the one-shot CLI surface's mechanism), so `gateOpen` is
-   * false here by construction.
-   */
-  protected reviewTurnInBackground(turn: CompletedTurn, snapshot: AdvisorRecoverySnapshot): Promise<void> {
-    if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return Promise.resolve();
-
-    // ONE lane per turn, ever STARTED. A terminal replay arriving after the
-    // checkpoint but before its row recorded `completed` would otherwise open a
-    // second fiber beside the first — which the SDK can still recover — and two
-    // advisors would review one turn, each spending a model call and appending
-    // its own note. Recovery re-drives the fiber this accepted; it does not come
-    // back through here. An unkeyed turn has no replay to guard against.
-    if (advisorLaneStarted(this.boundSql, this.actorHandle(), turn)) return Promise.resolve();
-    const checkpointed = Promise.withResolvers<void>();
-    const taskKey = nanoid();
-    const owner: AsyncTaskOwner = { promise: null };
-    this._advisorReviewTasks.set(taskKey, owner);
-    owner.promise = (async () => {
-      try {
-        await this.runFiber(ADVISOR_LANE_FIBER, async (ctx) => {
-          // The checkpoint IS what the caller owes. A lane that could not write one
-          // is a review no eviction can resume, so the failure travels to the owed
-          // row rather than being absorbed here — the earlier "named and dropped"
-          // reported an unrecoverable lane as a completed obligation.
-          try {
-            ctx.stash(snapshot);
-          } catch (cause) {
-            const failure = toKinuError({
-              doing: 'checkpointing the advisor review so an eviction can resume it',
-              cause,
-              otherwise: 'io',
-            });
-
-            diagnostics.failure('advisor.snapshot_failed', failure, { turnId: turn.turnId ?? '(none)' });
-            checkpointed.reject(failure);
-            // The caller owes a resumable review, not a finished one: a body that
-            // returned here would let the fiber retire as complete with no
-            // checkpoint on disk, so the same rejection the owed row already sees
-            // must reach the lane catch below, which records it as lane work.
-            throw failure;
-          }
-
-          // Adjacent to the stash: from this instant the lane is recoverable on its
-          // own, which is exactly when a second one becomes a duplicate.
-          markAdvisorLaneStarted(this.boundSql, this.actorHandle(), turn);
-          checkpointed.resolve();
-          await this.runAdvisorReview(snapshot);
-        });
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'reviewing the completed turn',
-          cause,
-          otherwise: 'unavailable',
-        });
-
-        diagnostics.failure('advisor.review_failed', failure);
-        // A fiber that never reached its body leaves the caller waiting on a
-        // checkpoint that will never be written. Rejecting is what keeps the row
-        // owed; once the stash landed, this settles nothing and the review's own
-        // failure is the lane's, not the ledger's.
-        checkpointed.reject(failure);
-      } finally {
-        if (this._advisorReviewTasks.get(taskKey) === owner) {
-          this._advisorReviewTasks.delete(taskKey);
-        }
-      }
-    })();
-
-    return checkpointed.promise;
-  }
-
   /**
    * One review, from a snapshot — the single body both the live lane and its
    * recovery run.
@@ -3049,24 +2942,6 @@ export abstract class ActorAgent extends Agent<Env> {
       refiner: this.temporaryAgentPort(),
       approvals: this.instructionApprovals(),
     };
-  }
-
-  /**
-   * One step of the continual-refinement lane, plus the automatic trigger.
-   *
-   * Both halves are core policy over {@link refinementDeps}; the order is the
-   * only thing decided here, and it is decided once: open what the debt owes,
-   * then advance one request. Opening first means a workspace that has just
-   * crossed the threshold does not wait a whole cadence to be looked at.
-   *
-   * Awaited by the cadence pass, so an eviction mid-lane leaves a `planning`
-   * claim the next activation re-queues. The refiner is read only — re-driving
-   * a claim can cost one child agent and can never double-apply.
-   */
-  protected async runRefinementLane(): Promise<void> {
-    const deps = this.refinementDeps;
-    await refinementDebtRequest(deps);
-    await advanceRefinementLane(deps);
   }
 
   /** The model half of a scaffold candidate surface: the routing profile of
@@ -3949,14 +3824,6 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Resolved active skill set for the current turn. Built in beforeTurn, read
    *  by the per-step dynamic context and the turn-local tail. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
-  /** Lazy SkillsVfs adapter over rt.storage.vfs — built once, reused. */
-  private _skillsVfs: SkillsVfs | null = null;
-  private getSkillsVfs(): SkillsVfs {
-    this._skillsVfs ??= skillsVfsOver(this.rt.storage.vfs);
-
-    return this._skillsVfs;
-  }
-
   /** Instruction trust for this activation (KINU-N028). ONE store over the
    *  actor's own SQL, scoped to this workspace so a forked or copied root starts
    *  unapproved. The owner's decisions and the turn's classification read the
@@ -3996,105 +3863,55 @@ export abstract class ActorAgent extends Agent<Env> {
 
     return this.instructionApprovals().list();
   }
-  /**
-   * The owner's approval surface: every instruction file this workspace would
-   * carry, what its bytes are doing now, and what approving them would bind.
-   *
-   * Derived on read, never stored. A "waiting" list held in a table would be a
-   * table the AGENT could fill by writing files, aimed at the one queue the
-   * owner trusts.
-   */
+
+  /** The owner's desk over this workspace: AGENTS.md from the workspace planes
+   *  and their sandbox, and the one approval store the turn classifies with. */
+  private _instructionDesk: InstructionApprovalDesk | null = null;
+  private instructionDesk(): InstructionApprovalDesk {
+    this._instructionDesk ??= new InstructionApprovalDesk({
+      agentsMd: (window, trust) =>
+        collectWorkspaceAgentsMd(this.rt.storage.vfs, window, trust, this.rt.executionRouter?.getProvider('sandbox')),
+      skillsVfs: this.rt.storage.vfs,
+      approvals: this.instructionApprovals(),
+      window: () => this.modelCatalog.window(),
+    });
+
+    return this._instructionDesk;
+  }
+
+  /** The owner's approval surface (InstructionApprovalDesk.list): derived on
+   *  read, never stored, so the agent cannot fill the queue by writing files. */
   @callable()
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
     this._workspaceInstructionApprovals = null;
-    const agentsMd = await this.discoverInstructionSources();
 
-    return listInstructionApprovals({
-      ...request,
-      sources: await gatherApprovableInstructions({
-        agentsMd,
-        skillsVfs: this.getSkillsVfs(),
-        admissionTokens: stepContextLimit({
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      }),
-      }),
-      decisions: this.instructionApprovals().list(),
-    });
+    return this.instructionDesk().list(request);
   }
 
   /** One row, opened: the bytes of THAT file and nothing else. */
   @callable()
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
     this._workspaceInstructionApprovals = null;
-    const clean = path.trim();
 
-    if (clean === '') return null;
-
-    return openInstructionSource({
-      path: clean,
-      agentsMd: await this.discoverInstructionSources(),
-      skillsVfs: this.getSkillsVfs(),
-      trust: this.instructionTrust(),
-      decisions: this.instructionApprovals().list(),
-      admissionTokens: stepContextLimit({
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      }),
-    });
+    return this.instructionDesk().read(path);
   }
 
-  /** AGENTS.md as the owner's surface sees it: discovered fresh, because a
-   *  digest shown from a stale read would authorize bytes that already moved. */
-  private async discoverInstructionSources(): Promise<AgentsMdSources> {
-    return collectWorkspaceAgentsMd(
-      this.rt.storage.vfs,
-      { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
-      this.instructionTrust(),
-      this.rt.executionRouter?.getProvider('sandbox'),
-    );
-  }
-
-  /**
-   * The owner grants THESE bytes at THIS path system placement.
-   *
-   * `digest` is the one the owner was shown. If the file has changed since, the
-   * approval binds stale bytes, the next turn's lookup misses
-   * and the file stays reference material — so the approve/preview gap fails
-   * closed instead of granting force to something nobody read.
-   */
+  /** The owner grants THESE bytes at THIS path system placement; the digest
+   *  shown is re-checked against the file now (InstructionApprovalDesk.approve). */
   @callable()
-  async approveInstruction(
-    path: string, reviewedDigest: string,
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
+  async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
     this._workspaceInstructionApprovals = null;
-    const admitted = admitInstructionDecision(path, reviewedDigest);
 
-    if (!admitted.ok) return admitted;
-    const current = await this.readInstructionApproval(admitted.path);
-
-    if (!current || current.digest !== admitted.digest) {
-      return { ok: false, error: 'the file changed or could not be read after review; read it again before approving' };
-    }
-
-    this.instructionApprovals().approve(admitted.path, admitted.digest);
-
-    return { ok: true };
+    return this.instructionDesk().approve(path, reviewedDigest);
   }
 
   /** The owner withdraws trust from a path. The refusal is KEPT, so nothing can
    *  re-grant it without the owner saying so again. */
   @callable()
-  async revokeInstruction(
-    path: string,
-  ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
+  async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
     this._workspaceInstructionApprovals = null;
-    const admitted = admitInstructionDecision(path);
 
-    if (!admitted.ok) return admitted;
-    this.instructionApprovals().revoke(admitted.path);
-
-    return { ok: true };
+    return this.instructionDesk().revoke(path);
   }
 
   // ── Activity logging: persisted + broadcast to Logs pane ──
@@ -5028,18 +4845,7 @@ export abstract class ActorAgent extends Agent<Env> {
   @callable() async setRole(roleId: string): Promise<{ role: string }> {
     const { envelope } = await this.profileInputs();
 
-    const changed = changeActiveRole({
-      config: this.config,
-      envelope,
-      to: roleId,
-      actor: 'user',
-    });
-
-    if (changed.kind !== 'applied') {
-      throw new Error(roleChangeOutcomeText(roleId, changed, this.activeRoleLabel()));
-    }
-
-    return { role: changed.to };
+    return changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.activeRoleLabel() });
   }
   @callable()
   async setModel(spec: string) {
@@ -5592,8 +5398,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const tools = await this.mcpToolsCache.refresh(
         () => this.requireOwnerUserDO().userMcp_toolDescriptors(caller),
         {
-          contextWindow: this.sessionContextWindow(),
-          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+          ...this.modelCatalog.window(),
           nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
@@ -5687,18 +5492,6 @@ export abstract class ActorAgent extends Agent<Env> {
       return catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
     },
   });
-
-  /** The resolved model's context window — feeds the compaction extension
-   *  through the transformContext seam. */
-  protected sessionContextWindow(): number {
-    return this.modelCatalog.contextWindow();
-  }
-
-  /** Media kinds the next turn's model request can carry — the attachment
-   *  sanitizer's policy input (the proven Workers AI PDF-400 fix). */
-  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
-    return this.modelCatalog.acceptedMedia();
-  }
 
   /**
    * The turn-local message tail: the unapproved instruction files, then the
@@ -5810,7 +5603,7 @@ export abstract class ActorAgent extends Agent<Env> {
       },
       system: assembled.system,
       attachments: {
-        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
+        accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
       turnLocal: assembled.turnLocal.length > 0 ? assembled.turnLocal : undefined,
       tools: assembled.tools,
@@ -5962,15 +5755,12 @@ export abstract class ActorAgent extends Agent<Env> {
     const trust = this.instructionTrust();
 
     const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
-      vfs: this.getSkillsVfs(),
+      vfs: this.rt.storage.vfs,
       config: this.config,
       userText: extractLastUserText(input.history),
       roleSkills,
       trust,
-      limits: {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      },
+      limits: this.modelCatalog.window(),
     });
 
     if (activeSetForPrompt) {
@@ -6072,10 +5862,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // so it rides the beforeTurn system override, not the cached base prompt.
     const agentsMd = await collectWorkspaceAgentsMd(
       this.rt.storage.vfs,
-      {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      },
+      this.modelCatalog.window(),
       trust,
       this.rt.executionRouter?.getProvider('sandbox'),
     );

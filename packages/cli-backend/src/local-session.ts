@@ -32,7 +32,7 @@ import type {
   TurnContinuity, FiberCtx,
   LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, SendOptions,
-  SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
+  ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
@@ -72,7 +72,7 @@ import { TierIdSchema,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills, renderFactsForTurn,
+  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
@@ -99,7 +99,7 @@ import { TierIdSchema,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
-  ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
+  ADVISOR_LANE_FIBER, reviewRecordedTurn,
   advisorWorkspaceGuidance,
   createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
@@ -110,12 +110,9 @@ import { TierIdSchema,
   DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
   observeSystemPromptHash,
   type DynamicContext,
-  type MediaModality,
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
   initWorkspaceBaselineTable, initWorkspaceSchema, initPendingSendTables, PendingSendStore,
-  InstructionApprovalStore, listInstructionApprovals, gatherApprovableInstructions,
-  admitInstructionDecision, type AdmittedInstructionDecision,
-  openInstructionSource,
+  InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
   // The scaffold evolution control plane — core owns the drivers; this session
@@ -128,12 +125,10 @@ import { TierIdSchema,
   type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
   // Continual refinement — `/refine` and the automatic evolution-debt trigger.
-  advanceRefinementLane, createRefinementStore, refinementDebt, refinementDebtRequest,
-  decideRefinementRoute, refinementRequestView, requestRefinement, showRefinementRoute,
+  decideRefinementRoute, listRefinements, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
-  type RequestRefinementInput,
   revertChangelogEntryById, type ChangelogRevertResult,
   unclaimedAlternateTakeIds,
   latestAlternateTakeSet,
@@ -148,13 +143,13 @@ import { TierIdSchema,
   type CancelTriggerResult, type TrustLevel,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
-  changeActiveRole, agentsProfileContext, canonicalConversationId,
+  changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
   resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
-  roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
+  narrowToolSurface, codemodeCapabilitiesFor,
   readSoul,
   type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
@@ -169,7 +164,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
+  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -695,6 +690,7 @@ export class LocalAgentSession implements BackendHost {
    *  the authority that decides whether discovered AGENTS.md / skill bytes are
    *  placed as system instructions or as unverified reference material. */
   private readonly instructionApprovals: InstructionApprovalStore;
+  private readonly instructionDesk: InstructionApprovalDesk;
   /** Bound once rather than rebuilt per turn: both discovery and skill
    * admission take the resolver as a plain function. */
   private readonly instructionTrust: InstructionTrustResolver =
@@ -722,8 +718,6 @@ export class LocalAgentSession implements BackendHost {
    *  every turn's ExtensionHost in processTurn. */
   private readonly compactionState: CompactionStateStore;
   private readonly compactionExtension: KinuExtension;
-
-  private skillsVfs: SkillsVfs | null = null;
 
   /** Tools from connected MCP servers, merged into the turn surface. Connected
    *  lazily via connectMcp; closed on end. */
@@ -819,6 +813,14 @@ export class LocalAgentSession implements BackendHost {
       this.rt.actor,
       `local:${approvalScope}`,
     );
+    // AGENTS.md is discovered from this working directory; every rule of the
+    // owner's desk is core's.
+    this.instructionDesk = new InstructionApprovalDesk({
+      agentsMd: async (window, trust) => discoverAgentsMd(this.cwd, window, trust),
+      skillsVfs: this.rt.storage.vfs,
+      approvals: this.instructionApprovals,
+      window: () => this.modelCatalog.window(),
+    });
 
     // The stores every agent has, from core — one list both backends inherit.
     // Background-job lifecycle rides the durable local fiber (createSqlFiber)
@@ -948,16 +950,13 @@ export class LocalAgentSession implements BackendHost {
         // re-arms from the ledger on the next start. A timer here would have
         // to outlive the process it runs in, which is not a wake.
         armTurnWake: async () => {},
-        modelWindow: () => ({
-          contextWindow: this.sessionContextWindow(),
-          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-        }),
+        modelWindow: () => this.modelCatalog.window(),
         steerSkills: (text) => steerSkillsBlock({
-          vfs: this.getSkillsVfs(),
+          vfs: this.rt.storage.vfs,
           config: this.config,
           userText: text,
           trust: this.instructionTrust,
-          limits: { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+          limits: this.modelCatalog.window(),
           alreadyActive: new Set(this.turnActiveSkillNames),
         }),
       },
@@ -1093,79 +1092,25 @@ export class LocalAgentSession implements BackendHost {
   getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
-  /**
-   * The owner's instruction-file surface for this working directory
-   * (KINU-N028): every AGENTS.md and workspace skill this session would carry,
-   * with what an approval would bind.
-   *
-   * Discovery runs fresh rather than reporting the last turn's values, because
-   * the owner has to be shown what is on disk NOW — approving a digest that has
-   * already moved on would grant nothing and say it granted something. A file
-   * with no owner decision is unverified, however long it has sat on disk.
-   */
+  /** The owner's instruction-file surface for this working directory
+   *  (KINU-N028), discovered fresh on every call (InstructionApprovalDesk). */
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    const limits = {
-      contextWindow: this.sessionContextWindow(),
-      modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-    };
-
-    return listInstructionApprovals({
-      ...request,
-      sources: await gatherApprovableInstructions({
-        agentsMd: discoverAgentsMd(this.cwd, limits, this.instructionTrust),
-        skillsVfs: skillsVfsOver(this.rt.storage.vfs),
-        admissionTokens: stepContextLimit(limits),
-      }),
-      decisions: this.instructionApprovals.list(),
-    });
+    return this.instructionDesk.list(request);
   }
 
   /** One row, opened: the bytes of THAT file and nothing else. */
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    const clean = path.trim();
-
-    if (clean === '') return null;
-
-    const limits = {
-      contextWindow: this.sessionContextWindow(),
-      modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-    };
-
-    return openInstructionSource({
-      path: clean,
-      agentsMd: discoverAgentsMd(this.cwd, limits, this.instructionTrust),
-      skillsVfs: skillsVfsOver(this.rt.storage.vfs),
-      trust: this.instructionTrust,
-      decisions: this.instructionApprovals.list(),
-      admissionTokens: stepContextLimit(limits),
-    });
+    return this.instructionDesk.read(path);
   }
 
-  /** Follow these exact bytes at this path as instructions. Same admission rule
-   *  as the cloud transport, because it is core's rule, not either side's. */
+  /** Follow these exact bytes at this path as instructions. */
   async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
-    const admitted = admitInstructionDecision(path, reviewedDigest);
-
-    if (!admitted.ok) return admitted;
-    const current = await this.readInstructionApproval(admitted.path);
-
-    if (!current || current.digest !== admitted.digest) {
-      return { ok: false, error: 'the file changed or could not be read after review; read it again before approving' };
-    }
-
-    this.instructionApprovals.approve(admitted.path, admitted.digest);
-
-    return admitted;
+    return this.instructionDesk.approve(path, reviewedDigest);
   }
 
   /** Stop following a path, and keep the refusal so nothing re-grants it. */
   async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
-    const admitted = admitInstructionDecision(path);
-
-    if (!admitted.ok) return admitted;
-    this.instructionApprovals.revoke(admitted.path);
-
-    return admitted;
+    return this.instructionDesk.revoke(path);
   }
 
   /**
@@ -1322,18 +1267,7 @@ export class LocalAgentSession implements BackendHost {
   async setRole(roleId: string): Promise<{ role: string }> {
     const envelope = await this.profiles().envelope();
 
-    const changed = changeActiveRole({
-      config: this.config,
-      envelope,
-      to: roleId,
-      actor: 'user',
-    });
-
-    if (changed.kind !== 'applied') {
-      throw new Error(roleChangeOutcomeText(roleId, changed, this.getActiveRoleId()));
-    }
-
-    return { role: changed.to };
+    return changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.getActiveRoleId() });
   }
 
   /** Validate + store a new model spec. Effective on the next turn and for new
@@ -1702,8 +1636,7 @@ export class LocalAgentSession implements BackendHost {
     // than one turn's filtered subset. A turn that narrows its tools keeps
     // MORE room, never less.
     const admission = admitMcpDescriptors(conn.descriptors, {
-      contextWindow: this.sessionContextWindow(),
-      modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+      ...this.modelCatalog.window(),
       nativeToolTokens: toolSurfaceTokens(this.tools),
     });
 
@@ -2440,10 +2373,7 @@ export class LocalAgentSession implements BackendHost {
     // Only the files that fit this model's window are read, and each one is
     // classified against the owner's approvals so an unapproved file cannot
     // reach the system prompt.
-    const agentsMd = discoverAgentsMd(this.cwd, {
-      contextWindow: this.sessionContextWindow(),
-      modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-    }, this.instructionTrust);
+    const agentsMd = discoverAgentsMd(this.cwd, this.modelCatalog.window(), this.instructionTrust);
 
     // The agent's SOUL.md, re-read each turn for the same reason as AGENTS.md.
     // agentStateVfs is the identity tree when it differs from the working VFS;
@@ -2560,7 +2490,7 @@ export class LocalAgentSession implements BackendHost {
       // (same ordering as the DO's beforeTurn); this.history itself is
       // never mutated.
       attachments: {
-        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
+        accepts: this.modelCatalog.acceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
       },
       turnLocal: turnLocalMsgs.length > 0 ? turnLocalMsgs : undefined,
       tools: turnTools,
@@ -2897,7 +2827,12 @@ export class LocalAgentSession implements BackendHost {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
 
-          await this.reviewTurnInBackground(advisor);
+          await this.actorSession.startAdvisorLane({
+            turn: advisor.turn,
+            snapshot: projectJsonValue({ value: advisor }),
+            carry: (name, body) => this.trackFiber(name, body),
+            review: () => this.runAdvisorReview(advisor),
+          });
 
           return { status: 'completed' };
         },
@@ -3184,77 +3119,6 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Start the advisor review on its own tracked fiber, and resolve once that
-   * fiber has CHECKPOINTED — not once the review is done.
-   *
-   * The caller is a terminal effect, and what it owes is a RECOVERABLE review
-   * rather than a finished one. Before the checkpoint there is nothing on disk
-   * about this lane, so a process killed between the effect completing and the
-   * fiber's first tick lost the review under a row that could never replay it.
-   * After it, `recoverAdvisorLane` re-drives the fiber from its own snapshot.
-   *
-   * ONE lane per turn, ever STARTED. A terminal replay arriving after the
-   * checkpoint but before its row recorded `completed` would otherwise open a
-   * second fiber beside the first, and two advisors would review one turn, each
-   * spending a model call and appending its own note. The tombstone is written
-   * adjacent to the stash, which is exactly when a second lane becomes a
-   * duplicate. A turn with no durable id has no replay to guard against and is
-   * not given a fabricated key.
-   */
-  private async reviewTurnInBackground(recorded: RecordedAdvisor): Promise<void> {
-    if (this.rt.advisorLlm === undefined || !this.actorSession.advisorEnabled) return;
-
-    if (advisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn)) return;
-    const checkpointed = Promise.withResolvers<void>();
-
-    const review = this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
-      // The checkpoint IS what the caller owes, so a lane that cannot write one
-      // is a review no interruption can resume and the failure travels to the
-      // owed row rather than being absorbed here.
-      try {
-        ctx.stash(projectJsonValue({ value: recorded }));
-      } catch (cause) {
-        const failure = toKinuError({
-          doing: 'checkpointing the advisor review so an interruption can resume it',
-          cause,
-          otherwise: 'io',
-        });
-
-        diagnostics.failure('advisor.snapshot_failed', failure, {
-          turnId: recorded.turn.turnId ?? '(none)',
-        });
-        checkpointed.reject(failure);
-        throw failure;
-      }
-
-      markAdvisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn);
-      checkpointed.resolve();
-      await this.runAdvisorReview(recorded);
-    });
-
-    let observed: Promise<void> | null = null;
-    observed = (async () => {
-      try {
-        await review;
-      } catch (cause) {
-        // Not `advisor.review_failed`: the review body catches its own failures
-        // (`runAdvisorReview` never throws), so what lands here is the LANE —
-        // fiber tracking or checkpoint bookkeeping — dying around the review.
-        const failure = toKinuError({
-          doing: 'tracking the advisor review lane', cause, otherwise: 'unavailable',
-        });
-
-        diagnostics.failure('advisor.lane_failed', failure);
-        checkpointed.reject(failure);
-      } finally {
-        if (observed !== null) this.backgroundFibers.delete(observed);
-      }
-    })();
-    this.backgroundFibers.add(observed);
-    await checkpointed.promise;
-  }
-
-  /**
    * The ONE review body the live lane and its recovery both run.
    *
    * `gateOpen` is the one input this backend has and the cloud one does not. The
@@ -3288,13 +3152,6 @@ export class LocalAgentSession implements BackendHost {
       send: (signal) => this.actorSession.orchestrator.inbox.send(signal),
       record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
     });
-  }
-
-  /** Passthrough SkillsVfs adapter over rt.storage.vfs (core turn-surface). */
-  private getSkillsVfs(): SkillsVfs {
-    this.skillsVfs ??= skillsVfsOver(this.rt.storage.vfs);
-
-    return this.skillsVfs;
   }
 
   private agentName(): string {
@@ -3376,15 +3233,12 @@ export class LocalAgentSession implements BackendHost {
     roleSkills: readonly string[] = [],
   ): Promise<TurnSkillSurface> {
     return resolveTurnSkills({
-      vfs: this.getSkillsVfs(),
+      vfs: this.rt.storage.vfs,
       config: this.config,
       userText,
       roleSkills,
       trust: this.instructionTrust,
-      limits: {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      },
+      limits: this.modelCatalog.window(),
     });
   }
 
@@ -3453,9 +3307,7 @@ export class LocalAgentSession implements BackendHost {
   /** One step of the refinement lane plus the automatic trigger — driven by the
    *  off-turn cadence pass, exactly as on the cloud backend. */
   async runRefinementLane(): Promise<void> {
-    const deps = this.refinementDeps;
-    await refinementDebtRequest(deps);
-    const step = await advanceRefinementLane(deps);
+    const step = await refinementPass(this.refinementDeps);
 
     if (step.step === 'idle') return;
     // A refinement can move the live prompt (through the section lane it feeds)
@@ -3474,13 +3326,7 @@ export class LocalAgentSession implements BackendHost {
   async requestRefinement(opts?: {
     turnIds?: readonly string[]; scope?: RefinementScope;
   }): Promise<RefinementRequestView> {
-    let request: RequestRefinementInput = {
-      trigger: 'explicit',
-      scope: opts?.scope ?? 'workspace',
-    };
-
-    if (opts?.turnIds !== undefined) request = { ...request, turnIds: opts.turnIds };
-    const view = await requestRefinement(this.refinementDeps, request);
+    const view = await requestOwnerRefinement(this.refinementDeps, opts);
     // Awaited, unlike the cloud nudge: a local `/refine` is a foreground
     // command at a terminal, and printing "queued" while the answer is one
     // await away would be worse than the wait.
@@ -3512,10 +3358,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Refinements newest first, plus the debt that would open the next one. */
   listRefinements(limit = 20) {
-    return {
-      requests: createRefinementStore(this.rt.storage.sql, this.rt.actor).list(limit).map(refinementRequestView),
-      debt: refinementDebt(this.refinementDeps),
-    };
+    return listRefinements(this.refinementDeps, limit);
   }
 
   /** The pending scaffold's rollout state — trials so far and what the
@@ -3584,8 +3427,7 @@ export class LocalAgentSession implements BackendHost {
       model,
       modelContext: {
         id: this.effectiveModelSpec(),
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        ...this.modelCatalog.window(),
       },
       system: systemPrompt,
       history: [{ role: 'user', content: task }],
@@ -4107,14 +3949,6 @@ export class LocalAgentSession implements BackendHost {
     effectiveSpec: () => this.effectiveModelSpec(),
     lookup: (spec) => this.modelResolver ? this.modelResolver.modelInfo(spec) : Promise.resolve(null),
   });
-
-  private sessionContextWindow(): number {
-    return this.modelCatalog.contextWindow();
-  }
-
-  private sessionAcceptedMedia(): ReadonlySet<MediaModality> {
-    return this.modelCatalog.acceptedMedia();
-  }
 
   private ensureModelState(): LanguageModel {
     const spec = this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());

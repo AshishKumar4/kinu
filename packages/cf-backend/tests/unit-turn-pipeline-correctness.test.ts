@@ -1039,33 +1039,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(loop).toContain('private answeredDeliveries(item: QueueItem): ReadonlySet<string> {');
   });
 
-  test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
-    // The ordering (sanitize → onTurnStart → transformContext → turn-local) is
-    // owned by core assembleTurnMessages — behaviorally pinned in core's
-    // unit-turn-context-assembly.test.ts. What THIS backend must do is delegate
-    // to it with the sanitizer policy and the extension host, instead of
-    // re-implementing the ordering inline.
-    // The backend hands the loop the sanitizer's policy (what media this
-    // session accepts, the vfs the attachments live on) and the turn-local
-    // tail; the chat runner assembles the messages in core's one order.
-    const prepare = actor.slice(
-      actor.indexOf('protected async prepareTurn(item: ChatTurnInput'),
-      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
-    );
-
-    const attachments = prepare.indexOf('attachments: {');
-    expect(attachments).toBeGreaterThan(-1);
-    const args = prepare.slice(attachments);
-    expect(args).toContain('accepts: this.sessionAcceptedMedia()');
-    expect(args).toContain('vfs: this.rt.storage.vfs');
-    expect(args).toContain('turnLocal: assembled.turnLocal.length > 0 ? assembled.turnLocal : undefined');
-    expect(chatRunner).toContain('assembleTurnMessages(');
-    // No parallel inline copy of the ordering survives here.
-    expect(actor).not.toContain('sanitizeAttachmentsForModel(');
-    expect(actor).not.toContain('runTransformContext(');
-    expect(actor).not.toContain('.weave(');
-  });
-
   test('nothing on this backend seals a run reason of its own', () => {
     // The run bracket is the shared core `closeTurnRun` (turn_end + run_end),
     // fed the driver's raw facts; `classifyRunEnd` owns the vocabulary. What

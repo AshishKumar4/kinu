@@ -4,7 +4,7 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
-  changeActiveRole, roleChangeOutcomeText, openWorkspaceMainActor,
+  changeRoleAsOwner, openWorkspaceMainActor,
   DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
@@ -242,16 +242,9 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
 
     if (input.role && input.role !== DEFAULT_ROLE_ID) {
-      const changed = changeActiveRole({
-        config: agentConfig,
-        envelope: await loadActiveProfile(),
-        to: input.role,
-        actor: 'user',
+      changeRoleAsOwner({
+        config: agentConfig, envelope: await loadActiveProfile(), to: input.role, active: DEFAULT_ROLE_ID,
       });
-
-      if (changed.kind !== 'applied') {
-        throw new Error(roleChangeOutcomeText(input.role, changed, DEFAULT_ROLE_ID));
-      }
     }
 
     // Checkpoint and leave WAL before publishing: the rename drops the sidecars, and a WAL db without `-shm`

@@ -28,7 +28,6 @@ import {
 } from '../src/safety/instruction-trust';
 import { trustedActiveSkills, unionAllowedTools } from '../src/skills/render';
 import { discoverSkills, skillPath } from '../src/skills/discover';
-import { skillsVfsOver } from '../src/orchestrator/turn-surface';
 import { SKILLS_DIR } from '../src/skills/types';
 import { gatherApprovableInstructions } from '../src/read-models/instruction-approvals';
 import type { ActiveSkill, ActiveSkillSet } from '../src/skills/types';
@@ -380,7 +379,7 @@ async function writeSkill(rt: AgentRuntime, path: string, source: string): Promi
 /** What the prompt would see: `discoverSkills` under SKILLS_DIR. */
 async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
-  const discovery = await discoverSkills(skillsVfsOver(vfs), { admissionTokens: 100_000 });
+  const discovery = await discoverSkills(vfs, { admissionTokens: 100_000 });
 
   return discovery.skills.filter((skill) => skill.bodyRef.kind === 'file').map((skill) => skill.name);
 }
@@ -390,7 +389,7 @@ async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
 
   const sources = await gatherApprovableInstructions({
-    skillsVfs: skillsVfsOver(vfs),
+    skillsVfs: vfs,
     admissionTokens: 100_000,
   });
 
