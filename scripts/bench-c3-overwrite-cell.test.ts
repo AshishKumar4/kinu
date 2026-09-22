@@ -218,7 +218,13 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
     const identity = c3Fixture().identity;
 
     if (identity === null) throw new Error('fixture identity is missing');
-    const row = await measureLiveC3({ origin: 'https://bench.invalid', token: 'test', identity }, 'box', 'test-run', null);
+
+    const row = await measureLiveC3({
+      fixture: { origin: 'https://bench.invalid', token: 'test', identity },
+      box: 'box',
+      runId: 'test-run',
+      preparation: null,
+    });
 
     return { row, events, installed };
   } finally {

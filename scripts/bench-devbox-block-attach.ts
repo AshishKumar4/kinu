@@ -112,14 +112,21 @@ try {
   };
 
   try {
-    row.initial = await startupOperation(fixture, box, '/create', `${name} baseline`, ['empty'], { deadlineMs: CELL_STARTUP_MS });
+    row.initial = await startupOperation({
+      fixture,
+      box,
+      path: '/create',
+      operation: `${name} baseline`,
+      allowedKinds: ['empty'],
+      bounds: { deadlineMs: CELL_STARTUP_MS },
+    });
     await command(`mkdir -p /workspace/vol && ${sparseControl ? `truncate -s ${LARGE_BYTES} /workspace/vol/large.bin` : 'dd if=/dev/urandom of=/workspace/vol/large.bin bs=4M count=512 conv=fsync status=none'}`);
-    row.baseline = await checkpointOperation(fixture, box, 'quiesce', `${name} base`);
+    row.baseline = await checkpointOperation({ fixture, box, kind: 'quiesce', what: `${name} base` });
 
     if (row.baseline.ok !== true || row.baseline.outcome?.kind !== 'committed') throw new Error(`large-file baseline was not committed: ${row.baseline.error ?? row.baseline.outcome?.reason}`);
     await command('dd if=/dev/urandom of=/workspace/vol/large.bin bs=16384 count=4 seek=512 conv=notrunc,fsync status=none');
     row.expectedFile = await readFile();
-    row.checkpoint = await checkpointOperation(fixture, box, 'quiesce', `${name} edit`);
+    row.checkpoint = await checkpointOperation({ fixture, box, kind: 'quiesce', what: `${name} edit` });
 
     if (row.checkpoint.ok !== true || row.checkpoint.outcome?.kind !== 'committed') throw new Error(`large-file edit was not committed: ${row.checkpoint.error ?? row.checkpoint.outcome?.reason}`);
     const before = row.publication = await boxState(fixture, box);
@@ -129,12 +136,26 @@ try {
     const destroyed = await destroyBox(fixture, box);
 
     if (destroyed.ok !== true || destroyed.destroyed !== true) throw new Error('large-file container destruction was not proved');
-    row.restoration = await startupOperation(fixture, box, '/wake', `${name} cold restore`, ['attached'], { deadlineMs: CELL_STARTUP_MS });
+    row.restoration = await startupOperation({
+      fixture,
+      box,
+      path: '/wake',
+      operation: `${name} cold restore`,
+      allowedKinds: ['attached'],
+      bounds: { deadlineMs: CELL_STARTUP_MS },
+    });
     const boot = row.restoration.state.state?.bootId;
 
     if (boot === undefined || boot === before.state?.bootId) throw new Error('large-file restore was not genuinely cold');
     row.errors.push(...chunkedPublicationErrors(row.restoration.state.state?.chain));
-    row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', LARGE_BYTES, row.errors, row.restoration.startedAt);
+    row.restoreProbe = await readRestoreProbe({
+      fixture,
+      box,
+      kind: 'destroy-cold-restore',
+      treeBytes: LARGE_BYTES,
+      notes: row.errors,
+      notBefore: row.restoration.startedAt,
+    });
     row.blockReads = await readBlockAttachMetrics(fixture, box);
     observe(row);
     row.fileProbe = await readFile();
@@ -210,7 +231,14 @@ async function runLifecycle(fixture: Fixture, box: string, observed: RunObservat
     await destroyBox(fixture, box);
 
     try {
-      cycle.initial = await startupOperation(fixture, box, '/create', `lifecycle empty baseline ${attempt + 1}`, ['empty'], { deadlineMs: CELL_STARTUP_MS, observations });
+      cycle.initial = await startupOperation({
+        fixture,
+        box,
+        path: '/create',
+        operation: `lifecycle empty baseline ${attempt + 1}`,
+        allowedKinds: ['empty'],
+        bounds: { deadlineMs: CELL_STARTUP_MS, observations },
+      });
       cycle.exec = await execInBox(fixture, box, 'mkdir -p /tmp/devbox-first-exec-witness');
     } catch (cause) {
       cycle.refusal = cause instanceof Error ? cause.message : String(cause);
@@ -240,7 +268,15 @@ async function runCells(
   const { c3Only, largeOnly } = selection;
 
   if (!largeOnly) {
-    const c3 = await measureLiveC3(fixture, box, runId, null, row => { observed.c3 = row; save(); }, { deadlineMs: CELL_STARTUP_MS });
+    const c3 = await measureLiveC3({
+      fixture,
+      box,
+      runId,
+      preparation: null,
+      observe: row => { observed.c3 = row; save(); },
+      startupBounds: { deadlineMs: CELL_STARTUP_MS },
+    });
+
     observed.c3 = c3;
     errors.push(...evaluateLiveC3(c3).errors, ...boundedAttachErrors({ phases: c3.restoreProbe?.phases, blockReads: c3.blockReads }));
     errors.push(...chunkedPublicationErrors(c3.beforeDestroy?.state?.chain));

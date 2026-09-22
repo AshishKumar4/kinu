@@ -325,12 +325,19 @@ export interface LifecycleSeam {
 export function deployedSeam(fixture: Fixture, box: string): LifecycleSeam {
   return {
     startup: async (kick, operation, allowed, deadlineMs): Promise<StartupOutcome> => {
-      const completed = await startupOperation(fixture, box, kick, operation, allowed, { deadlineMs });
+      const completed = await startupOperation({
+        fixture,
+        box,
+        path: kick,
+        operation,
+        allowedKinds: allowed,
+        bounds: { deadlineMs },
+      });
 
       return { ms: completed.ms, kind: completed.attach.kind, detail: completed.attach.detail };
     },
     checkpoint: async (what, deadlineMs): Promise<SettleOutcome> => {
-      const settled = await checkpointOperation(fixture, box, 'quiesce', what, { deadlineMs });
+      const settled = await checkpointOperation({ fixture, box, kind: 'quiesce', what, bounds: { deadlineMs } });
       const kind = settled.outcome?.kind ?? 'unknown';
 
       return {

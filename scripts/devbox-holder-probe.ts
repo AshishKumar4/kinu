@@ -237,7 +237,14 @@ async function main(): Promise<number> {
     stopWorker = started.stop;
     log(`deployed at ${live.origin}`);
 
-    const cold = await startupOperation(live, box, '/create', 'probe cold attach', ['empty', 'attached']);
+    const cold = await startupOperation({
+      fixture: live,
+      box,
+      path: '/create',
+      operation: 'probe cold attach',
+      allowedKinds: ['empty', 'attached'],
+    });
+
     log(`cold attach: ${cold.attach.kind} — ${cold.attach.detail}`);
 
     // ── the E2E's own open-write arming, verbatim in shape ─────────────────

@@ -196,7 +196,7 @@ export function describeStartupState(reply: StateReply): string {
 }
 
 async function chainGeneration(fixture: Fixture, box: string): Promise<ChainGeneration> {
-  const reply = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+  const reply = await call({ fixture, method: 'GET', path: `/state?box=${box}`, schema: StateReplySchema });
 
   return chainGenerationFromState(reply);
 }
@@ -786,7 +786,7 @@ export function parseFrozenControlArtifact(
     );
   }
 
-  const arm = arms[0]!;
+  const arm = arms[0];
   const judged = frozenControlStatus(arm, parsed.output.cleanup, parsed.output.admission);
 
   return {
@@ -1244,13 +1244,17 @@ const CALL_DEADLINE_MS = 180_000;
 
 const CALL_ATTEMPTS = 3;
 
+interface Call<TSchema extends v.GenericSchema> {
+  readonly fixture: Fixture;
+  readonly method: 'GET' | 'POST';
+  readonly path: string;
+  readonly schema: TSchema;
+  readonly body?: DriverRequest;
+  readonly timeoutMs?: number;
+}
+
 async function call<TSchema extends v.GenericSchema>(
-  fixture: Fixture,
-  method: 'GET' | 'POST',
-  path: string,
-  schema: TSchema,
-  body?: DriverRequest,
-  timeoutMs?: number,
+  { fixture, method, path, schema, body, timeoutMs }: Call<TSchema>,
 ): Promise<v.InferOutput<TSchema>> {
   const addressed = addressArmRequest(method, path, body);
   const headers = new Headers({ authorization: `Bearer ${fixture.token}` });
@@ -1384,7 +1388,14 @@ export async function execInBox(
 ): Promise<ExecReply> {
   return await askWhileStarting(
     `exec ${command.length > 48 ? `${command.slice(0, 48)}…` : command}`,
-    async () => await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command }, timeoutMs),
+    async () => await call({
+      fixture,
+      method: 'POST',
+      path: `/exec?box=${box}`,
+      schema: ExecReplySchema,
+      body: { command },
+      timeoutMs,
+    }),
   );
 }
 
@@ -1473,7 +1484,13 @@ export async function writeFileInBox(
 ): Promise<void> {
   const reply = await askWhileStarting(
     `write ${path}`,
-    async () => await call(fixture, 'POST', `/write?box=${box}`, AckReplySchema, { path, content }),
+    async () => await call({
+      fixture,
+      method: 'POST',
+      path: `/write?box=${box}`,
+      schema: AckReplySchema,
+      body: { path, content },
+    }),
   );
 
   // A REFUSED WRITE IS NOT A WRITE. The fault-cut cell of run `20260914234711`
@@ -1678,17 +1695,24 @@ const HeadReplySchema: v.GenericSchema<HeadReply> = v.looseObject({
  *  The startup poll reads the same reply; a caller that needs the arm's store
  *  prefix or its durable chain record asks here rather than deriving either. */
 export async function boxState(fixture: Fixture, box: string): Promise<StateReply> {
-  return await call(
-    fixture, 'GET', `/state?box=${box}`, StateReplySchema, undefined, STATE_POLL_REQUEST_TIMEOUT_MS,
-  );
+  return await call({
+    fixture,
+    method: 'GET',
+    path: `/state?box=${box}`,
+    schema: StateReplySchema,
+    timeoutMs: STATE_POLL_REQUEST_TIMEOUT_MS,
+  });
 }
 
 /** What the STORE holds under one key, through the fixture's own `/head` route.
  *  The only fact about durable bytes no container command can answer. */
 export async function headObject(fixture: Fixture, box: string, key: string): Promise<HeadReply> {
-  return await call(
-    fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
-  );
+  return await call({
+    fixture,
+    method: 'GET',
+    path: `/head?box=${box}&key=${encodeURIComponent(key)}`,
+    schema: HeadReplySchema,
+  });
 }
 
 /**
@@ -1752,7 +1776,12 @@ async function observeContinuity(fixture: Fixture, box: string, label: string): 
   }
 
   try {
-    row.incidents = await call(fixture, 'GET', `/incidents?box=${box}`, IncidentReasonsReplySchema);
+    row.incidents = await call({
+      fixture,
+      method: 'GET',
+      path: `/incidents?box=${box}`,
+      schema: IncidentReasonsReplySchema,
+    });
   } catch (error) {
     row.errors.push(`incidents: ${describeThrown({ cause: error })}`);
   }
@@ -1799,7 +1828,12 @@ export async function readIncidentReasons(
   notes: string[],
 ): Promise<IncidentReasonRow[] | undefined> {
   try {
-    const reply = await call(fixture, 'GET', `/incidents?box=${box}`, IncidentReasonsReplySchema);
+    const reply = await call({
+      fixture,
+      method: 'GET',
+      path: `/incidents?box=${box}`,
+      schema: IncidentReasonsReplySchema,
+    });
 
     if (reply.ok !== true || reply.incidents === undefined) {
       notes.push(
@@ -1864,12 +1898,16 @@ const requestOverHttps: HttpsRequester = (url, options, respond) =>
  * `teardownLiveArms` posts a second pass, so an abandoned request costs a retry
  * rather than the work.
  */
+interface BoundedPost {
+  readonly fixture: Fixture;
+  readonly path: string;
+  readonly body: DriverRequest;
+  readonly requester: HttpsRequester;
+  readonly timeoutMs?: number;
+}
+
 async function postBoundedHttps(
-  fixture: Fixture,
-  path: string,
-  body: DriverRequest,
-  requester: HttpsRequester,
-  timeoutMs?: number,
+  { fixture, path, body, requester, timeoutMs }: BoundedPost,
 ): Promise<string> {
   const addressed = addressArmRequest('POST', path, body);
   const endpoint = new URL(path, 'https://bench.invalid').pathname;
@@ -2034,12 +2072,16 @@ type ReadinessDrive =
  * recorded as refused while the box was doing exactly what it said. The wait
  * stays bounded by the caller's own ceiling; only the classification changes.
  */
+interface ReadinessRequest {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly operation: string;
+  readonly timeoutMs?: number;
+  readonly observations?: StartupObservation[];
+}
+
 async function driveReadiness(
-  fixture: Fixture,
-  box: string,
-  operation: string,
-  timeoutMs?: number,
-  observations?: StartupObservation[],
+  { fixture, box, operation, timeoutMs, observations }: ReadinessRequest,
 ): Promise<ReadinessDrive> {
   let driven: ExecReply;
 
@@ -2078,15 +2120,19 @@ async function driveReadiness(
  * completed inside the caller's ceiling would have been recorded as a startup
  * that never happened.
  */
+export interface AttachPoll {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly operation: string;
+  readonly allowedKinds: readonly string[];
+  readonly bounds?: StartupBounds;
+}
+
 export async function pollForAttach(
-  fixture: Fixture,
-  box: string,
-  operation: string,
-  allowedKinds: readonly string[],
-  bounds: StartupBounds = {},
+  { fixture, box, operation, allowedKinds, bounds = {} }: AttachPoll,
 ): Promise<StartupPoll> {
-  bounds = { deadlineMs: CELL_STARTUP_MS, ...bounds };
-  const deadline = Date.now() + (bounds.deadlineMs ?? CELL_STARTUP_MS);
+  const limits = { deadlineMs: CELL_STARTUP_MS, ...bounds };
+  const deadline = Date.now() + (limits.deadlineMs ?? CELL_STARTUP_MS);
   let redrives = 0;
   let lastReading = 'no /state reply has been decoded yet';
   /** The one drive in flight, HELD rather than floated: the loop that started
@@ -2098,11 +2144,15 @@ export async function pollForAttach(
     // The boundary's refusal, collected from whichever drive carried it. It is
     // read here rather than thrown from the drive so that one lane's refusal
     // still travels through this loop's own accounting.
-    if (refusal !== null) throw new Error(`${operation} refused: ${refusal}`);
+    if (refusal !== null) {
+      const refused: string = refusal;
+
+      throw new Error(`${operation} refused: ${refused}`);
+    }
 
     if (deadline !== null && Date.now() > deadline) {
       throw new Error(
-        `${operation} did not attach within its ${String(bounds.deadlineMs)} ms ceiling `
+        `${operation} did not attach within its ${String(limits.deadlineMs)} ms ceiling `
         + `(last reading: ${lastReading}`
         + `${driving === null ? '' : `; a readiness drive posted ${String(Date.now() - driving.since)} ms ago has not answered`})`,
       );
@@ -2111,7 +2161,7 @@ export async function pollForAttach(
     let reply: StateReply;
 
     try {
-      reply = await observeStartupReply(bounds.observations, 'state', async () => await boxState(fixture, box));
+      reply = await observeStartupReply(limits.observations, 'state', async () => await boxState(fixture, box));
     } catch (error) {
       log(`${operation}: state poll retrying: ${describeThrown({ cause: error })}`);
       await delay(STARTUP_POLL_INTERVAL_MS);
@@ -2145,7 +2195,13 @@ export async function pollForAttach(
         since,
         settled: (async (): Promise<void> => {
           try {
-            const drive = await driveReadiness(fixture, box, operation, remaining, bounds.observations);
+            const drive = await driveReadiness({
+              fixture,
+              box,
+              operation,
+              timeoutMs: remaining,
+              observations: limits.observations,
+            });
 
             if (drive.kind === 'refused') refusal = drive.detail;
             else if (drive.kind === 'unanswered') {
@@ -2182,29 +2238,33 @@ export interface StartupBounds {
 /** Kick one startup and wait for THIS generation's attach, measured end to end
  *  from the kick. The two startup routes are the same operation to a caller;
  *  which one it is decides only what the container is allowed to restore. */
+export interface StartupRequest {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly path: '/create' | '/wake';
+  readonly operation: string;
+  readonly allowedKinds: readonly string[];
+  readonly bounds?: StartupBounds;
+}
+
 export async function startupOperation(
-  fixture: Fixture,
-  box: string,
-  path: '/create' | '/wake',
-  operation: string,
-  allowedKinds: readonly string[],
-  bounds: StartupBounds = {},
+  { fixture, box, path, operation, allowedKinds, bounds = {} }: StartupRequest,
 ): Promise<StartupCompletion> {
   const started = Date.now();
-  bounds = { deadlineMs: CELL_STARTUP_MS, ...bounds };
+  const limits = { deadlineMs: CELL_STARTUP_MS, ...bounds };
   // THE CALLER'S CEILING COVERS THE KICK TOO. The capacity retry below is
   // unbounded by design for the benchmark, and a bounded caller that inherited
   // it spent its whole window re-kicking a box that never admitted a container
   // and then reported the ceiling with nothing named. `bounds` now ends that
   // loop with the last kick's own words.
-  const deadline = bounds.deadlineMs === undefined ? null : started + bounds.deadlineMs;
+  const deadline = limits.deadlineMs === undefined ? null : started + limits.deadlineMs;
 
   for (let attempt = 1; ; attempt += 1) {
     let transient: string;
 
     try {
-      const kicked = await observeStartupReply(bounds.observations, 'kick', async () =>
-        await call(fixture, 'POST', `${path}?box=${box}`, KickReplySchema, {}));
+      const kicked = await observeStartupReply(limits.observations, 'kick', async () =>
+        await call({ fixture, method: 'POST', path: `${path}?box=${box}`, schema: KickReplySchema, body: {} }));
 
       if (kicked.ok === true) break;
       const detail = kicked.error ?? 'the startup kick did not confirm';
@@ -2222,7 +2282,7 @@ export async function startupOperation(
 
     if (deadline !== null && Date.now() + 15_000 > deadline) {
       throw new Error(
-        `${operation} was still being admitted at its ${String(bounds.deadlineMs)} ms ceiling `
+        `${operation} was still being admitted at its ${String(limits.deadlineMs)} ms ceiling `
         + `after ${String(attempt)} kick(s) (last kick: ${transient})`,
       );
     }
@@ -2230,8 +2290,13 @@ export async function startupOperation(
     await delay(15_000);
   }
 
-  const attached = await pollForAttach(fixture, box, operation, allowedKinds,
-    { ...bounds, deadlineMs: Math.max(0, (deadline ?? started + CELL_STARTUP_MS) - Date.now()) });
+  const attached = await pollForAttach({
+    fixture,
+    box,
+    operation,
+    allowedKinds,
+    bounds: { ...limits, deadlineMs: Math.max(0, (deadline ?? started + CELL_STARTUP_MS) - Date.now()) },
+  });
 
   return { ...attached, ms: Date.now() - started, startedAt: started };
 }
@@ -2256,7 +2321,7 @@ export interface StopReply { ok?: boolean; ms?: number; error?: string }
 
 
 export async function destroyBox(fixture: Fixture, box: string): Promise<DestroyReply> {
-  const reply = await call(fixture, 'POST', `/destroy?box=${box}`, DestroyReplySchema);
+  const reply = await call({ fixture, method: 'POST', path: `/destroy?box=${box}`, schema: DestroyReplySchema });
 
   if (reply.ok !== true || reply.destroyed !== true) {
     throw new Error(`container destruction was not confirmed: ${JSON.stringify(reply)}`);
@@ -2344,12 +2409,16 @@ const OPERATION_POLL_GROWTH = 1.5;
  * idempotent arm that question stops mattering. Every later request is a poll,
  * so nothing here can publish twice however often it is retried.
  */
+interface ArmedOperation {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly route: '/checkpoint' | '/stop';
+  readonly body: DriverRequest & { readonly op: string };
+  readonly bounds?: { readonly pollMs?: number; readonly deadlineMs?: number };
+}
+
 async function awaitArmedOperation(
-  fixture: Fixture,
-  box: string,
-  route: '/checkpoint' | '/stop',
-  body: DriverRequest & { readonly op: string },
-  bounds: { readonly pollMs?: number; readonly deadlineMs?: number } = {},
+  { fixture, box, route, body, bounds = {} }: ArmedOperation,
 ): Promise<OperationPollReply> {
   // An explicit cadence is FIXED at that value, so a test asking for a 1 ms
   // cadence gets one instead of a backoff it then has to wait out.
@@ -2360,9 +2429,14 @@ async function awaitArmedOperation(
 
   for (let attempt = 1; armed === null; attempt += 1) {
     try {
-      armed = await call(
-        fixture, 'POST', `${route}?box=${box}`, OperationArmedReplySchema, body, STATE_POLL_REQUEST_TIMEOUT_MS,
-      );
+      armed = await call({
+        fixture,
+        method: 'POST',
+        path: `${route}?box=${box}`,
+        schema: OperationArmedReplySchema,
+        body,
+        timeoutMs: STATE_POLL_REQUEST_TIMEOUT_MS,
+      });
     } catch (error) {
       if (!isTransportLoss(parseThrown({ cause: error })) || Date.now() > deadline) throw error;
       log(`${route}: arming lost its reply on attempt ${attempt}; asking again under the same op`);
@@ -2386,14 +2460,13 @@ async function awaitArmedOperation(
     let poll: OperationPollReply;
 
     try {
-      poll = await call(
+      poll = await call({
         fixture,
-        'GET',
-        `/operation?box=${box}&token=${encodeURIComponent(token)}`,
-        OperationPollReplySchema,
-        undefined,
-        STATE_POLL_REQUEST_TIMEOUT_MS,
-      );
+        method: 'GET',
+        path: `/operation?box=${box}&token=${encodeURIComponent(token)}`,
+        schema: OperationPollReplySchema,
+        timeoutMs: STATE_POLL_REQUEST_TIMEOUT_MS,
+      });
     } catch (error) {
       // A poll that could not be asked proves nothing about the operation. It
       // is re-asked until the deadline, exactly as the startup poll re-asks
@@ -2455,15 +2528,25 @@ export interface OperationBounds {
  * second quiesce ever ran. A fresh `op` is a fresh operation, which is the
  * only thing that heals the replacement the sentence names.
  */
+export interface CheckpointRequest {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly kind: 'tick' | 'quiesce';
+  readonly what: string;
+  readonly bounds?: OperationBounds;
+}
+
 export async function checkpointOperation(
-  fixture: Fixture,
-  box: string,
-  kind: 'tick' | 'quiesce',
-  what: string,
-  bounds: OperationBounds = {},
+  { fixture, box, kind, what, bounds = {} }: CheckpointRequest,
 ): Promise<CheckpointReply> {
   return await retryTransient(what, async () =>
-    await awaitArmedOperation(fixture, box, '/checkpoint', { kind, op: `${what}-${crypto.randomUUID()}` }, bounds),
+    await awaitArmedOperation({
+      fixture,
+      box,
+      route: '/checkpoint',
+      body: { kind, op: `${what}-${crypto.randomUUID()}` },
+      bounds,
+    }),
   );
 }
 
@@ -2480,17 +2563,28 @@ export interface ArmedCheckpoint {
  * The `op` is generated here, so a transport loss that retries THIS call
  * re-arms the same operation rather than starting a second publication.
  */
+export interface ArmCheckpointRequest {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly kind: 'tick' | 'quiesce';
+  readonly what: string;
+  readonly route?: '/checkpoint' | '/checkpoint-cut';
+}
+
 export async function armCheckpointOperation(
-  fixture: Fixture,
-  box: string,
-  kind: 'tick' | 'quiesce',
-  what: string,
-  route: '/checkpoint' | '/checkpoint-cut' = '/checkpoint',
+  { fixture, box, kind, what, route = '/checkpoint' }: ArmCheckpointRequest,
 ): Promise<ArmedCheckpoint> {
   const op = `${what}-${crypto.randomUUID()}`;
 
   const armed = await retryTransient(what, async () =>
-    await call(fixture, 'POST', `${route}?box=${box}`, OperationArmedReplySchema, { kind, op }, STATE_POLL_REQUEST_TIMEOUT_MS),
+    await call({
+      fixture,
+      method: 'POST',
+      path: `${route}?box=${box}`,
+      schema: OperationArmedReplySchema,
+      body: { kind, op },
+      timeoutMs: STATE_POLL_REQUEST_TIMEOUT_MS,
+    }),
   );
 
   if (armed.ok !== true || armed.token === undefined || armed.token.length === 0) {
@@ -2510,7 +2604,13 @@ export async function stopOperation(
   bounds: OperationBounds = {},
 ): Promise<StopReply> {
   const settled = await retryTransient(what, async () =>
-    await awaitArmedOperation(fixture, box, '/stop', { op: `${what}-${crypto.randomUUID()}` }, bounds),
+    await awaitArmedOperation({
+      fixture,
+      box,
+      route: '/stop',
+      body: { op: `${what}-${crypto.randomUUID()}` },
+      bounds,
+    }),
   );
 
   return {
@@ -2552,13 +2652,13 @@ export async function postLiveTeardown(
   requester: LiveTeardownHttpsRequester = requestOverHttps,
   timeoutMs?: number,
 ): Promise<void> {
-  const responseText = await postBoundedHttps(
+  const responseText = await postBoundedHttps({
     fixture,
-    `/teardown?box=${box}`,
-    TEARDOWN_PURGE_PAYLOAD,
+    path: `/teardown?box=${box}`,
+    body: TEARDOWN_PURGE_PAYLOAD,
     requester,
     timeoutMs,
-  );
+  });
 
   let decoded: unknown;
 
@@ -2913,9 +3013,16 @@ async function installWitnessHarness(fixture: Fixture, box: string, directory: s
  * sentinel for anything minute-scale, because the blocking path is bounded by a
  * ceiling that no timeout option raises.
  */
-async function runPhase(
-  fixture: Fixture, box: string, root: string, phase: string, seed: number, budgetMs: number,
-): Promise<ProbeRun> {
+interface PhaseRun {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly root: string;
+  readonly phase: string;
+  readonly seed: number;
+  readonly budgetMs: number;
+}
+
+async function runPhase({ fixture, box, root, phase, seed, budgetMs }: PhaseRun): Promise<ProbeRun> {
   const base = `bun ${HARNESS}/probe.ts --root ${root} --phase ${phase} --seed ${seed} --budget-ms ${budgetMs}`;
 
   if (!PROCESS_PHASES.has(phase)) {
@@ -2992,16 +3099,20 @@ async function runPhase(
  * across repetitions, since a later repetition re-runs the same segments over
  * the tree the previous one left.
  */
+interface DecisiveSegment {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly arm: string;
+  readonly spec: (typeof DECISIVE_WORKLOADS)[number];
+  readonly seed: number;
+  readonly repetition: number;
+  readonly segment: number;
+  readonly observation: DecisiveSegmentObservation;
+  readonly notes: string[];
+}
+
 async function executeDecisiveSegment(
-  fixture: Fixture,
-  box: string,
-  arm: string,
-  spec: (typeof DECISIVE_WORKLOADS)[number],
-  seed: number,
-  repetition: number,
-  segment: number,
-  observation: DecisiveSegmentObservation,
-  notes: string[],
+  { fixture, box, arm, spec, seed, repetition, segment, observation, notes }: DecisiveSegment,
 ): Promise<{ tick: TickRecord | null; treeBytes: number | null }> {
   const root = `/workspace/decisive-${spec.id}`;
 
@@ -3045,10 +3156,10 @@ async function executeDecisiveSegment(
   // behaviour; a driver that trips it is measuring the rate limiter.
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
 
-  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-  const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
+  const before = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
   observation.accounting.before = before;
-  const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
+  const cp = await checkpointOperation({ fixture, box, kind: 'tick', what: `${spec.id} tick ${segmentName}` });
   observation.checkpoint = cp;
 
   // UNCOMMITTED TICKS PRICE NOTHING. A failed or skipped tick pushed as a
@@ -3075,8 +3186,8 @@ async function executeDecisiveSegment(
     return { tick: null, treeBytes: run.treeBytes ?? null };
   }
 
-  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-  const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
+  const after = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
   observation.accounting.after = after;
   const bill = pricedOpWindow(before, after);
 
@@ -3132,16 +3243,20 @@ async function executeDecisiveSegment(
  * checkpoint said neither, because a strategy that does not account for its own
  * work is a finding.
  */
-export async function runDecisive(
-  fixture: Fixture,
-  box: string,
-  arm: string,
-  spec: (typeof DECISIVE_WORKLOADS)[number],
-  seed: number,
+export interface DecisiveCell {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly arm: string;
+  readonly spec: (typeof DECISIVE_WORKLOADS)[number];
+  readonly seed: number;
   /** Which repetition of this cell is running, counting from one. Stamped on
    *  every tick, so the artifact keeps the per-repetition rows apart. */
-  repetition: number,
-  record?: { segments: DecisiveSegmentObservation[]; settled: () => void },
+  readonly repetition: number;
+  readonly record?: { segments: DecisiveSegmentObservation[]; settled: () => void };
+}
+
+export async function runDecisive(
+  { fixture, box, arm, spec, seed, repetition, record }: DecisiveCell,
 ): Promise<{ ticks: TickRecord[]; treeBytes: number; notes: string[]; segments: DecisiveSegmentObservation[] }> {
   const notes: string[] = [];
   const ticks: TickRecord[] = [];
@@ -3151,9 +3266,12 @@ export async function runDecisive(
   // The excludes arm differs ONLY by the policy file, so the pair isolates the
   // policy rather than the workload.
   if (spec.excludes) {
-    await call(fixture, 'POST', `/write?box=${box}`, AckReplySchema, {
-      path: `${root}/.devboxignore`,
-      content: 'node_modules/**/dist/**\n**/*.map\n.git/objects/**\n',
+    await call({
+      fixture,
+      method: 'POST',
+      path: `/write?box=${box}`,
+      schema: AckReplySchema,
+      body: { path: `${root}/.devboxignore`, content: 'node_modules/**/dist/**\n**/*.map\n.git/objects/**\n', },
     });
   }
 
@@ -3181,9 +3299,17 @@ export async function runDecisive(
     try {
       observation.before = await observeContinuity(fixture, box, `${spec.id}/${repetition}/${segment}: before`);
 
-      const run = await executeDecisiveSegment(
-        fixture, box, arm, spec, seed, repetition, segment, observation, notes,
-      );
+      const run = await executeDecisiveSegment({
+        fixture,
+        box,
+        arm,
+        spec,
+        seed,
+        repetition,
+        segment,
+        observation,
+        notes,
+      });
 
       if (run.treeBytes !== null && run.treeBytes > treeBytes) treeBytes = run.treeBytes;
 
@@ -3622,12 +3748,6 @@ function requiredChainId(id: string | undefined, what: string): string {
   return id;
 }
 
-/** HEAD one archived key through the fixture's /head endpoint — the cell and
- * its witness both read presence and etag through this one reader. */
-async function headKey(fixture: Fixture, box: string, key: string): Promise<HeadReply> {
-  return await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
-}
-
 /** A cell's own setup command either ran to exit 0 or the cell ends with the
  *  box's reason: a refused setup judged as if it ran is a witness of nothing. */
 function ranInBox(reply: ExecReply, what: string): void {
@@ -3673,9 +3793,12 @@ async function observeChunkedAbsorption(
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
 
   // A tick preserves the base; this cell needs a delta sidecar to restore.
-  const seeded = await checkpointOperation(
-    fixture, box, 'tick', 'chunked-absorption marker commit',
-  );
+  const seeded = await checkpointOperation({
+    fixture,
+    box,
+    kind: 'tick',
+    what: 'chunked-absorption marker commit',
+  });
 
   sample.seedCheckpoint = seeded;
 
@@ -3690,7 +3813,7 @@ async function observeChunkedAbsorption(
   const chainId = requiredChainId(sample.beforeState.state?.chain?.base?.id, 'chain');
   sample.before = chainId;
   const deltaId = requiredChainId(sample.beforeState.state?.chain?.delta?.id, 'delta');
-  sample.deltaHead = await headKey(fixture, box, `${sample.beforeState.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`);
+  sample.deltaHead = await headObject(fixture, box, `${sample.beforeState.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`);
   const manifestPoint = `${dirname(CHAIN_UPPER_DIR)}/witness-manifest`;
   sample.manifestRead = await execInBox(fixture, box,
     `mkdir -p '${manifestPoint}' && devbox-squashfuse '${CHAIN_STORE_MOUNT_DIR}/${deltaId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
@@ -3711,7 +3834,14 @@ async function observeChunkedAbsorption(
   sample.destroyReceipt = await destroyBox(fixture, box);
   const startupObservations: StartupObservation[] = [];
   sample.startupObservations = startupObservations;
-  sample.wake = await startupOperation(fixture, box, '/wake', 'chunked-absorption wake', ['attached'], { observations: startupObservations });
+  sample.wake = await startupOperation({
+    fixture,
+    box,
+    path: '/wake',
+    operation: 'chunked-absorption wake',
+    allowedKinds: ['attached'],
+    bounds: { observations: startupObservations },
+  });
   sample.blockReads = await readBlockAttachMetrics(fixture, box);
   sample.mounts = await execInBox(fixture, box, 'cat /proc/mounts');
 
@@ -3729,7 +3859,12 @@ async function observeChunkedAbsorption(
     fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
   ), 'the post-wake write did not run');
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
+  sample.nextCheckpoint = await checkpointOperation({
+    fixture,
+    box,
+    kind: 'tick',
+    what: 'chunked-absorption next checkpoint',
+  });
   sample.afterState = await boxState(fixture, box);
   const next = sample.afterState.state?.chain;
   sample.after = next?.base?.id ?? null;
@@ -3771,7 +3906,13 @@ async function runControlWitnessCells(
   await cell('mutable-delta', async () => {
     const before = await deltaAfterOneChange(fixture, box, 'a');
     await destroyBox(fixture, box);
-    await startupOperation(fixture, box, '/wake', 'immutable-delta retained mount', ['attached']);
+    await startupOperation({
+      fixture,
+      box,
+      path: '/wake',
+      operation: 'immutable-delta retained mount',
+      allowedKinds: ['attached'],
+    });
     const after = await deltaAfterOneChange(fixture, box, 'b');
 
     if (before.chainId !== after.chainId) {
@@ -3788,7 +3929,7 @@ async function runControlWitnessCells(
       etagAfter: after.etag,
       bytesBefore: before.bytes,
       bytesAfter: after.bytes,
-      retainedHead: await headKey(fixture, box, before.key),
+      retainedHead: await headObject(fixture, box, before.key),
       beforeState: before.state,
       afterState: after.state,
       checkpoint: after.checkpoint,
@@ -3827,7 +3968,7 @@ function combineRollbackPhantom(rollback: boolean | null, phantom: boolean | nul
  */
 async function healBox(fixture: Fixture, box: string): Promise<string> {
   try {
-    const healed = await checkpointOperation(fixture, box, 'quiesce', 'fault-cut heal');
+    const healed = await checkpointOperation({ fixture, box, kind: 'quiesce', what: 'fault-cut heal' });
 
     if (healed.ok === true && healed.outcome?.kind === 'committed') return '';
 
@@ -3877,19 +4018,45 @@ async function fireCutVictim(
     box,
     `dd if=/dev/urandom of=/workspace/${victim.file} bs=1048576 count=${FAULT_CUT_VICTIM_MIB} 2>/dev/null && sync`,
   );
-  const armed = await armCheckpointOperation(fixture, box, 'quiesce', 'fault-cut victim', '/checkpoint-cut');
+
+  const armed = await armCheckpointOperation({
+    fixture,
+    box,
+    kind: 'quiesce',
+    what: 'fault-cut victim',
+    route: '/checkpoint-cut',
+  });
+
   const query = `box=${box}&token=${encodeURIComponent(armed.op)}`;
 
-  const pollOperation = async (): Promise<OperationPollReply> => await call(
-    fixture, 'GET', `/operation?box=${box}&token=${encodeURIComponent(armed.token)}`, OperationPollReplySchema,
-  );
+  const pollOperation = async (): Promise<OperationPollReply> => await call({
+    fixture,
+    method: 'GET',
+    path: `/operation?box=${box}&token=${encodeURIComponent(armed.token)}`,
+    schema: OperationPollReplySchema,
+  });
 
   try {
     const receipt = await rendezvousPublicationCut({
-      read: async () => await call(fixture, 'GET', `/fault-cut?${query}`, PublicationCutSchema),
+      read: async () => await call({
+        fixture,
+        method: 'GET',
+        path: `/fault-cut?${query}`,
+        schema: PublicationCutSchema,
+      }),
       pending: async () => (await pollOperation()).state === 'pending',
-      kill: async () => await call(fixture, 'POST', `/fault-cut/kill?${query}`, PublicationCutSchema),
-      cancel: async () => await call(fixture, 'POST', `/fault-cut/cancel?${query}`, PublicationCutSchema),
+      kill: async () => await call({
+        fixture,
+        method: 'POST',
+        path: `/fault-cut/kill?${query}`,
+        schema: PublicationCutSchema,
+      }),
+      cancel: async () => await call({
+        fixture,
+        method: 'POST',
+        path: `/fault-cut/cancel?${query}`,
+        schema: PublicationCutSchema,
+      }),
       wait: async () => await delay(500),
     });
 
@@ -3916,7 +4083,7 @@ async function fireCutVictim(
 
     return { victimEnd: `CUT: ${JSON.stringify(receipt)}; victim ${outcome.state ?? 'unmeasured'}` };
   } finally {
-    await call(fixture, 'POST', `/fault-cut/clear?${query}`, AckReplySchema);
+    await call({ fixture, method: 'POST', path: `/fault-cut/clear?${query}`, schema: AckReplySchema });
   }
 }
 
@@ -4013,7 +4180,7 @@ async function readCutArchiveRows(
     deltaExists = deltaRow.present ? exists : null;
     unexpectedDelta = deltaRow.present ? false : exists;
 
-    if (deltaRow.present && head?.error === undefined) postDeltaEtag = head?.etag || null;
+    if (deltaRow.present && head?.error === undefined) postDeltaEtag = head?.etag ?? null;
   }
 
   return { deltaRow, baseExists, deltaExists, unexpectedDelta, postDeltaEtag };
@@ -4174,7 +4341,13 @@ async function runFaultCutCell(
     throw new Error(`the baseline witness was not observed: ${baselineRead.error ?? 'bytes differ'}`);
   }
 
-  const acknowledged = await checkpointOperation(fixture, box, 'quiesce', 'fault-cut acknowledged baseline');
+  const acknowledged = await checkpointOperation({
+    fixture,
+    box,
+    kind: 'quiesce',
+    what: 'fault-cut acknowledged baseline',
+  });
+
   evidence.acknowledgement = { witnesses: [witness], checkpoint: acknowledged };
 
   if (acknowledged.ok !== true || acknowledged.outcome?.kind !== 'committed') {
@@ -4196,7 +4369,7 @@ async function runFaultCutCell(
     if (preDelta !== undefined) {
       const head = await readCutHead(fixture, box, preDelta.key, evidence);
       evidence.preDeltaHead = head;
-      chainPreDeltaEtag = head?.error === undefined ? head?.etag || null : null;
+      chainPreDeltaEtag = head?.error === undefined ? head?.etag ?? null : null;
     }
   }
 
@@ -4221,8 +4394,13 @@ async function runFaultCutCell(
 
   // THE WAKE AFTER THE CUT. Every kind is admitted: an empty wake is the
   // finding, not a step failure, and the judges below read it as one.
-  const cut = await startupOperation(fixture, box, '/wake', 'fault-cut wake', ['attached', 'already-attached', 'empty'], {
-    observations: evidence.wakeObservations,
+  const cut = await startupOperation({
+    fixture,
+    box,
+    path: '/wake',
+    operation: 'fault-cut wake',
+    allowedKinds: ['attached', 'already-attached', 'empty'],
+    bounds: { observations: evidence.wakeObservations },
   });
 
   evidence.wake = cut;
@@ -4250,8 +4428,8 @@ async function deltaAfterOneChange(
 ): Promise<{ chainId: string; key: string; etag: string; bytes: number; state: StateReply; checkpoint: CheckpointReply }> {
   await execInBox(fixture, box, `printf %s mutable-delta-${label} > /workspace/witness-delta-${label}.txt && sync`);
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  const checkpoint = await checkpointOperation(fixture, box, 'tick', `mutable-delta cell ${label}`);
-  const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+  const checkpoint = await checkpointOperation({ fixture, box, kind: 'tick', what: `mutable-delta cell ${label}` });
+  const state = await call({ fixture, method: 'GET', path: `/state?box=${box}`, schema: StateReplySchema });
   const chainId = state.state?.chain?.base?.id ?? '';
 
   if (chainId.length === 0) throw new Error('/state reported no chain generation');
@@ -4260,9 +4438,12 @@ async function deltaAfterOneChange(
   if (deltaId === undefined) throw new Error('/state reported no immutable delta identity');
   const key = `${state.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`;
 
-  const head = await call(
-    fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
-  );
+  const head = await call({
+    fixture,
+    method: 'GET',
+    path: `/head?box=${box}&key=${encodeURIComponent(key)}`,
+    schema: HeadReplySchema,
+  });
 
   return { chainId, key, etag: head.etag ?? '', bytes: head.size ?? 0, state, checkpoint };
 }
@@ -4374,8 +4555,8 @@ async function closeWakeOpsWindow(
   before: OpTally,
   notes: string[],
 ): Promise<OpTally | null> {
-  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-  const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
+  const after = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
   const wakeOps = diffOpTallies(before, after);
 
   if (wakeOps === null) {
@@ -4407,19 +4588,23 @@ const RestoreProbeReplySchema: v.GenericSchema<{
  * diagnostic read, so every failure is an absent row with its reason, and
  * the arm keeps whatever it measured. Added 2026-09-10.
  */
+export interface RestoreProbe {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly kind: RestoreProbeRow['kind'];
+  readonly treeBytes: number | null;
+  readonly notes: string[];
+  readonly notBefore: number;
+}
+
 export async function readRestoreProbe(
-  fixture: Fixture,
-  box: string,
-  kind: RestoreProbeRow['kind'],
-  treeBytes: number | null,
-  notes: string[],
-  notBefore: number,
+  { fixture, box, kind, treeBytes, notes, notBefore }: RestoreProbe,
 ): Promise<RestoreProbeRow> {
   const absent = (outcome: string): RestoreProbeRow => ({ kind, treeBytes, wallMs: null, probeAt: null, outcome });
   let reply: v.InferOutput<typeof RestoreProbeReplySchema>;
 
   try {
-    reply = await call(fixture, 'GET', `/restore-probe?box=${box}`, RestoreProbeReplySchema);
+    reply = await call({ fixture, method: 'GET', path: `/restore-probe?box=${box}`, schema: RestoreProbeReplySchema });
   } catch (error) {
     const words = describeThrown({ cause: error }).slice(0, 240);
     notes.push(`restore probe ${kind} did not answer: ${words}`);
@@ -4462,16 +4647,14 @@ export async function readRestoreProbe(
 /** Poll the probe and append its row to the arm, in one place: every restore
  *  the walk settles records exactly one row, present or absent, and the walk
  *  itself carries no branch for it. */
+interface RecordedRestoreProbe extends RestoreProbe {
+  readonly result: ArmResult;
+}
+
 async function recordRestoreProbe(
-  fixture: Fixture,
-  box: string,
-  result: ArmResult,
-  kind: RestoreProbeRow['kind'],
-  treeBytes: number | null,
-  notes: string[],
-  notBefore: number,
+  { fixture, box, result, kind, treeBytes, notes, notBefore }: RecordedRestoreProbe,
 ): Promise<void> {
-  const row = await readRestoreProbe(fixture, box, kind, treeBytes, notes, notBefore);
+  const row = await readRestoreProbe({ fixture, box, kind, treeBytes, notes, notBefore });
   (result.restoreProbes ??= []).push(row);
   const phases = Object.entries(row.phases ?? {}).map(([phase, atMs]) => `${phase}=${String(atMs)}`).join(' ');
   log(`restore probe ${kind}: wallMs=${String(row.wallMs)} ${phases.length === 0 ? 'no phases' : phases} (${row.outcome})`);
@@ -4487,13 +4670,17 @@ async function recordRestoreProbe(
  * rather than a silent absence — a probe that silently ran a workload would
  * be indistinguishable from one that measured it.
  */
+export interface WorkloadPhases {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly strategy: Strategy;
+  readonly run: { seed: number; budgetMs: number; repetitions: number; verifyOnly: boolean };
+  readonly result: ArmResult;
+  readonly notes: string[];
+}
+
 export async function runWorkloadPhases(
-  fixture: Fixture,
-  box: string,
-  strategy: Strategy,
-  run: { seed: number; budgetMs: number; repetitions: number; verifyOnly: boolean },
-  result: ArmResult,
-  notes: string[],
+  { fixture, box, strategy, run, result, notes }: WorkloadPhases,
 ): Promise<void> {
   if (run.verifyOnly) {
     notes.push(
@@ -4512,7 +4699,14 @@ export async function runWorkloadPhases(
     states.push(await observeContinuity(fixture, box, `${what}: before`));
 
     try {
-      result.phases.push(await runPhase(fixture, box, `/workspace/ab-${strategy}`, phase, run.seed, run.budgetMs));
+      result.phases.push(await runPhase({
+        fixture,
+        box,
+        root: `/workspace/ab-${strategy}`,
+        phase,
+        seed: run.seed,
+        budgetMs: run.budgetMs,
+      }));
     } catch (error) {
       const reason = describeThrown({ cause: error });
       log(`phase ${what} failed: ${reason.slice(0, 160)}`);
@@ -4522,7 +4716,7 @@ export async function runWorkloadPhases(
     states.push(await observeContinuity(fixture, box, `${what}: after`));
 
     // FLUSH AT THE PHASE BOUNDARY, not a settle-and-hope.
-    await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+    await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
   };
 
   log('workload phases');
@@ -4570,12 +4764,16 @@ export async function runWorkloadPhases(
  * DERIVED from the preregistration, never a second copy of its membership: a
  * strategy whose witness list is empty runs no cells.
  */
+interface WitnessCellsPhase {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly strategy: Strategy;
+  readonly result: ArmResult;
+  readonly notes: string[];
+}
+
 async function runWitnessCellsPhase(
-  fixture: Fixture,
-  box: string,
-  strategy: Strategy,
-  result: ArmResult,
-  notes: string[],
+  { fixture, box, strategy, result, notes }: WitnessCellsPhase,
 ): Promise<void> {
   if (PREREGISTERED_WITNESSES[strategy].length > 0) {
     log('witness cells');
@@ -4692,15 +4890,13 @@ async function releaseArm(
   notes: string[],
 ): Promise<void> {
   const teardown = async (): Promise<ArmResult> => {
-    if (result.teardown === null) {
-      result.teardown = await call(
-        fixture,
-        'POST',
-        `/teardown?box=${box}`,
-        TeardownReplySchema,
-        { purge: true, prefix: '', whole: true },
-      );
-    }
+    result.teardown ??= await call({
+      fixture,
+      method: 'POST',
+      path: `/teardown?box=${box}`,
+      schema: TeardownReplySchema,
+      body: { purge: true, prefix: '', whole: true },
+    });
 
     return result;
   };
@@ -4768,20 +4964,24 @@ async function recordServedEntries(
  * stands as the last rung's restore, so no container work is duplicated.
  * A failed extra measurement writes a row and a note, never a gate.
  */
-async function measureComplexityRung(
-  fixture: Fixture,
-  box: string,
-  kib: number,
-  rung: number,
-  ladderBytes: number,
-  complexityScope: boolean,
-  result: ArmResult,
-  notes: string[],
-  startup: (
+interface ComplexityRung {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly kib: number;
+  readonly rung: number;
+  readonly ladderBytes: number;
+  readonly complexityScope: boolean;
+  readonly result: ArmResult;
+  readonly notes: string[];
+  readonly startup: (
     path: '/create' | '/wake',
     operation: string,
     allowedKinds: readonly string[],
-  ) => Promise<StartupCompletion>,
+  ) => Promise<StartupCompletion>;
+}
+
+async function measureComplexityRung(
+  { fixture, box, kib, rung, ladderBytes, complexityScope, result, notes, startup }: ComplexityRung,
 ): Promise<number> {
   if (!complexityScope) return ladderBytes;
   const treeBytes = ladderBytes + kib * 1024;
@@ -4791,7 +4991,14 @@ async function measureComplexityRung(
       await execInBox(fixture, box, 'dd if=/dev/urandom of=/workspace/ladder/backup-64k.bin bs=1024 count=64 2>/dev/null && sync'),
     );
     result.quiescesBeforeDecisive++;
-    const backup = await checkpointOperation(fixture, box, 'quiesce', `complexity backup-64k at ${treeBytes}B`);
+
+    const backup = await checkpointOperation({
+      fixture,
+      box,
+      kind: 'quiesce',
+      what: `complexity backup-64k at ${treeBytes}B`,
+    });
+
     result.complexity?.push({
       treeBytes,
       kind: 'backup-64k',
@@ -4813,14 +5020,22 @@ async function measureComplexityRung(
       // restore: run 20260905193714 recorded 67 operations for five rung
       // restores of three arms with different call mixes, and 10 puts on a
       // chain restore that puts nothing.
-      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-      const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+      await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
+      const opsBeforeRestore = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
       const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
       const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
       // The restore wall time of this rung's wake, at the rung's own tree
       // size. Polled inside the try so a silent probe is an absent row, and
       // the helper never throws past it.
-      await recordRestoreProbe(fixture, box, result, 'complexity-restore', treeBytes, notes, rewoke.startedAt);
+      await recordRestoreProbe({
+        fixture,
+        box,
+        result,
+        kind: 'complexity-restore',
+        treeBytes,
+        notes,
+        notBefore: rewoke.startedAt,
+      });
       result.complexity?.push({
         treeBytes,
         kind: 'restore',
@@ -4859,11 +5074,11 @@ function recordFinalComplexityRestore(
   });
 }
 
-async function measureArm(
-  fixture: Fixture,
-  strategy: Strategy,
-  options: Options,
-  noteLiveBox: (box: string) => void,
+interface ArmMeasurement {
+  readonly fixture: Fixture;
+  readonly strategy: Strategy;
+  readonly options: Options;
+  readonly noteLiveBox: (box: string) => void;
   /** Hand the arm's own row to the caller BEFORE anything is measured into it.
    *
    *  MEASURED DEFECT THIS REPAIRS. A refusal at the wake or the warm attach
@@ -4873,7 +5088,11 @@ async function measureArm(
    *  the workload phases those runs really measured were discarded with the
    *  exception. The row is a single mutable object filled in as the arm
    *  proceeds, so a caller holding it keeps every step that completed. */
-  observe: (row: ArmResult) => void = () => {},
+  readonly observe?: (row: ArmResult) => void;
+}
+
+async function measureArm(
+  { fixture, strategy, options, noteLiveBox, observe = () => {} }: ArmMeasurement,
 ): Promise<ArmResult> {
   // ONE BOX PER ARM: mountBucket refuses a second mount of one binding at a
   // different prefix or readOnly value, so the arms cannot share an instance.
@@ -4919,7 +5138,14 @@ async function measureArm(
     let completed: StartupCompletion;
 
     try {
-      completed = await startupOperation(fixture, box, path, operation, allowedKinds, { observations: record.observations });
+      completed = await startupOperation({
+        fixture,
+        box,
+        path,
+        operation,
+        allowedKinds,
+        bounds: { observations: record.observations },
+      });
       record.completion = completed;
     } catch (error) {
       record.error = describeThrown({ cause: error });
@@ -4955,7 +5181,15 @@ async function measureArm(
     // The refusal's own evidence: a start the platform reset left its row
     // with the phases it reached and no wall time. Polled here because the
     // 2026-09-10 refusal recorded nothing but the platform's sentence.
-    await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes, createKickedAt);
+    await recordRestoreProbe({
+      fixture,
+      box,
+      result,
+      kind: 'cold-attach',
+      treeBytes: 0,
+      notes,
+      notBefore: createKickedAt,
+    });
     settle('a refused create');
 
     return result;
@@ -4966,7 +5200,15 @@ async function measureArm(
   result.attachColdBootId = cold.state.state?.bootId ?? null;
   // The restore wall time of the cold start itself, beside the driver's own
   // round trip. The tree is empty here; the sized restores come per rung.
-  await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes, cold.startedAt);
+  await recordRestoreProbe({
+    fixture,
+    box,
+    result,
+    kind: 'cold-attach',
+    treeBytes: 0,
+    notes,
+    notBefore: cold.startedAt,
+  });
   settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
@@ -4991,7 +5233,7 @@ async function measureArm(
   // The checkpoint ladder is the verification commit. Its first forced quiesce
   // carries the marker and its normal rows remain the measurement rows.
   log('ops reset and ladder');
-  await call(fixture, 'POST', `/ops/reset?box=${box}`, AckReplySchema);
+  await call({ fixture, method: 'POST', path: `/ops/reset?box=${box}`, schema: AckReplySchema });
 
   // The checkpoint ladder writes known bytes, then records each commit.
   result.generationBeforeLadder = await chainGeneration(fixture, box);
@@ -5009,7 +5251,7 @@ async function measureArm(
 
     for (const kind of ['quiesce', 'tick'] as const) {
       if (kind === 'quiesce') result.quiescesBeforeDecisive++;
-      const cp = await checkpointOperation(fixture, box, kind, `ladder ${kib}KiB ${kind}`);
+      const cp = await checkpointOperation({ fixture, box, kind, what: `ladder ${kib}KiB ${kind}` });
       result.checkpoints.push({
         changeKiB: kib,
         kind,
@@ -5028,7 +5270,17 @@ async function measureArm(
       }
     }
 
-    ladderBytes = await measureComplexityRung(fixture, box, kib, rung, ladderBytes, complexityScope, result, notes, startup);
+    ladderBytes = await measureComplexityRung({
+      fixture,
+      box,
+      kib,
+      rung,
+      ladderBytes,
+      complexityScope,
+      result,
+      notes,
+      startup,
+    });
   }
 
   // THE PUBLISH-TIME PROBE READ. The ladder just published, so the incident
@@ -5053,8 +5305,8 @@ async function measureArm(
   // itself; the state polls between the two reads touch Durable Object
   // storage only, and the readiness drive is a no-op exec, so nothing the
   // driver does inside the window reaches the counted seams.
-  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-  const opsBeforeWake = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
+  const opsBeforeWake = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
   const woke = await startup('/wake', 'wake', admittedAttachKinds('wake'));
   result.wakeMs = woke.ms;
   result.wakeKind = woke.attach.kind;
@@ -5062,7 +5314,15 @@ async function measureArm(
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
   // Preserve this restore's row before the independent warm observation.
-  await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes, woke.startedAt);
+  await recordRestoreProbe({
+    fixture,
+    box,
+    result,
+    kind: 'post-ladder-wake',
+    treeBytes: ladderBytes,
+    notes,
+    notBefore: woke.startedAt,
+  });
 
   if (!options.verifyOnly) {
     const warm = await startup('/create', 'warm attach', admittedAttachKinds('warm attach'));
@@ -5238,7 +5498,7 @@ async function measureArm(
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
   }
 
-  await runWorkloadPhases(fixture, box, strategy, options, result, notes);
+  await runWorkloadPhases({ fixture, box, strategy, run: options, result, notes });
 
   result.generationAfterLadder = await chainGeneration(fixture, box);
   settle('the workload phases');
@@ -5281,9 +5541,14 @@ async function measureArm(
           // this is also the attach/replay probe for the replacement generation.
           await installHarness(fixture, box);
 
-          const run = await runDecisive(fixture, box, strategy, spec, options.seed, repetition, {
-            segments: result.decisiveSegments ??= [],
-            settled: () => settle('a decisive segment'),
+          const run = await runDecisive({
+            fixture,
+            box,
+            arm: strategy,
+            spec,
+            seed: options.seed,
+            repetition,
+            record: { segments: result.decisiveSegments ??= [], settled: () => settle('a decisive segment') },
           });
 
           result.decisiveTicks.push(...run.ticks);
@@ -5306,11 +5571,11 @@ async function measureArm(
 
 
   log('ops accounting and teardown');
-  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-  result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  await call({ fixture, method: 'POST', path: `/ops/flush?box=${box}`, schema: AckReplySchema });
+  result.ops = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
 
   // THE WITNESS CELLS, after the tally and before the teardown.
-  await runWitnessCellsPhase(fixture, box, strategy, result, notes);
+  await runWitnessCellsPhase({ fixture, box, strategy, result, notes });
   settle('the witness cells');
 
   // THE FAULT-CUT PHASE, after the witness cells and before the teardown —
@@ -5328,13 +5593,13 @@ async function measureArm(
   settle('the security cells');
   // THE DESTROY-COLD RESTORE, after every priced cell and before the
   // teardown — see `runDestroyColdPhase` for why it can only append a row.
-  await runDestroyColdPhase(fixture, box, result, notes, startup, settle);
+  await runDestroyColdPhase({ fixture, box, result, notes, startup, settle });
 
   // CLEANUP, through the shared release: a cleanup failure is not a
   // measurement failure, and the arm still returns what it measured.
   await releaseArm(fixture, box, result, notes);
 
-  await runLiveC3Phase(fixture, box, options, result, notes, settle);
+  await runLiveC3Phase({ fixture, box, options, result, notes, settle });
 
   settle('the arm finished');
 
@@ -5348,20 +5613,27 @@ async function measureArm(
  * is a note, never an arm failure. A run without `options.decisive` never
  * reaches it.
  */
+interface LiveC3Phase {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly options: Options;
+  readonly result: ArmResult;
+  readonly notes: string[];
+  readonly settle: (what: string) => void;
+}
+
 async function runLiveC3Phase(
-  fixture: Fixture,
-  box: string,
-  options: Options,
-  result: ArmResult,
-  notes: string[],
-  settle: (what: string) => void,
+  { fixture, box, options, result, notes, settle }: LiveC3Phase,
 ): Promise<void> {
   if (!options.decisive) return;
 
   const preparation = result.teardown;
-  result.c3 = await measureLiveC3(fixture, box, `${FIXTURE_BASE}-${options.runId}`, preparation, (row) => {
-    result.c3 = row;
-    settle('the live C3 evidence');
+  result.c3 = await measureLiveC3({
+    fixture,
+    box,
+    runId: `${FIXTURE_BASE}-${options.runId}`,
+    preparation,
+    observe: (row) => { result.c3 = row; settle('the live C3 evidence'); },
   });
   result.teardown = null;
   await releaseArm(fixture, box, result, notes);
@@ -5382,24 +5654,36 @@ async function runLiveC3Phase(
  * already settled. `treeBytes` is the largest size the run recorded, a lower
  * bound past the cells that wrote outside the measured window.
  */
-async function runDestroyColdPhase(
-  fixture: Fixture,
-  box: string,
-  result: ArmResult,
-  notes: string[],
-  startup: (
+interface DestroyColdPhase {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly result: ArmResult;
+  readonly notes: string[];
+  readonly startup: (
     path: '/create' | '/wake',
     operation: string,
     allowedKinds: readonly string[],
-  ) => Promise<StartupCompletion>,
-  settle: (what: string) => void,
+  ) => Promise<StartupCompletion>;
+  readonly settle: (what: string) => void;
+}
+
+async function runDestroyColdPhase(
+  { fixture, box, result, notes, startup, settle }: DestroyColdPhase,
 ): Promise<void> {
   try {
     await destroyBox(fixture, box);
     const rewokeCold = await startup('/wake', 'destroy-cold restore', admittedAttachKinds('wake'));
     const knownSizes = Object.values(result.treeBytes).filter((n) => Number.isSafeInteger(n));
     const coldTreeBytes = knownSizes.length > 0 ? Math.max(...knownSizes) : null;
-    await recordRestoreProbe(fixture, box, result, 'destroy-cold-restore', coldTreeBytes, notes, rewokeCold.startedAt);
+    await recordRestoreProbe({
+      fixture,
+      box,
+      result,
+      kind: 'destroy-cold-restore',
+      treeBytes: coldTreeBytes,
+      notes,
+      notBefore: rewokeCold.startedAt,
+    });
     notes.push(
       `destroy-cold restore woke ${rewokeCold.attach.kind}; treeBytes is the largest size the run recorded, `
       + 'a lower bound past the witness and cut cells that wrote outside the measured window',
@@ -5419,13 +5703,26 @@ const PublicationWindowReplySchema = v.looseObject({
   ok: v.optional(v.boolean()), error: v.optional(v.string()), window: v.optional(PublicationWindowSchema),
 });
 
+/** One C3 startup edge, with the ledger read the refusal path needs. */
+interface ReasonedStartup {
+  readonly edge: keyof StartupIncidents;
+  readonly path: '/create' | '/wake';
+  readonly operation: string;
+  readonly allowedKinds: readonly string[];
+  readonly observations: StartupObservation[];
+}
+
+export interface LiveC3Measurement {
+  readonly fixture: Fixture;
+  readonly box: string;
+  readonly runId: string;
+  readonly preparation: TeardownReply | null;
+  readonly observe?: (row: LiveC3Observation) => void;
+  readonly startupBounds?: StartupBounds;
+}
+
 export async function measureLiveC3(
-  fixture: Fixture,
-  box: string,
-  runId: string,
-  preparation: TeardownReply | null,
-  observe: (row: LiveC3Observation) => void = () => {},
-  startupBounds: StartupBounds = {},
+  { fixture, box, runId, preparation, observe = () => {}, startupBounds = {} }: LiveC3Measurement,
 ): Promise<LiveC3Observation> {
   const round: LiveC3Observation['rounds'][number] = {
     round: 1, checkpoint: null, published: { transport: { puts: null, putUploadBytes: null } },
@@ -5449,21 +5746,24 @@ export async function measureLiveC3(
    *  `b20260914045438` recorded eight incident totals and no reason string,
    *  so its 55 s refusal named nothing a fix could act on. */
   const startupWithReasons = async (
-    edge: keyof StartupIncidents,
-    path: '/create' | '/wake',
-    operation: string,
-    allowedKinds: readonly string[],
-    observations: StartupObservation[],
+    { edge, path, operation, allowedKinds, observations }: ReasonedStartup,
   ): Promise<StartupCompletion> => {
     try {
-      return await startupOperation(fixture, box, path, operation, allowedKinds, { ...startupBounds, observations });
+      return await startupOperation({
+        fixture,
+        box,
+        path,
+        operation,
+        allowedKinds,
+        bounds: { ...startupBounds, observations },
+      });
     } catch (cause) {
       const reasons = await readIncidentReasons(fixture, box, row.errors);
       incidents[edge] = reasons ?? null;
 
       throw new Error(`${describeThrown({ cause })}; incident reasons: ${describeIncidentReasons(reasons)}`, { cause });
     } finally {
-      if (incidents[edge] === null) incidents[edge] = (await readIncidentReasons(fixture, box, row.errors)) ?? null;
+      incidents[edge] ??= (await readIncidentReasons(fixture, box, row.errors)) ?? null;
     }
   };
 
@@ -5474,7 +5774,12 @@ export async function measureLiveC3(
 
   const closeWindow = async (): Promise<void> => {
     try {
-      const closed = await call(fixture, 'POST', `/publication-window/close?box=${box}&token=${encodeURIComponent(token)}`, PublicationWindowReplySchema);
+      const closed = await call({
+        fixture,
+        method: 'POST',
+        path: `/publication-window/close?box=${box}&token=${encodeURIComponent(token)}`,
+        schema: PublicationWindowReplySchema,
+      });
 
       if (closed.ok !== true || closed.window?.token !== token || closed.window.closedAt === null) {
         throw new Error(`the C3 PUT window did not close: ${closed.error ?? 'no matching receipt'}`);
@@ -5492,7 +5797,13 @@ export async function measureLiveC3(
   try {
     if (row.identity === null) throw new Error('live C3 requires the deployed build identity');
     row.preparation.destroy = await destroyBox(fixture, box);
-    row.initial = await startupWithReasons('initial', '/create', 'C3 empty baseline', ['empty'], initialObservations);
+    row.initial = await startupWithReasons({
+      edge: 'initial',
+      path: '/create',
+      operation: 'C3 empty baseline',
+      allowedKinds: ['empty'],
+      observations: initialObservations,
+    });
     row.prefix = row.initial.state.storePrefix ?? null;
 
     if (row.prefix === null) throw new Error('the C3 box did not report its store prefix');
@@ -5500,14 +5811,26 @@ export async function measureLiveC3(
     row.baselineCommand = await execInBox(fixture, box, `bun ${harness}/witness-files.ts baseline /workspace`);
 
     if (row.baselineCommand.ok !== true || row.baselineCommand.exitCode !== 0) throw new Error('the C3 baseline writer did not complete');
-    row.baselineCheckpoint = await checkpointOperation(fixture, box, 'quiesce', 'C3 baseline');
+    row.baselineCheckpoint = await checkpointOperation({ fixture, box, kind: 'quiesce', what: 'C3 baseline' });
 
     if (row.baselineCheckpoint.ok !== true || row.baselineCheckpoint.outcome?.kind !== 'committed') throw new Error('the C3 baseline checkpoint did not commit');
     observe(row);
 
-    round.accounting.beforeOps = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+    round.accounting.beforeOps = await call({
+      fixture,
+      method: 'GET',
+      path: `/ops?box=${box}`,
+      schema: OpTallySchema,
+    });
     windowAttempted = true;
-    const opened = await call(fixture, 'POST', `/publication-window/open?box=${box}&token=${encodeURIComponent(token)}`, PublicationWindowReplySchema);
+
+    const opened = await call({
+      fixture,
+      method: 'POST',
+      path: `/publication-window/open?box=${box}&token=${encodeURIComponent(token)}`,
+      schema: PublicationWindowReplySchema,
+    });
+
     round.accounting.window = opened.window ?? null;
 
     if (opened.ok !== true || opened.window?.token !== token || opened.window.prefix !== row.prefix || opened.window.closedAt !== null) {
@@ -5519,13 +5842,13 @@ export async function measureLiveC3(
     if (row.overwriteCommand.ok !== true || row.overwriteCommand.exitCode !== 0) throw new Error('the C3 overwrite writer did not complete');
 
     try {
-      round.checkpoint = await checkpointOperation(fixture, box, 'quiesce', 'C3 overwrite');
+      round.checkpoint = await checkpointOperation({ fixture, box, kind: 'quiesce', what: 'C3 overwrite' });
     } catch (error) {
       row.errors.push(`overwrite checkpoint: ${describeThrown({ cause: error })}`);
     }
 
     await closeWindow();
-    round.accounting.afterOps = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+    round.accounting.afterOps = await call({ fixture, method: 'GET', path: `/ops?box=${box}`, schema: OpTallySchema });
     const totals = publicationTotals(round.accounting.window);
     round.published.transport = { puts: totals.objectsPut, putUploadBytes: totals.bytesPut };
     observe(row);
@@ -5534,8 +5857,21 @@ export async function measureLiveC3(
 
     row.beforeDestroy = await boxState(fixture, box);
     row.destroyReceipt = await destroyBox(fixture, box);
-    row.restoration = await startupWithReasons('restoration', '/wake', 'C3 cold restore', ['attached'], restorationObservations);
-    row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', C3_WORKLOAD.baselineBytes, row.errors, row.restoration.startedAt);
+    row.restoration = await startupWithReasons({
+      edge: 'restoration',
+      path: '/wake',
+      operation: 'C3 cold restore',
+      allowedKinds: ['attached'],
+      observations: restorationObservations,
+    });
+    row.restoreProbe = await readRestoreProbe({
+      fixture,
+      box,
+      kind: 'destroy-cold-restore',
+      treeBytes: C3_WORKLOAD.baselineBytes,
+      notes: row.errors,
+      notBefore: row.restoration.startedAt,
+    });
     row.blockReads = await readBlockAttachMetrics(fixture, box);
     observe(row);
     // Observer code is outside the one-file workload, and installed only after the cold clock ends.
@@ -5627,17 +5963,26 @@ export interface ArmArtifact<Row = ArmResult> {
   readonly row: Row;
 }
 
+/** The row's own identity. The row carries far more than this, but a file whose
+ *  row names no strategy, no box and no notes is not an arm's however
+ *  well-formed its envelope is. */
+const ArmRowIdentitySchema = v.looseObject({
+  strategy: v.picklist(STRATEGIES),
+  box: v.string(),
+  notes: v.array(v.string()),
+});
+
 /** The file's contract, parsed at the boundary like every wire reply here. The
- *  ROW is left unparsed on purpose: two drivers write two row shapes through
- *  this one writer, and the envelope — schema, arm, run — is what a reader has
- *  to be able to trust before it reads either. */
-const ArmArtifactSchema: v.GenericSchema<ArmArtifact<unknown>> = v.looseObject({
+ *  ROW is recognized rather than restated: two drivers write two row shapes
+ *  through this one writer, and the envelope — schema, arm, run — plus the
+ *  row's own identity is what a reader has to trust before it reads either. */
+const ArmArtifactSchema: v.GenericSchema<ArmArtifact> = v.looseObject({
   schema: v.literal('devbox-arm-artifact/1'),
   arm: v.picklist(STRATEGIES),
   runId: v.string(),
   settledAt: v.string(),
   logTail: v.array(v.string()),
-  row: v.unknown(),
+  row: v.custom<ArmResult>((value) => v.safeParse(ArmRowIdentitySchema, value).success),
 });
 
 /**
@@ -5720,11 +6065,7 @@ export function readArmArtifact(repoRoot: string, runId: string, arm: Strategy):
     };
   }
 
-  // SAFETY: the envelope is parsed above; the row is whatever THIS run's own
-  // lane wrote through `writeArmArtifact` minutes earlier, and the decisive
-  // assembly is the only reader of the `ArmResult` shape it wrote itself. A
-  // cross-driver read would need its own row parse and has no caller.
-  return { artifact: parsed.output as ArmArtifact, error: null };
+  return { artifact: parsed.output, error: null };
 }
 
 /**
@@ -5764,7 +6105,7 @@ export async function runArm(
   let partial: ArmResult | null = null;
 
   try {
-    return await measureArm(fixture, strategy, options, noteLiveBox, (row) => { partial = row; });
+    return await measureArm({ fixture, strategy, options, noteLiveBox, observe: (row) => { partial = row; } });
   } catch (error) {
     const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
     const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
@@ -6046,12 +6387,28 @@ function renderComplexitySection(arms: readonly ArmResult[], date: string): stri
   return out.join('\n');
 }
 
+/** Whether the ladder rebased, as the report words it. A rebase writes a fresh
+ *  base uuid and drops the delta, so the pair of generations answers it. */
+function rebaseWords(before: ChainGeneration | null, after: ChainGeneration | null): string {
+  if (before === null || after === null) return 'not read';
+
+  if (before.baseId === null && after.baseId === null) return 'no base generation';
+
+  if (before.baseId === after.baseId) return 'no';
+
+  return `YES (${String(before.baseId).slice(0, 8)} -> ${String(after.baseId).slice(0, 8)})`;
+}
+
+export interface Report {
+  readonly arms: readonly ArmResult[];
+  readonly meta: RunMeta;
+  readonly admission: AdmissionVerdict;
+  readonly frozenControls?: readonly FrozenControl[];
+  readonly renderControlContext?: boolean;
+}
+
 export function render(
-  arms: readonly ArmResult[],
-  meta: RunMeta,
-  admission: AdmissionVerdict,
-  frozenControls: readonly FrozenControl[] = [],
-  renderControlContext = false,
+  { arms, meta, admission, frozenControls = [], renderControlContext = false }: Report,
 ): string {
   const out: string[] = [];
   const compared = arms.map((arm) => `\`${arm.strategy}\``).join(', ');
@@ -6119,13 +6476,7 @@ export function render(
       // OBSERVED, not weighed. A rebase writes a fresh base uuid and drops the
       // delta, so the pair answers it outright. A run whose ladder wrote no
       // base has no generation to compare, which is its own answer.
-      const rebased = before === null || after === null
-        ? 'not read'
-        : before.baseId === null && after.baseId === null
-          ? 'no base generation'
-          : before.baseId !== after.baseId
-            ? `YES (${String(before.baseId).slice(0, 8)} -> ${String(after.baseId).slice(0, 8)})`
-            : 'no';
+      const rebased = rebaseWords(before, after);
 
       out.push(
         `| \`${arm.strategy}\` | ${arm.quiescesBeforeDecisive} | ${rebased} |`,
@@ -6154,11 +6505,9 @@ export function render(
         const opsCell = blind ? 'unmeasured' : String(totals.classA);
         const bCell = blind ? 'unmeasured' : String(totals.classB);
 
-        const movedCell = !totals.movedReported
-          ? 'not measurable'
-          : totals.unanswerable > 0
-            ? `${(totals.bytesPut / 1024 / 1024).toFixed(1)} (${totals.unanswerable} tick(s) could not answer)`
-            : (totals.bytesPut / 1024 / 1024).toFixed(1);
+        const moved = (totals.bytesPut / 1024 / 1024).toFixed(1);
+        const unanswered = totals.unanswerable > 0 ? ` (${totals.unanswerable} tick(s) could not answer)` : '';
+        const movedCell = totals.movedReported ? `${moved}${unanswered}` : 'not measurable';
 
         out.push(
           `| \`${arm.strategy}\` | ${spec.id} | ${totals.ticks} | ${Math.round(totals.sumWallMs)} `
@@ -6336,7 +6685,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
 
     return {
       arm,
-      unmeasured: RULE_WORKLOADS.filter((_, index) => totals[index]!.ticks === 0),
+      unmeasured: RULE_WORKLOADS.filter((_, index) => totals[index].ticks === 0),
       decisiveMs: totals.reduce((sum, row) => sum + row.sumWallMs, 0),
       statMs: metricSummary(arm, DECIDING_METRIC)?.p50 ?? null,
       witnesses: arm.witnessChecks.filter((witness) => witness.observed).map((witness) => witness.name),
@@ -6355,13 +6704,14 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     '| --- | --- | --- | --- | --- |',
   ];
 
-  rankable.forEach((row, index) => {
+  for (const [index, row] of rankable.entries()) {
     const name = `\`${row.arm.strategy}\``;
+
     out.push(
       `| ${index + 1} | ${name} | ${Math.round(row.decisiveMs)} `
       + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${witnessCell(row.witnesses)} |`,
     );
-  });
+  }
 
   for (const row of scored.filter((candidate) => candidate.unmeasured.length > 0)) {
     out.push(
@@ -7085,7 +7435,7 @@ export function summarizePublication(
     }
   }
 
-  let barrierAckLoss: number | null = null;
+  let ackLossTotal: number | null = null;
 
   if (completed) {
     let counted = false;
@@ -7099,7 +7449,7 @@ export function summarizePublication(
       lost += loss;
     }
 
-    barrierAckLoss = counted ? lost : null;
+    ackLossTotal = counted ? lost : null;
   }
 
   let readOnlyDeclared = false;
@@ -7125,7 +7475,7 @@ export function summarizePublication(
     readOnlyRefusedWrites,
     faultCutCompleted: completed,
     allOldOrAllNew,
-    barrierAckLoss,
+    barrierAckLoss: ackLossTotal,
     absentReferences,
     rollbackOrPhantomRoot,
   };
@@ -8431,7 +8781,7 @@ async function main(): Promise<number> {
   // section renders even if it is empty, so the report states outright whether
   // history covered the gap rather than leaving the absence unremarked.
   const partial = options.arms.length < STRATEGIES.length;
-  process.stdout.write(`${render(arms, meta, admission, frozenControls, partial)}\n`);
+  process.stdout.write(`${render({ arms, meta, admission, frozenControls, renderControlContext: partial })}\n`);
   log(`artifact written to ${options.out}`);
 
   return benchmarkExitCode(failure, admission);

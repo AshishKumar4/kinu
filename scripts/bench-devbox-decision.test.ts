@@ -309,9 +309,14 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
 
     try {
-      const run = await withFastClock(async () => await runDecisive(BENCH_FIXTURE, 'box', 'snapshot-chain', {
-        id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4',
-      }, 1, 1));
+      const run = await withFastClock(async () => await runDecisive({
+        fixture: BENCH_FIXTURE,
+        box: 'box',
+        arm: 'snapshot-chain',
+        spec: { id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4' },
+        seed: 1,
+        repetition: 1,
+      }));
 
       expect(run.ticks).toHaveLength(5);
       expect(run.ticks.every((row) => row.classA === 1 && row.classB === 0 && row.classFree === 0)).toBe(true);
@@ -327,9 +332,14 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
     globalThis.fetch = Object.assign(async () => Response.json({ ok: false, error: 'startup pending' }), { preconnect: real.preconnect });
 
     try {
-      const run = await runDecisive(BENCH_FIXTURE, 'box', 'snapshot-chain', {
-        id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4',
-      }, 1, 1);
+      const run = await runDecisive({
+        fixture: BENCH_FIXTURE,
+        box: 'box',
+        arm: 'snapshot-chain',
+        spec: { id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4' },
+        seed: 1,
+        repetition: 1,
+      });
 
       expect(run.ticks).toHaveLength(0);
       expect(run.segments).toHaveLength(5);
@@ -908,11 +918,11 @@ describe('the rendered report carries no money', () => {
     // The strip removes money, NOT measurement: `class A`/`class B` name the
     // kind of R2 API operation, and those counts plus bytes moved and tick
     // time are what the decision reads.
-    const report = render(
-      [reportArm('snapshot-chain')],
-      reportMeta,
-      { admitted: true, gates: [] },
-    );
+    const report = render({
+      arms: [reportArm('snapshot-chain')],
+      meta: reportMeta,
+      admission: { admitted: true, gates: [] },
+    });
 
     expect(report).toContain('| class A | class B | MiB moved |');
     expect(report).toContain('Σ tick ms');
@@ -972,7 +982,13 @@ describe('restore and backup time versus tree size', () => {
     expect(read.artifact?.schema).toBe('devbox-arm-artifact/1');
     const rows = decodeComplexityRows(read.artifact?.row.complexity);
     expect(rows).toEqual(complexity);
-    const report = render([{ ...arm, complexity: rows }], complexityMeta, { admitted: true, gates: [] });
+
+    const report = render({
+      arms: [{ ...arm, complexity: rows }],
+      meta: complexityMeta,
+      admission: { admitted: true, gates: [] },
+    });
+
     expect(report).toContain('#### Restore and backup time versus tree size');
     expect(report).toContain('| `snapshot-chain` | 65,536 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
     expect(report).toContain('| `snapshot-chain` | 4,259,840 | 120 | 5,100 | 7 | 90,112 | committed; attached |');
@@ -980,7 +996,13 @@ describe('restore and backup time versus tree size', () => {
     // THE SECTION CARRIES THE RUN'S OWN DATE. It carried the literal
     // 2026-09-05, the day the cell was written, so every later run's table
     // would have dated its numbers to a day nobody measured them on.
-    const later = render([{ ...arm, complexity: rows }], { ...complexityMeta, date: '2026-09-06' }, { admitted: true, gates: [] });
+
+    const later = render({
+      arms: [{ ...arm, complexity: rows }],
+      meta: { ...complexityMeta, date: '2026-09-06' },
+      admission: { admitted: true, gates: [] },
+    });
+
     const section = later.slice(later.indexOf('#### Restore and backup time versus tree size'));
     expect(section).toContain('Measured 2026-09-06.');
     expect(section).not.toContain('2026-09-05');
@@ -1525,7 +1547,7 @@ describe('the instruments restate nothing unchecked', () => {
 
   test('the probe scope gates the post-wake tail on verify-only', () => {
     const arm = /async function measureArm[\s\S]*?\n\}\n/.exec(driver)?.[0] ?? '';
-    expect(arm).toContain('await runWorkloadPhases(fixture, box, strategy, options, result, notes);');
+    expect(arm).toContain('await runWorkloadPhases({ fixture, box, strategy, run: options, result, notes });');
     expect(arm).toContain('if (options.verifyOnly) {');
     expect(arm).toContain('await releaseArm(fixture, box, result, notes);');
   });

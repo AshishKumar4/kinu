@@ -68,7 +68,15 @@ describe('the restore poll', () => {
     })));
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 4_259_840, [], 0);
+      const row = await readRestoreProbe({
+        fixture: PROBE_FIXTURE,
+        box: 'ab-snapshot-chain-probe',
+        kind: 'post-ladder-wake',
+        treeBytes: 4_259_840,
+        notes: [],
+        notBefore: 0,
+      });
+
       expect(row).toEqual({
         kind: 'post-ladder-wake', treeBytes: 4_259_840,
         wallMs: 2347, probeAt: 1_786_000_000_000, outcome: 'ok',
@@ -85,7 +93,15 @@ describe('the restore poll', () => {
     })));
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, [], 0);
+      const row = await readRestoreProbe({
+        fixture: PROBE_FIXTURE,
+        box: 'ab-snapshot-chain-probe',
+        kind: 'cold-attach',
+        treeBytes: 0,
+        notes: [],
+        notBefore: 0,
+      });
+
       expect(row.outcome).toBe('ok');
       expect(row.phases).toEqual({ containerStart: 1210, attached: 3980, bootId: 4530 });
       // A fresh box mounts no store and no base: those phases are not there,
@@ -106,7 +122,15 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes, 0);
+      const row = await readRestoreProbe({
+        fixture: PROBE_FIXTURE,
+        box: 'ab-snapshot-chain-probe',
+        kind: 'cold-attach',
+        treeBytes: 0,
+        notes,
+        notBefore: 0,
+      });
+
       expect(row.wallMs).toBeNull();
       expect(row.probeAt).toBe(1_786_000_000_000);
       expect(row.phases).toEqual({ containerStart: 28_400 });
@@ -130,7 +154,15 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 0, notes, 1_786_000_000_001);
+      const row = await readRestoreProbe({
+        fixture: PROBE_FIXTURE,
+        box: 'ab-snapshot-chain-probe',
+        kind: 'post-ladder-wake',
+        treeBytes: 0,
+        notes,
+        notBefore: 1_786_000_000_001,
+      });
+
       expect(row.wallMs).toBeNull();
       expect(row.probeAt).toBeNull();
       expect(row.outcome).toContain('adopted the instance it held');
@@ -148,7 +180,15 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes, 0);
+      const row = await readRestoreProbe({
+        fixture: PROBE_FIXTURE,
+        box: 'ab-snapshot-chain-probe',
+        kind: 'cold-attach',
+        treeBytes: 0,
+        notes,
+        notBefore: 0,
+      });
+
       expect(row.wallMs).toBeNull();
       expect(row.probeAt).toBeNull();
       expect(row.outcome).toContain('absent');
@@ -166,7 +206,15 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'complexity-restore', 65_536, notes, 0);
+      const row = await readRestoreProbe({
+        fixture: PROBE_FIXTURE,
+        box: 'ab-snapshot-chain-probe',
+        kind: 'complexity-restore',
+        treeBytes: 65_536,
+        notes,
+        notBefore: 0,
+      });
+
       expect(row.wallMs).toBeNull();
       expect(row.outcome).toContain('error:');
       expect(notes).toHaveLength(1);
