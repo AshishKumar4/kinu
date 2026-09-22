@@ -38,6 +38,9 @@ export * from './codex';
 
 export * from './codex-oauth';
 
+export { OAuthTokenError } from './oauth-token-error';
+
+
 export * from './cloudflare-oauth';
 
 export * from './anthropic';

@@ -79,7 +79,7 @@ import {
   type ReleaseSource,
   type ReleaseSourceInput,
   CODEX_CRED_KEY,
-  CodexOAuthTokenError,
+  OAuthTokenError,
   createCodexOAuthClient,
   decodeCodexAccountId,
   tokensToCredential,
@@ -172,7 +172,6 @@ import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
-  CloudflareOAuthTokenError,
   accountIdFromCloudflareCredential,
   cloudflareAIGatewayId,
   cloudflareAccountsFromCredential,
@@ -4656,98 +4655,70 @@ export class UserDO extends Agent<Env> {
     await this.listAIGateways(owner);
   }
 
-  /** Returns the rotated credential, `'revoked'` when Cloudflare rejected
-   *  the refresh token outright (`invalid_grant`) or the owner retired the
-   *  credential while this refresh was in the air, or null on transient
-   *  failure (the current credential stays in place). On `invalid_grant`
-   *  the dead refresh token is stripped from storage so the credential
-   *  stops counting as usable and the connect CTA resurfaces, instead of
-   *  advertising a provider whose every call would 401.
-   *
-   *  The revision is read BEFORE the network call and every write below is
-   *  fenced on it, because this method's only awaits are the ones during which
-   *  the owner can disconnect or reconnect. */
-  private async refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthCredential | 'revoked' | null> {
-    const revision = this.credentialRevision(CLOUDFLARE_OAUTH_CRED_KEY);
+  /** Rotate a stored OAuth credential. Returns the rotated credential;
+   *  `'revoked'` when the issuer rejected the refresh token outright
+   *  (`invalid_grant`) or the owner disconnected while the refresh was in the
+   *  air; null on a transient failure, the current credential staying in
+   *  place. Every write carries the revision fence: a login the owner
+   *  completed during the round trip is never demoted by its predecessor's
+   *  rejection. */
+  private async refreshOAuthCredential(
+    key: typeof CLOUDFLARE_OAUTH_CRED_KEY | typeof CODEX_CRED_KEY,
+    rotate: () => Promise<OAuthCredential>,
+    onRevoked: (revision: number) => Promise<void>,
+  ): Promise<OAuthCredential | 'revoked' | null> {
+    const revision = this.credentialRevision(key);
+    const codex = key === CODEX_CRED_KEY;
+    const doing = codex ? 'refreshing the Codex credential' : 'refreshing the Cloudflare credential';
 
     try {
-      const next = await refreshCloudflareCredential(this.env, current);
-
-      return await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, next, revision);
+      return await this.commitRefreshedCredential(key, await rotate(), revision);
     } catch (err) {
-      if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
-        diagnostics.failure('credential.cloudflare_refresh_revoked', toKinuError({
-          doing: 'refreshing the Cloudflare credential',
-          cause: err,
-          otherwise: 'denied',
-        }));
-        const { refreshToken: _dead, ...rest } = current;
-        // Stripping the dead token is itself a write of the credential this
-        // call read, so it carries the same fence: a login the owner completed
-        // during the round trip must not be demoted by its predecessor's
-        // rejection.
-        await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision);
+      if (err instanceof OAuthTokenError && err.revoked) {
+        const failure = toKinuError({ doing, cause: err, otherwise: 'denied' });
+
+        if (codex) diagnostics.failure('credential.codex_refresh_revoked', failure);
+        else diagnostics.failure('credential.cloudflare_refresh_revoked', failure);
+        await onRevoked(revision);
 
         return 'revoked';
       }
 
-      diagnostics.failure('credential.cloudflare_refresh_failed', toKinuError({
-        doing: 'refreshing the Cloudflare credential',
-        cause: err,
-        otherwise: 'unavailable',
-      }));
+      const failure = toKinuError({ doing, cause: err, otherwise: 'unavailable' });
+
+      if (codex) diagnostics.failure('credential.codex_refresh_failed', failure);
+      else diagnostics.failure('credential.cloudflare_refresh_failed', failure);
 
       return null;
     }
   }
 
-  /** Returns the rotated credential, `'revoked'` when OpenAI rejected the
-   *  refresh token outright (`invalid_grant`) or the owner disconnected while
-   *  this refresh was in the air, or null on transient failure (the current
-   *  credential stays in place). On `invalid_grant` the whole row is deleted —
-   *  nothing but model calls reads it, unlike the Cloudflare credential whose
-   *  token still serves the management APIs — so the credential stops counting
-   *  as connected and the connect CTA resurfaces, instead of advertising a
-   *  provider whose every call would 401. */
-  private async refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | 'revoked' | null> {
-    const revision = this.credentialRevision(CODEX_CRED_KEY);
-    const client = createCodexOAuthClient();
+  /** The Cloudflare token still serves the management APIs after a rejected
+   *  refresh, so only the dead refresh token is stripped. */
+  private refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthCredential | 'revoked' | null> {
+    return this.refreshOAuthCredential(
+      CLOUDFLARE_OAUTH_CRED_KEY,
+      () => refreshCloudflareCredential(this.env, current),
+      async (revision) => {
+        const { refreshToken: _dead, ...rest } = current;
+        await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision);
+      },
+    );
+  }
 
-    try {
-      const fresh = await client.refresh(current.refreshToken);
+  /** Nothing but model calls reads the Codex credential, so a rejected
+   *  refresh deletes the row: the credential stops counting as connected and
+   *  the connect CTA resurfaces. */
+  private refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | 'revoked' | null> {
+    return this.refreshOAuthCredential(
+      CODEX_CRED_KEY,
+      async () => {
+        const fresh = await createCodexOAuthClient().refresh(current.refreshToken);
 
-      const next: OAuthCredential = {
-        kind: 'oauth',
-        accessToken: fresh.accessToken,
-        refreshToken: fresh.refreshToken,
-        expiresAt: fresh.expiresAt,
-        metadata: current.metadata,
-      };
-
-      return await this.commitRefreshedCredential(CODEX_CRED_KEY, next, revision);
-    } catch (err) {
-      if (err instanceof CodexOAuthTokenError && err.oauthError === 'invalid_grant') {
-        diagnostics.failure('credential.codex_refresh_revoked', toKinuError({
-          doing: 'refreshing the Codex credential',
-          cause: err,
-          otherwise: 'denied',
-        }));
-        // Fenced like every other write here: a sign-in the owner completed
-        // during the round trip is not deleted by the rejection of the
-        // credential it replaced.
-        this.retireRejectedCredential(CODEX_CRED_KEY, revision);
-
-        return 'revoked';
-      }
-
-      diagnostics.failure('credential.codex_refresh_failed', toKinuError({
-        doing: 'refreshing the Codex credential',
-        cause: err,
-        otherwise: 'unavailable',
-      }));
-
-      return null;
-    }
+        return { kind: 'oauth', accessToken: fresh.accessToken, refreshToken: fresh.refreshToken, expiresAt: fresh.expiresAt, metadata: current.metadata };
+      },
+      async (revision) => { this.retireRejectedCredential(CODEX_CRED_KEY, revision); },
+    );
   }
 
   // ── Codex device flow ──────────────────────────────────────────────

@@ -9,6 +9,7 @@
 // Provider calls use the Codex CLI-style header bundle. Refresh ownership stays
 // with the credential store that calls createCodexOAuthClient().
 import * as v from 'valibot';
+import { OAuthTokenError } from './oauth-token-error';
 import type { OAuthCredential } from '../credentials/store';
 import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json';
 import { tolerate } from '../obs/index';
@@ -55,23 +56,11 @@ function sanitizeErrorBody(body: string): string {
     .slice(0, 512);
 }
 
-/** Token-endpoint rejection carrying the OAuth error code, so callers can
- *  tell a terminal `invalid_grant` (revoked/expired refresh token) apart from
- *  transient failures. The Codex counterpart of cf-backend's
- *  CloudflareOAuthTokenError — the same distinction, one per issuer. */
-export class CodexOAuthTokenError extends Error {
-  override readonly name = 'CodexOAuthTokenError';
-
-  constructor(readonly oauthError: string, message: string) {
-    super(message);
-  }
-}
-
 /** Read the token endpoint's rejection into its typed shape. The OAuth error
  *  code rides the JSON body's `error` field; a body that is not that shape is
  *  still a failure, but it carries no code — spelled `unknown` so no caller
  *  can mistake a transient outage for a terminal revocation. */
-async function codexTokenEndpointError(res: Response): Promise<CodexOAuthTokenError> {
+async function codexTokenEndpointError(res: Response): Promise<OAuthTokenError> {
   const body = await res.text();
 
   const rejection = v.safeParse(
@@ -79,7 +68,7 @@ async function codexTokenEndpointError(res: Response): Promise<CodexOAuthTokenEr
     tolerate<unknown>(() => JSON.parse(body), 'malformed-input'),
   );
 
-  return new CodexOAuthTokenError(
+  return new OAuthTokenError('codex',
     rejection.success && rejection.output.error ? rejection.output.error : 'unknown',
     `Codex token refresh failed: ${res.status} ${sanitizeErrorBody(body)}`,
   );

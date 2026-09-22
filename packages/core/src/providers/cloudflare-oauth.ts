@@ -1,4 +1,5 @@
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { OAuthTokenError } from './oauth-token-error';
 import { nonEmptyString } from '../utils/json';
 import type { OAuthCredential } from '../credentials/store';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -57,16 +58,6 @@ export interface CloudflareTokenPayload {
   scope?: unknown;
 }
 
-/** Token-endpoint rejection carrying the OAuth error code, so callers can
- *  tell a terminal `invalid_grant` (revoked/expired refresh token) apart
- *  from transient failures. */
-export class CloudflareOAuthTokenError extends Error {
-  constructor(public readonly oauthError: string, message: string) {
-    super(message);
-    this.name = 'CloudflareOAuthTokenError';
-  }
-}
-
 async function requestCloudflareOAuthToken(
   env: CloudflareOAuthEnv,
   fields: Record<string, string>,
@@ -97,7 +88,7 @@ async function requestCloudflareOAuthToken(
   if (!response.ok) {
     const code = stringField(payload, 'error') ?? `http_${response.status}`;
     const reason = stringField(payload, 'error_description') ?? stringField(payload, 'error') ?? `HTTP ${response.status}`;
-    throw new CloudflareOAuthTokenError(code, `Cloudflare token refresh failed: ${reason}`);
+    throw new OAuthTokenError('cloudflare', code, `Cloudflare token refresh failed: ${reason}`);
   }
 
   return payload;

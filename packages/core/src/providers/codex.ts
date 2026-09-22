@@ -21,7 +21,7 @@ import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, copyHeaders, positiveInteger } from './util';
 import { nonEmptyString } from '../utils/json';
 import * as v from 'valibot';
-import { CodexOAuthTokenError } from './codex-oauth';
+import { OAuthTokenError } from './oauth-token-error';
 import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json';
 import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
 import { GPT54_EFFORTS } from './openai';
@@ -129,7 +129,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           try {
             return await deps.getAuth(CODEX_CRED_KEY, refresh);
           } catch (cause) {
-            if (cause instanceof CodexOAuthTokenError && cause.oauthError === 'invalid_grant') return 'revoked';
+            if (cause instanceof OAuthTokenError && cause.revoked) return 'revoked';
             throw cause;
           }
         };

@@ -18,7 +18,7 @@ import * as v from 'valibot';
 import {
   createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
   createAnthropicProvider, createCodexProvider, createCodexOAuthClient,
-  CodexOAuthTokenError,
+  OAuthTokenError,
   CODEX_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   type ProviderDeps, type AuthResolution,
@@ -348,7 +348,7 @@ describe('Codex provider contract', () => {
       }),
       async getAuth(key) {
         if (key !== CODEX_CRED_KEY) return null;
-        throw new CodexOAuthTokenError('invalid_grant', 'Codex token refresh failed: 400 invalid_grant');
+        throw new OAuthTokenError('codex', 'invalid_grant', 'Codex token refresh failed: 400 invalid_grant');
       },
       async hasCredential() { return true; },
     };
@@ -422,7 +422,7 @@ describe('Codex OAuth client', () => {
     try {
       await client.refresh('codex-refresh-revoked');
     } catch (err) {
-      if (!(err instanceof CodexOAuthTokenError)) throw err;
+      if (!(err instanceof OAuthTokenError)) throw err;
       expect(err.oauthError).toBe('invalid_grant');
       // The message must never quote the credential it failed on.
       expect(err.message).not.toContain('codex-refresh-revoked');
@@ -430,7 +430,7 @@ describe('Codex OAuth client', () => {
       return;
     }
 
-    throw new Error('expected CodexOAuthTokenError');
+    throw new Error('expected OAuthTokenError');
   });
 
   test('a transient refresh failure carries no OAuth code a caller could treat as terminal', async () => {
@@ -440,13 +440,13 @@ describe('Codex OAuth client', () => {
     try {
       await client.refresh('codex-refresh');
     } catch (err) {
-      if (!(err instanceof CodexOAuthTokenError)) throw err;
+      if (!(err instanceof OAuthTokenError)) throw err;
       expect(err.oauthError).toBe('unknown');
 
       return;
     }
 
-    throw new Error('expected CodexOAuthTokenError');
+    throw new Error('expected OAuthTokenError');
   });
 });
 

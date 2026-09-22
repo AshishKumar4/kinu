@@ -10,7 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
+import { OAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
 import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
@@ -125,7 +125,7 @@ describe('Workers AI credential refresh', () => {
         );
       } catch (cause) {
         rejected = true;
-        expect(cause).toBeInstanceOf(CloudflareOAuthTokenError);
+        expect(cause).toBeInstanceOf(OAuthTokenError);
         const parsed = v.safeParse(v.object({ oauthError: v.string() }), cause);
         expect(parsed.success && parsed.output.oauthError).toBe('invalid_grant');
       }
