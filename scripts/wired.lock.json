@@ -197,7 +197,6 @@
   "packages/core/src/heads/head-inference.ts#buildHeadMessages (unreached-export)",
   "packages/core/src/heads/head-inference.ts#buildHeadSystemPrompt (unreached-export)",
   "packages/core/src/heads/journal.ts#UNREPORTED_AT_MERGE_REASON (unreached-export)",
-  "packages/core/src/heads/merge-schema.ts#DecisionSchema (unreached-export)",
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_REASON (unreached-export)",
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_SIGNAL (unreached-export)",
   "packages/core/src/heads/reconcile.ts#forkInterruptedWake (unreached-export)",

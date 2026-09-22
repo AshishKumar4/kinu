@@ -14,7 +14,7 @@
 
 import * as v from 'valibot';
 import type { IndexedChunk } from '@kinu.run/agent-utils/memory';
-import type { JsonObject } from '../utils/json';
+import { renderIssues, type JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
 import { diagnostics, toKinuError } from '../obs/index';
 
@@ -145,8 +145,6 @@ const ChunkMetadataSchema = v.object({
   endLine: v.optional(v.number()),
 });
 
-type ChunkMetadata = v.InferOutput<typeof ChunkMetadataSchema>;
-
 /**
  * Build a CloudflareVectorStore — pairs an Embedder with a Vectorize index.
  *
@@ -223,6 +221,7 @@ export function createCloudflareVectorStore(opts: {
     }
   }
 
+
   return {
     get available() { return Date.now() >= unavailableUntil; },
 
@@ -248,11 +247,20 @@ export function createCloudflareVectorStore(opts: {
           namespace,
         });
 
-        return (res.matches ?? []).map((m) => {
+        return (res.matches ?? []).flatMap((m) => {
           const located = v.safeParse(ChunkMetadataSchema, m.metadata ?? {});
-          const fields: ChunkMetadata = located.success ? located.output : {};
 
-          return {
+          // A record this module did not write in its convention has no location
+          // to serve: it is named, not passed off as a hit with a blank one.
+          if (!located.success) {
+            diagnostics.event('vector.hit_refused', { id: m.id, issues: renderIssues(located.issues) });
+
+            return [];
+          }
+
+          const fields = located.output;
+
+          return [{
             // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
             // fuses the two sources. Falls back to the raw id for un-namespaced stores.
             id: fields.chunkId ?? m.id,
@@ -260,7 +268,7 @@ export function createCloudflareVectorStore(opts: {
             startLine: fields.startLine ?? 0,
             endLine: fields.endLine ?? 0,
             score: m.score,
-          };
+          }];
         });
       });
     },

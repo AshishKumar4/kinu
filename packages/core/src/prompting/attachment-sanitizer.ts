@@ -25,7 +25,6 @@
  */
 
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
-import * as v from 'valibot';
 import type { VFS } from '../types/primitives';
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
@@ -286,7 +285,7 @@ function isTextMediaType(mediaType: string): boolean {
 async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
   const payload = decodePayload(file.data);
 
-  if (payload.kind === 'remote') return remoteReference(file.data, file.mediaType, file.filename);
+  if (payload.kind === 'remote') return remoteReference(payload.url, file.mediaType, file.filename);
 
   if (payload.bytes.length < INLINE_TEXT_MAX_BYTES) {
     const name = file.filename ?? 'attachment.txt';
@@ -309,7 +308,7 @@ async function replaceMedia(
 ): Promise<TextPart> {
   const payload = decodePayload(data);
 
-  if (payload.kind === 'remote') return remoteReference(data, mediaType, filename);
+  if (payload.kind === 'remote') return remoteReference(payload.url, mediaType, filename);
 
   return storeAndReference(payload.bytes, mediaType, filename, policy);
 }
@@ -385,17 +384,7 @@ async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<bo
 
 /** A part whose data is a remote URL carries no payload to store — reference
  *  the URL itself (equally byte-stable). */
-function remoteReference(
-  data: FilePart['data'],
-  mediaType: string,
-  filename: string | undefined,
-): TextPart {
-  // Only a URL or the string form of one reaches here (`decodePayload` answers
-  // `remote` for nothing else); bytes have no address to name.
-  let url = '';
-
-  if (data instanceof URL) url = data.toString();
-  else if (v.is(v.string(), data)) url = data;
+function remoteReference(url: string, mediaType: string, filename: string | undefined): TextPart {
   const name = filename ?? url;
 
   return {
@@ -406,13 +395,13 @@ function remoteReference(
 
 type DecodedPayload =
   | { kind: 'bytes'; bytes: Uint8Array }
-  | { kind: 'remote' };
+  | { kind: 'remote'; url: string };
 
 /** Decode every DataContent carrier to raw bytes: data URLs (base64 or
  *  percent-encoded), bare base64 strings (the DataContent contract), and
  *  binary views. Remote http(s) URLs have no local payload. */
 function decodePayload(data: FilePart['data']): DecodedPayload {
-  if (data instanceof URL) return { kind: 'remote' };
+  if (data instanceof URL) return { kind: 'remote', url: data.toString() };
 
   if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };
 
@@ -420,7 +409,7 @@ function decodePayload(data: FilePart['data']): DecodedPayload {
 
   if (data.startsWith('data:')) return { kind: 'bytes', bytes: decodeDataUrl(data) };
 
-  if (/^https?:\/\//.test(data)) return { kind: 'remote' };
+  if (/^https?:\/\//.test(data)) return { kind: 'remote', url: data };
 
   return { kind: 'bytes', bytes: decodeBase64OrText(data) };
 }
