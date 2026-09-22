@@ -90,12 +90,6 @@ export interface EnqueueTurnResult {
    *  'yielded' when a `yieldsToUserMessage` turn found an operator message
    *  already admitted at its slot: the offer is consumed, never retried. */
   readonly status: 'queued' | 'skipped' | 'yielded';
-  /** Durable-admission receipt when the backend has a submission ledger. */
-  readonly durable?: {
-    readonly submissionId: string;
-    readonly accepted: boolean;
-    readonly status: 'pending' | 'running' | 'completed' | 'aborted' | 'skipped' | 'error';
-  };
 }
 
 export interface BackendHost {

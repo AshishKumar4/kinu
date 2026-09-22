@@ -78,7 +78,6 @@ import {
 } from '../steer-branch';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
-import type { AgentInbox } from '../types/signals';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 
 /**
@@ -252,54 +251,56 @@ export function terminalEffect<I>(spec: {
 }
 
 /**
- * The one durable body for an effect whose whole job is to deliver ONE signal —
- * a follow-up turn the settled turn owes.
- *
- * Both of them are the same three steps (name the fact, key it on this
- * response's scope, report an undelivered signal as still owed), so they are one
- * function rather than two near-copies that drift a field at a time. The KEY
- * prefix is per-signal because two different follow-ups on one response must not
- * collide onto one durable message id.
+ * The loop an owed follow-up turn is queued on: core's ChatSession, on both
+ * backends. `announcementOnDisk` is the backend's durable answer (the
+ * transcript row, over Durable Object storage on cf and over the session
+ * database on the CLI); a queued turn is only RAM until it says yes.
  */
-function signalTerminalEffect(inbox: AgentInbox, spec: {
-  readonly kind: string;
-  readonly text: string;
-  /** The `idempotencyKey` prefix. Omitted when the scope is unkeyed — a
-   *  response with no durable identity has nothing stable to key on, and a
-   *  shared key across such responses would collapse them into one turn. */
-  readonly keyPrefix: string;
-  /** What an undelivered signal leaves owed, in this signal's own words. */
-  readonly undelivered: string;
+export interface OwedTurnQueue {
+  announcementOnDisk(identity: string): boolean;
+  announcementInFlight(identity: string): boolean;
+  appendOwedTurn(turn: { readonly text: string; readonly idempotencyKey: string; readonly event: string }): void;
+}
+
+/**
+ * The one durable body for an effect whose whole job is to owe ONE follow-up
+ * turn: OWED UNTIL DURABLE.
+ *
+ * The row completes only once the turn's own durable row exists, which a
+ * replay reads. Until then it queues the turn once, under this response's key,
+ * and stays owed: a process that dies before its pump reaches the turn, or a
+ * pump that refuses it at dequeue, loses a RAM item and never the row. The key
+ * is per signal, so two follow-ups of one response never share a message id.
+ */
+function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
+  readonly input: v.GenericSchema<unknown, I>;
+  readonly event: string;
+  readonly text: (input: I) => string;
+  readonly key: (scope: string) => string;
 }): TerminalEffect {
   return terminalEffect({
-    input: v.object({}),
-    run: async (_input, scope) => {
-      const effectScope = keyedScope(scope);
+    input: spec.input,
+    run: (input, scope) => {
+      // An unkeyed response has no replay to dedupe against: its turn is its own.
+      const identity = spec.key(keyedScope(scope) ?? crypto.randomUUID());
+      const loop = queue();
 
-      const signal = effectScope === undefined
-        ? { kind: spec.kind, text: spec.text }
-        : {
-          kind: spec.kind,
-          text: spec.text,
-          idempotencyKey: `${spec.keyPrefix}:${effectScope}`,
-        };
+      if (loop.announcementOnDisk(identity)) return { status: 'completed', detail: 'the follow-up turn is on disk' };
 
-      const outcome = await inbox.send(signal);
+      if (!loop.announcementInFlight(identity)) {
+        loop.appendOwedTurn({ text: spec.text(input), idempotencyKey: identity, event: spec.event });
+      }
 
-      return outcome === 'undelivered'
-        ? { status: 'owed', detail: spec.undelivered }
-        : { status: 'completed' };
+      return { status: 'owed', detail: 'the follow-up turn is queued and not yet on disk' };
     },
   });
 }
 
 /** The one durable body both backends use for a context-overflow retry. */
-export function overflowRetryTerminalEffect(inbox: AgentInbox): TerminalEffect {
-  return signalTerminalEffect(inbox, {
-    kind: OVERFLOW_RETRY_EVENT,
-    text: OVERFLOW_RETRY_TEXT,
-    keyPrefix: 'overflow-retry',
-    undelivered: 'the overflow retry signal was undelivered',
+export function overflowRetryTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+  return owedTurnTerminalEffect(queue, {
+    input: v.object({}), event: OVERFLOW_RETRY_EVENT, text: () => OVERFLOW_RETRY_TEXT,
+    key: (scope) => `overflow-retry:${scope}`,
   });
 }
 
@@ -311,48 +312,27 @@ export function overflowRetryTerminalEffect(inbox: AgentInbox): TerminalEffect {
  * sequence. Think's loop cannot: it re-issues a request only while a step ended
  * with tool calls whose outputs all landed, and no hook can extend it past a
  * `length` finish. So the continuation is the next turn, and it rides this
- * ledger for the same reason the overflow retry does — enqueueing is
- * asynchronous, and a truncated answer whose continuation died with the isolate
- * is exactly the state the audit named: a turn published as complete with the
+ * ledger for the same reason the overflow retry does: a truncated answer whose
+ * continuation died with the isolate is a turn published as complete with the
  * work after it never done.
  */
-export function outputLimitContinuationTerminalEffect(inbox: AgentInbox): TerminalEffect {
-  return signalTerminalEffect(inbox, {
-    kind: OUTPUT_CONTINUATION_EVENT,
-    text: OUTPUT_CONTINUATION_TEXT,
-    keyPrefix: 'output-continuation',
-    undelivered: 'the output-limit continuation signal was undelivered',
+export function outputLimitContinuationTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+  return owedTurnTerminalEffect(queue, {
+    input: v.object({}), event: OUTPUT_CONTINUATION_EVENT, text: () => OUTPUT_CONTINUATION_TEXT,
+    key: (scope) => `output-continuation:${scope}`,
   });
 }
 
 /**
  * The durable body for the reminder a turn owes when it settled while its task
- * list still held open items. The text is a RECORDED input — the roster froze
- * it when the list was read at commit, so a replay announces what the turn was
+ * list still held open items. The text is a RECORDED input: the roster froze it
+ * when the list was read at commit, so a replay announces what the turn was
  * owed, not what the list happens to show when the row re-runs.
- *
- * Owed until the turn's own durable row exists: `inbox.send`'s `queued` answer
- * only means the item was accepted by a live pump, and a process cut between
- * the claim and the write is exactly the window this ledger closes.
  */
-export function taskReminderTerminalEffect(inbox: AgentInbox): TerminalEffect {
-  return terminalEffect({
-    input: v.object({ text: v.string() }),
-    run: async ({ text }, scope) => {
-      const effectScope = keyedScope(scope);
-
-      const outcome = await inbox.send(effectScope === undefined
-        ? { kind: TASK_REMINDER_EVENT, text }
-        : {
-          kind: TASK_REMINDER_EVENT,
-          text,
-          idempotencyKey: taskReminderIdempotencyKey(effectScope),
-        });
-
-      return outcome === 'undelivered'
-        ? { status: 'owed', detail: 'the task reminder signal was undelivered' }
-        : { status: 'completed' };
-    },
+export function taskReminderTerminalEffect(queue: () => OwedTurnQueue): TerminalEffect {
+  return owedTurnTerminalEffect(queue, {
+    input: v.object({ text: v.string() }), event: TASK_REMINDER_EVENT, text: ({ text }) => text,
+    key: taskReminderIdempotencyKey,
   });
 }
 
@@ -903,18 +883,6 @@ export class TerminalEffectLedger {
       .map((row) => row.sequence_id);
   }
 
-
-  /** Whether this actor still owes the named effect, across every sequence —
-   *  the pre-flight read a stale signal gets: admitted only while a row still
-   *  says the turn that owed it never delivered. */
-  hasOwed(name: TerminalEffectName): boolean {
-    this.deps.actor.assertCurrent();
-
-    return this.deps.sql<{ present: number }>`
-      SELECT 1 AS present FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND effect_name = ${name} AND status != 'completed'
-      LIMIT 1`.length > 0;
-  }
   /** The earliest instant any owed row is next attemptable, or null when nothing
    *  is owed. An instant already past means a row is due now. */
   nextRetryAt(

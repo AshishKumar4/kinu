@@ -10,13 +10,14 @@ import { PLATFORM_CATALOG } from '../platform-catalog';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
 import type {
-  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanEdit,
+  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
   PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus,
 } from '../types/plans';
+import type { EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host';
 
 export type {
-  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanEdit,
+  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
   PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus, SubmitPlanToolDeps,
 } from '../types/plans';
@@ -391,12 +392,12 @@ export function formatPlanWithLineNumbers(content: string): string {
  * off them, and the key a retry collapses onto are declared once here rather
  * than per adapter.
  */
-export interface PlanHandoffTurn {
+interface PlanHandoffTurn {
   readonly text: string;
   readonly metadata: JsonObject;
 }
 
-export function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHandoffTurn {
+function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision): PlanHandoffTurn {
   const text = decision === 'request_changes'
     ? [
         `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
@@ -438,7 +439,7 @@ export function planHandoffTurn(plan: PlanReview, decision: PlanReviewDecision):
 
 /** The name one handoff attempt announces itself under: the decision's own
  *  identity, so a re-delivery collapses onto the row the first attempt wrote. */
-export function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision, attempt: number): string {
+function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision, attempt: number): string {
   return `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`;
 }
 
@@ -683,24 +684,6 @@ export class PlanReviewStore {
 
     return 1;
   }
-
-  advanceHandoffAttempt(id: string, revision: number, expected: number): number {
-    this.actor.assertCurrent();
-    void this.sql`UPDATE plan_reviews SET handoff_attempt=handoff_attempt + 1
-      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision}
-        AND handoff_attempt=${expected} AND handoff_accepted=0`;
-
-    const rows = this.sql<{ handoff_attempt: number }>`SELECT handoff_attempt FROM plan_reviews
-      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
-
-    const attempt = rows[0]?.handoff_attempt;
-
-    if (attempt === undefined || attempt <= expected) {
-      throw new Error(`could not advance plan handoff attempt for ${id}/${revision}`);
-    }
-
-    return attempt;
-  }
 }
 
 
@@ -739,5 +722,49 @@ export class PlanReviewActions {
 
   markHandoffAccepted(id: string, revision: number): PlanReviewResult {
     return this.announced(this.store.markHandoffAccepted(id, revision));
+  }
+
+  /**
+   * The owner's verdict and the turn it hands the actor.
+   *
+   * The handoff is recorded ACCEPTED only once the loop has admitted that turn.
+   * A submission the loop skipped or could not take leaves the review decided
+   * with its handoff still owed, so the next decision submits under the same
+   * key, and the loop, which recognises a turn it already ran, admits no second.
+   */
+  async decideAndHandOff(
+    verdict: { readonly id: string; readonly revision: number; readonly decision: PlanReviewDecision; readonly feedback?: string },
+    enqueue: (turn: ProgrammaticTurn) => Promise<EnqueueTurnResult>,
+  ): Promise<PlanDecisionOutcome> {
+    const { decision } = verdict;
+    const result = this.decide(verdict.id, verdict.revision, decision, verdict.feedback);
+
+    if (!result.ok) return result;
+
+    if (result.plan.handoffAccepted) return { ok: true, plan: result.plan, queued: true };
+    const plan = result.plan;
+    const { text, metadata } = planHandoffTurn(plan, decision);
+
+    try {
+      const attempt = this.store.handoffAttempt(plan.id, plan.revision);
+      const queued = await enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt) });
+
+      if (queued.status !== 'queued') {
+        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
+      }
+
+      const accepted = this.markHandoffAccepted(plan.id, plan.revision);
+
+      if (accepted.ok) return { ok: true, plan: accepted.plan, queued: true };
+
+      // The loop runs a handed-off turn before this answer, and a change
+      // request's turn ends by submitting the next revision: superseded here
+      // means the handoff was delivered, not refused.
+      if (accepted.plan?.status === 'superseded') return { ok: true, plan: accepted.plan, queued: true };
+
+      return accepted;
+    } catch (error) {
+      return { ok: true, plan, queued: false, queueError: renderThrownChain({ cause: error }) };
+    }
   }
 }

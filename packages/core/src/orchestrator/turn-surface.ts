@@ -10,20 +10,7 @@ import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
-import type { VFS } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
-
-export function skillsVfsOver(vfs: VFS): SkillsVfs {
-  return {
-    exists: (p) => vfs.exists(p),
-    readFile: (p, opts) => vfs.readFile(p, opts),
-    writeFile: (p, data) => vfs.writeFile(p, data),
-    readdir: (p) => vfs.readdir(p),
-    stat: (p) => vfs.stat(p),
-    unlink: (p) => vfs.unlink(p),
-    mkdir: (p, opts) => vfs.mkdir(p, opts),
-  };
-}
 
 export interface TurnSkillsConfig {
   getAlwaysActiveSkills(): string[];
