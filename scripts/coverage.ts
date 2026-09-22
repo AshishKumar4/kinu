@@ -104,11 +104,10 @@ function bunGroups(): SuiteGroup[] {
   const buckets = new Map<string, string[]>();
 
   for (const suite of allBunSuites()) {
-    const parts = suite.split('/');
+    let owner = 'tests';
 
-    const owner = suite.startsWith('packages/') ? parts[1] ?? 'packages'
-      : suite.startsWith('scripts/') ? 'scripts'
-        : 'tests';
+    if (suite.startsWith('packages/')) owner = suite.split('/')[1] ?? 'packages';
+    else if (suite.startsWith('scripts/')) owner = 'scripts';
 
     // ONE exception to owner-grouping, and it is measured rather than stylistic.
     // `bun test --coverage` over all 62 `packages/cli` suites dies with
@@ -356,6 +355,16 @@ ${rows}
   }
 }
 
+/** The gutter of one source line: blank where nothing was instrumented, the hit
+ *  count where the line ran, `####` where it never did. */
+function lineMark(count: number | undefined): string {
+  if (count === undefined) return '<span class="n">    </span>';
+
+  if (count > 0) return `<span class="y">${String(count).padStart(4)}</span>`;
+
+  return '<span class="m">####</span>';
+}
+
 function filePage(record: LcovRecord, esc: (s: string) => string): string | undefined {
   const abs = join(ROOT, record.file);
 
@@ -367,11 +376,7 @@ function filePage(record: LcovRecord, esc: (s: string) => string): string | unde
 
   const body = source
     .map((line, index) => {
-      const count = hits.get(index + 1);
-
-      const mark = count === undefined
-        ? '<span class="n">    </span>'
-        : count > 0 ? '<span class="y">' + String(count).padStart(4) + '</span>' : '<span class="m">####</span>';
+      const mark = lineMark(hits.get(index + 1));
 
       return `<tr><td class="ln">${index + 1}</td><td class="mk">${mark}</td><td class="src">${esc(line)}</td></tr>`;
     })

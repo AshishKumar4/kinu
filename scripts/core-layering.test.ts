@@ -7,11 +7,25 @@ const corpus = (files: Record<string, string>): Map<string, string> =>
   new Map(Object.entries(files).map(([f, t]) => [`${C}${f}`, t]));
 
 describe('core-layering', () => {
-  test('an unlisted directory is the harness', () => {
-    expect(layerOf(`${C}newthing/x.ts`)).toBe(2);
-    expect(layerOf(`${C}vfs/x.ts`)).toBe(0);
-    expect(layerOf(`${C}tools/x.ts`)).toBe(1);
-  });
+  /** Which layer a path lands in, by directory and by root file name. */
+  const placements = [
+    {
+      name: 'an unlisted directory is the harness',
+      files: [['newthing/x.ts', 2], ['vfs/x.ts', 0], ['tools/x.ts', 1]],
+    },
+    {
+      name: 'a root file is placed by name, and an unlisted one is the harness',
+      files: [['llm.ts', 0], ['platform-catalog.ts', 0], ['chat.ts', 2]],
+    },
+  ] as const;
+
+  for (const placement of placements) {
+    test(placement.name, () => {
+      for (const [file, layer] of placement.files) {
+        expect(layerOf(`${C}${file}`), file).toBe(layer);
+      }
+    });
+  }
 
   test('imports that point down are not findings', () => {
     const v = findViolations(corpus({
@@ -42,12 +56,6 @@ describe('core-layering', () => {
     }));
 
     expect(v.map((x) => [x.to.slice(C.length), x.typeOnly])).toEqual([['heads/h.ts', true], ['mcts/m.ts', false], ['tools/t.ts', true]]);
-  });
-
-  test('a root file is placed by name, and an unlisted one is the harness', () => {
-    expect(layerOf(`${C}llm.ts`)).toBe(0);
-    expect(layerOf(`${C}platform-catalog.ts`)).toBe(0);
-    expect(layerOf(`${C}chat.ts`)).toBe(2);
   });
 
   test('a mixed import is a value finding', () => {

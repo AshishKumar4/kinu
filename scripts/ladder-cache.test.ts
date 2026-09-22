@@ -69,13 +69,13 @@ interface GateRun {
 
 function runGate(fx: Fixture, run: string, inputs: Inputs = DERIVED, tools = fx.tools): GateRun {
   const repo = fx.repo();
-  const plan = planGate(run, inputs, repo, tools, fx.store);
+  const plan = planGate({ run, inputs, repo, tools, store: fx.store });
 
   if (plan.kind === 'hit') return { plan, refused: undefined, exitCode: 0 };
   const proc = Bun.spawnSync(run.split(' '), { cwd: fx.root, stdout: 'pipe', stderr: 'pipe' });
 
   if (plan.kind === 'uncacheable' || proc.exitCode !== 0) return { plan, refused: undefined, exitCode: proc.exitCode };
-  const refused = recordGreen(plan, run, inputs, fx.repo(), tools, fx.store, { seconds: 0.1, revision: 'fixture' });
+  const refused = recordGreen(plan, { run, inputs, repo: fx.repo(), tools, store: fx.store }, { seconds: 0.1, revision: 'fixture' });
 
   return { plan, refused, exitCode: proc.exitCode };
 }
@@ -216,34 +216,34 @@ describe('ladder-cache — red in every direction it claims', () => {
   test('a declared environment value enters the key, and an undeclared one does not', () => {
     const fx = fixture({ 'scripts/a.ts': `export const a = process.env.ALPHA;\n${GREEN}` });
     const repo = fx.repo();
-    const plan = planGate('bun scripts/a.ts', DERIVED, repo, fx.tools, fx.store);
+    const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
 
     if (plan.kind === 'uncacheable') throw new Error(plan.closure.why);
     expect(plan.closure.env).toEqual(['ALPHA']);
     const reader = (values: Record<string, string>) => (name: string) => values[name];
-    const base = keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({}));
-    expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ ALPHA: 'x' }))).not.toBe(base);
-    expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ ALPHA: '' }))).not.toBe(base);
-    expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ UNRELATED: 'x' }))).toBe(base);
+    const base = keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({}) });
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ ALPHA: 'x' }) })).not.toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ ALPHA: '' }) })).not.toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ UNRELATED: 'x' }) })).toBe(base);
 
     // A declared name the graph never reads is a key input once declared:
     // with it, a value for BETA moves the key away from the base; without it,
     // the same value leaves the base untouched.
     const declared = { ...plan.closure, env: ['ALPHA', 'BETA'] };
-    expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ BETA: 'y' }))).toBe(base);
-    expect(keyFor('bun scripts/a.ts', declared, fx.tools, repo, reader({}))).not.toBe(base);
-    expect(keyFor('bun scripts/a.ts', declared, fx.tools, repo, reader({ BETA: 'y' }))).not.toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({}) })).not.toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).not.toBe(base);
   });
 
   test('a closure that changes while the gate runs is not recorded', () => {
     const fx = fixture({ 'scripts/a.ts': `import { s } from './s';\nexport const a = s;\n${GREEN}`, 'scripts/s.ts': 'export const s = 1;' });
     const repo = fx.repo();
-    const plan = planGate('bun scripts/a.ts', DERIVED, repo, fx.tools, fx.store);
+    const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
 
     if (plan.kind !== 'miss') throw new Error(`planned as ${plan.kind}`);
     // The gate ran green; an edit landed before the recorder looked again.
     writeFileSync(join(fx.root, 'scripts/s.ts'), 'export const s = 2;');
-    const refused = recordGreen(plan, 'bun scripts/a.ts', DERIVED, fx.repo(), fx.tools, fx.store, { seconds: 1, revision: 'fixture' });
+    const refused = recordGreen(plan, { run: 'bun scripts/a.ts', inputs: DERIVED, repo: fx.repo(), tools: fx.tools, store: fx.store }, { seconds: 1, revision: 'fixture' });
     expect(refused).toContain('changed while the gate ran');
     expect(entries(fx.store)).toEqual([]);
   });

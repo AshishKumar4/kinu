@@ -14,7 +14,7 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import {
-  ENUMERATOR, NON_REPOSITORY_SCANS, auditGateProgram, gateCommands, gatePrograms,
+  type Kind, ENUMERATOR, NON_REPOSITORY_SCANS, auditGateProgram, gateCommands, gatePrograms,
 } from './gate-set-equality';
 import { LADDER, deployGates } from './ladder';
 import { isTestFile, isRunnableSuite, trackedFiles } from './sources';
@@ -24,46 +24,83 @@ const REPO_ROOT = new URL('..', import.meta.url).pathname;
 const at = (file: string): string => readFileSync(REPO_ROOT + file, 'utf8');
 
 describe('red: the shapes that were shipped fifteen times', () => {
-  test('a private pattern NARROWER than the shared set is a finding', () => {
-    // Verbatim the shape `ladder.ts` carried: a third spelling of "test file",
-    // counting 474 where the lint rule governs 661.
-    const found = auditGateProgram('scripts/probe.ts', `
+  /** Each gate program shipped that night, the finding kinds the audit must
+   *  produce for it, and the part of the detail that names why it is one. */
+  const shipped: readonly { name: string; source: string; kinds: Kind[]; detail: string | undefined }[] = [
+    {
+      name: 'a private pattern NARROWER than the shared set is a finding',
+      // Verbatim the shape `ladder.ts` carried: a third spelling of "test file",
+      // counting 474 where the lint rule governs 661.
+      source: `
       const TEST_FILE = /\\.test\\.(ts|tsx|js)$/;
       export function trackedTestFiles(files: string[]): string[] {
         return files.filter((path) => TEST_FILE.test(path));
       }
-    `);
-
-    expect(found.map((v) => v.kind)).toEqual(['private-pattern']);
-    expect(found[0]?.detail).toContain('463 files while the rule governed 646');
-  });
-
-  test('an inline pattern is caught as well as a named constant', () => {
-    const found = auditGateProgram('scripts/probe.ts', `
+    `,
+      kinds: ['private-pattern'],
+      detail: '463 files while the rule governed 646',
+    },
+    {
+      name: 'an inline pattern is caught as well as a named constant',
+      source: `
       export const suites = (files: string[]) => files.filter((f) => /\\.test\\.tsx?$/.test(f));
-    `);
-
-    expect(found.map((v) => v.kind)).toEqual(['private-pattern']);
-  });
-
-  test('a private `git ls-files` is a finding', () => {
-    const found = auditGateProgram('scripts/probe.ts', `
+    `,
+      kinds: ['private-pattern'],
+      detail: undefined,
+    },
+    {
+      name: 'a private `git ls-files` is a finding',
+      source: `
       import { spawnSync } from 'node:child_process';
       const listed = spawnSync('git', ['ls-files', 'packages'], { encoding: 'utf8' });
-    `);
-
-    expect(found.map((v) => v.kind)).toEqual(['private-enumeration']);
-    expect(found[0]?.detail).toContain('tracked-only in secret-scan');
-  });
-
-  test('a private directory walk is a finding', () => {
-    const found = auditGateProgram('scripts/probe.ts', `
+    `,
+      kinds: ['private-enumeration'],
+      detail: 'tracked-only in secret-scan',
+    },
+    {
+      name: 'a private directory walk is a finding',
+      source: `
       import { readdirSync } from 'node:fs';
       export const walk = (dir: string) => readdirSync(dir, { withFileTypes: true });
-    `);
+    `,
+      kinds: ['private-enumeration'],
+      detail: undefined,
+    },
+    {
+      name: 'a lock written before the corpus was measured is a finding',
+      source: `
+      import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
+      if (import.meta.main) {
+        writeLock(keys, LOCK);
+        const measured = assertMeasured('probe', [['files', files.length]]);
+        process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', measured));
+      }
+    `,
+      kinds: ['unmeasured-publication'],
+      detail: 'healthiest possible number',
+    },
+    {
+      name: 'a gate that publishes with NO measurement at all is a finding twice over',
+      source: `
+      import { reconcile, report, writeLock } from './gate-ratchet';
+      if (import.meta.main) {
+        if (process.argv.includes('--lock')) writeLock(keys, LOCK);
+        else process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', '7 things'));
+      }
+    `,
+      kinds: ['unmeasured-publication', 'unmeasured-publication'],
+      detail: undefined,
+    },
+  ];
 
-    expect(found.map((v) => v.kind)).toEqual(['private-enumeration']);
-  });
+  for (const program of shipped) {
+    test(program.name, () => {
+      const found = auditGateProgram('scripts/probe.ts', program.source);
+      expect(found.map((v) => v.kind)).toEqual(program.kinds);
+
+      if (program.detail !== undefined) expect(found[0]?.detail).toContain(program.detail);
+    });
+  }
 
   test('a glob SCAN is a finding, and constructing a glob is not', () => {
     expect(auditGateProgram('scripts/probe.ts', `
@@ -76,32 +113,6 @@ describe('red: the shapes that were shipped fifteen times', () => {
       const globs = patterns.map((p: string) => new Bun.Glob(p));
       export const skip = (path: string) => globs.some((g) => g.match(path));
     `)).toEqual([]);
-  });
-
-  test('a lock written before the corpus was measured is a finding', () => {
-    const found = auditGateProgram('scripts/probe.ts', `
-      import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
-      if (import.meta.main) {
-        writeLock(keys, LOCK);
-        const measured = assertMeasured('probe', [['files', files.length]]);
-        process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', measured));
-      }
-    `);
-
-    expect(found.map((v) => v.kind)).toEqual(['unmeasured-publication']);
-    expect(found[0]?.detail).toContain('healthiest possible number');
-  });
-
-  test('a gate that publishes with NO measurement at all is a finding twice over', () => {
-    const found = auditGateProgram('scripts/probe.ts', `
-      import { reconcile, report, writeLock } from './gate-ratchet';
-      if (import.meta.main) {
-        if (process.argv.includes('--lock')) writeLock(keys, LOCK);
-        else process.exit(report('probe', reconcile(keys, LOCK), detail, 'cmd', '7 things'));
-      }
-    `);
-
-    expect(found.map((v) => v.kind)).toEqual(['unmeasured-publication', 'unmeasured-publication']);
   });
 
   test('a stale non-repository declaration is a finding', () => {

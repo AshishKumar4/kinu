@@ -350,7 +350,7 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
     for (const name of scan.env) env.add(name);
 
     for (const edge of edges) {
-      const next = resolveSpecifier(edge.specifier, file, universe, workspace, aliases, true);
+      const next = resolveSpecifier({ specifier: edge.specifier, from: file, universe, workspace, aliases, strict: true });
 
       if (next.kind === 'leaf') continue;
 
@@ -546,11 +546,10 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
 
   if (corpus) {
     for (const file of repo.files) files.add(file);
-    notes.push(walked.corpus
-      ? `reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`
-      : inputs.corpus === true
-        ? 'the row declares it reads the tree: every tracked file is an input'
-        : 'reads the whole corpus: every tracked file is an input');
+
+    if (walked.corpus) notes.push(`reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`);
+    else if (inputs.corpus === true) notes.push('the row declares it reads the tree: every tracked file is an input');
+    else notes.push('reads the whole corpus: every tracked file is an input');
   }
 
   for (const prefix of [...form.reads, ...(inputs.reads ?? []), ...(inputs.imports ?? [])]) {

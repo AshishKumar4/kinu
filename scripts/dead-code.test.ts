@@ -77,12 +77,37 @@ describe('the reference forms', () => {
       .toBe(true);
   });
 
-  test('a stylesheet at-rule counts and a bare mention does not', () => {
-    expect(referencesPackage('src/index.css', '@import "@cloudflare/kumo/styles/tailwind";',
-      forms('@cloudflare/kumo'))).toBe(true);
-    expect(referencesPackage('src/index.css', '/* kumo lives here */', forms('@cloudflare/kumo')))
-      .toBe(false);
-  });
+  /** What each kind of file lets a package name mean: a stylesheet has one
+   *  form that references and one that mentions; a document has neither. */
+  const readings = [
+    {
+      name: 'a stylesheet at-rule counts and a bare mention does not',
+      file: 'src/index.css',
+      pkg: '@cloudflare/kumo',
+      lines: [
+        { text: '@import "@cloudflare/kumo/styles/tailwind";', references: true },
+        { text: '/* kumo lives here */', references: false },
+      ],
+    },
+    {
+      name: 'a document references nothing: a README naming a package is not a use',
+      file: 'docs/X.md',
+      pkg: 'clsx',
+      lines: [
+        { text: 'We use `clsx` for class names.', references: false },
+        { text: 'import x from "clsx"', references: false },
+      ],
+    },
+  ];
+
+  for (const reading of readings) {
+    test(reading.name, () => {
+      for (const line of reading.lines) {
+        expect(referencesPackage(reading.file, line.text, forms(reading.pkg)), line.text)
+          .toBe(line.references);
+      }
+    });
+  }
 
   test('a config file counts a quoted value, and a shell line counts a command word', () => {
     expect(referencesPackage('a.jsonc', '{ "plugins": ["oxlint-tsgolint"] }',
@@ -92,12 +117,6 @@ describe('the reference forms', () => {
     expect(referencesPackage('a.sh', 'tsc --noEmit -p tsconfig.json', forms('typescript', ['tsc'])))
       .toBe(true);
     expect(referencesPackage('a.sh', 'echo typescripts', forms('typescript', ['tsc']))).toBe(false);
-  });
-
-  test('a document references nothing: a README naming a package is not a use', () => {
-    expect(referencesPackage('docs/X.md', 'We use `clsx` for class names.', forms('clsx')))
-      .toBe(false);
-    expect(referencesPackage('docs/X.md', 'import x from "clsx"', forms('clsx'))).toBe(false);
   });
 
   test('an unrelated package is never a reference', () => {
@@ -155,13 +174,13 @@ const probe = (
   declarations: Record<string, string>,
   files: Record<string, string>,
   peers: Record<string, readonly string[]> = {},
-) => unusedDependencies(
-  [MANIFEST],
-  [MANIFEST, ...Object.keys(files)],
-  (file) => (file === MANIFEST ? JSON.stringify({ dependencies: declarations }) : files[file] ?? ''),
-  () => [],
-  (name) => peers[name] ?? [],
-);
+) => unusedDependencies({
+  manifests: [MANIFEST],
+  files: [MANIFEST, ...Object.keys(files)],
+  read: (file) => (file === MANIFEST ? JSON.stringify({ dependencies: declarations }) : files[file] ?? ''),
+  binaries: () => [],
+  peers: (name) => peers[name] ?? [],
+});
 
 describe('the census', () => {
   test('a declaration nothing imports is reported', () => {
@@ -195,7 +214,7 @@ describe('the census', () => {
   });
 
   test('a census that reads no manifest reports nothing, which is why the gate counts them', () => {
-    expect(unusedDependencies([], [], () => '{}', () => [], () => [])).toEqual([]);
+    expect(unusedDependencies({ manifests: [], files: [], read: () => '{}', binaries: () => [], peers: () => [] })).toEqual([]);
   });
 });
 
@@ -207,11 +226,11 @@ const manifests = tracked.filter(isManifest);
 
 const installed = readInstalled(read('bun.lock'));
 
-const live = unusedDependencies(
-  manifests, tracked, read,
-  (name) => installed.binaries.get(name) ?? [],
-  (name) => installed.peerRequirers.get(name) ?? [],
-);
+const live = unusedDependencies({
+  manifests, files: tracked, read,
+  binaries: (name) => installed.binaries.get(name) ?? [],
+  peers: (name) => installed.peerRequirers.get(name) ?? [],
+});
 
 describe('this repository', () => {
   test('every manifest is read and every declaration examined', () => {

@@ -141,7 +141,7 @@ export function findViolations(sources: ReadonlyMap<string, string>, entries: re
         continue;
       }
 
-      const next = resolveSpecifier(edge.specifier, file, universe, workspace, aliases);
+      const next = resolveSpecifier({ specifier: edge.specifier, from: file, universe, workspace, aliases });
 
       // A LOCAL edge that names no file is FATAL rather than skipped: a
       // dropped local edge shrinks the graph in silence, which is exactly how

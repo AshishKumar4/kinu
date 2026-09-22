@@ -86,22 +86,21 @@ const root = new URL('..', import.meta.url).pathname;
 
 const LOCK = `${root}scripts/capability-parity.lock.json`;
 
+/** Every adapter closure this gate compares. The names lead so that the set the
+ *  gate iterates and the set it resolves prefixes from are one declaration: a
+ *  third adapter is a compile error here until both name it. */
+const CLOSURE_NAMES = ['cf', 'cli'] as const;
+
+export type Closure = typeof CLOSURE_NAMES[number];
+
 /** The two adapter closures, and the shared packages that belong to neither. A
  *  file outside all three (test-utils, pc-agent) is not an adapter. */
-const CLOSURES = {
+const CLOSURES: Record<Closure, readonly string[]> = {
   cf: ['packages/cf-backend/src/'],
   cli: ['packages/cli-backend/src/', 'packages/cli/src/'],
-} as const;
+};
 
 const SHARED = ['packages/core/src/', 'packages/agent-utils/src/', 'packages/compaction/src/'];
-
-export type Closure = keyof typeof CLOSURES;
-
-/* SAFETY: `CLOSURES` is an `as const` object literal declared immediately above,
-   so its runtime own-enumerable keys are exactly the literal union `Closure`.
-   `Object.keys` is typed `string[]` because a wider object could reach it at
-   runtime; none can reach this one. */
-const CLOSURE_NAMES = Object.keys(CLOSURES) as readonly Closure[];
 
 /** A core-owned contract with at least one optional member: one capability
  *  switchboard, and the switches on it. */
@@ -596,17 +595,29 @@ type Local =
   | { readonly kind: 'missing' }
   | { readonly kind: 'external' };
 
+/** The tree path a specifier names before any extension is tried: a relative
+ *  path resolved against its importer, an aliased prefix rewritten, or nothing
+ *  when the specifier belongs to neither regime. */
+function resolvedBase(
+  from: string,
+  spec: string,
+  aliases: readonly (readonly [string, string])[],
+): string | undefined {
+  if (spec.startsWith('.')) return normalize(join(dirname(from), spec));
+  const alias = aliases.find(([prefix]) => spec.startsWith(prefix));
+
+  if (alias === undefined) return undefined;
+
+  return `${alias[1]}${spec.slice(alias[0].length)}`;
+}
+
 function resolveLocal(
   from: string,
   spec: string,
   known: ReadonlySet<string>,
   aliases: readonly (readonly [string, string])[],
 ): Local {
-  const alias = aliases.find(([prefix]) => spec.startsWith(prefix));
-
-  const base = spec.startsWith('.')
-    ? normalize(join(dirname(from), spec))
-    : alias === undefined ? undefined : `${alias[1]}${spec.slice(alias[0].length)}`;
+  const base = resolvedBase(from, spec, aliases);
 
   if (base === undefined) return { kind: 'external' };
 

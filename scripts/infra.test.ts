@@ -22,8 +22,8 @@ import {
   type AccessApplicationView, accessCovering, accessDestinations, accessOverreach, routeAnswer,
 } from './infra-cloudflare';
 import {
-  type Phase, type Row, PHASES, audit, observedRow, phaseFrom, supplyDrift, supplyRows,
-  supplySummary, unobservableDrift,
+  type AuditRequest, type Phase, type Row, PHASES, audit, observedRow, phaseFrom, supplyDrift,
+  supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { plan } from './infra-provision';
@@ -40,6 +40,14 @@ function authStore(environment: string): Resource {
     resource.kind === 'kv' && resource.environments.includes(environment));
 
   if (found === undefined) throw new Error(`fixture lost ${environment}'s auth store`);
+
+  return found;
+}
+
+function environmentNamed(key: string): InfraEnvironment {
+  const found = infrastructure.environments.find((entry) => entry.key === key);
+
+  if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
 
   return found;
 }
@@ -107,14 +115,6 @@ describe('the inventory is derived from the manifest, not written beside it', ()
 });
 
 describe('the supply census is pinned to `Env`, one environment at a time', () => {
-  function environmentNamed(key: string): InfraEnvironment {
-    const found = infrastructure.environments.find((entry) => entry.key === key);
-
-    if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
-
-    return found;
-  }
-
   const production = environmentNamed('production');
 
   /** The same manifest with one environment's `vars` edited — the whole fixture
@@ -172,13 +172,16 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
     const held = (names: readonly string[]) => ({ state: 'present', detail: 'fixture', names } as const);
 
     for (const environment of [production]) {
-      const missing = audit(infrastructure, [], supplyRows(environment, held([])), []);
+      const missing = audit({ infrastructure, rows: [], supplied: supplyRows(environment, held([])), unreadFields: [] });
       expect(missing.findings.some((entry) =>
         entry.includes(`${environment.key}/CREDENTIAL_ENCRYPTION_KEY`))).toBe(true);
 
       // The negative control for the same environment: set it, and the finding
       // is gone rather than merely reworded.
-      const set = audit(infrastructure, [], supplyRows(environment, held(['CREDENTIAL_ENCRYPTION_KEY'])), []);
+      const set = audit({
+        infrastructure, rows: [], supplied: supplyRows(environment, held(['CREDENTIAL_ENCRYPTION_KEY'])), unreadFields: [],
+      });
+
       expect(set.findings.some((entry) =>
         entry.includes(`${environment.key}/CREDENTIAL_ENCRYPTION_KEY`))).toBe(false);
     }
@@ -226,14 +229,6 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
 });
 
 describe('the control plane\'s outer Access gate is declared and proved, not assumed', () => {
-  function environmentNamed(key: string): InfraEnvironment {
-    const found = infrastructure.environments.find((entry) => entry.key === key);
-
-    if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
-
-    return found;
-  }
-
   const production = environmentNamed('production');
   const ids = infrastructure.resources.map((resource) => resource.id);
 
@@ -398,15 +393,15 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
 
     for (const id of ['access-organization.kinu.run', 'access-application.kinu.run',
       'access-policy.kinu.run', 'access-scope.kinu.run']) {
-      const missing = audit(infrastructure, [deployed, row(id, 'absent', true)], [], []);
+      const missing = audit({ infrastructure, rows: [deployed, row(id, 'absent', true)], supplied: [], unreadFields: [] });
       expect(missing.findings.some((entry) => entry.includes(id))).toBe(true);
 
-      const unreadable = audit(infrastructure, [deployed, row(id, 'unknown', true)], [], []);
+      const unreadable = audit({ infrastructure, rows: [deployed, row(id, 'unknown', true)], supplied: [], unreadFields: [] });
       expect(unreadable.findings.some((entry) => entry.includes(id))).toBe(true);
 
       // The negative control: present is silent, so the findings above are about
       // the verdict rather than about the row existing.
-      const present = audit(infrastructure, [deployed, row(id, 'present', true)], [], []);
+      const present = audit({ infrastructure, rows: [deployed, row(id, 'present', true)], supplied: [], unreadFields: [] });
       expect(present.findings).toEqual([]);
     }
   });
@@ -464,36 +459,38 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
   ];
 
   test('a clean inventory produces no findings', () => {
-    expect(audit(infrastructure, clean, [], []).findings).toEqual([]);
+    expect(audit({ infrastructure, rows: clean, supplied: [], unreadFields: [] }).findings).toEqual([]);
   });
 
   test('a required absent resource fails and an optional one does not', () => {
-    const missing = audit(infrastructure, [...clean, row('r2.x', 'absent', true)], [], []);
+    const missing = audit({ infrastructure, rows: [...clean, row('r2.x', 'absent', true)], supplied: [], unreadFields: [] });
     expect(missing.findings.length).toBe(1);
     expect(missing.findings[0]).toContain('r2.x');
 
-    const optional = audit(infrastructure, [...clean, row('r2.x', 'absent', false)], [], []);
+    const optional = audit({ infrastructure, rows: [...clean, row('r2.x', 'absent', false)], supplied: [], unreadFields: [] });
     expect(optional.findings).toEqual([]);
   });
 
   test('a deploy-created absence is tolerated only before the Worker exists', () => {
     const missing = row('durable-object.x:New', 'absent', true, 'wrangler-deploy');
 
-    const preDeploy = audit(infrastructure, [
-      ...clean,
-      row('worker.kinu', 'absent', true, 'wrangler-deploy'),
-      missing,
-    ], [], []);
+    const preDeploy = audit({
+      infrastructure,
+      rows: [...clean, row('worker.kinu', 'absent', true, 'wrangler-deploy'), missing],
+      supplied: [],
+      unreadFields: [],
+    });
 
     expect(preDeploy.findings).toEqual([]);
     expect(preDeploy.notes.map((note) => note.includes('created by the deploy itself')))
       .toEqual([true, true]);
 
-    const deployed = audit(infrastructure, [
-      ...clean,
-      row('worker.kinu', 'present', true, 'wrangler-deploy'),
-      missing,
-    ], [], []);
+    const deployed = audit({
+      infrastructure,
+      rows: [...clean, row('worker.kinu', 'present', true, 'wrangler-deploy'), missing],
+      supplied: [],
+      unreadFields: [],
+    });
 
     expect(deployed.notes).toEqual([]);
     expect(deployed.findings).toHaveLength(1);
@@ -504,13 +501,16 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     // The whole reason for the third state. `unknown` on an OPTIONAL resource
     // still fails: "we could not look" is not softened by the resource being
     // one the Worker tolerates losing.
-    const unreadable = audit(infrastructure, [...clean, row('r2.x', 'unknown', false)], [], []);
+    const unreadable = audit({ infrastructure, rows: [...clean, row('r2.x', 'unknown', false)], supplied: [], unreadFields: [] });
     expect(unreadable.findings.length).toBe(1);
     expect(unreadable.findings[0]).toContain('lookup failed');
   });
 
   test('an undeclared blind spot fails, and a stale declaration fails too', () => {
-    const undeclared = audit(infrastructure, [...clean, row('cron.whatever', 'unobservable', true)], [], []);
+    const undeclared = audit({
+      infrastructure, rows: [...clean, row('cron.whatever', 'unobservable', true)], supplied: [], unreadFields: [],
+    });
+
     expect(undeclared.findings.length).toBe(1);
     expect(undeclared.findings[0]).toContain('nothing declares that');
 
@@ -522,12 +522,15 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     const gatewayId = [...UNOBSERVABLE.keys()].find((id) => id.startsWith('ai-gateway.'));
 
     if (gatewayId === undefined) throw new Error('fixture expects the ai-gateway blind entry');
-    const stale = audit(infrastructure, [row(gatewayId, 'present', true)], [], []);
+    const stale = audit({ infrastructure, rows: [row(gatewayId, 'present', true)], supplied: [], unreadFields: [] });
     expect(stale.findings.length).toBe(1);
     expect(stale.findings.join('\n')).toContain('ai-gateway.kinu-ai-gateway');
 
     // Out of scope, out of verdict: the same entry with its row undeclared.
-    const scoped = audit(infrastructure, [row(authStore('production').id, 'present', true)], [], []);
+    const scoped = audit({
+      infrastructure, rows: [row(authStore('production').id, 'present', true)], supplied: [], unreadFields: [],
+    });
+
     expect(scoped.findings).toEqual([]);
   });
 
@@ -542,15 +545,20 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
       verdict: 'absent' as const, required, detail: 'absent',
     }];
 
-    expect(audit(infrastructure, clean, secret(true), []).findings.length).toBe(1);
-    expect(audit(infrastructure, clean, secret(false), []).findings).toEqual([]);
+    expect(audit({ infrastructure, rows: clean, supplied: secret(true), unreadFields: [] }).findings.length).toBe(1);
+    expect(audit({ infrastructure, rows: clean, supplied: secret(false), unreadFields: [] }).findings).toEqual([]);
   });
 
   test('an unreadable secret list fails rather than reading as "no secrets set"', () => {
-    const unreadable = audit(infrastructure, clean, [{
-      environment: 'production', name: '(all secrets)', verdict: 'unknown', required: true,
-      detail: 'token expired',
-    }], []);
+    const unreadable = audit({
+      infrastructure,
+      rows: clean,
+      supplied: [{
+        environment: 'production', name: '(all secrets)', verdict: 'unknown', required: true,
+        detail: 'token expired',
+      }],
+      unreadFields: [],
+    });
 
     expect(unreadable.findings.length).toBe(1);
     expect(unreadable.findings[0]).toContain('token expired');
@@ -585,8 +593,8 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     'durable-object.kinu:ControlPlaneDO', 'absent', true, 'wrangler-deploy',
   );
 
-  const at = (phase: Phase, rows: readonly Row[], supplied: Parameters<typeof audit>[2] = []) =>
-    audit(infrastructure, rows, supplied, [], phase);
+  const at = (phase: Phase, rows: readonly Row[], supplied: AuditRequest['supplied'] = []) =>
+    audit({ infrastructure, rows, supplied, unreadFields: [], phase });
 
   test('the tolerance is exactly the three phases, and a mistyped one is refused', () => {
     expect([...PHASES]).toEqual(['full', 'bootstrap', 'post-deploy']);

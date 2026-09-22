@@ -324,19 +324,30 @@ interface Collector {
   readonly visited: Set<string>;
 }
 
+/** What a scan carries across every hop: the product source it may follow
+ *  into, the functions it may enter, and what it has found so far. */
+interface ReadScan {
+  readonly parsed: ReadonlyMap<string, Source>;
+  readonly functions: ReadonlyMap<string, Map<string, SyntaxNode>>;
+  readonly into: Collector;
+}
+
+/** One parameter binding to read: the scope that binds it, in the source that
+ *  declares it, and a subtree to leave out. */
+interface BoundParameter {
+  readonly source: Source;
+  readonly scope: SyntaxNode;
+  readonly param: string;
+  readonly skip?: SyntaxNode;
+}
+
 /**
  * Every `<param>.<field>` read reachable from `scope`, following each call that
- * hands the whole parameter on. `skip` is a subtree to leave out.
+ * hands the whole parameter on.
  */
-function collectReads(
-  source: Source,
-  scope: SyntaxNode,
-  param: string,
-  parsed: ReadonlyMap<string, Source>,
-  functions: ReadonlyMap<string, Map<string, SyntaxNode>>,
-  into: Collector,
-  skip?: SyntaxNode,
-): void {
+function collectReads(scan: ReadScan, binding: BoundParameter): void {
+  const { source, scope, param, skip } = binding;
+  const { into } = scan;
   const at = (node: SyntaxNode): string => `${source.file}:${String(source.lineAt(node.start))}`;
   walkExcept(scope, skip, (node) => {
     if (node.type === 'MemberExpression') {
@@ -361,7 +372,7 @@ function collectReads(
 
       for (const [index, argument] of args.entries()) {
         if (identifierText(argument) !== param) continue;
-        followHop(source, node, callee, index, parsed, functions, into, at);
+        followHop(scan, { source, call: node, callee, index, at });
       }
 
       return;
@@ -386,16 +397,18 @@ function collectReads(
   });
 }
 
-function followHop(
-  source: Source,
-  call: SyntaxNode,
-  callee: SyntaxNode | undefined,
-  index: number,
-  parsed: ReadonlyMap<string, Source>,
-  functions: ReadonlyMap<string, Map<string, SyntaxNode>>,
-  into: Collector,
-  at: (node: SyntaxNode) => string,
-): void {
+/** One call that hands the whole parameter on, and where it was written. */
+interface Hop {
+  readonly source: Source;
+  readonly call: SyntaxNode;
+  readonly callee: SyntaxNode | undefined;
+  readonly index: number;
+  readonly at: (node: SyntaxNode) => string;
+}
+
+function followHop(scan: ReadScan, hop: Hop): void {
+  const { source, call, callee, index, at } = hop;
+  const { parsed, functions, into } = scan;
   const name = callee === undefined ? undefined : identifierText(callee);
 
   if (name === undefined) {
@@ -458,8 +471,7 @@ function followHop(
   if (into.visited.has(key)) return;
   into.visited.add(key);
   into.hops.push(`${name}(…)`);
-  const functionsOfTarget = functions;
-  collectReads(targetSource, target, bound, parsed, functionsOfTarget, into);
+  collectReads(scan, { source: targetSource, scope: target, param: bound });
 }
 
 export function readHandler(parsed: ReadonlyMap<string, Source>): HandlerReads {
@@ -502,7 +514,7 @@ export function readHandler(parsed: ReadonlyMap<string, Source>): HandlerReads {
   // before the arms belongs to no action and cannot be held to a field list, so
   // it is a finding rather than a silent attribution to all seven.
   const before: Collector = { fields: new Set(), opaque, hops, visited: new Set() };
-  collectReads(tool, handler, input, parsed, functions, before, dispatch);
+  collectReads({ parsed, functions, into: before }, { source: tool, scope: handler, param: input, skip: dispatch });
 
   for (const field of before.fields) {
     if (field === DISCRIMINANT) continue;
@@ -525,7 +537,7 @@ export function readHandler(parsed: ReadonlyMap<string, Source>): HandlerReads {
     const collector: Collector = { fields: new Set(), opaque, hops, visited: new Set() };
 
     for (const statement of clause.children.slice(1)) {
-      collectReads(tool, statement, input, parsed, functions, collector);
+      collectReads({ parsed, functions, into: collector }, { source: tool, scope: statement, param: input });
     }
 
     collector.fields.delete(DISCRIMINANT);

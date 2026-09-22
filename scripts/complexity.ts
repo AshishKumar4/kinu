@@ -97,39 +97,40 @@ const CALLABLE = {
 
 const isCallable = (type: string): boolean => Object.hasOwn(CALLABLE, type);
 
+/** Node types that are one branch each, whatever they hold. `LogicalExpression`
+ *  counts every operator, `??` included: each one is a second path through the
+ *  expression. An `AssignmentPattern` is the branch taken when the argument is
+ *  absent. */
+const BRANCHING = {
+  AssignmentPattern: true,
+  CatchClause: true,
+  ConditionalExpression: true,
+  DoWhileStatement: true,
+  ForInStatement: true,
+  ForOfStatement: true,
+  ForStatement: true,
+  IfStatement: true,
+  LogicalExpression: true,
+  WhileStatement: true,
+} satisfies Record<string, true>;
+
 /** What one node adds to the function that encloses it. */
 function decisions(node: SyntaxNode): number {
   const { raw } = node;
 
-  switch (raw.type) {
-    case 'CatchClause':
-    case 'ConditionalExpression':
-    case 'DoWhileStatement':
-    case 'ForInStatement':
-    case 'ForOfStatement':
-    case 'ForStatement':
-    case 'IfStatement':
-    case 'WhileStatement':
-      return 1;
-    // A `default` clause is the fall-through, not a decision.
-    case 'SwitchCase':
-      return raw.test === null ? 0 : 1;
-    // Every operator, `??` included: each one is a second path through the
-    // expression.
-    case 'LogicalExpression':
-      return 1;
-    case 'AssignmentExpression':
-      return raw.operator === '&&=' || raw.operator === '||=' || raw.operator === '??=' ? 1 : 0;
-    // A default value is a branch taken when the argument is absent.
-    case 'AssignmentPattern':
-      return 1;
-    // `a?.b` and `f?.()` each carry their own short circuit.
-    case 'MemberExpression':
-    case 'CallExpression':
-      return raw.optional ? 1 : 0;
-    default:
-      return 0;
+  if (Object.hasOwn(BRANCHING, raw.type)) return 1;
+
+  // A `default` clause is the fall-through, not a decision.
+  if (raw.type === 'SwitchCase') return raw.test === null ? 0 : 1;
+
+  if (raw.type === 'AssignmentExpression') {
+    return raw.operator === '&&=' || raw.operator === '||=' || raw.operator === '??=' ? 1 : 0;
   }
+
+  // `a?.b` and `f?.()` each carry their own short circuit.
+  if (raw.type === 'MemberExpression' || raw.type === 'CallExpression') return raw.optional ? 1 : 0;
+
+  return 0;
 }
 
 /** One measured function. */
