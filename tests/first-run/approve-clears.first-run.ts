@@ -258,7 +258,7 @@ async function approveThroughTheButton(
 
     if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
 
-    return await drive(page, plan.origin, workspace, command, empty);
+    return await drive({ page, origin: plan.origin, workspace, command, empty });
   } finally {
     await page.close();
   }
@@ -266,9 +266,15 @@ async function approveThroughTheButton(
 
 /** The page's own walk to the queue and back. Split out so the header, the
  *  navigation and the failure wording are one readable sequence. */
-async function drive(
-  page: Page, origin: string, workspace: string, command: string, empty: Omit<ButtonRun, 'approved' | 'why'>,
-): Promise<ButtonRun> {
+interface DriveOptions {
+  readonly page: Page;
+  readonly origin: string;
+  readonly workspace: string;
+  readonly command: string;
+  readonly empty: Omit<ButtonRun, 'approved' | 'why'>;
+}
+
+async function drive({ page, origin, workspace, command, empty }: DriveOptions): Promise<ButtonRun> {
   await page.goto(`${origin}/workspace/${encodeURIComponent(workspace)}`, {
     waitUntil: 'domcontentloaded',
   });

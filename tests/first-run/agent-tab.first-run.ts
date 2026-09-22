@@ -143,11 +143,11 @@ function openPublicSocket(
     failInFlight(`the case budget was spent with ${url.pathname} still owing an answer`);
   });
 
-  socket.addEventListener('message', (event: MessageEvent) => {
-    // SAFETY: `MessageEvent.data` is `any` on the DOM lib; the agents-SDK
-    // transport sends only text or binary payloads, which are exactly the
-    // three shapes the codec takes, and it answers null for anything else.
-    const frame = decodeFrame(event.data as string | ArrayBuffer | Uint8Array);
+  // `MessageEvent.data` is `any` on the DOM lib; the agents-SDK transport
+  // sends only text or binary payloads, which are exactly the three shapes the
+  // codec takes, and it answers null for anything else.
+  socket.addEventListener('message', (event: MessageEvent<string | ArrayBuffer | Uint8Array>) => {
+    const frame = decodeFrame(event.data);
 
     if (frame === null) return;
 
@@ -234,6 +234,25 @@ function excerpt(value: JsonValue, length = 240): string {
   return JSON.stringify(value).slice(0, length);
 }
 
+/** One RPC row's `detail`: how the call failed, what a parsed answer said, or
+ *  the bytes that did not parse. */
+interface RpcDetail {
+  readonly rpc: string;
+  readonly answer: Answer;
+  /** How this row names a call that never came back. */
+  readonly refusal: string;
+  /** The sentence a parsed answer earns, or null when it did not parse. */
+  readonly said: string | null;
+}
+
+function rpcDetail({ rpc, answer, refusal, said }: RpcDetail): string {
+  if (!answer.ok) return `${rpc} ${refusal}: ${answer.failure.slice(0, 300)}`;
+
+  if (said !== null) return said;
+
+  return `${rpc} answered foreign bytes: ${excerpt(answer.value)}`;
+}
+
 const CreatedSchema = v.object({ name: v.string() });
 
 const SnapshotSchema = v.object({
@@ -283,11 +302,12 @@ describe(SUITE, () => {
           subgoals.push({
             what: 'tab-creates',
             reached: created !== null && created.success,
-            detail: !createdAnswer.ok
-              ? `createSubordinateAgent refused: ${createdAnswer.failure.slice(0, 300)}`
-              : created !== null && created.success
+            detail: rpcDetail({
+              rpc: 'createSubordinateAgent', answer: createdAnswer, refusal: 'refused',
+              said: created !== null && created.success
                 ? `createSubordinateAgent answered with ${JSON.stringify(created.output.name)}`
-                : `createSubordinateAgent answered foreign bytes: ${excerpt(createdAnswer.value)}`,
+                : null,
+            }),
           });
 
           if (created === null || !created.success) return announce(subgoals);
@@ -321,12 +341,13 @@ describe(SUITE, () => {
           subgoals.push({
             what: 'snapshot-answers',
             reached: snapshot !== null && snapshot.success && snapshot.output.name === name,
-            detail: !snapshotAnswer.ok
-              ? `getActorSnapshot never answered: ${snapshotAnswer.failure.slice(0, 300)}`
-              : snapshot !== null && snapshot.success
+            detail: rpcDetail({
+              rpc: 'getActorSnapshot', answer: snapshotAnswer, refusal: 'never answered',
+              said: snapshot !== null && snapshot.success
                 ? `getActorSnapshot answered for ${JSON.stringify(snapshot.output.name)} (role `
                   + `${JSON.stringify(snapshot.output.role ?? '')})`
-                : `getActorSnapshot answered foreign bytes: ${excerpt(snapshotAnswer.value)}`,
+                : null,
+            }),
           });
 
           const tasksAnswer = await ask(tabSocket, 'listAgentTasks', []);
@@ -335,11 +356,12 @@ describe(SUITE, () => {
           subgoals.push({
             what: 'tasks-answer',
             reached: tasks !== null && tasks.success,
-            detail: !tasksAnswer.ok
-              ? `listAgentTasks never answered: ${tasksAnswer.failure.slice(0, 300)}`
-              : tasks !== null && tasks.success
+            detail: rpcDetail({
+              rpc: 'listAgentTasks', answer: tasksAnswer, refusal: 'never answered',
+              said: tasks !== null && tasks.success
                 ? `listAgentTasks answered a list of ${String(tasks.output.length)}`
-                : `listAgentTasks answered foreign bytes: ${excerpt(tasksAnswer.value)}`,
+                : null,
+            }),
           });
 
           // ── One message to the subagent, one answer back. ──────────────

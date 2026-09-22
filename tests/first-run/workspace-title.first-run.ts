@@ -82,7 +82,9 @@ describe('First-run · workspace-title (owned workspace, read-only)', () => {
 
     // First actor RPC: do not warm its title through another read beforehand.
     // Select title fields only; private memory and other snapshot data are never logged.
-    const snapshot = v.safeParse(Snapshot, await callAgentRpc(origin, auth.accessToken, workspace, 'getWorkspaceSnapshot', JsonValueSchema));
+    const snapshot = v.safeParse(Snapshot, await callAgentRpc({
+      origin, token: auth.accessToken, name: workspace, method: 'getWorkspaceSnapshot', schema: JsonValueSchema,
+    }));
 
     if (!snapshot.success) prerequisite('Loaded snapshot is missing its required status/title fields; comparison unavailable');
     const statusTitle = snapshot.output.status.displayName;

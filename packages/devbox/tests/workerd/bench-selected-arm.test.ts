@@ -35,27 +35,25 @@ describe('the selected-arm route guard', () => {
     expect(await response.json()).toMatchObject({ ok: false, error: 'unauthorized' });
   });
 
-  it('refuses a request that names no arm at all', async () => {
-    const response = await SELF.fetch('https://bench.test/state', {
-      headers: { authorization: 'Bearer test-token' },
-    });
+  /** Two requests that name no arm this run knows: one names none at all, the
+   *  other names one that does not exist. Neither may fall back to the shipped
+   *  arm, so both are refused with the same sentence. */
+  const UNNAMED_ARMS = [
+    { what: 'a request that names no arm at all', url: 'https://bench.test/state' },
+    { what: 'an unknown arm name rather than defaulting to the shipped one', url: 'https://bench.test/state?strategy=snapshot-chai' },
+  ];
 
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      ok: false,
-      error: 'strategy is required: snapshot-chain',
-    });
-  });
+  for (const unnamed of UNNAMED_ARMS) {
+    it(`refuses ${unnamed.what}`, async () => {
+      const response = await SELF.fetch(unnamed.url, {
+        headers: { authorization: 'Bearer test-token' },
+      });
 
-  it('refuses an unknown arm name rather than defaulting to the shipped one', async () => {
-    const response = await SELF.fetch('https://bench.test/state?strategy=snapshot-chai', {
-      headers: { authorization: 'Bearer test-token' },
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        error: 'strategy is required: snapshot-chain',
+      });
     });
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({
-      ok: false,
-      error: 'strategy is required: snapshot-chain',
-    });
-  });
+  }
 });

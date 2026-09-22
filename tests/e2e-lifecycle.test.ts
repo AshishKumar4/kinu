@@ -122,13 +122,18 @@ interface ConversationTurn {
  * threading, because a second channel can satisfy them. The prompt itself is
  * the only witness that cannot, so the suite asserts on it too.
  */
-async function chatTurn(
-  model: LanguageModel,
-  rt: CLIRuntime,
-  tools: ToolSet,
-  history: ModelMessage[],
-  userMessage: string,
-): Promise<ConversationTurn> {
+/** One turn as the CLI drives it: the model, the runtime it acts on, the tool
+ *  surface, and the conversation it extends. */
+interface ChatTurn {
+  readonly model: LanguageModel;
+  readonly rt: CLIRuntime;
+  readonly tools: ToolSet;
+  readonly history: ModelMessage[];
+  readonly userMessage: string;
+}
+
+async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
+  const { history, model, rt, tools, userMessage } = turn;
   const start = Date.now();
   const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
@@ -271,7 +276,7 @@ describe('E2E Lifecycle', () => {
 
     for (const [i, message] of messages.entries()) {
       console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
-      const { turn, sent } = await chatTurn(model, rt, tools, history, message);
+      const { turn, sent } = await chatTurn({ model, rt, tools, history, userMessage: message });
       sentPerTurn.push(sent);
       turns.push(turn);
       await engine.reviewTurn(turn, null);

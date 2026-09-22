@@ -122,8 +122,15 @@ const REPO_ROOT = join(import.meta.dirname, '../..');
  *  a tier switch reaches this family too, plus the one arm only this family
  *  runs: `product`, the deployment's own default model, which is what
  *  `scripts/trajectory-tier.sh` asks for before a publish. */
-const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro'
-  : process.env.KINU_EVAL_TIER === 'product' ? 'product' : 'flash';
+function tierOf(named: string | undefined): EvalTier {
+  if (named === 'pro') return 'pro';
+
+  if (named === 'product') return 'product';
+
+  return 'flash';
+}
+
+const TIER: EvalTier = tierOf(process.env.KINU_EVAL_TIER);
 
 /**
  * WHERE this run's agent lives, resolved once, and the model it PINS.
@@ -677,6 +684,56 @@ afterAll(() => {
   });
 });
 
+/** The session a verifier oracle runs against: files and commands on `root`,
+ *  and whichever background jobs the case declares. */
+function scratchSession(
+  root: string, jobs: readonly PublicBackgroundJob[],
+): Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'> {
+  return {
+    readFile: (path) => Bun.file(join(root, path)).text(),
+    backgroundJobs: async () => jobs,
+    async execute(_executor, command) {
+      // The verifier stages into /workspace (the sandbox container's default
+      // cwd, core/src/execution/sandbox.ts) while this fake runs on the local
+      // box: translate the mount so the same literal stages the scratch root
+      // the seed writer used.
+      const translated = command.replaceAll('/workspace', root);
+      const process = Bun.spawn(['bash', '-c', translated], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+
+      const [exitCode, stdout, stderr] = await Promise.all([process.exited,
+        new Response(process.stdout).text(), new Response(process.stderr).text()]);
+
+      return { exitCode, stdout, stderr };
+    },
+  };
+}
+
+/** One turn's `run_start` row, carrying the prompt the case names for it. */
+function turnRun(runId: string, userMessage: string, at: string): RunEvent {
+  return {
+    type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
+    agentId: 'eval-public', userMessage,
+  };
+}
+
+/** One settled `tool_call_end` row of a run. */
+interface ToolRow {
+  readonly runId: string;
+  readonly at: string;
+  readonly name: string;
+  readonly action: string;
+  readonly path?: string;
+}
+
+function toolRow({ runId, at, name, action, path }: ToolRow): RunEvent {
+  return {
+    type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
+    name, toolCallId: `${runId}-${action}`,
+    args: path === undefined ? { action } : { action, path },
+    outcome: { success: true },
+  };
+}
+
 describe('Trajectory evals — multi-turn episodes through the public API', () => {
   /**
    * CREDENTIAL-FREE: the corpus can answer the question this family asks.
@@ -781,23 +838,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     if (!entry) throw new Error('missing recovery case');
     const root = scratchDir('trajectory-oracle');
 
-    const session: Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'> = {
-      readFile: (path) => Bun.file(join(root, path)).text(),
-      backgroundJobs: async () => [],
-      async execute(_executor, command) {
-        // The verifier stages into /workspace (the sandbox container's
-        // default cwd, core/src/execution/sandbox.ts) while this fake runs on
-        // the local box: translate the mount so the same literal stages the
-        // scratch root the seed writer used.
-        const translated = command.replaceAll('/workspace', root);
-        const process = Bun.spawn(['bash', '-c', translated], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
-
-        const [exitCode, stdout, stderr] = await Promise.all([process.exited,
-          new Response(process.stdout).text(), new Response(process.stderr).text()]);
-
-        return { exitCode, stdout, stderr };
-      },
-    };
+    const session = scratchSession(root, []);
 
     const events: RunEvent[] = [
       { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
@@ -915,21 +956,9 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     if (!entry) throw new Error('missing recovery case');
     const root = scratchDir('trajectory-wake');
 
-    const session: Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'> = {
-      readFile: (path) => Bun.file(join(root, path)).text(),
-      backgroundJobs: async () => [
-        { id: 'bgjob-live', kind: 'shell', status: 'completed', result: '"1 pass, 0 fail"', error: null },
-      ],
-      async execute(_executor, command) {
-        const translated = command.replaceAll('/workspace', root);
-        const process = Bun.spawn(['bash', '-c', translated], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
-
-        const [exitCode, stdout, stderr] = await Promise.all([process.exited,
-          new Response(process.stdout).text(), new Response(process.stderr).text()]);
-
-        return { exitCode, stdout, stderr };
-      },
-    };
+    const session = scratchSession(root, [
+      { id: 'bgjob-live', kind: 'shell', status: 'completed', result: '"1 pass, 0 fail"', error: null },
+    ]);
 
     const events: RunEvent[] = [
       { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
@@ -988,24 +1017,12 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
     if (!entry) throw new Error('missing memory case');
 
-    const turnRun = (runId: string, turn: number, at: string): RunEvent => ({
-      type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
-      agentId: 'eval-public', userMessage: entry.turns[turn],
-    });
-
-    const toolRow = (runId: string, at: string, name: string, action: string, path?: string): RunEvent => ({
-      type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
-      name, toolCallId: `${runId}-${action}`,
-      args: path === undefined ? { action } : { action, path },
-      outcome: { success: true },
-    });
-
     const events: RunEvent[] = [
-      turnRun('save', 0, '01'),
-      toolRow('save', '02', 'memory', 'save'),
-      turnRun('find', 1, '03'),
-      toolRow('find', '04', 'memory', 'search'),
-      toolRow('find', '05', 'file', 'write', 'found-public.txt'),
+      turnRun('save', entry.turns[0], '01'),
+      toolRow({ runId: 'save', at: '02', name: 'memory', action: 'save' }),
+      turnRun('find', entry.turns[1], '03'),
+      toolRow({ runId: 'find', at: '04', name: 'memory', action: 'search' }),
+      toolRow({ runId: 'find', at: '05', name: 'file', action: 'write', path: 'found-public.txt' }),
     ];
 
     const input = {
@@ -1036,25 +1053,13 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
     if (!entry) throw new Error('missing tasks case');
 
-    const turnRun = (runId: string, turn: number, at: string): RunEvent => ({
-      type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
-      agentId: 'eval-public', userMessage: entry.turns[turn],
-    });
-
-    const toolRow = (runId: string, at: string, name: string, action: string, path?: string): RunEvent => ({
-      type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
-      name, toolCallId: `${runId}-${action}`,
-      args: path === undefined ? { action } : { action, path },
-      outcome: { success: true },
-    });
-
     const events: RunEvent[] = [
-      turnRun('plan', 0, '01'),
-      toolRow('plan', '02', 'tasks', 'add'),
-      turnRun('close', 1, '03'),
-      toolRow('close', '04', 'tasks', 'update'),
-      toolRow('close', '05', 'tasks', 'list'),
-      toolRow('close', '06', 'file', 'write', 'status-public.txt'),
+      turnRun('plan', entry.turns[0], '01'),
+      toolRow({ runId: 'plan', at: '02', name: 'tasks', action: 'add' }),
+      turnRun('close', entry.turns[1], '03'),
+      toolRow({ runId: 'close', at: '04', name: 'tasks', action: 'update' }),
+      toolRow({ runId: 'close', at: '05', name: 'tasks', action: 'list' }),
+      toolRow({ runId: 'close', at: '06', name: 'file', action: 'write', path: 'status-public.txt' }),
     ];
 
     const input = {

@@ -21,7 +21,7 @@ const sha = 'a'.repeat(64);
 
 const BOX = 'boxes/3d74cb9b';
 
-function stubStore<const T extends Record<string, Uint8Array>>(objects: T): CandidateObjectReader {
+function stubStore(objects: Record<string, Uint8Array>): CandidateObjectReader {
   return {
     list: async ({ prefix }) => ({
       objects: Object.entries(objects)

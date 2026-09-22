@@ -105,7 +105,7 @@ interface LayerMount {
  *  `mountLayer:<archive>:<point>` call: where in the sequence it happened, the
  *  archive path it read THROUGH the store mount, and the point it chose. */
 function layerMountOf(calls: readonly string[], objectKey: string): LayerMount {
-  const archiveName = objectKey.split('/').at(-1)!;
+  const archiveName = objectKey.slice(objectKey.lastIndexOf('/') + 1);
 
   const index = calls.findIndex((call) => {
     const parts = call.split(':');
@@ -250,6 +250,25 @@ interface Harness {
   upperMark: string;
 }
 
+/** The record the ports wrote, for a case that has already asserted a commit
+ *  landed — so no record here is that commit publishing nothing. */
+function publishedState(record: Harness): ChainState {
+  const { state } = record;
+
+  if (state === null) throw new Error('the harness holds no record: nothing published one');
+
+  return state;
+}
+
+/** The generation a publication retained as the restore fallback. */
+function retainedFallback(state: ChainState): ChainGeneration {
+  const { fallback } = state;
+
+  if (fallback === undefined) throw new Error('the record names no fallback generation');
+
+  return fallback;
+}
+
 /**
  * What one recognised shell command turns into: the recorded label the
  * assertions read, and the stdout the strategy consumes.
@@ -300,14 +319,19 @@ const DELTA_SHELL_REPLIES: ReadonlyMap<string, ShellOutcome> = new Map([
   ['# devbox-manifest-v1', { call: 'deltaManifest', stdout: '' }],
 ]);
 
-function shellLabel(
-  command: string,
-  mounts: string,
-  absent: (path: string) => boolean,
-  freeBytes: number,
-  upperMark: string,
-  stagedSize: string,
-): ShellOutcome {
+/** One command and the world it meets: what `/proc/mounts` says, which paths
+ *  the case declares absent, and what the probes report back. */
+interface ShellWorld {
+  readonly command: string;
+  readonly mounts: string;
+  readonly absent: (path: string) => boolean;
+  readonly freeBytes: number;
+  readonly upperMark: string;
+  readonly stagedSize: string;
+}
+
+function shellLabel(world: ShellWorld): ShellOutcome {
+  const { command, mounts, absent, freeBytes, upperMark, stagedSize } = world;
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
@@ -753,12 +777,14 @@ function harness(overrides: {
         ? mounts()
         : `${mounts()}\ns3fs ${table.mounted.at} fuse.s3fs rw,nosuid,nodev,relatime 0 0\n`;
 
-      const label = shellLabel(
-        command, procMounts(), overrides.absent ?? (() => false),
-        overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,
-        liveMark,
-        overrides.stagedReport ?? `0 ${DELTA_BYTES}`,
-      );
+      const label = shellLabel({
+        command,
+        mounts: procMounts(),
+        absent: overrides.absent ?? (() => false),
+        freeBytes: overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,
+        upperMark: liveMark,
+        stagedSize: overrides.stagedReport ?? `0 ${DELTA_BYTES}`,
+      });
 
       calls.push(label.call);
 
@@ -1816,7 +1842,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     const storage = snapshotChainStorage(record.ports);
 
     expect((await storage.checkpoint('tick')).kind).toBe('committed');
-    const collapsed = record.state!.base.id;
+    const collapsed = publishedState(record).base.id;
     record.upperMark = 'written-after-the-collapse';
 
     // A quiesce, so the interval gate the collapse just reset is not what this
@@ -2050,7 +2076,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(squashed).toStartWith(`makeSquashfs:${DEVBOX_WORKDIR}:`);
     expect(squashed).not.toBe(`makeSquashfs:${DEVBOX_WORKDIR}:0`);
     expect(record.calls.some(
-      call => call === `publishArchive:${baseObjectKey(STORE_ROOT, record.state!.base.id)}`,
+      call => call === `publishArchive:${baseObjectKey(STORE_ROOT, publishedState(record).base.id)}`,
     )).toBe(true);
     expect(record.state?.delta).toBeUndefined();
   });
@@ -2087,7 +2113,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // which the changed set reflects — without this mark the upper is
       // untouched and the tick correctly skips, proving nothing.
       record.upperMark = '9:8192:1700000900';
-      record.state = { ...record.state!, at: 0 };
+      record.state = { ...publishedState(record), at: 0 };
       const tick = await storage.checkpoint('tick');
       expect({ kind: tick.kind, reason: tick.reason }).toEqual({
         kind: 'committed', reason: undefined,
@@ -2125,7 +2151,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'quiesce');
 
       expect(outcome.kind).toBe('committed');
-      const collapsed = record.state!;
+      const collapsed = publishedState(record);
       expect(collapsed.base.id).not.toBe(CHAIN_ID);
       expect(collapsed.delta).toBeUndefined();
       // The whole merged tree, with the box's exclude policy applied.
@@ -2161,7 +2187,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // NOTHING was deleted, so both generations are whole and both are named.
       expect(record.calls.filter(c => c.startsWith('deleteObjects'))).toEqual([]);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
-      expect(record.objects.has(baseObjectKey(STORE_ROOT, record.state!.base.id))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, publishedState(record).base.id))).toBe(true);
     });
 
   test('a second unproven publication orphans the UNPROVEN generation, never the proven one',
@@ -2197,7 +2223,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(false);
       // The proven fallback and the new generation both survived it.
       expect(record.objects.has(baseObjectKey(STORE_ROOT, FALLBACK_ID))).toBe(true);
-      expect(record.objects.has(baseObjectKey(STORE_ROOT, record.state!.base.id))).toBe(true);
+      expect(record.objects.has(baseObjectKey(STORE_ROOT, publishedState(record).base.id))).toBe(true);
     });
 
   test('a crash before the sweep leaves an id the NEXT checkpoint cleans up', async () => {
@@ -2250,7 +2276,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // reports. A `failed` here would also refuse the quiesce this ran under,
       // holding a box open over work that is already durable.
       expect(outcome.kind).toBe('committed');
-      const committed = record.state!;
+      const committed = publishedState(record);
       expect(committed.rev).toBe(2);
       expect(committed.base.id).not.toBe(CHAIN_ID);
       expect(record.objects.has(baseObjectKey(STORE_ROOT, committed.base.id))).toBe(true);
@@ -2299,7 +2325,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'quiesce');
 
       expect(outcome.kind).toBe('committed');
-      const committed = record.state!;
+      const committed = publishedState(record);
       // The published pointer, unchanged by either failure.
       expect(committed.rev).toBe(2);
       expect(committed.base.id).not.toBe(CHAIN_ID);
@@ -3235,6 +3261,15 @@ describe('attachChain resets only its OWN directories', () => {
 /** The whole second both fingerprint marks land in. */
 const T_SAME = 1_700_000_000;
 
+/** The skip gate's own fingerprint for `dir`, read through the real command. */
+function fingerprintOf(dir: string): string {
+  const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+
+  if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+
+  return proc.stdout.toString().trim();
+}
+
 describe('the skip-gate fingerprint keeps sub-second mtime', () => {
   test('a same-size rename changes the per-path mark', () => {
     const dir = devboxScratchDir('devbox-fingerprint-rename');
@@ -3244,18 +3279,10 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     writeFileSync(firstPath, 'same-size');
     utimesSync(firstPath, T_SAME + 0.5, T_SAME + 0.5);
 
-    const run = (): string => {
-      const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
-
-      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
-
-      return proc.stdout.toString().trim();
-    };
-
-    const first = run();
+    const first = fingerprintOf(dir);
     renameSync(firstPath, secondPath);
     utimesSync(secondPath, T_SAME + 0.5, T_SAME + 0.5);
-    expect(run()).not.toBe(first);
+    expect(fingerprintOf(dir)).not.toBe(first);
   });
 
   test('a same-size same-second rewrite changes the mark', () => {
@@ -3268,20 +3295,12 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     writeFileSync(file, 'aaaaaaaaaa');
     utimesSync(file, T_SAME + 0.25, T_SAME + 0.25);
 
-    const run = (): string => {
-      const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
-
-      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
-
-      return proc.stdout.toString().trim();
-    };
-
-    const first = run();
+    const first = fingerprintOf(dir);
 
     writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE
     utimesSync(file, T_SAME + 0.25, T_SAME + 0.75); // SAME SECOND, later fraction
 
-    expect(run()).not.toBe(first);
+    expect(fingerprintOf(dir)).not.toBe(first);
   });
 
   test('a same-path rewrite with the mtime RESTORED still changes the mark', () => {
@@ -3297,20 +3316,12 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     writeFileSync(file, 'aaaaaaaaaa');
     utimesSync(file, at, at);
 
-    const run = (): string => {
-      const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
-
-      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
-
-      return proc.stdout.toString().trim();
-    };
-
-    const first = run();
+    const first = fingerprintOf(dir);
 
     writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE, SAME INODE
     utimesSync(file, at, at); // MTIME PUT BACK EXACTLY
 
-    expect(run()).not.toBe(first);
+    expect(fingerprintOf(dir)).not.toBe(first);
   });
 });
 
@@ -3624,7 +3635,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const secondCalls: string[] = [];
 
       const second = harness({
-        state: { ...first.state!, upperMark: 'stale-again', at: 1 },
+        state: { ...publishedState(first), upperMark: 'stale-again', at: 1 },
         mounts: MOUNTED,
         calls: secondCalls,
         registry, mountsTable: container,
@@ -3704,7 +3715,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // And the registry still holds exactly the box's root, unchanged by a
       // generation that did not exist when it was mounted.
       expect(registry.held).toEqual({ prefix: `${STORE_ROOT}/`, readOnly: false });
-      expect(fold.objects.has(baseObjectKey(STORE_ROOT, fold.state!.base.id))).toBe(true);
+      expect(fold.objects.has(baseObjectKey(STORE_ROOT, publishedState(fold).base.id))).toBe(true);
     });
 
   test('a generation that changes releases the one mount before the next takes it',
@@ -3770,7 +3781,7 @@ describe('the generation lifecycle, against ONE box', () => {
 
     // The stop collapses the chain onto a fresh generation and keeps the old one.
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
-    const rebased = record.state!.base.id;
+    const rebased = publishedState(record).base.id;
     expect(rebased).not.toBe(CHAIN_ID);
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
     expect(record.objects.has(baseObjectKey(STORE_ROOT, CHAIN_ID))).toBe(true);
@@ -3813,17 +3824,30 @@ describe('a legacy delta publication carries its fallback evidence', () => {
     expect(record.state?.delta).toEqual(priorDelta);
   });
 
-  for (const reason of ['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed'] as const) {
+  const DELTA_PROBE_FAILURES = ['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed'] as const;
+
+  /** What `# devbox-probe-v1` answers under `reason`: the two upper reasons are
+   *  the refusal itself, and every other reason reads a well-formed upper. */
+  function upperProbeReply(reason: (typeof DELTA_PROBE_FAILURES)[number], encoded: string): string {
+    if (reason === 'upper-probe-failed') return '1 failed';
+
+    if (reason === 'upper-empty') return '0 ';
+
+    return `0 ${encoded}`;
+  }
+
+  for (const reason of DELTA_PROBE_FAILURES) {
     test(reason, async () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });
       const exec = record.ports.exec;
       const type = reason === 'whiteout-probe-failed' ? 'c' : 'f';
       const size = reason === 'block-hash-failed' ? 65536 : 32;
       const encoded = Buffer.from([type, '42', '1', '644', '0', '0', String(size), '0', '0', '', 'file', ''].join('\0')).toString('base64');
+
       record.ports.exec = async command => {
         let stdout: string | undefined;
 
-        if (command.startsWith('# devbox-probe-v1')) stdout = reason === 'upper-probe-failed' ? '1 failed' : reason === 'upper-empty' ? '0 ' : `0 ${encoded}`;
+        if (command.startsWith('# devbox-probe-v1')) stdout = upperProbeReply(reason, encoded);
 
         if (command.startsWith('# devbox-whiteout-v1')) stdout = '';
 
@@ -3867,7 +3891,7 @@ describe('the retained fallback', () => {
         delta: undefined,
         ...roles,
       });
-      retained.push(state.fallback!.base.id);
+      retained.push(retainedFallback(state).base.id);
     }
 
     // The first outgoing generation is the proven one, and it is still the
@@ -3978,7 +4002,7 @@ describe('a restore that refuses the newest generation recovers from the older o
       // The record now names the recovered generation, says what it lost on the
       // failure field it already had, and names the refused generation for the
       // next sweep — after the replacement was proven, never before.
-      const state = record.state!;
+      const state = publishedState(record);
       expect(state.base).toEqual(baseLayer(FALLBACK_ID, FALLBACK_BYTES));
       expect(state.delta).toBeUndefined();
       expect(state.rev).toBe(2);
@@ -4337,7 +4361,7 @@ describe('an archive replaced at the same length is refused', () => {
       const born: string[] = [];
       const fresh = harness({ state: null, mounts: mountsAfterAttach(born), calls: born });
       expect((await checkpointOf(fresh, 'tick')).kind).toBe('committed');
-      const generation = fresh.state!.base.id;
+      const generation = publishedState(fresh).base.id;
       expect(fresh.state?.base).toEqual(baseLayer(generation, DELTA_BYTES));
       expect(fresh.state?.delta).toBeUndefined();
 

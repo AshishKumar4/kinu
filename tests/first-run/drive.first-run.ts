@@ -48,7 +48,13 @@ describe(SUITE, () => {
         const skillName = `eval-skill-${stamp}`;
 
         const drive = async (path: string, init?: RequestInit): Promise<{ status: number; text: string }> => {
-          const response = await fetch(`${plan.origin}/api/drive${path}`, { ...init, headers: { ...headers, ...init?.headers } });
+          // The identity's headers, then whatever the call adds. Built through
+          // `Headers` because `HeadersInit` is also a list of pairs, which a
+          // spread would turn into numbered keys.
+          const sent = new Headers(headers);
+
+          for (const [name, value] of new Headers(init?.headers)) sent.set(name, value);
+          const response = await fetch(`${plan.origin}/api/drive${path}`, { ...init, headers: sent });
 
           return { status: response.status, text: await response.text() };
         };

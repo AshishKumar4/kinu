@@ -157,7 +157,7 @@ END`));
 
           const docs = v.safeParse(Answered, await forked.slateOp({ op: 'call', id: fork.slate, method: 'docs', args: [] }));
           const answer = v.safeParse(McpAnswer, docs.success ? docs.output.value : null);
-          const mapped = mappedGraph.bindings.find((binding) => binding.name === 'DOCS');
+          const mapped = mappedGraph.bindings.find((mapping) => mapping.name === 'DOCS');
 
           goals.push({
             what: 'own-mcp-mapping-works',

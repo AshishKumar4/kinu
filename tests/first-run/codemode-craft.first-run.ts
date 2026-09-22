@@ -72,7 +72,7 @@ const INPUT = '4827516390';
 
 /** 4+8+2+7+5+1+6+3+9+0 = 45, computed here, in this file, from the string
  *  above — never read back off the deployment. */
-const ANSWER = [...INPUT].reduce((sum, digit) => sum + Number(digit), 0);
+const ANSWER = INPUT.split('').reduce((sum, digit) => sum + Number(digit), 0);
 
 /**
  * The ask, in the words a person uses.

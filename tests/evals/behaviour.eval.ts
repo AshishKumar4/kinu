@@ -633,6 +633,16 @@ afterAll(() => {
   for (const db of opened) db.close();
 });
 
+/** One `tool_call_end` fixture row: the call, the path it named if any, and
+ *  how it ended. A `reason` belongs to a failure. */
+interface ToolEnd {
+  readonly name: string;
+  readonly action: string;
+  readonly path?: string;
+  readonly success: boolean;
+  readonly reason?: 'unread' | 'not_found';
+}
+
 /** What one counted run-event adds to its case's tally.
  *
  * Three types, and only three: a turn closing, a tool call returning, a model
@@ -644,7 +654,34 @@ function activityDelta(event: RunEvent): Partial<CaseActivity> | undefined {
     case 'turn_end': return { turns: 1 };
     case 'tool_call_end': return { toolCalls: 1 };
     case 'step_finish': return { modelSteps: 1 };
-    default: return undefined;
+    case 'approval_consumed':
+    case 'budget_exhausted':
+    case 'completion_gate':
+    case 'context_budget':
+    case 'context_edit':
+    case 'craft_cycle':
+    case 'db_op':
+    case 'error':
+    case 'execution_escalation':
+    case 'execution_recovery':
+    case 'fiber_recovered':
+    case 'file_edit':
+    case 'head_abandoned':
+    case 'head_merge':
+    case 'head_split':
+    case 'memory_write':
+    case 'model_call':
+    case 'model_operation':
+    case 'profile_resolution':
+    case 'provider_wait':
+    case 'run_end':
+    case 'run_start':
+    case 'scaffold_promotion':
+    case 'scaffold_rollback':
+    case 'step_partial':
+    case 'turn_start':
+    case 'turn_steering':
+      return undefined;
   }
 }
 
@@ -940,9 +977,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
 
     let index = 0;
 
-    const toolEnd = (
-      name: string, action: string, path: string | undefined, success: boolean, reason?: 'unread' | 'not_found',
-    ): RunEvent => {
+    const toolEnd = ({ name, action, path, success, reason }: ToolEnd): RunEvent => {
       index += 1;
 
       return {
@@ -962,58 +997,58 @@ describe('corpus quality — can this corpus rank anything at all', () => {
       'probe-blind-edit': {
         files: { 'src/blind.txt': 'The vault is OPEN shut.\n' },
         events: [
-          toolEnd('file', 'edit', 'src/blind.txt', false, 'unread'),
-          toolEnd('file', 'read', 'src/blind.txt', true),
-          toolEnd('file', 'edit', 'src/blind.txt', true),
+          toolEnd({ name: 'file', action: 'edit', path: 'src/blind.txt', success: false, reason: 'unread' }),
+          toolEnd({ name: 'file', action: 'read', path: 'src/blind.txt', success: true }),
+          toolEnd({ name: 'file', action: 'edit', path: 'src/blind.txt', success: true }),
         ],
       },
       'probe-absent-anchor': {
         files: { 'src/anchor.txt': 'The vault is OPEN shut.\n' },
         events: [
-          toolEnd('file', 'edit', 'src/anchor.txt', false, 'not_found'),
-          toolEnd('file', 'read', 'src/anchor.txt', true),
-          toolEnd('file', 'edit', 'src/anchor.txt', true),
+          toolEnd({ name: 'file', action: 'edit', path: 'src/anchor.txt', success: false, reason: 'not_found' }),
+          toolEnd({ name: 'file', action: 'read', path: 'src/anchor.txt', success: true }),
+          toolEnd({ name: 'file', action: 'edit', path: 'src/anchor.txt', success: true }),
         ],
       },
       'probe-file-roundtrip': {
         files: { 'roundtrip.txt': 'ALPHA\nBRAVO\nGAMMA\n' },
         events: [
-          toolEnd('file', 'write', 'roundtrip.txt', true),
-          toolEnd('file', 'read', 'roundtrip.txt', true),
+          toolEnd({ name: 'file', action: 'write', path: 'roundtrip.txt', success: true }),
+          toolEnd({ name: 'file', action: 'read', path: 'roundtrip.txt', success: true }),
         ],
       },
       'probe-codemode-branch': {
         files: { 'diagnosis.txt': 'reason:unread' },
-        events: [toolEnd('eval', 'shell', undefined, true)],
+        events: [toolEnd({ name: 'eval', action: 'shell', success: true })],
       },
       'probe-codemode-throw': {
         files: { 'aftermath.txt': 'readFile threw: the file does not exist' },
         events: [
-          toolEnd('eval', 'shell', undefined, false),
-          toolEnd('file', 'write', 'aftermath.txt', true),
+          toolEnd({ name: 'eval', action: 'shell', success: false }),
+          toolEnd({ name: 'file', action: 'write', path: 'aftermath.txt', success: true }),
         ],
       },
       'probe-memory-notes': {
         files: { 'found.txt': 'BLUEBIRD' },
         events: [
-          toolEnd('memory', 'save', undefined, true),
-          toolEnd('memory', 'search', undefined, true),
+          toolEnd({ name: 'memory', action: 'save', success: true }),
+          toolEnd({ name: 'memory', action: 'search', success: true }),
         ],
       },
       'probe-memory-facts': {
         files: { 'recalled.txt': 'BLUEBIRD' },
         events: [
-          toolEnd('memory', 'remember', undefined, true),
-          toolEnd('memory', 'recall', undefined, true),
-          toolEnd('memory', 'forget', undefined, true),
+          toolEnd({ name: 'memory', action: 'remember', success: true }),
+          toolEnd({ name: 'memory', action: 'recall', success: true }),
+          toolEnd({ name: 'memory', action: 'forget', success: true }),
         ],
       },
       'probe-task-list': {
         files: { 'status.txt': 'probe-first:done' },
         events: [
-          toolEnd('tasks', 'add', undefined, true),
-          toolEnd('tasks', 'update', undefined, true),
-          toolEnd('tasks', 'list', undefined, true),
+          toolEnd({ name: 'tasks', action: 'add', success: true }),
+          toolEnd({ name: 'tasks', action: 'update', success: true }),
+          toolEnd({ name: 'tasks', action: 'list', success: true }),
         ],
       },
     };
@@ -1049,8 +1084,8 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     const readFirst = await blind.verify({
       files: files({ 'src/blind.txt': 'The vault is OPEN shut.\n' }),
       events: [
-        toolEnd('file', 'read', 'src/blind.txt', true),
-        toolEnd('file', 'edit', 'src/blind.txt', true),
+        toolEnd({ name: 'file', action: 'read', path: 'src/blind.txt', success: true }),
+        toolEnd({ name: 'file', action: 'edit', path: 'src/blind.txt', success: true }),
       ],
     });
 
@@ -1066,7 +1101,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
 
     const escaped = await branch.verify({
       files: files({ 'diagnosis.txt': 'reason:unread' }),
-      events: [toolEnd('eval', 'shell', undefined, false)],
+      events: [toolEnd({ name: 'eval', action: 'shell', success: false })],
     });
 
     expect(escaped.find((s) => s.what === 'refusal-diagnosed')?.reached).toBe(true);
@@ -1080,8 +1115,8 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     const unforgotten = await facts.verify({
       files: files({ 'recalled.txt': 'BLUEBIRD' }),
       events: [
-        toolEnd('memory', 'remember', undefined, true),
-        toolEnd('memory', 'recall', undefined, true),
+        toolEnd({ name: 'memory', action: 'remember', success: true }),
+        toolEnd({ name: 'memory', action: 'recall', success: true }),
       ],
     });
 

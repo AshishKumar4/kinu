@@ -170,9 +170,9 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const { rt, model, llm } = deps;
   const sql = rt.storage.sql;
   const facts = createFactsStore(sql, rt.actor);
-  const taskList = new TaskListStore(sql, rt.actor, rt.storage.transactionSync);
+  const taskList = new TaskListStore(sql, rt.actor, <T>(write: () => T) => rt.storage.transactionSync(write));
   const config = rt.actor.config;
-  const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch });
+  const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch.bind(globalThis) });
 
   // This builds a TOOL SURFACE — the tools, the action enum and the system
   // prompt — for arms that assert their shape. It holds no session, and local
@@ -1061,36 +1061,38 @@ export async function runBehaviourTask(
   // Measured AFTER `readLedgerTotals` on purpose: the verifier runs commands
   // through `rt.shell`, and reading the ledger first keeps the turn and tool-call
   // counts a property of the agent's episode rather than of its grading.
-  const outcome: EvalScoreRow[] = hard === undefined || shell === undefined
-    ? probe === undefined
-      ? []
-      : [await verifyProbe(probe, {
-        files: {
-          readText: async (path) => {
-            let content: string | Uint8Array;
+  const probeFiles = {
+    readText: async (path: string): Promise<string | null> => {
+      let content: string | Uint8Array;
 
-            try {
-              content = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-            } catch (error) {
-              // Absence is the probe's miss, not the harness failing: only the
-              // missing-file errno becomes null, everything else rethrows.
-              if (isVfsError(error) && error.code === 'ENOENT') return null;
-              throw error;
-            }
+      try {
+        content = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+      } catch (error) {
+        // Absence is the probe's miss, not the harness failing: only the
+        // missing-file errno becomes null, everything else rethrows.
+        if (isVfsError(error) && error.code === 'ENOENT') return null;
+        throw error;
+      }
 
-            // A file whose bytes are not text cannot be the exact text the
-            // probe asked for — also a miss, measured rather than thrown.
-            const text = v.safeParse(v.string(), content);
+      // A file whose bytes are not text cannot be the exact text the probe
+      // asked for — also a miss, measured rather than thrown.
+      const text = v.safeParse(v.string(), content);
 
-            return text.success ? text.output : null;
-          },
-        },
-        events,
-      })]
-    : [await verifyHardTask(hard, {
-      vfs: rt.storage.vfs,
-      exec: (command) => shell.exec(command),
-    })];
+      return text.success ? text.output : null;
+    },
+  };
+
+  const measureOutcome = async (): Promise<EvalScoreRow[]> => {
+    if (hard !== undefined && shell !== undefined) {
+      return [await verifyHardTask(hard, { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) })];
+    }
+
+    if (probe === undefined) return [];
+
+    return [await verifyProbe(probe, { files: probeFiles, events })];
+  };
+
+  const outcome: EvalScoreRow[] = await measureOutcome();
 
   // THE COST, beside the outcome and the mechanisms. Measured, never enforced:
   // nothing above changes what the agent may do, and an over-budget episode

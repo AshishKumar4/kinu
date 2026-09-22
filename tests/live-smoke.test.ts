@@ -256,9 +256,9 @@ describe('Live Smoke — one real turn per backend', () => {
       // what it spent getting there, and inside the boundary because a spend read
       // that 5xx's is the deployment failing, not the agent.
       recordWorkspaceSpend(
-        (await infraBoundary('reading the workspace spend read model', () => callAgentRpc(
-          origin, token, created.name, 'getActivitySnapshot', ActivitySpendSchema,
-        ))).spend,
+        (await infraBoundary('reading the workspace spend read model', () => callAgentRpc({
+          origin, token, name: created.name, method: 'getActivitySnapshot', schema: ActivitySpendSchema,
+        }))).spend,
       );
 
       console.log(`    hosted turn: ${String(elapsedMs)}ms, ${String(turn.steps)} step(s), `
@@ -371,9 +371,9 @@ describe('Live Smoke — one real turn per backend', () => {
       // The browser created it, so its name comes off the URL rather than from a
       // create call, but the workspace is the same kind of workspace.
       recordWorkspaceSpend(
-        (await infraBoundary('reading the web workspace spend read model', () => callAgentRpc(
-          origin, token, name, 'getActivitySnapshot', ActivitySpendSchema,
-        ))).spend,
+        (await infraBoundary('reading the web workspace spend read model', () => callAgentRpc({
+          origin, token, name, method: 'getActivitySnapshot', schema: ActivitySpendSchema,
+        }))).spend,
       );
 
       await clickAriaPrefix(page, 'Environment');

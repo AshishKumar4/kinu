@@ -1,7 +1,7 @@
 // Docker, 2026-09-13: indexed composition and opaque directory replacement;
 // the same probe image is built from the source pinned in block-lower/upstream.json.
 import { afterAll, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,14 @@ const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}block-conforman
 const image = `kinu-block-lower:${process.pid}`;
 
 let built = false;
+
+/** One phase of a probe script in the image: privileged with `/dev/fuse`, the
+ *  fixture writable and the script read-only. The shell differs per probe —
+ *  the reseat probe needs bash. */
+function probeRunner(fixture: string, script: string, shell: string): (phase: string) => SpawnSyncReturns<string> {
+  return (phase) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
+    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', shell, image, '/probe.sh', phase], { encoding: 'utf8' });
+}
 
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
@@ -96,8 +104,7 @@ test('a renamed replacement directory checkpoints and restores without the old l
   writeFileSync(`${fixture}/probe.sh`, deltaProbeCommand('/fixture/upper', []));
   const script = join(import.meta.dir, 'support/opaque-namespace-probe.sh');
 
-  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
-    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/sh', image, '/probe.sh', phase], { encoding: 'utf8' });
+  const run = probeRunner(fixture, script, '/bin/sh');
 
   const prepared = run('prepare');
   expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
@@ -127,8 +134,7 @@ test('moving the checkpoint session out of the workspace reseats the base and pu
     upperPath: `/fixture/upper/${path}`, basePath: `/fixture/lower-base/${path}` }] }));
   const script = join(import.meta.dir, 'support/reseat-cwd-probe.sh');
 
-  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--network=none', '--privileged', '--device', '/dev/fuse',
-    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/bash', image, '/probe.sh', phase], { encoding: 'utf8' });
+  const run = probeRunner(fixture, script, '/bin/bash');
 
   const prepared = run('prepare');
   expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);

@@ -494,14 +494,13 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   // refused call.
   if (type === 'rpc' && id !== undefined && frame.output.success !== undefined) {
     const detail = v.safeParse(v.string(), frame.output.error);
+    const refusal = detail.success ? detail.output : 'the workspace RPC failed';
 
     return {
       kind: 'rpc',
       id,
       result: frame.output.result ?? null,
-      error: frame.output.success
-        ? null
-        : (detail.success ? detail.output : 'the workspace RPC failed'),
+      error: frame.output.success ? null : refusal,
     };
   }
 
@@ -533,16 +532,22 @@ export type SocketPayload = string | ArrayBuffer | Uint8Array;
  * anything that is not a parse failure still throws. A bare `catch` here would
  * turn a real fault into the same value an unreadable broadcast produces.
  */
-function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
+function socketText(data: SocketPayload): string | null {
   const text = v.safeParse(v.string(), data);
+
+  if (text.success) return text.output;
   const bytes = v.safeParse(v.instance(Uint8Array), data);
+
+  if (bytes.success) return new TextDecoder().decode(bytes.output);
   const buffer = v.safeParse(v.instance(ArrayBuffer), data);
 
-  const decoded = text.success
-    ? text.output
-    : bytes.success
-      ? new TextDecoder().decode(bytes.output)
-      : buffer.success ? new TextDecoder().decode(buffer.output) : null;
+  if (buffer.success) return new TextDecoder().decode(buffer.output);
+
+  return null;
+}
+
+function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
+  const decoded = socketText(data);
 
   if (decoded === null) return undefined;
 
