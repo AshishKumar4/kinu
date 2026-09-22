@@ -1,62 +1,58 @@
 # Live UI: slates
 
-A slate is an authored project under `/home/user/slates/<id>/` in the workspace
-file plane. Source and versions persist. Compilation, resident processes,
-and preview URLs derive from that source. They are not a second source of truth.
+A slate is a small app under `/home/user/slates/<id>/` in the workspace file
+plane: a server class, an optional React client and a `package.json`. The
+source and its committed versions persist. The compiled bundle, the running
+process and the preview URL all derive from that source.
 
 ## Preview tabs and plans
 
-Each preview has a titled tab at the left of the workspace surface strip. A live
-slate and its exposed workspace port share one tab. The tab follows the current
-caller and source resident, not a second preview registry. Previews fill the
-available height and use the same URL, copy, open frame and security policy as
-compact chat cards. A new preview identity takes focus once. Refreshing a source
-or reconnecting does not replay that focus. Diffs keep their own conditional tab.
+Each preview gets a titled tab at the left of the workspace surface strip. A
+slate and the workspace port it serves share one tab. The pane renders the same
+component as the chat card (`SlateFrame` is `InlineSlate` in `pane` display),
+fills the available height and shows the URL. A new preview takes focus once;
+refreshing its source or reconnecting does not take it again. Diffs keep their
+own tab, shown only when there are diffs.
 
-Work browses plan revisions across the workspace: root, active agents and retained
-nested or dismissed actors. It pages the existing read-only actor-inspection
-protocol and shows an explicit "Older plans / more actors" frontier instead of
-an eager recursive scan. Actor-qualified selection keeps identical plan IDs separate.
-Root and current-actor decisions stay inline. Reviewing another active direct agent
-opens its conversation explicitly. Nested and dismissed history is read-only.
-Any new plan opens Work without switching the chat. This holds for a plan from an actor
-no page of the walk ever named. The workspace broadcasts only a
-path, id, and revision reference. The browser resolves that exact reference through the
-same read-only inspection, which verifies every stored ownership hop, before
-showing or focusing anything. The workspace reports a reference it cannot resolve beside the other unreadable actors and focuses nothing. A repeated reference
-is not a second arrival. A pane holding an undecided plan keeps it in front of
-the reader. The workspace roster decides once whether a plan reads as live or retained, so the history label and the read-only banner cannot disagree.
-Loading older history does not steal focus. Failed refreshes retain the last
-usable history and progress beside the failure. Inspection never starts an actor.
+The Work tab lists the workspace's plans newest first, from one workspace-wide
+read (`listWorkspaceWork`), with the owning actor named on each. A new pending
+plan from this pane's own actor opens its review and switches to Work without
+changing the chat. Another actor's new plan shows up in the list and the
+needs-you queue without taking over the tab. A plan-arrival broadcast carries
+only a path, id and revision. The pane opens that plan only once the workspace
+read holds that exact plan, and an arrival that lands while a review is open
+waits until the list is shown again. A plan owned by another actor, or no
+longer pending, opens read-only.
 
-Tasks created by a verified approval submission retain that
-plan ID, revision and session in `plan_task_links`. Revisions never relabel older
-tasks. Subtasks inherit the parent association. Ordinary and pre-existing
-tasks stay unassociated. The new table uses the existing idempotent schema
-initializer, with no ALTER, historical backfill or reset. Task status updates
-change progress, not provenance. The store commits task and link writes in one
-synchronous storage transaction. This covers inherited subtasks outside a turn.
-Native tools and promoted-program host
-bridges capture approved authority once. An unrelated turn or metadata without the real admitted approval cannot
-attribute new work.
+A task created under an approved plan records that plan's id, revision and
+session in `plan_task_links`. Subtasks take their parent's link. Tasks created
+outside a plan, and tasks that existed before the table, stay unlinked. A later
+revision never relabels older tasks, and a status update changes progress, not
+the link. The task row and its link are written in one synchronous storage
+transaction. The table comes from the existing idempotent schema initializer,
+with no ALTER and no backfill. Only a verified approval links new work: an
+unrelated turn or metadata without the admitted approval cannot.
 
 ## Authoring
 
-Write JavaScript/TypeScript and `package.json` through the ordinary file plane. For a
-Worker project, `main` names a module whose default export implements
-`fetch(request, env)`. The handler serves the UI and any JSON POST routes that
-other slates or the agent call. There is no separate publish tool and no host-rendered
-UI vocabulary.
+Write the source and `package.json` through the ordinary file plane. `main`
+names the server module. It exports `class Slate extends SlateObject` from
+`kinu:slate`, as the `Slate` export or the default export. Every public method
+is callable from the client and through the `call` operation. A `fetch(request)`
+method is optional: define it only when the slate must answer plain HTTP on a
+path of its own. `browser` names a module whose default export is a React
+component. Kinu supplies React 19 and mounts it. The built-in `slates` skill
+(`packages/core/src/skills/builtins.ts`) is the guide the agent reads before
+writing one.
 
-Prefer a slate for a workspace dashboard, live-data view or dynamic UI. A
-standalone, ship-ready Node/Vite application belongs in an available executor
-that supports its toolchain, not in the hosted Worker runtime.
+Use a slate for a workspace dashboard, a live-data view or any dynamic UI. A
+standalone Node/Vite application belongs on an executor that supports its
+toolchain, not in the hosted Worker runtime.
 
-For a Worker slate, call `workspace.slate({op: 'preview', id})` directly. That
-operation compiles and boots the authored module. No workspace `node -e`
-import check or source commit comes first. Success returns
-`{ok: true, value: {url, port}}`. Use `value.url`. A refusal carries
-`reason` and `error`, not an alternative URL field to guess.
+To run a Worker slate, call `workspace.slate({op: 'preview', id})` directly. It
+compiles and boots the module; nothing has to be checked or committed first.
+Success returns `{ok: true, value: {url, port, inline: {height}}}`. Use
+`value.url`. A refusal carries `reason` and `error` and no URL.
 
 ```json
 {
@@ -78,169 +74,161 @@ import check or source commit comes first. Success returns
 ```
 
 `browser` is optional. When present, EsbuildService compiles it as a browser
-bundle. The resident serves the compiled assets at their output paths, including
-the entry declared path. The authored server supplies the HTML that loads it.
-Server and browser entry paths stay inside the project.
+bundle served at `/__kinu/client.js`, and the host serves the page that loads
+it. Server and browser entry paths must stay inside the project.
 
-The `slate` field is strict. Only `runtime`, `title`, `port`, and `bindings`
-pass validation, and each binding kind rejects undeclared fields. Runtime defaults to
-`worker`, and a Worker `main` is required. `node` requires a port from 1 through 65535 and
-`scripts.dev` or `scripts.start`. Node projects belong on the sandbox executor.
-The hosted resident preview path explicitly refuses them. A Worker declares
-a port or lets the host allocate one. The displayed title falls back from
-`slate.title` to package `name` to directory id.
+The `slate` field is strict. Only `runtime`, `title`, `port`, `bindings` and
+`inline` pass validation (`inline.height` sets the chat card height: 120 to 720
+pixels, default 320), and each binding kind rejects undeclared fields.
+`runtime` defaults to `worker`, which requires `main`. `node` requires a port
+from 1 through 65535 and `scripts.dev` or `scripts.start`. Node projects run on
+the sandbox executor; the resident preview path refuses them. A Worker declares
+a port or lets the host allocate one. The title falls back from `slate.title`
+to package `name` to the directory id.
 
 Schema: `packages/core/src/slates/project.ts`.
 
 ## One codemode operation
 
-Use `workspace.slate(operation)` through `eval`. Each operation has a
-strict field set. There are no separate slate tools or codemode aliases.
-`TOOL_REACH.slate` is `{ native: false, codemode: "workspace", replay: "claimed" }`.
-The eight native builtins stay unchanged.
+Everything goes through `workspace.slate(operation)` in `eval`. There are no
+separate slate tools or codemode aliases. `TOOL_REACH.slate` is
+`{ native: false, codemode: "workspace", replay: "claimed" }`. Each operation
+has a strict field set.
 
 | Operation | Input | Result |
 |---|---|---|
 | List | `{op: 'list'}` | Project summaries and per-project problems |
-| Preview | `{op: 'preview', id}` | Live preview URL and port |
-| Call | `{op: 'call', id, method, args?}` | JSON result of `POST /<method>` with a JSON argument array; omitted args mean `[]` |
+| Preview | `{op: 'preview', id}` | Live preview URL, port and inline height |
+| Call | `{op: 'call', id, method, args?}` | JSON return value of that method on the `Slate` class; omitted args mean `[]` |
 | Commit | `{op: 'commit', id}` | Immutable source version |
 | History | `{op: 'history', id}` | Durable slate record and versions |
 | Fork | `{op: 'fork', version}` | New slate with source from that version |
 | Restore | `{op: 'restore', id, version}` | Source restored into the named slate |
+| Remove | `{op: 'remove', id}` | Processes stopped, port, URL and `this.sql` storage released, tree deleted; committed versions stay |
+| Sharing | `inspect`, `publish`, `unshare`, `shares`, `graph`, `share`, `liveShares`, `viewerRequests` | Blueprints and live shares ([SLATE-SHARING.md](SLATE-SHARING.md)) |
 
-Answers are `{ok: true, value}` or `{ok: false, reason, error}`. History needs
-a durable record, created by source commit or preview synchronization. A directory
-alone is not a history record. Method names start with an ASCII letter, contain
-only letters, digits, or underscores, stay at most 64 characters, and exclude
-`constructor`. The authored POST handler returns JSON.
+Answers are `{ok: true, value}` or `{ok: false, reason, error}`. History needs a
+durable record, which a commit or a preview creates; a directory alone has none.
+Method names start with an ASCII letter, contain only letters, digits and
+underscores, are at most 64 characters, and exclude `constructor`. `fetch` is
+never callable as a method. In Plan mode only the read operations run: `list`,
+`history`, `inspect`, `shares`, `graph`, `liveShares` and `viewerRequests`.
+`remove` and every sharing operation except `graph` belong to the workspace
+root.
 
 Contract: `packages/core/src/slates/rpc.ts`. Hosted dispatch lives in
 `packages/cf-backend/src/slates/host.ts`.
 
 ## Bindings and gates
 
-The server receives introduced capabilities as `env.NAME.member(...args)`.
-Each binding passes one of the calling actor's own capabilities, with that
-actor's existing gates. The workspace root acts as the session user with the
-root providers. A hosted actor (a subordinate, a head, a swarm node) acts as its own
-provisioned uid with its own role-narrowed providers. The open turn profile sets reach, and only while that turn is in flight. Between turns the role resolves
-afresh on every call, so a role revoked after a turn completes applies at once.
-Source capture and compilation use that actor's credentialed reads. Fork and
-restore use its credentialed writes. A non-root actor cannot restore a tree it cannot
-write directly. Source, compiler and process caches distinguish the full
-credential: uid, gid, supplementary groups and umask.
-Each caller boots its own resident process, and an app hop keeps the caller's
-authority rather than adopting the callee's author. A declaration is not a
-permission grant, and there is no binding-specific approval ladder. The host
-re-reads `package.json` on every binding call, so a held stub cannot retain
-removed reach.
+The server calls a binding as `this.env.NAME.member(...args)`, from inside a
+method. Each binding passes one of the calling actor's own capabilities, under
+that actor's existing gates. The workspace root acts as the session user with
+the root providers. A hosted actor (a subordinate, a head, a swarm node) acts as
+its own provisioned uid with its own role-narrowed providers, and has no `mcp`,
+`rpc` or `agent` surface: those bindings refuse for it. The open turn profile
+sets reach while that turn is in flight. Between turns the role resolves again
+on every call, so a role revoked after a turn applies at once. Source capture
+and compilation use that actor's credentialed reads; fork and restore use its
+credentialed writes, so a non-root actor cannot restore a tree it cannot write
+directly. Source, compiler and process caches key on the full credential: uid,
+gid, supplementary groups and umask.
+
+Each caller gets its own process, and an app hop keeps the caller's authority
+rather than taking on the callee's author. A declaration is not a permission
+grant, and there is no binding-specific approval ladder. The host re-reads
+`package.json` on every binding call, so a stub held from earlier cannot keep
+reach that was removed.
 
 | Kind and fields | Reach and gate |
 |---|---|
-| `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
-| `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list, and the list is the workspace ROOT's own `@callable` reads: a non-root actor holds none of them natively, so a non-root `rpc` binding is `denied`. |
-| `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's allowed-tool policy shapes the actor's descriptor surface, and the caller's ROLE must admit the tool's key (`mcp_<server>_<tool>`) exactly as the native turn admits it. Calls take one JSON object, or no arguments for `{}`. |
-| `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry the id of the app invocation the host issued for that request; the host holds the chain of slate ids already running and looks it up. A hop into a slate already on that chain refuses as a cycle and names it. A preview visit is named the same way and released when it settles. A retired or foreign invocation id is refused by reason, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate that is not on it, and a workspace holds a finite number of slates. |
+| `namespace`: `namespace`, `members?`, `paths?` | A member of an available codemode provider. Optional `members` narrows reach. `paths` (only for the `workspace` namespace) limits it to `readFile`, `writeFile`, `editFile`, `readdir` and `exists` under those prefixes. Executor approvals and device consent stay the provider's own gates. An absent namespace refuses as unavailable; `agent` and `agents` always refuse. |
+| `rpc`: `methods` | Zero-argument workspace read models from the closed `SLATE_READ_MODELS` list, not arbitrary host RPC. These are the workspace root's own reads, so a non-root actor's `rpc` binding is `denied`. |
+| `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach. The owner's allowed-tool policy shapes what the actor sees, and the caller's role must admit the tool key (`mcp_<server>_<tool>`) exactly as a native turn does. Calls take one JSON object, or no arguments for `{}`. |
+| `app`: `id` | A method on another slate's `Slate` class. The callee runs for the caller: its own bindings resolve with the originating actor's authority. Each call carries the id of the invocation the host issued for that request, and the host looks up the chain of slates already running. A hop into a slate already on the chain refuses as a cycle and names it. A preview visit gets an invocation the same way, released when it settles. A retired or foreign invocation id is refused, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate not on it, and a workspace holds finitely many slates. |
+| `tool`: `name` | `call(input)` on one native or crafted tool, with one JSON object. |
+| `memory`, `tasks`, `web`: `members?` | That codemode namespace's members. Optional `members` narrows reach. |
+| `agent` | `send({text, data?})` puts a `slate` event in the workspace actor's inbox. |
+| `ai`: `tier?` | One model call with `{prompt, system?, tier?}` through the caller's own profile. A declared tier pins it; a call that names a different tier is refused. |
 
-A queued approval is not a simulated success. Namespace refusal results keep
-their failure class. MCP results retain their own `isError` protocol and read
-models retain their JSON payload. Business-data `reason` and `error` fields do not
-read as namespace refusals. Neither credentials nor workspace-object storage arrive
-as bindings. Lasting application state belongs in the workspace file
-plane or another explicitly available capability, not process memory.
+A queued approval is not reported as success. Namespace refusals keep their
+failure class. MCP results keep their own `isError`, and read models return
+their JSON payload as data, so `reason` and `error` fields in business data do
+not read as refusals. Credentials never reach the slate. Keep lasting state in
+`this.storage` (a key-value table on the workspace object) or `this.sql` (the
+slate's own SQLite, kept until `remove`); fields on the instance are only a
+cache.
 
 Routing: `packages/core/src/slates/bindings.ts`. Loopback transport:
 `packages/cf-backend/src/slates/bindings.ts`.
 
 ## Resident preview lifecycle
 
-`previewSlate` and the codemode preview operation boot the authored Worker
-through the real fabric process API after compilation with EsbuildService.
-The host keys running code by synchronized source digest and reuses a live
-matching process. Changed source or a stopped process needs a new boot.
-File-change events invalidate affected slates and refresh the UI. Requests to a
-live preview also refresh its resident on demand.
+`preview` compiles the source with EsbuildService and boots it through the
+fabric process API. The workspace root's Build process is the slate's durable
+Nimbus application: before it spawns, `apps.ensure` reserves a port and
+capability under the slate id, and returns the same pair on every later launch.
+The URL therefore survives restarts, eviction and redeploys, and changes only
+when `slate.port` is redeclared or the slate is removed. Every other caller (a
+hosted actor, a Plan-mode root, a live share) gets a private process with no
+port, reached by RPC alone. The host keys processes by caller and source digest
+and reuses a live match; changed source boots a new one. A file change under a
+slate invalidates it and refreshes the UI.
 
-Resident Build code uses the existing CodemodeEgress capability as its explicit
-WorkerLoader outbound route. The shared destination classifier refuses private
-literal addresses and reserved names. Upstream redirects stay manual. An authored
-manual fetch receives the 3xx, while native follow requests re-enter the same
-policy for the next destination. Public destinations stay usable.
+A request to a preview URL is routed like this:
 
-The caller captured mode stays part of the process and cache identity. Restricted
-materialization selects no outbound capability, and it cannot reuse a Build process.
-An independently admitted Build process retains its own authority. This does not
-add public Plan slate execution: preview and app calls still need Build.
-Nimbus only transports an optional outbound capability. Its default stays
-unchanged for unrelated consumers. Kinu always chooses explicitly.
+- No exposure for the port, or a handle that does not match it: HTTP 404.
+- An exposure owned by a slate brings that slate up first. A slate that no
+  longer exists answers 404; any other boot failure answers 503 with
+  `{reason, error}` and `retry-after: 3`.
+- A plain workspace port exposure (no owner) is served only while something
+  listens on it.
 
-The private loader key distinguishes mediated boots from the former inherited
-network image. WorkerLoader evaluates boot options only on a cache miss, so an
-unchanged caller and source identity alone cannot apply a changed outbound contract.
-The mediated identity stays stable across ordinary reads, preserving
-same-Build reuse and the existing Plan separation. It adds no persisted state or
-configuration and does not claim that an outer deployment upgrades a live runtime.
+In Build mode the resident gets the shared `CodemodeEgress` capability as its
+WorkerLoader outbound route; in Plan mode it gets none. The shared destination
+classifier refuses private literal addresses and reserved names. Redirects stay
+manual: an authored manual fetch receives the 3xx, and a native follow re-enters
+the same policy for the next destination. The process key includes the work
+mode and the mediated outbound, so a Plan process never reuses a Build one. The
+local workerd proof mocks only the final transport. It covers literal
+destinations, redirects and mode separation, not DNS rebinding or a private
+address behind a public hostname; no real private-network probe ran.
+Browser-side fetch is separate from this server-side policy.
 
-Local workerd proof uses the actual resident and shared policy with only the final
-transport mocked and unmatched network disabled. It proves literal destination and
-redirect enforcement and mode and cache separation, not DNS rebinding or the platform
-ability to reach a private address behind a public hostname. No real private-network
-probe ran. Browser-side fetch is separate from this server-side policy.
+The frame is a sandboxed iframe with the shared `PREVIEW_SANDBOX` policy. It
+includes `allow-same-origin` because each preview has its own hostname, so the
+workspace stays a different origin. The host posts one `host-context` message
+(theme, theme tokens, size, `inline` or `pane`), and the slate may post back one
+`size-changed` message with its height. The client talks to its own server
+through the Cap'n Web `slate` stub. It gets no host session, no storage handle
+and no RPC into the host. Whether a preview URL is available depends on the
+deployment; when it is not, `preview` refuses rather than rendering some other
+way.
 
-`SlateFrame` delegates the returned URL to the existing `PreviewFrame`. That
-pipeline rejects non-preview URLs and uses the shared `PREVIEW_SANDBOX` policy,
-including `allow-same-origin` on the distinct preview hostname so browser code
-calls its own server. The workspace stays a different origin. There is
-no srcdoc document and no MessagePort or browser-to-host RPC bridge.
-Browser code reaches only the HTTP interface the authored server exposes. Do
-not assume a host session, storage handle, injected RPC client, or blanket
-network prohibition. Preview URL availability depends on deployment support.
-An unavailable URL is a refusal, not an alternate renderer.
-
-The preview router distinguishes lifecycle states before booting anything:
-
-- A current live capability routes to its process, refreshing source on demand.
-- A persisted matching exposure whose listener was lost to isolate recycling
-  returns HTTP 410 with `RECYCLED_WORKSPACE_PREVIEW`. Open a new preview to boot
-  and expose the process again; visiting the stale URL does not restore it.
-- An unknown or mismatched capability returns HTTP 404.
-
-Slate exposures also retain a logical owner: workspace, slate id and the full
-calling actor identity. The existing Nimbus capability record stores that owner
-with the token. A rebuild of the same logical owner keeps its URL. Reusing a
-port for another slate or caller cannot inherit the previous URL, even before
-the new caller explicitly exposes it. Ordinary workspace exposures stay
-port-scoped (owner `null`), separate from slate ownership.
-
-The scalar-token record is replaced directly by `{capability, owner}`. There is
-no conversion path. Old-format preview links stop authorizing requests after
-deployment. `workspace.unexposePort(port)` deletes the existing persisted key
-even when no listener remains. No user or authentication reset is needed.
-`getExposedPorts("workspace")` lists live listeners, not orphaned exposure keys,
-so an empty list does not prove every old persisted key went away.
-
-The router strips visitor-supplied `x-slate-call` before routing, so a preview visitor
-cannot name an internal app invocation. The host drops the visitor header and sets its own.
+The router strips any visitor-supplied `x-slate-call` header and sets its own,
+so a visitor cannot name an internal app invocation.
 
 Implementation: `packages/cf-backend/src/slates/resident.ts`,
 `packages/cf-backend/src/workspace-host.ts`, and
 `packages/cf-backend/src/components/slates/SlateFrame.tsx`.
 
-The hosted `SlateHost` reuses `WorkspaceSlates` with `SqliteSlateStore`, the
-workspace file adapter, and the content store. Synchronization records current
-source. Commit freezes a version. Fork materializes a version into a new slate.
-Restore replaces source through an outer workspace VFS transaction. These
-operations survive host recreation. They do not checkpoint JavaScript heap
-state, keep a process alive, or make a preview URL durable.
+The hosted `SlateHost` runs `WorkspaceSlates` over `SqliteSlateStore`, the
+workspace file adapter and the content store. Synchronizing records the current
+source, commit freezes a version, fork materializes a version into a new slate,
+and restore replaces source inside a workspace VFS transaction. All of these
+survive host recreation. None of them checkpoint JavaScript heap state or keep a
+process alive.
 
-The hosted source runtime does not supply optional WorkspaceSlates effect capabilities.
-Operations needing absent build, process, or deployment
-capabilities explicitly refuse as unsupported rather than invoking provider
-stubs. The working resident preview path above is separate from those optional
-effects. Commit implies no external deployment or resource provisioning.
+The hosted source runtime does not supply the optional `WorkspaceSlates` build,
+process or deployment capabilities. Operations that need them refuse as
+unsupported instead of calling stubs. The resident preview path above is
+separate from those. A commit deploys nothing and provisions no resources.
 
 ## Deployed acceptance, 2026-09-07
+
+This run predates the class-based slate API and durable preview URLs (both
+2026-09-14), so the `POST` route and the 410 recycle answer below describe the
+design of that date.
 
 Production `kinu.run` at commit `dbc2c5797` (Worker version
 `3a269c61-df4b-47e7-b1a2-06ffb6215d0c`), driven through the stored CLI
@@ -249,7 +237,7 @@ held open for the run, `/api/cli/workspaces/:name/rpc`, and a clean headless
 Chromium with no Kinu cookie. Two disposable workspaces were created and
 deleted through the same API; the listing showed neither afterwards. The
 browser-cookie workspace surface (the Work tab's `SlateFrame`) was not driven
-here; the local production-build proof above covers it.
+here.
 
 Observed on the deployment:
 
@@ -272,7 +260,7 @@ Observed on the deployment:
 - Approval ladder: `deny_all` refused `npm publish --dry-run` through the
   binding; `strict` parked it in `listDeferredApprovals`, which was then
   decided `denied`. The command never ran. On that deployment the binding
-  answered `ok: true` with the rendered `NOT RUN` text, which is the defect
+  answered `ok: true` with the rendered `NOT RUN` text. That is the defect
   `fix(execution): classify commands the approval ladder stopped before
   rendering` corrects: the shell producer now carries `denied` / `unavailable`
   through `formatExecResult`, and a shell-command member of an executor namespace
