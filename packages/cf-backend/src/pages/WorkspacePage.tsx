@@ -25,10 +25,10 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
 import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
-import { DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { ChatLiveTail, DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
-import { classifyProgrammaticTurn, messageSignalId } from "@kinu.run/core";
+import { classifyProgrammaticTurn, messageSignalId, threadLiveTail } from "@kinu.run/core";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { SLATE_PREFIX } from "@/components/surfaces/presence";
@@ -461,6 +461,11 @@ function SubordinateChatColumn({
 
   const as = state.agentStatus;
 
+  // The thread's one live indicator, decided here rather than by the last row:
+  // an admitted turn with the operator's message last has no assistant row to
+  // ask. See `threadLiveTail`.
+  const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
+
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
@@ -496,10 +501,10 @@ function SubordinateChatColumn({
               key={msg.id}
               message={msg}
               steers={steers}
-              isLast={i === thread.entries.length - 1}
-              isStreaming={state.isStreaming}
+              liveTail={i === thread.entries.length - 1 ? tail : null}
             />
           ))}
+          <ChatLiveTail tail={tail} />
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
           {state.chatError && (
             <ChatErrorCard
@@ -523,7 +528,8 @@ function SubordinateChatColumn({
             ? `Steer ${title}…`
             : `Message ${title}…`}
           disabled={state.connectionStatus !== "connected"}
-          streaming={state.isStreaming}
+          liveness={state.liveness}
+          onRecover={state.recoverTurn}
           onStop={stop}
           mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs"
@@ -764,7 +770,11 @@ export default function WorkspacePage() {
         name: agentId,
         running,
         unseenChangelog: state.changelogUnseen,
-        agents: state.subordinates.map((sub) => ({
+        // The sidebar's nested list is the WORKING roster — who is on this
+        // workspace and what they are doing. A dismissed agent's conversation
+        // stays reachable from the chat strip, which is the surface that owns
+        // reachability; repeating it in the nav would read as staffing.
+        agents: state.subordinates.filter((sub) => sub.status !== "dismissed").map((sub) => ({
           name: sub.name, displayName: sub.displayName, status: sub.status,
         })),
       },
@@ -876,6 +886,11 @@ export default function WorkspacePage() {
 
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
+
+  // One indicator for the whole thread, owned here. A turn admitted before its
+  // first assistant row has no message to ask about liveness, which is why the
+  // tail is the page's and not the last row's.
+  const mainTail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
 
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
@@ -1124,8 +1139,7 @@ export default function WorkspacePage() {
                     key={msg.id}
                     message={msg}
                     steers={steers}
-                    isLast={i === thread.entries.length - 1}
-                    isStreaming={state.isStreaming}
+                    liveTail={i === thread.entries.length - 1 ? mainTail : null}
                     onFork={onForkMessage}
                     onFeedback={onMessageFeedback}
                     feedback={feedbackByMessage[msg.id] ?? null}
@@ -1137,6 +1151,7 @@ export default function WorkspacePage() {
                   />
                 );
               })}
+              <ChatLiveTail tail={mainTail} />
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
               ))}
@@ -1190,7 +1205,8 @@ export default function WorkspacePage() {
                 onSend={handleSend}
                 placeholder={state.isStreaming ? "Steer the running turn…" : "Send a message..."}
                 disabled={state.connectionStatus !== "connected"}
-                streaming={state.isStreaming}
+                liveness={state.liveness}
+                onRecover={state.recoverTurn}
                 onStop={handleStop}
                 onBranch={handleBranch}
                 mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planGate.locked }}

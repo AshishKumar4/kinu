@@ -118,6 +118,13 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
+import { threadLiveTail, type TurnLiveness } from "@kinu.run/core";
+
+/** The two liveness values a static frame photographs. */
+const IDLE_TURN: TurnLiveness = { kind: "idle" };
+
+const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
+
 import { diagnostics, toKinuError, tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -160,7 +167,7 @@ import { APP_ROUTES } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import type { SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
-import { DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
+import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
@@ -1316,6 +1323,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
     tabPresence: { releases: true, explorations: true, work: true },
     activePlan: null,
     slates: [],
+    turnClaim: { kind: "settled" },
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
@@ -3381,7 +3389,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
         onStop={() => {}}
         placeholder="Send a message..."
         disabled={false}
-        streaming={false}
+        liveness={IDLE_TURN}
         mode={{ value: mode, onChange: setMode, locked: false }}
         attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
         modelPicker={<ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs" />}
@@ -3413,9 +3421,9 @@ function ChatMessages() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto" data-gallery-chat>
-      {MESSAGES.map((m, i) => (
+      {MESSAGES.map((m) => (
         <div key={m.id} data-chat-row={m.id}>
-          <MessageView message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}}
+          <MessageView message={m} onFork={() => {}}
             feedback={feedback[m.id]} onFeedback={onFeedback} />
         </div>
       ))}
@@ -3636,11 +3644,10 @@ function ChatSteerFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryChatTabs />
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
-          {thread.entries.map(({ message, steers }, i) => (
+          {thread.entries.map(({ message, steers }) => (
             <div key={message.id} data-chat-row={message.id}>
               <MessageView
-                message={message} steers={steers}
-                isLast={i === thread.entries.length - 1} isStreaming={false} onFork={() => {}} />
+                message={message} steers={steers} onFork={() => {}} />
             </div>
           ))}
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
@@ -3697,9 +3704,9 @@ function ChatCodeFrame() {
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryChatTabs />
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
-          {CODE_THREAD.map((m, i) => (
+          {CODE_THREAD.map((m) => (
             <div key={m.id} data-chat-row={m.id}>
-              <MessageView message={m} isLast={i === CODE_THREAD.length - 1} isStreaming={false} onFork={() => {}} />
+              <MessageView message={m} onFork={() => {}} />
             </div>
           ))}
         </div>
@@ -3790,16 +3797,16 @@ function ComposerFrame() {
       <div className="w-full max-w-[640px] space-y-8 py-10">
         <div className="space-y-1">
           <div className="p-eyebrow px-4">At rest, with a draft</div>
-          <Composer {...shared} value={value} streaming={false} modelPicker={picker()} />
+          <Composer {...shared} value={value} liveness={IDLE_TURN} modelPicker={picker()} />
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
-          <Composer {...shared} value={value} streaming onBranch={() => {}}
+          <Composer {...shared} value={value} liveness={LIVE_TURN} onBranch={() => {}}
             modelPicker={picker()} />
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">With a status row</div>
-          <Composer {...shared} value="" streaming={false} modelPicker={picker()} notices={MCTS_NOTICE} />
+          <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={MCTS_NOTICE} />
         </div>
       </div>
     </div>
@@ -3904,9 +3911,9 @@ function ChatHistoryFrame() {
           <HistoryBoundary
             loading={history.loading} error={history.error}
             exhausted={history.exhausted} onRetry={history.loadMore} />
-          {transcript.map((m, i) => (
+          {transcript.map((m) => (
             <div key={m.id} data-msg={m.id}>
-              <MessageView message={m} isLast={i === transcript.length - 1} isStreaming={false} />
+              <MessageView message={m} />
             </div>
           ))}
         </div>
@@ -4038,7 +4045,7 @@ function ClientContinuityFrame() {
     <div data-client-continuity className="p-bg p-text min-h-screen px-4 py-6">
       <div className="mx-auto max-w-[760px] space-y-6">
         <div data-wrap-user>
-          <MessageView message={userMessage} isLast={false} isStreaming={false} />
+          <MessageView message={userMessage} />
         </div>
         <div data-wrap-steer>
           <SteerBubble steer={{
@@ -4053,7 +4060,7 @@ function ClientContinuityFrame() {
           onStop={() => {}}
           placeholder="Send a message"
           disabled={false}
-          streaming={false}
+          liveness={IDLE_TURN}
           attachments={{
             parts: [],
             onAdd: (added) => setFiles((current) => [
@@ -4259,7 +4266,7 @@ function AgentChatsPane({ conversation, transcript, onSend }: {
           }}
           placeholder="Send a message..."
           disabled={false}
-          streaming={false}
+          liveness={IDLE_TURN}
           onStop={() => {}}
           mode={{ value: ui.mode, onChange: ui.setMode, locked: false }}
         />
@@ -4806,11 +4813,10 @@ function ChatSlateFrame() {
         <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
           <GalleryChatTabs />
           <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8" data-gallery-chat>
-            {thread.entries.map(({ message, steers }, i) => (
+            {thread.entries.map(({ message, steers }) => (
               <div key={message.id} data-chat-row={message.id}>
                 <MessageView
-                  message={message} steers={steers}
-                  isLast={i === thread.entries.length - 1} isStreaming={false} onFork={() => {}} />
+                  message={message} steers={steers} onFork={() => {}} />
               </div>
             ))}
           </div>
@@ -6337,11 +6343,16 @@ function StreamingFrame() {
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div data-gallery-stream className="@container flex w-full max-w-[640px] flex-col gap-8 border-x p-border px-6 py-6">
-        {STREAMING_MESSAGES.map((message) => (
-          <div data-stream-id={message.id} key={message.id}>
-            <MessageView message={message} isLast isStreaming onFork={() => {}} />
-          </div>
-        ))}
+        {STREAMING_MESSAGES.map((message) => {
+          const tail = threadLiveTail({ last: message, liveness: LIVE_TURN });
+
+          return (
+            <div data-stream-id={message.id} key={message.id}>
+              <MessageView message={message} liveTail={tail} onFork={() => {}} />
+              <ChatLiveTail tail={tail} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -6352,7 +6363,7 @@ function MessageColumn({ messages }: { messages: UIMessage[] }) {
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
         {messages.map((m) => (
-          <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
+          <MessageView key={m.id} message={m} onFork={() => {}} />
         ))}
       </div>
     </div>
@@ -6369,7 +6380,7 @@ function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
   return (
     <div className="flex min-h-screen justify-center p-bg p-text">
       <div className="@container w-full max-w-[780px] border-x p-border px-6 py-6">
-        <MessageView message={secrets ? SECRET_TOOL_RUN_MESSAGE : LARGE_TOOL_RUN_MESSAGE} isLast={false} isStreaming={false} onFork={() => {}} />
+        <MessageView message={secrets ? SECRET_TOOL_RUN_MESSAGE : LARGE_TOOL_RUN_MESSAGE} onFork={() => {}} />
       </div>
     </div>
   );

@@ -18,6 +18,7 @@
  */
 import { isToolUIPart } from "ai";
 import type { UIMessage } from "ai";
+import type { TurnLiveness } from "./turn-liveness";
 
 type Part = UIMessage["parts"][number];
 
@@ -59,4 +60,21 @@ export function liveTail(parts: readonly Part[]): LiveTail {
   }
 
   return { kind: "thinking" };
+}
+
+/**
+ * The one tail the chat thread paints, decided by the surface that owns the
+ * whole thread rather than by its last row.
+ *
+ * `liveTail` above answers for a message; this answers for a CONVERSATION, and
+ * the difference is the reported wedge. A turn is admitted, the operator's
+ * message is the last row, and no assistant row exists yet: asking the last
+ * message whether it is live answers no, so the thread painted nothing while
+ * the composer offered Stop. A live turn always has a tail — before its first
+ * token that tail is `thinking` — and a thread that is not live has none.
+ */
+export function threadLiveTail(input: { readonly last: Pick<UIMessage, "role" | "parts"> | undefined; readonly liveness: TurnLiveness }): LiveTail | null {
+  if (input.liveness.kind !== "live") return null;
+
+  return liveTail(input.last?.role === "assistant" ? input.last.parts : []);
 }

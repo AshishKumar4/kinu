@@ -37,7 +37,7 @@ import {
   partOutput, partInput, partEffect, callFailed, parseProvisionError,
   type AnyToolPart,
 } from "@kinu.run/core";
-import { liveTail } from "@kinu.run/core";
+import type { LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
@@ -85,6 +85,21 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 }
 
 /**
+ * The gap above a render block, by how much air the block needs.
+ *
+ * One uniform `space-y-5` sat between every pair of blocks, so a run of quiet
+ * 32px tool rows read as a sparse list of unrelated events — the reported
+ * density complaint. A settled call is a LINE in a list and takes a line's
+ * gap; prose and a grouped card are SECTIONS and keep their air. The block
+ * carries its own margin rather than the stack imposing one, because a stack
+ * utility cannot be overridden per child.
+ */
+const BLOCK_GAP = {
+  row: "mt-1.5 first:mt-0",
+  section: "mt-4 first:mt-0",
+} as const;
+
+/**
  * The turn's live tail when nothing is arriving — between a settled call and
  * whatever the model does next, or before its first token.
  *
@@ -96,11 +111,25 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
  */
 function ThinkingRow() {
   return (
-    <div className="flex items-center gap-2 animate-fade-in py-1.5" aria-live="polite">
+    <div data-live-indicator="thinking" className="flex items-center gap-2 animate-fade-in py-1.5" aria-live="polite">
       <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden />
       <span className="p-row-text p-shimmer font-medium">Thinking</span>
     </div>
   );
+}
+
+/**
+ * The thread's live tail, rendered by the surface that owns the whole thread.
+ *
+ * It is a SIBLING of the message list rather than a child of its last message
+ * because a turn that has not written an assistant row yet has no message to
+ * hang it on — the state the wedge report was taken in. A tail that points at
+ * a part (text, reasoning, a call in flight) is drawn by that part's own row,
+ * so this draws only the between-parts case, and the thread carries exactly
+ * one indicator either way.
+ */
+export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
+  return tail?.kind === "thinking" ? <ThinkingRow /> : null;
 }
 
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
@@ -118,7 +147,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
     <div className="border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 p-row-text p-text-4">
       {live ? (
         <>
-          <span className="motion-safe:animate-[pulse_1.6s_ease-in-out_infinite] motion-reduce:animate-none">Thinking</span>
+          <span data-live-indicator="reasoning" className="motion-safe:animate-[pulse_1.6s_ease-in-out_infinite] motion-reduce:animate-none">Thinking</span>
           <div ref={viewport} data-reasoning-viewport className="mt-1 max-h-[4lh] overflow-y-auto scroll-auto whitespace-pre-wrap">{text}</div>
         </>
       ) : (
@@ -732,12 +761,16 @@ function SteeredMark({ state }: { state: "queued" | "landed" }) {
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
 export const MessageView = memo(function MessageView({
-  message, isLast, isStreaming, onFork, onFeedback, feedback, onRevert, takesChip,
+  message, liveTail: tail = null, onFork, onFeedback, feedback, onRevert, takesChip,
   signalState, steers,
 }: {
   message: UIMessage;
-  isLast: boolean;
-  isStreaming: boolean;
+  /** Where the live turn is, when this message is the row that carries it.
+   *  The thread's owner resolves it once (`threadLiveTail`) and passes it to
+   *  the last row only; null means this message is history. A message never
+   *  infers its own liveness — `isLast && isStreaming && !isUser` was that
+   *  inference, and it answered no for every turn before its first token. */
+  liveTail?: LiveTail | null;
   /** For a message a signal enqueued: where that signal's card is in its
    *  lifecycle. Undefined once the card's live state is gone (a reload, or a
    *  session that started after it landed) — history is by definition shown. */
@@ -763,7 +796,7 @@ export const MessageView = memo(function MessageView({
   steers?: readonly PlacedSteer[];
 }) {
   const isUser = message.role === "user";
-  const isLive = isLast && isStreaming && !isUser;
+  const isLive = tail !== null;
   // Fork button disabled on the mid-stream last assistant — that message
   // isn't durably persisted yet.
   const canFork = !isLive && onFork !== undefined && message.id !== "";
@@ -835,10 +868,6 @@ export const MessageView = memo(function MessageView({
     );
   }
 
-  // The one live affordance, and where it goes — read from the stream's own
-  // part states rather than inferred from part order. See message-live-tail.ts.
-  const tail = isLive ? liveTail(message.parts) : null;
-
   // Cut at the steers the model read inside this turn. With none — which is
   // nearly always — this is one segment holding every part, and the rendering
   // is what it was.
@@ -871,7 +900,8 @@ export const MessageView = memo(function MessageView({
       // emitted. As a sibling element it landed on a line of its own below
       // the paragraph, which is the misplacement that was reported.
       return (
-        <div key={key} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
+        <div key={key} {...(isTailPart ? { "data-live-indicator": "text" } : {})}
+          className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
           <MarkdownContent content={t} />
         </div>
       );
@@ -881,7 +911,7 @@ export const MessageView = memo(function MessageView({
   };
 
   const renderToolRow = (part: AnyToolPart) => (
-    <ToolCallPart key={part.toolCallId} part={part}
+    <ToolCallPart part={part}
       expanded={callExpanded(part)} onToggleExpand={() => toggleCall(part.toolCallId)} />
   );
 
@@ -891,7 +921,7 @@ export const MessageView = memo(function MessageView({
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
           {segment.parts.length > 0 && (
-            <div className="group relative w-full space-y-5">
+            <div className="group relative flex w-full flex-col">
               {s === forkSegment && canFork && (
                 <button
                   onClick={() => onFork(message.id)}
@@ -905,23 +935,25 @@ export const MessageView = memo(function MessageView({
                 if (block.kind === "tool-run") {
                   const first = block.parts[0];
 
-                  return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts}
-                    expandedCalls={callToggles} onToggleCall={toggleCall} /> : null;
+                  return first ? <div key={first.toolCallId} className={BLOCK_GAP.section}>
+                    <ToolCallGroup parts={block.parts} expandedCalls={callToggles} onToggleCall={toggleCall} />
+                  </div> : null;
                 }
 
                 const part = block.part;
 
                 if (isToolUIPart(part)) {
-                  return renderToolRow(part);
+                  return <div key={part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(part)}</div>;
                 }
 
-                return renderContentPart(part, i);
+                const content = renderContentPart(part, i);
+
+                return content === null ? null : <div key={i} className={BLOCK_GAP.section}>{content}</div>;
               })}
             </div>
           )}
         </Fragment>
       ))}
-      {tail?.kind === "thinking" && <ThinkingRow />}
       {!isLive && (
         <div className="flex items-center gap-2">
           <MessageTimestamp createdAt={messageCreatedAt(message)} />

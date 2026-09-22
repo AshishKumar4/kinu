@@ -5,6 +5,7 @@ import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { diagnostics } from '../obs/log';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, type SessionPayload } from './payload';
 import { turnAuthor } from '../utils/ui-message';
@@ -162,16 +163,36 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`.length > 0;
   }
 
-  /** The entry the next record chains from: the head a revert set, else the newest leaf. */
+  /**
+   * The entry the next record chains from: the head a revert set, else the newest leaf.
+   *
+   * A stored head is only an answer while it still names a row. One that does
+   * not is a fault in the only direction that matters — it is not a shorter
+   * conversation, it is a conversation nobody can read — so it refuses here,
+   * naming the entry, instead of being handed to an ancestry walk that dies on
+   * an anonymous "entry is missing" or to `record` as a parent that turns the
+   * next message into a new root.
+   */
   newestId(): string | null {
     this.actor.assertCurrent();
     const head = this.sql<{ entry_id: string | null }>`SELECT entry_id FROM conversation_heads WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}`[0];
 
-    if (head !== undefined) return head.entry_id;
+    if (head !== undefined) {
+      if (head.entry_id !== null && !this.has(head.entry_id)) this.refuseUnresolvedHead(head.entry_id);
+
+      return head.entry_id;
+    }
 
     return this.sql<{ id: string }>`SELECT e.id FROM conversation_entries e WHERE e.actor_id=${this.actor.actorId} AND e.session_id=${this.sessionId}
       AND NOT EXISTS(SELECT 1 FROM conversation_entries c WHERE c.actor_id=e.actor_id AND c.session_id=e.session_id AND c.parent_id=e.id)
       ORDER BY e.rowid DESC LIMIT 1`[0]?.id ?? null;
+  }
+
+  protected refuseUnresolvedHead(entryId: string): never {
+    const error = new KinuError('io', `conversation head names entry "${entryId}", which this conversation does not hold`);
+    diagnostics.failure('session.transcript_head_unresolvable', error, { actor: this.actor.actorId, session: this.sessionId, entry: entryId });
+
+    throw error;
   }
 
   read(id: string): ConversationEntry | null {
@@ -507,10 +528,15 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     });
   }
 
-  /** Move the head; entries beyond it stay recorded but leave the ancestry every read follows. */
+  /** Move the head; entries beyond it stay recorded but leave the ancestry every
+   *  read follows. An id this conversation does not hold is refused here: a
+   *  stored head that resolves to nothing wedges every later read and there is
+   *  no writer that means it. */
   setHead(entryId: string | null): void {
     this.atomic(() => {
       this.actor.assertCurrent();
+
+      if (entryId !== null && !this.has(entryId)) this.refuseUnresolvedHead(entryId);
       void this.sql`INSERT INTO conversation_heads(actor_id,session_id,entry_id) VALUES(${this.actor.actorId},${this.sessionId},${entryId})
         ON CONFLICT(actor_id,session_id) DO UPDATE SET entry_id=excluded.entry_id`;
     });
