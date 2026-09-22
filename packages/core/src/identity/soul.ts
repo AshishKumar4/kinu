@@ -97,11 +97,17 @@ export function workspaceGenesisSignal(mission: string | null | undefined): Agen
 export const UNTITLED_WORKSPACE_NAME = 'Kinu';
 
 function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ') || UNTITLED_WORKSPACE_NAME;
+  const collapsed = name.trim().replace(/\s+/g, ' ');
+
+  // A name of nothing but whitespace names nothing.
+  return collapsed === '' ? UNTITLED_WORKSPACE_NAME : collapsed;
 }
 
 function normalizeMission(mission?: string): string {
-  return mission?.trim() || PLACEHOLDER_MISSIONS[1];
+  const stated = mission?.trim();
+
+  // A mission of nothing but whitespace states nothing.
+  return stated === undefined || stated === '' ? PLACEHOLDER_MISSIONS[1] : stated;
 }
 
 export function renderSoulMarkdown(input: { name: string; mission?: string }): string {
@@ -335,7 +341,8 @@ export function readMission(sql: SqlExecutor): string | null {
     SELECT mission FROM workspace_identity LIMIT 1
   `[0]?.mission?.trim();
 
-  return mission || null;
+  // A mission of nothing but whitespace is no mission on record.
+  return mission === undefined || mission === '' ? null : mission;
 }
 
 /**

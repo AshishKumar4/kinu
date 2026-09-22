@@ -162,8 +162,8 @@ export const DEVICE_TOKEN_ROTATION_ACK = 'ROTATE_ACK';
  *  an unattached workspace all mean the same thing to a CALLER: the device
  *  plane is unavailable. They do not mean the same thing to a READER, which is
  *  what {@link isWorkspaceUnattachedError} is for. */
-export function isDeviceNotConnectedError<T>(err: T): boolean {
-  const message = renderThrownChain({ cause: err });
+export function isDeviceNotConnectedError(input: { cause: unknown }): boolean {
+  const message = renderThrownChain(input);
 
   return message.includes(NO_DEVICE_CONNECTED)
     || message.includes(TUNNEL_DISCONNECTED)
@@ -172,13 +172,13 @@ export function isDeviceNotConnectedError<T>(err: T): boolean {
 
 /** The workspace itself has no owner account, so no hub was ever asked. The
  *  narrower question, for the surfaces that tell a person what to do next. */
-export function isWorkspaceUnattachedError<T>(err: T): boolean {
-  return renderThrownChain({ cause: err }).includes(WORKSPACE_HAS_NO_OWNER);
+export function isWorkspaceUnattachedError(input: { cause: unknown }): boolean {
+  return renderThrownChain(input).includes(WORKSPACE_HAS_NO_OWNER);
 }
 
 /** The hub refused because several machines are live and the call named none. */
-export function isDeviceAmbiguityError<T>(err: T): boolean {
-  return renderThrownChain({ cause: err }).includes(SEVERAL_DEVICES_CONNECTED);
+export function isDeviceAmbiguityError(input: { cause: unknown }): boolean {
+  return renderThrownChain(input).includes(SEVERAL_DEVICES_CONNECTED);
 }
 
 /**
@@ -193,8 +193,8 @@ export function isDeviceAmbiguityError<T>(err: T): boolean {
 export const SANDBOX_UNAVAILABLE = 'sandbox_unavailable';
 
 /** Whether a rejection is either end refusing to run a command unsandboxed. */
-export function isSandboxUnavailableError<T>(err: T): boolean {
-  return renderThrownChain({ cause: err }).includes(SANDBOX_UNAVAILABLE);
+export function isSandboxUnavailableError(input: { cause: unknown }): boolean {
+  return renderThrownChain(input).includes(SANDBOX_UNAVAILABLE);
 }
 
 /**
@@ -210,8 +210,8 @@ export function isSandboxUnavailableError<T>(err: T): boolean {
 export const DEVICE_UNKNOWN_METHOD = 'unknown method';
 
 /** Whether a rejection is the daemon saying it has never heard of the method. */
-export function isDeviceUnknownMethodError<T>(err: T): boolean {
-  return (renderThrownChain({ cause: err })).includes(DEVICE_UNKNOWN_METHOD);
+export function isDeviceUnknownMethodError(input: { cause: unknown }): boolean {
+  return renderThrownChain(input).includes(DEVICE_UNKNOWN_METHOD);
 }
 
 /**
@@ -375,14 +375,14 @@ let requestSeq = 0;
  * it later with nothing to keep in step — there is no second identifier.
  */
 export function nextDeviceRequestId(): string {
-  if (requestEpoch === null) requestEpoch = nanoid(10);
+  requestEpoch ??= nanoid(10);
   requestSeq += 1;
 
   return `rpc-${requestEpoch}-${requestSeq}`;
 }
 
 export class DeviceTunnel {
-  private pending = new Map<string, Pending>();
+  private readonly pending = new Map<string, Pending>();
   /** Calls running with no work deadline — the set the heartbeat guards. */
   private readonly openEnded = new Set<string>();
   /** The cancel for the armed heartbeat, or null while none runs. */

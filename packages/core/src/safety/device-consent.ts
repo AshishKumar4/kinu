@@ -71,19 +71,28 @@ export interface DeviceActionSummary {
 }
 
 export function summarizeDeviceAction(method: string, params: unknown[]): DeviceActionSummary {
-  if (method === 'exec') return { method, command: String(params[0] ?? '') };
+  // `exec`'s first param IS the command. Anything else there is a malformed
+  // call, and is summarized the way every other method's params are.
+  if (method === 'exec') {
+    const first = params.at(0);
+    const command = v.safeParse(v.string(), first ?? '');
+
+    return { method, command: command.success ? command.output : summarizeParam({ value: first }) };
+  }
 
   return {
     method,
-    command: `${method}(${params.map((p) => summarizeParam(p)).join(', ')})`,
+    command: `${method}(${params.map((p) => summarizeParam({ value: p })).join(', ')})`,
   };
 }
 
-function summarizeParam<Value>(value: Value): string {
-  const text = v.safeParse(v.string(), value);
-  const rendered = text.success ? text.output : JSON.stringify(value);
+function summarizeParam(input: { value: unknown }): string {
+  const text = v.safeParse(v.string(), input.value);
+  // Everything that reaches here came off the wire as JSON, so JSON renders
+  // it. Only an absent value has no rendering of its own.
+  const rendered = text.success ? text.output : (JSON.stringify(input.value) ?? 'undefined');
 
-  return (rendered ?? String(value)).slice(0, 120);
+  return rendered.slice(0, 120);
 }
 
 /** What the agent is asking for: this workspace's use of this machine.
@@ -129,7 +138,7 @@ export interface DeviceConsentRegistryDeps {
   store: DeviceConsentStore;
   /** How long an unanswered prompt waits before it expires. */
   timeoutMs?: number;
-  now?(): number;
+  now?: () => number;
 }
 
 /** How long an unanswered prompt waits by default. Long enough that a user who

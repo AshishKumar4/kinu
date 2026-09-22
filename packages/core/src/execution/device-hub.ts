@@ -222,7 +222,7 @@ export class DeviceSocketHub {
       // read) is transient: leave the record untouched so the next turn re-asks.
       const failure = toKinuError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
 
-      if (isDeviceUnknownMethodError(err)) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
+      if (isDeviceUnknownMethodError({ cause: err })) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
       diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
 
       return null;
@@ -293,7 +293,7 @@ export class DeviceSocketHub {
     if (deviceId) return this.isConnected(deviceId) ? deviceId : null;
     const live = this.connectedDeviceIds();
 
-    return live.length === 1 ? live[0]! : null;
+    return live.length === 1 ? live[0] : null;
   }
 
   /** The DeviceTunnel for a connected device — rebuilt from the hibernatable

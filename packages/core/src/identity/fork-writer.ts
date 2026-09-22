@@ -67,6 +67,16 @@ export interface ForkWriteTarget {
   transaction?: (rows: () => void) => void;
 }
 
+/** The one system-role message a fork lands on its cut point: who owns it,
+ *  what it says, and where in the chain it sits. */
+interface ForkMarker {
+  readonly actorId: string;
+  readonly markerId: string;
+  readonly parentId: string;
+  readonly text: string;
+  readonly recordedAt: number;
+}
+
 /** How much a writer has taken. The wire checks this against what the source
  *  declared before it publishes. */
 export interface ForkStagedCounts {
@@ -539,7 +549,9 @@ export class ForkTargetWriter {
       + `referenced before the fork that you don't see in your active tool list.`;
 
     const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
-    this.writeForkMarker(actorId, markerId, cut, syntheticText, forkPointMs + 1);
+    this.writeForkMarker({
+      actorId, markerId, parentId: cut, text: syntheticText, recordedAt: forkPointMs + 1,
+    });
     // The marker is the chain's end: the fork's first turn chains from it.
     void this.target`INSERT INTO conversation_heads (actor_id, session_id, entry_id) VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId})`;
 
@@ -561,9 +573,9 @@ export class ForkTargetWriter {
    * and the marker's text is small enough to be an inline payload, so nothing
    * here needs the filesystem.
    */
-  private writeForkMarker(
-    actorId: string, markerId: string, parentId: string, text: string, recordedAt: number,
-  ): void {
+  private writeForkMarker(marker: ForkMarker): void {
+    const { actorId, markerId, parentId, text, recordedAt } = marker;
+
     void this.target`
       INSERT INTO session_messages
       (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, sealed_sequence, recorded_at)

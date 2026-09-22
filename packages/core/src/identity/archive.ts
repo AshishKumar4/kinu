@@ -79,7 +79,7 @@ export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
     exec(query, ...bindings) {
       // Canonical BLOBs are ArrayBuffers (DO storage's native type); bun:sqlite
       // binds TypedArrays only — the same coercion `wrapDatabase` makes.
-      const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
+      const bound = bindings.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
       const rows = db.prepare<NativeArchiveDatabaseRow>(query).all(...bound);
 
       return {
@@ -383,7 +383,7 @@ function readSchema(sql: SqlExec): SchemaObject[] {
 
   // FTS5 keeps its inverted index in `<name>_data` / `_idx` / `_docsize` /
   // `_config` tables. They are rebuilt from the virtual table, never dumped.
-  const isShadow = (name: string) => virtualNames.some((v) => name.startsWith(`${v}_`));
+  const isShadow = (name: string) => virtualNames.some((virtualName) => name.startsWith(`${virtualName}_`));
 
   const objects: SchemaObject[] = [];
 
@@ -500,11 +500,15 @@ async function archiveEntries(source: ArchiveFileSource): Promise<ArchiveFileEnt
     type: entry.type,
   }));
 
-  entries.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  entries.sort((a, b) => {
+    if (a.path === b.path) return 0;
+
+    return a.path < b.path ? -1 : 1;
+  });
 
   for (let i = 1; i < entries.length; i++) {
-    if (entries[i - 1]!.path === entries[i]!.path) {
-      throw new Error(`Workspace archive file source listed ${JSON.stringify(entries[i]!.path)} more than once.`);
+    if (entries[i - 1].path === entries[i].path) {
+      throw new Error(`Workspace archive file source listed ${JSON.stringify(entries[i].path)} more than once.`);
     }
   }
 
@@ -592,7 +596,7 @@ export async function readWorkspaceArchivePage(
   };
 
   while (index < dumpable.length) {
-    const table = dumpable[index]!;
+    const table = dumpable[index];
     const size = nextBatch();
     const rowidSelect = `SELECT rowid AS ${quoteIdent(ROWID_ALIAS)}, * FROM ${quoteIdent(table.name)}`;
     // KEYSET on the WITHOUT ROWID branch, where there is no rowid to hold the

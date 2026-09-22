@@ -311,13 +311,25 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
   `);
 }
 
-/** Whether a workspace has a rotation whose subtree push missed a replica. */
-export function pendingCapabilityReconcile(sql: SqlExec, workspaceName: string): string | null {
+/** The two tables keyed by workspace name that hold a `token_hash`: the
+ *  registry of issued identities, and the reconcile intent for a rotation
+ *  whose subtree push missed a replica. */
+type CapabilityHashTable = 'workspace_capability_tokens' | 'workspace_capability_reconcile';
+
+/** The hash one of those tables holds for a workspace, or null when it holds
+ *  no row for it. The table name is a literal of the pair above, never caller
+ *  text. */
+function registeredTokenHash(sql: SqlExec, table: CapabilityHashTable, workspaceName: string): string | null {
   const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
-    `SELECT token_hash FROM workspace_capability_reconcile WHERE workspace_name = ? LIMIT 1`, workspaceName,
+    `SELECT token_hash FROM ${table} WHERE workspace_name = ? LIMIT 1`, workspaceName,
   ).toArray()[0]);
 
   return row.success ? row.output.token_hash : null;
+}
+
+/** Whether a workspace has a rotation whose subtree push missed a replica. */
+export function pendingCapabilityReconcile(sql: SqlExec, workspaceName: string): string | null {
+  return registeredTokenHash(sql, 'workspace_capability_reconcile', workspaceName);
 }
 
 /** Record or re-arm a missed subtree push. `attempts` rises on every retry so
@@ -343,11 +355,7 @@ export function clearCapabilityReconcile(sql: SqlExec, workspaceName: string): v
  *  itself reports is what makes provisioning self-healing: any disagreement,
  *  however it arose, is repaired by re-minting. */
 export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): string | null {
-  const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
-    `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = ? LIMIT 1`, workspaceName,
-  ).toArray()[0]);
-
-  return row.success ? row.output.token_hash : null;
+  return registeredTokenHash(sql, 'workspace_capability_tokens', workspaceName);
 }
 
 /** A fresh capability secret and its hash, written NOWHERE.
@@ -396,13 +404,13 @@ const UserCallerSchema = v.union([
   v.object({ workspaceToken: v.string() }),
 ]);
 
-async function resolveCaller<Caller>(
+async function resolveCaller(
   sql: SqlExec,
   env: OwnerCapabilityEnv,
-  caller: Caller,
+  presented: { caller: unknown },
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
-  const parsedCaller = v.safeParse(UserCallerSchema, caller);
+  const parsedCaller = v.safeParse(UserCallerSchema, presented.caller);
 
   if (!parsedCaller.success) {
     denyCapability('no_caller_identity', capability,
@@ -441,13 +449,13 @@ async function resolveCaller<Caller>(
 /** The gate. Called first thing in every privileged UserDO method; returns the
  *  resolved principal so a method can additionally scope itself (e.g. renaming
  *  only the calling workspace). */
-export async function requireTier<Caller>(
+export async function requireTier(
   sql: SqlExec,
   env: OwnerCapabilityEnv,
-  caller: Caller,
+  presented: { caller: unknown },
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
-  const resolved = await resolveCaller(sql, env, caller, capability);
+  const resolved = await resolveCaller(sql, env, presented, capability);
 
   if (resolved.kind === 'owner_session') return resolved;
 

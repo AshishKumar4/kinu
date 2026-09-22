@@ -54,13 +54,20 @@ export function effectAlreadyDone(
     WHERE actor_id = ${actor.actorId} AND scope = ${scope} AND key = ${key} LIMIT 1`.length > 0;
 }
 
+/** Which effect a tombstone stands for: the lane that did the work, and the
+ *  row it did it for. */
+export interface EffectKey {
+  readonly scope: string;
+  readonly key: string;
+}
+
 /** Idempotent. Records that it happened. A second call keeps the FIRST
  *  timestamp: that is when the work actually ran. */
 export function recordEffectDone(
-  sql: SqlExecutor, actor: ActorHandle, scope: string, key: string, now?: number,
+  sql: SqlExecutor, actor: ActorHandle, effect: EffectKey, now?: number,
 ): void {
   actor.assertCurrent();
   void sql`INSERT INTO effect_tombstones (actor_id, scope, key, recorded_at)
-      VALUES (${actor.actorId}, ${scope}, ${key}, ${now ?? nowMs()})
+      VALUES (${actor.actorId}, ${effect.scope}, ${effect.key}, ${now ?? nowMs()})
       ON CONFLICT(actor_id, scope, key) DO NOTHING`;
 }

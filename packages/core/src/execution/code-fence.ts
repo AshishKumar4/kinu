@@ -44,7 +44,7 @@ export function readProposalCode(
   let unrunnable: string | null = null;
 
   for (let index = blocks.length - 1; index >= 0; index--) {
-    const block = blocks[index]!;
+    const block = blocks[index];
     const language = block.language ?? languages[0];
 
     if (languages.includes(language)) {

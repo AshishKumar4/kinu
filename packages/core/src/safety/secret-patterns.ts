@@ -151,13 +151,13 @@ export function scanText(file: string, text: string, patterns: readonly SecretPa
   const lines = text.split('\n');
 
   for (const p of patterns) {
-    lines.forEach((line, i) => {
-      if (p.benign?.test(line)) return;
+    for (const [i, line] of lines.entries()) {
+      if (p.benign?.test(line)) continue;
 
       for (const m of line.matchAll(p.regex)) {
         findings.push({ pattern: p.id, file, line: i + 1, match: m[0], text: line.trim() });
       }
-    });
+    }
   }
 
   return findings;
@@ -201,13 +201,13 @@ export function secretSightings(path: string, text: string, patterns: readonly S
   const lines = text.split('\n');
 
   for (const pattern of patterns) {
-    lines.forEach((line, index) => {
-      if (pattern.benign?.test(line)) return;
+    for (const [index, line] of lines.entries()) {
+      if (pattern.benign?.test(line)) continue;
 
       for (const _ of line.matchAll(pattern.regex)) {
         sightings.push({ path, line: index + 1, pattern: pattern.id, message: pattern.message });
       }
-    });
+    }
   }
 
   return sightings;

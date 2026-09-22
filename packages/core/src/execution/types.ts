@@ -195,13 +195,13 @@ export interface ExecutorProvider {
    * Rich lifecycle state for UI/status surfaces. This must be cheap and must
    * not perform remote RPCs; dashboard loads must not provision sandboxes.
    */
-  getStatus?(): ExecutorStatus;
+  getStatus?: () => ExecutorStatus;
 
   /** Lifecycle: set up the connection */
-  connect(): Promise<void>;
+  connect: () => Promise<void>;
 
   /** Lifecycle: tear down */
-  disconnect(): Promise<void>;
+  disconnect: () => Promise<void>;
 
   /**
    * The tools this executor exposes inside the codemode sandbox.
@@ -241,13 +241,13 @@ export interface ExecutorProvider {
    * yields a clear error pointing to `start a server first`, not a
    * broken-iframe failure mode.
    */
-  exposePort?(port: number, opts?: { name?: string }): Promise<PortExposureResult>;
+  exposePort?: (port: number, opts?: { name?: string }) => Promise<PortExposureResult>;
 
   /** Stop exposing a port. No-op if the port wasn't exposed. */
-  unexposePort?(port: number): Promise<void>;
+  unexposePort?: (port: number) => Promise<void>;
 
   /** List currently-exposed ports for this executor. */
-  listExposedPorts?(): Promise<ExposedPortInfo[]>;
+  listExposedPorts?: () => Promise<ExposedPortInfo[]>;
 }
 
 /**
