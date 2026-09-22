@@ -37,7 +37,7 @@ import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
   type SwarmInput,
 } from '../src/strategy/swarm';
-import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, present, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { makeSqlExec, storesFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
@@ -59,12 +59,19 @@ function agentSelfTypes(): string {
   return createAgentSelfProvider(host).types ?? '';
 }
 
+/** The prompt built with no options at all, matched against what a section of
+ *  it must still carry. */
+function expectDefaultPromptToMatch(...patterns: readonly RegExp[]): void {
+  const { rt } = createTestRuntime();
+  const prompt = buildSystemPromptSync(rt);
+
+  for (const pattern of patterns) expect(prompt).toMatch(pattern);
+}
+
 describe('buildSystemPromptSync', () => {
   test('uses fallback SOUL.md when SOUL.md is missing', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Kinu/);                 // identity self-id
-    expect(prompt).toMatch(/self-evolving/i);          // general-purpose, not code-centric
+    // Identity self-id, and general-purpose rather than code-centric.
+    expectDefaultPromptToMatch(/Kinu/, /self-evolving/i);
   });
 
   test('renders a neutral delegation index — one tool, no advice on when to delegate', () => {
@@ -1052,10 +1059,7 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('includes output-format guidance', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/Output format/);
-    expect(prompt).toMatch(/plain markdown|markdown/);
+    expectDefaultPromptToMatch(/Output format/, /plain markdown|markdown/);
   });
 
   test('renders only the available built-in tools for a gated turn', () => {
@@ -1099,7 +1103,7 @@ describe('buildSystemPromptSync', () => {
     );
 
     const surface = compilePromptSurface({ externalTools });
-    expect(surface.externalTools.map((tool) => tool.name)).toEqual(['good_tool', 'plain_tool']);
+    expect(surface.externalTools.map((external) => external.name)).toEqual(['good_tool', 'plain_tool']);
   });
 
   test('prompt surface hides unavailable executors from selectable runtimes', () => {
@@ -1122,19 +1126,19 @@ describe('buildSystemPromptSync', () => {
       .toThrow(/does not support tool calling/);
   });
 
-  test('adds model-specific guidance for Kimi', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, { model: { id: '@cf/moonshotai/kimi-k2.6' } });
-    expect(prompt).toContain('Kimi models work best');
-    expect(prompt).toContain('tool/result context');
-  });
+  const MODEL_GUIDANCE = [
+    { family: 'Kimi', id: '@cf/moonshotai/kimi-k2.6', says: ['Kimi models work best', 'tool/result context'] },
+    { family: 'GPT and Codex models', id: 'codex/gpt-5.5', says: ['GPT/Codex-style', 'success criteria'] },
+  ];
 
-  test('adds model-specific guidance for GPT and Codex models', () => {
-    const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt, { model: { id: 'codex/gpt-5.5' } });
-    expect(prompt).toContain('GPT/Codex-style');
-    expect(prompt).toContain('success criteria');
-  });
+  for (const guidance of MODEL_GUIDANCE) {
+    test(`adds model-specific guidance for ${guidance.family}`, () => {
+      const { rt } = createTestRuntime();
+      const prompt = buildSystemPromptSync(rt, { model: { id: guidance.id } });
+
+      for (const phrase of guidance.says) expect(prompt).toContain(phrase);
+    });
+  }
 
   test('the live ledger carries both plan-submission variants', () => {
     const plan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: true } });
@@ -1167,7 +1171,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).not.toContain('the referenced job result first');
-    expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(wake) })!.content))
+    expect(present(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(wake) }), 'the wake turn-local message').content)
       .toContain('the referenced job result first');
 
     // A Plan wake keeps both its mode fact and its resume overlay.
@@ -1175,7 +1179,7 @@ describe('buildSystemPromptSync', () => {
     const planPrompt = renderDynamicContextBlock({ mode: { workMode: workModeForTurnMetadata(planWake), planSubmission: false } });
     expect(planPrompt).toContain('Mode: plan;');
     expect(prompt).toContain('In Plan, inspect and research only.');
-    expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(planWake) })!.content))
+    expect(present(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(planWake) }), 'the Plan wake turn-local message').content)
       .toContain('the referenced job result first');
   });
 
@@ -1268,78 +1272,89 @@ describe('buildSystemPromptSync', () => {
     const actors = createTestActors(testSql.sql, testSql.execRaw);
     const catalog = { roles: {}, tiers: { default: { model: 'test' } } };
 
+    /** One role's phases under one actor: the system prompt is byte-identical
+     *  across them, Plan leaves the file alone and Build writes it. */
+    const runRolePhases = async (
+      subject: typeof rt,
+      roleId: string,
+      stores: ReturnType<typeof createAgentStores>,
+    ): Promise<void> => {
+      const ledger = new DynamicContextLedger();
+      const history: ModelMessage[] = [];
+      let previousSystem: string | undefined;
+
+      for (const phase of roleId === 'task' ? [0, 1, 2] : [0, 1]) {
+        const mode = phase === 2 ? 'build' : 'plan';
+        const path = `/mode-${subject.actor.name}-${roleId}-${phase}.txt`;
+        await subject.storage.vfs.writeFile(path, 'original');
+        const file = buildBuiltinTools({ rt: subject, history: storesFor(subject).history }).file;
+
+        if (!file) throw new Error('missing file tool');
+        const tools: ToolSet = { file };
+
+        if (phase === 0) tools.submit_plan = permitInPlan(tool({
+          description: 'Submit the plan for review', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'submitted',
+        }));
+
+        const profile = resolveTurnProfile({
+          envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+          provider: { revision: '1', availableModels: ['test'] }, roleId, workMode: mode,
+          availableTools: Object.keys(tools), activeSkills: [],
+        });
+
+        const system = buildSystemPromptSync(subject, { availableTools: ['file'], roleSection: profile.role });
+
+        if (previousSystem !== undefined) expect(system).toBe(previousSystem);
+        previousSystem = system;
+        let calls = 0;
+
+        const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+          const step = calls++;
+
+          return {
+            content: step < 2
+              ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${phase}-${step}`,
+                input: JSON.stringify(step === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
+              : [{ type: 'text', text: 'done' }],
+            finishReason: { unified: step < 2 ? 'tool-calls' : 'stop', raw: undefined },
+            usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+              outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+          };
+        } });
+
+        history.push({ role: 'user', content: 'Try the requested file operation.' });
+        const callableTools = toolsInWorkMode(profile.workMode, tools);
+
+        for await (const event of runChat({ model, system, history, tools: callableTools,
+          dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, memoryTail: undefined, missingCapabilities: [] }) },
+        })) {
+          if (event.type === 'done') history.push(...event.responseMessages);
+        }
+
+        expect(model.doStreamCalls).toHaveLength(3);
+        const request = model.doStreamCalls[0];
+        const instructions = request?.prompt.find((message) => message.role === 'system');
+
+        expect(instructions?.content).toContain('In Plan, inspect and research only.');
+        expect(instructions?.content).toContain('Implementation waits for an approved Build turn.');
+        const facts = request?.prompt.filter((message) => message.role === 'user').at(-1);
+        expect(JSON.stringify(facts)).toContain(`Mode: ${mode}; submit_plan: ${phase === 0 ? 'available' : 'unavailable'}.`);
+        expect(JSON.stringify(facts)).not.toContain('Do not change project files');
+        expect(await subject.storage.vfs.readFile(path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))
+          .toBe(mode === 'build' ? 'changed' : 'original');
+      }
+    };
+
     try {
       for (const actor of [actors.main, actors.sibling('child')]) {
         const subject = { ...rt, actor };
 
-        const stores = createAgentStores(() => testSql.sql, () => actor, rt.storage.transactionSync,
+        const stores = createAgentStores(() => testSql.sql, () => actor,
+          <T>(write: () => T) => rt.storage.transactionSync(write),
           async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' }));
 
-        for (const id of Object.keys(BUILTIN_ROLE_DEFINITIONS)) {
-          const ledger = new DynamicContextLedger();
-          const history: ModelMessage[] = [];
-          let previousSystem: string | undefined;
-
-          for (const phase of id === 'task' ? [0, 1, 2] : [0, 1]) {
-            const mode = phase === 2 ? 'build' : 'plan';
-            const path = `/mode-${actor.name}-${id}-${phase}.txt`;
-            await subject.storage.vfs.writeFile(path, 'original');
-            const file = buildBuiltinTools({ rt: subject, history: storesFor(subject).history }).file;
-
-            if (!file) throw new Error('missing file tool');
-            const tools: ToolSet = { file };
-
-            if (phase === 0) tools.submit_plan = permitInPlan(tool({
-              description: 'Submit the plan for review', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'submitted',
-            }));
-
-            const profile = resolveTurnProfile({
-              envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
-              provider: { revision: '1', availableModels: ['test'] }, roleId: id, workMode: mode,
-              availableTools: Object.keys(tools), activeSkills: [],
-            });
-
-            const system = buildSystemPromptSync(subject, { availableTools: ['file'], roleSection: profile.role });
-
-            if (previousSystem !== undefined) expect(system).toBe(previousSystem);
-            previousSystem = system;
-            let calls = 0;
-
-            const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
-              const step = calls++;
-
-              return {
-                content: step < 2
-                  ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${phase}-${step}`,
-                    input: JSON.stringify(step === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
-                  : [{ type: 'text', text: 'done' }],
-                finishReason: { unified: step < 2 ? 'tool-calls' : 'stop', raw: undefined },
-                usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-                  outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-              };
-            } });
-
-            history.push({ role: 'user', content: 'Try the requested file operation.' });
-            const callableTools = toolsInWorkMode(profile.workMode, tools);
-
-            for await (const event of runChat({ model, system, history, tools: callableTools,
-              dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, memoryTail: undefined, missingCapabilities: [] }) },
-            })) {
-              if (event.type === 'done') history.push(...event.responseMessages);
-            }
-
-            expect(model.doStreamCalls).toHaveLength(3);
-            const request = model.doStreamCalls[0];
-            const instructions = request?.prompt.find((message) => message.role === 'system');
-
-            expect(instructions?.content).toContain('In Plan, inspect and research only.');
-            expect(instructions?.content).toContain('Implementation waits for an approved Build turn.');
-            const facts = request?.prompt.filter((message) => message.role === 'user').at(-1);
-            expect(JSON.stringify(facts)).toContain(`Mode: ${mode}; submit_plan: ${phase === 0 ? 'available' : 'unavailable'}.`);
-            expect(JSON.stringify(facts)).not.toContain('Do not change project files');
-            expect(await subject.storage.vfs.readFile(path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))
-              .toBe(mode === 'build' ? 'changed' : 'original');
-          }
+        for (const roleId of Object.keys(BUILTIN_ROLE_DEFINITIONS)) {
+          await runRolePhases(subject, roleId, stores);
         }
       }
     } finally {

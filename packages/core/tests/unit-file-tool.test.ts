@@ -39,46 +39,64 @@ describe('applyFileEdits', () => {
     expect(out.applied).toEqual([{ line: 2, removedLines: 1, addedLines: 1 }]);
   });
 
-  test('refuses an anchor that appears more than once, naming the count', () => {
-    const out = applyFileEdits('x\nx\n', [{ oldText: 'x', newText: 'y' }], '/f');
-    expect(out.ok).toBe(false);
+  /** Every refusal the engine issues: the anchor as the model typed it, the
+   *  file it was typed against, and what the message must say for the model to
+   *  recover without another read. */
+  const REFUSALS = [
+    {
+      name: 'refuses an anchor that appears more than once, naming the count',
+      file: 'x\nx\n', edits: [{ oldText: 'x', newText: 'y' }],
+      reason: 'ambiguous', says: ['appears 2 times', 'unique'],
+    },
+    {
+      name: 'refuses an anchor that is absent, and says to re-read',
+      file: 'hello\n', edits: [{ oldText: 'goodbye', newText: 'x' }],
+      reason: 'not_found', says: ['does not appear'],
+    },
+    {
+      name: 'refuses an empty anchor rather than matching everywhere',
+      file: 'hello\n', edits: [{ oldText: '', newText: 'x' }],
+      reason: 'empty_anchor', says: [],
+    },
+    {
+      name: 'is atomic: one bad edit in a batch applies none of them',
+      file: 'alpha\nbeta\n',
+      edits: [{ oldText: 'alpha', newText: 'ALPHA' }, { oldText: 'missing', newText: 'x' }],
+      reason: 'not_found', says: ['edits[1].old_text'],
+    },
+    {
+      name: 'rejects two edits that cover overlapping text',
+      file: 'abcdef\n',
+      edits: [{ oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' }],
+      reason: 'overlap', says: ['edits[0] and edits[1]'],
+    },
+    {
+      name: 'a replacement that changes nothing is a failure, not a silent no-op',
+      file: 'same\n', edits: [{ oldText: 'same', newText: 'same' }],
+      reason: 'no_change', says: [],
+    },
+    {
+      // Non-overlapping counting reports "aa" in "aaa" once and quietly edits at
+      // index 0. Which of the two placements the caller meant is exactly the
+      // ambiguity the count exists to refuse.
+      name: 'an anchor that overlaps itself is ambiguous, not a silent first-match',
+      file: 'aaa\n', edits: [{ oldText: 'aa', newText: 'b' }],
+      reason: 'ambiguous', says: ['appears 2 times'],
+    },
+  ];
 
-    if (out.ok) return;
-    expect(out.reason).toBe('ambiguous');
-    expect(out.message).toContain('appears 2 times');
-    expect(out.message).toContain('unique');
-  });
+  for (const refusal of REFUSALS) {
+    test(refusal.name, () => {
+      const out = applyFileEdits(refusal.file, refusal.edits, '/f');
 
-  test('refuses an anchor that is absent, and says to re-read', () => {
-    const out = applyFileEdits('hello\n', [{ oldText: 'goodbye', newText: 'x' }], '/f');
-    expect(out.ok).toBe(false);
+      expect(out.ok).toBe(false);
 
-    if (out.ok) return;
-    expect(out.reason).toBe('not_found');
-    expect(out.message).toContain('does not appear');
-  });
+      if (out.ok) return;
+      expect(out.reason).toBe(refusal.reason);
 
-  test('refuses an empty anchor rather than matching everywhere', () => {
-    const out = applyFileEdits('hello\n', [{ oldText: '', newText: 'x' }], '/f');
-    expect(out.ok).toBe(false);
-
-    if (out.ok) return;
-    expect(out.reason).toBe('empty_anchor');
-  });
-
-  test('is atomic: one bad edit in a batch applies none of them', () => {
-    const out = applyFileEdits(
-      'alpha\nbeta\n',
-      [{ oldText: 'alpha', newText: 'ALPHA' }, { oldText: 'missing', newText: 'x' }],
-      '/f',
-    );
-
-    expect(out.ok).toBe(false);
-
-    if (out.ok) return;
-    expect(out.reason).toBe('not_found');
-    expect(out.message).toContain('edits[1].old_text');
-  });
+      for (const phrase of refusal.says) expect(out.message).toContain(phrase);
+    });
+  }
 
   test('matches every edit against the file as read, not against a sibling result', () => {
     // Naive sequential application would find "b" inside the first edit's own
@@ -95,73 +113,43 @@ describe('applyFileEdits', () => {
     expect(out.content).toBe('two\nthree\n');
   });
 
-  test('rejects two edits that cover overlapping text', () => {
-    const out = applyFileEdits(
-      'abcdef\n',
-      [{ oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' }],
-      '/f',
-    );
+  /** What a successful edit must leave alone: the file's own line endings, a
+   *  BOM the model never typed, and every line the anchor did not cover. */
+  const REWRITES = [
+    {
+      name: 'preserves CRLF line endings and a BOM the model never typed',
+      file: '﻿a\r\nTARGET\r\nb\r\n', edits: [{ oldText: 'TARGET', newText: 'NEW' }],
+      content: '﻿a\r\nNEW\r\nb\r\n',
+    },
+    {
+      name: 'an anchor typed with LF still matches a CRLF file',
+      file: 'x\r\ny\r\n', edits: [{ oldText: 'x\ny', newText: 'z' }],
+      content: 'z\r\n',
+    },
+    {
+      // Normalize-edit-and-rewrite would convert the LF line to CRLF — the same
+      // class of silent collateral damage as pi's fuzzy path.
+      name: 'a mixed-ending file keeps every ending it had outside the replaced span',
+      file: 'crlf\r\nlf\nTARGET\r\n', edits: [{ oldText: 'TARGET', newText: 'NEW' }],
+      content: 'crlf\r\nlf\nNEW\r\n',
+    },
+    {
+      name: 'a multi-line replacement takes the file\'s ending, and only for what it inserts',
+      file: 'a\r\nb\r\n', edits: [{ oldText: 'a', newText: 'x\ny' }],
+      content: 'x\r\ny\r\nb\r\n',
+    },
+  ];
 
-    expect(out.ok).toBe(false);
+  for (const rewrite of REWRITES) {
+    test(rewrite.name, () => {
+      const out = applyFileEdits(rewrite.file, rewrite.edits, '/f');
 
-    if (out.ok) return;
-    expect(out.reason).toBe('overlap');
-    expect(out.message).toContain('edits[0] and edits[1]');
-  });
+      expect(out.ok).toBe(true);
 
-  test('a replacement that changes nothing is a failure, not a silent no-op', () => {
-    const out = applyFileEdits('same\n', [{ oldText: 'same', newText: 'same' }], '/f');
-    expect(out.ok).toBe(false);
-
-    if (out.ok) return;
-    expect(out.reason).toBe('no_change');
-  });
-
-  test('preserves CRLF line endings and a BOM the model never typed', () => {
-    const out = applyFileEdits('﻿a\r\nTARGET\r\nb\r\n', [{ oldText: 'TARGET', newText: 'NEW' }], '/f');
-    expect(out.ok).toBe(true);
-
-    if (!out.ok) return;
-    expect(out.content).toBe('﻿a\r\nNEW\r\nb\r\n');
-  });
-
-  test('an anchor typed with LF still matches a CRLF file', () => {
-    const out = applyFileEdits('x\r\ny\r\n', [{ oldText: 'x\ny', newText: 'z' }], '/f');
-    expect(out.ok).toBe(true);
-
-    if (!out.ok) return;
-    expect(out.content).toBe('z\r\n');
-  });
-
-  test('an anchor that overlaps itself is ambiguous, not a silent first-match', () => {
-    // Non-overlapping counting reports "aa" in "aaa" once and quietly edits at
-    // index 0. Which of the two placements the caller meant is exactly the
-    // ambiguity the count exists to refuse.
-    const out = applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f');
-    expect(out.ok).toBe(false);
-
-    if (out.ok) return;
-    expect(out.reason).toBe('ambiguous');
-    expect(out.message).toContain('appears 2 times');
-  });
-
-  test('a mixed-ending file keeps every ending it had outside the replaced span', () => {
-    // Normalize-edit-and-rewrite would convert the LF line to CRLF — the same
-    // class of silent collateral damage as pi's fuzzy path.
-    const out = applyFileEdits('crlf\r\nlf\nTARGET\r\n', [{ oldText: 'TARGET', newText: 'NEW' }], '/f');
-    expect(out.ok).toBe(true);
-
-    if (!out.ok) return;
-    expect(out.content).toBe('crlf\r\nlf\nNEW\r\n');
-  });
-
-  test('a multi-line replacement takes the file\'s ending, and only for what it inserts', () => {
-    const out = applyFileEdits('a\r\nb\r\n', [{ oldText: 'a', newText: 'x\ny' }], '/f');
-    expect(out.ok).toBe(true);
-
-    if (!out.ok) return;
-    expect(out.content).toBe('x\r\ny\r\nb\r\n');
-  });
+      if (!out.ok) return;
+      expect(out.content).toBe(rewrite.content);
+    });
+  }
 
   test('an empty file and a file with no trailing newline both edit cleanly', () => {
     expect(applyFileEdits('', [{ oldText: 'x', newText: 'y' }], '/f')).toMatchObject({ reason: 'not_found' });
@@ -492,9 +480,8 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
 
       return content;
     },
-    async readRange(path: string, offset: number, length: number) {
-      return bytesOf(path).subarray(offset, offset + Math.min(length, opts.perRead ?? length));
-    },
+    readRange: async (path: string, offset: number, length: number) => bytesOf(path)
+      .subarray(offset, offset + Math.min(length, opts.perRead ?? length)),
     async writeFile(path: string, data: string | Uint8Array) { write(path, String(data)); },
     async readdir() { return ['local']; },
     async stat(path: string): Promise<VfsEntryStat | null> {
