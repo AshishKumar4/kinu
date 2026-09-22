@@ -186,3 +186,13 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
   });
 });
 
+describe('a journal column reads back as the shape it was written in', () => {
+  test('a decision stored without its fields is refused, not read back as strings nobody wrote', () => {
+    const { db, actor, journal } = newJournal();
+    journal.insertSpawn(spawn('h', 'run-1'));
+    db.run('UPDATE head_journal SET decisions_json = ? WHERE actor_id = ? AND id = ?', ['[{"question":"which?"}]', actor.actorId, 'h']);
+
+    expect(() => journal.readHeadView('h')).toThrow('choice');
+  });
+});
+
