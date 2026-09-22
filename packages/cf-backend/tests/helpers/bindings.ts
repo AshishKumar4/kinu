@@ -1,12 +1,6 @@
 /**
- * Stand-ins for the platform bindings a route's env declares but the route
- * under test never reaches.
- *
- * A route family's env names every binding the family can read, including the
- * ones a particular path returns before touching. Building those as refusals
- * rather than as quiet stand-ins is what keeps "this path reads no binding" a
- * checked claim: the first reach names the binding and fails the test, instead
- * of resolving a fake nobody asserted on.
+ * Platform bindings a route's env declares but the path under test never reaches, as refusals:
+ * the first reach names the binding and fails, so "this path reads no binding" stays checked.
  */
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Connection } from 'agents';
@@ -38,16 +32,7 @@ export function unreachableAssets(): AssetFetcher {
   };
 }
 
-/**
- * The deployment's whole `Env`, with every binding refusing and naming itself.
- *
- * What the Worker ENTRY takes. `route()` is the host-aware table over every
- * surface this Worker answers, so its env is the whole deployment's and nothing
- * narrower is honest there. A case hands `reached` the bindings its request
- * genuinely reads; a binding it leaves out refuses on first touch, so "this
- * request answered before reaching a binding" is a checked claim instead of an
- * empty array somebody remembered to assert.
- */
+/** The whole deployment `Env` the Worker entry takes; bindings not in `reached` refuse on first touch. */
 export function workerEnv(reached: Partial<Env> = {}): Env {
   return {
     LOADER: {
@@ -68,8 +53,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
   };
 }
 
-/** A Durable Object namespace nothing may resolve through: every entry point
- *  into it refuses and says which binding was reached. */
+/** A Durable Object namespace whose every entry point refuses, naming the binding. */
 export function unreachableObjects<T extends Rpc.DurableObjectBranded>(binding: string): DurableObjectNamespace<T> {
   const refuse = (verb: string, arg: string): never => {
     throw new Error(`${binding}.${verb}(${arg}): not reachable in this test`);
@@ -85,9 +69,7 @@ export function unreachableObjects<T extends Rpc.DurableObjectBranded>(binding: 
   };
 }
 
-/** The platform KV binding, refusing. `unreachableKv` above is the narrow
- *  `KvStore` port our own code reads a store through; this is the whole
- *  namespace an `Env` member is declared as. */
+/** The platform KV namespace, refusing (`unreachableKv` is the narrow `KvStore` port). */
 function unreachableKvNamespace(binding: string): KVNamespace {
   const refuse = (verb: string, key: string): never => {
     throw new Error(`${binding}.${verb}(${key}): not reachable in this test`);
@@ -109,13 +91,7 @@ function unreachableFetcher(binding: string): Fetcher {
   };
 }
 
-/**
- * The entry's `ExecutionContext`, with the retention hooks recording.
- *
- * `waitUntil` is how every retained write leaves a request — the control-plane
- * observation, the index feed — so a case that asserts one happened reads the
- * promises back out of `retained`.
- */
+/** `ExecutionContext` whose `waitUntil` promises are collected in `retained`. */
 export function workerContext(): ExecutionContext & { readonly retained: Promise<unknown>[] } {
   const retained: Promise<unknown>[] = [];
 
@@ -132,22 +108,13 @@ export function workerContext(): ExecutionContext & { readonly retained: Promise
   };
 }
 
-/** The span a test's request runs under: nothing collects it, and it says so. */
 class UntracedSpan {
   get isTraced(): boolean { return false; }
   setAttribute(): void {}
   end(): void {}
 }
 
-/**
- * The socket an actor is handed, with every member this case did not build
- * refusing by name.
- *
- * `Connection` is the workers `WebSocket` plus the party's five — 27 members —
- * and a path under test reads two or three of them. Refusing the rest is what
- * keeps "this handler only sent on the wire" a checked claim; `readyState` is
- * OPEN because a closed socket is a state a case asks for deliberately.
- */
+/** A `Connection` whose unbuilt members refuse by name; `readyState` is OPEN unless a case asks otherwise. */
 export function socketConnection(built: Partial<Connection> = {}): Connection {
   const refuse = (member: string) => unreached('Connection', member);
 
@@ -183,15 +150,12 @@ export function socketConnection(built: Partial<Connection> = {}): Connection {
   };
 }
 
-/** The row `ensureProfile` answers with, as a bootstrap that stores nothing
- *  returns it: the account exists, has no onboarding stamp and owns nothing. */
+/** `ensureProfile`'s answer from a bootstrap that stores nothing: no onboarding stamp, no workspaces. */
 export function bootstrappedProfile(email: string, displayName: string | null = null): UserProfile {
   return { email, displayName, createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: 0 };
 }
 
-/** The CLI plane's env with nothing in it but refusals: what a public static
- *  route — the install page, the installer, the launcher — is answered from,
- *  since each returns before reading a binding. */
+/** An all-refusing CLI env for public static routes, which return before reading a binding. */
 export function staticRouteCliEnv(): CliRoutesEnv<string> {
   return {
     AUTH_KV: unreachableKv('AUTH_KV'),
@@ -201,22 +165,11 @@ export function staticRouteCliEnv(): CliRoutesEnv<string> {
   };
 }
 
-/** Name one member of an object binding that this case does not reach. The
- *  refusal is the point: a route that was supposed to answer without it says
- *  so, instead of a stand-in quietly answering for it. */
 function unreached(object: string, member: string) {
   return (): never => { throw new Error(`${object}.${member}: not reachable in this test`); };
 }
 
-/**
- * The account object as the CLI plane declares it, with every call this case
- * did not build refusing.
- *
- * The plane's env names one object for every CLI surface — sign-in, tokens,
- * devices, credentials, workspaces — while one case drives a handful. Filling
- * the rest with refusals is what keeps "this route touched only these" a
- * checked claim.
- */
+/** The CLI plane's account object, with unbuilt calls refusing. */
 export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Built): CliRoutesAuthority & Built {
   const refuse = (member: string) => unreached('UserDO', member);
 
@@ -254,15 +207,7 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
   };
 }
 
-/**
- * The account object as the MCP surface declares it: the bearer path's token
- * checks, the cookie path's session checks, and the ownership gate's roster
- * reads, with everything a case did not build refusing.
- *
- * One server answers external MCP clients (a CLI bearer) and the browser
- * (a session cookie), so both authentications are on the same object even
- * though one request takes one of them.
- */
+/** The MCP account object; bearer and cookie auth share it because one server serves CLI and browser. */
 export function mcpAccount<Built extends Partial<McpAuthority>>(built: Built): McpAuthority & Built {
   const refuse = (member: string) => unreached('UserDO', member);
 
@@ -280,11 +225,7 @@ export function mcpAccount<Built extends Partial<McpAuthority>>(built: Built): M
   };
 }
 
-/** The workspace object a Worker route addresses, with the birth sequence and
- *  the credential notice refusing unless the case built them. The dispatch
- *  surface is the request's own choice of name, so a case supplies exactly the
- *  methods it drives. Typed at the CLI plane's reach, which is the widest of
- *  the two planes that address one. */
+/** The workspace object a Worker route addresses, typed at the CLI plane's (widest) reach; unbuilt calls refuse. */
 export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Built): CliAgentTarget & Built {
   const refuse = (member: string) => unreached('OrchestratorAgent', member);
 
@@ -304,14 +245,7 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
   };
 }
 
-/**
- * The account object as `/api/user/*` declares it, with every call this case
- * did not build refusing.
- *
- * One dispatcher holds one stub for every route family the plane answers, so a
- * case that drives the credential routes still has to say what the device,
- * config, codex and MCP families would do. Refusals say it.
- */
+/** The `/api/user/*` account object: one stub serves every route family, so unbuilt calls refuse. */
 export function userAccount<Built extends Partial<UserRoutesAuthority>>(
   built: Built,
 ): UserRoutesAuthority & Built {
