@@ -1,84 +1,30 @@
 /**
- * The fleet event boundaries: every place a Cloudflare-side failure, turn, model
- * request, tool call, job settlement or release transition becomes a row.
- *
- * ## Why this list exists at all
- *
- * An instrument nobody asserts on is an instrument nobody notices has stopped.
- * Instrumentation is uniquely prone to that because its absence looks exactly
- * like quiet: a deleted emit line leaves a passing build, a passing suite, and a
- * dataset whose missing rows read as "nothing happened there". So the boundaries
- * are DECLARED, and the declaration is load-bearing in two directions.
- *
- * RUNTIME. `boundaryOf` is read by the diagnostics sink to stamp the `boundary`
- * slot, so a declared boundary's rows are queryable by boundary id and an
- * undeclared event's are not. The list is therefore exercised on every write
- * rather than being a fixture a gate reads and nothing else does — the failure
- * mode of every registry that drifts.
- *
- * GATE. `tests/unit-analytics-boundaries.test.ts` asserts set equality between
- * this list and the emit sites actually present in the named files, and that the
- * families covered are exactly the pinned five. Deleting an emit line reds it;
- * adding a boundary without instrumenting it reds it; instrumenting something
- * without declaring it reds it. The list is module-private, so the gate recovers
- * it from this file's own syntax with the parser it already walks the emit sites
- * with — the declaration is one side of a source-structure equality, and reading
- * it the same way as the other side is what keeps the two halves comparable.
- *
- * ## Why the mechanism is part of the declaration
- *
- * Two thirds of these sites cannot reach a binding. `rejectOutOfScopeRpc` is a
- * pure function over a frame, `createCloudflareAIFetch` closes over options and
- * not an environment, and the capability gate is a free function over SQL. Those
- * emit through core's `diagnostics` seam and the sink routes them; the sites that
- * DO hold an environment and a numeric payload — a turn, a model request, a tool
- * call, a job, a release — call a writer directly, because routing a turn's
- * eleven measured numbers through a log line's string fields would lose every one
- * of them. Recording which mechanism a boundary uses is what lets one gate check
- * both kinds without knowing them individually.
+ * Declared fleet event boundaries. `boundaryOf` stamps the `boundary` slot on every write, and
+ * `tests/unit-analytics-boundaries.test.ts` asserts set equality with the emit sites in `site`.
  */
 import type { LogEventName } from '../log';
 
-/**
- * The five boundary families, pinned. A family is the QUESTION a query asks —
- * "what is failing", "how are turns going", "which provider is refusing", "are
- * jobs settling", "are releases moving" — which is why the set is closed: a
- * sixth family is a new question and should have to be argued for, not appear.
- */
+/** Closed set: a family is the question a query asks; a sixth must be argued for. */
 const BOUNDARY_FAMILIES = ['error', 'turn', 'provider', 'job', 'release'] as const;
 
 type BoundaryFamily = (typeof BOUNDARY_FAMILIES)[number];
 
 /**
- * How a boundary reaches Analytics Engine.
- *
- * `diagnostics` — the site has no binding in reach; it emits through core's
- * global logger and `install.ts` routes it. Cheap, no plumbing, string fields.
- *
- * `writer` — the site holds an environment and a measured payload; it calls a
- * named adapter in `record.ts`. Typed, numeric, and isolate-agnostic, which is
- * what makes it correct inside a Durable Object where an installed sink from the
- * Worker's isolate would not be present.
+ * `diagnostics`: no binding in reach; emits via core's logger and `install.ts` routes it.
+ * `writer`: holds an env and calls a `record.ts` adapter; works in a DO, where no sink is
+ * installed.
  */
 type BoundaryMechanism = 'diagnostics' | 'writer';
 
 interface FleetBoundary {
-  /** Stable id, written to the `boundary` blob. Never renamed: it is the join
-   *  key between a dataset three months deep and this file. */
+  /** Written to the `boundary` blob; never renamed, it joins stored rows to this file. */
   readonly id: string;
   readonly family: BoundaryFamily;
-  /** The dotted event name the row carries. For a `diagnostics` boundary this is
-   *  literally the name passed to `diagnostics.event`/`failure`, which is what
-   *  lets the sink find the boundary from the line alone. */
   readonly event: LogEventName;
-  /** Repo-relative file the emit lives in. The gate's denominator. */
   readonly site: string;
   readonly mechanism: BoundaryMechanism;
-  /** The identifier the gate looks for at the site: the adapter's name for a
-   *  `writer` boundary, and the emitting method for a `diagnostics` one. */
+  /** Identifier the gate looks for at the site: adapter name or emitting method. */
   readonly emitter: string;
-  /** What a row here means, in one sentence, for whoever reads the dataset
-   *  later and does not have this file open. */
   readonly means: string;
 }
 
@@ -225,34 +171,16 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
   },
 ];
 
-/**
- * Boundary ids by event name, for the sink's `boundary` stamp. Built once: the
- * lookup is on a per-datapoint path, and the list is fixed at module load.
- */
 const BOUNDARY_ID_BY_EVENT: Record<string, string> = Object.fromEntries(
   FLEET_BOUNDARIES.map((boundary) => [boundary.event, boundary.id] as const),
 );
 
-/**
- * The boundary id for an event name, or the empty string when the event is not a
- * declared boundary. Empty rather than the event's own name: a query filtering on
- * `boundary` is asking about the declared set, and quietly widening it to every
- * diagnostic in the codebase would make that filter meaningless.
- */
+/** `''` for an undeclared event, so a `boundary` filter stays scoped to the declared set. */
 export function boundaryOf(event: string): string {
   return BOUNDARY_ID_BY_EVENT[event] ?? '';
 }
 
-/**
- * The family segment of a dotted event name — everything before the first dot,
- * and the whole name when there is none.
- *
- * Stored in its own slot rather than derived at query time. AE's SQL dialect is a
- * subset, so a reader cannot be assumed to have string splitting; and the
- * question it answers — which SUBSYSTEM is producing this — is the first one
- * anyone asks of a dataset holding hundreds of distinct event names, which makes
- * it a dimension rather than a derivation.
- */
+/** Segment before the first dot. Stored in its own slot: AE's SQL subset lacks string splitting. */
 export function eventFamily(event: string): string {
   const dot = event.indexOf('.');
 

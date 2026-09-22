@@ -1,71 +1,26 @@
 /**
- * The three Analytics Engine datasets, and the slot layout every writer and
- * every reader resolves through.
- *
- * ## Why a descriptor rather than positional literals
- *
- * AE's columns are `blob1..blob20` and `double1..double20`. A writer that spells
- * `blobs[4] = provider` and a reader that spells `blob5 AS provider` are two
- * declarations of one fact, and the failure when they disagree is the worst kind
- * this repository has: the query returns a column, the column contains strings,
- * and every one of them is the wrong field. Nothing is thrown and nothing reads
- * empty. So the position is derived, once, from a named slot: the writer
- * projects a typed row through `blobs`, and a reader asks
- * `blobColumn(schema, 'provider')`. A rename is then a type error on both sides
- * rather than a silently transposed dataset.
- *
- * ## Why three datasets rather than one
- *
- * AE samples PER INDEX VALUE, and sampling is the reason. A turn stream and an
- * admin audit trail differ in volume by orders of magnitude; sharing a dataset
- * would put them in one sampling population and the audit rows — the ones that
- * must be exact — are the ones that would be dropped. Three datasets also mean
- * three row SHAPES, so no dataset carries a column that is meaningless for most
- * of its rows.
- *
- * ## What the byte budgets are for
- *
- * Every slot declares `maxBytes`, and `defineSchema` asserts that the blob
- * budgets SUM to no more than the platform's 16 KiB per-datapoint limit. That
- * makes the limit structural rather than defensive: a row cannot exceed it,
- * because no slot can exceed its own bound and the bounds already fit. The
- * alternative — truncating a finished row at 16 KiB — decides which field to
- * lose at the moment it is too late to say so.
- *
- * ## What may never appear here
- *
- * No slot may be named for a reserved field, and `defineSchema` refuses one both
- * at compile time (the `ReservedSlotIsNotWritable` witness, the same idiom core's
- * `LoggableFields` uses) and at load. Beyond names, the rule these schemas were
- * designed to: nothing on them holds a prompt, a message, free text, an email, a
- * token or a header value. The two identifiers that could smuggle user text —
- * a workspace id and an admin's address — are declared as digests and are
- * written through `analyticsDigest`.
+ * The three Analytics Engine datasets and their slot layouts. Positions derive from named slots
+ * (`blobColumn(schema, 'provider')`), so writer and reader cannot silently transpose columns.
+ * Separate datasets because AE samples per index value: audit rows must not share a sampling
+ * population with turn streams. No slot holds free text; workspace and actor ids are digests.
  */
 import type { ReservedLogField } from '../log';
 import { assertWithinPlatformLimits } from './limits';
 import { assertPublishableNames } from './privacy';
 
-/** The Env members that hold an Analytics Engine dataset. Named as a union so a
- *  schema cannot point at a binding the Worker does not declare. */
 export type AnalyticsBindingName = 'AGENT_METRICS' | 'FEEDBACK_MARKERS' | 'CONTROL_PLANE_OPS';
 
-/** One string column. `maxBytes` is what makes the 16 KiB per-datapoint budget a
- *  property of the schema instead of a check on the way out. */
+/** Blob budgets must sum within the per-datapoint limit, so a row cannot exceed it. */
 export interface BlobSlot {
   readonly name: string;
   readonly maxBytes: number;
 }
 
-/** One numeric column. Numbers are fixed-width on the wire, so a double slot has
- *  no byte budget to declare — which is also why anything unbounded belongs in a
- *  double if it can be counted rather than in a blob if it can be named. */
 export interface DoubleSlot {
   readonly name: string;
 }
 
-/** The single indexed column. AE's sampling key and its only high-cardinality
- *  filter, capped by the platform at 96 bytes. */
+/** AE's sampling key and only high-cardinality filter. */
 export interface IndexSlot {
   readonly name: string;
   readonly maxBytes: number;
@@ -73,14 +28,12 @@ export interface IndexSlot {
 
 export interface AnalyticsSchema {
   readonly binding: AnalyticsBindingName;
-  /** The dataset name. Writers never read it: they write through `binding`,
-   *  which wrangler points at the dataset. Only the SQL read path names one, and
-   *  `scripts/analytics-datasets.test.ts` holds the two equal. */
+  /** Read only by SQL; `scripts/analytics-datasets.test.ts` holds it equal to wrangler's. */
   readonly dataset: string;
   readonly index: IndexSlot;
-  /** Slot order IS `blob1..blobN`. */
+  /** Order is `blob1..blobN`: append only, it is the wire format. */
   readonly blobs: readonly BlobSlot[];
-  /** Slot order IS `double1..doubleN`. */
+  /** Order is `double1..doubleN`: append only. */
   readonly doubles: readonly DoubleSlot[];
 }
 
@@ -90,14 +43,7 @@ export type DoubleName<S extends AnalyticsSchema> = S['doubles'][number]['name']
 
 export type IndexName<S extends AnalyticsSchema> = S['index']['name'];
 
-/**
- * A complete row for one dataset. Every slot is REQUIRED: a schema's whole
- * purpose is that position N always means the same thing, and an optional slot
- * would let one call site write `provider` into a row where another left it
- * absent — after which `blob7` means two things depending on which call site
- * produced the row. A field with nothing to say passes the empty string or zero,
- * which is a statement rather than a gap.
- */
+/** Every slot required, so position N always means one thing; pass `''` or 0 when empty. */
 export type AnalyticsRow<S extends AnalyticsSchema> =
   & { readonly [K in BlobName<S>]: string }
   & { readonly [K in DoubleName<S>]: number }
@@ -105,12 +51,7 @@ export type AnalyticsRow<S extends AnalyticsSchema> =
 
 declare const reservedSlot: unique symbol;
 
-/**
- * Uninhabited. It is the required type of a schema whose slot names include a
- * reserved field, so such a schema does not compile — the same construction
- * core's `LoggableFields` uses, for the same reason: a name-based ban that is
- * only a convention gets violated by the call site that most needed it.
- */
+/** Uninhabited: a schema naming a reserved log field does not compile (as `LoggableFields`). */
 export interface ReservedSlotIsNotWritable {
   readonly [reservedSlot]: 'reserved slot name';
 }
@@ -118,14 +59,8 @@ export interface ReservedSlotIsNotWritable {
 type SlotName<S extends AnalyticsSchema> = BlobName<S> | DoubleName<S> | IndexName<S>;
 
 /**
- * Pin a schema. `const` type parameter so the slot names survive as literals —
- * without it every name widens to `string` and `AnalyticsRow` degenerates to an
- * open map, which is exactly the shape this file exists to prevent.
- *
- * The runtime assertions duplicate what the type system already refuses, and
- * deliberately: the type check is erased before anything runs, so a test cannot
- * prove the ban fires. `limits.ts` and `privacy.ts` hold them, beside the facts
- * each enforces, and both are reachable by a test for that reason.
+ * `const` keeps slot names literal; without it `AnalyticsRow` widens to an open map. Runtime
+ * checks repeat the type-level ban because types are erased and untestable.
  */
 function defineSchema<const S extends AnalyticsSchema>(
   schema: S
@@ -147,7 +82,7 @@ function defineSchema<const S extends AnalyticsSchema>(
   return pinned;
 }
 
-/** The SQL column a named blob occupies. 1-based, because AE's columns are. */
+/** 1-based, as AE's columns are. */
 export function blobColumn<S extends AnalyticsSchema>(schema: S, name: BlobName<S>): string {
   const at = schema.blobs.findIndex((slot) => slot.name === name);
 
@@ -156,7 +91,6 @@ export function blobColumn<S extends AnalyticsSchema>(schema: S, name: BlobName<
   return `blob${at + 1}`;
 }
 
-/** The SQL column a named double occupies. */
 export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleName<S>): string {
   const at = schema.doubles.findIndex((slot) => slot.name === name);
 
@@ -165,24 +99,13 @@ export function doubleColumn<S extends AnalyticsSchema>(schema: S, name: DoubleN
   return `double${at + 1}`;
 }
 
-/** AE's one indexed column. A function rather than the constant `'index1'` so a
- *  reader names the CONCEPT it is filtering on and stays correct if the platform
- *  ever admits a second index. */
 export function indexColumn(_schema: AnalyticsSchema): string {
   return 'index1';
 }
 
 /**
- * Agent operational metrics: one row per turn, per model request, per tool call,
- * per first token, and one per diagnostic event that reaches the sink.
- *
- * `kind` discriminates them. It is blob1 because it is the first predicate of
- * every query — a mixed-shape dataset whose discriminator is buried is one whose
- * aggregates quietly pool a turn's `durationMs` with a tool call's.
- *
- * INDEXED ON THE WORKSPACE DIGEST, which is the whole reason this is a separate
- * dataset. AE samples per index value, so one workspace running a swarm is
- * sampled alone and every other workspace's counts stay exact.
+ * Rows discriminated by `kind`; every query must filter on it. Indexed on the workspace digest so
+ * a busy workspace is sampled alone.
  */
 export const AGENT_METRICS_SCHEMA = defineSchema({
   binding: 'AGENT_METRICS',
@@ -198,74 +121,38 @@ export const AGENT_METRICS_SCHEMA = defineSchema({
     { name: 'agentKind', maxBytes: 24 },
     { name: 'provider', maxBytes: 48 },
     { name: 'model', maxBytes: 128 },
-    // `tool` and `source` are disjoint by `kind`, which is what keeps either from
-    // becoming a bag: `tool` is the tool's name and is set only on a `tool` row;
-    // `source` is the producer or operation a row is attributed to — which spend
-    // source asked for a `model` row, which lifecycle verb produced an `event`
-    // row. One row never carries both.
+    // Disjoint by `kind`: `tool` only on tool rows; `source` is the producer or lifecycle verb.
     { name: 'tool', maxBytes: 64 },
     { name: 'source', maxBytes: 48 },
-    // WHY a refusal was refused, as one closed word. `code` names the CLASS of
-    // failure from core's nine-member vocabulary; a denial's reason is the arm
-    // that decided it, and `unrecognized_workspace` versus `owner_only` imply
-    // opposite responses while both are `denied`. APPENDED rather than inserted:
-    // slot order IS the wire format, so a new slot may only go last.
+    // The deciding arm of a refusal, one closed word; `code` is only the failure class.
     { name: 'reason', maxBytes: 32 },
   ],
   doubles: [
-    // Always 1. Present so `SUM(_sample_interval * count)` reads as a weighted
-    // count of ROWS while every other double keeps its own meaning — and so a
-    // future pre-aggregated row can carry a real multiplicity without changing
-    // one query.
+    // Always 1, so `SUM(_sample_interval * count)` is a weighted row count.
     { name: 'count' },
     { name: 'durationMs' },
     { name: 'ttftMs' },
     { name: 'steps' },
     { name: 'toolCalls' },
-    // Core's `Usage` field names verbatim (packages/core/src/usage.ts
-    // USAGE_FIELDS). One token vocabulary in the repository: a dataset that
-    // renamed them would be the tenth restatement of the same provider report.
+    // Core's `Usage` field names verbatim (`USAGE_FIELDS`).
     { name: 'input' },
     { name: 'output' },
     { name: 'cacheRead' },
     { name: 'cacheWrite' },
     { name: 'reasoning' },
     { name: 'neurons' },
-    // A price is something WE computed, not something the provider reported, and
-    // it exists only where the catalog rate was the call's own — a judge runs
-    // cross-family on purpose, so pricing it at the actor's rate would put a
-    // fabricated number in the dataset. `priced` is the witness: an average cost
-    // divides by `SUM(_sample_interval * priced)`, never by the row count, so an
-    // unpriced call cannot read as a free one.
+    // `usd` only when the catalog rate was the call's own; average cost divides by
+    // `SUM(_sample_interval * priced)`, so an unpriced call never reads as free.
     { name: 'usd' },
     { name: 'priced' },
-    // Which delivery attempt a row is reporting, where the producer counts them.
-    // A durable recovery announcement is retried until its host accepts it, so
-    // "how many rows" and "how many incidents" are different questions, and this
-    // slot is what tells them apart. APPENDED, like `reason` above: slot order IS
-    // the wire format. Zero on every row whose producer counts no attempts.
+    // Delivery attempt, separating rows from incidents; 0 where the producer counts none.
     { name: 'attempts' },
   ],
 });
 
 /**
- * Feedback markers: one row per submission, accepted or rejected.
- *
- * A MARKER, not a report. The note, the screenshot and the route the person was
- * on live in R2 and in the control plane's own row; what reaches here is that a
- * report happened, how big it was, and whether we kept it. `noteLength` is a
- * character count precisely so the question "are people writing real reports"
- * can be answered without the reports.
- *
- * REJECTIONS ARE ROWS TOO. `storage_unavailable` and `row_write_failed` mean a
- * report was lost rather than refused, and pooling those with a client error
- * would make both rates unreadable.
- *
- * INDEXED ON THE SUBMISSION ID, which looks like the wrong choice and is the
- * right one: AE samples the index values that accumulate events, so a
- * unique-per-row index is the one shape that is never sampled, and feedback
- * counts must be exact. Every grouping anyone wants — outcome, reason, route
- * family — is a blob.
+ * One marker per submission, never the report itself. Indexed on the unique submission id so it
+ * is never sampled and counts stay exact.
  */
 export const FEEDBACK_MARKERS_SCHEMA = defineSchema({
   binding: 'FEEDBACK_MARKERS',
@@ -275,9 +162,7 @@ export const FEEDBACK_MARKERS_SCHEMA = defineSchema({
     { name: 'kind', maxBytes: 16 },
     { name: 'outcome', maxBytes: 16 },
     { name: 'rejectReason', maxBytes: 32 },
-    // The FIRST path segment, mapped onto a closed union. Never the route: a
-    // workspace slug is mission-derived, and no redactor can recognise user text
-    // inside a path.
+    // Closed union from the first path segment; never the route (slugs are user text).
     { name: 'routeFamily', maxBytes: 24 },
   ],
   doubles: [
@@ -285,28 +170,12 @@ export const FEEDBACK_MARKERS_SCHEMA = defineSchema({
     { name: 'screenshotBytes' },
     { name: 'noteLength' },
     { name: 'annotated' },
-    // 1 when the submission CARRIED a screenshot. Presence and size are two
-    // facts, and the marker held only one of them: a refusal decided before the
-    // bytes were measured wrote 0 bytes, which is indistinguishable from a
-    // note-only report — so the screenshot-refusal population, the one these
-    // columns exist to describe, counted itself as having no screenshots.
-    // APPENDED, because slot order is the wire format.
+    // Presence, separate from size: a refusal can precede measuring the bytes.
     { name: 'screenshot' },
   ],
 });
 
-/**
- * Control-plane operations: one row per privileged mutation and per release
- * transition, successful or refused.
- *
- * INDEXED ON THE ACTOR DIGEST rather than the address. Per-actor audit without
- * storing who: a reader holding an admin's email can digest it and filter, and
- * the dataset alone names nobody.
- *
- * `target` is a digest for the same reason `workspace` is one on the agent
- * dataset. `targetKind` is the plain word, because 'workspace' is our
- * vocabulary and not the user's.
- */
+/** Indexed on the actor digest: a reader holding an email can digest it and filter. */
 export const CONTROL_PLANE_OPS_SCHEMA = defineSchema({
   binding: 'CONTROL_PLANE_OPS',
   dataset: 'kinu_control_plane_ops',
@@ -327,12 +196,7 @@ export const CONTROL_PLANE_OPS_SCHEMA = defineSchema({
   ],
 });
 
-/**
- * Every dataset, keyed by the binding that carries it. `writer.ts` builds the
- * one plane from this list, so a dataset added here is wired — and a binding
- * wrangler declares that no schema claims fails the same equality from the other
- * side (`scripts/analytics-datasets.test.ts`).
- */
+/** `writer.ts` builds its plane from this list; `scripts/analytics-datasets.test.ts` checks it. */
 export const ANALYTICS_SCHEMAS = [
   AGENT_METRICS_SCHEMA,
   FEEDBACK_MARKERS_SCHEMA,

@@ -1,33 +1,6 @@
 /**
- * The named adapters a production call site uses to write one row.
- *
- * ## Why adapters rather than the writer
- *
- * Three things have to be true at every emit site and none of them should be
- * that site's problem:
- *
- *   1. EVERY SLOT IS FILLED. `AnalyticsRow` requires all of them, so a turn row
- *      still has to say something about `tool` and a tool row about `steps`. That
- *      is the point — position N always means one thing — but it means a call
- *      site spelling a literal row would be twenty fields of noise around the
- *      five it cares about. `agentRow` supplies the rest.
- *   2. THE IDENTIFIERS ARE DIGESTED. A workspace id is mission-derived user text.
- *      Leaving that to the call site is leaving it to be forgotten once.
- *   3. NOTHING THROWS. Every one of these runs inside a turn, a route handler or
- *      a `.catch()`. A telemetry write that can fail a turn is worse than no
- *      telemetry, so the one call that could throw is classified and reported
- *      through the same seam every other handled failure in this codebase uses.
- *
- * ## Why they take `env` rather than reading an installed sink
- *
- * A Durable Object is a different isolate from the Worker that routes to it, with
- * its own module-level state. A sink installed in `fetch` is NOT installed inside
- * `OrchestratorAgent`, so an implementation that reached for an installed
- * singleton would write nothing from the very sites that produce the most
- * valuable rows — with a green test suite, because a test installs the sink in
- * the same isolate it asserts in. Taking the environment makes correctness
- * independent of which isolate the call happens in, which is the only way to be
- * sure of it.
+ * Named row adapters: fill every slot, digest identifiers, never throw. They take `env` rather
+ * than an installed sink because a DO is a separate isolate where the Worker's sink is absent.
  */
 import type { Usage } from '../../usage';
 import { toKinuError, type ErrorCode } from '../error';
@@ -41,41 +14,21 @@ import {
 import { analyticsPlane, type AnalyticsEnv, type AnalyticsWriter } from './writer';
 
 /**
- * Which kind of actor produced a row. A closed union because the alternative —
- * each call site spelling a string — is how a dataset ends up with
- * `'orchestrator'`, `'Orchestrator'` and `'cf-orchestrator'` as three values of
- * one dimension. Empty is legal and means the row is not attributable to one
- * actor, which a route handler's row is not.
- *
- * Only the root writes rows: a hosted subordinate, head or branch runs
- * `runHeadInference` and records nothing here, so the fleet metrics do not see
- * its spend. When that changes, its kinds join from `WorkspaceActor['kind']`.
+ * `''` means not attributable to one actor. Only the root writes rows: subordinates, heads and
+ * branches run `runHeadInference` and record nothing, so fleet metrics omit their spend.
  */
 export type AgentKind = 'orchestrator' | '';
 
-/**
- * How an operation ended. `refused` and `failed` are separate for the reason
- * `CODE_IS_REFUSAL` exists in core: a rate that pools a correct refusal with a
- * defect is worse than no rate.
- */
+/** `refused` and `failed` stay separate: pooling a correct refusal with a defect ruins the rate. */
 export type RowOutcome = 'ok' | 'refused' | 'failed' | 'denied';
 
-/** What an agent-metrics row is about. Blob 1, because it is the first predicate
- *  of every query over this dataset. */
 export type AgentRowKind = 'turn' | 'model' | 'tool' | 'ttft' | 'event';
 
 type AgentRow = AnalyticsRow<typeof AGENT_METRICS_SCHEMA>;
 
 type OpsRow = AnalyticsRow<typeof CONTROL_PLANE_OPS_SCHEMA>;
 
-/**
- * A complete agent-metrics row from the fields a call site actually has.
- *
- * Defaults are the empty string and zero, never a plausible stand-in: a tool row
- * whose `steps` read 1 would be indistinguishable from a one-step turn under an
- * aggregate that forgot to filter on `kind`.
- */
-/** The fields a call site actually has for one agent-plane row. */
+/** Absent fields default to `''`/0, never a plausible stand-in value. */
 interface AgentRowInput {
   kind: AgentRowKind;
   event: string;
@@ -112,9 +65,7 @@ function agentRow(input: AgentRowInput): AgentRow {
     model: input.model ?? '',
     tool: input.tool ?? '',
     source: input.source ?? '',
-    // Structurally empty here. A typed row's verdict is already fully carried by
-    // `outcome` plus `code`; the slot exists for the diagnostics path, where a
-    // refusal's deciding ARM is a fact neither of those two can hold.
+    // Only the diagnostics path fills `reason`; typed rows carry the verdict in `outcome` + `code`.
     reason: '',
     count: 1,
     durationMs: input.durationMs ?? 0,
@@ -133,13 +84,6 @@ function agentRow(input: AgentRowInput): AgentRow {
   };
 }
 
-/**
- * Hand one row to one writer, reporting a failure rather than raising it.
- *
- * The `catch` classifies and reports, which is the same discipline
- * `reportModelCall` follows one layer up: a telemetry write is exactly the kind
- * of side effect whose failure must not become the caller's.
- */
 function emit<S extends AnalyticsSchema>(writer: AnalyticsWriter<S>, row: AnalyticsRow<S>): void {
   try {
     writer.write(row);
@@ -152,13 +96,10 @@ function emit<S extends AnalyticsSchema>(writer: AnalyticsWriter<S>, row: Analyt
   }
 }
 
-/** One row onto the agent plane. Every recorder below is its own named row
- *  shape over this one write. */
 function recordAgentRow(env: AnalyticsEnv, row: AgentRowInput): void {
   emit(analyticsPlane(env).agent, agentRow(row));
 }
 
-/** A settled turn: what it cost, how long it took, and how it ended. */
 export interface TurnRowInput {
   readonly workspace: string;
   readonly agentKind: AgentKind;
@@ -178,14 +119,7 @@ export function recordTurnRow(env: AnalyticsEnv, input: TurnRowInput): void {
   recordAgentRow(env, { kind: 'turn', event: 'turn.settled', ...input });
 }
 
-/**
- * Time to first token, from the turn's own start to its first streamed chunk.
- *
- * A separate row rather than a field on the turn row, because it is known
- * hundreds of milliseconds into a turn that may run for minutes and a turn that
- * never streamed anything must be visibly absent here rather than present with a
- * zero.
- */
+/** Its own row, so a turn that never streamed is absent rather than a zero. */
 export interface TtftRowInput {
   readonly workspace: string;
   readonly agentKind: AgentKind;
@@ -198,13 +132,11 @@ export function recordTtftRow(env: AnalyticsEnv, input: TtftRowInput): void {
   recordAgentRow(env, { kind: 'ttft', event: 'turn.first_token', ...input });
 }
 
-/** One model request: the turn loop's steps and every producer outside it. */
 export interface ModelRowInput {
   readonly workspace: string;
   readonly agentKind: AgentKind;
   readonly provider: string;
   readonly model: string;
-  /** Which producer asked — the turn loop, a judge, the fast tier, evolution. */
   readonly source: string;
   readonly usage: Usage;
   readonly usd: number | undefined;
@@ -214,10 +146,7 @@ export function recordModelRow(env: AnalyticsEnv, input: ModelRowInput): void {
   recordAgentRow(env, { kind: 'model', event: 'model.call', ...input });
 }
 
-/**
- * One finished tool call. Name, verdict, duration — never arguments and never a
- * result: those are whatever the user's workspace contains.
- */
+/** Never arguments or results: those carry workspace content. */
 export interface ToolRowInput {
   readonly workspace: string;
   readonly agentKind: AgentKind;
@@ -239,12 +168,10 @@ export function recordToolRow(env: AnalyticsEnv, input: ToolRowInput): void {
   }));
 }
 
-/** A background job's lifecycle operation and whether it took effect. */
 export interface JobRowInput {
   readonly workspace: string;
   readonly agentKind: AgentKind;
-  /** `cancel` | `retry` | `dismiss` | `clear` — the operation, not the job id: a
-   *  job id is high-cardinality and answers no fleet question. */
+  /** `cancel` | `retry` | `dismiss` | `clear`; never the job id. */
   readonly operation: string;
   readonly outcome: RowOutcome;
 }
@@ -260,35 +187,16 @@ export function recordJobSettled(env: AnalyticsEnv, input: JobRowInput): void {
   }));
 }
 
-/**
- * One durable recovery incident's announcement, settled.
- *
- * A container lifecycle failure is made durable by the box before anyone is
- * told, and the box re-delivers it until this Worker accepts it. This row is
- * what happened to ONE of those deliveries. Without the row, an incident that
- * reached the agent and one that reached nobody would produce the same
- * observable result, which is nothing.
- *
- * `outcome` carries the verdict and `code` the class of failure, so a successful
- * recovery and a refused envelope are separate values of one dimension rather
- * than a row's presence or absence. `attempts` is the producer's own count, not
- * a number this side could derive: the box's ledger is where deliveries are
- * counted, and a Worker that has been evicted between two of them cannot see
- * how many there were.
- */
+/** One delivery of a durable container-failure announcement; success is a row too. */
 export interface RecoveryRowInput {
   readonly workspace: string;
-  /** The lifecycle stage the incident is about — `attach`, `checkpoint`,
-   *  `process`, `port`. Empty when the envelope was refused before a stage could
-   *  be read, which is the one case where no stage is a fact yet. */
+  /** `attach` | `checkpoint` | `process` | `port`; `''` when refused before a stage was read. */
   readonly stage: string;
   readonly outcome: RowOutcome;
   readonly code: ErrorCode | '';
-  /** Which delivery attempt this was, as the producer counts them. */
+  /** The producer's own count; an evicted Worker cannot derive it. */
   readonly attempts: number;
-  /** From the incident's first report to this settlement. Zero when the two are
-   *  the same instant, and zero for a refused envelope, which has no first
-   *  report on record. */
+  /** Since the incident's first report; 0 for a refused envelope. */
   readonly durationMs: number;
 }
 
@@ -297,11 +205,7 @@ export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput
     kind: 'event',
     event: 'sandbox.recovery_settled',
     workspace: input.workspace,
-    // The workspace root is what accepts the announcement and owns the ledger.
     agentKind: 'orchestrator',
-    // `source` on an `event` row is the lifecycle verb that produced it, which
-    // for a recovery is the stage that failed. A closed vocabulary from the
-    // producer's own `IncidentStage`, so it can never be prose.
     source: input.stage,
     outcome: input.outcome,
     code: input.code,
@@ -310,22 +214,15 @@ export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput
   }));
 }
 
-/**
- * A release change moving status, or a deployment recorded against one.
- *
- * On the control-plane dataset rather than the agent one: a release is an
- * operator action over a user's account, and it belongs beside the audit rows a
- * reader compares it with.
- */
+/** Written to the control-plane dataset, beside the audit rows it is compared with. */
 export interface ReleaseRowInput {
-  /** The acting user's id or address. Digested here — never written raw. */
+  /** Digested; never written raw. */
   readonly actor: string;
-  /** `transition` or `deployment`. */
+  /** `transition` | `deployment`. */
   readonly operation: string;
-  /** The status moved to, or the environment deployed to. A closed vocabulary
-   *  from the release store, never free text. */
+  /** Status or environment; a closed vocabulary, never free text. */
   readonly reason: string;
-  /** The change id. Digested: it identifies one user's work. */
+  /** The change id, digested. */
   readonly target: string;
   readonly outcome: RowOutcome;
   readonly code: ErrorCode | '';
