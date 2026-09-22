@@ -289,7 +289,7 @@ function makePeers(overrides: Partial<PeersToolDeps> = {}) {
 
 describe('agents tool — registration and dep-gating', () => {
   test('hire accepts a birth-time context choice and refuses it on existing agents', async () => {
-    expect(parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'Continue', context: 'inherit' }))
+    expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Continue', context: 'inherit' } }))
       .toMatchObject({ context: 'inherit' });
     const { deps } = makeTeam();
     await expect(agentsTool({ team: deps, profile: testProfile }).execute({
@@ -457,8 +457,9 @@ describe('agents tool — the field contract', () => {
     const tool = agentsTool({ team: makeTeam().deps, swarm: swarmDeps(), profile: testProfile });
     expect(propertyDescription({ value: tool.inputSchema }, 'context')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
     expect(propertyDescription({ value: tool.inputSchema }, 'config')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
-    expect(parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'Read' })).not.toHaveProperty('context');
-    expect(() => parseAgentsToolInput({ action: 'swarm', task: 'Read', context: 'inherit' })).toThrow('hire');
+    expect(parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'Read' } }))
+      .not.toHaveProperty('context');
+    expect(() => parseAgentsToolInput({ input: { action: 'swarm', task: 'Read', context: 'inherit' } })).toThrow('hire');
   });
 
   test('the preset list reaches the model where `preset` is filled, from the one constant', () => {
@@ -988,7 +989,7 @@ describe('agents tool — peer workspace actions', () => {
     expect('timeoutMs' in (calls[0]?.input ?? {})).toBe(false);
 
     expect(() => parseAgentsToolInput({
-      action: 'hire', agent: 'scout', message: 'x', timeout_seconds: 1,
+      input: { action: 'hire', agent: 'scout', message: 'x', timeout_seconds: 1 },
     })).toThrow('unknown field "timeout_seconds"');
     expect(calls).toHaveLength(1);
   });

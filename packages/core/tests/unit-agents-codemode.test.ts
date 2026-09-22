@@ -545,11 +545,13 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const deps = withBuildMode(fullDeps());
 
     const nativeInput = parseAgentsToolInput({
-      action: 'hire',
-      scope: 'workspace',
-      mission: 'own the specialist workspace',
-      message: 'begin',
-      role: 'researcher',
+      input: {
+        action: 'hire',
+        scope: 'workspace',
+        mission: 'own the specialist workspace',
+        message: 'begin',
+        role: 'researcher',
+      },
     });
 
     const native = dispatchAgentsAction(deps, nativeInput);
@@ -834,9 +836,9 @@ describe('agents surface — one action-field source', () => {
   });
 
   test('a direct model spec is refused on hire and swarm, naming tier instead', () => {
-    expect(() => parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'm', model: 'openai/gpt' }))
+    expect(() => parseAgentsToolInput({ input: { action: 'hire', role: 'researcher', mission: 'm', model: 'openai/gpt' } }))
       .toThrow(/model/);
-    expect(() => parseAgentsToolInput({ action: 'swarm', preset: 'ideate', task: 't', model: 'openai/gpt' }))
+    expect(() => parseAgentsToolInput({ input: { action: 'swarm', preset: 'ideate', task: 't', model: 'openai/gpt' } }))
       .toThrow(/model/);
   });
 });
