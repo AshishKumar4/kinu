@@ -61,12 +61,12 @@ function importsOf(file: string): Import[] {
 
       const values = match[1] || !named
         ? []
-        : named[1]!.split(',')
+        : named[1].split(',')
             .map((part) => part.trim())
             .filter((part) => part.length > 0 && !part.startsWith('type '))
-            .map((part) => part.split(/\s+as\s+/)[0]!.trim());
+            .map((part) => part.split(/\s+as\s+/)[0].trim());
 
-      out.push({ spec: match[3]!, values });
+      out.push({ spec: match[3], values });
     }
   }
 

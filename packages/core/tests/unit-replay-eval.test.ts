@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
@@ -72,25 +72,26 @@ describe('runReplayEval', () => {
       sampleSize: 6,
     });
 
-    expect(summary).not.toBeNull();
-    expect(summary!.sampleSize).toBe(2);
-    expect(summary!.acceptedCount).toBe(1);
-    expect(summary!.negativeCount).toBe(1);
-    expect(summary!.meanScore).toBeCloseTo(0.75);
-    expect(summary!.loss).toBeCloseTo(0.25);
+    const scored = present(summary, 'the replay-eval summary');
+
+    expect(scored.sampleSize).toBe(2);
+    expect(scored.acceptedCount).toBe(1);
+    expect(scored.negativeCount).toBe(1);
+    expect(scored.meanScore).toBeCloseTo(0.75);
+    expect(scored.loss).toBeCloseTo(0.25);
     expect(ranTasks.sort()).toEqual(['list the open ports', 'summarize Q3']);
 
     // 0.75 over TWO instances says almost nothing, and the summary says so.
-    expect(summary!.interval).toEqual(wilsonInterval(1.5, 2));
-    expect(summary!.interval.lo).toBeCloseTo(0.1979, 4);
-    expect(summary!.interval.hi).toBeCloseTo(0.9733, 4);
+    expect(scored.interval).toEqual(wilsonInterval(1.5, 2));
+    expect(scored.interval.lo).toBeCloseTo(0.1979, 4);
+    expect(scored.interval.hi).toBeCloseTo(0.9733, 4);
 
     // Persisted — the loss curve is queryable, interval included.
     const stored = listReplayEvals(sql, actor);
     expect(stored).toHaveLength(1);
     expect(stored[0].loss).toBeCloseTo(0.25);
     expect(stored[0].results).toHaveLength(2);
-    expect(stored[0].interval).toEqual(summary!.interval);
+    expect(stored[0].interval).toEqual(scored.interval);
 
     const [row] = sql<{ score_lo: number; score_hi: number }>`
       SELECT score_lo, score_hi FROM replay_evals WHERE actor_id = ${actor.actorId}`;
@@ -113,9 +114,11 @@ describe('runReplayEval', () => {
       },
     });
 
-    expect(summary!.meanScore).toBe(0);
-    expect(summary!.loss).toBe(1);
-    expect(summary!.results.map((r) => r.note).join(' ')).toContain('runner exploded');
+    const scored = present(summary, 'the replay-eval summary');
+
+    expect(scored.meanScore).toBe(0);
+    expect(scored.loss).toBe(1);
+    expect(scored.results.map((r) => r.note).join(' ')).toContain('runner exploded');
   });
 
   test('returns null (and persists nothing) when no labeled turns exist', async () => {

@@ -195,8 +195,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     // The ungraded turn is still VISIBLE — recorded as ungraded, not as a win.
     const complete = events.filter(e => e.type === 'turn_complete');
     expect(complete).toHaveLength(1);
-    expect(complete[0]!.message).toContain('ungraded');
-    const completionData = v.parse(v.object({ graded: v.boolean(), source: v.nullable(v.string()) }), complete[0]!.data);
+    expect(complete[0].message).toContain('ungraded');
+    const completionData = v.parse(v.object({ graded: v.boolean(), source: v.nullable(v.string()) }), complete[0].data);
     expect(completionData.graded).toBe(false);
     expect(completionData.source).toBeNull();
   });
@@ -213,9 +213,9 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     await engine.reviewTurn(turn, null);
 
     const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
-    expect(row!.outcome).toBe('accepted');
-    expect(row!.source).toBe('execution');
-    expect(row!.followup).toBeNull();
+    expect(row.outcome).toBe('accepted');
+    expect(row.source).toBe('execution');
+    expect(row.followup).toBeNull();
     // A headless turn earns a positive from the environment, not only a negative.
     expect(turn.feedback).toBe('positive');
   });
@@ -240,8 +240,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
     await new EvolutionEngine(headless.rt, headless.stores.history).reviewTurn(makeTurn({ turnId: 'exec-promote', ...acted }), null);
     const [graded] = listTurnOutcomes(headless.rt.storage.sql, headless.rt.actor);
-    expect(graded!.source).toBe('execution');
-    expect(graded!.outcome).toBe('accepted');
+    expect(graded.source).toBe('execution');
+    expect(graded.outcome).toBe('accepted');
     expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM crafted_tools`[0]?.n).toBe(0);
     expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM pattern_extractions`[0]?.n).toBe(0);
 
@@ -255,7 +255,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       makeTurn({ turnId: 'graded-promote', ...acted }), 'perfect, thanks',
     );
     const [byUser] = listTurnOutcomes(asked.rt.storage.sql, asked.rt.actor);
-    expect(byUser!.source).toBe('classifier');
+    expect(byUser.source).toBe('classifier');
     expect(asked.rt.storage.sql<{ name: string }>`SELECT name FROM crafted_tools`.map((r) => r.name))
       .toEqual(['rotate_staging_keys']);
   });
@@ -274,8 +274,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     }), null);
 
     const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
-    expect(row!.outcome).toBe('corrected');
-    expect(row!.source).toBe('execution');
+    expect(row.outcome).toBe('corrected');
+    expect(row.source).toBe('execution');
     // The corroboration gate is a USER-verdict gate: a machine verdict still
     // earns a reflection, but nothing is promoted into the corroborated view
     // by it.

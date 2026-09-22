@@ -126,8 +126,8 @@ describe('MCTS per-iteration checkpoint logging', () => {
     expect(checkpointLines).toHaveLength(3);
     // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
     // filter and order on, which an interpolated `iteration=1/3` string is not.
-    expect(JSON.parse(checkpointLines[0]!).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
-    expect(JSON.parse(checkpointLines[2]!).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
+    expect(JSON.parse(checkpointLines[0]).fields).toMatchObject({ iteration: 1, total: 3, remaining: 2 });
+    expect(JSON.parse(checkpointLines[2]).fields).toMatchObject({ iteration: 3, total: 3, remaining: 0 });
   });
 
   // Regression: a heartbeat on stdout lands in what `kinu exec --json` uses as

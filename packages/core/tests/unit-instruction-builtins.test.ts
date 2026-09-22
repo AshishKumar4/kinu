@@ -16,7 +16,7 @@ import {
   type SkillsVfs,
 } from '../src/index';
 
-const BUILTIN_NAME = BUILTIN_SKILLS[0]!.name;
+const BUILTIN_NAME = BUILTIN_SKILLS[0].name;
 
 /** The smallest plane discovery can walk: a filename → contents map. */
 function vfsWith(files: Record<string, string>): SkillsVfs {

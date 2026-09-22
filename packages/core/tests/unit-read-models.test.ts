@@ -714,7 +714,7 @@ describe('background-job control plane', () => {
     expect(live.signal.aborted).toBe(true);
     // The backend settles its own turn state BEFORE clients hear about it.
     expect(order).toEqual(['settled', 'broadcast']);
-    expect(JSON.parse(broadcasts[0]!)).toMatchObject({ type: 'work_cancelled', abortedTools: 1 });
+    expect(JSON.parse(broadcasts[0])).toMatchObject({ type: 'work_cancelled', abortedTools: 1 });
     db.close();
   });
 

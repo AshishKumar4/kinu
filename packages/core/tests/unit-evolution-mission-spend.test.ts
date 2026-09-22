@@ -84,15 +84,15 @@ describe('evolution spend under a mission budget', () => {
 
     // The control: the same review on the same workspace, with no label.
     await ws.engine.reviewTurn(makeTurn({ turnId: 'unscoped' }), FOLLOWUP);
-    expect(ws.governor.snapshot('checkout-fixes')[0]!.calls).toBe(0);
-    expect(ws.governor.snapshot('checkout-fixes')[0]!.spent.tokens).toBe(0);
+    expect(ws.governor.snapshot('checkout-fixes')[0].calls).toBe(0);
+    expect(ws.governor.snapshot('checkout-fixes')[0].spent.tokens).toBe(0);
 
     await ws.engine.reviewTurn(
       makeTurn({ turnId: 'scoped', missionLabels: ['checkout-fixes'] }),
       FOLLOWUP,
     );
 
-    const spent = ws.governor.snapshot('checkout-fixes')[0]!;
+    const spent = ws.governor.snapshot('checkout-fixes')[0];
     // Both graded turns produced the same verdict, so the difference in the
     // ledger is attributable to the label and to nothing else.
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId).sort())
@@ -113,7 +113,7 @@ describe('evolution spend under a mission budget', () => {
     // The review ran, and the one declared mission is untouched: an undeclared
     // label charges its own absent row, never the nearest real one.
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
-    expect(ws.governor.snapshot('checkout-fixes')[0]!.calls).toBe(0);
+    expect(ws.governor.snapshot('checkout-fixes')[0].calls).toBe(0);
   });
 
   test('a spent cap refuses the review\'s CALL, and the model is never reached', async () => {
@@ -141,7 +141,7 @@ describe('evolution spend under a mission budget', () => {
 
     expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
     // The exhausted label was never consulted: nothing bound this turn to it.
-    expect(ws.governor.snapshot('someone-elses-mission')[0]!.calls).toBe(1);
+    expect(ws.governor.snapshot('someone-elses-mission')[0].calls).toBe(1);
   });
 });
 
@@ -158,7 +158,7 @@ describe('a deferred review carries its mission across processes', () => {
     ws.governor.activate([]);
 
     expect(await ws.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
-    expect(ws.governor.snapshot('checkout-fixes')[0]!.calls).toBeGreaterThan(0);
+    expect(ws.governor.snapshot('checkout-fixes')[0].calls).toBeGreaterThan(0);
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(0);
   });
 

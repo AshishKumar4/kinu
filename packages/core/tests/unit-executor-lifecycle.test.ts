@@ -354,7 +354,7 @@ describe("executor lifecycle state", () => {
       list: async () => [],
     };
     const executor = createNimbusExecutor({ box });
-    const result = await executor.exposePort!(4321);
+    const result = await executor.exposePort(4321);
     expect(result.supported).toBe(false);
 
     if (!result.supported) expect(result.reason).toContain("4321");

@@ -58,7 +58,7 @@ describe('the lane bound is the platform\'s, not a number of ours', () => {
     await Promise.resolve();
     expect(admitted).toBe(false);
 
-    held[0]!();
+    held[0]();
     expect(await extra).toBeInstanceOf(Function);
 
     for (const release of held.slice(1)) release();

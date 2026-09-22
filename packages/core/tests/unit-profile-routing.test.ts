@@ -144,7 +144,7 @@ describe('resolver tier snapshot', () => {
     expect(Object.keys(p.tiers).sort()).toEqual([...TIER_IDS].sort());
 
     for (const id of ['fast', 'deep'] as const) {
-      expect(p.tiers[id].model).toBe(BUILTIN_PROFILE_CATALOG.tiers.default!.model);
+      expect(p.tiers[id].model).toBe(BUILTIN_PROFILE_CATALOG.tiers.default.model);
     }
   });
 

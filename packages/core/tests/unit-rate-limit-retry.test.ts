@@ -29,7 +29,7 @@ function retryHarness(
     nowMs += ms;
   };
 
-  const fetchImpl = asFetchFunction(async () => responses[Math.min(calls++, responses.length - 1)]!);
+  const fetchImpl = asFetchFunction(async () => responses[Math.min(calls++, responses.length - 1)]);
 
   const wrapped = withRateLimitRetry(fetchImpl, {
     now,

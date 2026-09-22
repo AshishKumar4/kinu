@@ -101,7 +101,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     const { sql, journal, actor } = seeded();
     expect(statuses(sql, actor.actorId).h4).toBe('running');
     expect(journal.listLive().items.map((run) => run.running)).toEqual([1]);
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });
 
   test('the merge terminalizes it, and the run has no running head left', () => {
@@ -114,7 +114,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     // The roster is what the dynamic context carries into every model step, and
     // the list is what the reader sees. Neither may still count this head.
     expect(journal.listLive().items).toEqual([]);
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('completed');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('completed');
   });
 
   test('the closed head says why, in the settle transition’s own words', () => {
@@ -133,16 +133,16 @@ describe('a run that settles closes every head it did not hear from', () => {
     const { sql, journal, actor } = seeded();
 
     const before = sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
-      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0]!.n;
+      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n;
 
     journal.cacheMerge(RUN, MERGE, 'synthesize');
     const view = journal.readRun(RUN)!;
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
-      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0]!.n)
+      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n)
       .toBe(before);
     expect(view.heads).toHaveLength(before);
     expect(view.heads.filter((head) => head.status === 'running')).toEqual([]);
-    expect(listForkRuns(sql, actor).items[0]!.branches).toBe(before);
+    expect(listForkRuns(sql, actor).items[0].branches).toBe(before);
   });
 
   test('settling twice is the same settlement', () => {
@@ -152,7 +152,7 @@ describe('a run that settles closes every head it did not hear from', () => {
 
     const closedAt = sql<{ completed_at: number | null }>`
       SELECT completed_at FROM head_journal
-      WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0]!.completed_at;
+      WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0].completed_at;
 
     journal.cacheMerge(RUN, MERGE, 'synthesize');
 
@@ -161,9 +161,9 @@ describe('a run that settles closes every head it did not hear from', () => {
     // unfinished rows only, so a re-settle cannot rewrite a real report's time.
     expect(sql<{ completed_at: number | null }>`
       SELECT completed_at FROM head_journal
-      WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0]!.completed_at).toBe(closedAt);
+      WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0].completed_at).toBe(closedAt);
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_merge_results
-      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0]!.n)
+      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n)
       .toBe(1);
   });
 
@@ -176,6 +176,6 @@ describe('a run that settles closes every head it did not hear from', () => {
     journal.insertSpawn({ ...spawn(RUN), depth: 0, parentId: null });
     journal.cacheMerge(RUN, MERGE, 'synthesize');
     expect(statuses(sql, actor.actorId)[RUN]).toBe('running');
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });
 });

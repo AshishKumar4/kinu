@@ -55,7 +55,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     await engine.reviewTurn(makeTurn(), 'no — you rotated production, not staging');
     const lessons = listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' });
     expect(lessons).toHaveLength(1);
-    const lessonText = lessons[0]!.text;
+    const lessonText = lessons[0].text;
 
     // THE RESET: the whole memory file plane is wiped, as a workspace reset
     // does. A lesson kept as a MEMORY.md copy goes with it.
@@ -127,16 +127,16 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
       userMessage: 'u', assistantResponse: 'a',
     });
     const [classifierRow] = listTurnOutcomes(rt.storage.sql, rt.actor, { outcomes: ['accepted'] });
-    expect(classifierRow!.source).toBe('classifier');
+    expect(classifierRow.source).toBe('classifier');
 
     // The human's gold label lands on THAT row, by id.
     const written = recordOutcomeLabels(rt.storage.sql, rt.actor, {
-      labeler: 'owner', labels: [{ outcomeId: classifierRow!.id, label: 'corrected' }],
+      labeler: 'owner', labels: [{ outcomeId: classifierRow.id, label: 'corrected' }],
     });
 
     expect(written).toBe(1);
     const gold = goldLabels(rt.storage.sql, rt.actor);
-    expect(gold.get(classifierRow!.id)!.label).toBe('corrected');
+    expect(gold.get(classifierRow.id)!.label).toBe('corrected');
 
     // …and the calibration universe is drawn from classifier rows only, so a
     // later explicit verdict neither dilutes nor deletes the measured error.
@@ -145,8 +145,8 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
       userMessage: 'u', assistantResponse: 'a',
     });
     const universe = calibrationUniverse(rt.storage.sql, rt.actor);
-    expect(universe.map(r => r.id)).toEqual([classifierRow!.id]);
-    expect(universe[0]!.predicted).toBe('accepted'); // what the model GUESSED
+    expect(universe.map(r => r.id)).toEqual([classifierRow.id]);
+    expect(universe[0].predicted).toBe('accepted'); // what the model GUESSED
     expect(listLessons(rt.storage.sql, rt.actor)).toHaveLength(0); // untouched lane
   });
 });

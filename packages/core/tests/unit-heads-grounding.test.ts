@@ -76,14 +76,14 @@ function buildRuntime(opts: {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       return {
         id: input.id,
-        async run() { return { ...opts.reports[input.task]!, id: input.id }; },
+        async run() { return { ...opts.reports[input.task], id: input.id }; },
         async abort() {},
       };
     },
     async mergeLLM(prompt): Promise<MergeOutput> {
       opts.mergePrompts?.push(prompt);
       const narrs = opts.mergeNarratives ?? ['merged'];
-      const narrative = narrs[Math.min(mergeCall, narrs.length - 1)]!;
+      const narrative = narrs[Math.min(mergeCall, narrs.length - 1)];
       mergeCall++;
 
       return mergeOut(narrative);
@@ -249,7 +249,7 @@ describe('grounded head outcome scores', () => {
 
     const lines = stderr.filter((line) => line.includes('"event":"head.judge_ensemble_clamped"'));
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!).fields).toMatchObject({
+    expect(JSON.parse(lines[0]).fields).toMatchObject({
       judgeSamplesRequested: 20,
       judgeSamplesRealised: 3,
       maxEvalLLMCalls: 4,
@@ -382,7 +382,7 @@ describe('evidence is not clipped into the merge', () => {
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
-    const prompt = mergePrompts[0]!;
+    const prompt = mergePrompts[0];
     expect(prompt).toContain(longBody);            // full body, not truncated
     expect(prompt).toContain('finding-8');         // the 9th evidence item (past a slice(0,6))
   });

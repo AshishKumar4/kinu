@@ -188,7 +188,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
 
     // Denominator: the recursion actually happened.
     expect(depth2Ids.length).toBe(1);
-    const depth2Id = depth2Ids[0]!;
+    const depth2Id = depth2Ids[0];
 
     // The journal row exists on the root...
     const row = journal.readHead(depth2Id);
@@ -216,7 +216,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
     // satisfy every assertion below vacuously, and "STEPS 0" is exactly what a
     // vacuous pass looks like.
     expect(depth2Ids.length).toBe(1);
-    const depth2Id = depth2Ids[0]!;
+    const depth2Id = depth2Ids[0];
 
     // readRun is what the Exploration surface renders — the real reader, not a
     // hand-rolled query, so this asserts the user-visible outcome.
@@ -248,7 +248,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
       stepSink: (id, seq, step) => rootJournal.appendStep(id, seq, step),
     });
 
-    const depth2Id = depth2Ids[0]!;
+    const depth2Id = depth2Ids[0];
 
     // Same denominator: the depth-2 head really was spawned and really did report.
     expect(depth2Ids.length).toBe(1);

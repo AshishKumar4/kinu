@@ -49,7 +49,7 @@ describe('BUG-1: the initial value prior', () => {
 
     const node = rt.storage.sql<{ value: number; visits: number }>`
       SELECT value, visits FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = 'fresh'`[0]!;
+      WHERE actor_id = ${rt.actor.actorId} AND id = 'fresh'`[0];
 
     // Lean initial_in_range: visits = 0 admits scaledSum = 0 only.
     expect(node.visits).toBe(0);

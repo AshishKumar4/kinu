@@ -162,13 +162,13 @@ describe('buildHeadAccumulatorTools', () => {
   test('record_evidence / record_decision push into the shared capture', async () => {
     const capture = new HeadCapture();
     const tools = buildHeadAccumulatorTools(capture);
-    const recordEvidence = toolExecute<Omit<Evidence, 'id'>, string>(tools.record_evidence!);
-    const recordDecision = toolExecute<Decision, string>(tools.record_decision!);
+    const recordEvidence = toolExecute<Omit<Evidence, 'id'>, string>(tools.record_evidence);
+    const recordDecision = toolExecute<Decision, string>(tools.record_decision);
     await recordEvidence({ kind: 'fact', body: 'X holds' });
     await recordDecision({ question: 'q', choice: 'c', rationale: 'r' });
-    expect(capture.evidence[0]!.body).toBe('X holds');
-    expect(capture.evidence[0]!.id).toMatch(/^ev-/);
-    expect(capture.decisions[0]!.choice).toBe('c');
+    expect(capture.evidence[0].body).toBe('X holds');
+    expect(capture.evidence[0].id).toMatch(/^ev-/);
+    expect(capture.decisions[0].choice).toBe('c');
     // Each tool also logs a tool call for telemetry.
     expect(capture.toolCalls.map((t) => t.name)).toEqual(['record_evidence', 'record_decision']);
   });
@@ -420,7 +420,7 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     // Structurally, nothing is flattened: no single message carries more than
     // its own body, so every inherited turn stays individually addressable.
     for (const [i, inherited] of multiTurn.entries()) {
-      expect(msgs[i]!.content).toBe(inherited.content);
+      expect(msgs[i].content).toBe(inherited.content);
     }
   });
 
@@ -449,7 +449,7 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     expect(report.status).toBe('completed');
     expect(prompts).toHaveLength(1);
     // system prompt, then the inherited turns with their roles intact, then the task.
-    expect(prompts[0]!.map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user', 'user']);
+    expect(prompts[0].map((m) => m.role)).toEqual(['system', 'user', 'assistant', 'user', 'user']);
   });
 
   test("an inherited 'tool' result never reaches the SDK as role:'tool', and keeps its tool identity", () => {
@@ -461,7 +461,7 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     }));
 
     expect(msgs.map((m) => m.role)).toEqual(['user', 'user']);
-    expect(msgs[0]!.content).toBe('[inherited tool result from shell]\nexit status 0');
+    expect(msgs[0].content).toBe('[inherited tool result from shell]\nexit status 0');
   });
 
   test("an inherited 'system' entry does not become a second system prompt", () => {
@@ -470,8 +470,8 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     }));
 
     expect(msgs.some((m) => m.role === 'system')).toBe(false);
-    expect(msgs[0]!.role).toBe('user');
-    expect(msgs[0]!.content).toContain('10 earlier messages omitted');
+    expect(msgs[0].role).toBe('user');
+    expect(msgs[0].content).toContain('10 earlier messages omitted');
   });
 
   test('an empty inheritance is just the task', () => {
@@ -545,11 +545,11 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);
 
     expect(ctx).toHaveLength(1);
-    expect(ctx[0]!.content.length).toBeLessThanOrEqual(bound);
-    expect(ctx[0]!.content.length).toBeLessThan(stored.length / 8);
+    expect(ctx[0].content.length).toBeLessThanOrEqual(bound);
+    expect(ctx[0].content.length).toBeLessThan(stored.length / 8);
     // Head AND tail survive — the window is a window, not a head truncation.
-    expect(ctx[0]!.content.startsWith('HEAD-MARK')).toBe(true);
-    expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
+    expect(ctx[0].content.startsWith('HEAD-MARK')).toBe(true);
+    expect(ctx[0].content.endsWith('TAIL-MARK')).toBe(true);
     seeded.db.close();
   });
 
@@ -558,7 +558,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
       await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'input', message: { role: 'user', content: 'short body' } });
     });
 
-    expect((await inheritedContextFromTranscript(seeded.transcript))[0]!.content).toBe('short body');
+    expect((await inheritedContextFromTranscript(seeded.transcript))[0].content).toBe('short body');
     seeded.db.close();
   });
 
@@ -566,9 +566,9 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
     const ctx = inheritedContextFromHistory([{ role: 'assistant', content: stored }], 50);
 
     expect(ctx).toHaveLength(1);
-    expect(ctx[0]!.content.length).toBeLessThanOrEqual(bound);
-    expect(ctx[0]!.content.startsWith('HEAD-MARK')).toBe(true);
-    expect(ctx[0]!.content.endsWith('TAIL-MARK')).toBe(true);
+    expect(ctx[0].content.length).toBeLessThanOrEqual(bound);
+    expect(ctx[0].content.startsWith('HEAD-MARK')).toBe(true);
+    expect(ctx[0].content.endsWith('TAIL-MARK')).toBe(true);
   });
 
   test('buildHeadMessages neither expands nor re-windows what the read already capped', async () => {
@@ -580,7 +580,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 
     seeded.db.close();
 
-    const windowed = inheritedContext[0]!.content;
+    const windowed = inheritedContext[0].content;
 
     // A second window IS observable on already-windowed text, so the
     // byte-identity assertion below genuinely detects double application.
@@ -606,7 +606,7 @@ describe('inheritedContextFromTranscript — the canonical store, read once for 
 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);
     expect(ctx[0]).toMatchObject({ id: 'ctx-omitted', role: 'system' });
-    expect(ctx[0]!.content).toContain('5 earlier messages omitted');
+    expect(ctx[0].content).toContain('5 earlier messages omitted');
     expect(ctx).toHaveLength(cap + 1);
     expect(ctx[1]).toMatchObject({ id: 'm5', role: 'assistant', content: 'body 5' });
     expect(ctx.at(-1)).toMatchObject({ id: `m${cap + 4}` });

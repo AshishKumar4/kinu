@@ -11,7 +11,16 @@ import {
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import type { SQLQueryBindings } from 'bun:sqlite';
+import type { SqlValue } from '@nimbus-sh/core';
+import type { ExecutorToolResult } from '../src/execution/types';
+import { present } from '@kinu.run/test-utils';
 import { CommandResultSchema } from '../src/execution/exec-result';
+
+/** The text an executor tool answered with — a structured answer where the
+ *  test reads prose is the failure it is looking for. */
+function toolText(result: ExecutorToolResult): string {
+  return v.parse(v.string(), result);
+}
 
 function fakeBox() {
   const files = new Map<string, Uint8Array>();
@@ -44,7 +53,11 @@ function fakeBox() {
       write: async (path, content) => {
         files.set(path, content instanceof Uint8Array ? content.slice() : encoder.encode(content));
       },
-      stat: async (path) => files.has(path) ? { type: 'file', size: files.get(path)!.byteLength, mtime: 1 } : null,
+      stat: async (path) => {
+        const bytes = files.get(path);
+
+        return bytes === undefined ? null : { type: 'file', size: bytes.byteLength, mtime: 1 };
+      },
       list: async () => [],
       exists: async (path) => files.has(path),
       mkdir: async () => {},
@@ -102,21 +115,23 @@ describe('hosted Nimbus workspace provider', () => {
     expect(router.getProviders().map((entry) => entry.name)).toEqual(['workspace']);
     expect(router.getProvider('nimbus')).toBeUndefined();
 
-    await provider.files!.writeFile('/home/user/proof.txt', 'same bytes');
-    expect(await provider.files!.stat('/home/user/proof.txt')).toEqual({
+    const plane = present(provider.files, 'the workspace file plane');
+
+    await plane.writeFile('/home/user/proof.txt', 'same bytes');
+    expect(await plane.stat('/home/user/proof.txt')).toEqual({
       size: 10,
       mtimeMs: 1,
       isDir: false,
     });
     expect(await provider.tools.exec.execute('cat /home/user/proof.txt')).toBe('same bytes');
 
-    const started = String(await provider.tools.startProcess.execute('node server.js'));
+    const started = toolText(await provider.tools.startProcess.execute('node server.js'));
     expect(started).toContain('pid=41');
     expect(started).toContain('workspace.logs(41)');
     expect(started).not.toContain('nimbus.');
     expect(await provider.tools.logs.execute(41)).toContain('ready');
     expect(await provider.tools.exposePort.execute(4321)).toBe('https://4321.example.test');
-    expect(await provider.exposePort!(4321)).toEqual({
+    expect(await provider.exposePort(4321)).toEqual({
       supported: true,
       port: 4321,
       url: 'https://4321.example.test',
@@ -204,7 +219,7 @@ describe('hosted Nimbus workspace provider', () => {
       },
     });
 
-    const answer = v.parse(CommandResultSchema, await provider.tools.exec!.execute('bun test broken.test.mjs'));
+    const answer = v.parse(CommandResultSchema, await provider.tools.exec.execute('bun test broken.test.mjs'));
 
     if (v.is(v.string(), answer)) throw new Error('expected a refusal object');
 
@@ -301,7 +316,7 @@ describe('hosted Nimbus workspace provider', () => {
       name: 'KinuError', code: 'unsupported', message: expect.stringContaining(reason),
     });
     // The model reads the same reason on its own listing.
-    expect(JSON.parse(String(await provider.tools.listPorts.execute()))).toEqual([
+    expect(JSON.parse(toolText(await provider.tools.listPorts.execute()))).toEqual([
       { port: 4321, unavailable: reason },
     ]);
   });
@@ -385,7 +400,7 @@ describe('a workspace whose host cannot compile node programs', () => {
       logs: async (pid) => ({ pid, text: CODEGEN_STDERR }),
     };
     const logs = await blockedProvider(box).tools.logs.execute(41);
-    expect(JSON.parse(String(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
+    expect(JSON.parse(toolText(logs))).toEqual({ pid: 41, text: CODEGEN_STDERR });
   });
 
   test('a port without a listener refuses rather than advertising a working preview', async () => {
@@ -396,9 +411,9 @@ describe('a workspace whose host cannot compile node programs', () => {
       list: async () => [],
     };
     const provider = blockedProvider(box);
-    const toolRefusal = JSON.parse(String(await provider.tools.exposePort.execute(8789)));
+    const toolRefusal = JSON.parse(toolText(await provider.tools.exposePort.execute(8789)));
     expect(toolRefusal.reason).toBe('unsupported');
-    const direct = await provider.exposePort!(8789);
+    const direct = await provider.exposePort(8789);
     expect(direct.supported).toBe(false);
   });
 
@@ -411,7 +426,7 @@ describe('a workspace whose host cannot compile node programs', () => {
       unexpose: async () => ({ ok: true }),
       list: async () => [],
     };
-    const refusal = JSON.parse(String(await blockedProvider(box).tools.exposePort.execute(8789)));
+    const refusal = JSON.parse(toolText(await blockedProvider(box).tools.exposePort.execute(8789)));
     expect(refusal.reason).toBe('io');
   });
 });
@@ -469,7 +484,7 @@ describe('the workspace generation is fabric\u2019s counter over one row', () =>
     await first.session();
 
     const sql = {
-      exec<Binding>(query: string, ...bindings: Binding[]) {
+      exec(query: string, ...bindings: SqlValue[]) {
         if (/INSERT INTO kinu_workspace_generation/.test(query)) throw new Error('storage write failed');
         const statement = database.prepare<{ value: number }, SQLQueryBindings[]>(query);
         const bound = bindings.map((binding) => v.parse(v.union([v.string(), v.number(), v.null()]), binding));

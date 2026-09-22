@@ -171,7 +171,7 @@ describe('the surfaces the model reads', () => {
       },
     });
 
-    const out = String(await nimbus.tools.readFile!.execute('/missing.txt'));
+    const out = String(await nimbus.tools.readFile.execute('/missing.txt'));
     expect(parseJsonValue(out)).toMatchObject({ reason: 'missing' });
   });
 
@@ -190,7 +190,7 @@ describe('the surfaces the model reads', () => {
       },
     });
 
-    const out = String(await nimbus.tools.readFile!.execute('/empty.txt'));
+    const out = String(await nimbus.tools.readFile.execute('/empty.txt'));
     expect(out).toBe('');
   });
 });

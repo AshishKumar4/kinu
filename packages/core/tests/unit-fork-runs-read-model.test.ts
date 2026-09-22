@@ -208,13 +208,13 @@ describe('listForkRuns', () => {
   test('a run with a node still going reads as running', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'running' }] });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });
 
   test('nodes that errored without a synthesis read as partial, not completed', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedJournalledRun(db, actorId, { rootId: 'r1', task: 'audit', at: 1000, heads: [{ status: 'completed' }, { status: 'errored' }] });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('partial');
   });
 
   test("a recursive sub-split is judged by its parent head, as the detail view judges it", () => {
@@ -243,7 +243,7 @@ describe('listForkRuns', () => {
   test('a failed search says failed', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearchRun(db, actorId, { rootId: 'r1', task: 'doomed', at: 1000, branches: 1, ledger: 'failed' });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('failed');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('failed');
   });
 
   test('a settled search with no acceptable candidate never reads completed', () => {
@@ -461,7 +461,7 @@ describe('a stale running lease', () => {
       branches: ['failed', 'failed', 'failed', 'failed'],
       ledger: 'running',
     });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('partial');
   });
 
   test('a tree that converged under a running row is settled, not running', () => {
@@ -471,7 +471,7 @@ describe('a stale running lease', () => {
     seedTree(db, actorId, {
       rootId: 'r-won', root: 'pruned', branches: ['terminal', 'pruned'], ledger: 'running',
     });
-    expect(listForkRuns(sql, actor).items[0]!).toMatchObject({ status: 'completed', winnerScore: 0.4 });
+    expect(listForkRuns(sql, actor).items[0]).toMatchObject({ status: 'completed', winnerScore: 0.4 });
   });
 
   test('a search with a frontier left is still running', () => {
@@ -481,13 +481,13 @@ describe('a stale running lease', () => {
     seedTree(db, actorId, {
       rootId: 'r-live', root: 'open', branches: ['open', 'failed'], ledger: 'running',
     });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });
 
   test('a search that has not expanded anything yet is running', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedTree(db, actorId, { rootId: 'r-fresh', root: 'open', branches: [], ledger: 'running' });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });
 
   test('an expanded parent left open is not a frontier', () => {
@@ -496,7 +496,7 @@ describe('a stale running lease', () => {
     // open read as running forever.
     const { db, sql, actor, actorId } = freshDb();
     seedTree(db, actorId, { rootId: 'r-open-root', root: 'open', branches: ['pruned', 'pruned'] });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('partial');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('partial');
   });
 });
 
@@ -542,7 +542,7 @@ describe('a run that wrote both stores', () => {
   test('starts when its FIRST half was written, not when its second was', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSwarmRun(db, actorId);
-    expect(listForkRuns(sql, actor).items[0]!.startedAt).toBe(1000);
+    expect(listForkRuns(sql, actor).items[0].startedAt).toBe(1000);
   });
 
   test('reports the task it ran, never the preset name in the split rationale', () => {
@@ -551,8 +551,8 @@ describe('a run that wrote both stores', () => {
     // `recordSplit` stamps `label ?? preset` into `head_runs.rationale`, and a
     // swarm journals no row for its root — so reading that column as the run's
     // task reports the preset name. The tree's root node holds the real task.
-    expect(listForkRuns(sql, actor).items[0]!.task).toBe(TASK);
-    expect(listForkRuns(sql, actor).items[0]!.task).not.toBe(PRESET);
+    expect(listForkRuns(sql, actor).items[0].task).toBe(TASK);
+    expect(listForkRuns(sql, actor).items[0].task).not.toBe(PRESET);
   });
 
   test('a run with no tree still falls back to the split rationale for its task', () => {
@@ -564,7 +564,7 @@ describe('a run that wrote both stores', () => {
       rootId: 'j1', task: 'unused', at: 1000, rationale: 'compare two rewrites',
       heads: [{ status: 'completed' }],
     });
-    expect(listForkRuns(sql, actor).items[0]!.task).toBe('compare two rewrites');
+    expect(listForkRuns(sql, actor).items[0].task).toBe('compare two rewrites');
   });
 
   test('is running while either half is still writing', () => {
@@ -574,7 +574,7 @@ describe('a run that wrote both stores', () => {
       rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
       heads: [{ status: 'completed' }, { status: 'running' }],
     });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('running');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
   });
 
   test('a settled search with one failed node reads as settled, not partial', () => {
@@ -588,7 +588,7 @@ describe('a run that wrote both stores', () => {
       rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
       heads: [{ status: 'completed' }, { status: 'errored' }],
     });
-    expect(listForkRuns(sql, actor).items[0]!.status).toBe('completed');
+    expect(listForkRuns(sql, actor).items[0].status).toBe('completed');
   });
 
   test('arrives whole on whichever page it falls on, halves together', () => {

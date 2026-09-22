@@ -71,7 +71,7 @@ describe('buildPendingActions', () => {
     expect(action).toMatchObject({
       id: 'scaffold-v8', kind: 'scaffold_version', detail: 'shorter tool preamble', at: 9000,
     });
-    expect(action!.title).toContain('v8');
+    expect(action.title).toContain('v8');
   });
 
   test('a failed background job is the agent\'s to fix and never reaches the owner queue', () => {
@@ -89,9 +89,9 @@ describe('buildPendingActions', () => {
     });
 
     expect(actions).toHaveLength(1);
-    expect(actions[0]!.kind).toBe('unseen_changes');
-    expect(actions[0]!.title).toBe('3 self-changes you have not seen');
-    expect(actions[0]!.detail).toBe('Keep or revert them in the journal below.');
+    expect(actions[0].kind).toBe('unseen_changes');
+    expect(actions[0].title).toBe('3 self-changes you have not seen');
+    expect(actions[0].detail).toBe('Keep or revert them in the journal below.');
   });
 
   test('one unseen change is singular', () => {
@@ -99,7 +99,7 @@ describe('buildPendingActions', () => {
       ...EMPTY, unseenChanges: { count: 1, revertable: 1, latestAt: 1 },
     });
 
-    expect(action!.title).toBe('1 self-change you have not seen');
+    expect(action.title).toBe('1 self-change you have not seen');
   });
 
   // The row a brand-new workspace gets after its very first turn: the digest's
@@ -111,7 +111,7 @@ describe('buildPendingActions', () => {
       ...EMPTY, unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
     });
 
-    expect(action!.detail).toBe('Read them in the journal below.');
+    expect(action.detail).toBe('Read them in the journal below.');
   });
 
   test('a mixed window says how many of them can actually be decided', () => {
@@ -119,7 +119,7 @@ describe('buildPendingActions', () => {
       ...EMPTY, unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
     });
 
-    expect(action!.detail).toBe('Keep or revert 1 of them in the journal below.');
+    expect(action.detail).toBe('Keep or revert 1 of them in the journal below.');
   });
 
   test('only pending curriculum proposals are the owner\'s call', () => {

@@ -113,7 +113,7 @@ describe('the ledger', () => {
     const { sql, actor } = ledgerDb();
     recordRecoveryFinding(sql, actor, finding());
     expect(corroborateLessonsForTurn(sql, actor, 'turn-1')).toEqual([]);
-    expect(listLessons(sql, actor, { source: 'execution_recovery' })[0]!.status).toBe('provisional');
+    expect(listLessons(sql, actor, { source: 'execution_recovery' })[0].status).toBe('provisional');
   });
 
   test('an empty ledger reads as empty, never as a throw', () => {

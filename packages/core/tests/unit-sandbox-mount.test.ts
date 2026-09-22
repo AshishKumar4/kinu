@@ -149,7 +149,7 @@ function container(fs: ContainerFs): SandboxHandle {
 			if (!fs.files.delete(resolved)) throw sdkNotFound(resolved);
 		},
 		async exec(command) {
-			const quoted = [...command.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+			const quoted = [...command.matchAll(/'([^']*)'/g)].map((m) => m[1]);
 			const target = quoted.at(-1) ?? '';
 
 			if (command.startsWith('mkdir')) {

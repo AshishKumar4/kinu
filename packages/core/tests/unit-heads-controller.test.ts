@@ -30,7 +30,7 @@ import {
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { handClock } from '@kinu.run/test-utils';
+import { handClock, present } from '@kinu.run/test-utils';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
 
@@ -215,10 +215,10 @@ describe('HeadController.run', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    const cached = journal.readCachedMerge('root-1');
-    expect(cached).not.toBeNull();
-    expect(cached!.mergedNarrative).toBe('Cached narrative.');
-    expect(cached!.costSummary.headCount).toBe(result.costSummary.headCount);
+    const cached = present(journal.readCachedMerge('root-1'), 'the cached merge for root-1');
+
+    expect(cached.mergedNarrative).toBe('Cached narrative.');
+    expect(cached.costSummary.headCount).toBe(result.costSummary.headCount);
   });
 
   test('a head with no authored wall clock runs to completion — no default deadline is invented', async () => {
@@ -446,8 +446,10 @@ describe('HeadController.run', () => {
 
     for (const key of Object.keys(malformed)) Reflect.deleteProperty(malformed, key);
 
+    const spawner = buildRuntime({});
+
     const runtime: HeadRuntime = {
-      spawnHead: buildRuntime({}).spawnHead,
+      spawnHead: (input) => spawner.spawnHead(input),
       // Returns an output that doesn't match MergeOutputSchema (missing required fields).
       mergeLLM: async () => malformed,
     };
@@ -470,8 +472,10 @@ describe('HeadController.run', () => {
     const { journal } = newJournal();
     const promptsSeen: string[] = [];
 
+    const spawner = buildRuntime({});
+
     const runtime: HeadRuntime = {
-      spawnHead: buildRuntime({}).spawnHead,
+      spawnHead: (input) => spawner.spawnHead(input),
       mergeLLM: async (prompt) => {
         promptsSeen.push(prompt);
 
@@ -526,14 +530,14 @@ describe('HeadController.run', () => {
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
 
-    const run = journal.listRuns(10).find((r) => r.rootId === 'r-steps');
-    expect(run).toBeDefined();
-    expect(run!.heads).toHaveLength(1);
+    const run = present(journal.listRuns(10).find((r) => r.rootId === 'r-steps'), 'the r-steps run');
+
+    expect(run.heads).toHaveLength(1);
     // The trace reaches the journal per step while the head is still running
     // (HeadInferenceDeps.reportStep), never from the finished report — so a
     // report claiming two steps must NOT materialize a trace here, or a late
     // report could overwrite the live rows already written.
-    expect(journal.readSteps(run!.heads[0]!.id)).toHaveLength(0);
+    expect(journal.readSteps(run.heads[0].id)).toHaveLength(0);
   });
 
   test('a head whose spawn throws still yields a MergeResult carrying its errored report and the survivor', async () => {
@@ -609,7 +613,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     });
 
     const runtime: HeadRuntime = {
-      spawnHead: base.spawnHead,
+      spawnHead: (input) => base.spawnHead(input),
       mergeLLM: async (...args) => {
         mergeCalls++;
 
@@ -649,7 +653,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     });
 
     const runtime: HeadRuntime = {
-      spawnHead: base.spawnHead,
+      spawnHead: (input) => base.spawnHead(input),
       mergeLLM: async (p, schema) => {
         prompt = p;
 
@@ -915,7 +919,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
 
     const runtime: HeadRuntime = {
       async spawnHead(input) {
-        if (observed == null) observed = input;
+        observed ??= input;
 
         return {
           id: input.id,
@@ -936,9 +940,10 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
       parentBudget: { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     });
 
-    expect(observed).not.toBeNull();
-    expect(observed!.budget.maxDepth).toBe(2);     // depth - 1
-    expect(observed!.depth).toBe(1);               // 3 - 2 = 1
+    const firstSpawn = present(observed, 'the first spawned head input');
+
+    expect(firstSpawn.budget.maxDepth).toBe(2);     // depth - 1
+    expect(firstSpawn.depth).toBe(1);               // 3 - 2 = 1
     // Fan-out does not divide a child's working room: two siblings each get the
     // parent's envelope, not half of it.
     //
@@ -949,8 +954,8 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     // was undivided, and failed ~1 in 7 under load. Half would be 30_000, so
     // the lower bound is what proves undividedness; the upper bound is what
     // stops a child being handed more room than its parent.
-    expect(observed!.budget.maxWallClockMs).toBeGreaterThan(59_000);
-    expect(observed!.budget.maxWallClockMs).toBeLessThanOrEqual(60_000);
+    expect(firstSpawn.budget.maxWallClockMs).toBeGreaterThan(59_000);
+    expect(firstSpawn.budget.maxWallClockMs).toBeLessThanOrEqual(60_000);
   });
 });
 
@@ -1069,7 +1074,7 @@ describe('merge blind spots', () => {
     const base = buildRuntime({ mergeOutput: withBlindSpots() });
 
     const runtime: HeadRuntime = {
-      spawnHead: base.spawnHead,
+      spawnHead: (input) => base.spawnHead(input),
       mergeLLM: async (p, schema) => {
         prompt = p;
 
