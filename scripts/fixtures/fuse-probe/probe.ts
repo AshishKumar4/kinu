@@ -714,151 +714,242 @@ function cachedChunk(cache: Map<number, Buffer>, index: number): Buffer {
   return chunk;
 }
 
+/** One kernel request, as an opcode arm reads it: the header, the frame it
+ *  arrived in, the node the header names, and the daemon's own state. */
+interface FuseCall {
+  readonly fd: number;
+  readonly req: FuseRequestHeader;
+  readonly frame: Buffer;
+  readonly node: NodeInfo | undefined;
+  readonly config: DaemonConfig;
+  readonly cache: Map<number, Buffer>;
+}
+
+/** A refusal: a bare header carrying -errno. */
+function fail(call: FuseCall, errno: number): void {
+  response(call.fd, call.req.unique, Buffer.alloc(0), -errno);
+}
+
+/** An answer, with the payload the arm produced or with nothing at all. */
+function reply(call: FuseCall, payload?: Buffer): void {
+  response(call.fd, call.req.unique, payload);
+}
+
+/** The attributes reply the stat-shaped arms send. */
+function attr(call: FuseCall, node: NodeInfo): void {
+  reply(call, packGetattrOut({ ino: node.id, size: node.size, mode: node.mode, nlink: node.nlink }));
+}
+
+function initSession(call: FuseCall): void {
+  const major = call.frame.readUInt32LE(IN_HEADER_SIZE);
+  const minor = call.frame.readUInt32LE(IN_HEADER_SIZE + 4);
+  const readahead = call.frame.readUInt32LE(IN_HEADER_SIZE + 8);
+  const flags = call.frame.readUInt32LE(IN_HEADER_SIZE + 12);
+
+  if (major !== FUSE_PROTOCOL_MAJOR) {
+    fail(call, 22);
+
+    return;
+  }
+
+  reply(call, packInitOut(minor, flags, readahead));
+}
+
+function lookupChild(call: FuseCall): void {
+  const node = call.node;
+
+  if (node?.kind !== 'dir') {
+    fail(call, 20);
+
+    return;
+  }
+
+  const found = childByName(node, requestName(call.frame, call.req.length), call.config);
+
+  if (found === undefined) {
+    fail(call, 2);
+
+    return;
+  }
+
+  if (found.id === BAD_DIGEST && call.config.poisonDigest === true) {
+    fail(call, 5);
+
+    return;
+  }
+
+  reply(call, packEntryOut(found.id, { ino: found.id, size: found.size, mode: found.mode, nlink: found.nlink }));
+}
+
+function statNode(call: FuseCall): void {
+  if (call.node === undefined) fail(call, 2); else attr(call, call.node);
+}
+
+function readLink(call: FuseCall): void {
+  const node = call.node;
+
+  if (node?.kind !== 'link' || node.target === undefined) fail(call, 22); else reply(call, Buffer.from(node.target));
+}
+
+function openNode(call: FuseCall): void {
+  const node = call.node;
+
+  if (node === undefined) fail(call, 2);
+  else if (call.req.opcode === FUSE_OPCODES.OPENDIR && node.kind !== 'dir') fail(call, 20);
+  else reply(call, packOpenOut(BigInt(node.id)));
+}
+
+function readFileRange(call: FuseCall): void {
+  const node = call.node;
+
+  if (node === undefined || node.kind !== 'file') {
+    fail(call, 2);
+
+    return;
+  }
+
+  if (node.id === BAD_DIGEST && call.config.poisonDigest === true) {
+    fail(call, 5);
+
+    return;
+  }
+
+  const offset = Number(call.frame.readBigUInt64LE(IN_HEADER_SIZE + 8));
+  const size = call.frame.readUInt32LE(IN_HEADER_SIZE + 16);
+
+  if (node.id !== RANGE) {
+    reply(call, nodeContent(node).subarray(offset, offset + size));
+
+    return;
+  }
+
+  const end = Math.min(BIG_FILE_BYTES, offset + size);
+  const out = Buffer.alloc(Math.max(0, end - offset));
+  let written = 0;
+
+  for (let index = Math.floor(offset / CHUNK_BYTES); index <= Math.floor((end - 1) / CHUNK_BYTES); index++) {
+    const chunk = cachedChunk(call.cache, index);
+    const verification = verifyChunk(TREE_SEED, index, chunk, call.config.poisonChunk === index);
+
+    if (!verification.ok) { fail(call, 5); written = -1; break; }
+
+    const from = Math.max(offset, index * CHUNK_BYTES) - index * CHUNK_BYTES;
+    const to = Math.min(end, (index + 1) * CHUNK_BYTES) - index * CHUNK_BYTES;
+    chunk.copy(out, written, from, to);
+    written += to - from;
+  }
+
+  if (written >= 0) reply(call, out);
+}
+
+function readDirectory(call: FuseCall): void {
+  const node = call.node;
+
+  if (node?.kind !== 'dir') {
+    fail(call, 20);
+
+    return;
+  }
+
+  const offset = Number(call.frame.readBigUInt64LE(IN_HEADER_SIZE + 8));
+  const size = call.frame.readUInt32LE(IN_HEADER_SIZE + 16);
+
+  const entries = [
+    { name: '.', id: node.id, type: DT.DIR },
+    { name: '..', id: parentIdOf(node.id), type: DT.DIR },
+    ...children(node, call.config),
+  ];
+
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+
+  for (let index = offset; index < entries.length; index++) {
+    const entry = entries[index];
+    const encoded = packDirent(entry.id, index + 1, entry.type, entry.name);
+
+    if (bytes + encoded.length > size) break;
+    chunks.push(encoded); bytes += encoded.length;
+  }
+
+  reply(call, Buffer.concat(chunks));
+}
+
+function reportStatfs(call: FuseCall): void {
+  reply(call, packStatfs(call.config.wideEntries + BIG_FILE_CHUNKS));
+}
+
+function acknowledge(call: FuseCall): void {
+  reply(call);
+}
+
+/** FORGET, BATCH_FORGET and INTERRUPT deliberately have no reply. */
+function ignoreRequest(): void {
+  return;
+}
+
+function destroySession(call: FuseCall): never {
+  reply(call);
+  process.exit(0);
+}
+
+/** EROFS: this reference filesystem is read-only by construction. */
+function refuseWrite(call: FuseCall): void {
+  fail(call, 30);
+}
+
+/** ENOSYS lets the kernel disable an optional operation. */
+function refuseUnsupported(call: FuseCall): void {
+  fail(call, 38);
+}
+
+/** One arm per opcode this filesystem answers. A request the table does not
+ *  name reaches `refuseUnsupported`, so the served set IS these keys. */
+const FUSE_HANDLERS = new Map<number, (call: FuseCall) => void>([
+  [FUSE_OPCODES.INIT, initSession],
+  [FUSE_OPCODES.LOOKUP, lookupChild],
+  [FUSE_OPCODES.GETATTR, statNode],
+  [FUSE_OPCODES.READLINK, readLink],
+  [FUSE_OPCODES.OPEN, openNode],
+  [FUSE_OPCODES.OPENDIR, openNode],
+  [FUSE_OPCODES.READ, readFileRange],
+  [FUSE_OPCODES.READDIR, readDirectory],
+  [FUSE_OPCODES.STATFS, reportStatfs],
+  [FUSE_OPCODES.ACCESS, acknowledge],
+  [FUSE_OPCODES.FLUSH, acknowledge],
+  [FUSE_OPCODES.RELEASE, acknowledge],
+  [FUSE_OPCODES.RELEASEDIR, acknowledge],
+  [FUSE_OPCODES.FSYNC, acknowledge],
+  [FUSE_OPCODES.FSYNCDIR, acknowledge],
+  [FUSE_OPCODES.FORGET, ignoreRequest],
+  [FUSE_OPCODES.BATCH_FORGET, ignoreRequest],
+  [FUSE_OPCODES.INTERRUPT, ignoreRequest],
+  [FUSE_OPCODES.DESTROY, destroySession],
+  [FUSE_OPCODES.SETATTR, refuseWrite],
+  [FUSE_OPCODES.WRITE, refuseWrite],
+  [FUSE_OPCODES.MKNOD, refuseWrite],
+  [FUSE_OPCODES.MKDIR, refuseWrite],
+  [FUSE_OPCODES.UNLINK, refuseWrite],
+  [FUSE_OPCODES.RMDIR, refuseWrite],
+  [FUSE_OPCODES.RENAME, refuseWrite],
+  [FUSE_OPCODES.SYMLINK, refuseWrite],
+  [FUSE_OPCODES.LINK, refuseWrite],
+  [FUSE_OPCODES.CREATE, refuseWrite],
+]);
+
 /** The daemon lives in a separate bun process. No library, helper daemon or
  *  compiled code is required: INIT, LOOKUP, GETATTR, OPEN, READ and READDIR
  *  are the kernel ABI itself. */
 function serveFuseRequests(fd: number, config: DaemonConfig): never {
   const cache = new Map<number, Buffer>();
-  const readBuffer = Buffer.alloc(1024 * 1024 + 4096);
+  const frame = Buffer.alloc(1024 * 1024 + 4096);
 
   for (;;) {
-    const read = readSync(fd, readBuffer, 0, readBuffer.length, null);
+    const read = readSync(fd, frame, 0, frame.length, null);
 
     if (read < IN_HEADER_SIZE) continue;
-    const req = requestHeader(readBuffer);
-    const node = staticNode(req.nodeid, config);
-    const fail = (number: number): void => response(fd, req.unique, Buffer.alloc(0), -number);
-    const attr = (candidate: NodeInfo): void => response(fd, req.unique, packGetattrOut({ ino: candidate.id, size: candidate.size, mode: candidate.mode, nlink: candidate.nlink }));
-
-    switch (req.opcode) {
-      case FUSE_OPCODES.INIT: {
-        const major = readBuffer.readUInt32LE(IN_HEADER_SIZE);
-        const minor = readBuffer.readUInt32LE(IN_HEADER_SIZE + 4);
-        const readahead = readBuffer.readUInt32LE(IN_HEADER_SIZE + 8);
-        const flags = readBuffer.readUInt32LE(IN_HEADER_SIZE + 12);
-
-        if (major !== FUSE_PROTOCOL_MAJOR) { fail(22); break; }
-
-        response(fd, req.unique, packInitOut(minor, flags, readahead));
-        break;
-      }
-
-      case FUSE_OPCODES.LOOKUP: {
-        if (node?.kind !== 'dir') { fail(20); break; }
-
-        const found = childByName(node, requestName(readBuffer, req.length), config);
-
-        if (found === undefined) { fail(2); break; }
-
-        if (found.id === BAD_DIGEST && config.poisonDigest === true) { fail(5); break; }
-
-        response(fd, req.unique, packEntryOut(found.id, { ino: found.id, size: found.size, mode: found.mode, nlink: found.nlink }));
-        break;
-      }
-
-      case FUSE_OPCODES.GETATTR:
-        if (node === undefined) fail(2); else attr(node);
-        break;
-      case FUSE_OPCODES.READLINK:
-        if (node?.kind !== 'link' || node.target === undefined) fail(22); else response(fd, req.unique, Buffer.from(node.target));
-        break;
-      case FUSE_OPCODES.OPEN:
-      case FUSE_OPCODES.OPENDIR:
-        if (node === undefined) fail(2); else if (req.opcode === FUSE_OPCODES.OPENDIR && node.kind !== 'dir') fail(20); else response(fd, req.unique, packOpenOut(BigInt(node.id)));
-        break;
-      case FUSE_OPCODES.READ: {
-        if (node === undefined || node.kind !== 'file') { fail(2); break; }
-
-        if (node.id === BAD_DIGEST && config.poisonDigest === true) { fail(5); break; }
-
-        const offset = Number(readBuffer.readBigUInt64LE(IN_HEADER_SIZE + 8));
-        const size = readBuffer.readUInt32LE(IN_HEADER_SIZE + 16);
-
-        if (node.id !== RANGE) {
-          response(fd, req.unique, nodeContent(node).subarray(offset, offset + size));
-          break;
-        }
-
-        const end = Math.min(BIG_FILE_BYTES, offset + size);
-        const out = Buffer.alloc(Math.max(0, end - offset));
-        let written = 0;
-
-        for (let index = Math.floor(offset / CHUNK_BYTES); index <= Math.floor((end - 1) / CHUNK_BYTES); index++) {
-          const chunk = cachedChunk(cache, index);
-          const verification = verifyChunk(TREE_SEED, index, chunk, config.poisonChunk === index);
-
-          if (!verification.ok) { fail(5); written = -1; break; }
-
-          const from = Math.max(offset, index * CHUNK_BYTES) - index * CHUNK_BYTES;
-          const to = Math.min(end, (index + 1) * CHUNK_BYTES) - index * CHUNK_BYTES;
-          chunk.copy(out, written, from, to);
-          written += to - from;
-        }
-
-        if (written >= 0) response(fd, req.unique, out);
-        break;
-      }
-
-      case FUSE_OPCODES.READDIR: {
-        if (node?.kind !== 'dir') { fail(20); break; }
-
-        const offset = Number(readBuffer.readBigUInt64LE(IN_HEADER_SIZE + 8));
-        const size = readBuffer.readUInt32LE(IN_HEADER_SIZE + 16);
-
-        const entries = [
-          { name: '.', id: node.id, type: DT.DIR },
-          { name: '..', id: parentIdOf(node.id), type: DT.DIR },
-          ...children(node, config),
-        ];
-
-        const chunks: Buffer[] = [];
-        let bytes = 0;
-
-        for (let index = offset; index < entries.length; index++) {
-          const entry = entries[index];
-          const encoded = packDirent(entry.id, index + 1, entry.type, entry.name);
-
-          if (bytes + encoded.length > size) break;
-          chunks.push(encoded); bytes += encoded.length;
-        }
-
-        response(fd, req.unique, Buffer.concat(chunks));
-        break;
-      }
-
-      case FUSE_OPCODES.STATFS:
-        response(fd, req.unique, packStatfs(config.wideEntries + BIG_FILE_CHUNKS));
-        break;
-      case FUSE_OPCODES.ACCESS:
-      case FUSE_OPCODES.FLUSH:
-      case FUSE_OPCODES.RELEASE:
-      case FUSE_OPCODES.RELEASEDIR:
-      case FUSE_OPCODES.FSYNC:
-      case FUSE_OPCODES.FSYNCDIR:
-        response(fd, req.unique);
-        break;
-      case FUSE_OPCODES.FORGET:
-      case FUSE_OPCODES.BATCH_FORGET:
-      case FUSE_OPCODES.INTERRUPT:
-        break; // These requests deliberately have no reply.
-      case FUSE_OPCODES.DESTROY:
-        response(fd, req.unique);
-        process.exit(0);
-      case FUSE_OPCODES.SETATTR:
-      case FUSE_OPCODES.WRITE:
-      case FUSE_OPCODES.MKNOD:
-      case FUSE_OPCODES.MKDIR:
-      case FUSE_OPCODES.UNLINK:
-      case FUSE_OPCODES.RMDIR:
-      case FUSE_OPCODES.RENAME:
-      case FUSE_OPCODES.SYMLINK:
-      case FUSE_OPCODES.LINK:
-      case FUSE_OPCODES.CREATE:
-        fail(30); // EROFS: custom reference is read-only by construction.
-        break;
-      default:
-        fail(38); // ENOSYS lets the kernel disable an optional operation.
-    }
+    const req = requestHeader(frame);
+    const handler = FUSE_HANDLERS.get(req.opcode) ?? refuseUnsupported;
+    handler({ fd, req, frame, node: staticNode(req.nodeid, config), config, cache });
   }
 }
 
