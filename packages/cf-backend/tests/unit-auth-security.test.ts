@@ -24,7 +24,7 @@ import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
 
 const root = join(import.meta.dir, '..');

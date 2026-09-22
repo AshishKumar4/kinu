@@ -14,7 +14,7 @@ import {
 } from './store';
 import { isDeployPath } from '@kinu.run/core/deploy';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import type { AccessTokenScope } from '@kinu.run/core';
 

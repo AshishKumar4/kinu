@@ -21,7 +21,8 @@ import {
   cloudflareAIGatewayId,
   fetchCloudflareAIGateways,
 } from '@kinu.run/core';
-import { requestBodyText, requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
+import { requestBodyText } from '@kinu.run/test-utils';
 import { present } from '@kinu.run/test-utils';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';

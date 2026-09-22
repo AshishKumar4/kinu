@@ -20,7 +20,8 @@ import {
 } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
-import { requestBodyText, requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
+import { requestBodyText } from '@kinu.run/test-utils';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 

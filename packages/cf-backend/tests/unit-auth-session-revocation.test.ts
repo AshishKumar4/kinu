@@ -17,7 +17,7 @@ import {
 } from '../src/auth/session';
 import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import { unreachableNamespace } from './helpers/bindings';
-import type { ObjectNamespace } from '../src/bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { OwnerCapabilityUnavailableError } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';

@@ -11,7 +11,7 @@ import {
   entryRevision, fileTextEditable, nextTreeCache, putFileBytes, sandboxedHtml,
   textRenderOf, viewerKindOf,
 } from "@kinu.run/core";
-import { requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {

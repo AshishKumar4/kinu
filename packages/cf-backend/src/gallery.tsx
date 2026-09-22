@@ -115,11 +115,10 @@
  * The dispatch in `mount()` is the full frame list.
  */
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { requestUrl } from '@/lib/fetch-input';
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { threadLiveTail, type TurnLiveness } from "@kinu.run/core";
+import { threadLiveTail, type TurnLiveness, requestUrl } from "@kinu.run/core";
 
 /** The two liveness values a static frame photographs. */
 const IDLE_TURN: TurnLiveness = { kind: "idle" };

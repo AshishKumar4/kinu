@@ -63,7 +63,7 @@ import {
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';

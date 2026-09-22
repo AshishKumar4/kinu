@@ -34,7 +34,7 @@ import {
   sessionBearerFromTags,
 } from '../src/cli/rpc-gate';
 import { sha256Hex } from '@kinu.run/core';
-import { requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

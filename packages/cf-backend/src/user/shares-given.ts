@@ -19,7 +19,7 @@ import {
   type WorkspaceOwnerClaim, type WorkspaceOwnershipEnv, type WorkspaceRegistry,
 } from './workspace-ownership';
 import { workspaceOwner, type WorkspaceOwnerWire } from '../workspace-owner-rpc';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
 import { deriveUserId } from '../auth/store';

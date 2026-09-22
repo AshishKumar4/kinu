@@ -32,7 +32,7 @@ import {
 } from '@kinu.run/core';
 import { pageDeployedBuildSha, reportRenderFailure } from '@kinu.run/core';
 import { APP_ROUTES, routeTemplateOf } from '@kinu.run/core';
-import { requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 

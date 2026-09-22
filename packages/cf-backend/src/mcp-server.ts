@@ -70,7 +70,7 @@ import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer, type CliAuthAuthority } from "./cli/auth-store";
 import { claimOwnedWorkspace, type WorkspaceOwnerClaim, type WorkspaceRegistry } from "./user/workspace-ownership";
 import type { SessionAuthority } from "./auth/store";
-import type { ObjectNamespace } from "./bindings";
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { decodeRunEventWire, decodeScaffoldRunWire } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';

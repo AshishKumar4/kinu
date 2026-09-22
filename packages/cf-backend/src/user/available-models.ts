@@ -9,7 +9,7 @@ import {
   type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';

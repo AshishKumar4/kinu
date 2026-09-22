@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { handleAccountRequest, type AccountRoutesEnv } from '../src/user/account-routes';
 import { unreachableNamespace } from './helpers/bindings';
-import type { ObjectNamespace } from '../src/bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';

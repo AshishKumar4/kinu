@@ -13,7 +13,7 @@
  */
 import * as v from 'valibot';
 import type { ControlPlaneDO } from './control-plane-do';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 /** One instance, by name. Fleet state is not per-user or per-workspace, and this
  *  is the only place the name is spelled — a second literal is how two callers

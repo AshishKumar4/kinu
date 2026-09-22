@@ -45,10 +45,21 @@ export interface PcUserStub {
   fetch(request: Request): Promise<Response>;
 }
 
-export interface PcUserNamespace<Id> {
+/**
+ * The shape Worker code uses a Durable Object namespace through.
+ *
+ * Generic in the id: nothing here reads the id beyond handing it straight
+ * back to `get`, so a caller that mints its own names satisfies the port,
+ * while the deployment's binding, which mints a `DurableObjectId`, satisfies
+ * it too. `Stub` is named by each port as a `Pick` of the object class, so a
+ * module states the methods it reaches instead of the whole object.
+ */
+export interface ObjectNamespace<Id, Stub> {
   idFromName(name: string): Id;
-  get(id: Id): PcUserStub;
+  get(id: Id): Stub;
 }
+
+export type PcUserNamespace<Id> = ObjectNamespace<Id, PcUserStub>;
 
 export interface PcIngressEnv<Id> extends OwnerCapabilityEnv {
   AUTH_KV?: KvStore;

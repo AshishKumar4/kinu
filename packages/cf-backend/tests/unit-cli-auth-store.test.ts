@@ -14,7 +14,7 @@ import { handleCliRequest, type CliRoutesAuthority, type CliRoutesEnv } from '..
 import {
   bootstrappedProfile, cliAccount, unreachableAssets, unreachableNamespace,
 } from './helpers/bindings';
-import type { ObjectNamespace } from '../src/bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserCaller } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';

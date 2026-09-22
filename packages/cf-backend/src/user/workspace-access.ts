@@ -7,7 +7,7 @@
 // and only this one creates — see that module's header.
 import type { ActorAgent } from '../actor-agent';
 import type { UserDO } from './user-do';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import {
   createCloudWorkspaceForUser,

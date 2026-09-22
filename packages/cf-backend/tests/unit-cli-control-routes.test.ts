@@ -4,7 +4,7 @@ import {
   handleCliRequest, type CliAgentTarget, type CliRoutesAuthority, type CliRoutesEnv,
 } from '../src/cli/routes';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
-import type { ObjectNamespace } from '../src/bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import type { ReasoningEffort, UserCaller } from '@kinu.run/core';

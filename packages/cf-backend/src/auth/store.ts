@@ -37,7 +37,7 @@
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from './providers';
 import type { BrowserSessionIdentity, LiveBrowserSession, UserDO } from '../user/user-do';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';

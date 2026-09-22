@@ -8,7 +8,8 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { asFetchFunction } from '@kinu.run/core';
-import { requestBodyText, requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
+import { requestBodyText } from '@kinu.run/test-utils';
 
 const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 

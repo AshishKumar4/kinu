@@ -9,7 +9,7 @@
 
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { renderThrownChain } from '@kinu.run/core/obs';

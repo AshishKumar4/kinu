@@ -52,7 +52,7 @@ import {
   handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged, type CreateWorkspaceEnv,
 } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { err, json, safeJson } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from '@kinu.run/core';

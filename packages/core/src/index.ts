@@ -2382,7 +2382,7 @@ export {
 
 export {
   err, escapeHtml, fileResponseHeaders, firstResponse, json,
-  readBounded, readBoundedStream, reoriginateRequest, safeJson,
+  readBounded, readBoundedStream, reoriginateRequest, requestUrl, safeJson,
 } from './http/http';
 
 export { KINU_USER_AGENT, kinuUserAgent } from './utils/user-agent';
@@ -2713,6 +2713,7 @@ export {
 
 export {
   type PcUserStub,
+  type ObjectNamespace,
   type PcUserNamespace,
   type PcIngressEnv,
   handlePcRequest,

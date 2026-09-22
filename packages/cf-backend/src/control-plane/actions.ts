@@ -38,7 +38,7 @@ import { ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { unindexWorkspace, type IndexFeedSink } from './index-feed';
 import type { ControlPlaneEnv } from './stub';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 /** The account an action is bound to. A UserDO name, which is what makes the
  *  workspace name beside it an address rather than a guess. Exported because

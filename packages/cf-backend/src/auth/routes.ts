@@ -24,7 +24,7 @@ import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged, type CredentialFanoutTarget } from '../user/workspace-access';
 import type { UserDO } from '../user/user-do';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';

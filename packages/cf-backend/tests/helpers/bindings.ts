@@ -15,7 +15,7 @@ import type { CliAgentTarget, CliRoutesAuthority, CliRoutesEnv } from '../../src
 import type { UserRoutesAuthority } from '../../src/user/routes';
 import type { McpAuthority } from '../../src/mcp-server';
 import type { AssetFetcher } from '@kinu.run/core';
-import type { ObjectNamespace } from '../../src/bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 export function unreachableNamespace<Stub>(binding: string): ObjectNamespace<string, Stub> {
   return {

@@ -31,7 +31,7 @@ import { listAvailableModels } from '../user/available-models';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
 import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
 import type { SessionAuthority } from '../auth/store';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';

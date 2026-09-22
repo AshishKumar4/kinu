@@ -21,7 +21,7 @@ import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** The two registry calls the gate makes on the asking user's own object. */

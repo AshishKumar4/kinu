@@ -15,7 +15,7 @@ import { listAvailableModels, type AvailableModelsEnv } from './available-models
 import type { WorkspaceEntry, WorkspaceRegistration, WorkspaceRegistrationSource } from './user-do';
 import { indexNewWorkspace, unindexWorkspace, type IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 export interface CloudWorkspaceRegistry extends UserCredentialClient {
   /** The account's profile catalog: its `default` tier is the one place the

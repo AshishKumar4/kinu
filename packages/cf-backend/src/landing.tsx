@@ -1,8 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import * as v from 'valibot';
-import { requestUrl } from '@/lib/fetch-input';
 
-import { buildCliInstallCommand } from '@kinu.run/core';
+import { buildCliInstallCommand, requestUrl } from '@kinu.run/core';
 import { LANDING_PROFILE, LANDING_ROSTER } from '@/components/landing/landing-fixtures';
 import { LandingPage } from '@/components/landing/LandingPage';
 import './index.css';

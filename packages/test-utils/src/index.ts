@@ -26,6 +26,8 @@ export * from './answer-oracle';
 
 export * from './present';
 
+export * from './fetch-input';
+
 export * from './eval-identity';
 
 export * from './live-model';

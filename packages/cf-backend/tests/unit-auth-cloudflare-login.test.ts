@@ -14,7 +14,7 @@ import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { requestBodyText } from './helpers/fetch-input';
+import { requestBodyText } from '@kinu.run/test-utils';
 
 const ORIGIN = 'https://kinu.example.com';
 

@@ -14,7 +14,7 @@ import {
   liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
 } from './helpers/agents-sdk';
 import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
-import { requestBodyText } from './helpers/fetch-input';
+import { requestBodyText } from '@kinu.run/test-utils';
 import { durableObjectStorage } from './helpers/programmatic-host';
 
 // Imported AFTER the helper's mock registration (see `mockAgentsSdk`): mcp.ts

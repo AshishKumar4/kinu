@@ -19,7 +19,7 @@ import type {
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
-import type { ObjectNamespace } from './bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 /**
  * Every method a caller in this Worker reaches on the object that owns a

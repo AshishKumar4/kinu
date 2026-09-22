@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
 import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } from './shares-given';
-import type { ObjectNamespace } from '../bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import {
   confirmsAccountDelete,
   decodeJsonWire,

@@ -15,7 +15,7 @@ import {
 } from './providers/agent-registry';
 import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { UserCaller } from '@kinu.run/core';
-import type { ObjectNamespace } from './bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 /** The HTML→markdown call the web provider makes on the AI binding, taken from
  *  the factory that consumes it so the two cannot drift. */

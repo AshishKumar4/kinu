@@ -45,7 +45,7 @@ import {
 import {
   adminDenialMessage, adminDenialStatus, authorizeAdmin, isControlPlaneOperator,
 } from '../src/control-plane/admin-caller';
-import { requestUrl } from './helpers/fetch-input';
+import { requestUrl } from '@kinu.run/core';
 
 /** The header Cloudflare Access sets, spelled independently of the production
  *  constant on purpose. A shared import would let a rename pass both sides; an

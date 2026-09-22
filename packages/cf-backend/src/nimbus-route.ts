@@ -46,7 +46,7 @@ import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
 import type { LabelSignerEnv, PreviewSuffixEnv, WorkspacePreviewUrl } from '@kinu.run/core';
-import type { ObjectNamespace } from './bindings';
+import type { ObjectNamespace } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
 
 /** The v4 preview signer: its own HKDF salt and info, so a preview token

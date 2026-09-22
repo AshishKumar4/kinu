@@ -232,3 +232,27 @@ export function reoriginateRequest(
 
   return new Request(target, requestInit);
 }
+
+/**
+ * The URL a `fetch` call names, whichever of its three input shapes the caller
+ * used. `String(input)` renders a `Request` as `[object Request]`, so a fake
+ * or a relay that reads the URL to route the call reads the shape instead.
+ * An input of none of the shapes is the page's own location: in a browser,
+ * `fetch()` with no argument fetches the document; a Worker has no location,
+ * so its callers always name one.
+ */
+export function requestUrl(input: RequestInfo | URL): string {
+  const text = v.safeParse(v.string(), input);
+
+  if (text.success) return text.output;
+
+  const url = v.safeParse(v.instance(URL), input);
+
+  if (url.success) return url.output.href;
+
+  const request = v.safeParse(v.instance(Request), input);
+
+  if (request.success) return request.output.url;
+
+  return globalThis.location.href;
+}
