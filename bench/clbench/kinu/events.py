@@ -188,16 +188,6 @@ def assistant_text(events: list[Event]) -> str:
     return texts[-1]
 
 
-def session_id(events: list[Event]) -> str | None:
-    """The CLI session id from the stream header, replayed by `--resume`."""
-    for event in events:
-        if event.get("type") == "session":
-            value = event.get("id")
-            if isinstance(value, str) and value:
-                return value
-    return None
-
-
 def usage_reported(usage: Usage) -> bool:
     """Whether the provider reported anything at all — the gate for pricing a
     row. A turn served by a provider that says nothing carries no usage rather
