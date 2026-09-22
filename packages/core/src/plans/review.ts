@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { nanoid } from '../utils/nanoid';
@@ -684,3 +685,41 @@ export class PlanReviewStore {
   }
 }
 
+
+/**
+ * The owner-facing review actions over one store, with every change the store
+ * makes announced to whoever watches the actor. Both backends expose these
+ * verbatim; the one thing each supplies is how it broadcasts.
+ */
+export class PlanReviewActions {
+  constructor(
+    private readonly store: PlanReviewStore,
+    private readonly announce: (plan: PlanReview) => void,
+  ) {}
+
+  private announced(result: PlanReviewResult): PlanReviewResult {
+    if (result.ok) this.announce(result.plan);
+
+    return result;
+  }
+
+  submit(edits: readonly PlanEdit[]): PlanReviewResult {
+    return this.announced(this.store.submit(CHAT_SESSION_ID, edits));
+  }
+
+  active(): PlanReview | null {
+    return this.store.getActive(CHAT_SESSION_ID);
+  }
+
+  saveAnnotations(id: string, revision: number, annotations: { value: unknown }): PlanReviewResult {
+    return this.announced(this.store.saveAnnotations(id, revision, annotations));
+  }
+
+  decide(id: string, revision: number, decision: PlanReviewDecision, feedback?: string): PlanReviewResult {
+    return this.announced(this.store.decide(id, revision, decision, feedback));
+  }
+
+  markHandoffAccepted(id: string, revision: number): PlanReviewResult {
+    return this.announced(this.store.markHandoffAccepted(id, revision));
+  }
+}

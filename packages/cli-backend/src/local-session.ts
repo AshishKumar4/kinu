@@ -178,7 +178,7 @@ import { TierIdSchema,
   // Plan review — the owner's decision surface, and the store both backends
   // keep it in. Core owns every rule; this session owns the broadcast and the
   // handoff turn.
-  SUBMIT_PLAN_TOOL, admitPlanReviewAnnotations, planHandoffKey, planHandoffTurn, planReviewAwaitingDecision,
+  PlanReviewActions, SUBMIT_PLAN_TOOL, planHandoffKey, planHandoffTurn, planReviewAwaitingDecision,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult, type PlanReviewStore,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
@@ -681,6 +681,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly triggerRegistry: TriggerRegistry;
   private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
+  private _planActions: PlanReviewActions | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
   /** Branching-heads runtime — local heads run in-process over isolated
@@ -1500,6 +1501,13 @@ export class LocalAgentSession implements BackendHost {
     return this.stores.planReviews;
   }
 
+  /** The review as the owner drives it; every change reaches the session's watchers. */
+  private get planActions(): PlanReviewActions {
+    this._planActions ??= new PlanReviewActions(this.planReviews, (plan) => this.broadcast({ type: 'plan_updated', plan }));
+
+    return this._planActions;
+  }
+
   /**
    * Whether this session holds the review surface: a root chat, where the
    * person at the terminal IS the owner deciding.
@@ -1514,21 +1522,13 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
-    const result = this.planReviews.submit(CHAT_SESSION_ID, edits);
-
-    if (result.ok) this.broadcastPlanUpdate(result.plan);
-
-    return result;
-  }
-
-  private broadcastPlanUpdate(plan: PlanReview): void {
-    this.broadcast({ type: 'plan_updated', plan });
+    return this.planActions.submit(edits);
   }
 
   /** The latest revision this conversation still owes a decision on, or the
    *  approved one a reload should keep rendering. */
   async getActivePlanReview(): Promise<PlanReview | null> {
-    return this.planReviews.getActive(CHAT_SESSION_ID);
+    return this.planActions.active();
   }
 
   async savePlanReviewAnnotations(
@@ -1536,17 +1536,7 @@ export class LocalAgentSession implements BackendHost {
     revision: number,
     annotations: PlanReviewAnnotation[],
   ): Promise<PlanReviewResult> {
-    const admitted = admitPlanReviewAnnotations({ value: annotations });
-
-    if (!admitted.ok) {
-      return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
-    }
-
-    const result = this.planReviews.saveAnnotations(id, revision, { value: admitted.annotations });
-
-    if (result.ok) this.broadcastPlanUpdate(result.plan);
-
-    return result;
+    return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
 
   /**
@@ -1581,12 +1571,11 @@ export class LocalAgentSession implements BackendHost {
       };
     }
 
-    const result = this.planReviews.decide(id, revision, decision, feedback);
+    const result = this.planActions.decide(id, revision, decision, feedback);
 
     if (!result.ok) return result;
 
     if (result.plan.handoffAccepted) return { ok: true, plan: result.plan, queued: true };
-    this.broadcastPlanUpdate(result.plan);
     const plan = result.plan;
     const { text, metadata } = planHandoffTurn(plan, decision);
 
@@ -1597,10 +1586,9 @@ export class LocalAgentSession implements BackendHost {
         text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt),
       });
 
-      const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
+      const accepted = this.planActions.markHandoffAccepted(plan.id, plan.revision);
 
       if (!accepted.ok) return accepted;
-      this.broadcastPlanUpdate(accepted.plan);
       this.actorSession.orchestrator.track(handoff.then(() => {}), 'the plan handoff turn');
 
       return { ok: true, plan: accepted.plan, queued: true };

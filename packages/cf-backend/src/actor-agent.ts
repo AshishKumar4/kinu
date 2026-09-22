@@ -164,7 +164,7 @@ import {
   // Heads support (inherited-context digest)
   inheritedContextFromTranscript,
   type ReleaseToolDeps,
-  PlanReviewStore, admitPlanReviewAnnotations, planHandoffKey, planHandoffTurn,
+  PlanReviewActions, PlanReviewStore, planHandoffKey, planHandoffTurn,
   type PlanEdit, type PlanReview, type PlanReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   isVfsError,
@@ -881,6 +881,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private _planReviews: PlanReviewStore | null = null;
+  private _planActions: PlanReviewActions | null = null;
 
   /** One SQL-backed review stream, local to this actor's durable storage. */
   protected get planReviews(): PlanReviewStore {
@@ -889,21 +890,20 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._planReviews;
   }
 
-  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
-    const result = this.planReviews.submit('default', edits);
+  /** The review as the owner drives it; every change reaches the clients. */
+  private get planActions(): PlanReviewActions {
+    this._planActions ??= new PlanReviewActions(this.planReviews, (plan) => this.host.broadcast({ type: 'plan_updated', plan }));
 
-    if (result.ok) this.broadcastPlanUpdate(result.plan);
-
-    return result;
+    return this._planActions;
   }
 
-  private broadcastPlanUpdate(plan: PlanReview): void {
-    this.host.broadcast({ type: 'plan_updated', plan });
+  protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
+    return this.planActions.submit(edits);
   }
 
   @callable()
   async getActivePlanReview(): Promise<PlanReview | null> {
-    return this.planReviews.getActive('default');
+    return this.planActions.active();
   }
 
   @callable()
@@ -912,17 +912,7 @@ export abstract class ActorAgent extends Agent<Env> {
     revision: number,
     annotations: PlanReviewAnnotation[],
   ): Promise<PlanReviewResult> {
-    const admitted = admitPlanReviewAnnotations({ value: annotations });
-
-    if (!admitted.ok) {
-      return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
-    }
-
-    const result = this.planReviews.saveAnnotations(id, revision, { value: admitted.annotations });
-
-    if (result.ok) this.broadcastPlanUpdate(result.plan);
-
-    return result;
+    return this.planActions.saveAnnotations(id, revision, { value: annotations });
   }
 
   /** Persist the verdict before starting the next turn. The queued handoff
@@ -939,15 +929,13 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly queued: boolean;
     readonly queueError?: string;
   }> {
-    const result = this.planReviews.decide(id, revision, decision, feedback);
+    const result = this.planActions.decide(id, revision, decision, feedback);
 
     if (!result.ok) return result;
 
     if (result.plan.handoffAccepted) {
       return { ok: true, plan: result.plan, queued: true };
     }
-
-    this.broadcastPlanUpdate(result.plan);
 
     const plan = result.plan;
     const { text, metadata } = planHandoffTurn(plan, decision);
@@ -976,10 +964,9 @@ export abstract class ActorAgent extends Agent<Env> {
         return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
       }
 
-      const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
+      const accepted = this.planActions.markHandoffAccepted(plan.id, plan.revision);
 
       if (!accepted.ok) return accepted;
-      this.broadcastPlanUpdate(accepted.plan);
 
       return { ok: true, plan: accepted.plan, queued: true };
     } catch (error) {
