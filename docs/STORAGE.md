@@ -162,15 +162,19 @@ erDiagram
         TEXT message_id PK "Message ID"
         TEXT role "user/assistant/system/tool"
         TEXT origin "input/output/edit/context_transform/render"
-        INTEGER sealed_sequence "Last update once sealed"
+        TEXT envelope_json "Message fields other than role and content"
+        INTEGER sealed_at "Epoch ms once the content is committed"
+        TEXT content_json "The parts array, inline"
+        TEXT content_path "The parts array in the file plane when large"
         INTEGER recorded_at "Epoch ms"
     }
-    message_updates {
+    stream_parts {
         TEXT actor_id PK "Actor"
-        TEXT message_id PK "Message ID"
-        INTEGER sequence PK "Update order within the message"
-        TEXT operation "open/append/metadata/content-end/replace-content"
-        TEXT payload_path "Large payloads live in the file plane"
+        TEXT message_id PK "Open message"
+        INTEGER part_no PK "Part"
+        TEXT descriptor_json "The part without its text"
+        TEXT text "Accumulated text, extended in place"
+        INTEGER ended "1 once the part's stream ended"
     }
     conversation_entries {
         TEXT actor_id PK "Actor whose conversation this is"
@@ -235,7 +239,7 @@ erDiagram
 
     memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
-    session_messages ||--o{ message_updates : "the streamed record"
+    session_messages ||--o{ stream_parts : "an open message's accumulating parts"
     session_messages ||--o{ conversation_entries : "entry parts reference message parts"
     conversation_entries ||--o| conversation_heads : "one head per session"
     conversation_entries ||--o{ conversation_fts : "local transcript index"
@@ -319,20 +323,21 @@ Every actor's chat, root and hosted alike, on both backends, lives in one
 relational store under `packages/core/src/session` (`SessionHistory`, built by
 `createAgentStores`). It has two layers:
 
-- The streamed record: `session_messages` is one row per message the model
-  read or produced (`role`, `origin`, `native_content_kind`, the sequence it
-  was sealed at); `message_parts` its parts and their reply edges;
-  `message_updates` the ordered operations that built it (`open`, `append`,
-  `metadata`, `content-end`, `replace-content`), with payloads over a size
-  threshold written to the actor's file plane and referenced by
-  `payload_path` plus digest. A message is durable while it streams, one
-  update at a time, and sealed when its sequence closes.
+- The messages: `session_messages` is one row per message the model read or
+  produced (`role`, `origin`, `native_content_kind`, `envelope_json`), with
+  its content committed once as one parts array (`content_json`, or
+  `content_path` plus digest in the actor's file plane over a size threshold)
+  and `sealed_at` stamped. A message inserted whole is sealed in its insert.
+  A streamed answer accumulates in `stream_parts`, one row per open part
+  extended in place by windows of deltas, and seals once at its step's end;
+  the seal deletes its stream rows. A reader folds the stream rows of an
+  open message and reads the content row of a sealed one.
 - The conversation: `conversation_entries` is the public chain (`id`,
   `parent_id`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
   context the entry recorded), keyed by actor and session (`default` is the
   chat; `mcts` holds lifetime-search trajectories and is never browsed as
   chat). `conversation_entry_parts` references the message parts each entry
-  displays, up to a cutoff sequence. `conversation_heads` names the entry the
+  displays. `conversation_heads` names the entry the
   next turn chains from; a walk-back moves it without deleting anything
   (`SessionHistory.revertTo`), and a fork carries the chain to the cut
   (`identity/fork.ts`, the `ForkTargetWriter` staging then publishing in one
