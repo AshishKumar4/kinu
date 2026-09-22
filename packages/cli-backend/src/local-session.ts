@@ -81,10 +81,10 @@ import { TierIdSchema,
   // the wake. The same class the Durable Object drives.
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
-  eventDrainTerminalEffect, shadowTrialTerminalEffect,
+  eventDrainTerminalEffect, shadowTrialTerminalEffect, overflowRetryTerminalEffect, taskReminderTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportStatus, type TaskTurnEnding,
-  terminalEffect, keyedScope,
+  terminalEffect,
   RunEndReasonSchema, WorkModeSchema,
   shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
@@ -95,8 +95,6 @@ import { TierIdSchema,
   turnProvenanceForMetadata,
   runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
-  OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
-  TASK_REMINDER_EVENT, taskReminderIdempotencyKey,
   normalizeUsage,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
@@ -176,10 +174,9 @@ import { TierIdSchema,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   // Plan review — the owner's decision surface, and the store both backends
-  // keep it in. Core owns every rule; this session owns the broadcast and the
-  // handoff turn.
-  PlanReviewActions, SUBMIT_PLAN_TOOL, planHandoffKey, planHandoffTurn, workModeUnderReview,
-  type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
+  // keep it in. Core owns every rule; this session owns the broadcast.
+  PlanReviewActions, SUBMIT_PLAN_TOOL, workModeUnderReview,
+  type PlanDecisionOutcome, type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
   ChatSession, CHAT_SESSION_ID, CHECKPOINTS_UNCONFIGURED, checkpointAvailability, fileCheckpointListing,
@@ -522,12 +519,6 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
 }
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
-
-/** What a plan decision answers with: core's refusal, or the decided plan
- *  plus the fate of the implementation turn the decision handed off to. */
-export type PlanDecisionOutcome =
-  | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null }
-  | { readonly ok: true; readonly plan: PlanReview; readonly queued: boolean; readonly queueError?: string };
 
 export class LocalAgentSession implements BackendHost {
   private readonly rt: CLIRuntime;
@@ -1528,15 +1519,8 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Record the owner's verdict and hand the conversation the turn it owes.
-   *
-   * The handoff is ADMITTED here, not awaited: the turn runs on this session's
-   * own pump and streams through the same event channel every other turn does,
-   * and a caller that must see it finish awaits `settleBackgroundWork()`. The
-   * acceptance is written in the same breath as the admission because the turn
-   * itself moves the row — a change request ends with the model submitting the
-   * NEXT revision, which supersedes the one being handed off — so a mark after
-   * the turn would have nothing left to write to.
+   * Record the owner's verdict and hand the conversation the turn it owes
+   * (PlanReviewActions.decideAndHandOff).
    *
    * The driver lease is asked first, for the reason a drain asks it before
    * binding rows: a verdict that cannot be handed off here belongs to whoever
@@ -1559,30 +1543,7 @@ export class LocalAgentSession implements BackendHost {
       };
     }
 
-    const result = this.planActions.decide(id, revision, decision, feedback);
-
-    if (!result.ok) return result;
-
-    if (result.plan.handoffAccepted) return { ok: true, plan: result.plan, queued: true };
-    const plan = result.plan;
-    const { text, metadata } = planHandoffTurn(plan, decision);
-
-    try {
-      const attempt = this.stores.planReviews.handoffAttempt(plan.id, plan.revision);
-
-      const handoff = this.enqueueTurn({
-        text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt),
-      });
-
-      const accepted = this.planActions.markHandoffAccepted(plan.id, plan.revision);
-
-      if (!accepted.ok) return accepted;
-      this.actorSession.orchestrator.track(handoff.then(() => {}), 'the plan handoff turn');
-
-      return { ok: true, plan: accepted.plan, queued: true };
-    } catch (error) {
-      return { ok: true, plan, queued: false, queueError: renderThrownChain({ cause: error }) };
-    }
+    return this.planActions.decideAndHandOff({ id, revision, decision, feedback }, (turn) => this.enqueueTurn(turn));
   }
 
   // ── BackendHost ────────────────────────────────────────────────────
@@ -2907,52 +2868,8 @@ export class LocalAgentSession implements BackendHost {
           };
         },
       }),
-      overflow_retry: terminalEffect({
-        input: v.object({}),
-        run: (_input, scope) => {
-          const effectScope = keyedScope(scope);
-
-          const identity = effectScope === undefined
-            ? `overflow-retry:${crypto.randomUUID()}`
-            : `overflow-retry:${effectScope}`;
-
-          if (this.chat.announcementOnDisk(identity)) {
-            return { status: 'completed', detail: 'the retry turn is on disk' };
-          }
-
-          if (!this.chat.announcementInFlight(identity)) {
-
-            this.chat.appendOwedTurn({ text: OVERFLOW_RETRY_TEXT, idempotencyKey: identity, event: OVERFLOW_RETRY_EVENT });
-          }
-
-          return { status: 'owed', detail: 'the retry turn is queued and not yet on disk' };
-        },
-      }),
-
-      // The third signal a settled turn can owe: it ended while its task list
-      // still held open items. Same contract as the retry beside it — owed
-      // until the turn's durable row exists, keyed on this response's scope so
-      // a replay announces once.
-      task_reminder: terminalEffect({
-        input: v.object({ text: v.string() }),
-        run: ({ text }, scope) => {
-          const effectScope = keyedScope(scope);
-
-          const identity = effectScope === undefined
-            ? `task-reminder:${crypto.randomUUID()}`
-            : taskReminderIdempotencyKey(effectScope);
-
-          if (this.chat.announcementOnDisk(identity)) {
-            return { status: 'completed', detail: 'the reminder turn is on disk' };
-          }
-
-          if (!this.chat.announcementInFlight(identity)) {
-            this.chat.appendOwedTurn({ text, idempotencyKey: identity, event: TASK_REMINDER_EVENT });
-          }
-
-          return { status: 'owed', detail: 'the reminder turn is queued and not yet on disk' };
-        },
-      }),
+      overflow_retry: overflowRetryTerminalEffect(() => this.chat),
+      task_reminder: taskReminderTerminalEffect(() => this.chat),
 
       turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
       event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
@@ -3166,38 +3083,7 @@ export class LocalAgentSession implements BackendHost {
       try {
         await closing;
       } catch (cause) {
-        const failure = toKinuError({
-          doing: "recording that a settled turn's effects had all reported",
-          cause,
-          otherwise: 'io',
-        });
-
-        // RELEASED. A sequence this process still holds is one every later
-        // sweep skips, which is the one way this design wedges. The rows stay
-        // owed either way, and the next start is what comes back for them.
-        this.terminal.leave(transition);
-        diagnostics.failure('turn.terminal_transition_close_failed', failure, {
-          turnId: transition.turnId, messageId: transition.messageId,
-        });
-
-        // RE-ARMED, exactly as the Durable Object's close does. The close
-        // carries the ledger's own final wake, so this rejection can BE that
-        // wake failing — and the fiber is about to delete itself. Without this
-        // the rows stay owed with nothing left to come back for them until the
-        // whole session is restarted.
-        try {
-          await this.terminal.armRecovery(transition, { cause });
-        } catch (recoveryCause) {
-          diagnostics.failure(
-            'turn.terminal_transition_recovery_failed',
-            toKinuError({
-              doing: "re-arming a settled turn's effects after their close failed",
-              cause: recoveryCause,
-              otherwise: 'unavailable',
-            }),
-            { turnId: transition.turnId, messageId: transition.messageId },
-          );
-        }
+        await this.terminal.closeFailed(transition, { cause });
       }
     });
   }

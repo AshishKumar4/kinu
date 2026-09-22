@@ -57,6 +57,12 @@ export type PlanReviewResult =
   | { readonly ok: true; readonly plan: PlanReview }
   | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null };
 
+/** An owner's verdict: the review, and whether the loop admitted the turn it
+ *  hands off. `queued: false` leaves the handoff owed to the next decision. */
+export type PlanDecisionOutcome =
+  | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null }
+  | { readonly ok: true; readonly plan: PlanReview; readonly queued: boolean; readonly queueError?: string };
+
 export interface SubmitPlanToolDeps {
   readonly submit: (edits: readonly PlanEdit[]) => PlanReviewResult | Promise<PlanReviewResult>;
 }

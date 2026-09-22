@@ -27,7 +27,7 @@ import {
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { TurnHarness } from './helpers/turn-harness';
-import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
+import type { CompletedTurn } from '@kinu.run/core';
 
 import { openTurnRun, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
@@ -211,47 +211,44 @@ describe('a terminal transition is claimed before its effects and released after
   });
 });
 
-describe('overflow retry delivery is a durable terminal effect', () => {
-  test('an undelivered retry stays owed and replays with the same identity', async () => {
+describe('an owed follow-up turn is a durable terminal effect', () => {
+  /**
+   * Queued is RAM. Here the pump refuses the retry at dequeue — another
+   * activation holds the driver lease — so a row that completed on `queued`
+   * would leave the retry lost with nothing saying it was owed. The row waits
+   * for the retry turn's own durable row instead, and a replay re-queues it.
+   */
+  test('an overflow retry stays owed until its turn is on disk, across a refused dequeue', async () => {
     const harness = orchestratorHarness();
-    const delivered: AgentSignal[] = [];
-    harness.agent.harnessSetSignalDeliverer(async (signal) => {
-      delivered.push(signal);
 
-      return 'undelivered';
-    });
-    turns(harness).open('u-overflow');
-
-    await turns(harness).settle({ messageId: 'a-overflow', status: 'error', error: OVERFLOW_ERROR });
+    await turns(harness).openInFlight('u-overflow');
+    harness.agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
+    const { turnId, messageId } = await turns(harness).settle({ messageId: 'a-overflow', status: 'error', error: OVERFLOW_ERROR });
     await harness.agent.harnessTerminalReported();
-    await joinHarnessFibers();
 
-    const first = harness.agent.harnessTerminalEffects('u-overflow', 'a-overflow')
-      .find((row) => row.effect_key === 'v1:overflow_retry:a-overflow');
+    const retry = () => harness.agent.harnessTerminalEffects(turnId, messageId)
+      .find((row) => row.effect_key === `v1:overflow_retry:${messageId}`);
 
-    expect(first).toMatchObject({ status: 'pending', attempts: 1 });
+    const retryOnDisk = () => harness.agent.harnessChatLoop.announcementOnDisk(`overflow-retry:${messageId}`);
 
-    const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
-      clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
-      beforeStart: (agent) => {
-        agent.harnessSetSignalDeliverer(async (signal) => {
-          delivered.push(signal);
+    expect(retryOnDisk()).toBe(false);
+    expect(retry()).toMatchObject({ status: 'pending' });
 
-          return 'queued';
-        });
-      },
-    });
+    harness.agent.harnessRefuseDriving(null);
+    harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
+    await harness.agent.harnessResumeTerminalTransitions();
+    await harness.agent.harnessChatLoop.pumpPromise;
+    expect(retryOnDisk()).toBe(true);
 
-    // Reactivation CLASSIFIES and arms; the durable wake is what replays.
-    await restarted.agent.terminalRetryPass();
+    harness.agent.harnessAdvanceTerminalClock(TERMINAL_EFFECT_RETRY_CEILING_MS);
+    await harness.agent.harnessResumeTerminalTransitions();
 
-    expect(delivered).toHaveLength(2);
-    expect(delivered[0]?.idempotencyKey).toBe('overflow-retry:a-overflow');
-    expect(delivered[1]?.idempotencyKey).toBe(delivered[0]?.idempotencyKey);
-    expect(restarted.agent.harnessTerminalEffects('u-overflow', 'a-overflow')).toEqual([]);
-    expect(restarted.agent.harnessTerminalClaims()).toEqual([
-      { turn_id: 'u-overflow', call_id: 'terminal:response:a-overflow', result_json: '"settled"' },
+    expect(retry()).toBeUndefined();
+    expect(harness.agent.harnessTerminalClaims().filter((row) => row.turn_id === turnId)).toEqual([
+      { turn_id: turnId, call_id: `terminal:response:${messageId}`, result_json: '"settled"' },
     ]);
+    // One retry turn: the replay that found it on disk queued no second.
+    expect((await harness.agent.listRuns()).items).toHaveLength(2);
   });
 });
 
@@ -948,6 +945,22 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // Still owed, so the outer transition is still open and the next activation
     // is still handed the suffix.
     expect(harness.agent.harnessBeginTerminalTransition('u-stuck', 'a-stuck')).toBe('resumed');
+  });
+
+  /**
+   * A close that rejects while the activation lives on must hand its sequence
+   * back: one this activation still held is skipped by every later sweep and
+   * alarm, which is the one way the ledger wedges.
+   */
+  test('a close that rejects releases its sequence to the next sweep', async () => {
+    const harness = orchestratorHarness();
+    turns(harness).open('u-rejected-close');
+    harness.agent.harnessArmTerminalFault('auto_gepa', 'before');
+
+    await turns(harness).settle({ messageId: 'a-rejected-close' });
+    await harness.agent.harnessTerminalReported();
+
+    expect(harness.agent.harnessSequencesInFlight()).toBe(0);
   });
 
   /**
