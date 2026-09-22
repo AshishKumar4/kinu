@@ -533,7 +533,7 @@ function createGatewayBackedProvider(opts: {
     id: opts.id,
     label: opts.label,
     defaultModel: opts.defaultModel,
-    isAvailable: () => !!opts.llm.baseURL && Object.keys(opts.llm.headers).length > 0,
+    isAvailable: () => opts.llm.baseURL !== '' && Object.keys(opts.llm.headers).length > 0,
     unavailableReason: () => 'KINU_BASE_URL and KINU_AUTH are required for the local gateway provider.',
     async listModels(deps): Promise<ModelInfo[]> {
       const fallback: ModelInfo[] = [{ id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] }];

@@ -30,7 +30,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     // THIS node's stores, over the shared SQL. A node reading the parent's
     // claim ledger would present the parent's turns as its own working
     // history, which is the one thing `/context` must never do.
-    const stores = createAgentStores(() => origin.storage.sql, () => actor, origin.storage.transactionSync, async () => {
+    const stores = createAgentStores(() => origin.storage.sql, () => actor, (write) => origin.storage.transactionSync(write), async () => {
       requireLocalActorWorkspace(origin.actor, actor);
 
       if (node.isolation === 'private-home') return { vfs, artifactDirectory: agentArtifactDirectory(node.home) };

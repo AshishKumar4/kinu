@@ -335,23 +335,26 @@ export function createOpenCodeProvider(opts: OpenCodeProviderOptions = {}): Mode
         ? metadata.reasoning === true || metadata.apiNpm === '@ai-sdk/openai'
         : isOpenAIReasoningFamily(modelId);
 
-      return createOpenCodeModel(modelId, () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI);
+      return createOpenCodeModel({ modelId, resolveConfig: () => loadConfig(), invalidateCache, fetchImpl, useResponsesAPI });
     },
   };
 }
 
 // ─── Model construction ─────────────────────────────────────────────────────
 
-function createOpenCodeModel(
-  modelId: string,
-  resolveConfig: () => Promise<ResolvedConfig>,
-  invalidateCache: () => void,
-  fetchImpl: typeof fetch,
-  useResponsesAPI: boolean,
-): LanguageModel {
-  // The modelId is the opencode model id, e.g. "openai/gpt-5.6-sol".
-  // We split on the first slash to get the provider prefix and the
-  // upstream model id.
+interface OpenCodeModelSpec {
+  /** The opencode model id, e.g. "openai/gpt-5.6-sol". */
+  modelId: string;
+  resolveConfig: () => Promise<ResolvedConfig>;
+  invalidateCache: () => void;
+  fetchImpl: typeof fetch;
+  useResponsesAPI: boolean;
+}
+
+function createOpenCodeModel(spec: OpenCodeModelSpec): LanguageModel {
+  const { modelId, resolveConfig, invalidateCache, fetchImpl, useResponsesAPI } = spec;
+  // We split the model id on the first slash to get the provider prefix and
+  // the upstream model id.
   const slash = modelId.indexOf('/');
 
   if (slash < 0) throw new Error(`Invalid opencode model id: ${modelId}`);
@@ -373,12 +376,7 @@ function createOpenCodeModel(
     }
 
     // Rewrite the URL from placeholder to the upstream baseURL.
-    const stringInput = v.safeParse(v.string(), input);
-
-    const originalUrl = stringInput.success
-      ? stringInput.output
-      : input instanceof Request ? input.url : input.toString();
-
+    const originalUrl = input instanceof Request ? input.url : input.toString();
     const url = originalUrl.replace(placeholder, route.baseURL);
 
     // Inject provider auth headers.
@@ -562,19 +560,21 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
 
       const context = metadata?.limit?.context;
 
-      // Use api.id when available; otherwise strip the provider prefix.
-      const upstreamModel = metadata.api?.id
-        ? metadata.api.id
-        : id.slice(provider.length + 1);
+      // Use api.id when available; otherwise strip the provider prefix. An
+      // empty string in any of these three is opencode declaring the field and
+      // filling in nothing, which is the same as omitting it.
+      const apiId = metadata.api?.id;
+      const apiNpm = metadata.api?.npm;
+      const name = metadata.name;
 
       models.push({
         id,
         provider,
-        upstreamModel,
-        name: metadata.name || id,
+        upstreamModel: apiId === undefined || apiId === '' ? id.slice(provider.length + 1) : apiId,
+        name: name === undefined || name === '' ? id : name,
         contextWindow: context && context > 0 ? Math.floor(context) : undefined,
         reasoning: metadata.capabilities?.reasoning,
-        apiNpm: metadata.api?.npm || undefined,
+        apiNpm: apiNpm === '' ? undefined : apiNpm,
       });
     } catch (error) {
       unreadable.push(`${id}: ${renderThrownChain({ cause: error })}`);

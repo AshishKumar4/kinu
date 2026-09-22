@@ -38,6 +38,7 @@ import {
   resolveRoutingProfile, createRoutedModelLane,
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
+  type WorkspaceActor,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -131,7 +132,7 @@ export interface CLIRuntime extends AgentRuntime {
    *  runtime keeps the in-SQLite plane. See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
-  modelForRoute?(resolution: ModelRouteResolution): LLM;
+  modelForRoute?: (resolution: ModelRouteResolution) => LLM;
   /**
    * The turn-profile authority every routed lane resolves through when no turn
    * has installed a profile. Built by {@link createCLIRuntime}, so a runtime
@@ -154,7 +155,7 @@ export interface CLIRuntime extends AgentRuntime {
    */
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
   /** The issued operation's profile, or current authority for new work. */
-  ensureProfile?(): Promise<ResolvedTurnProfile>;
+  ensureProfile?: () => Promise<ResolvedTurnProfile>;
   /**
    * The three host-owned things a swarm node's private home needs — the uid-0
    * view of this workspace's filesystem, the principal registry that scopes
@@ -398,6 +399,18 @@ function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
     list() { return store.list(); },
     search(query, limit = 10) { return store.search(query, limit); },
   };
+}
+
+/** The agent-home facet an actor's private plane is provisioned under. The main
+ *  actor owns the workspace's own home; every other kind is prefixed, and a
+ *  head, node or branch is named by storage key because its roster name is not
+ *  unique across expansions. */
+function actorFacetName(record: WorkspaceActor): string {
+  if (record.kind === 'main') return MAIN_AGENT;
+
+  if (record.kind === 'subordinate') return subordinateAgentName(record.name);
+
+  return headAgentName(record.storageKey);
 }
 
 export function createCLIRuntime(
@@ -650,8 +663,7 @@ export function createCLIRuntime(
       return { vfs: fileVfs, artifactDirectory };
     }
 
-    const name = record.kind === 'main' ? MAIN_AGENT : record.kind === 'subordinate' ? subordinateAgentName(record.name) : headAgentName(record.storageKey);
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: workspaceSql }))(), () => target.assertCurrent())(name);
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: workspaceSql }))(), () => target.assertCurrent())(actorFacetName(record));
 
     if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
     const plane = await workspace.asAgent(home);
@@ -938,7 +950,7 @@ async function buildCLIHeadRuntime(
   const actor = opts.actor;
   const physicalName = headAgentName(actor.storageKey);
 
-  const stores = createAgentStores(() => sql, () => actor, parent.storage.transactionSync, async () => {
+  const stores = createAgentStores(() => sql, () => actor, (write) => parent.storage.transactionSync(write), async () => {
     if (!parent.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
 
     return parent.filesForActor(actor);
@@ -950,9 +962,11 @@ async function buildCLIHeadRuntime(
   // The observer watches whichever plane the head's writes actually land on, so
   // the split can name the files this head changed. With a shared directory
   // that is this plane; without one it is the `parent` executor's surface below.
-  const vfs = cwdPlane === null
-    ? agentStateVfs
-    : opts.writeObserver ? observeWrites(cwdPlane, opts.writeObserver) : cwdPlane;
+  const writeObserver = opts.writeObserver;
+
+  const vfs = cwdPlane !== null && writeObserver !== undefined
+    ? observeWrites(cwdPlane, writeObserver)
+    : cwdPlane ?? agentStateVfs;
 
   // One directory, one approval policy, one undo history: a head over a shared
   // plane runs the parent's own gated and checkpointed shell, with its own
@@ -1043,7 +1057,7 @@ async function buildCLIHeadRuntime(
   const checkpoints = parent.checkpoints;
 
   const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
-    transactionSync: parent.storage.transactionSync,
+    transactionSync: (write) => parent.storage.transactionSync(write),
     // THIS head's own scaffold, not the workspace's. The agent-state plane is
     // shared by construction (`createWorkspaceFilesystem` takes no actor), so
     // the PATH is the only thing separating two actors' programs: with the
@@ -1097,7 +1111,8 @@ export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.en
       return new Promise((resolve) => {
         const stdinText = v.safeParse(v.string(), stdinOrOptions);
         const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
-        const stdin = stdinText.success ? stdinText.output : options.success ? options.output.stdin : undefined;
+        const optionsStdin = options.success ? options.output.stdin : undefined;
+        const stdin = stdinText.success ? stdinText.output : optionsStdin;
         const signal = options.success ? options.output.signal : undefined;
         let settled = false;
 
@@ -1137,7 +1152,7 @@ export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.en
         child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
 
         const settle = (code: number | null, signalName: NodeJS.Signals | null) => {
-          const aborted = signal?.aborted || signalName === 'SIGTERM' || signalName === 'SIGKILL';
+          const aborted = (signal?.aborted ?? false) || signalName === 'SIGTERM' || signalName === 'SIGKILL';
           finish({
             stdout,
             stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,

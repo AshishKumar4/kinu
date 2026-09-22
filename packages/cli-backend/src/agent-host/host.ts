@@ -327,6 +327,21 @@ interface HostEntry {
   } | null;
 }
 
+/** One report travelling from a child to its parent's event rail. */
+interface ChildReportRelay {
+  child: HostEntry;
+  content: string;
+  mode: WorkMode;
+  status: SubordinateReportStatus;
+  origin: SubordinateReportOrigin;
+  /** This report's identity on the parent's rail: the key the parent's ingress
+   *  deduplicates on, so one report cannot wake it twice. */
+  sequenceId: string;
+  /** The `report` tool's structured handoff. Absent on the automatic turn-end
+   *  relay, which has only the assistant's closing prose. */
+  handoff?: SubordinateReportHandoff;
+}
+
 export type AgentEventListener = (agent: string, event: SessionEvent) => void;
 
 export class LocalAgentHost {
@@ -440,7 +455,7 @@ export class LocalAgentHost {
   async team(address: string): Promise<TeamToolDeps> {
     const entry = await this.resolveEntry(address);
 
-    if (!entry.team) entry.team = this.buildTeam(entry);
+    entry.team ??= this.buildTeam(entry);
 
     return entry.team;
   }
@@ -667,7 +682,7 @@ export class LocalAgentHost {
       storage: {
         sql,
         transactionSync: (write) => db.transaction(write)(),
-        exec: hubSql.exec,
+        exec: (query, ...bindings) => hubSql.exec(query, ...bindings),
       },
       directory,
       // The local host publishes NO installed build identity for its builtin
@@ -1395,9 +1410,9 @@ export class LocalAgentHost {
           child.relay.settledRun = true;
         }
 
-        const relayed = await this.relayToParent(
-          child, text, mode, status, 'turn_end', sequenceId,
-        );
+        const relayed = await this.relayToParent({
+          child, content: text, mode, status, origin: 'turn_end', sequenceId,
+        });
 
         return relayed.disposition;
       },
@@ -1414,19 +1429,9 @@ export class LocalAgentHost {
    * The automatic turn-end relay still passes `progress`, because an answer
    * nobody was asked for is progress and nothing stronger.
    */
-  private async relayToParent(
-    child: HostEntry,
-    content: string,
-    mode: WorkMode,
-    status: SubordinateReportStatus,
-    origin: SubordinateReportOrigin,
-    /** This report's identity on the parent's rail: the key the parent's
-     *  ingress deduplicates on, so one report cannot wake it twice. */
-    sequenceId: string,
-    /** The `report` tool's structured handoff. Absent on the automatic
-     *  turn-end relay below, which has only the assistant's closing prose. */
-    handoff?: SubordinateReportHandoff,
-  ): Promise<SubordinateEventResult> {
+  private async relayToParent(relay: ChildReportRelay): Promise<SubordinateEventResult> {
+    const { child, content, mode, status, origin, sequenceId, handoff } = relay;
+
     if (!child.parentKey) return { id: '', disposition: 'not_awaited' };
     const parent = this.entries.get(child.parentKey);
 
@@ -1484,13 +1489,17 @@ export class LocalAgentHost {
   private buildReport(child: HostEntry): ReportToolDeps {
     return {
       report: async ({ status, content, handoff }) => {
-        const relayed = await this.relayToParent(
-          child, content, child.relay?.mode ?? 'build', status, 'report_tool',
+        const relayed = await this.relayToParent({
+          child,
+          content,
+          mode: child.relay?.mode ?? 'build',
+          status,
+          origin: 'report_tool',
           // One in-process tool call is one report — a second call with the
           // same words is a second thing the model chose to say.
-          `${child.key}:report:${crypto.randomUUID()}`,
+          sequenceId: `${child.key}:report:${crypto.randomUUID()}`,
           handoff,
-        );
+        });
 
         // Set HERE rather than off a `tool-call` event: this is the one seam
         // both the native tool and the `report.*` codemode namespace publish
