@@ -687,4 +687,16 @@ describe('web builtin', () => {
 
     expect(v.parse(v.string(), fetched.result)).toContain('page body');
   });
+
+  test('a codemode call with a number for its text is refused by parameter and type', async () => {
+    // A number is not an empty query: the refusal names what was wrong with
+    // the call instead of the provider reporting a search for nothing.
+    const { rt } = createTestRuntime();
+    const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: DDG_HTML })).fetch });
+    const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(buildWithWeb(rt, provider).eval);
+
+    const refused = await execute({ code: 'try { await web.search(42); return "searched"; } catch (e) { return String(e.message); }' });
+
+    expect(v.parse(v.string(), refused.result)).toContain('web.search(query) takes a string, not a number');
+  });
 });
