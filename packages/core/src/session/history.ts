@@ -88,19 +88,21 @@ export class SessionHistory {
       const selected = this.context.selected() ?? this.context.initialize();
       this.dependencies.transactionSync(() => {
         if (!abandoned().some(candidate => candidate.message_id === row.message_id)) return;
-        this.context.commit(selected, 'output', null, entries => {
+        this.context.commit(selected, { cause: 'output', turnId: null, assertEpoch: () => this.dependencies.actor.assertCurrent(), mutate: entries => {
           this.messages.seal(row.message_id, content);
 
           if (row.origin !== 'output' || entries.some(entry => entry.messageId === row.message_id)) return entries;
 
           return [...entries, { messageId: row.message_id, entryId: row.message_id, position: entries.length }];
-        }, () => this.dependencies.actor.assertCurrent());
+        } });
       });
     }
   }
 
   transcript(sessionId: string): SessionTranscript {
-    return new SessionTranscript(this.dependencies.sql, this.dependencies.actor, sessionId, this.messages, this.messages.payloads, this.dependencies.transactionSync, () => this.context.selected());
+    return new SessionTranscript({ sql: this.dependencies.sql, actor: this.dependencies.actor, sessionId,
+      messages: this.messages, payloads: this.messages.payloads,
+      atomic: this.dependencies.transactionSync, selection: () => this.context.selected() });
   }
 
   clearConversation(sessionId: string, assertIdle: () => void): ContextSelection {
@@ -110,7 +112,7 @@ export class SessionHistory {
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
-      const cleared = this.context.commit(selected, 'edit', null, () => [], assertIdle);
+      const cleared = this.context.commit(selected, { cause: 'edit', turnId: null, mutate: () => [], assertEpoch: assertIdle });
       this.transcript(sessionId).clear();
 
       return cleared;
@@ -201,7 +203,7 @@ export class SessionHistory {
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
 
-      return { result: { selection: this.context.commit(selected, 'edit', options.turnId, () => entries, options.assertOwner), proposalId: null }, publication: null };
+      return { result: { selection: this.context.commit(selected, { cause: 'edit', turnId: options.turnId, mutate: () => entries, assertEpoch: options.assertOwner }), proposalId: null }, publication: null };
     });
 
     committed.publication?.publish();
@@ -346,7 +348,8 @@ export class SessionHistory {
 
       if (owned !== undefined) return;
       const selected = this.context.selected() ?? this.context.initialize();
-      this.context.commit(selected, 'input', turnId, entries => [...entries, { ...reference, entryId: reference.messageId, position: entries.length }], assertOwner);
+      this.context.commit(selected, { cause: 'input', turnId, assertEpoch: assertOwner,
+        mutate: entries => [...entries, { ...reference, entryId: reference.messageId, position: entries.length }] });
     });
   }
 
@@ -358,11 +361,11 @@ export class SessionHistory {
     const selected = this.context.selected() ?? this.context.initialize();
     const prepared = await this.messages.prepare(input.message, input.id);
     let reference: MessageReference | null = null;
-    this.context.commit(selected, input.origin, input.turnId, entries => {
+    this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: input.assertOwner, mutate: entries => {
       reference = this.messages.insert(prepared, input.origin, input.ingressId === undefined ? {} : { ingressId: input.ingressId });
 
       return [...entries, { ...reference, entryId: input.id, position: entries.length }];
-    }, input.assertOwner);
+    } });
 
     if (reference === null) throw new KinuError('io', 'message publication did not return its identity');
 

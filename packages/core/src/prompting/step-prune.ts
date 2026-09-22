@@ -226,37 +226,38 @@ function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
   return [];
 }
 
+/** The content array with exactly the chosen results truncated, or null when
+ *  the walk chose nothing in it. A part it did not choose is the same object. */
+function prunedContent<Part extends AssistantPart | ToolPart>(
+  content: readonly Part[], doomed: ReadonlySet<ToolResultPart>,
+): (Part | ToolResultPart)[] | null {
+  let changed = false;
+
+  const next = content.map((part): Part | ToolResultPart => {
+    if (part.type !== 'tool-result' || !doomed.has(part)) return part;
+    const truncated = truncateResultPart(part);
+
+    if (truncated !== part) changed = true;
+
+    return truncated;
+  });
+
+  return changed ? next : null;
+}
+
 /** Replace exactly the parts the walk chose, in place. Everything else keeps
  *  its object identity, so an untouched message is the same reference. */
 function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>): ModelMessage {
   if (message.role === 'tool') {
-    let changed = false;
+    const content = prunedContent(message.content, doomed);
 
-    const content = message.content.map((part): ToolPart => {
-      if (part.type !== 'tool-result' || !doomed.has(part)) return part;
-      const truncated = truncateResultPart(part);
-
-      if (truncated !== part) changed = true;
-
-      return truncated;
-    });
-
-    return changed ? { ...message, content } : message;
+    return content === null ? message : { ...message, content };
   }
 
   if (message.role === 'assistant' && Array.isArray(message.content)) {
-    let changed = false;
+    const content = prunedContent(message.content, doomed);
 
-    const content = message.content.map((part): AssistantPart => {
-      if (part.type !== 'tool-result' || !doomed.has(part)) return part;
-      const truncated = truncateResultPart(part);
-
-      if (truncated !== part) changed = true;
-
-      return truncated;
-    });
-
-    return changed ? { ...message, content } : message;
+    return content === null ? message : { ...message, content };
   }
 
   return message;

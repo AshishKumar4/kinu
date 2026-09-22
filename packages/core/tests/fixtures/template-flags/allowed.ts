@@ -54,6 +54,6 @@ verification.renderFrom('## V{{#if hasShell}} {{shellNote}}{{/if}}', {
 });
 
 // The runtime contract reader takes any string — that is its whole point.
-const promoted: string = '## V{{#if hasShell}}{{shellNote}}{{/if}}';
+const promoted = '## V{{#if hasShell}}{{shellNote}}{{/if}}';
 
 templateContract(verification.id, promoted);

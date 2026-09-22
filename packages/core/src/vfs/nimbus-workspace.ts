@@ -357,7 +357,7 @@ export interface WorkspaceOptions {
   sql: SqlDatabase;
   /** Carries `transactionSync`. In a Durable Object: `ctx`. Every atomic write
    *  in the filesystem rests on this being a real transaction. */
-  transactions: { readonly storage?: { transactionSync<T>(cb: () => T): T } };
+  transactions: { readonly storage?: { readonly transactionSync: <T>(cb: () => T) => T } };
   /**
    * Where the process-id generation is kept, which must never repeat for a
    * given database: the workspace revokes every append capability at or below

@@ -596,10 +596,9 @@ describe('team action routing', () => {
   test('a model hire still refuses to invent a role or a mission', async () => {
     const h = makeTeamHarness();
 
-    // SAFETY: the input omits the required `role` field, so it fails spawn's own
-    // type contract by construction — the cast only reaches the runtime refusal
-    // guarding that same boundary.
-    await expect(h.team.spawn({ mission: 'Do the thing.', mode: 'build' } as never))
+    // A model's hire arrives as JSON, so this one does too: the input omits the
+    // required `role` and reaches the runtime refusal that guards the boundary.
+    await expect(h.team.spawn(JSON.parse(JSON.stringify({ mission: 'Do the thing.', mode: 'build' }))))
       .rejects.toThrow('role must be non-empty');
     await expect(h.team.spawn({ role: 'auditor', mission: '   ', mode: 'build' }))
       .rejects.toThrow('mission must be non-empty');

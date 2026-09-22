@@ -9,6 +9,19 @@ export interface ContextEntry extends MessageReference { readonly entryId: strin
 
 interface MemberRow { entry_id: string; position: number; message_id: string }
 
+/** One revision of a context's membership. */
+export interface ContextCommitRequest {
+  /** What the revision is recorded as: `input`, `output`, `edit`, `context_transform`. */
+  readonly cause: string;
+  readonly turnId: string | null;
+  /** Returns the membership the revision publishes; runs inside the transaction. */
+  readonly mutate: (current: readonly ContextEntry[]) => readonly ContextEntry[];
+  /** Throws when the turn that prepared this change no longer holds the actor. */
+  readonly assertEpoch: () => void;
+  /** The staged proposal this change applies: it authors the revision and is recorded on it. */
+  readonly proposal?: { readonly id: string; readonly author: string };
+}
+
 /** Interval membership is both the current selection and its historical record. */
 export class SessionContext {
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T) {}
@@ -61,8 +74,9 @@ export class SessionContext {
   }
 
   /** The mutation callback publishes message rows under the same transaction as their membership. */
-  commit(expected: ContextSelection, cause: string, turnId: string | null,
-    mutate: (current: readonly ContextEntry[]) => readonly ContextEntry[], assertEpoch: () => void, proposal?: { readonly id: string; readonly author: string }): ContextSelection {
+  commit(expected: ContextSelection, request: ContextCommitRequest): ContextSelection {
+    const { cause, turnId, mutate, assertEpoch, proposal } = request;
+
     return this.atomic(() => {
       this.actor.assertCurrent();
       assertEpoch();

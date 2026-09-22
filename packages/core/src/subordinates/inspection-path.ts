@@ -83,5 +83,5 @@ export async function inspectSubordinateStorage(
     target = child;
   }
 
-  return readSubordinateInspection(access.sql, target, access.raw, input, access.transcriptFor);
+  return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
 }

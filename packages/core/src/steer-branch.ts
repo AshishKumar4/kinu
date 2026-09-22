@@ -168,28 +168,35 @@ export interface PendingBranch {
   readonly handle: Promise<SteerBranchHandle>;
 }
 
+export interface BranchSettleDeps {
+  sql: SqlExecutor;
+  /** The actor whose turn was steered — see {@link settleBranchIntoTakes}. */
+  actor: ActorHandle;
+  sessionId: string;
+  broadcast: (event: BranchStatusEvent) => void;
+}
+
+/** The branch to settle, and the live turn it is compared against. */
+export interface BranchSettlement {
+  readonly entry: PendingBranch;
+  /** Null when the live turn never completed: the branch is aborted instead. */
+  readonly turnId: string | null;
+  readonly liveText: string;
+  /** The settlement's durable identity, for a caller that OWES this comparison.
+   *  The live path needs it as much as a replay does: an unkeyed write here and a
+   *  keyed one on recovery are two take sets for one branch. */
+  readonly settlementKey?: string;
+}
+
 /**
  * The shared both-sides settle both backends run (detached) at turn end:
  * await the branch head, compare against the finished live turn, persist the
  * takes set, and broadcast the terminal branch_status. A dead live turn
  * (`turnId` null / empty answer) aborts the branch instead.
  */
-export async function settlePendingBranch(
-  deps: {
-    sql: SqlExecutor;
-    /** The actor whose turn was steered — see {@link settleBranchIntoTakes}. */
-    actor: ActorHandle;
-    sessionId: string;
-    broadcast: (event: BranchStatusEvent) => void;
-  },
-  entry: PendingBranch,
-  turnId: string | null,
-  liveText: string,
-  /** The settlement's durable identity, for a caller that OWES this comparison.
-   *  The live path needs it as much as a replay does: an unkeyed write here and a
-   *  keyed one on recovery are two take sets for one branch. */
-  settlementKey?: string,
-): Promise<void> {
+export async function settlePendingBranch(deps: BranchSettleDeps, pending: BranchSettlement): Promise<void> {
+  const { entry, turnId, liveText, settlementKey } = pending;
+
   const fail = (message: string) => deps.broadcast({
     type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
   });

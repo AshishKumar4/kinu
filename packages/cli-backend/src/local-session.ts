@@ -1378,7 +1378,7 @@ export class LocalAgentSession implements BackendHost {
    *  self cancel of an owner-created ingress. The operator's own cancel runs in
    *  another process, through the registry in the CLI's local inspection. */
   cancelTrigger(trigger_id: string, caller: TrustLevel): CancelTriggerResult {
-    const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now(), caller);
+    const result = cancelTrigger({ registry: this.triggerRegistry, trigger_id, now: Date.now(), caller });
     this.rearmLocalAlarm();
 
     return result;
@@ -2084,15 +2084,17 @@ export class LocalAgentSession implements BackendHost {
     mode: WorkMode,
     signal: AbortSignal,
   ) {
-    return resumeBackgroundJob((resumeMode) => {
-      this.ensureModelState();
-      const surface = this.toolSets[resumeMode];
+    return resumeBackgroundJob({
+      rawTools: (resumeMode) => {
+        this.ensureModelState();
+        const surface = this.toolSets[resumeMode];
 
-      if (!surface) throw new Error(`tool surface for ${resumeMode} mode is unavailable`);
+        if (!surface) throw new Error(`tool surface for ${resumeMode} mode is unavailable`);
 
-      return surface.raw;
-    }, kind, decodeJsonValue({ value: input.value }), mode, signal).then((value) =>
-      value === undefined ? undefined : decodeJsonValue({ value }));
+        return surface.raw;
+      },
+      kind, input: decodeJsonValue({ value: input.value }), mode, signal,
+    }).then((value) => value === undefined ? undefined : decodeJsonValue({ value }));
   }
 
   // ── Internals ──────────────────────────────────────────────────────

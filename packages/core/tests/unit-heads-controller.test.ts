@@ -228,7 +228,7 @@ describe('HeadController.run', () => {
     const { sql, journal } = newJournal();
     const gate = Promise.withResolvers<void>();
     const runtime = buildRuntime({});
-    const originalSpawn = runtime.spawnHead.bind(runtime);
+    const originalSpawn = runtime.spawnHead;
     runtime.spawnHead = async (input) => {
       const handle = await originalSpawn(input);
 
@@ -449,7 +449,7 @@ describe('HeadController.run', () => {
     const spawner = buildRuntime({});
 
     const runtime: HeadRuntime = {
-      spawnHead: (input) => spawner.spawnHead(input),
+      spawnHead: spawner.spawnHead,
       // Returns an output that doesn't match MergeOutputSchema (missing required fields).
       mergeLLM: async () => malformed,
     };
@@ -475,7 +475,7 @@ describe('HeadController.run', () => {
     const spawner = buildRuntime({});
 
     const runtime: HeadRuntime = {
-      spawnHead: (input) => spawner.spawnHead(input),
+      spawnHead: spawner.spawnHead,
       mergeLLM: async (prompt) => {
         promptsSeen.push(prompt);
 
@@ -613,7 +613,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     });
 
     const runtime: HeadRuntime = {
-      spawnHead: (input) => base.spawnHead(input),
+      spawnHead: base.spawnHead,
       mergeLLM: async (...args) => {
         mergeCalls++;
 
@@ -653,7 +653,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     });
 
     const runtime: HeadRuntime = {
-      spawnHead: (input) => base.spawnHead(input),
+      spawnHead: base.spawnHead,
       mergeLLM: async (p, schema) => {
         prompt = p;
 
@@ -1074,7 +1074,7 @@ describe('merge blind spots', () => {
     const base = buildRuntime({ mergeOutput: withBlindSpots() });
 
     const runtime: HeadRuntime = {
-      spawnHead: (input) => base.spawnHead(input),
+      spawnHead: base.spawnHead,
       mergeLLM: async (p, schema) => {
         prompt = p;
 

@@ -130,7 +130,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
     },
   };
 
-  const call = (input: ExperienceTestInput) => runExperienceAction(deps, input);
+  const call = (input: ExperienceTestInput) => runExperienceAction(deps, { value: input });
 
   return { rt, db, facts, call, engine: new EvolutionEngine(rt, stores.history) };
 }

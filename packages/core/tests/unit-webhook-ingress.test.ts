@@ -496,7 +496,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
     const spec: Partial<WebhookTriggerSpec> = present(h.triggers.get(trigger_id), 'the registered trigger').spec;
 
-    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets)).toEqual({ ok: true, changed: true });
+    expect(cancelTrigger({ registry: h.triggers, trigger_id, now: NOW, caller: 'owner', secrets: h.secrets })).toEqual({ ok: true, changed: true });
 
     // The plaintext is gone from storage the moment the trigger closed — one
     // host call, one transaction on the single-threaded SQLite both backends run.
@@ -514,8 +514,8 @@ describe('revocation closes the trigger and deletes its secret together', () => 
   test('repeat revocation is idempotent', async () => {
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'k' });
-    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets).changed).toBe(true);
-    expect(cancelTrigger(h.triggers, trigger_id, NOW + 1, 'owner', h.secrets)).toEqual({ ok: true, changed: false });
+    expect(cancelTrigger({ registry: h.triggers, trigger_id, now: NOW, caller: 'owner', secrets: h.secrets }).changed).toBe(true);
+    expect(cancelTrigger({ registry: h.triggers, trigger_id, now: NOW + 1, caller: 'owner', secrets: h.secrets })).toEqual({ ok: true, changed: false });
   });
 
   test('a model turn cannot close the owner-created ingress whose id it can read', async () => {
@@ -527,7 +527,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     const spec: Partial<WebhookTriggerSpec> = present(h.triggers.get(trigger_id), 'the registered trigger').spec;
 
     // `agent.cancelSchedule` reaches the same host call as the operator's route.
-    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'self', h.secrets)).toEqual({
+    expect(cancelTrigger({ registry: h.triggers, trigger_id, now: NOW, caller: 'self', secrets: h.secrets })).toEqual({
       ok: false,
       changed: false,
       error: 'this trigger was created by the owner; only the owner can revoke it',
@@ -539,7 +539,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     expect(await h.secrets.get(present(spec.secret_id, 'the stored secret id'))).toBe('shhh');
 
     // The owner's own surface is unchanged.
-    expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets).changed).toBe(true);
+    expect(cancelTrigger({ registry: h.triggers, trigger_id, now: NOW, caller: 'owner', secrets: h.secrets }).changed).toBe(true);
   });
 
   test('a model turn may still close a schedule of its own making', async () => {
@@ -553,7 +553,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
       creator_trust: 'authenticated',
     }, NOW);
 
-    expect(cancelTrigger(h.triggers, own, NOW, 'self', h.secrets)).toEqual({ ok: true, changed: true });
+    expect(cancelTrigger({ registry: h.triggers, trigger_id: own, now: NOW, caller: 'self', secrets: h.secrets })).toEqual({ ok: true, changed: true });
   });
 
   test('secrets whose trigger is gone or terminal are purged; a live one survives', async () => {

@@ -13,7 +13,7 @@ import { runMCTS } from '../../src/mcts/engine';
 import { initSearchTables } from '../../src/mcts/schemas';
 import { initScaffoldTables } from '../../src/scaffold/schemas';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
-import type { SearchNode } from '../../src/types/mcts';
+import type { NodeStatus, SearchNode } from '../../src/types/mcts';
 import type { AgentRuntime, BranchHandle } from '../../src/types/agent-runtime';
 import type { LLM } from '../../src/types/primitives';
 import type { SessionWriter, SessionMessage } from '../../src/mcts/record-node';
@@ -111,6 +111,8 @@ function createE2ESession(): SessionWriter {
   };
 }
 
+const STATUS_ICONS: Record<NodeStatus, string> = { open: 'O', pruned: 'X', terminal: 'V', failed: '!' };
+
 function printTree(db: Database) {
   const sql = makeSql(db);
 
@@ -122,7 +124,7 @@ function printTree(db: Database) {
 
   for (const n of nodes) {
     const indent = '  '.repeat(n.depth);
-    const icon = n.status === 'open' ? 'O' : n.status === 'pruned' ? 'X' : n.status === 'terminal' ? 'V' : '!';
+    const icon = STATUS_ICONS[n.status];
     console.log(`${indent}[${icon}] ${n.id.slice(0, 8)} v=${n.value.toFixed(3)} n=${n.visits} | ${n.action.replace(/\n/g, ' ').slice(0, 50)}`);
   }
 

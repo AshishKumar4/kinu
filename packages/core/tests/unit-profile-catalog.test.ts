@@ -131,11 +131,13 @@ describe('catalog validation', () => {
         b: { ...base, spawns: ['a', 'task'] },
       },
     } })).not.toThrow();
-    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { b: { ...base, spawns: ['NOPE'] } } } }))
-      .toThrow(/invalid profile catalog/);
+
+    const validating = (spawns: readonly string[]) => () =>
+      validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { b: { ...base, spawns } } } });
+
+    expect(validating(['NOPE'])).toThrow(/invalid profile catalog/);
     // `not-there` is well-formed but resolves to no current role.
-    expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, roles: { b: { ...base, spawns: ['not-there'] } } } }))
-      .toThrow(/spawns/);
+    expect(validating(['not-there'])).toThrow(/spawns/);
   });
 
   test('plan narrows only: false is not `true`', () => {

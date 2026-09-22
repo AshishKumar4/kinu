@@ -32,7 +32,7 @@ function transcript() {
   };
 
   const output = async (id: string, parts: JsonObject[]): Promise<MessagePartReference[]> => {
-    const prepared = await history.messages.prepareParts('assistant', parts, {}, id);
+    const prepared = await history.messages.prepareParts({ id, role: 'assistant', content: parts, envelope: {} });
     db.transaction(() => history.messages.insert(prepared, 'output'))();
 
     return prepared.content.parts.map((part) => ({ messageId: id, partNo: part.partNo }));

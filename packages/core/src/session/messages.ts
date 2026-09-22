@@ -57,6 +57,27 @@ interface StreamPartRow { part_no: number; segment: number; kind: string; stream
 
 export type ToolCallIndex = ReadonlyMap<string, { messageId: string; part: number }>;
 
+/** What a streamed message's row holds before any part arrives. */
+export interface StreamedMessage {
+  /** The model request that produced it; null for a scaffold-authored stream. */
+  readonly requestId?: string;
+  /** Position within that request: assistant, tool, then the render-only container. */
+  readonly slot?: number;
+  /** Everything the encoded message will carry besides `role` and `content`. */
+  readonly envelope?: JsonObject;
+}
+
+/** One message in its native encoding, split the way a row stores it. */
+export interface NativeMessage {
+  readonly id: string;
+  readonly role: string;
+  readonly content: JsonValue;
+  /** Everything the encoded message carries besides `role` and `content`. */
+  readonly envelope: JsonObject;
+  /** Where each tool call was recorded, so a result part can point back at it. */
+  readonly calls?: ToolCallIndex;
+}
+
 function payloadOf(json: string | null, path: string | null, digest: string | null): SessionPayload {
   if (json !== null && path === null && digest === null) return { json, path: null, digest: null };
 
@@ -192,7 +213,7 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (encoded === undefined) throw new KinuError('bad_input', 'missing native message');
     const { role, content, ...envelope } = encoded;
 
-    return this.prepareParts(v.parse(v.string(), role), v.parse(JsonValueSchema, content), envelope, id, calls);
+    return this.prepareParts({ id, role: v.parse(v.string(), role), content: v.parse(JsonValueSchema, content), envelope, calls });
   }
 
   async prepareProjection(value: JsonObject, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
@@ -200,11 +221,12 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     const decodedContent = v.is(v.string(), content) ? content : await Promise.all(v.parse(v.array(JsonObjectSchema), content).map(part => part.type === 'file' || part.type === 'image' ? this.payloads.resolveMedia(part) : part));
     decodeModelMessages(JSON.stringify([{ ...envelope, role, content: decodedContent }]));
 
-    return this.prepareParts(v.parse(v.string(), role), v.parse(JsonValueSchema, content), envelope, id, calls);
+    return this.prepareParts({ id, role: v.parse(v.string(), role), content: v.parse(JsonValueSchema, content), envelope, calls });
   }
 
   /** Native structure the codec does not validate: render-only parts a transcript entry shows and the model never reads. */
-  async prepareParts(role: string, content: JsonValue, envelope: JsonObject, id: string, calls: ToolCallIndex = new Map()): Promise<PreparedMessage> {
+  async prepareParts(message: NativeMessage): Promise<PreparedMessage> {
+    const { id, role, content, envelope, calls = new Map() } = message;
     const kind = v.is(v.string(), content) ? 'string' : 'parts';
     const nativeParts = v.is(v.string(), content) ? [{ type: 'text', text: content }] : v.parse(v.array(JsonObjectSchema), content);
 
@@ -244,11 +266,11 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   /** A streamed message: its row only. Parts arrive through `stream*`. */
-  open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, identity: { requestId?: string; slot?: number } = {}, envelope: JsonObject = {}): MessageReference {
+  open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, stream: StreamedMessage = {}): MessageReference {
     this.actor.assertCurrent();
     this.assertUnrecorded(id);
     void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,recorded_at,envelope_json)
-      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${identity.requestId ?? null},${identity.slot ?? null},${null},${Date.now()},${JSON.stringify(envelope)})`;
+      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${Date.now()},${JSON.stringify(stream.envelope ?? {})})`;
 
     return { messageId: id };
   }

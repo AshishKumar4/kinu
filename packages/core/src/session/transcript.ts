@@ -409,13 +409,25 @@ interface SteerBatch {
   readonly parentId: string | null;
 }
 
+/** A writing transcript's stores, plus the two seams a write needs. */
+interface TranscriptWriterStores extends TranscriptStores<ActorHandle, SessionPayloads> {
+  readonly messages: SessionMessages;
+  /** Runs one write as a transaction on the same connection as `sql`. */
+  readonly atomic: <T>(write: () => T) => T;
+  /** The actor's working context at record time: an entry that names no context
+   *  of its own is stamped with it, so a fork cut at that entry restores
+   *  exactly the model context the actor held there. */
+  readonly selection: () => ContextSelection | null;
+}
+
 export class SessionTranscript extends SessionTranscriptReader<ActorHandle, SessionPayloads> {
-  /** `selection` is the actor's working context at record time: an entry that
-   *  names no context of its own is stamped with it, so a fork cut at that
-   *  entry restores exactly the model context the actor held there. */
-  constructor(sql: SqlExecutor, actor: ActorHandle, sessionId: string, messages: SessionMessages, payloads: SessionPayloads,
-    private readonly atomic: <T>(write: () => T) => T, private readonly selection: () => ContextSelection | null) {
-    super({ sql, actor, sessionId, messages, payloads });
+  private readonly atomic: <T>(write: () => T) => T;
+  private readonly selection: () => ContextSelection | null;
+
+  constructor(stores: TranscriptWriterStores) {
+    super(stores);
+    this.atomic = stores.atomic;
+    this.selection = stores.selection;
   }
 
   async prepareSteers(batch: SteerBatch): Promise<PreparedConversationEntry[]> {

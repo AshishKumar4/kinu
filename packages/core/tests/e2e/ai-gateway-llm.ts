@@ -27,7 +27,7 @@ function getRequiredEnv(name: string): string {
 
 /** Check whether E2E test credentials are configured */
 export function isE2EConfigured(): boolean {
-  return !!(process.env.AI_GATEWAY_BASE_URL && process.env.AI_GATEWAY_AUTH);
+  return Boolean(process.env.AI_GATEWAY_BASE_URL && process.env.AI_GATEWAY_AUTH);
 }
 
 /**

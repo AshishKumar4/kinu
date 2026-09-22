@@ -1,5 +1,6 @@
 import { parseWorkspacePreviewLabel } from './nimbus-preview-host';
 import * as v from 'valibot';
+import type { JsonValue } from '../utils/json';
 
 /** The one DOM surface this module reads, declared locally: the file compiles
  *  under the Worker's DOM libs, under core's default lib set, and under the
@@ -249,8 +250,8 @@ export function sandboxPreviewLabelOf(url: URL, env: PreviewHostEnv): SandboxPre
  * too — so candidates are parsed and checked against `isPreviewUrl` rather than
  * pattern-matched out of the surrounding prose.
  */
-export function extractPreviewUrl<Output>(
-  output: Output,
+export function extractPreviewUrl(
+  output: JsonValue | undefined,
   configuredSuffix: string | null = browserPreviewHostSuffix(),
 ): string | null {
   const scan = (text: string): string | null =>

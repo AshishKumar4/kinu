@@ -45,7 +45,7 @@ export interface RawSqlExec {
  * {@link SqlExecutor} wherever the statement is a literal.
  */
 export interface SqlExec {
-  exec(query: string, ...bindings: SqlValue[]): {
+  readonly exec: (query: string, ...bindings: SqlValue[]) => {
     toArray(): SqlExecRow[];
   };
 }
@@ -107,7 +107,7 @@ export interface Storage {
   /** Raw DDL execution (CREATE TABLE, CREATE INDEX) */
   execRaw: RawSqlExec;
   /** Atomic synchronous writes on the SAME connection as sql; rolls back on throw. */
-  transactionSync: <T>(write: () => T) => T;
+  readonly transactionSync: <T>(write: () => T) => T;
 }
 
 /**

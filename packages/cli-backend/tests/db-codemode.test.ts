@@ -54,7 +54,7 @@ function sandbox(): Sandbox {
     throw new Error('the local workspace exposes no synchronous transaction, so batch atomicity cannot be measured');
   }
 
-  const transactionSync = <T>(write: () => T): T => transactions.transactionSync(write);
+  const { transactionSync } = transactions;
 
   const sql = schemaSql.sql;
   initWorkspaceSchema(schemaSql);

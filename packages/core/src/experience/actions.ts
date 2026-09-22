@@ -86,14 +86,14 @@ function summarizeCandidate(candidate: PublishableCandidate) {
 /** Dispatch one library action. Errors come back in the result rather than
  *  thrown: every caller is a surface that has to render a refusal ("nothing
  *  here qualifies yet") as an ordinary answer, not as a failure. */
-export async function runExperienceAction<Input>(
+export async function runExperienceAction(
   deps: ExperienceActionDeps,
-  input: Input,
+  input: { readonly value: unknown },
 ) {
-  const request = v.safeParse(ExperienceActionInputSchema, input);
+  const request = v.safeParse(ExperienceActionInputSchema, input.value);
 
   if (!request.success) {
-    const attempted = v.safeParse(v.object({ action: v.string() }), input);
+    const attempted = v.safeParse(v.object({ action: v.string() }), input.value);
     const subject = attempted.success ? `action "${attempted.output.action}"` : 'action';
 
     return { error: `${subject} is not available. Available: ${EXPERIENCE_ACTIONS.join(', ')}` };

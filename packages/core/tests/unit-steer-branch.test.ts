@@ -384,10 +384,7 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     const events: BranchStatusEvent[] = [];
     await settlePendingBranch(
       { sql, actor, sessionId: 'default', broadcast: (e) => { events.push(e); } },
-      entry,
-      'turn-1',
-      'the live answer',
-      `branch:${entry.id}`,
+      { entry, turnId: 'turn-1', liveText: 'the live answer', settlementKey: `branch:${entry.id}` },
     );
     const settled = events.filter((e) => e.status === 'settled');
     expect(settled).toHaveLength(1);
@@ -405,8 +402,9 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
       sql, actor, sessionId: 'default', broadcast: (e: BranchStatusEvent) => { events.push(e); },
     };
 
-    await settlePendingBranch(deps, entry, 'turn-1', 'the live answer', `branch:${entry.id}`);
-    await settlePendingBranch(deps, entry, 'turn-1', 'the live answer', `branch:${entry.id}`);
+    const settlement = { entry, turnId: 'turn-1', liveText: 'the live answer', settlementKey: `branch:${entry.id}` };
+    await settlePendingBranch(deps, settlement);
+    await settlePendingBranch(deps, settlement);
     expect(listAlternateTakeSets(sql, actor)).toHaveLength(1);
     const settled = events.filter((e) => e.status === 'settled');
     expect(settled).toHaveLength(2);
@@ -423,9 +421,7 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     const events: BranchStatusEvent[] = [];
     await settlePendingBranch(
       { sql, actor, sessionId: 'default', broadcast: (e) => { events.push(e); } },
-      entry,
-      null,
-      '',
+      { entry, turnId: null, liveText: '' },
     );
     expect(events).toHaveLength(1);
     expect(events[0]?.status).toBe('error');

@@ -934,7 +934,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
       fiber,
       inbox: agent.inbox,
       resume: (kind, input, mode, signal) =>
-        resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
+        resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
       onSettled: (job) => notified.push(job.status),
     });
 
@@ -1155,7 +1155,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       fiber,
       inbox: agent.inbox,
       resume: (kind, input, mode, signal) =>
-        resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
+        resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
     });
 
     const jobId = 'bgjob-flat-swarm';
@@ -1299,7 +1299,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       fiber,
       inbox: agent.inbox,
       resume: (kind, input, mode, signal) =>
-        resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
+        resumeBackgroundJob({ rawTools: () => ({ agents }), kind, input, mode, signal }),
     });
 
     jobs.create({

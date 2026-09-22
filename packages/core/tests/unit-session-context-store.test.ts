@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
@@ -30,13 +30,13 @@ test('message publication rolls back with its membership and can be retried', as
   try {
     const selected = s.context.initialize();
     const prepared = await s.messages.prepare({ role: 'user', content: 'hello' }, 'input');
-    expect(() => s.context.commit(selected, 'input', 'turn', () => {
+    expect(() => s.context.commit(selected, { cause: 'input', turnId: 'turn', assertEpoch: () => s.rt.actor.assertCurrent(), mutate: () => {
       s.messages.insert(prepared, 'input');
       throw new Error('crash before membership');
-    }, () => s.rt.actor.assertCurrent())).toThrow('crash before membership');
+    } })).toThrow('crash before membership');
     expect(s.context.entries(selected)).toEqual([]);
-    const committed = s.context.commit(selected, 'input', 'turn', () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], () => s.rt.actor.assertCurrent());
-    expect(await s.messages.materialize(s.context.entries(committed)[0]!)).toEqual({ role: 'user', content: 'hello' });
+    const committed = s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+    expect(await s.messages.materialize(present(s.context.entries(committed)[0], 'the committed context entry'))).toEqual({ role: 'user', content: 'hello' });
   } finally { s.testSql.close(); }
 });
 
@@ -107,9 +107,9 @@ test('pruning and branching preserve historical selection without resurrecting r
   try {
     const prepared = await s.messages.prepare({ role: 'assistant', content: 'recorded' }, 'answer');
     const initial = s.context.initialize();
-    const original = s.context.commit(initial, 'output', 'turn', () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], () => s.rt.actor.assertCurrent());
+    const original = s.context.commit(initial, { cause: 'output', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'output'), entryId: 'answer', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
     const fork = s.context.fork(original);
-    const pruned = s.context.commit(original, 'context_transform', 'turn', () => [], () => s.rt.actor.assertCurrent());
+    const pruned = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [], assertEpoch: () => s.rt.actor.assertCurrent() });
     expect(s.context.entries(pruned)).toEqual([]);
     expect(s.context.entries(original)).toEqual(s.context.entries(fork));
     s.context.select(pruned, fork, () => {});
@@ -125,9 +125,9 @@ test('reverting a context selects an isolated branch that survives reader recons
     const assertOwner = () => s.rt.actor.assertCurrent();
     const input = await s.messages.prepare({ role: 'user', content: 'initial instruction' }, 'input');
     const initial = s.context.initialize();
-    const original = s.context.commit(initial, 'input', 'turn', () => [{ ...s.messages.insert(input, 'input'), entryId: 'input', position: 0 }], assertOwner);
+    const original = s.context.commit(initial, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(input, 'input'), entryId: 'input', position: 0 }], assertEpoch: assertOwner });
     const summary = await s.messages.prepare({ role: 'user', content: 'compacted instruction' }, 'summary');
-    const compacted = s.context.commit(original, 'context_transform', 'turn', () => [{ ...s.messages.insert(summary, 'context_transform'), entryId: 'summary', position: 0 }], assertOwner);
+    const compacted = s.context.commit(original, { cause: 'context_transform', turnId: 'turn', mutate: () => [{ ...s.messages.insert(summary, 'context_transform'), entryId: 'summary', position: 0 }], assertEpoch: assertOwner });
     const before = s.rt.storage.sql<{ total: number }>`SELECT COUNT(*) AS total FROM session_messages`[0]?.total;
     const restored = s.context.fork(original);
     s.context.select(compacted, restored, assertOwner);
@@ -137,7 +137,7 @@ test('reverting a context selects an isolated branch that survives reader recons
     expect(s.rt.storage.sql<{ total: number }>`SELECT COUNT(*) AS total FROM session_messages`[0]?.total).toBe(before);
 
     const edited = await s.messages.prepare({ role: 'user', content: 'branch instruction' }, 'edit');
-    const branch = reopened.commit(restored, 'edit', null, () => [{ ...s.messages.insert(edited, 'edit'), entryId: 'input', position: 0 }], assertOwner);
+    const branch = reopened.commit(restored, { cause: 'edit', turnId: null, mutate: () => [{ ...s.messages.insert(edited, 'edit'), entryId: 'input', position: 0 }], assertEpoch: assertOwner });
     const originalEntry = s.context.entries(original)[0];
     const compactedEntry = s.context.entries(compacted)[0];
     const branchEntry = reopened.entries(branch)[0];
@@ -156,8 +156,8 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
 
   try {
     const image = await s.messages.prepare({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] }, 'image');
-    const selected = s.context.commit(s.context.initialize(), 'input', 'turn', () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], () => s.rt.actor.assertCurrent());
-    const reference = s.context.entries(selected)[0]!;
+    const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(image, 'input'), entryId: 'image', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+    const reference = present(s.context.entries(selected)[0], 'the image entry');
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
     const stored = await s.messages.materializeParts(reference);
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
@@ -172,7 +172,7 @@ test('foreign keys reject another actor selection and stale ownership publishes 
   try {
     const selected = s.context.initialize();
     const prepared = await s.messages.prepare({ role: 'user', content: 'same' }, 'one');
-    expect(() => s.context.commit(selected, 'input', 'turn', () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'one', position: 0 }], () => { throw new Error('stale epoch'); })).toThrow('stale epoch');
+    expect(() => s.context.commit(selected, { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'one', position: 0 }], assertEpoch: () => { throw new Error('stale epoch'); } })).toThrow('stale epoch');
     expect(s.context.entries(selected)).toEqual([]);
     expect(() => s.rt.storage.sql`INSERT INTO actor_context_selection(actor_id,context_id) VALUES(${'unknown-actor'},${selected.contextId})`).toThrow();
   } finally { s.testSql.close(); }
@@ -185,11 +185,11 @@ test('staged removal preserves an appended tail and rejects a changed target', a
     const assertOwner = () => s.rt.actor.assertCurrent();
     const proposals = new SessionProposals(s.rt.storage.sql, s.rt.actor, s.context, write => s.rt.storage.transactionSync(write));
     const prepared = await s.messages.prepare({ role: 'user', content: 'old' }, 'old');
-    const base = s.context.commit(s.context.initialize(), 'input', 'turn', () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertOwner);
-    const old = s.context.entries(base)[0]!;
+    const base = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'old', position: 0 }], assertEpoch: assertOwner });
+    const old = present(s.context.entries(base)[0], 'the staged entry');
     proposals.stage({ id: 'remove', base, author: s.rt.actor.actorId, via: 'session', cause: 'context_transform', turnId: 'turn', changes: [{ entryId: old.entryId, expected: old, replacement: null }] });
     const tail = await s.messages.prepare({ role: 'assistant', content: 'new work' }, 'tail');
-    s.context.commit(base, 'output', 'turn', entries => [...entries, { ...s.messages.insert(tail, 'output'), entryId: 'tail', position: 1 }], assertOwner);
+    s.context.commit(base, { cause: 'output', turnId: 'turn', mutate: entries => [...entries, { ...s.messages.insert(tail, 'output'), entryId: 'tail', position: 1 }], assertEpoch: assertOwner });
     const applied = proposals.apply('remove', assertOwner, () => null);
 
     if (applied === null) throw new Error('unexpected deferred edit');
@@ -208,7 +208,7 @@ test('read-only transcript authorization is checked again after payload access',
     const text = 'retained text '.repeat(100_000);
     const prepared = await s.messages.prepare({ role: 'user', content: text }, 'input');
     const reference = s.messages.insert(prepared, 'input');
-    const writer = new SessionTranscript(s.rt.storage.sql, s.rt.actor, 'default', s.messages, s.payloads, write => s.rt.storage.transactionSync(write), () => s.context.selected());
+    const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
     writer.appendUser(await writer.prepareUser({ id: 'public-input', turnId: 'turn', message: reference }));
     let authorized = true;
     let revokeDuringRead = false;
@@ -235,8 +235,8 @@ test('canonical transcript pages follow the head ancestry and stay session-scope
 
   try {
     initSessionTranscriptTables(s.rt.storage.execRaw);
-    const writer = new SessionTranscript(s.rt.storage.sql, s.rt.actor, 'default', s.messages, s.payloads, write => s.rt.storage.transactionSync(write), () => s.context.selected());
-    const other = new SessionTranscript(s.rt.storage.sql, s.rt.actor, 'mcts', s.messages, s.payloads, write => s.rt.storage.transactionSync(write), () => s.context.selected());
+    const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
+    const other = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'mcts', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
 
     for (const [id, transcript, parentId] of [['root', writer, null], ['left', writer, 'root'], ['foreign', other, null], ['right', writer, 'root']] as const) {
       const prepared = await s.messages.prepare({ role: 'user', content: id }, id);
@@ -301,7 +301,7 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
 
   try {
     initSessionTranscriptTables(s.rt.storage.execRaw);
-    const transcript = new SessionTranscript(s.rt.storage.sql, s.rt.actor, 'default', s.messages, s.payloads, write => s.rt.storage.transactionSync(write), () => s.context.selected());
+    const transcript = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
     const input = s.messages.insert(await s.messages.prepare({ role: 'user', content: 'request' }, 'input'), 'input');
     transcript.appendUser(await transcript.prepareUser({ id: 'ask', turnId: 'turn', message: input, metadata: { drainTurnId: 'drain' } }));
 
