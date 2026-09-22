@@ -147,6 +147,30 @@ export function auditPage(): PageAudit {
     return flat;
   };
 
+  /** Every bare token in `declarations` the browser resolves to nothing on the
+   *  element the rule matched, counted whether or not it is a defect. */
+  const recordUnresolved = (
+    declarations: readonly [string, string][], rule: CSSStyleRule, element: Element,
+  ): void => {
+    const computed = getComputedStyle(element);
+
+    const label = element.tagName.toLowerCase()
+      + (element.classList.length > 0 ? `.${[...element.classList].slice(0, 2).join('.')}` : '');
+
+    for (const [property, value] of declarations) {
+      for (const [, token] of value.matchAll(BARE_VAR)) {
+        checked += 1;
+
+        if (computed.getPropertyValue(token).trim() !== '') continue;
+        const key = `${token}|${rule.selectorText}|${property}`;
+
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ token, selector: rule.selectorText, property, element: label });
+      }
+    }
+  };
+
   for (const sheet of document.styleSheets) {
     for (const rule of rulesOf(sheet)) {
       if (!(rule instanceof CSSStyleRule)) continue;
@@ -161,8 +185,8 @@ export function auditPage(): PageAudit {
       if (!text.includes('var(')) continue;
 
       const declarations = [...text.matchAll(/(?:^|;)\s*([-\w]+)\s*:\s*([^;]*)/g)]
-        .filter(([, , value]) => value!.includes('var('))
-        .map(([, property, value]) => [property!, value!] satisfies [string, string]);
+        .filter(([, , value]) => value.includes('var('))
+        .map(([, property, value]) => [property, value] satisfies [string, string]);
 
       if (declarations.length === 0) continue;
 
@@ -181,24 +205,7 @@ export function auditPage(): PageAudit {
 
       // One element per rule is enough: the token either exists at that scope
       // or it does not, and reporting 400 identical rows helps nobody.
-      const element = matched[0]!;
-      const computed = getComputedStyle(element);
-
-      const label = element.tagName.toLowerCase()
-        + (element.classList.length > 0 ? `.${[...element.classList].slice(0, 2).join('.')}` : '');
-
-      for (const [property, value] of declarations) {
-        for (const [, token] of value.matchAll(BARE_VAR)) {
-          checked += 1;
-
-          if (computed.getPropertyValue(token).trim() !== '') continue;
-          const key = `${token}|${rule.selectorText}|${property}`;
-
-          if (seen.has(key)) continue;
-          seen.add(key);
-          out.push({ token, selector: rule.selectorText, property, element: label });
-        }
-      }
+      recordUnresolved(declarations, rule, matched[0]);
     }
   }
 
@@ -280,7 +287,7 @@ export function summarise(found: readonly Unresolved[]): string[] {
     const themes = [...new Set(hits.map((h) => h.theme))].sort();
 
     return `  ${key} — unresolved at ${hits.length} rule(s) across ${frames.length} frame(s) `
-      + `in ${themes.join(' / ')}: ${frames.join(', ')}\n      e.g. \`${hits[0]!.selector}\` on <${hits[0]!.element}>`;
+      + `in ${themes.join(' / ')}: ${frames.join(', ')}\n      e.g. \`${hits[0].selector}\` on <${hits[0].element}>`;
   });
 }
 

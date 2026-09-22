@@ -90,14 +90,14 @@ export function parse(file: string, text: string): Parsed {
     if (open.length === 0 && done !== undefined) root = done;
   };
 
-  /* SAFETY: every `VisitorObject` field is an optional callback taking one member
-     of `Node`, so a handler accepting the whole union is assignable to all of
+  /* Every `VisitorObject` field is an optional callback taking one member of
+     `Node`, so a handler accepting the whole union is assignable to all of
      them; the keys are `visitorKeys`' own, so they are exactly the type names
      `VisitorObject` declares. Naming 165 node types here instead would be the
      schema copy this module exists to avoid. */
-  const handlers = Object.fromEntries(
+  const handlers: VisitorObject = Object.fromEntries(
     Object.keys(visitorKeys).flatMap((type) => [[type, enter], [`${type}:exit`, exit]]),
-  ) as VisitorObject;
+  );
 
   new Visitor(handlers).visit(program);
 
@@ -853,9 +853,14 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
 
     if (raw.type === 'ImportDeclaration') {
       for (const specifier of raw.specifiers) {
-        const imported = specifier.type === 'ImportNamespaceSpecifier' ? NAMESPACE
-          : specifier.type === 'ImportDefaultSpecifier' ? 'default'
-          : specifier.imported.type === 'Identifier' ? specifier.imported.name : specifier.imported.value;
+        let imported: string;
+
+        if (specifier.type === 'ImportNamespaceSpecifier') imported = NAMESPACE;
+        else if (specifier.type === 'ImportDefaultSpecifier') imported = 'default';
+        else {
+          imported = specifier.imported.type === 'Identifier'
+            ? specifier.imported.name : specifier.imported.value;
+        }
 
         bind(specifier.local, scope, { specifier: raw.source.value, imported });
       }
@@ -885,10 +890,10 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
   walk(tree, node => {
     const raw = node.raw;
 
-    const target = raw.type === 'AssignmentExpression' ? raw.left
-      : raw.type === 'UpdateExpression' ? raw.argument : undefined;
+    if (raw.type !== 'AssignmentExpression' && raw.type !== 'UpdateExpression') return;
+    const target = raw.type === 'AssignmentExpression' ? raw.left : raw.argument;
 
-    if (target?.type !== 'Identifier') return;
+    if (target.type !== 'Identifier') return;
     const binding = resolve(node, target.name);
 
     if (binding?.dynamic) binding.origin = undefined;
@@ -916,10 +921,10 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
 
       if (parent?.type !== 'MemberExpression' || parent.object !== node.raw) return;
 
-      const name = !parent.computed && parent.property.type === 'Identifier'
+      const member = !parent.computed && parent.property.type === 'Identifier'
         ? parent.property.name : literalString(parent.property);
 
-      if (name !== undefined) uses.push({ specifier: origin.specifier, imported: name });
+      if (member !== undefined) uses.push({ specifier: origin.specifier, imported: member });
     } else uses.push(origin);
   });
   // `lazy(() => import('./m'))`: React resolves the promise and reads exactly
@@ -1007,7 +1012,9 @@ export function numericValue(node: SyntaxNode): number | undefined {
   if (raw.type === 'UnaryExpression' && (raw.operator === '-' || raw.operator === '+')) {
     const inner = numericValue(node.children[0]);
 
-    return inner === undefined ? undefined : (raw.operator === '-' ? -inner : inner);
+    if (inner === undefined) return undefined;
+
+    return raw.operator === '-' ? -inner : inner;
   }
 
   if (raw.type !== 'BinaryExpression') return undefined;
@@ -1022,7 +1029,12 @@ export function numericValue(node: SyntaxNode): number | undefined {
     case '+': return finite(left + right);
     case '-': return finite(left - right);
     case '**': return finite(left ** right);
-    default: return undefined;
+    // Comparisons, bitwise arithmetic and the type tests do not evaluate to a
+    // policy number, and `%` reaches no notation this gate compares.
+    case '!=': case '!==': case '%': case '&': case '<': case '<<': case '<=':
+    case '==': case '===': case '>': case '>=': case '>>': case '>>>': case '^':
+    case 'in': case 'instanceof': case '|':
+      return undefined;
   }
 }
 

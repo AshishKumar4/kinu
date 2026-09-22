@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 
+import { present } from '@kinu.run/test-utils';
 import { type PageAudit, auditPage } from './computed-style';
 import { withGallery } from './gallery-harness';
 
@@ -170,19 +171,25 @@ describe('computed-style gate', () => {
   });
 
   test('the historical --radius defect is reported when seeded back in', () => {
-    const hit = scenarios.seededRadius.audit.findings.find((f) => f.token === '--radius');
-    expect(hit).toBeDefined();
-    expect(hit!.property).toBe('border-radius');
-    expect(hit!.selector).toBe('.p-card');
+    const hit = present(
+      scenarios.seededRadius.audit.findings.find((f) => f.token === '--radius'),
+      'the --radius finding',
+    );
+
+    expect(hit.property).toBe('border-radius');
+    expect(hit.selector).toBe('.p-card');
   });
 
   test('a role token withdrawn at :root is reported at the class that reads it', () => {
     // Cut-the-wire: the gate must be reading the live cascade, not stylesheet
     // text. Nothing on disk changed, so every source-reading instrument in the
     // repo still passes and only this one fails.
-    const hit = scenarios.cutRoleToken.audit.findings.find((f) => f.token === '--r-card');
-    expect(hit).toBeDefined();
-    expect(hit!.property).toBe('border-radius');
+    const hit = present(
+      scenarios.cutRoleToken.audit.findings.find((f) => f.token === '--r-card'),
+      'the --r-card finding',
+    );
+
+    expect(hit.property).toBe('border-radius');
   });
 
   test('a var() with a fallback is not a defect', () => {

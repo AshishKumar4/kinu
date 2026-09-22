@@ -98,7 +98,17 @@ async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<voi
   }
 }
 
-async function shoot(name: string, width: number, height: number, element: React.ReactElement, passes = 12): Promise<void> {
+/** One capture: the file it lands in, the terminal it renders into, the tree
+ *  it renders, and how many passes that tree needs to settle. */
+interface Shot {
+  readonly name: string;
+  readonly width: number;
+  readonly height: number;
+  readonly element: React.ReactElement;
+  readonly passes?: number;
+}
+
+async function shoot({ name, width, height, element, passes = 12 }: Shot): Promise<void> {
   const renderer = await createTestRenderer({ width, height, useThread: false, maxFps: Number.POSITIVE_INFINITY });
   const root = createRoot(renderer.renderer);
 
@@ -207,42 +217,60 @@ const TREE_NODES: readonly AgentSearchNode[] = [
 
 try {
   // Home, populated.
-  await shoot('home-populated-88x28', 88, 28, React.createElement(HomeApp, { opts: {} }), 14);
-  await shoot('home-populated-100x40', 100, 40, React.createElement(HomeApp, { opts: {} }), 14);
+  await shoot({
+    name: 'home-populated-88x28', width: 88, height: 28,
+    element: React.createElement(HomeApp, { opts: {} }), passes: 14,
+  });
+  await shoot({
+    name: 'home-populated-100x40', width: 100, height: 40,
+    element: React.createElement(HomeApp, { opts: {} }), passes: 14,
+  });
 
   // Chat states.
-  await shoot('chat-idle-88x28', 88, 28, chatScreen(WELCOME, null, false));
-  await shoot('chat-midturn-88x28', 88, 28, chatScreen(MIDTURN, 'writing', true));
-  await shoot('chat-tools-88x28', 88, 28, chatScreen(TOOLS, null, false));
-  await shoot('chat-tools-64x24', 64, 24, chatScreen(TOOLS, null, false));
-  await shoot('takes-88x28', 88, 28, chatScreen(TOOLS, null, false, React.createElement(TakesOverlay, {
-    set: TAKES_SET,
-    terminal: { width: 88, height: 28 },
-    onSelect: () => {},
-  })));
-  await shoot('tree-88x28', 88, 28, chatScreen([
-    ...TOOLS,
-    message('tree', 'system', `MCTS Tree (${TREE_NODES.length} nodes):\n${renderSearchTreeLines(TREE_NODES).join('\n')}`),
-  ], null, false));
+  await shoot({ name: 'chat-idle-88x28', width: 88, height: 28, element: chatScreen(WELCOME, null, false) });
+  await shoot({ name: 'chat-midturn-88x28', width: 88, height: 28, element: chatScreen(MIDTURN, 'writing', true) });
+  await shoot({ name: 'chat-tools-88x28', width: 88, height: 28, element: chatScreen(TOOLS, null, false) });
+  await shoot({ name: 'chat-tools-64x24', width: 64, height: 24, element: chatScreen(TOOLS, null, false) });
+  await shoot({
+    name: 'takes-88x28', width: 88, height: 28,
+    element: chatScreen(TOOLS, null, false, React.createElement(TakesOverlay, {
+      set: TAKES_SET,
+      terminal: { width: 88, height: 28 },
+      onSelect: () => {},
+    })),
+  });
+  await shoot({
+    name: 'tree-88x28', width: 88, height: 28,
+    element: chatScreen([
+      ...TOOLS,
+      message('tree', 'system', `MCTS Tree (${TREE_NODES.length} nodes):\n${renderSearchTreeLines(TREE_NODES).join('\n')}`),
+    ], null, false),
+  });
 
   // Status bar across widths.
   for (const width of [52, 72, 88, 120]) {
-    await shoot(`statusbar-${width}x6`, width, 6, React.createElement(StatusBar, {
-      name: WORKSPACE, mode: 'local' as const, model: MODEL, reasoningEffort: 'high' as const,
-      connected: true, scaffoldVersion: 12, toolCount: 14, autoEvolve: false,
-      contextTokens: 2300, contextWindow: 128_000, branchCount: 2,
-    }));
+    await shoot({
+      name: `statusbar-${width}x6`, width, height: 6,
+      element: React.createElement(StatusBar, {
+        name: WORKSPACE, mode: 'local' as const, model: MODEL, reasoningEffort: 'high' as const,
+        connected: true, scaffoldVersion: 12, toolCount: 14, autoEvolve: false,
+        contextTokens: 2300, contextWindow: 128_000, branchCount: 2,
+      }),
+    });
   }
 
   // Command hints palette.
-  await shoot('hints-80x24', 80, 24, React.createElement(
-    'box',
-    { style: { width: '100%', height: '100%' } },
-    React.createElement(CommandHintOverlay, {
-      commands: commandsForClient({ localControls: null, consents: null, checkpoints: null }),
-      terminal: { width: 80, height: 24 },
-    }),
-  ));
+  await shoot({
+    name: 'hints-80x24', width: 80, height: 24,
+    element: React.createElement(
+      'box',
+      { style: { width: '100%', height: '100%' } },
+      React.createElement(CommandHintOverlay, {
+        commands: commandsForClient({ localControls: null, consents: null, checkpoints: null }),
+        terminal: { width: 80, height: 24 },
+      }),
+    ),
+  });
 
   process.stdout.write(`captured ${set}: done\n`);
 } finally {

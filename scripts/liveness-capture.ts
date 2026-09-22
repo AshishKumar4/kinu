@@ -389,6 +389,19 @@ async function pollCanvasAndJournal(driver: DriverSocket, state: PollState): Pro
   for (const n of view.nodes) record("journal-node", `${n.id}:${n.status}`);
 }
 
+/** What one broadcast frame off the page's wire tap adds to the ledger. */
+function recordBroadcastFrame(frame: v.InferOutput<typeof BroadcastFrameSchema>): void {
+  if (frame.type !== "mcts-progress") {
+    if (frame.headId !== undefined) record("broadcast-activity", frame.headId);
+
+    return;
+  }
+
+  if (frame.rootId !== undefined) record("broadcast-run", frame.rootId);
+
+  for (const n of frame.nodes ?? []) record("broadcast-node", n.id);
+}
+
 /* ── main ───────────────────────────────────────────────────────── */
 
 async function main(): Promise<void> {
@@ -451,14 +464,7 @@ async function main(): Promise<void> {
         const frame = v.safeParse(BroadcastFrameSchema, JSON.parse(w.data));
 
         if (!frame.success) continue;
-
-        if (frame.output.type === "mcts-progress") {
-          if (frame.output.rootId !== undefined) record("broadcast-run", frame.output.rootId);
-
-          for (const n of frame.output.nodes ?? []) record("broadcast-node", n.id);
-        } else if (frame.output.headId !== undefined) {
-          record("broadcast-activity", frame.output.headId);
-        }
+        recordBroadcastFrame(frame.output);
       }
 
       cap.wire.length = 0;

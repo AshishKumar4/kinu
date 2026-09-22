@@ -13,7 +13,7 @@
 import { readFileSync } from "fs";
 import * as v from "valibot";
 import { parseJsonValue } from "../packages/core/src/utils/json";
-import { tolerate } from "../packages/core/src/obs/index";
+import { renderThrownChain, tolerate } from "../packages/core/src/obs/index";
 
 // Load credentials from .dev.vars
 const devVars = readFileSync("packages/cf-backend/.dev.vars", "utf8");
@@ -205,6 +205,14 @@ interface GatewayRequest {
   tools?: typeof TOOL_SCHEMAS;
 }
 
+interface StreamingCall {
+  name: string;
+  model: string;
+  systemPrompt?: string;
+  userMessage: string;
+  tools?: typeof TOOL_SCHEMAS;
+}
+
 const streamChunkSchema = v.object({
   choices: v.array(v.object({
     delta: v.object({
@@ -214,17 +222,27 @@ const streamChunkSchema = v.object({
   })),
 });
 
-function errorMessage<Failure>(error: Failure): string {
-  return error instanceof Error ? error.message : String(error);
+/** The first content or reasoning delta carried by one SSE burst. */
+function firstChunkOf(text: string): string {
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+    const decoded = tolerate(() => parseJsonValue(line.slice(6)), "malformed-input");
+
+    if (decoded === undefined) continue;
+    const parsed = v.safeParse(streamChunkSchema, decoded);
+
+    if (!parsed.success) continue;
+    const delta = parsed.output.choices[0]?.delta;
+
+    if (delta?.content) return delta.content.slice(0, 60);
+
+    if (delta?.reasoning_content) return `[reasoning] ${delta.reasoning_content.slice(0, 50)}`;
+  }
+
+  return "";
 }
 
-async function measureStreaming(opts: {
-  name: string;
-  model: string;
-  systemPrompt?: string;
-  userMessage: string;
-  tools?: typeof TOOL_SCHEMAS;
-}): Promise<TestResult> {
+async function measureStreaming(opts: StreamingCall): Promise<TestResult> {
   const messages: GatewayMessage[] = [];
 
   if (opts.systemPrompt) messages.push({ role: "system", content: opts.systemPrompt });
@@ -283,22 +301,7 @@ async function measureStreaming(opts: {
 
       if (ttfc < 0) {
         ttfc = performance.now() - t0;
-
-        // Extract first meaningful content from SSE
-        for (const line of text.split("\n")) {
-          if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-          const decoded = tolerate(() => parseJsonValue(line.slice(6)), "malformed-input");
-
-          if (decoded === undefined) continue;
-          const parsed = v.safeParse(streamChunkSchema, decoded);
-
-          if (!parsed.success) continue;
-          const delta = parsed.output.choices[0]?.delta;
-
-          if (delta?.content) { firstChunk = delta.content.slice(0, 60); break; }
-
-          if (delta?.reasoning_content) { firstChunk = `[reasoning] ${delta.reasoning_content.slice(0, 50)}`; break; }
-        }
+        firstChunk = firstChunkOf(text);
       }
     }
 
@@ -306,9 +309,45 @@ async function measureStreaming(opts: {
 
     return { name: opts.name, ttfc, total, firstChunk };
   } catch (error) {
-    return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: errorMessage(error) };
+    return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: renderThrownChain({ cause: error }) };
   }
 }
+
+const LATENCY_TESTS: readonly { headline: string; call: StreamingCall }[] = [
+  {
+    headline: "Test 1: Kimi K2.5 — minimal prompt, no tools",
+    call: { name: "Kimi K2.5 (no tools, minimal)", model: MODEL, userMessage: "Say hi" },
+  },
+  {
+    headline: "Test 2: Kimi K2.5 — full system prompt, no tools",
+    call: {
+      name: "Kimi K2.5 (full prompt, no tools)", model: MODEL,
+      systemPrompt: FULL_SYSTEM_PROMPT, userMessage: "Say hi",
+    },
+  },
+  {
+    headline: "Test 3: Kimi K2.5 — full prompt + 12 tool schemas",
+    call: {
+      name: "Kimi K2.5 (full prompt + tools)", model: MODEL,
+      systemPrompt: FULL_SYSTEM_PROMPT, tools: TOOL_SCHEMAS, userMessage: "Say hi",
+    },
+  },
+  {
+    headline: "Test 4: Llama 4 Scout — full prompt + tools",
+    call: {
+      name: "Llama Scout (full prompt + tools)", model: FAST_MODEL,
+      systemPrompt: FULL_SYSTEM_PROMPT, tools: TOOL_SCHEMAS, userMessage: "Say hi",
+    },
+  },
+  {
+    headline: "Test 5: Kimi K2.5 — complex task (triggers reasoning)",
+    call: {
+      name: "Kimi K2.5 (complex task)", model: MODEL,
+      systemPrompt: FULL_SYSTEM_PROMPT, tools: TOOL_SCHEMAS,
+      userMessage: "Write a TypeScript function that implements a red-black tree with insert and delete operations.",
+    },
+  },
+];
 
 // ── Main ─────────────────────────────────────────────────────────
 
@@ -322,57 +361,14 @@ async function main() {
 
   const results: TestResult[] = [];
 
-  // Test 1: Kimi K2.5 — minimal prompt, no tools
-  console.log("▶ Test 1: Kimi K2.5 — minimal prompt, no tools...");
-  results.push(await measureStreaming({
-    name: "Kimi K2.5 (no tools, minimal)",
-    model: MODEL,
-    userMessage: "Say hi",
-  }));
-  console.log(`  → TTFC: ${results.at(-1)!.ttfc.toFixed(0)}ms, first: "${results.at(-1)!.firstChunk}" ${results.at(-1)!.error ?? ""}`);
+  for (const test of LATENCY_TESTS) {
+    console.log(`▶ ${test.headline}...`);
 
-  // Test 2: Kimi K2.5 — full system prompt, no tools
-  console.log("▶ Test 2: Kimi K2.5 — full system prompt, no tools...");
-  results.push(await measureStreaming({
-    name: "Kimi K2.5 (full prompt, no tools)",
-    model: MODEL,
-    systemPrompt: FULL_SYSTEM_PROMPT,
-    userMessage: "Say hi",
-  }));
-  console.log(`  → TTFC: ${results.at(-1)!.ttfc.toFixed(0)}ms, first: "${results.at(-1)!.firstChunk}" ${results.at(-1)!.error ?? ""}`);
+    const result = await measureStreaming(test.call);
 
-  // Test 3: Kimi K2.5 — full system prompt + all 12 tool schemas
-  console.log("▶ Test 3: Kimi K2.5 — full prompt + 12 tool schemas...");
-  results.push(await measureStreaming({
-    name: "Kimi K2.5 (full prompt + tools)",
-    model: MODEL,
-    systemPrompt: FULL_SYSTEM_PROMPT,
-    tools: TOOL_SCHEMAS,
-    userMessage: "Say hi",
-  }));
-  console.log(`  → TTFC: ${results.at(-1)!.ttfc.toFixed(0)}ms, first: "${results.at(-1)!.firstChunk}" ${results.at(-1)!.error ?? ""}`);
-
-  // Test 4: Llama 4 Scout — same full prompt + tools (baseline comparison)
-  console.log("▶ Test 4: Llama 4 Scout — full prompt + tools...");
-  results.push(await measureStreaming({
-    name: "Llama Scout (full prompt + tools)",
-    model: FAST_MODEL,
-    systemPrompt: FULL_SYSTEM_PROMPT,
-    tools: TOOL_SCHEMAS,
-    userMessage: "Say hi",
-  }));
-  console.log(`  → TTFC: ${results.at(-1)!.ttfc.toFixed(0)}ms, first: "${results.at(-1)!.firstChunk}" ${results.at(-1)!.error ?? ""}`);
-
-  // Test 5: Kimi K2.5 — complex prompt to trigger reasoning
-  console.log("▶ Test 5: Kimi K2.5 — complex task (triggers reasoning)...");
-  results.push(await measureStreaming({
-    name: "Kimi K2.5 (complex task)",
-    model: MODEL,
-    systemPrompt: FULL_SYSTEM_PROMPT,
-    tools: TOOL_SCHEMAS,
-    userMessage: "Write a TypeScript function that implements a red-black tree with insert and delete operations.",
-  }));
-  console.log(`  → TTFC: ${results.at(-1)!.ttfc.toFixed(0)}ms, first: "${results.at(-1)!.firstChunk}" ${results.at(-1)!.error ?? ""}`);
+    results.push(result);
+    console.log(`  → TTFC: ${result.ttfc.toFixed(0)}ms, first: "${result.firstChunk}" ${result.error ?? ""}`);
+  }
 
   // Summary table
   console.log("\n╔══════════════════════════════════════════════════════╦═══════════╦═══════════╗");

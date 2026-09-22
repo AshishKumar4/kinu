@@ -263,9 +263,9 @@ async function control(page: Page, input: { within: string; name: string }): Pro
     return { candidates };
   })()`);
 
-  const control = v.safeParse(ControlSchema, found);
+  const located = v.safeParse(ControlSchema, found);
 
-  if (!control.success) {
+  if (!located.success) {
     const offscreen = v.safeParse(v.object({ unreachable: v.string() }), found);
 
     if (offscreen.success) {
@@ -277,7 +277,7 @@ async function control(page: Page, input: { within: string; name: string }): Pro
     throw new Error(`no ${input.name} control inside ${input.within}; saw ${JSON.stringify(seen.candidates)}`);
   }
 
-  return control.output;
+  return located.output;
 }
 
 /** Settle CSS animations so two shots of one state are the same bytes. */
@@ -292,10 +292,20 @@ const SETTLE_SCRIPT = `(() => {
   }
 })()`;
 
+/** One cursor journey: the page it happens on, the two points it runs between,
+ *  and the beat its frames belong to. */
+interface Travel {
+  readonly page: Page;
+  readonly target: { readonly x: number; readonly y: number };
+  readonly from: { readonly x: number; readonly y: number };
+  readonly onFrame: OnFrame;
+  readonly beat: string;
+}
+
 /** Move the real mouse to a point, the drawn cursor with it, photographing
  *  the travel. The click is a real press at real coordinates: a control the
  *  layout covers or shifts cannot be clicked by accident. */
-async function travelTo(page: Page, target: { x: number; y: number }, from: { x: number; y: number }, onFrame: OnFrame, beat: string): Promise<void> {
+async function travelTo({ page, target, from, onFrame, beat }: Travel): Promise<void> {
   for (let step = 1; step <= TRAVEL_STEPS; step += 1) {
     const progress = step / TRAVEL_STEPS;
     const x = from.x + (target.x - from.x) * progress;
@@ -381,7 +391,7 @@ export async function drivePlanReview(
   const origin0 = { x: VIEWPORT.width - 80, y: VIEWPORT.height - 60 };
 
   const planMode = await control(page, { within: '[aria-label="Turn mode"]', name: '^Plan$' });
-  await travelTo(page, planMode, origin0, onFrame, 'plan-mode');
+  await travelTo({ page, target: planMode, from: origin0, onFrame, beat: 'plan-mode' });
   await pressAt(page, planMode, onFrame, 'plan-mode');
 
   const composer = v.parse(v.nullable(PointSchema), await page.evaluate(`(() => {
@@ -394,11 +404,15 @@ export async function drivePlanReview(
   })()`));
 
   if (composer === null) throw new Error('the workspace has no live composer');
-  await travelTo(page, composer, planMode, onFrame, 'mission');
+  await travelTo({ page, target: composer, from: planMode, onFrame, beat: 'mission' });
   await page.mouse.click(composer.x, composer.y);
 
-  for (const [index, letter] of [...PLAN_MISSION].entries()) {
-    await page.keyboard.type(letter);
+  // Graphemes, not code units: a character outside the BMP has to reach the
+  // composer whole or the film shows half of it.
+  const letters = new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(PLAN_MISSION);
+
+  for (const [index, { segment }] of [...letters].entries()) {
+    await page.keyboard.type(segment);
 
     if (index % 3 === 0) await onFrame('mission');
   }
@@ -406,7 +420,7 @@ export async function drivePlanReview(
   await onFrame('mission');
 
   const send = await control(page, { within: '#chat', name: '^Send$' });
-  await travelTo(page, send, composer, onFrame, 'send');
+  await travelTo({ page, target: send, from: composer, onFrame, beat: 'send' });
   const toolCardsBeforeApproval0 = Number(await page.evaluate(TOOL_CARDS));
   await pressAt(page, send, onFrame, 'send');
 
@@ -422,7 +436,7 @@ export async function drivePlanReview(
   await onFrame('review');
 
   const approve = await control(page, { within: '#inspector [data-plan-decisions]', name: 'approve' });
-  await travelTo(page, approve, send, onFrame, 'approve');
+  await travelTo({ page, target: approve, from: send, onFrame, beat: 'approve' });
   const toolCardsBeforeApproval = Number(await page.evaluate(TOOL_CARDS));
   await pressAt(page, approve, onFrame, 'approve');
   await until(page, `${PLAN_STATUS} === 'Approved'`, onFrame, 'approved');
@@ -647,9 +661,12 @@ export async function filmPlanReview(
     await deleteWorkspace(app.origin, stale);
   }
 
-  const workspace = await createWorkspace(
-    app.origin, `plan-demo-${crypto.randomUUID().slice(0, 8)}`, WORKSPACE_PURPOSE, SCRIPTED_MODEL_SPEC,
-    { displayName: WORKSPACE_TITLE });
+  const workspace = await createWorkspace(app.origin, {
+    name: `plan-demo-${crypto.randomUUID().slice(0, 8)}`,
+    purpose: WORKSPACE_PURPOSE,
+    model: SCRIPTED_MODEL_SPEC,
+    displayName: WORKSPACE_TITLE,
+  });
 
   const verdict = await drivePlanReview(page, app.origin, workspace, film.shoot);
   await page.close();
