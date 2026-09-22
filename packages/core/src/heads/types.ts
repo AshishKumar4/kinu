@@ -1,29 +1,7 @@
 /**
- * Branching heads — types.
- *
- * A *head* is a divergent reasoning thread of the agent's working state.
- *
- * What's different from sub-agents:
- *   • Sub-agent  → isolated context, gets only its input, returns structured result
- *   • Head       → sees the WHOLE conversation context, accumulates EPHEMERAL
- *                  interim context (scratch notes, tool results), merges back
- *                  via LLM synthesis. Can recursively spawn children under a
- *                  depth budget.
- *
- * What's different from MCTS branches:
- *   • MCTS branch → samples one approach for evaluation (one short LLM call)
- *   • Head        → does real work: multiple turns, tool calls, file writes
- *
- * Lifecycle:
- *   1. parent calls HeadController.split({ rationale, heads: [...] })
- *   2. the controller acquires each head as a logical ACTOR of the workspace
- *      (state/actor-host.ts) — its own session, stores and queue over the one
- *      workspace database, seeded with the loop origin its input names
- *   3. each head runs its task autonomously, as a claimed actor turn
- *   4. heads may call splitHeads() on themselves (recursive, decremented depth)
- *   5. controller awaitAll(heads) collects HeadReport[]
- *   6. merge(reports, strategy) → LLM synthesis → MergeResult
- *   7. parent writes MergeResult.mergedNarrative back into conversation
+ * Branching heads: a head is a fork of the agent's working state that sees the whole conversation,
+ * does real work as a claimed actor turn, may split recursively under a depth budget, and merges
+ * back via LLM synthesis.
  */
 
 import type { ToolCallRecord } from '../evolution/types';
@@ -35,111 +13,67 @@ import type { BuiltinToolName } from '../tools/registry';
 import type { LoopOrigin } from '../scaffold/loop-origin';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 
-/** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage };
 
-/** What kind of merging the parent wants — drives the merge prompt. */
 export type MergeStrategy =
   | 'synthesize'   // unify into one coherent narrative (default)
   | 'best_of'      // pick the strongest single head; cite weaker ones briefly
   | 'consensus';   // emphasize areas of agreement; surface disagreements
 
 /**
- * What propagates down the head tree.
- *
- * A head is a FORK of its parent — the same workspace, files and sandbox — so it
- * gets the same working envelope its parent turn gets: run until the work is
- * done. There is no token pool and no wall clock by default. Cost is governed
- * where cost is actually owned: the mission budget governor (mission-budget.ts),
- * which is label-scoped, opt-in, and enforced at the spawn and model-call seams.
- *
- * The two fields here are not work limits:
- *   • `maxDepth` terminates RECURSION. `split_subheads` lets a head spawn heads
- *     that spawn heads; without a decrementing depth there is no fixed point and
- *     a single swarm call can expand without bound. It never stops a running
- *     head — it refuses a NEW split.
- *   • `maxWallClockMs` exists only when the caller supplies a deadline in
- *     the inherited HeadBudget or node deps. Absent means run to completion. */
+ * A head gets its parent's envelope: no token pool, no default wall clock. Cost is governed by the
+ * mission budget governor (mission-budget.ts). `maxDepth` terminates recursion; it refuses new splits only.
+ */
 export interface HeadBudget {
-  /** Remaining recursive-split depth; decremented per spawn. 0 rejects splits. */
+  /** Decremented per spawn. 0 rejects splits. */
   readonly maxDepth: number;
-  /** Caller-requested wall-clock ceiling in ms. Undefined = run to completion. */
+  /** Undefined = run to completion. */
   readonly maxWallClockMs?: number;
-  /** Epoch ms when the head was spawned; used for wall-clock enforcement. */
   readonly spawnedAt: number;
 }
 
-/** Everything a branching head needs to start working. */
 export interface HeadInput {
   readonly id: HeadId;
   readonly rootId: HeadId;                 // root of the split tree (== id if this is a root)
   readonly parentId: HeadId | null;        // null only for the root head
   readonly depth: number;                  // 0 for root, +1 per spawn
-  readonly task: string;                   // what this head should explore
+  readonly task: string;
   readonly mode: WorkMode;                 // inherited mutation boundary
-  readonly rationale: string;              // why this head was spawned (carried for merge prompt)
+  readonly rationale: string;
   readonly inheritedContext: SerializedMessage[];
   readonly budget: HeadBudget;
-  /** The model to use for this head — usually the same as the parent's. */
   readonly model?: string;
-  /** Names of crafted tools this head may invoke. Empty = none. Undefined = all. */
+  /** Empty = none. Undefined = all. */
   readonly allowedTools?: readonly string[];
-  /**
-   * The mission-budget labels this head's model calls charge, carried down so a
-   * head running in another process can find the ledger its spend belongs to.
-   *
-   * Strings, not a port: this input crosses a facet boundary as structured
-   * data, and the boundary is exactly why the labels have to travel at all.
-   * The runtime on the far side turns them back into a
-   * {@link import('../mission-budget.js').MissionScope} over whatever reaches
-   * the ledger from there.
-   *
-   * Absent or empty means unbudgeted — the default, and then nothing is asked:
-   * no query, no RPC, no refusal.
-   */
+  /** Mission-budget labels, as strings because this input crosses a facet boundary. Absent or empty: unbudgeted, nothing is asked. */
   readonly missionLabels?: readonly string[];
-  /**
-   * Where this head's agentic loop comes from — always stated, never inferred.
-   *
-   * A head opened a FRESH scaffold store, found no row and ran the shipped
-   * bootstrap loop, so a workspace whose owner had promoted three generations
-   * of loop still forked with the first one and nothing said so. `inherit` is
-   * this kind's default (`defaultLoopOrigin`): a fork explores under the loop
-   * it is forking FROM.
-   */
+  /** Always stated, never inferred; a head's default is `inherit` (`defaultLoopOrigin`). */
   readonly loop: LoopOrigin;
-  /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
   readonly mergeStrategy: MergeStrategy;
 }
 
-/** A single piece of evidence the head considered authoritative. */
 export interface Evidence {
   readonly id: string;
   readonly kind: 'tool_output' | 'fact' | 'citation' | 'artifact';
   readonly body: string;
-  /** Optional pointer to where this came from (file path, URL, tool call id). */
   readonly ref?: string;
-  /** Confidence 0..1 — heads self-report; used by merge to weight contributions. */
+  /** 0..1, self-reported; the merge weights contributions by it. */
   readonly confidence?: number;
 }
 
-/** A decision the head made — surfaces for the merge prompt to reconcile. */
 export interface Decision {
   readonly question: string;
   readonly choice: string;
   readonly rationale: string;
-  /** Which evidence ids back this decision. */
   readonly supportingEvidence?: readonly string[];
 }
 
-/** Pointer to a tangible side-effect the head produced. */
 export interface ArtifactRef {
   readonly kind: 'file' | 'port' | 'memory' | 'note';
   readonly ref: string;
   readonly description?: string;
 }
 
-/** One tool call within a head step — name + (digested) input/output. */
 export interface HeadStepToolCall {
   readonly toolCallId?: string;
   readonly name: string;
@@ -147,154 +81,75 @@ export interface HeadStepToolCall {
   readonly output?: unknown;
 }
 
-/** One reasoning step of a head's run — the ordered trace the UI replays so the
- *  user can see what each branch actually did, turn by turn. */
 export interface HeadStep {
   readonly text: string;
   readonly reasoning?: string;
   readonly toolCalls: readonly HeadStepToolCall[];
 }
 
-/**
- * Every status a head's own run can END on — the closed set `head_journal.status`
- * holds once a report has landed.
- *
- * A LIST and not just a union, because two readers outside this module have to
- * ask a `TEXT` column which of these it holds, and a hand-written subset in either
- * of them names `completed` and treats the rest as one lump. Let the
- * exploration-facet sweep classify a facet terminal on `completed` or `aborted`
- * alone and a head that THREW or blew its budget keeps its facet for the life of
- * the workspace; let the cold branch settle report every non-`completed` status as
- * `errored` and a branch that ran out of wall clock is recorded as having thrown.
- * Four statuses, none of them a lump.
- */
+/** Every terminal status of a head run; readers classifying a `TEXT` column must handle all four, not `completed` versus the rest. */
 const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
 
 export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];
 
-/**
- * The statuses a journal row carries while it still CLAIMS to execute — the only
- * two that are not terminal, and the exact complement of
- * {@link HEAD_REPORT_STATUSES} over what `HeadJournal` writes.
- *
- * `running` is written at spawn and `interrupted` by a cold activation's
- * reconciliation, so both are non-terminal and neither is permanent: the resume
- * gate either re-drives the run or `abandonRunning` settles it `aborted`. That is
- * what makes a caller owing work on these two terminate.
- */
+/** Non-terminal journal statuses, the complement of {@link HEAD_REPORT_STATUSES}; the resume gate re-drives or `abandonRunning` settles them. */
 const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;
 
 export type HeadUnsettledStatus = (typeof HEAD_UNSETTLED_STATUSES)[number];
 
-/** Is this stored status one a head is still executing under? */
 export function headStatusUnsettled(status: string): status is HeadUnsettledStatus {
   return HEAD_UNSETTLED_STATUSES.some((unsettled) => unsettled === status);
 }
 
-/**
- * A stored `head_journal.status` read back as the report status it records, or
- * null when it records none.
- *
- * Null covers an unsettled row AND a value no version of this journal writes; a
- * caller that must tell those apart asks {@link headStatusUnsettled} first. Kept
- * apart from that predicate rather than folded into one three-way answer because
- * the two callers weigh the unknown differently: a facet sweep must not wipe
- * storage it cannot account for, and a settlement must not owe forever on a
- * status nothing will ever change.
- */
+/** Null for an unsettled row and for an unknown value; ask {@link headStatusUnsettled} to tell them apart. */
 export function storedHeadReportStatus(status: string): HeadReportStatus | null {
   return HEAD_REPORT_STATUSES.find((reported) => reported === status) ?? null;
 }
 
-/** What a head reports back to its parent on completion. */
 export interface HeadReport {
   readonly id: HeadId;
   readonly canonicalCompletion?: { readonly turnId: string; readonly runId: string; readonly outputReferences: readonly MessageReference[]; readonly outputPartReferences: readonly MessagePartReference[]; readonly finalTextReference: MessagePartReference | null };
   readonly status: HeadReportStatus;
-  /** 2-4 sentence finding — the LLM writes this. Used in the merge prompt. */
+  /** 2-4 sentence finding; used in the merge prompt. */
   readonly summary: string;
-  /** Top-N evidence items (head decides; usually <= 10). */
   readonly evidence: readonly Evidence[];
   readonly decisions: readonly Decision[];
   readonly artifactRefs: readonly ArtifactRef[];
-  /** Files this head created, changed or deleted on the SHARED planes, with
-   *  line counts — the review a parent gets of what its child actually did.
-   *  Attributed at the head's own file plane, which is why a concurrent sibling
-   *  cannot appear here; see heads/file-changes.ts for what that leaves out. */
+  /** Changes on the shared planes, attributed at the head's own file plane (see heads/file-changes.ts). */
   readonly fileChanges: readonly HeadFileChange[];
-  /** Heads this one spawned (already merged before returning). */
   readonly childHeadIds: readonly HeadId[];
-  /** Tool calls the head made — for telemetry. */
   readonly toolCalls: readonly ToolCallRecord[];
-  /** How many steps the head took. The trace itself is NOT carried here: a
-   *  head writes each step to its journal as it finishes it (HeadInferenceDeps
-   *  .reportStep), so the branch is readable while it is still running rather
-   *  than only once this report exists. Returning the trace as well would ship
-   *  the same rows twice and let a late empty report erase a live one. */
+  /** The trace is not carried: steps are journalled live via `reportStep`, and a late empty report must not erase them. */
   readonly stepCount: number;
-  /** What this head's provider calls reported, accumulated. Absent fields mean
-   *  the provider said nothing — a head aborted before its first call carries
-   *  `{}`, not a set of zeros. Callers wanting one number call `usageTotal`,
-   *  which answers `undefined` for exactly that case; no scalar total is stored
-   *  here because it could only ever drift from its own parts. */
+  /** Absent fields mean the provider said nothing; no scalar total is stored (use `usageTotal`). */
   readonly usage: Usage;
   readonly wallClockMs: number;
-  /** Free-form failure message if status != 'completed'. */
   readonly errorMessage?: string;
 }
 
 /**
- * One head as the Exploration surface renders it — lifecycle and liveness.
- * Assembled by HeadJournal.assembleRun.
- *
- * `spawnedAt` and `lastStepAt` are what make a RUNNING branch legible. Without
- * them the surface could only say "no steps", which reads as lost data; with
- * them it can say "started 3s ago, nothing yet" or "4 steps, last one 6 minutes
- * ago" — the difference between a head that is working and a head that is
- * wedged on a call that never answers.
- *
- * THE TRACE IS NOT HERE, and that is the point. A run view holds every head of
- * a run, and the canvas composes thirty runs at once; carrying each head's
- * prose made one Exploration page 824 KiB and one workspace's initial load
- * 13.2 MB (measured against production, 2026-08-20). Nothing that renders a run
- * ever read it — `headRunToTree`, the fan-in marks and the resolution label use
- * the fields above. The one reader of a trace opens ONE branch, and reaches it
- * through {@link HeadJournal.readSteps} on that branch's id.
+ * One head as the Exploration surface renders it (HeadJournal.assembleRun). The trace is deliberately
+ * absent to keep run views small; one branch's trace is read via {@link HeadJournal.readSteps}.
  */
 export interface HeadRunHeadView {
   readonly id: HeadId;
-  /**
-   * This node's own parent, as the journal recorded it — the edge that lets a
-   * RUNNING node be drawn where it really sits.
-   *
-   * Null for a head of a top-level split, whose synthetic root has no journal
-   * row of its own, and for any run that recorded no edge; a reader draws those
-   * under the run. It is carried because the journal is the only record of a
-   * node that has not reported yet, so a reader that flattens every journalled
-   * node to depth 1 misdraws every level of a deeper search.
-   */
+  /** The journalled parent edge; null for a top-level split's head or a run with no edge recorded. */
   readonly parentId: HeadId | null;
-  /** This node's depth below the run's root, as the journal recorded it. */
   readonly depth: number;
   readonly task: string;
   readonly rationale: string;
   readonly status: string;
   readonly summary: string | null;
   readonly errorMessage: string | null;
-  /** This head's tokens as the journal stored them. A field is absent when its
-   *  column is NULL, which is what a head that never reported looks like —
-   *  distinct from a head that reported zero, and never rendered as 0. */
+  /** A field is absent when its column is NULL (never reported); never rendered as 0. */
   readonly usage: Usage;
-  /** Measured wall clock, written with the report. 0 while the head runs —
-   *  `spawnedAt` is what an in-flight branch is timed from. */
+  /** 0 while the head runs; in-flight timing uses `spawnedAt`. */
   readonly wallClockMs: number;
   readonly spawnedAt: number;
-  /** When the head last recorded a step, or null when it has recorded none. */
   readonly lastStepAt: number | null;
   readonly decisions: ReadonlyArray<{ question: string; choice: string; rationale: string }>;
 }
 
-/** One split (a run): its identity + grouped heads + the merge synthesis. */
 export interface HeadRunView {
   readonly rootId: HeadId;
   readonly task: string;
@@ -302,105 +157,63 @@ export interface HeadRunView {
   readonly status: string;
   readonly spawnedAt: number;
   readonly heads: readonly HeadRunHeadView[];
-  /** `totalTokens` is null when no head in the run reported any — the SQL
-   *  column's own absence crossing the seam, deliberately spelled `null` here
-   *  rather than as an absent key because this whole view is a row read. Domain
-   *  types spell the same absence by omitting the field; what neither may do is
-   *  substitute 0, which is the claim that the split was free. */
+  /** Null when no head reported any; never substituted with 0. */
   readonly merge: { narrative: string; headCount: number; totalTokens: number | null } | null;
 }
 
-/** What the parent asks the controller to run. */
 export interface SplitRequest {
-  /** The merge prompt will receive this as overall framing. */
   readonly rationale: string;
   readonly heads: readonly {
     readonly task: string;
     readonly rationale: string;
-    /** Per-head provider/model spec (e.g. `codex/gpt-5.5`). Heterogeneous
-     *  models per head enable multi-agent debate / panel-of-experts. */
+    /** Per-head provider/model spec (e.g. `codex/gpt-5.5`). */
     readonly model?: string;
     readonly allowedTools?: readonly string[];
   }[];
   readonly mergeStrategy?: MergeStrategy;
 }
 
-/** Result of split → await → merge. The parent writes mergedNarrative back. */
 export interface MergeResult {
   readonly mergedNarrative: string;
-  /** Decisions the LLM selected as final answers (cherry-picked across heads). */
   readonly selectedDecisions: readonly Decision[];
-  /** Decisions/questions the heads disagreed on — surfaced for the parent. */
   readonly unresolvedQuestions: readonly string[];
-  /** Concrete next-step suggestions. */
   readonly recommendations: readonly string[];
-  /** Ground NO head covered — the negative space of the split. Distinct from
-   *  unresolvedQuestions, which the heads themselves raised: a blind spot is
-   *  something none of them thought to look at, so nothing in their reports
-   *  points at it. Empty when the heads between them covered the task, and
-   *  empty on the deterministic empty-split and merge-fallback paths, which
-   *  have no synthesis to draw it from. */
+  /** Ground no head covered, distinct from unresolvedQuestions. Empty on the empty-split and merge-fallback paths. */
   readonly blindSpots: readonly string[];
-  /** Aggregate of every head's evidence — for memory writeback. */
   readonly evidenceAggregate: readonly Evidence[];
-  /** The ids of every head spawned in this split (root-level only — not recursive). */
+  /** Root-level only, not recursive. */
   readonly headIds: readonly HeadId[];
-  /** Per-head outcome score in [0,1] + the head's text — one entry per head,
-   *  surfaced as Alternate-Takes and reported to the preference ledger. When
-   *  `grounded`, the score is execution-banded (mcts/evaluation.ts); otherwise a
-   *  neutral 0.5 (no grounding seam wired). A failed/unresolved head scores below
-   *  a head whose work ran and held up. */
+  /** One entry per head, for Alternate-Takes and the preference ledger; neutral 0.5 when ungrounded. */
   readonly headScores: readonly HeadScore[];
-  /** Which files each head created, changed or deleted — the review of the
-   *  split's actual effect on the shared workspace, per head, with line counts.
-   *  Only heads that changed something appear. */
+  /** Only heads that changed something appear. */
   readonly fileChanges: readonly HeadFileChangeSet[];
-  /** True when headScores carry a real grounded verdict (the controller had a
-   *  grounding seam); false when they are neutral placeholders. */
   readonly grounded: boolean;
   readonly costSummary: {
     readonly headCount: number;
-    /** How many of those heads actually banked a finding (headProducedFindings).
-     *  `headCount - headsWithFindings` is how many forks came back empty — the
-     *  one number that says whether a delegation was worth its tokens. */
+    /** Heads that banked a finding (headProducedFindings). */
     readonly headsWithFindings: number;
-    /** Every head's tokens, or undefined when NO head reported any — a split
-     *  whose heads all died before their first provider call did not cost zero
-     *  tokens, it cost an unknown number, and claiming 0 is what let a failed
-     *  delegation look free. */
+    /** Undefined when no head reported any: unknown cost, not zero. */
     readonly totalTokens: number | undefined;
     readonly totalWallClockMs: number;
     readonly maxDepth: number;
   };
 }
 
-/** A single head's execution-grounded outcome score, mirroring the MCTS
- *  BranchEvaluation shape (evaluation.ts) so heads and branches report the same
- *  grounded signal. Carries the head's summary so the backend can build the
- *  Alternate-Takes set (the comparable answer of each thread) without re-reading
- *  the journal. */
+/** Mirrors MCTS BranchEvaluation (evaluation.ts). */
 export interface HeadScore {
   readonly id: HeadId;
-  /** The head's finding (its report summary) — the take candidate's text. */
   readonly text: string;
   readonly status: HeadReport['status'];
-  /** [0,1] — grounded outcome (execution band when the head ran code, else judge). */
+  /** [0,1]: execution band when the head ran code, else judge. */
   readonly score: number;
   readonly grounding: EvaluationGrounding;
 }
 
-/** Default merge strategy. */
 export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';
 
 /**
- * The budget a child head inherits from its parent.
- *
- * Depth decrements — that is the whole point of it. A caller-requested
- * wall-clock is bounded by the parent's REMAINING time rather than re-granted in
- * full: the child resets `spawnedAt` to now, so handing it the parent's whole
- * ceiling would let a recursive subtree run past the deadline the caller asked
- * for, once per level it descends (THINKING-AUDIT §4 #7). With no wall clock
- * requested there is nothing to clamp and the child, like the parent, just runs.
+ * Depth decrements. A requested wall clock is bounded by the parent's remaining time, since the child
+ * resets `spawnedAt` (THINKING-AUDIT §4 #7).
  */
 export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()): HeadBudget {
   if (parent.maxWallClockMs === undefined) {
@@ -414,8 +227,7 @@ export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()):
   };
 }
 
-/** Whether a caller-requested deadline has passed. Split depth is checked
- * where children are created; it cannot stop work in an existing head. */
+/** Split depth is checked where children are created, not here. */
 export function budgetExhausted(b: HeadBudget) {
   if (b.maxWallClockMs !== undefined && Date.now() - b.spawnedAt >= b.maxWallClockMs) {
     return { exhausted: true, reason: 'wall-clock' };
@@ -426,24 +238,10 @@ export function budgetExhausted(b: HeadBudget) {
 
 import type { WorkMode } from '../types/turn';
 
-/** The builtin tools a head keeps. `file` is the runtime's native file plane,
- *  `eval` its executor namespaces, `shell` its shell router, and `web`
- *  live research. Hosted `file` reaches the canonical workspace; local `file`
- *  reaches private scratch while `parent.*` reaches canonical files. `memory`
- *  and `skills` are withheld because they would address head-private stores. */
+/** `memory` and `skills` are withheld because they would address head-private stores. */
 export const HEAD_BUILTIN_TOOLS = ['eval', 'shell', 'file', 'web'] as const satisfies readonly BuiltinToolName[];
 
-/**
- * The builtin surface narrowed to an explicit allow-list.
- *
- * The mechanism, not a convenience: what makes containment structural is that a
- * builtin added upstream tomorrow does not silently appear, and that holds only
- * if every confined surface is built by ONE filter over a NAMED set. Heads pass
- * {@link HEAD_BUILTIN_TOOLS}; a swarm node passes that set plus its report tool,
- * exactly the surface *A node is an agent* gives a node. A tool whose deps the
- * caller did not wire is absent from `builtin` already, so the "absent deps, absent
- * tool" half needs no check here.
- */
+/** One filter over a named set, so a builtin added upstream never silently appears on a confined surface. */
 export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
   const kept: ToolSet = {};
 

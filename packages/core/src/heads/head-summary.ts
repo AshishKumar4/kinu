@@ -1,24 +1,10 @@
-// Pure helpers for building a head's report summary — extracted from
-// the hosted head runner so the capture logic is unit-testable and shared
-// by both backends (the cf Facet head + the CLI subprocess head).
-//
-// The bug they fix: ai-SDK v6 `result.text` returns only the LAST step's text,
-// and a generative head almost always ends on a tool-call / reasoning turn —
-// so reading `result.text` alone yielded an empty per-head merge summary.
+// Head report summary helpers. ai-SDK v6 `result.text` is only the last step's text, which is
+// usually empty for a head that ends on a tool call.
 
 import { digestJsonValue } from '../utils/json';
 import type { HeadReport, HeadStep } from "./types";
 
-/**
- * Did this head bank anything a merge may cite?
- *
- * The distinction the merge path must never blur. A head that STOPPED — budget,
- * abort, error — without recording evidence, a decision, or an artifact learned
- * nothing, and its silence is not a finding about the task or the environment.
- * A completed head answered, and its summary is that answer. Tool calls alone
- * are activity, not findings. One predicate so the merge prompt, the merge
- * narrative, and the cost summary can never disagree about which is which.
- */
+/** A stopped head with no evidence, decision or artifact learned nothing; tool calls alone are not findings. */
 export function headProducedFindings(
   r: Pick<HeadReport, "status" | "evidence" | "decisions" | "artifactRefs">,
 ): boolean {
@@ -31,8 +17,6 @@ interface StepLike { text?: string }
 
 interface ResultLike { text?: string; reasoningText?: string; steps?: ReadonlyArray<StepLike> }
 
-/** ai-SDK v6 step shape we read for the trace. toolCalls carry `.input`, their
- *  results carry `.output`, matched by `toolCallId`. */
 interface ToolCallLike { toolName?: string; name?: string; input?: unknown; toolCallId?: string }
 
 interface ToolResultLike { toolName?: string; output?: unknown; result?: unknown; toolCallId?: string }
@@ -45,17 +29,7 @@ export interface TraceStepLike {
 }
 
 
-/**
- * One ai-SDK v6 step as the head's trace row: its prose, its reasoning, and its
- * tool calls (input matched with its output by toolCallId). Null for a step
- * that carries none of the three — empty padding the trace should not show.
- *
- * Per step, not per run, because the trace is written AS the head runs: the
- * head hands each finished step to its journal, so a fork that is still
- * thinking already has a readable trace. A whole-run walk can only run after the
- * report, which would leave the Exploration surface with nothing to show until
- * then.
- */
+/** Null for a step with no prose, reasoning or tool call. Per step, because the trace is written live. */
 export function toHeadStep(step: TraceStepLike): HeadStep | null {
   const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
   const results = Array.isArray(step.toolResults) ? step.toolResults : [];
@@ -84,8 +58,7 @@ export function toHeadStep(step: TraceStepLike): HeadStep | null {
   return { text, reasoning, toolCalls };
 }
 
-/** The head's real final answer: the last text-bearing step (not just the last
- *  step), falling back to the model's reasoning text. */
+/** The last text-bearing step (not just the last step), falling back to reasoning. */
 export function extractFinalText(result: ResultLike): string {
   const direct = result.text?.trim();
 
@@ -101,9 +74,7 @@ export function extractFinalText(result: ResultLike): string {
   return result.reasoningText?.trim() ?? "";
 }
 
-/** When a head produced no prose turn, synthesize a summary from what it
- *  actually recorded (decisions / evidence / tool calls). Returns null when the
- *  head recorded nothing at all. */
+/** Null when the head recorded nothing. */
 export function synthesizeHeadSummary(opts: {
   decisions: ReadonlyArray<{ question: string; choice: string }>;
   evidence: ReadonlyArray<{ body: string }>;

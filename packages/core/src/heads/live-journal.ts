@@ -1,41 +1,7 @@
 /**
- * The head journal, announcing itself.
- *
- * `head_activity` was never a property of the journal. On the Cloudflare backend
- * it was a side effect bolted onto two RPC methods — `recordHeadStep` on the
- * orchestrator and `headJournalRecordReport` on the actor — and both are
- * reachable only from a FACET calling back to its parent. The consequences,
- * measured:
- *
- *   - A top-level head's or node's COMPLETION never announced anything.
- *     `getHeadController` and the node host were handed the raw journal, whose
- *     `recordReport` has no broadcast anywhere in it, so an open transcript sat
- *     one write short of the answer it was waiting for — the exact defect
- *     `headJournalRecordReport`'s own comment says it fixed, fixed only for the
- *     recursive case that comment was written from.
- *   - An UNHOSTED node announced NOTHING, ever. `getCFNodeHost` answers
- *     undefined for a workspace with no owner, and core then wires `reportStep`
- *     straight to `journal.appendStep`. Its rows land correctly and a manual
- *     reload shows them, which is the worst shape a liveness defect can have.
- *   - A SPAWN announced nothing, so a node appearing in a running search was
- *     poll-only — and for `agents(action:'swarm')` that is the only channel
- *     there is, because `SwarmRunDeps` carries no progress seam at all.
- *
- * One seam instead of two call sites. Every path into the journal — hosted and
- * unhosted, head and node, top-level and recursive — goes through the instance a
- * backend hands the controller and the node host, so announcing HERE covers all
- * of them.
- *
- * SHARED, not cf-only: the listener is injected, and the CLI carries the same
- * defect in a stronger form — its nodes always run in process, so nothing it
- * journals has ever announced anything. It has a live surface to feed too, and a
- * copy of this class in each backend is the drift `gate:capability-parity`
- * exists to refuse.
- *
- * The announcement carries an id and never a row. Same reasoning as
- * `pending_actions_changed`: the reader re-reads the ledger it already renders
- * from, so one channel cannot start disagreeing with the other, and a
- * subscriber that missed a frame is corrected by the next one.
+ * The head journal, announcing `head_activity` after each durable write. Every journal path (hosted
+ * or not, head or node, any depth) goes through this instance. The announcement carries an id, never
+ * a row: readers re-read the ledger.
  */
 import { diagnostics, toKinuError } from '../obs';
 import type { SqlExecutor } from '../types/primitives';
@@ -53,8 +19,7 @@ export class LiveHeadJournal extends HeadJournal {
     super(sql, actor);
   }
 
-  /** The run itself, seeded. For a swarm this is the row that makes the search
-   *  exist, so it is the first thing a watching client can learn. */
+  /** For a swarm, the row that makes the search exist. */
   override recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void {
     super.recordSplit(rootId, rationale, spawnedAt);
     this.announce(rootId);
@@ -80,22 +45,13 @@ export class LiveHeadJournal extends HeadJournal {
     this.announce(headId);
   }
 
-  /** The settle. Keyed to the ROOT, because what moved is the run. */
+  /** Keyed to the root, because what moved is the run. */
   override cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
     super.cacheMerge(rootId, result, strategy);
     this.announce(rootId);
   }
 
-  /**
-   * AFTER the write, and it cannot cost the write.
-   *
-   * The guard is HERE rather than in the listener, because that is where the
-   * promise belongs: core calls these methods mid-search, and a socket with
-   * nobody on it must never fail a journal write. Reported rather than
-   * swallowed — a courtesy that stopped working is a finding, and a client that
-   * silently stopped hearing about a running search is exactly the defect this
-   * class was written for.
-   */
+  /** After the write, and it must never fail it: a listener failure is reported, not thrown. */
   private announce(headId: HeadId): void {
     try {
       this.listener(headId);
