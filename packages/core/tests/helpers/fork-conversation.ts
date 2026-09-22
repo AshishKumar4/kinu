@@ -112,9 +112,7 @@ export class ForkConversation {
       this.transcript.record({
         id: input.id, parentId: input.parentId, role: input.message.role,
         turnId: null, runId: null, metadata,
-        parts: prepared.parts.map((part) => ({
-          messageId: published.messageId, partNo: part.number, throughSequence: published.sequence,
-        })),
+        parts: prepared.content.parts.map((part) => ({ messageId: published.messageId, partNo: part.partNo })),
       });
     }
 
@@ -133,13 +131,8 @@ export class ForkConversation {
     });
   }
 
-  /**
-   * A tool call and the result that answers it.
-   *
-   * The result's part records `reply_to_message_id` against the call's part,
-   * which is how the reader resolves its `toolCallId` — so these two messages
-   * are only readable together.
-   */
+  /** A tool call and the result that answers it; the result's part records
+   *  `replyTo` against the call's part. */
   async toolExchange(input: {
     readonly callId: string; readonly resultId: string; readonly toolName: string;
     readonly toolCallId: string; readonly output: JsonObject;

@@ -57,8 +57,6 @@ import {
   forkArtifactPath,
   forkConversationEntryPartRows,
   forkConversationEntryRow,
-  forkMessagePartRows,
-  forkMessageUpdateRows,
   forkSessionMessageRow,
   planForkConversation,
 } from './fork-plan';
@@ -149,11 +147,7 @@ export async function snapshotWorkspaceForFork(source: ForkSnapshotSource): Prom
       workspaceName: identity[0]?.name ?? '',
     },
     cut: { messageId: plan.cut.entryId, createdAtMs: plan.cut.recordedAt },
-    sessionMessages: plan.messages.map((message) => forkSessionMessageRow(source.sql, actorId, message.messageId)),
-    messageParts: plan.messages.flatMap((message) => forkMessagePartRows(source.sql, actorId, message.messageId)),
-    messageUpdates: plan.messages.flatMap(
-      (message) => forkMessageUpdateRows(source.sql, actorId, message, source.artifactDirectory),
-    ),
+    sessionMessages: plan.messageIds.map((messageId) => forkSessionMessageRow(source.sql, actorId, messageId, source.artifactDirectory)),
     conversationEntries: plan.entryIds.map(
       (entryId) => forkConversationEntryRow(source.sql, actorId, entryId, source.artifactDirectory),
     ),

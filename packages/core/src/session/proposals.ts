@@ -17,12 +17,12 @@ export interface ContextProposal {
   readonly cause: string; readonly turnId: string | null; readonly buildIdentity?: string;
   readonly expectedPending?: string | null;
   readonly changes: readonly ContextChange[];
-  readonly sources?: readonly { readonly outputMessageId: string; readonly outputPart: number; readonly entryId: string; readonly messageId: string; readonly part: number; readonly sequence: number }[];
+  readonly sources?: readonly { readonly outputMessageId: string; readonly outputPart: number; readonly entryId: string; readonly messageId: string; readonly part: number }[];
 }
 
 interface ProposalRow { context_id: string; base_revision: number; author: string; via: string; cause: string; turn_id: string | null; status: string }
 
-interface ChangeRow { entry_id: string; expected_message_id: string | null; expected_sequence: number | null; message_id: string | null; through_sequence: number | null; position: number | null }
+interface ChangeRow { entry_id: string; expected_message_id: string | null; message_id: string | null; position: number | null }
 
 export interface ContextProposalMetadata extends PendingContextProposal { readonly context_id: string; readonly status: string; readonly closed_reason: string | null; readonly build_identity: string | null }
 
@@ -67,7 +67,7 @@ export class SessionProposals {
       if (original.some((entry, position) => {
         const live = current[position];
 
-        return live?.entryId !== entry.entryId || live.messageId !== entry.messageId || live.sequence !== entry.sequence;
+        return live?.entryId !== entry.entryId || live.messageId !== entry.messageId;
       })) throw new KinuError('denied', 'proposal base was changed rather than extended');
       const pending = this.pending(selected.contextId);
       const previous = pending.at(-1)?.proposal_id ?? null;
@@ -82,16 +82,16 @@ export class SessionProposals {
 
       for (const change of proposal.changes) {
         this.validateExpected(base.get(change.entryId), change.expected);
-        void this.sql`INSERT INTO context_proposal_entries(actor_id,proposal_id,entry_id,expected_message_id,expected_sequence,message_id,through_sequence,position)
-          VALUES(${actorId},${proposal.id},${change.entryId},${change.expected?.messageId ?? null},${change.expected?.sequence ?? null},${change.replacement?.messageId ?? null},${change.replacement?.sequence ?? null},${change.replacement?.position ?? null})`;
+        void this.sql`INSERT INTO context_proposal_entries(actor_id,proposal_id,entry_id,expected_message_id,message_id,position)
+          VALUES(${actorId},${proposal.id},${change.entryId},${change.expected?.messageId ?? null},${change.replacement?.messageId ?? null},${change.replacement?.position ?? null})`;
       }
 
       for (const source of proposal.sources ?? []) {
-        this.validateExpected(base.get(source.entryId), { messageId: source.messageId, sequence: source.sequence });
+        this.validateExpected(base.get(source.entryId), { messageId: source.messageId });
 
         if (!proposal.changes.some(change => change.replacement?.messageId === source.outputMessageId)) throw new KinuError('bad_input', 'transformation source names an output outside the proposal');
-        void this.sql`INSERT INTO context_proposal_sources(actor_id,proposal_id,output_message_id,output_part_no,source_entry_id,source_message_id,source_part_no,source_sequence)
-          VALUES(${actorId},${proposal.id},${source.outputMessageId},${source.outputPart},${source.entryId},${source.messageId},${source.part},${source.sequence})`;
+        void this.sql`INSERT INTO context_proposal_sources(actor_id,proposal_id,output_message_id,output_part_no,source_entry_id,source_message_id,source_part_no)
+          VALUES(${actorId},${proposal.id},${source.outputMessageId},${source.outputPart},${source.entryId},${source.messageId},${source.part})`;
       }
     });
   }
@@ -156,23 +156,13 @@ export class SessionProposals {
   }
 
   private compose(id: string, current: readonly ContextEntry[]): ContextEntry[] {
-    const changes = this.sql<ChangeRow>`SELECT entry_id,expected_message_id,expected_sequence,message_id,through_sequence,position
+    const changes = this.sql<ChangeRow>`SELECT entry_id,expected_message_id,message_id,position
       FROM context_proposal_entries WHERE actor_id=${this.actor.actorId} AND proposal_id=${id}`;
 
     const members = new Map(current.map(entry => [entry.entryId, entry]));
 
     for (const change of changes) {
-      let expected: MessageReference | null = null;
-
-      if (change.expected_message_id !== null) {
-        // The two columns are written together by `open`; one without the other
-        // is a half-written row, the same incompleteness the replacement below
-        // refuses rather than guesses at.
-        if (change.expected_sequence === null) throw new KinuError('io', 'proposal expectation is incomplete');
-        expected = { messageId: change.expected_message_id, sequence: change.expected_sequence };
-      }
-
-      this.validateExpected(members.get(change.entry_id), expected);
+      this.validateExpected(members.get(change.entry_id), change.expected_message_id === null ? null : { messageId: change.expected_message_id });
       members.delete(change.entry_id);
     }
 
@@ -181,14 +171,14 @@ export class SessionProposals {
     for (const change of changes.sort((a, b) => (a.position ?? -1) - (b.position ?? -1))) {
       if (change.message_id === null) continue;
 
-      if (change.position === null || change.through_sequence === null) throw new KinuError('io', 'proposal replacement is incomplete');
-      ordered.splice(change.position, 0, { entryId: change.entry_id, messageId: change.message_id, sequence: change.through_sequence, position: change.position });
+      if (change.position === null) throw new KinuError('io', 'proposal replacement is incomplete');
+      ordered.splice(change.position, 0, { entryId: change.entry_id, messageId: change.message_id, position: change.position });
     }
 
     return ordered.map((entry, position) => ({ ...entry, position }));
   }
 
   private validateExpected(actual: ContextEntry | undefined, expected: MessageReference | null): void {
-    if (expected === null ? actual !== undefined : actual?.messageId !== expected.messageId || actual.sequence !== expected.sequence) throw new KinuError('denied', 'context edit targets content that changed since its base');
+    if (expected === null ? actual !== undefined : actual?.messageId !== expected.messageId) throw new KinuError('denied', 'context edit targets content that changed since its base');
   }
 }

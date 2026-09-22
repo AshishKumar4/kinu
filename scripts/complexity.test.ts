@@ -18,8 +18,8 @@ import { scratchPath } from '../packages/test-utils/src/scratch';
 
 
 import {
-  BLIND_SPOTS, census, distribution, inventory, isGreen, judge, keyOf, measureFile, readBudget,
-  topTier,
+  BLIND_SPOTS, census, distribution, inventory, isGreen, judge, keyOf, lockCandidate, measureFile, readBudget,
+  shrinkBudget, topTier, writeBudget,
   type Budget, type Measured,
 } from './complexity';
 import { isParseable, readMatching } from './sources';
@@ -222,6 +222,164 @@ describe('a locked function', () => {
   test('and passes unchanged, which is the green this gate has to be able to reach', () => {
     expect(isGreen(judge(census(new Map([[PROBE, `${BASELINE}${injected(40)}`]])), locked.budget)))
       .toBe(true);
+  });
+});
+
+/* ── What `--lock` may write ───────────────────────────────────────────── */
+
+/**
+ * The merge is a rule about two locks, so it is driven with two locks. A
+ * fixture that went through a corpus would prove the same rule over a parser
+ * run, and would not be able to state a case like "two keys left at 50 and 40,
+ * two arrived at 45" at all.
+ */
+function budgetOf(ceiling: number, line: number, entries: Record<string, number>): Budget {
+  return {
+    measuredAt: '2026-09-21',
+    files: 1,
+    functions: 1000,
+    ceiling,
+    line,
+    inventory: Object.entries(entries).map(([key, complexity]) => ({ key, complexity })),
+  };
+}
+
+describe('the candidate a --lock run merges', () => {
+  const measuredAt = (name: string, complexity: number): Measured =>
+    ({ file: 'x.ts', line: 1, offset: 0, name, complexity });
+
+  test('is read at the held line when the measured line rose, so nothing between the lines drops out', () => {
+    // 2,000 functions: one at 50, one at 36, one at 35, the rest at 1, so the
+    // measured p99.9 (the 1,998th of 2,000 sorted) is 36 while the lock holds 35.
+    const measured = [measuredAt('top', 50), measuredAt('mid', 36), measuredAt('low', 35),
+      ...Array.from({ length: 1997 }, (_, index) => measuredAt(`f${String(index)}`, 1))];
+
+    const spread = distribution(measured);
+    const previous = budgetOf(50, 35, { 'x.ts#top': 50, 'x.ts#mid': 36, 'x.ts#low': 35 });
+
+
+    expect(spread.line).toBe(36);
+
+    const candidate = lockCandidate(previous, measured, spread, { measuredAt: '2026-09-21', files: 1 });
+
+    expect(candidate.line).toBe(35);
+    expect(candidate.inventory.map((entry) => entry.key).sort()).toEqual(['x.ts#low', 'x.ts#mid', 'x.ts#top']);
+    expect(judge(measured, candidate).entrants).toEqual([]);
+  });
+});
+
+describe('the lock only shrinks or is re-keyed', () => {
+  const previous = budgetOf(50, 30, { 'a.ts#alpha': 50, 'b.ts#beta': 40 });
+
+  test('a locked function that grew is refused, and nothing is written', () => {
+    const { budget, refusals } = shrinkBudget(
+      previous,
+      budgetOf(50, 30, { 'a.ts#alpha': 50, 'b.ts#beta': 41 }),
+    );
+
+    expect(refusals).toEqual([{ key: 'b.ts#beta', was: 40, now: 41 }]);
+    expect(budget).toBeUndefined();
+  });
+
+  test('a raised ceiling and a raised line are refused, each naming both numbers', () => {
+    // The two numbers a re-lock moved silently: the ceiling IS the envelope, so
+    // re-recording it is the whole defect rather than a detail of it.
+    const { budget, refusals } = shrinkBudget(
+      previous,
+      budgetOf(51, 31, { 'a.ts#alpha': 50, 'b.ts#beta': 40 }),
+    );
+
+    expect(refusals).toEqual([
+      { key: 'ceiling', was: 50, now: 51 },
+      { key: 'budget line', was: 30, now: 31 },
+    ]);
+
+    expect(budget).toBeUndefined();
+  });
+
+  test('a lowered entry, a vanished entry and a lowered ceiling are accepted and written', () => {
+    // The direction the lock exists to record, and it has to reach a file: a
+    // merge that refused everything would pass every red case above.
+    const { budget, refusals } = shrinkBudget(previous, budgetOf(44, 28, { 'a.ts#alpha': 44 }));
+    expect(refusals).toEqual([]);
+
+    const path = scratchPath('complexity-lock', 'lock.json');
+
+    if (budget === undefined) throw new Error('an accepted merge has a budget to write');
+    expect(writeBudget(budget, path)).toBe(1);
+
+    expect(readBudget(path)).toEqual({
+      measuredAt: '2026-09-21',
+      files: 1,
+      functions: 1000,
+      ceiling: 44,
+      line: 28,
+      inventory: [{ key: 'a.ts#alpha', complexity: 44 }],
+    });
+  });
+
+  test('a re-key is accepted: one key vanishes and one arrives no worse', () => {
+    // A rename and a file move are the reason the rule is not "no new keys".
+    const { budget, refusals } = shrinkBudget(
+      previous,
+      budgetOf(50, 30, { 'a.ts#alpha': 50, 'b.ts#renamed': 40 }),
+    );
+
+    expect(refusals).toEqual([]);
+    expect(budget?.inventory).toEqual([
+      { key: 'a.ts#alpha', complexity: 50 },
+      { key: 'b.ts#renamed', complexity: 40 },
+    ]);
+  });
+
+  test('a new entrant with nothing vanishing to pay for it is refused', () => {
+    const { budget, refusals } = shrinkBudget(
+      previous,
+      budgetOf(50, 30, { 'a.ts#alpha': 50, 'b.ts#beta': 40, 'c.ts#gamma': 33 }),
+    );
+
+    expect(refusals).toEqual([{ key: 'c.ts#gamma', was: undefined, now: 33 }]);
+    expect(budget).toBeUndefined();
+  });
+
+  test('two keys leaving at 50 and 40 pay for 45 and 39, and refuse 45 and 45', () => {
+    // The whole reason the pairing is sorted. Matching arrivals to departures in
+    // any other order lets the pair of 45s through on the 50 alone, which is a
+    // function growing from 40 to 45 with the count unchanged.
+    const twoLeaving = budgetOf(50, 30, { 'a.ts#alpha': 50, 'b.ts#beta': 40 });
+
+    const refused = shrinkBudget(
+      twoLeaving,
+      budgetOf(50, 30, { 'c.ts#gamma': 45, 'd.ts#delta': 45 }),
+    );
+
+    expect(refused.refusals).toEqual([{ key: 'd.ts#delta', was: 40, now: 45 }]);
+    expect(refused.budget).toBeUndefined();
+
+    const accepted = shrinkBudget(
+      twoLeaving,
+      budgetOf(50, 30, { 'c.ts#gamma': 45, 'd.ts#delta': 39 }),
+    );
+
+    expect(accepted.refusals).toEqual([]);
+    expect(accepted.budget?.inventory).toEqual([
+      { key: 'c.ts#gamma', complexity: 45 },
+      { key: 'd.ts#delta', complexity: 39 },
+    ]);
+  });
+
+  test('a function the descending line newly covers is recorded, not refused', () => {
+    // The line falling is the budget tightening, and the functions it descends
+    // onto were inside it all along. Refusing them would leave `--lock` unable
+    // to record a tree that got simpler.
+    const { budget, refusals } = shrinkBudget(
+      previous,
+      budgetOf(50, 25, { 'a.ts#alpha': 50, 'b.ts#beta': 40, 'c.ts#gamma': 27 }),
+    );
+
+    expect(refusals).toEqual([]);
+    expect(budget?.line).toBe(25);
+    expect(budget?.inventory).toContainEqual({ key: 'c.ts#gamma', complexity: 27 });
   });
 });
 

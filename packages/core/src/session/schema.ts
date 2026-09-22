@@ -6,51 +6,34 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), message_id TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
     native_content_kind TEXT NOT NULL CHECK(native_content_kind IN ('string','parts')),
     origin TEXT NOT NULL CHECK(origin IN ('input','output','edit','context_transform','render')),
-    request_id TEXT, output_slot INTEGER, ingress_id TEXT, sealed_sequence INTEGER,
+    request_id TEXT, output_slot INTEGER, ingress_id TEXT,
     recorded_at INTEGER NOT NULL,
+    envelope_json TEXT NOT NULL,
+    sealed_at INTEGER, content_json TEXT, content_path TEXT, content_digest TEXT,
     PRIMARY KEY(actor_id,message_id), UNIQUE(actor_id,request_id,output_slot),
     FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
-    FOREIGN KEY(actor_id,message_id,sealed_sequence) REFERENCES message_updates(actor_id,message_id,sequence),
     CHECK(output_slot IS NULL OR output_slot >= 0),
-    CHECK((request_id IS NULL) = (output_slot IS NULL)))`);
+    CHECK((request_id IS NULL) = (output_slot IS NULL)),
+    CHECK((sealed_at IS NULL AND content_json IS NULL AND content_path IS NULL AND content_digest IS NULL)
+      OR (sealed_at IS NOT NULL AND ((content_json IS NOT NULL AND content_path IS NULL AND content_digest IS NULL)
+        OR (content_json IS NULL AND content_path IS NOT NULL AND content_digest IS NOT NULL)))))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS session_message_ingress ON session_messages(actor_id,ingress_id) WHERE ingress_id IS NOT NULL`);
-  exec(`CREATE TABLE IF NOT EXISTS message_parts (
-    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL,
-    kind TEXT NOT NULL, reply_to_message_id TEXT, reply_to_part_no INTEGER, stream_order INTEGER CHECK(stream_order IS NULL OR stream_order >= 0),
-    PRIMARY KEY(actor_id,message_id,part_no),
+  // An open message's parts while its answer streams: one row per part,
+  // extended in place, deleted when the message seals into `content_*`. A
+  // part whose text outgrows one row continues in the next segment, so no
+  // row reaches the platform's row limit; segment 0 carries the descriptor,
+  // through the payload spill rule.
+  exec(`CREATE TABLE IF NOT EXISTS stream_parts (
+    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, part_no INTEGER NOT NULL, segment INTEGER NOT NULL,
+    kind TEXT NOT NULL, stream_order INTEGER NOT NULL,
+    descriptor_json TEXT, descriptor_path TEXT, descriptor_digest TEXT,
+    text TEXT NOT NULL DEFAULT '', ended INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(actor_id,message_id,part_no,segment),
     FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id),
-    FOREIGN KEY(actor_id,reply_to_message_id,reply_to_part_no) REFERENCES message_parts(actor_id,message_id,part_no),
-    CHECK(part_no >= 0), CHECK((reply_to_message_id IS NULL) = (reply_to_part_no IS NULL)))`);
-  exec(`CREATE TABLE IF NOT EXISTS message_updates (
-    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, sequence INTEGER NOT NULL,
-    part_no INTEGER, operation TEXT NOT NULL,
-    payload_json TEXT, payload_path TEXT, payload_digest TEXT,
-    PRIMARY KEY(actor_id,message_id,sequence),
-    FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id),
-    FOREIGN KEY(actor_id,message_id,part_no) REFERENCES message_parts(actor_id,message_id,part_no),
-    CHECK(sequence >= 0),
-    CHECK(operation IN ('open','append','envelope-metadata','metadata','content-end','replace-content')),
-    CHECK((operation = 'envelope-metadata') = (part_no IS NULL)),
-    CHECK((operation = 'content-end' AND payload_json IS NULL AND payload_path IS NULL AND payload_digest IS NULL)
-      OR (operation != 'content-end' AND ((payload_json IS NOT NULL AND payload_path IS NULL AND payload_digest IS NULL)
-        OR (payload_json IS NULL AND payload_path IS NOT NULL AND payload_digest IS NOT NULL)))))`);
-  exec(`CREATE UNIQUE INDEX IF NOT EXISTS message_part_open ON message_updates(actor_id,message_id,part_no) WHERE operation = 'open'`);
-  exec(`CREATE UNIQUE INDEX IF NOT EXISTS message_part_end ON message_updates(actor_id,message_id,part_no) WHERE operation = 'content-end'`);
-  exec(`CREATE INDEX IF NOT EXISTS message_part_updates ON message_updates(actor_id,message_id,part_no,sequence)`);
-  // A sealed message's materialized form at its sealed cutoff, written once
-  // on the first read after the seal and read as ONE row thereafter. The
-  // update rows stay the source of truth: a projection is derived, and a
-  // missing one is rebuilt from them. Every step of every turn reads every
-  // message in its context, so without this a streamed answer's delta rows
-  // were re-read and re-joined on each step for the rest of the workspace's
-  // life (D23: 20 answers of 2,000 deltas made a one-step turn cost 2.5 s).
-  exec(`CREATE TABLE IF NOT EXISTS message_projections (
-    actor_id TEXT NOT NULL, message_id TEXT NOT NULL, sequence INTEGER NOT NULL,
-    payload_json TEXT, payload_path TEXT, payload_digest TEXT,
-    PRIMARY KEY(actor_id,message_id,sequence),
-    FOREIGN KEY(actor_id,message_id,sequence) REFERENCES message_updates(actor_id,message_id,sequence),
-    CHECK((payload_json IS NOT NULL AND payload_path IS NULL AND payload_digest IS NULL)
-      OR (payload_json IS NULL AND payload_path IS NOT NULL AND payload_digest IS NOT NULL)))`);
+    CHECK(part_no >= 0), CHECK(segment >= 0), CHECK(stream_order >= 0), CHECK(ended IN (0,1)),
+    CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
+      OR (segment = 0 AND ((descriptor_json IS NOT NULL AND descriptor_path IS NULL AND descriptor_digest IS NULL)
+        OR (descriptor_json IS NULL AND descriptor_path IS NOT NULL AND descriptor_digest IS NOT NULL)))))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_contexts (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL, fork_context_id TEXT, fork_revision INTEGER,
     PRIMARY KEY(actor_id,context_id), CHECK((fork_context_id IS NULL) = (fork_revision IS NULL)),
@@ -67,12 +50,12 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE TABLE IF NOT EXISTS context_memberships (
     actor_id TEXT NOT NULL, context_id TEXT NOT NULL, entry_id TEXT NOT NULL,
     from_revision INTEGER NOT NULL, to_revision INTEGER, position INTEGER NOT NULL,
-    message_id TEXT NOT NULL, through_sequence INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
     PRIMARY KEY(actor_id,context_id,entry_id,from_revision),
     CHECK(position >= 0), CHECK(to_revision IS NULL OR to_revision > from_revision),
     FOREIGN KEY(actor_id,context_id,from_revision) REFERENCES context_revisions(actor_id,context_id,revision),
     FOREIGN KEY(actor_id,context_id,to_revision) REFERENCES context_revisions(actor_id,context_id,revision),
-    FOREIGN KEY(actor_id,message_id,through_sequence) REFERENCES message_updates(actor_id,message_id,sequence))`);
+    FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_entry ON context_memberships(actor_id,context_id,entry_id) WHERE to_revision IS NULL`);
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_position ON context_memberships(actor_id,context_id,position) WHERE to_revision IS NULL`);
   exec(`CREATE INDEX IF NOT EXISTS context_history_members ON context_memberships(actor_id,context_id,from_revision,to_revision,position)`);
@@ -86,23 +69,20 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_pending_proposal ON context_proposals(actor_id,context_id) WHERE status='pending'`);
   exec(`CREATE TABLE IF NOT EXISTS context_proposal_entries (
     actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, entry_id TEXT NOT NULL,
-    expected_message_id TEXT, expected_sequence INTEGER,
-    message_id TEXT, through_sequence INTEGER, position INTEGER,
+    expected_message_id TEXT, message_id TEXT, position INTEGER,
     PRIMARY KEY(actor_id,proposal_id,entry_id),
-    CHECK((expected_message_id IS NULL) = (expected_sequence IS NULL)),
-    CHECK((message_id IS NULL) = (through_sequence IS NULL)),
     CHECK((message_id IS NULL AND expected_message_id IS NOT NULL AND position IS NULL) OR (message_id IS NOT NULL AND position IS NOT NULL AND position >= 0)),
     FOREIGN KEY(actor_id,proposal_id) REFERENCES context_proposals(actor_id,proposal_id),
-    FOREIGN KEY(actor_id,expected_message_id,expected_sequence) REFERENCES message_updates(actor_id,message_id,sequence),
-    FOREIGN KEY(actor_id,message_id,through_sequence) REFERENCES message_updates(actor_id,message_id,sequence))`);
+    FOREIGN KEY(actor_id,expected_message_id) REFERENCES session_messages(actor_id,message_id),
+    FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
   exec(`CREATE TABLE IF NOT EXISTS context_proposal_sources (
     actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, output_message_id TEXT NOT NULL, output_part_no INTEGER NOT NULL,
-    source_entry_id TEXT NOT NULL, source_message_id TEXT NOT NULL, source_part_no INTEGER NOT NULL, source_sequence INTEGER NOT NULL,
-    PRIMARY KEY(actor_id,proposal_id,output_message_id,output_part_no,source_entry_id,source_message_id,source_part_no,source_sequence),
+    source_entry_id TEXT NOT NULL, source_message_id TEXT NOT NULL, source_part_no INTEGER NOT NULL,
+    PRIMARY KEY(actor_id,proposal_id,output_message_id,output_part_no,source_entry_id,source_message_id,source_part_no),
+    CHECK(output_part_no >= 0), CHECK(source_part_no >= 0),
     FOREIGN KEY(actor_id,proposal_id) REFERENCES context_proposals(actor_id,proposal_id),
-    FOREIGN KEY(actor_id,output_message_id,output_part_no) REFERENCES message_parts(actor_id,message_id,part_no),
-    FOREIGN KEY(actor_id,source_message_id,source_part_no) REFERENCES message_parts(actor_id,message_id,part_no),
-    FOREIGN KEY(actor_id,source_message_id,source_sequence) REFERENCES message_updates(actor_id,message_id,sequence))`);
+    FOREIGN KEY(actor_id,output_message_id) REFERENCES session_messages(actor_id,message_id),
+    FOREIGN KEY(actor_id,source_message_id) REFERENCES session_messages(actor_id,message_id))`);
   exec(`CREATE TABLE IF NOT EXISTS actor_requests (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), request_id TEXT NOT NULL, turn_id TEXT NOT NULL, run_id TEXT NOT NULL,
     epoch INTEGER NOT NULL, step_index INTEGER, revision INTEGER NOT NULL,
@@ -114,9 +94,9 @@ export function initSessionContextTables(exec: RawSqlExec): void {
       OR (metadata_json IS NULL AND metadata_path IS NOT NULL AND metadata_digest IS NOT NULL)))`);
   exec(`CREATE TABLE IF NOT EXISTS request_messages (
     actor_id TEXT NOT NULL, request_id TEXT NOT NULL, position INTEGER NOT NULL,
-    message_id TEXT NOT NULL, through_sequence INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
     PRIMARY KEY(actor_id,request_id,position),
     CHECK(position >= 0),
     FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
-    FOREIGN KEY(actor_id,message_id,through_sequence) REFERENCES message_updates(actor_id,message_id,sequence))`);
+    FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
 }

@@ -577,6 +577,14 @@ export class OrchestratorAgent extends ActorAgent {
    * entrypoint from its own trusted props, never by the facet — so a process
    * can neither choose nor drop the credential its writes land under.
    *
+   * It answers under EVERY name this class is opened under. Nimbus opens
+   * siblings of this namespace by name — `nbf:npm-resolve-fanout:<doId>:<n>`
+   * for the resolver's wide layers, and the same shape for peer process
+   * hosting — and each one must answer with a hosted runtime of its own. A
+   * sibling is not a Kinu workspace: it claims no owner, keeps no transcript
+   * and runs no turn, because a `supervisorOp` call reaches this method
+   * without the lifecycle gate `onStart` sits behind.
+   *
    * Deliberately NOT `@callable`: like `workspaceBoxOp` below, this is how a
    * Durable Object in this Worker reaches the object that owns the
    * filesystem, and a browser socket that could reach it could ask for any
@@ -6600,6 +6608,14 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
 
+  /** Continue the chat from before `entryId`, on the context the actor held
+   *  there. The walk-back and the refusal are core's; the reverted transcript
+   *  reaches every open tab as the session event this emits. */
+  @callable()
+  async revertConversation(entryId: string): Promise<void> {
+    await this.chatLoop.revertTo(entryId);
+  }
+
   // ── Fork RPCs ──────────────────────────────────────────────────
 
   /**
@@ -6614,14 +6630,6 @@ export class OrchestratorAgent extends ActorAgent {
    *
    * See docs/WORKSPACES.md for the full spec.
    */
-  /** Continue the chat from before `entryId`, on the context the actor held there. */
-  @callable()
-  async revertConversation(entryId: string): Promise<void> {
-    await this.actorSession.revertConversation(CHAT_SESSION_ID, entryId, () => {
-      if (this.chatLoop.turnInFlight()) throw new KinuError('denied', 'Stop the active turn before reverting its conversation');
-    });
-  }
-
   @callable()
   async forkAgent(
     untilMessageId: string,

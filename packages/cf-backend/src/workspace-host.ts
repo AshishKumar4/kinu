@@ -296,11 +296,23 @@ export interface HostedWorkspace {
    */
   box(shellId: string): NimbusSandboxHandle;
   /**
-   * The one method a workspace host mounts for its facets, forwarded to the
-   * workspace's own dispatch. The orchestrator's mounted method delegates
-   * here, and this answers against the booted workspace — so the first facet
-   * call boots the workspace exactly like any other first touch, through the
-   * same memoized open with the same failure-clearing retry.
+   * The one method a workspace host mounts for its facets, answered by the
+   * composed HOSTED RUNTIME.
+   *
+   * Half of the operations an envelope can carry are filesystem ops a bare
+   * workspace serves; the other half — `fanoutExecute`, `hostProcess`,
+   * `cpSpawn`, `writeBatch`, `registerPort`, `routeLoopback` and the rest of
+   * `SUPERVISOR_OP_ROUTES` — are HOST ops, and only the runtime has the
+   * methods behind them. Answering from the workspace alone refused every one
+   * of them.
+   *
+   * It holds for EVERY name this object is opened under. Nimbus opens
+   * siblings of the host namespace by name for the npm resolver's wide layers
+   * and for peer process hosting, and a sibling answers this same method; it
+   * is a runtime over its own scratch storage, never a Kinu workspace, so
+   * nothing here claims an owner or writes a transcript. Composing it boots
+   * the workspace exactly as the first file touch does, through the same
+   * memoized open with the same failure-clearing retry.
    */
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
   /**
@@ -532,7 +544,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
   return {
     bundle,
     async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
-      return (await bundle.session()).supervisorOp(envelope);
+      return (await runtime()).supervisorOp(envelope);
     },
     box(shellId) {
       const held = boxes.get(shellId);

@@ -12,16 +12,20 @@ pinned versions, checked against the package manifests and `bun.lock` on
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.11.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
-| `@nimbus-sh/fabric` | 0.7.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | 0.8.0 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.9.0 | `packages/cf-backend` |
+| `@nimbus-sh/core` | 0.12.0 | root, `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
+| `@nimbus-sh/fabric` | 0.7.1 | `packages/core`, `packages/cf-backend` |
+| `@nimbus-sh/sdk` | 0.8.1 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.10.0 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37 | root, `packages/cli-backend` |
 | `@nimbus-sh/runtime-cpython` | 3.13.14 | root, `packages/cli-backend` |
 
-The pin is exact, never a caret, because `patchedDependencies` is keyed by
-`name@version`: a range that aged to 0.11.1 would match no key, and the patch
-would leave the tree without one line of the manifest changing.
+The pin is exact, never a caret. It was `patchedDependencies` that demanded it
+— that map is keyed by `name@version`, so a range aged past the key drops the
+patch with no manifest line changing — and no Nimbus patch remains. The pin
+stays because these five versions move together: fabric, sdk and worker each
+declare a range on core, and a caret that resolves two of them onto different
+copies gives the composition module two instances to be first-write-wins over
+(D22).
 
 Every declaration moves together, the ROOT `devDependencies` included. It
 declares `@nimbus-sh/core` for the repository's own scripts and fixtures, and
@@ -34,32 +38,32 @@ Core imports fabric directly: `packages/core/src/events/outbox.ts` builds its
 outbox on `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on
 fabric, so the resolved tree holds it either way.
 
-Two Nimbus packages are patched, each hunk with its reason on record:
+NO NIMBUS PATCH REMAINS. Both files are deleted and their
+`patchedDependencies` keys are gone from the root `package.json`, because
+core 0.12.0 and worker 0.10.0 carry every hunk:
 
-- `patches/@nimbus-sh%2Fworker@0.9.0.patch`: the `facets()` accessor on the
-  composed runtime, which is how the hosted host reaches the ONE facet manager
-  instead of composing a second (`workspace-host.ts`), the
-  `LongRunningWorkerSpawnOptions` re-export that `src/slates/resident.ts`
-  imports, and `NPM_REGISTRY` plumbed through the hosted installer, the R2
-  cache key namespace, the facet resolver and the supervisor RPC (pinned by
-  `packages/cf-backend/tests/workerd/slate-durability.test.ts`, "npm install
-  streams a package off the registry"). Worker 0.9.0 now carries the
-  `resolveWorkerLaunch` embedder hook itself — `dist/hosted/runtime.d.ts:29`
-  reads it off `HostedRuntimeOptions` directly rather than a `hooks` member —
-  and re-exports `FacetManagerHostHooks` and `WorkerRecipe`, so those hunks
-  are retired (D20, D22).
-- `patches/@nimbus-sh%2Fcore@0.11.0.patch`: the `NPM_REGISTRY` origin on the
-  core `npm` command's install port, and five schema writes gated on their
-  row's absence so a reader holding a `readonly` database can still open a
-  current filesystem: the schema-migration marker (D21), the filesystem
-  identity and device rows, the `vfs_ino_allocator` seed, and
-  `backfillInoColumn`'s two `UPDATE`s (D22). Each is written in
-  `src/vfs/sqlite-vfs.ts` and its `dist` build alike. The `src` half matters
-  because bun resolves the package through its `bun` export condition to
-  `src/*.ts`; a `dist`-only patch never reaches the CLI backend or any
-  `bun test`.
+- The five read-only-open guards (D21, D22) are in core's own
+  `src/vfs/sqlite-vfs.ts` and its `dist` build alike — the filesystem identity
+  row (`:781-787`), the device row (`:792-797`), the `vfs_ino_allocator` seed
+  (`:937-939`), the schema-migration marker (`:1014-1020`) and
+  `backfillInoColumn` (`:1047-1056`), each read before its write.
+- `NPM_REGISTRY` reaches the installer from the command's environment:
+  `NpmInstallPort.install` takes `registry`
+  (`core/src/substrate/lifo/commands/system/npm.ts:60`), the hosted `npm`
+  passes `ctx.env?.NPM_REGISTRY` (`worker/dist/hosted/commands.js:824`), and
+  the origin namespaces the R2 packument keys
+  (`worker/dist/npm/r2-cache.js:104-121`), the facet resolver's spec
+  (`dist/npm/resolve-one-facet.js:285`) and the supervisor's `getPackument`.
+- `composeHostedRuntime` returns `facets()` (`dist/hosted/runtime.js:310`) and
+  `workspace-host` re-exports `LongRunningWorkerSpawnOptions`
+  (`dist/workspace-host.d.ts:2`).
 
-The other five `patchedDependencies` entries are `@plannotator%2Fui@0.30.0.patch`,
+`packages/cf-backend/tests/workerd/slate-durability.test.ts` ("npm install
+streams a package off the registry") and
+`packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts` hold the registry
+behaviour to that.
+
+The five remaining `patchedDependencies` entries are `@plannotator%2Fui@0.30.0.patch`,
 `@cloudflare%2Fsandbox@0.12.8.patch`, `@cloudflare%2Fcontainers@0.3.7.patch`,
 `agents@0.22.0.patch` and `@cloudflare%2Fcodemode@0.5.1.patch`, all declared
 in the root `package.json`. The sandbox patch makes the SDK's handler-map
@@ -70,10 +74,10 @@ subpath export and the `dist/normalize.js` behind it, which
 `cli-backend/src/executor.ts` and `cli-backend/src/codemode-tool-factory.ts`
 import as `normalizeCode`. `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json`, so it governs all seven. Its header still narrates the
+`package.json`, so it governs all five. Its header still narrates the
 `@nimbus-sh/core` patch incident, because that incident is why the gate exists.
 
-The eighth file, `upstream-codemode-normalize.patch`, is not a
+The sixth file, `upstream-codemode-normalize.patch`, is not a
 `patchedDependencies` entry, so bun never applies it and `gate:patch-parity`
 does not govern it. It patches the codemode repository's own
 `packages/codemode/` sources, which is the upstream proposal behind the export
@@ -120,6 +124,31 @@ local CLI keeps them. It supplies `localFacetHost()`, which a Worker cannot.
 `Storage.vfs`, the native `file` tool, `shell` with `runtime: "workspace"`, and
 the `workspace.*` codemode namespace all address that same session. A write
 through any one of them is immediately visible through the others.
+
+## The host-forwarding rule
+
+`OrchestratorAgent.supervisorOp` forwards to the composed HOSTED RUNTIME, and
+it does so under every name the class is opened under.
+
+A facet reaches the object that owns its filesystem through `SupervisorRPC`,
+which resolves this deployment's `OrchestratorAgent` namespace and calls that
+one method. Half of what an envelope carries is a filesystem operation, which
+a bare workspace answers; the other half are HOST operations —
+`fanoutExecute`, `hostProcess`, `cpSpawn`, `writeBatch`, `registerPort` and
+the rest of core's `SUPERVISOR_OP_ROUTES` — and only the runtime holds the
+methods behind them.
+
+The names matter because Nimbus opens SIBLINGS of the namespace by name. A
+resolver layer of five packages or more is sharded across objects called
+`nbf:npm-resolve-fanout:<doId>:<shard>`, and peer process hosting uses the
+same shape. Each of them is an ordinary instance of our class, so each
+composes a hosted runtime over its own storage and answers from it. A sibling
+is NOT a Kinu workspace: it has no genesis, no owner and no transcript,
+because `supervisorOp` is a plain RPC method and Kinu's schema bootstrap runs
+from `onStart`, which the Agents SDK starts for `fetch`, `alarm` and its own
+internal RPCs only. `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts`
+holds this: it installs six packages, one wider than the coordinator resolves
+alone. D23-N records the measurement.
 
 ## Runtime composition
 

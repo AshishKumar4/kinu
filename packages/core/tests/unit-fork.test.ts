@@ -120,11 +120,22 @@ describe('forkWorkspaceStorage', () => {
     expect(inherited((await readChain(tgt)).ids)).toEqual(['m1', 'm2']);
     const working = await readWorkingContext(tgt, TARGET_ARTIFACTS);
     expect(working.entryIds).toEqual(['m1', 'call', 'result', 'm2']);
-    // A tool result is only readable through the call it answers — the reader
-    // resolves its toolCallId out of the call's own payload — so a context that
-    // materializes identically to the source's proves the reply edge crossed.
     expect(working.messages).toEqual(before.messages);
     expect(working.messages[2]).toMatchObject({ role: 'tool' });
+  });
+
+  test('a message still open in the source refuses the fork', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedForkTarget(tgt);
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    // An answer mid-stream: its row is open and its parts live in stream_parts.
+    chat.atomic(() => chat.messages.open('assistant', 'm2', 'output'));
+    chat.messages.streamOpenPart('m2', { partNo: 0, kind: 'text', streamOrder: 0, descriptor: { json: '{"type":"text"}', path: null, digest: null }, text: 'partial' });
+    chat.transcript.record({ id: 'm2', parentId: 'm1', role: 'assistant', turnId: null, runId: null, metadata: null, parts: [{ messageId: 'm2', partNo: 0 }] });
+
+    await expect(forkInto(src, tgt, { untilMessageId: 'm2' })).rejects.toThrow(/still open in the source/);
   });
 
   test('re-roots carried payload files under the target\'s artifact directory', async () => {
@@ -135,18 +146,18 @@ describe('forkWorkspaceStorage', () => {
     const spilled = 'p'.repeat(SPILLED_BYTES);
     await chat.say({ id: 'm1', role: 'user', text: spilled, parentId: null, metadata: { note: 'q'.repeat(SPILLED_BYTES) } });
 
-    const stored = src.sql<{ payload_path: string | null }>`
-      SELECT payload_path FROM message_updates WHERE payload_path IS NOT NULL`;
+    const stored = src.sql<{ content_path: string | null }>`
+      SELECT content_path FROM session_messages WHERE content_path IS NOT NULL`;
 
     expect(stored.length).toBeGreaterThan(0);
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
 
-    const landed = tgt.sql<{ payload_path: string }>`
-      SELECT payload_path FROM message_updates WHERE payload_path IS NOT NULL`;
+    const landed = tgt.sql<{ content_path: string }>`
+      SELECT content_path FROM session_messages WHERE content_path IS NOT NULL`;
 
     expect(landed.length).toBe(stored.length);
-    expect(landed.every((row) => row.payload_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
+    expect(landed.every((row) => row.content_path.startsWith(`${TARGET_ARTIFACTS}/`))).toBe(true);
     // Read back through the production reader: it resolves each path on the
     // TARGET's plane and refuses a payload whose digest differs.
     expect((await readChain(tgt)).text[0]).toBe(spilled);
@@ -164,7 +175,7 @@ describe('forkWorkspaceStorage', () => {
     await seedForkTarget(tgt);
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'p'.repeat(SPILLED_BYTES), parentId: null });
-    void src.sql`UPDATE message_updates SET payload_path = ${'/elsewhere/leaked.json'} WHERE payload_path IS NOT NULL`;
+    void src.sql`UPDATE session_messages SET content_path = ${'/elsewhere/leaked.json'} WHERE content_path IS NOT NULL`;
 
     await expect(forkInto(src, tgt, { untilMessageId: 'm1' }))
       .rejects.toThrow(/\/elsewhere\/leaked\.json/);
@@ -192,8 +203,8 @@ describe('forkWorkspaceStorage', () => {
     expect(tgt.sql<{ table: string; rowid: number }>`PRAGMA foreign_key_check`).toEqual([]);
 
     // A redelivery deletes a POPULATED canonical store before staging again, so
-    // the clearing order has to release the forward edges — a seal into its
-    // updates, a reply into another part — before the rows they name go.
+    // the clearing order has to release the forward edge — an entry's parent —
+    // before the rows it names go.
     await forkInto(src, tgt, { untilMessageId: 'm2' });
 
     expect(tgt.sql<{ table: string; rowid: number }>`PRAGMA foreign_key_check`).toEqual([]);

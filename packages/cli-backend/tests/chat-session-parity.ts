@@ -267,6 +267,7 @@ function frontendView(event: SessionEvent): JsonValue {
     case 'background': return { type: event.type, event: event.event, message: event.message };
     case 'broadcast': return { type: event.type, event: event.event.type };
     case 'run-event': return { type: event.type, event: event.event.type };
+    case 'history-reverted': return { type: event.type, entryId: event.entryId };
     default: return event satisfies never;
   }
 }

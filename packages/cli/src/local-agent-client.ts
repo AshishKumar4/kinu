@@ -780,5 +780,11 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
       return { type: 'run-event', event: event.event };
     case 'error':
       return { type: 'error', message: event.message };
+    // The walk-back's redraw is for a surface that keeps the conversation on
+    // screen. This client rebuilds the session around the reverted head
+    // ({@link fork}) and prints the transcript from the store after it, so
+    // there is nothing here to redraw.
+    case 'history-reverted':
+      return null;
   }
 }

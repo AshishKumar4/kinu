@@ -20,14 +20,10 @@ import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
   ForkConversationEntryRowSchema,
-  ForkMessagePartRowSchema,
-  ForkMessageUpdateRowSchema,
   ForkSessionMessageRowSchema,
   type ForkContextMemberRow,
   type ForkConversationEntryPartRow,
   type ForkConversationEntryRow,
-  type ForkMessagePartRow,
-  type ForkMessageUpdateRow,
   type ForkSessionMessageRow,
 } from './fork-rows';
 
@@ -36,30 +32,20 @@ import {
  *  bound is a loop waiting for corrupt parent edges. */
 const FORK_CHAIN_MAX_DEPTH = 10_000;
 
-/** One carried message and the cutoff every carried reference to it respects:
- *  the highest `through_sequence` any carried entry part or context member
- *  names for it. Updates past it do not cross, so no carried reference can
- *  point past what landed. */
-export interface ForkCarriedMessage {
-  readonly messageId: string;
-  readonly cutoff: number;
-}
-
 /**
  * Which rows one cut selects, decided once.
  *
  * Both halves of the fork run this: the in-process snapshot materializes the
- * rows it names, and the wire streams them. It holds identities and cutoffs —
- * never row CONTENT — so the plan of an unbounded workspace is bounded by its
- * chain, and the content stays where the framing can bound it.
+ * rows it names, and the wire streams them. It holds identities — never row
+ * CONTENT — so the plan of an unbounded workspace is bounded by its chain, and
+ * the content stays where the framing can bound it.
  */
 export interface ForkConversationPlan {
   readonly cut: { readonly entryId: string; readonly recordedAt: number };
   /** The cut entry's ancestry, root first. */
   readonly entryIds: readonly string[];
-  /** Carried messages in the source's own insertion order, so a tool result
-   *  never precedes the call its part references. */
-  readonly messages: readonly ForkCarriedMessage[];
+  /** Carried message ids in the source's own insertion order. */
+  readonly messageIds: readonly string[];
   /** The membership of the cut entry's context revision, by position. Empty
    *  where no entry in the chain recorded a context. */
   readonly members: readonly ForkContextMemberRow[];
@@ -72,8 +58,6 @@ export interface ForkConversationPlan {
  *  checked against what the target took. */
 export interface ForkConversationCounts {
   sessionMessages: number;
-  messageParts: number;
-  messageUpdates: number;
   conversationEntries: number;
   conversationEntryParts: number;
   contextMembers: number;
@@ -204,79 +188,39 @@ export function planForkConversation(input: {
   const members = context === undefined || context.context_id === null || context.context_revision === null
     ? []
     : sql<ForkContextMemberRow>`
-        SELECT entry_id, position, message_id, through_sequence FROM context_memberships
+        SELECT entry_id, position, message_id FROM context_memberships
         WHERE actor_id = ${actorId} AND context_id = ${context.context_id}
           AND from_revision <= ${context.context_revision}
           AND (to_revision IS NULL OR to_revision > ${context.context_revision})
         ORDER BY position
       `.map((row) => v.parse(ForkContextMemberRowSchema, row));
 
-  const cutoffs = new Map<string, number>();
-
-  const reference = (messageId: string, sequence: number): void => {
-    const known = cutoffs.get(messageId);
-
-    if (known === undefined || sequence > known) cutoffs.set(messageId, sequence);
-  };
+  const referenced = new Set<string>();
 
   for (const entry of chain) {
-    for (const part of forkConversationEntryPartRows(sql, actorId, entry.id)) {
-      reference(part.message_id, part.through_sequence);
-    }
+    for (const part of forkConversationEntryPartRows(sql, actorId, entry.id)) referenced.add(part.message_id);
   }
 
-  for (const member of members) reference(member.message_id, member.through_sequence);
+  for (const member of members) referenced.add(member.message_id);
 
-  // A carried tool result is unreadable without the call it answers: the
-  // reader resolves the result's toolCallId out of the call's own `open`
-  // payload. So a referenced reply target is carried too, whether or not the
-  // chain or the context named it.
-  const pending = [...cutoffs.keys()];
-
-  for (;;) {
-    const messageId = pending.pop();
-
-    if (messageId === undefined) break;
-
-    for (const reply of sql<{ reply_to_message_id: string }>`
-      SELECT DISTINCT reply_to_message_id FROM message_parts
-      WHERE actor_id = ${actorId} AND message_id = ${messageId} AND reply_to_message_id IS NOT NULL
-    `) {
-      if (cutoffs.has(reply.reply_to_message_id)) continue;
-
-      const head = sql<{ sealed_sequence: number | null; head_sequence: number | null }>`
-        SELECT m.sealed_sequence,
-               (SELECT MAX(u.sequence) FROM message_updates u
-                 WHERE u.actor_id = m.actor_id AND u.message_id = m.message_id) AS head_sequence
-        FROM session_messages m WHERE m.actor_id = ${actorId} AND m.message_id = ${reply.reply_to_message_id}
-      `[0];
-
-      const cutoff = head?.sealed_sequence ?? head?.head_sequence ?? null;
-
-      if (cutoff === null) {
-        throw new Error(
-          `fork cannot carry message ${JSON.stringify(messageId)}: the call it answers `
-          + `(${JSON.stringify(reply.reply_to_message_id)}) has no recorded content in the source`,
-        );
-      }
-
-      cutoffs.set(reply.reply_to_message_id, cutoff);
-      pending.push(reply.reply_to_message_id);
-    }
-  }
-
-  const ordered = [...cutoffs].map(([messageId, cutoff]) => {
-    const row = sql<{ seek: number }>`
-      SELECT rowid AS seek FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
+  const ordered = [...referenced].map((messageId) => {
+    const row = sql<{ seek: number; sealed_at: number | null }>`
+      SELECT rowid AS seek, sealed_at FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
     `[0];
 
     if (row === undefined) {
       throw new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`);
     }
 
-    return { messageId, cutoff, seek: row.seek };
+    // An open message is still being streamed by a turn: a fork requires an
+    // idle source, and its stream rows do not cross.
+    if (row.sealed_at === null) {
+      throw new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`);
+    }
+
+    return { messageId, seek: row.seek };
   }).sort((left, right) => left.seek - right.seek)
-    .map(({ messageId, cutoff }) => ({ messageId, cutoff }));
+    .map(({ messageId }) => messageId);
 
   const artifacts: string[] = [];
   const carried = new Set<string>();
@@ -292,30 +236,30 @@ export function planForkConversation(input: {
 
   for (const entry of chain) carry(entry.metadata_path);
 
-  for (const message of ordered) {
-    for (const row of sql<{ payload_path: string }>`
-      SELECT payload_path FROM message_updates
-      WHERE actor_id = ${actorId} AND message_id = ${message.messageId}
-        AND sequence <= ${message.cutoff} AND payload_path IS NOT NULL
-      ORDER BY sequence
-    `) carry(row.payload_path);
+  for (const messageId of ordered) {
+    carry(sql<{ content_path: string | null }>`
+      SELECT content_path FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
+    `[0]?.content_path ?? null);
   }
 
   return {
     cut: { entryId: cutEntry.id, recordedAt: cutEntry.recorded_at },
     entryIds: chain.map((entry) => entry.id),
-    messages: ordered,
+    messageIds: ordered,
     members,
     artifacts,
   };
 }
 
-/** One carried message's identity row. */
+/** One carried message, whole, with its content path made relative. */
 export function forkSessionMessageRow(
-  sql: SqlExecutor, actorId: string, messageId: string,
+  sql: SqlExecutor, actorId: string, messageId: string, artifactDirectory: string,
 ): ForkSessionMessageRow {
-  const row = sql<ForkSessionMessageRow>`
-    SELECT message_id, role, native_content_kind, origin, recorded_at
+  const row = sql<{
+    message_id: string; role: string; native_content_kind: string; origin: string; recorded_at: number;
+    envelope_json: string; sealed_at: number | null; content_json: string | null; content_path: string | null; content_digest: string | null;
+  }>`
+    SELECT message_id, role, native_content_kind, origin, recorded_at, envelope_json, sealed_at, content_json, content_path, content_digest
     FROM session_messages WHERE actor_id = ${actorId} AND message_id = ${messageId}
   `[0];
 
@@ -323,45 +267,15 @@ export function forkSessionMessageRow(
     throw new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`);
   }
 
-  return v.parse(ForkSessionMessageRowSchema, row);
-}
+  if (row.sealed_at === null) {
+    throw new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`);
+  }
 
-/** One carried message's part identities, by part number. */
-export function forkMessagePartRows(
-  sql: SqlExecutor, actorId: string, messageId: string,
-): ForkMessagePartRow[] {
-  return sql<ForkMessagePartRow>`
-    SELECT message_id, part_no, kind, reply_to_message_id, reply_to_part_no, stream_order
-    FROM message_parts WHERE actor_id = ${actorId} AND message_id = ${messageId} ORDER BY part_no
-  `.map((row) => v.parse(ForkMessagePartRowSchema, row));
-}
-
-/** One carried message's updates up to its cutoff, with payload paths made
- *  relative and the seal marked on the update that carries it. */
-export function forkMessageUpdateRows(
-  sql: SqlExecutor, actorId: string, message: ForkCarriedMessage, artifactDirectory: string,
-): ForkMessageUpdateRow[] {
-  return sql<{
-    message_id: string; sequence: number; part_no: number | null; operation: string;
-    payload_json: string | null; payload_path: string | null; payload_digest: string | null;
-    sealed_sequence: number | null;
-  }>`
-    SELECT u.message_id, u.sequence, u.part_no, u.operation, u.payload_json, u.payload_path, u.payload_digest,
-           (SELECT m.sealed_sequence FROM session_messages m
-             WHERE m.actor_id = u.actor_id AND m.message_id = u.message_id) AS sealed_sequence
-    FROM message_updates u
-    WHERE u.actor_id = ${actorId} AND u.message_id = ${message.messageId} AND u.sequence <= ${message.cutoff}
-    ORDER BY u.sequence
-  `.map((row) => v.parse(ForkMessageUpdateRowSchema, {
-    message_id: row.message_id,
-    sequence: row.sequence,
-    part_no: row.part_no,
-    operation: row.operation,
-    payload_json: row.payload_json,
-    payload_path: row.payload_path === null ? null : forkArtifactRelativePath(row.payload_path, artifactDirectory),
-    payload_digest: row.payload_digest,
-    seals: row.sealed_sequence === row.sequence,
-  }));
+  return v.parse(ForkSessionMessageRowSchema, {
+    ...row,
+    sealed_at: row.sealed_at,
+    content_path: row.content_path === null ? null : forkArtifactRelativePath(row.content_path, artifactDirectory),
+  });
 }
 
 /** One carried entry of the public chain. */
@@ -392,7 +306,7 @@ export function forkConversationEntryPartRows(
   sql: SqlExecutor, actorId: string, entryId: string,
 ): ForkConversationEntryPartRow[] {
   return sql<ForkConversationEntryPartRow>`
-    SELECT entry_id, position, message_id, part_no, through_sequence, text_start, text_length
+    SELECT entry_id, position, message_id, part_no, text_start, text_length
     FROM conversation_entry_parts
     WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND entry_id = ${entryId}
     ORDER BY position
@@ -404,20 +318,6 @@ export function forkConversationEntryPartRows(
 export function forkConversationCounts(
   sql: SqlExecutor, actorId: string, plan: ForkConversationPlan,
 ): ForkConversationCounts {
-  let messageParts = 0;
-  let messageUpdates = 0;
-
-  for (const message of plan.messages) {
-    messageParts += sql<{ total: number }>`
-      SELECT COUNT(*) AS total FROM message_parts WHERE actor_id = ${actorId} AND message_id = ${message.messageId}
-    `[0]?.total ?? 0;
-
-    messageUpdates += sql<{ total: number }>`
-      SELECT COUNT(*) AS total FROM message_updates
-      WHERE actor_id = ${actorId} AND message_id = ${message.messageId} AND sequence <= ${message.cutoff}
-    `[0]?.total ?? 0;
-  }
-
   let conversationEntryParts = 0;
 
   for (const entryId of plan.entryIds) {
@@ -428,9 +328,7 @@ export function forkConversationCounts(
   }
 
   return {
-    sessionMessages: plan.messages.length,
-    messageParts,
-    messageUpdates,
+    sessionMessages: plan.messageIds.length,
     conversationEntries: plan.entryIds.length,
     conversationEntryParts,
     contextMembers: plan.members.length,

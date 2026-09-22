@@ -215,17 +215,14 @@
     "from_revision",
     "to_revision",
     "position",
-    "message_id",
-    "through_sequence"
+    "message_id"
   ],
   "context_proposal_entries@packages/core/src/session/schema.ts": [
     "actor_id",
     "proposal_id",
     "entry_id",
     "expected_message_id",
-    "expected_sequence",
     "message_id",
-    "through_sequence",
     "position"
   ],
   "context_proposal_sources@packages/core/src/session/schema.ts": [
@@ -235,8 +232,7 @@
     "output_part_no",
     "source_entry_id",
     "source_message_id",
-    "source_part_no",
-    "source_sequence"
+    "source_part_no"
   ],
   "context_proposals@packages/core/src/session/schema.ts": [
     "actor_id",
@@ -286,7 +282,6 @@
     "position",
     "message_id",
     "part_no",
-    "through_sequence",
     "text_start",
     "text_length"
   ],
@@ -525,8 +520,6 @@
     "staged_crafted_tools",
     "staged_memory_chunks",
     "staged_session_messages",
-    "staged_message_parts",
-    "staged_message_updates",
     "staged_conversation_entries",
     "staged_conversation_entry_parts",
     "staged_context_members",
@@ -541,8 +534,6 @@
     "want_crafted_tools",
     "want_memory_chunks",
     "want_session_messages",
-    "want_message_parts",
-    "want_message_updates",
     "want_conversation_entries",
     "want_conversation_entry_parts",
     "want_context_members",
@@ -700,33 +691,6 @@
     "hash",
     "text",
     "updated_at"
-  ],
-  "message_parts@packages/core/src/session/schema.ts": [
-    "actor_id",
-    "message_id",
-    "part_no",
-    "kind",
-    "reply_to_message_id",
-    "reply_to_part_no",
-    "stream_order"
-  ],
-  "message_projections@packages/core/src/session/schema.ts": [
-    "actor_id",
-    "message_id",
-    "sequence",
-    "payload_json",
-    "payload_path",
-    "payload_digest"
-  ],
-  "message_updates@packages/core/src/session/schema.ts": [
-    "actor_id",
-    "message_id",
-    "sequence",
-    "part_no",
-    "operation",
-    "payload_json",
-    "payload_path",
-    "payload_digest"
   ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id",
@@ -946,8 +910,7 @@
     "actor_id",
     "request_id",
     "position",
-    "message_id",
-    "through_sequence"
+    "message_id"
   ],
   "run_events@packages/core/src/events/recorder.ts": [
     "actor_id",
@@ -1032,8 +995,12 @@
     "request_id",
     "output_slot",
     "ingress_id",
-    "sealed_sequence",
-    "recorded_at"
+    "recorded_at",
+    "envelope_json",
+    "sealed_at",
+    "content_json",
+    "content_path",
+    "content_digest"
   ],
   "slate_deployment_reservations@packages/core/src/state/workspace-schema.ts": [
     "id",
@@ -1157,6 +1124,19 @@
     "effect_key",
     "update_json",
     "created_at"
+  ],
+  "stream_parts@packages/core/src/session/schema.ts": [
+    "actor_id",
+    "message_id",
+    "part_no",
+    "segment",
+    "kind",
+    "stream_order",
+    "descriptor_json",
+    "descriptor_path",
+    "descriptor_digest",
+    "text",
+    "ended"
   ],
   "subordinate_identity@packages/core/src/subordinates/support.ts": [
     "actor_id",

@@ -21,8 +21,6 @@ import type {
   ForkConversationEntryRow,
   ForkCraftedToolRow,
   ForkMemoryChunkRow,
-  ForkMessagePartRow,
-  ForkMessageUpdateRow,
   ForkSessionMessageRow,
   ForkSnapshot,
   ForkSnapshotHead,
@@ -67,16 +65,6 @@ export interface ForkWriteTarget {
   transaction?: (rows: () => void) => void;
 }
 
-/** The one system-role message a fork lands on its cut point: who owns it,
- *  what it says, and where in the chain it sits. */
-interface ForkMarker {
-  readonly actorId: string;
-  readonly markerId: string;
-  readonly parentId: string;
-  readonly text: string;
-  readonly recordedAt: number;
-}
-
 /** How much a writer has taken. The wire checks this against what the source
  *  declared before it publishes. */
 export interface ForkStagedCounts {
@@ -84,8 +72,6 @@ export interface ForkStagedCounts {
   craftedTools: number;
   memoryChunks: number;
   sessionMessages: number;
-  messageParts: number;
-  messageUpdates: number;
   conversationEntries: number;
   conversationEntryParts: number;
   contextMembers: number;
@@ -103,16 +89,26 @@ export interface ForkStagedCounts {
  * no display name, so `readForkLineage` answers null and nothing downstream
  * treats the workspace as forked.
  *
- * THE STAGE ORDER IS THE FOREIGN-KEY ORDER. Message identities precede their
- * parts, parts precede the updates that reference them, entries precede their
- * part references, and the context membership lands last — so each statement
- * commits against rows that already exist. Nothing here relies on a deferred
+ * THE STAGE ORDER IS THE FOREIGN-KEY ORDER. Messages precede the entries that
+ * reference them, entries precede their part references, and the context
+ * membership lands last — so each statement commits against rows that already
+ * exist. Nothing here relies on a deferred
  * constraint, because a hosted transfer stages one frame per RPC and has no
  * transaction spanning the sections.
  *
  * The in-process fork drives the same methods over a whole snapshot; see
  * {@link writeForkSnapshot}. There is one write, driven two ways.
  */
+/** The one system-role message a fork lands on its cut point: who owns it,
+ *  what it says, and where in the chain it sits. */
+interface ForkMarker {
+  readonly actorId: string;
+  readonly markerId: string;
+  readonly parentId: string;
+  readonly text: string;
+  readonly recordedAt: number;
+}
+
 export class ForkTargetWriter {
   private readonly now: number;
   /**
@@ -181,9 +177,9 @@ export class ForkTargetWriter {
    * staging state from an earlier attempt is gone before a row of this one
    * lands, and nothing has to detect that it was there.
    *
-   * Children before parents, and the two edges that point FORWARD — a message's
-   * seal into its updates, a part's reply into another part — are released
-   * first, so the deletion needs no deferred constraint either.
+   * Children before parents, and the one edge that points FORWARD — an entry's
+   * parent into another entry — is released first, so the deletion needs no
+   * deferred constraint either.
    *
    * `workspace_identity` is deliberately NOT cleared. On a hosted target the
    * owner row is the precondition for the target's own file plane — the Nimbus
@@ -209,11 +205,7 @@ export class ForkTargetWriter {
     void this.target`UPDATE actor_contexts SET fork_context_id = ${null}, fork_revision = ${null} WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM context_revisions WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM actor_contexts WHERE actor_id = ${actorId}`;
-    void this.target`UPDATE session_messages SET sealed_sequence = ${null} WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM message_projections WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM message_updates WHERE actor_id = ${actorId}`;
-    void this.target`UPDATE message_parts SET reply_to_message_id = ${null}, reply_to_part_no = ${null} WHERE actor_id = ${actorId}`;
-    void this.target`DELETE FROM message_parts WHERE actor_id = ${actorId}`;
+    void this.target`DELETE FROM stream_parts WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM session_messages WHERE actor_id = ${actorId}`;
   }
 
@@ -250,63 +242,26 @@ export class ForkTargetWriter {
     this.staging.count({ memoryChunks: rows.length });
   }
 
-  /** Carried message identities, under THIS target's actor. The execution
+  /** Carried messages, whole, under THIS target's actor. The execution
    *  identity of the source turn does not cross: no request, no output slot, no
-   *  ingress id, and no seal until the update that seals it has landed. */
+   *  ingress id. A content path is re-rooted under the target's artifact
+   *  directory. */
   stageSessionMessages(rows: readonly ForkSessionMessageRow[]): void {
     const actorId = this.actorId;
 
     for (const row of rows) {
       void this.target`
         INSERT INTO session_messages
-        (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, sealed_sequence, recorded_at)
+        (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, recorded_at,
+         envelope_json, sealed_at, content_json, content_path, content_digest)
         VALUES (${actorId}, ${row.message_id}, ${row.role}, ${row.native_content_kind}, ${row.origin},
-                ${null}, ${null}, ${null}, ${null}, ${row.recorded_at})
+                ${null}, ${null}, ${null}, ${row.recorded_at},
+                ${row.envelope_json}, ${row.sealed_at}, ${row.content_json},
+                ${row.content_path === null ? null : this.artifactPath(row.content_path)}, ${row.content_digest})
       `;
     }
 
     this.staging.count({ sessionMessages: rows.length });
-  }
-
-  stageMessageParts(rows: readonly ForkMessagePartRow[]): void {
-    const actorId = this.actorId;
-
-    for (const row of rows) {
-      void this.target`
-        INSERT INTO message_parts
-        (actor_id, message_id, part_no, kind, reply_to_message_id, reply_to_part_no, stream_order)
-        VALUES (${actorId}, ${row.message_id}, ${row.part_no}, ${row.kind},
-                ${row.reply_to_message_id}, ${row.reply_to_part_no}, ${row.stream_order})
-      `;
-    }
-
-    this.staging.count({ messageParts: rows.length });
-  }
-
-  /** Carried updates, with each payload reference re-rooted under the target's
-   *  artifact directory and each seal applied the moment the update it names
-   *  exists. */
-  stageMessageUpdates(rows: readonly ForkMessageUpdateRow[]): void {
-    const actorId = this.actorId;
-
-    for (const row of rows) {
-      void this.target`
-        INSERT INTO message_updates
-        (actor_id, message_id, sequence, part_no, operation, payload_json, payload_path, payload_digest)
-        VALUES (${actorId}, ${row.message_id}, ${row.sequence}, ${row.part_no}, ${row.operation},
-                ${row.payload_json},
-                ${row.payload_path === null ? null : this.artifactPath(row.payload_path)},
-                ${row.payload_digest})
-      `;
-
-      if (!row.seals) continue;
-      void this.target`
-        UPDATE session_messages SET sealed_sequence = ${row.sequence}
-        WHERE actor_id = ${actorId} AND message_id = ${row.message_id}
-      `;
-    }
-
-    this.staging.count({ messageUpdates: rows.length });
   }
 
   /** The public chain, root first — the tree carried verbatim under this
@@ -336,9 +291,9 @@ export class ForkTargetWriter {
     for (const row of rows) {
       void this.target`
         INSERT INTO conversation_entry_parts
-        (actor_id, session_id, entry_id, position, message_id, part_no, through_sequence, text_start, text_length)
+        (actor_id, session_id, entry_id, position, message_id, part_no, text_start, text_length)
         VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.entry_id}, ${row.position}, ${row.message_id},
-                ${row.part_no}, ${row.through_sequence}, ${row.text_start}, ${row.text_length})
+                ${row.part_no}, ${row.text_start}, ${row.text_length})
       `;
     }
 
@@ -354,9 +309,9 @@ export class ForkTargetWriter {
     for (const row of rows) {
       void this.target`
         INSERT INTO context_memberships
-        (actor_id, context_id, entry_id, from_revision, to_revision, position, message_id, through_sequence)
+        (actor_id, context_id, entry_id, from_revision, to_revision, position, message_id)
         VALUES (${actorId}, ${contextId}, ${row.entry_id}, ${FORK_CONTEXT_REVISION}, ${null},
-                ${row.position}, ${row.message_id}, ${row.through_sequence})
+                ${row.position}, ${row.message_id})
       `;
     }
 
@@ -429,8 +384,7 @@ export class ForkTargetWriter {
   get staged(): ForkStagedCounts {
     return this.staging.read()?.staged ?? {
       agentConfig: 0, craftedTools: 0, memoryChunks: 0,
-      sessionMessages: 0, messageParts: 0, messageUpdates: 0,
-      conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
+      sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
       files: 0,
     };
   }
@@ -565,8 +519,8 @@ export class ForkTargetWriter {
   }
 
   /**
-   * The marker, as canonical rows: one message with one text part, sealed at
-   * its last update, and one entry referencing that part.
+   * The marker, as canonical rows: one sealed message with one text part, and
+   * one entry referencing that part.
    *
    * Written through SQL rather than through the session stores because the
    * publication is synchronous by contract — a host transaction cannot await —
@@ -576,38 +530,13 @@ export class ForkTargetWriter {
   private writeForkMarker(marker: ForkMarker): void {
     const { actorId, markerId, parentId, text, recordedAt } = marker;
 
+    const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
     void this.target`
       INSERT INTO session_messages
-      (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, sealed_sequence, recorded_at)
-      VALUES (${actorId}, ${markerId}, ${'system'}, ${'string'}, ${'edit'}, ${null}, ${null}, ${null}, ${null}, ${recordedAt})
-    `;
-
-    void this.target`
-      INSERT INTO message_parts (actor_id, message_id, part_no, kind, reply_to_message_id, reply_to_part_no, stream_order)
-      VALUES (${actorId}, ${markerId}, ${0}, ${'text'}, ${null}, ${null}, ${null})
-    `;
-
-    // The update sequence a string-content message is published with: its
-    // envelope, its one part's descriptor, then that part's text.
-    const updates: readonly { part: number | null; operation: string; payload: string }[] = [
-      { part: null, operation: 'envelope-metadata', payload: JSON.stringify({}) },
-      { part: 0, operation: 'open', payload: JSON.stringify({ type: 'text' }) },
-      { part: 0, operation: 'append', payload: JSON.stringify(text) },
-    ];
-
-    for (const [sequence, update] of updates.entries()) {
-      void this.target`
-        INSERT INTO message_updates
-        (actor_id, message_id, sequence, part_no, operation, payload_json, payload_path, payload_digest)
-        VALUES (${actorId}, ${markerId}, ${sequence}, ${update.part}, ${update.operation},
-                ${update.payload}, ${null}, ${null})
-      `;
-    }
-
-    const sealed = updates.length - 1;
-    void this.target`
-      UPDATE session_messages SET sealed_sequence = ${sealed}
-      WHERE actor_id = ${actorId} AND message_id = ${markerId}
+      (actor_id, message_id, role, native_content_kind, origin, request_id, output_slot, ingress_id, recorded_at,
+       envelope_json, sealed_at, content_json, content_path, content_digest)
+      VALUES (${actorId}, ${markerId}, ${'system'}, ${'string'}, ${'edit'}, ${null}, ${null}, ${null}, ${recordedAt},
+              ${'{}'}, ${recordedAt}, ${content}, ${null}, ${null})
     `;
 
     void this.target`
@@ -620,8 +549,8 @@ export class ForkTargetWriter {
 
     void this.target`
       INSERT INTO conversation_entry_parts
-      (actor_id, session_id, entry_id, position, message_id, part_no, through_sequence, text_start, text_length)
-      VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId}, ${0}, ${markerId}, ${0}, ${sealed}, ${null}, ${null})
+      (actor_id, session_id, entry_id, position, message_id, part_no, text_start, text_length)
+      VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId}, ${0}, ${markerId}, ${0}, ${null}, ${null})
     `;
   }
 
@@ -712,8 +641,6 @@ export async function writeForkSnapshot(
     writer.stageCraftedTools(snapshot.craftedTools);
     writer.stageMemoryChunks(snapshot.memoryChunks);
     writer.stageSessionMessages(snapshot.sessionMessages);
-    writer.stageMessageParts(snapshot.messageParts);
-    writer.stageMessageUpdates(snapshot.messageUpdates);
     writer.stageConversationEntries(snapshot.conversationEntries);
     writer.stageConversationEntryParts(snapshot.conversationEntryParts);
     writer.stageContextMembers(snapshot.contextMembers);

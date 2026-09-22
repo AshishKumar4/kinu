@@ -34,8 +34,7 @@ function begin(transferId: string): ForkFrame {
     head: { source: { workspaceId: 'S', workspaceName: 'source' }, cut: { messageId: 'm1', createdAtMs: 1 } },
     counts: {
       agentConfig: 0, craftedTools: 0, memoryChunks: 0,
-      sessionMessages: 0, messageParts: 0, messageUpdates: 0,
-      conversationEntries: 1, conversationEntryParts: 0, contextMembers: 0,
+      sessionMessages: 0, conversationEntries: 1, conversationEntryParts: 0, contextMembers: 0,
       files: 1,
     },
   });

@@ -11,10 +11,7 @@ import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
-import type {
-  AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing,
-  FileRestoreChange, FileRestorePlan, TakePickOutcome,
-} from "@kinu.run/core";
+import type { AlternateTakeSet, FileRestoreChange, TakePickOutcome } from "@kinu.run/core";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useChatThread } from "@/hooks/use-chat-thread";
@@ -27,6 +24,7 @@ import { describeError } from "@/hooks/use-async-resource";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Modal } from "@/components/ui/Modal";
+import { RevertTurnDialog, type DeviceRestorePlan } from "@/components/RevertTurnDialog";
 import { DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
@@ -904,76 +902,16 @@ export default function WorkspacePage() {
     return result;
   }, [state.rpc]);
 
-  // Shadow-git restore — the files half of walk-back. The store lives on the
-  // user's device daemon; the DO forwards. Shows the plan (paths + counts)
-  // before applying; the restore itself is preceded by a safety snapshot.
+  // The walk-back. The conversation half is core's, over one RPC; the device
+  // half is the shadow-git store on the user's own machine, which the DO
+  // forwards to and which exists only while a device is connected. The dialog
+  // owns that decision — see RevertTurnDialog — and hands the plan here,
+  // because overwriting files on a real machine gets its own confirm with the
+  // paths on it, preceded by a safety snapshot.
+  const [revertFor, setRevertFor] = useState<string | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
-  // Planning is several sequential RPCs over the device tunnel; without a
-  // guard the affordance was re-entrant, and the plan was shown in a native
-  // confirm() — a browser-chrome box for an operation that overwrites files on
-  // the user's actual machine.
-  const [planning, setPlanning] = useState(false);
-  const [restorePlan, setRestorePlan] = useState<RestorePlan | null>(null);
+  const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
   const [restoring, setRestoring] = useState(false);
-
-  const onRestoreFiles = useCallback(async (mid: string) => {
-    if (planning || restoring) return;
-    setRestoreNotice(null);
-    setPlanning(true);
-
-    try {
-      // Keyed on the turn IN THE STORE, not filtered here. Reading a window and
-      // filtering client-side is what produced "It changed no device files." on a
-      // turn that had written plenty: retention is per working directory while
-      // this limit is global across them, so once the operator had a few active
-      // directories a still-restorable checkpoint fell outside the newest 200 and
-      // the empty filter result was rendered as a fact about the turn.
-      const { availability, entries } =
-        await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200, mid]);
-
-      if (!availability.available) {
-        // The store is not reachable. Saying anything about what the turn
-        // changed would be a guess: this is where "It changed no device files."
-        // came from on a turn that had written plenty.
-        setRestoreNotice(
-          `File history is unavailable: ${availability.reason ?? 'the checkpoint store cannot be reached'}.`,
-        );
-
-        return;
-      }
-
-      // Now an empty answer means what it says: the store searched every
-      // directory for this turn and holds no checkpoint for it.
-      if (entries.length === 0) {
-        setRestoreNotice(
-          'This turn changed no files on your device. Workspace and sandbox changes cannot be restored here.',
-        );
-
-        return;
-      }
-
-      const matches = entries;
-      const plans: FileRestorePlan[] = [];
-
-      for (const entry of matches) {
-        plans.push(await state.rpc<FileRestorePlan>('planFileRestore', [entry.dir, entry.id]));
-      }
-
-      const files = plans.flatMap((p) => p.files);
-
-      if (files.length === 0) {
-        setRestoreNotice('Your files already match the state before this turn.');
-
-        return;
-      }
-
-      setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
-    } catch (err) {
-      setRestoreNotice(`Restore failed: ${renderThrownChain({ cause: err })}`);
-    } finally {
-      setPlanning(false);
-    }
-  }, [state.rpc, planning, restoring]);
 
   const applyRestore = useCallback(async () => {
     if (!restorePlan) return;
@@ -1191,7 +1129,7 @@ export default function WorkspacePage() {
                     onFork={onForkMessage}
                     onFeedback={onMessageFeedback}
                     feedback={feedbackByMessage[msg.id] ?? null}
-                    onRestoreFiles={onRestoreFiles}
+                    onRevert={setRevertFor}
                     takesChip={hasComparableTakes(takes)
                       ? <TakesChip set={takes} onPick={onPickTake} />
                       : undefined}
@@ -1286,8 +1224,6 @@ export default function WorkspacePage() {
                   }),
                   ...(branchNotice ? [{ id: "branch", tone: "warning" as const,
                     text: `Branch unavailable: ${branchNotice}`, onDismiss: () => setBranchNotice(null) }] : []),
-                  ...(planning ? [{ id: "planning", tone: "progress" as const,
-                    text: "Checking what this turn changed on your device…" }] : []),
                   ...(restoreNotice ? [{ id: "restore", tone: "neutral" as const, text: restoreNotice,
                     onDismiss: () => setRestoreNotice(null) }] : []),
                   ...(steerNotice ? [steerNotice] : []),
@@ -1365,6 +1301,18 @@ export default function WorkspacePage() {
         />
       )}
 
+      {revertFor !== null && <RevertTurnDialog
+        messageId={revertFor}
+        rpc={state.rpc}
+        onClose={() => setRevertFor(null)}
+        // The walk is reset with the revert, not after it: a first history page
+        // already in flight belongs to the conversation being walked back, and
+        // without a new generation it lands afterwards and puts the removed
+        // messages straight back on screen.
+        onReverted={history.reset}
+        onRestorePlan={setRestorePlan}
+      />}
+
       {restorePlan && (
         <RestoreFilesModal plan={restorePlan} busy={restoring}
           onCancel={() => setRestorePlan(null)} onConfirm={applyRestore} />
@@ -1398,15 +1346,6 @@ export default function WorkspacePage() {
   );
 }
 
-/** The device-file restore confirm. Shows the whole plan in the app's own
- *  destructive-action treatment rather than crammed into a native `confirm()`
- *  dialog — this overwrites files on the user's real machine. */
-interface RestorePlan {
-  entries: FileCheckpointEntry[];
-  dirs: string[];
-  files: FileRestoreChange[];
-}
-
 const RESTORE_PREVIEW_LIMIT = 12;
 
 const RESTORE_MARK = {
@@ -1415,8 +1354,11 @@ const RESTORE_MARK = {
   delete: { mark: "-", tone: "p-danger" },
 } satisfies Record<FileRestoreChange["kind"], { mark: string; tone: string }>;
 
+/** The device-file restore confirm. Shows the whole plan in the app's own
+ *  destructive-action treatment rather than crammed into a native `confirm()`
+ *  dialog — this overwrites files on the user's real machine. */
 function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
-  plan: RestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
+  plan: DeviceRestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
 }) {
   const { modified, created, deleted } = summarizeRestorePlan(plan.files);
 
@@ -1430,7 +1372,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
 
   return (
     <Modal
-      title="Restore files to before this turn"
+      title="Restore device files to before this turn"
       icon={<ClockCounterClockwiseIcon size={18} className="p-warning" />}
       onClose={onCancel}
       busy={busy}
