@@ -379,10 +379,11 @@ for (const program of gatePrograms) {
     `${program} is not the executed final module of an unconditional supported node command in test:anti-slop`,
   );
 }
-// NODE_OPTIONS is load-bearing, not decoration: oxlint spawns `node` to load this
-// plugin, and official Node 22 only strips `.ts` types behind the flag. The pin
-// stays exact so any other change to the lint invocation still fails here.
-assert.match(packageJson.scripts.lint, /^bun run test:anti-slop && NODE_OPTIONS=--experimental-strip-types oxlint$/u);
+// The whole-tree lint runs once, in `live-tree.gate.test.ts`, which asserts the
+// empty report AND oxlint's exit status. The plain `oxlint` that followed it
+// could only pass once that gate had, and cost 55 CPU-s a commit (2026-09-22).
+// The pin stays exact so any other change to the lint invocation still fails here.
+assert.match(packageJson.scripts.lint, /^bun run test:anti-slop$/u);
 assert.match(packageJson.scripts.check, /^bun run lint && /u);
 assert.doesNotMatch(packageJson.scripts.lint, /--quiet|--allow|--fix|baseline/u);
 
