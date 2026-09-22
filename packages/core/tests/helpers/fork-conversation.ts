@@ -56,10 +56,10 @@ export class ForkConversation {
     this.messages = new SessionMessages(workspace.sql, this.actor, this.payloads);
     this.context = new SessionContext(workspace.sql, this.actor, (write) => this.atomic(write));
 
-    this.transcript = new SessionTranscript(
-      workspace.sql, this.actor, CHAT_SESSION_ID, this.messages, this.payloads,
-      (write) => this.atomic(write), () => this.context.selected(),
-    );
+    this.transcript = new SessionTranscript({
+      sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads,
+      atomic: (write) => this.atomic(write), selection: () => this.context.selected(),
+    });
   }
 
   atomic<T>(write: () => T): T {
@@ -96,11 +96,11 @@ export class ForkConversation {
     let reference: MessageReference | null = null;
 
     if (input.working ?? true) {
-      this.context.commit(this.selection(), origin, null, (entries) => {
+      this.context.commit(this.selection(), { cause: origin, turnId: null, assertEpoch: () => this.actor.assertCurrent(), mutate: (entries) => {
         reference = this.messages.insert(prepared, origin);
 
         return [...entries, { ...reference, entryId: input.id, position: entries.length }];
-      }, () => this.actor.assertCurrent());
+      } });
     } else {
       reference = this.atomic(() => this.messages.insert(prepared, origin));
     }
@@ -164,12 +164,12 @@ export class ForkConversation {
   /** Drop one entry out of the working context — a prune. The public chain is
    *  untouched, which is exactly the divergence a fork has to carry. */
   prune(entryId: string): ContextSelection {
-    return this.context.commit(
-      this.selection(), 'context_transform', null,
-      (entries) => entries.filter((entry) => entry.entryId !== entryId)
+    return this.context.commit(this.selection(), {
+      cause: 'context_transform', turnId: null,
+      mutate: (entries) => entries.filter((entry) => entry.entryId !== entryId)
         .map((entry, position) => ({ ...entry, position })),
-      () => this.actor.assertCurrent(),
-    );
+      assertEpoch: () => this.actor.assertCurrent(),
+    });
   }
 }
 

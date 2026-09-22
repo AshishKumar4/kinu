@@ -335,13 +335,13 @@ export class SessionStream {
     const selected = this.history.context.selected();
 
     if (selected === null) throw new KinuError('missing', 'stream has no selected context');
-    this.history.context.commit(selected, 'output', this.turnId, entries => {
+    this.history.context.commit(selected, { cause: 'output', turnId: this.turnId, assertEpoch: () => this.history.assertEpoch(this.turnId, this.epoch), mutate: entries => {
       this.history.messages.seal(container.id, content, envelope);
 
       if (entries.some(entry => entry.messageId === container.id)) return entries;
 
       return [...entries, { messageId: container.id, entryId: container.id, position: entries.length }];
-    }, () => this.history.assertEpoch(this.turnId, this.epoch));
+    } });
     container.sealed = true;
   }
 

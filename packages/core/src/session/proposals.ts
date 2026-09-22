@@ -133,7 +133,7 @@ export class SessionProposals {
         return null;
       }
 
-      const committed = this.context.commit(selected, proposal.cause, turnId, () => next, assertEpoch, { id, author: proposal.author });
+      const committed = this.context.commit(selected, { cause: proposal.cause, turnId, mutate: () => next, assertEpoch, proposal: { id, author: proposal.author } });
       void this.sql`UPDATE context_proposals SET status='applied',deferred_reason=NULL,deferred_at=NULL WHERE actor_id=${actorId} AND proposal_id=${id}`;
 
       return committed;
