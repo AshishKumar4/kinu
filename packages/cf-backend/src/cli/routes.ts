@@ -28,9 +28,8 @@ import {
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
-import type { UserRoutesAuthority, UserRoutesEnv } from '../user/routes';
-import type { CloudWorkspaceBirth } from '../user/workspace-create';
-import type { CredentialFanoutTarget } from '../user/workspace-access';
+import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
+import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
 import type { SessionAuthority } from '../auth/store';
 import type { ObjectNamespace } from '../bindings';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -72,11 +71,14 @@ function publishedDownloadType(pathname: string): string | null {
 }
 
 /** Every call the CLI plane makes on the signing-in account's own object. */
-export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & UserRoutesAuthority & Pick<
+export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
   'revokeCliTokenHash' | 'listCliTokens' | 'revokeAllCliTokens'
   | 'listAccessTokens' | 'mintAccessToken' | 'revokeAccessToken'
-  | 'issueCliAgentConnectTicket' | 'registerDevice' | 'hasWorkspace'
+  | 'issueCliAgentConnectTicket' | 'registerDevice'
+  | 'hasWorkspace' | 'listDevices' | 'listActiveWorkspaces'
+  | 'getProfileCatalog' | 'putProfileCatalog'
+  | 'listCredentials' | 'setCredential' | 'deleteCredential'
 >;
 
 /** The workspace object as the CLI plane reaches it: the birth sequence a
@@ -89,7 +91,8 @@ export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget
  *  auth store's KV and objects, the published assets a download is served
  *  from, the webhook route secret a trigger checks, and the approval origin the
  *  browser hand-off is rendered against. */
-export interface CliRoutesEnv<Id> extends UserRoutesEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
+export interface CliRoutesEnv<Id>
+  extends CreateWorkspaceEnv<Id>, UserAIProxyEnv<Id>, AuthEnv<Id>, WebhookRouteEnv {
   AUTH_KV: KvStore;
   ASSETS: AssetFetcher;
   UserDO: ObjectNamespace<Id, CliRoutesAuthority>;

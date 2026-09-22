@@ -10,6 +10,7 @@
  */
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserProfile } from '../../src/user/user-do';
+import type { CliAgentTarget, CliRoutesAuthority } from '../../src/cli/routes';
 import type { AssetFetcher } from '@kinu.run/core';
 import type { ObjectNamespace } from '../../src/bindings';
 
@@ -38,4 +39,81 @@ export function unreachableAssets(): AssetFetcher {
  *  returns it: the account exists, has no onboarding stamp and owns nothing. */
 export function bootstrappedProfile(email: string, displayName: string | null = null): UserProfile {
   return { email, displayName, createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: 0 };
+}
+
+/** Name one member of an object binding that this case does not reach. The
+ *  refusal is the point: a route that was supposed to answer without it says
+ *  so, instead of a stand-in quietly answering for it. */
+function unreached(object: string, member: string) {
+  return (): never => { throw new Error(`${object}.${member}: not reachable in this test`); };
+}
+
+/**
+ * The account object as the CLI plane declares it, with every call this case
+ * did not build refusing.
+ *
+ * The plane's env names one object for every CLI surface — sign-in, tokens,
+ * devices, credentials, workspaces — while one case drives a handful. Filling
+ * the rest with refusals is what keeps "this route touched only these" a
+ * checked claim.
+ */
+export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Built): CliRoutesAuthority & Built {
+  const refuse = (member: string) => unreached('UserDO', member);
+
+  return {
+    ensureProfile: refuse('ensureProfile'),
+    mintCliToken: refuse('mintCliToken'),
+    verifyCliToken: refuse('verifyCliToken'),
+    verifyAccessToken: refuse('verifyAccessToken'),
+    registerBrowserSession: refuse('registerBrowserSession'),
+    verifyBrowserSession: refuse('verifyBrowserSession'),
+    revokeBrowserSession: refuse('revokeBrowserSession'),
+    getAuthHeaders: refuse('getAuthHeaders'),
+    getCredentialBaseURL: refuse('getCredentialBaseURL'),
+    listCredentials: refuse('listCredentials'),
+    setCredential: refuse('setCredential'),
+    deleteCredential: refuse('deleteCredential'),
+    getProfileCatalog: refuse('getProfileCatalog'),
+    putProfileCatalog: refuse('putProfileCatalog'),
+    registerWorkspace: refuse('registerWorkspace'),
+    removeWorkspace: refuse('removeWorkspace'),
+    releaseWorkspaceReservation: refuse('releaseWorkspaceReservation'),
+    ensureWorkspaceCapability: refuse('ensureWorkspaceCapability'),
+    hasWorkspace: refuse('hasWorkspace'),
+    listActiveWorkspaces: refuse('listActiveWorkspaces'),
+    revokeCliTokenHash: refuse('revokeCliTokenHash'),
+    listCliTokens: refuse('listCliTokens'),
+    revokeAllCliTokens: refuse('revokeAllCliTokens'),
+    listAccessTokens: refuse('listAccessTokens'),
+    mintAccessToken: refuse('mintAccessToken'),
+    revokeAccessToken: refuse('revokeAccessToken'),
+    issueCliAgentConnectTicket: refuse('issueCliAgentConnectTicket'),
+    registerDevice: refuse('registerDevice'),
+    listDevices: refuse('listDevices'),
+    ...built,
+  };
+}
+
+/** The workspace object the CLI plane addresses, with the birth sequence and
+ *  the credential notice refusing unless the case built them. The dispatch
+ *  surface is the request's own choice of name, so a case supplies exactly the
+ *  methods it drives. */
+export function cliWorkspace<Built extends Partial<CliAgentTarget>>(built: Built): CliAgentTarget & Built {
+  const refuse = (member: string) => unreached('OrchestratorAgent', member);
+
+  return {
+    claimOwner: refuse('claimOwner'),
+    setInitialDisplayName: refuse('setInitialDisplayName'),
+    setAutoDisplayName: refuse('setAutoDisplayName'),
+    setSoul: refuse('setSoul'),
+    resetWorkspaceBaseline: refuse('resetWorkspaceBaseline'),
+    setModel: refuse('setModel'),
+    setReasoningEffort: refuse('setReasoningEffort'),
+    setRole: refuse('setRole'),
+    beginGenesisTurn: refuse('beginGenesisTurn'),
+    reportFacetModelCall: refuse('reportFacetModelCall'),
+    onCredentialsChanged: refuse('onCredentialsChanged'),
+    createDurableWebhook: refuse('createDurableWebhook'),
+    ...built,
+  };
 }
