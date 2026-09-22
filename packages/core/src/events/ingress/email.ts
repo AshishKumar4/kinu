@@ -1,21 +1,5 @@
-/**
- * Email ingress — inbound mail becomes a durable event, and the owner's
- * away-channel notifications decide whether to send.
- *
- * The backend in front of this owns the mail transport: parsing MIME,
- * resolving which agent an address belongs to, and putting bytes on the wire.
- * The gate is here, and it runs before anything is stored:
- *
- *   sender == owner's verified login email      → admitted (`sender_class: owner`,
- *                                                  trust `authenticated`)
- *   sender ∈ active email_route allowlist        → admitted (`sender_class:
- *                                                  allowlisted`, trust `external`)
- *   anyone else                                  → dropped; no event row exists
- *
- * Every admitted email opens an `email_thread` ReplyChannel carrying the
- * threading fields, so the turn's answer goes back as a real reply on the
- * same thread (In-Reply-To / References).
- */
+/** Inbound mail gate: the owner's verified address or an active email_route allowlist entry is
+ *  admitted; anyone else is dropped with no event row. */
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
@@ -29,36 +13,20 @@ import { argumentDigest } from '../../safety/argument-digest';
 import { tryConsumeWebhookRateLimit } from './rate-limit';
 import { diagnostics, toKinuError } from '../../obs/index';
 
-/**
- * Inbound-email budget per agent (all senders combined). Email is a wake
- * channel, not a data plane — mail beyond this is dropped at the gate. The drop
- * is announced to the agent: a reply storm or a list subscription otherwise
- * makes it silently deaf while it believes it has seen its inbox.
- */
+/** All senders combined. Drops are announced so the agent is not silently deaf. */
 export const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
 const EmailAllowlistSchema = v.object({ allow: v.optional(v.array(v.string())) });
 
-/** All senders share one rate-limit window; the key is not a trigger id. */
 const EMAIL_INBOUND_RATE_KEY = 'email:inbound';
 
-/** Lowercase, trim, and strip a single `Name <addr>` / `<addr>` wrapper. */
 export function normalizeEmailAddress(raw: string): string {
   const angled = raw.match(/<([^<>]+)>\s*$/);
 
   return (angled ? angled[1] : raw).trim().toLowerCase();
 }
 
-/**
- * The inbox gate as live turn state, while it is still refusing mail.
- *
- * A rate-limited delivery leaves no trace the agent can read: the sender gets
- * nothing, nothing is stored, and the agent goes on believing it has seen its
- * inbox. The durable `email_inbound_rate_limited` event records that it
- * happened; this says it is happening NOW and until when — and returns null
- * once the window has reset, so a turn is never told about a deafness that has
- * already ended.
- */
+/** Null once the window has reset, so a turn is never told about deafness that has ended. */
 export function inboundEmailDropNotice(
   limitPerMin: number, windowResetsAt: number, now: number,
 ): MissingCapability | null {
@@ -73,26 +41,12 @@ export function inboundEmailDropNotice(
   };
 }
 
-/**
- * RFC 5322 §2.1.1: a line of a message, not counting the CRLF, is at most 998
- * octets, and a receiver is not obliged to accept more. That is the whole
- * budget for a header field including its name, so each bound below subtracts
- * its own field name. Nothing here is a Kinu number.
- */
+/** RFC 5322 §2.1.1 line limit, excluding CRLF; each bound subtracts its own field name. */
 const RFC5322_LINE_OCTETS = 998;
 
-/** A msg-id per RFC 5322 §3.6.4: angle-bracketed, no whitespace inside, and
- *  printable US-ASCII, which is all this application ever needs to recognise. */
 const MSG_ID = /^<[\x21-\x3D\x3F-\x7E]+>$/;
 
-/**
- * One inbound Message-ID, or null when the sender's is unusable.
- *
- * Null rather than a repair: a truncated msg-id is a DIFFERENT identity, so it
- * would thread the reply onto nothing while looking like it worked. Dropping
- * it costs the In-Reply-To and keeps the subject-based threading every client
- * falls back to.
- */
+/** Null rather than truncated: a truncated msg-id is a different identity. */
 export function boundedMessageId(raw: string | null, fieldName = 'Message-ID'): string | null {
   const id = raw?.trim() ?? '';
 
@@ -101,18 +55,7 @@ export function boundedMessageId(raw: string | null, fieldName = 'Message-ID'): 
   return id.length + fieldName.length + 2 <= RFC5322_LINE_OCTETS ? id : null;
 }
 
-/**
- * The References chain, bounded, with the thread's identity kept.
- *
- * A chain grows by one msg-id per reply and nothing in the protocol ever
- * shortens it, so a long-lived thread eventually writes a header no receiver
- * has to accept — and every id in it arrived from outside. Trimming is from
- * the SECOND entry forward: RFC 5537 §3.4.4 states the rule this application
- * follows — keep the first, keep the most recent — because the first id is
- * what a reader threads the conversation under and the last ones are what it
- * threads this message under. Dropping the tail instead would detach the reply
- * from the message it answers, which is the one thing References exists for.
- */
+/** Keeps the first and most recent ids (RFC 5537 §3.4.4), trimming from the second entry. */
 export function boundedReferences(references: string | null, appended: string | null): string | null {
   const chain = (references ?? '').split(/\s+/)
     .filter((id) => MSG_ID.test(id));
@@ -124,7 +67,6 @@ export function boundedReferences(references: string | null, appended: string | 
   if (chain.length === 0) return null;
 
   const budget = RFC5322_LINE_OCTETS - 'References'.length - 2;
-  // Each entry after the first costs its own length plus the separating space.
   let octets = chain.reduce((sum, id) => sum + id.length + 1, -1);
 
   while (octets > budget && chain.length > 1) {
@@ -132,31 +74,18 @@ export function boundedReferences(references: string | null, appended: string | 
     chain.splice(1, 1);
   }
 
-  // A single id longer than the whole budget cannot be represented at all.
   return octets > budget ? null : chain.join(' ');
 }
 
-/** Threading envelope stored in the reply channel's holder_addr (JSON). */
 export interface EmailThreadAddr {
-  /** Reply recipient — the inbound envelope sender. */
   to: string;
-  /** Reply sender — the exact agent address the mail arrived at. */
   from: string;
   subject: string;
-  /** Inbound Message-ID → outbound In-Reply-To. */
   message_id: string | null;
-  /** Inbound References chain, extended with message_id on send. */
   references: string | null;
 }
 
-/**
- * The thread one inbound message belongs to, bounded once, here.
- *
- * ONE builder, because the same identity is written to three places — the
- * reply channel's `holder_addr`, the event payload the model reads, and the
- * receipt that goes back immediately — and three constructions of it would
- * drift the first time a bound moved.
- */
+/** One builder for reply channel, event payload and receipt, so the bounds cannot drift. */
 export function emailThreadAddr(msg: IncomingEmail): EmailThreadAddr {
   return {
     to: msg.from,
@@ -170,14 +99,9 @@ export function emailThreadAddr(msg: IncomingEmail): EmailThreadAddr {
 export interface EmailIngressDeps {
   log: EventLog;
   replies: ReplyChannelStore;
-  /** Owner's verified login email (UserDO profile), or null when unknown. */
   owner_email: string | null;
-  /** Active email_route allowlist (normalized happens here). */
   allowlist: ReadonlyArray<string>;
-  /** Per-agent inbound budget. Returns false when spent. */
   tryConsumeRateLimit(now: number): boolean;
-  /** The receiving agent's file plane — an oversize body is spilled here so
-   *  the woken turn can read the mail it was woken by. */
   vfs: VFS;
 }
 
@@ -197,25 +121,19 @@ export type EmailIngressResult =
   | {
       admitted: true;
       event_id: EventId;
-      /** True when dedupe matched an earlier delivery of the same message. */
       duplicate: boolean;
       sender_class: 'owner' | 'allowlisted';
-      /** The bounded thread identity this delivery belongs to — what a reply
-       *  and the immediate receipt are both addressed with. */
       thread: EmailThreadAddr;
     }
   | { admitted: false; reason: string };
 
-/** Which side of the inbox gate a sender falls on — the ONE comparison, so the
- *  pre-parse check the transport makes and the admission below cannot drift. */
+/** Shared by the transport's pre-parse check and admission so they cannot drift. */
 function classifyEmailSender(
   from: string,
   ownerEmail: string | null,
   allowlist: ReadonlyArray<string>,
 ): 'owner' | 'allowlisted' | null {
-  // Sender identity is the envelope from as delivered by the mail edge, which
-  // enforces SPF/DKIM/DMARC before this ever runs — that upstream reliance is
-  // why even the owner's mail caps at trust `authenticated` (events/hub/trust.ts).
+  // The mail edge enforces SPF/DKIM/DMARC upstream; hence the owner caps at `authenticated`.
   const sender = normalizeEmailAddress(from);
   const owner = ownerEmail ? normalizeEmailAddress(ownerEmail) : null;
 
@@ -224,7 +142,6 @@ function classifyEmailSender(
   return allowlist.some((a) => normalizeEmailAddress(a) === sender) ? 'allowlisted' : null;
 }
 
-/** Gate + publish an inbound email. Runs inside the agent's storage. */
 export async function acceptInboundEmail(
   deps: EmailIngressDeps,
   msg: IncomingEmail,
@@ -239,10 +156,7 @@ export async function acceptInboundEmail(
     return { admitted: false, reason: 'inbound email rate limit exceeded' };
   }
 
-  // Spilled after the gate so an unauthorized sender never writes a file —
-  // the same ordering peer ingress uses. A mail longer than the brief budget
-  // gets a readable path alongside the brief, because the agent is woken BY
-  // this message and the brief alone is a fragment it cannot ask past.
+  // Spilled after the gate so an unauthorized sender never writes a file.
   const spilled = await spillEventContent(deps.vfs, msg.body_text);
 
   const thread = emailThreadAddr(msg);
@@ -252,11 +166,7 @@ export async function acceptInboundEmail(
     to: msg.to,
     subject: msg.subject,
     body_text: msg.body_text,
-    // The bounded identity, not the sender's raw headers. An allowlisted
-    // sender writes these, they are stored, rendered into the turn's brief and
-    // put back on the wire on every reply, so the protocol's own limit is
-    // applied once — at the point of admission — rather than by whichever
-    // reader notices first.
+    // Bounded identity, not raw sender headers, which are stored and replayed on every reply.
     message_id: thread.message_id,
     in_reply_to: boundedMessageId(msg.in_reply_to, 'In-Reply-To'),
     references: thread.references,
@@ -266,7 +176,7 @@ export async function acceptInboundEmail(
   };
 
   const reply_channel_id = deps.replies.open({
-    event_id: 'pending',           // bound to the real event id after publish
+    event_id: 'pending',
     kind: 'email_thread',
     holder_addr: JSON.stringify(thread),
     payload_policy: 'full',
@@ -281,8 +191,6 @@ export async function acceptInboundEmail(
     if (admitted) {
       deps.replies.bindEvent(reply_channel_id, id);
     } else {
-      // Retried delivery of an already-admitted message: the original event
-      // already carries its thread channel.
       deps.replies.abort(reply_channel_id, msg.now, 'duplicate email delivery');
     }
   }
@@ -290,9 +198,6 @@ export async function acceptInboundEmail(
   return { admitted: true, event_id: id, duplicate: !admitted, sender_class, thread };
 }
 
-// ── The allowlist ────────────────────────────────────────────────
-
-/** Union of active email_route allowlists (normally zero or one trigger). */
 export function readEmailAllowlist(registry: TriggerRegistry): string[] {
   return registry.list({ kind: 'email_route', state: 'active' })
     .flatMap((t) => {
@@ -302,12 +207,7 @@ export function readEmailAllowlist(registry: TriggerRegistry): string[] {
     });
 }
 
-/**
- * Replace the inbound-email allowlist. The owner's own verified address is
- * always allowed and never needs listing; one active email_route trigger
- * (creator_trust recorded like every ingress) holds the extra senders, and an
- * empty list just revokes it.
- */
+/** The owner's address is always allowed; an empty list revokes the email_route trigger. */
 export async function setEmailAllowlist(
   registry: TriggerRegistry, allow: string[], now: number,
 ) {
@@ -326,19 +226,13 @@ export async function setEmailAllowlist(
   return { allowlist: cleaned };
 }
 
-// ── The inbox ────────────────────────────────────────────────────
-
 export interface EmailInboxDeps {
   log: EventLog;
   replies: ReplyChannelStore;
   triggers: TriggerRegistry;
-  /** The agent's file plane, dereferenced per delivery (built lazily). */
   vfs(): VFS;
-  /** Where the rate-limit windows live (the agent's own storage). */
   sql: SqlExec;
-  /** Owner's verified login email, or null when unknown. */
   ownerEmail(): Promise<string | null>;
-  /** A fresh event was admitted — wake the agent loop (debounced drain). */
   onAdmitted(): void;
 }
 
@@ -347,26 +241,17 @@ export interface EmailAdmission {
   duplicate?: boolean;
   event_id?: string;
   reason?: string;
-  /** Present on an admitted delivery: the bounded thread the sender wrote to,
-   *  so the host can acknowledge on it without rebuilding the identity. */
   thread?: EmailThreadAddr;
 }
 
-/**
- * One agent's inbound mailbox: the trust gate, the shared rate window, and the
- * announcement the agent reads while that window is refusing mail.
- *
- * The drop announcement is stateful on purpose — one internal event per
- * rate-limit window, not one per dropped message. In memory: re-announcing once
- * after an eviction is harmless, a storm writing a row per message is not.
- */
+/** One drop announcement per rate window, held in memory: a re-announce after eviction is
+ *  harmless, a row per dropped message is not. */
 export class EmailInbox {
   private dropWindow = 0;
   private dropCount = 0;
 
   constructor(private readonly deps: EmailInboxDeps) {}
 
-  /** Gate, publish, and wake. Unauthorized senders never produce an event. */
   async accept(msg: IncomingEmail): Promise<EmailAdmission> {
     const ownerEmail = await this.deps.ownerEmail();
 
@@ -396,8 +281,6 @@ export class EmailInbox {
       return { admitted: false, reason: result.reason };
     }
 
-    // Wake the agent for a turn, debounced — only on fresh admission (a
-    // duplicate delivery is already bound or in flight).
     if (!result.duplicate) this.deps.onAdmitted();
 
     return {
@@ -405,16 +288,7 @@ export class EmailInbox {
     };
   }
 
-  /**
-   * Whether this sender may reach the inbox at all — the transport's pre-parse
-   * half of {@link accept}'s own first question, so an unauthorized message is
-   * refused before it is buffered and MIME-parsed rather than after.
-   *
-   * Deliberately not a decision of its own: same owner address, same
-   * allowlist, same comparison. It admits nothing — a yes only buys the sender
-   * the parse, and `accept` asks again with the same rule before anything
-   * durable happens.
-   */
+  /** Pre-parse check with the same rule as `accept`, which asks again before anything durable. */
   async authorizes(from: string): Promise<{ authorized: boolean; reason?: string }> {
     const ownerEmail = await this.deps.ownerEmail();
 
@@ -426,18 +300,10 @@ export class EmailInbox {
       : { authorized: false, reason: 'sender not authorized for this agent' };
   }
 
-  /** The live "I may be deaf right now" line for this turn's context. */
   dropNotice(now: number): MissingCapability | null {
     return inboundEmailDropNotice(EMAIL_INBOUND_RATE_PER_MIN, this.dropWindow, now);
   }
 
-  /**
-   * Tell the agent its inbox gate is dropping mail.
-   *
-   * One internal event per rate-limit window turns "I may be deaf right now"
-   * into a fact it can act on — say so, ask the sender to resend, check back
-   * after the window — without a row per dropped message.
-   */
   private noteRateDrop(drop: { limit: number; resetAt: number }, now: number): void {
     if (drop.resetAt !== this.dropWindow) {
       this.dropWindow = drop.resetAt;
@@ -456,10 +322,7 @@ export class EmailInbox {
           emitting_head_trust: 'self',
           payload: {
             kind: 'email_inbound_rate_limited',
-            // Audit detail for the operator's event log. It never reaches the
-            // model through the brief (an internal payload's bytes are not
-            // rendered); what the model reads is the live inbox line in the
-            // turn's dynamic context, which also expires with the window.
+            // Operator audit only; the model reads the live inbox line instead.
             data: { limitPerMin: drop.limit, windowResetsAt: new Date(drop.resetAt).toISOString() },
           },
         },
@@ -476,23 +339,14 @@ export class EmailInbox {
   }
 }
 
-// ── Owner notifications (outbound) ───────────────────────────────
-
 export interface OwnerNotification {
   subject: string;
   text: string;
-  /** Idempotency key: a retry of the same notification dedupes downstream,
-   *  while two genuinely distinct notifications key apart and both send. */
   key: string;
 }
 
-/**
- * Decide whether an owner notification should leave at all.
- *
- * Email is the away channel, not a duplicate feed: while an operator socket is
- * live the owner already sees the card in-app, and `email_notifications=false`
- * silences the channel outright.
- */
+/** Email is the away channel: skipped while an operator socket is live or when
+ *  `email_notifications=false`. */
 export function planOwnerNotification(input: {
   enabled: boolean;
   operatorConnected: boolean;

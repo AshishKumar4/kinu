@@ -1,20 +1,5 @@
-/**
- * ReplyChannel — a durable, addressable, TTL-bounded sink for one event's
- * response. NOT a socket. Outlives DO eviction; survives crashes.
- *
- * Each kind has different TTL semantics + dispatcher:
- *
- *   ws_session    — open WebSocket; bound to socket lifetime
- *   http_pending  — held-open HTTP request; 30s TTL
- *   peer_back     — async reply to a peer agent; 24h TTL
- *   mcp_pending   — open MCP HTTP request; 60s TTL
- *   email_thread  — reply sent onto the inbound email's thread; 24h TTL
- *   none          — event has no reply channel (timer, file_watch, etc.)
- *
- * The single `reply()` LLM tool dispatches based on the channel bound to
- * the current event being processed. The LLM never picks the channel —
- * it's determined mechanically by the consumed event.
- */
+/** Durable, TTL-bounded sink for one event's response; survives DO eviction. The channel is
+ *  determined by the consumed event, never picked by the LLM. */
 
 import * as v from 'valibot';
 import {
@@ -28,18 +13,15 @@ import { parseJsonValue, type JsonValue } from '../../utils/json';
 import { renderThrownChain } from '../../obs/index';
 
 const TTL_MS = {
-  ws_session: 0,          // 0 → bound to holder, no clock-based expiry
+  ws_session: 0,          // bound to holder, no clock expiry
   http_pending: 30_000,
   peer_back: 24 * 60 * 60 * 1000,
   mcp_pending: 60_000,
   email_thread: 24 * 60 * 60 * 1000,
 } satisfies Record<Exclude<ReplyChannelKind, 'none'>, number>;
 
-/** Dispatcher that actually moves the reply over the wire. Implementations
- *  live in cf-backend (one per kind). */
+/** Implementations live in cf-backend. */
 export interface ReplyDispatcher {
-  /** Deliver `payload` to the channel's `holder_addr`. Throws on transport
-   *  failure; the caller retries via channel's attempt_count. */
   dispatch(channel: ReplyChannelRow, payload: JsonValue): Promise<{ delivered: boolean; detail?: string }>;
 }
 
@@ -66,17 +48,13 @@ export interface OpenChannelOpts {
   kind: ReplyChannelKind;
   holder_addr: string;
   payload_policy: PayloadPolicy;
-  /** Override default TTL; ignored for ws_session. */
   ttl_ms_override?: number;
 }
 
 export class ReplyChannelStore {
   private readonly actorId: string;
 
-  /** Bind the channel table to ONE actor. A channel answers an event, and an
-   *  event belongs to the actor whose inbox admitted it — so the sink for that
-   *  answer is that actor's, and an id alone is not authority over a sibling's
-   *  open reply. */
+  /** Actor-scoped: a channel id alone is not authority over a sibling's open reply. */
   constructor(
     private readonly sql: SqlExec,
     private readonly actor: ActorHandle,
@@ -85,9 +63,7 @@ export class ReplyChannelStore {
     this.actorId = actor.actorId;
   }
 
-  /** Create a new channel. Returns the row's id. Channels for `kind='none'`
-   *  return a sentinel id and are never persisted; the caller treats null
-   *  reply intent the same way. */
+  /** `kind='none'` is never persisted and returns null. */
   open(opts: OpenChannelOpts, now: number): ReplyChannelId | null {
     this.actor.assertCurrent();
 
@@ -111,9 +87,6 @@ export class ReplyChannelStore {
     return id;
   }
 
-  /** The open channel bound to an event (optionally narrowed by kind). Used by
-   *  reply tools that hold an event id, not a channel id — e.g. a peer answering
-   *  the ask event it was woken with. */
   findOpenByEvent(event_id: EventId, kind?: ReplyChannelKind): ReplyChannelRow | null {
     this.actor.assertCurrent();
 
@@ -154,8 +127,7 @@ export class ReplyChannelStore {
     };
   }
 
-  /** Re-point a channel at its real event id (channels are opened before
-   *  publish so the event row can carry the ref). */
+  /** Channels are opened before publish so the event row can carry the ref. */
   bindEvent(id: ReplyChannelId, eventId: EventId): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -164,17 +136,7 @@ export class ReplyChannelStore {
     );
   }
 
-  /** Mechanically dispatch a reply to a channel.
-   *
-   * Returns an outcome:
-   *   - `delivered` — reply landed, channel transitioned to `replied`
-   *   - `channel_closed` — channel was `replied`/`expired`/`aborted`; no-op
-   *   - `failed` — transport error; attempt_count incremented; retry possible
-   *   - `no_dispatcher` — no dispatcher registered for this channel kind
-   *
-   * In all cases except `channel_closed`, an audit row should be appended
-   * to `agent_log` by the caller (kind='reply_attempt').
-   */
+  /** Callers append a `reply_attempt` audit row for every outcome except `channel_closed`. */
   async reply(id: ReplyChannelId, payload: JsonValue, now: number): Promise<ReplyOutcome> {
     const channel = this.get(id);
 
@@ -182,7 +144,6 @@ export class ReplyChannelStore {
 
     if (channel.state !== 'open') return { outcome: 'channel_closed', state: channel.state };
 
-    // Expiry check (ws_session has TTL=0 — bound to holder, not clock).
     if (channel.kind !== 'ws_session' && now > channel.ttl_expires_at) {
       this.markState(id, 'expired', now);
 
@@ -224,7 +185,6 @@ export class ReplyChannelStore {
     }
   }
 
-  /** Mark a channel as aborted (e.g. on socket close). Idempotent. */
   abort(id: ReplyChannelId, now: number, reason?: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -237,8 +197,7 @@ export class ReplyChannelStore {
     );
   }
 
-  /** Expire channels whose TTL has passed. Returns the number of channels
-   *  expired. Currently unwired — no periodic caller exists. */
+  /** Currently unwired: no periodic caller exists. */
   expireDue(now: number): number {
     this.actor.assertCurrent();
     const before = this.countOpen();

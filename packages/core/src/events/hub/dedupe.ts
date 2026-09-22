@@ -1,24 +1,13 @@
-/**
- * Per-variant idempotency-key derivation. The UNIQUE partial index on
- * `agent_log.dedupe_key` enforces "exactly once" per key. Variants that
- * don't need dedupe return null (chat, internal, file_changed,
- * reply_request).
- *
- * Pure function. The same input always produces the same key.
- */
+/** Per-variant dedupe keys; the unique index on `agent_log.dedupe_key` enforces once-per-key. */
 
 import { sha256Hex, stableStringify } from '../../safety/argument-digest';
 import type { IngressDescriptor, KinuEvent, ReadableKinuEvent } from './types';
 import { decodeJsonValue } from '../../utils/json';
 
-/** A subordinate report's ingress identity, spelled once for the two places
- *  that read it: the admission-time derivation below, and the parent ingress
- *  asking whether a replayed report is already on its rail. */
 export function subordinateReportDedupeKey(sequenceId: string): string {
   return `subordinate_report:${sequenceId}`;
 }
 
-/** Map an event to its dedupe key, or null if the variant is not deduped. */
 export function dedupeKeyFor(event: KinuEvent): string | null {
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
     return event.dedupe_key;
@@ -54,8 +43,6 @@ function dedupeReadableEvent(
       return `process_done:${event.payload.process_id}`;
 
     case 'peer_agent':
-      // Receiver-side dedupe on (sender, sender-side outbox event id) — a
-      // redelivered message is a no-op while repeated topics still admit.
       return `peer:${event.payload.from_agent_name}:${event.payload.sender_event_id}`;
 
     case 'mcp_chat':
@@ -63,9 +50,7 @@ function dedupeReadableEvent(
       return `mcp:${event.payload.client_id}:${event.payload.request_id}`;
 
     case 'email': {
-      // Message-ID is the natural idempotency key (Email Routing retries
-      // deliver the same id). Mail without one falls back to a content hash
-      // bucketed like webhooks.
+      // Email Routing retries reuse the Message-ID; mail without one falls back to a bucketed hash.
       const p = event.payload;
 
       if (p.message_id) return `email:${p.message_id}`;
@@ -75,8 +60,6 @@ function dedupeReadableEvent(
     }
 
     case 'subordinate_report':
-      // The sending child's terminal sequence. A report is replayable durable
-      // work on that side, so its sequence is the key that recognises a replay.
       return subordinateReportDedupeKey(event.payload.sequence_id);
 
     case 'subordinate_task':

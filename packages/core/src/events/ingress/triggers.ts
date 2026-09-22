@@ -1,13 +1,4 @@
-/**
- * Timer ingress — registering the schedules that wake an agent, and firing the
- * ones that are due.
- *
- * A backend owns exactly two things here: the clock that calls
- * {@link fireDueTriggers} (a Durable Object alarm, a local `setTimeout`) and
- * what it does with the count that comes back. The registration rules, the
- * event a firing publishes, the cron re-arm and the one-shot revoke are the
- * agent's behaviour, not the host's.
- */
+/** Timer ingress. The host supplies only the clock that calls {@link fireDueTriggers}. */
 
 import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
@@ -23,7 +14,6 @@ export interface TimerTriggerOpts {
   label?: string;
   payload?: JsonObject;
   trust?: 'authenticated' | 'owner';
-  /** The mission budget every turn this schedule wakes spends against. */
   missionLabel?: string;
 }
 
@@ -33,7 +23,6 @@ export interface TimerTrigger {
   nextFireAt: number | null;
 }
 
-/** The trigger spec a timer registration writes and a firing reads back. */
 const TimerSpecSchema = v.object({
   cron: v.optional(v.string()),
   label: v.optional(v.string()),
@@ -43,13 +32,7 @@ const TimerSpecSchema = v.object({
 
 type TimerSpec = v.InferOutput<typeof TimerSpecSchema>;
 
-/**
- * Register a timer trigger — `timer_cron` (recurring, from a cron expr) or
- * `timer_oneshot` (a single future fire at `atMs`). Shared by the agent's
- * `agent.schedule` tool and the auto-GEPA scheduler, so trigger creation has
- * one home (not inlined SQL). `trust` defaults to 'authenticated' so
- * agent-created schedules are distinguishable from operator ones.
- */
+/** `trust` defaults to 'authenticated' so agent-created schedules differ from operator ones. */
 export async function createTimerTrigger(
   registry: TriggerRegistry,
   opts: TimerTriggerOpts,
@@ -81,8 +64,7 @@ export async function createTimerTrigger(
   return { id, kind, nextFireAt };
 }
 
-/** One trigger as the operator surfaces render it — every column except the
- *  spec's secrets, which live in a store of their own. */
+/** Secrets live in a separate store and never appear here. */
 export interface TriggerView {
   id: string;
   kind: string;
@@ -117,11 +99,9 @@ export function listTriggers(registry: TriggerRegistry) {
   };
 }
 
-/** What a cancellation did, or why it was refused. */
 export interface CancelTriggerResult {
   readonly ok: boolean;
   readonly changed: boolean;
-  /** Why it was refused. Present only when `ok` is false. */
   readonly error?: string;
 }
 
@@ -129,32 +109,15 @@ export interface CancelTriggerRequest {
   readonly registry: TriggerRegistry;
   readonly trigger_id: string;
   readonly now: number;
-  /** The principal asking, which is the authorization. */
   readonly caller: TrustLevel;
-  /** Present when the caller holds one: the plaintext goes with the revocation. */
   readonly secrets?: Pick<WebhookSecretStore, 'deleteByTrigger'>;
 }
 
-/** Cancel a trigger (revoke). Idempotent.
- *
- * `caller` is WHO asked, and it is the authorization: a trigger the OWNER
- * created may only be revoked by the owner. The model reaches this through
- * `agent.cancelSchedule`, and a webhook's durable trigger id is model-visible
- * (the drain renders `triggered_by: webhook (<id>)`), so without this a turn
- * that merely READ an admitted delivery could permanently close the owner's
- * step-up-gated ingress by handing that id straight back.
- *
- * Deliberately NOT a `TRUST_ORDER` comparison. That scale ranks how far an
- * EVENT is believed, and it puts `self` above `owner` — true of an agent's own
- * emissions, and no statement at all about who may revoke the owner's ingress.
- * The rule here is about a principal, so it is written as one.
- *
- * `secrets` is the webhook secret store over the SAME workspace SQLite as the
- * registry, when the caller has one: with it, closing a trigger and deleting
- * its plaintext happen back to back in this one host call — one transaction on
- * the single-threaded SQLite both backends run, so a revoked webhook never
- * leaves its credential behind. The trigger row itself is kept, byte-free:
- * revocation history is audit, not state to erase. */
+/**
+ * Owner-created triggers are revocable only by the owner: webhook trigger ids are model-visible.
+ * Not a `TRUST_ORDER` comparison, which ranks `self` above `owner`. Secrets are deleted in the same
+ * host call; the trigger row is kept as audit.
+ */
 export function cancelTrigger(request: CancelTriggerRequest): CancelTriggerResult {
   const { registry, trigger_id, now, caller, secrets } = request;
   const trigger = registry.get(trigger_id);
@@ -179,19 +142,11 @@ export interface TimerFireDeps {
   log: EventLog;
 }
 
-/**
- * Publish a Timer event for every due schedule, re-arm cron, revoke one-shot.
- * Returns how many fired, which is what tells the caller whether to drain.
- *
- * Crash-safe: hub dedupe on `(trigger_id, scheduled_fire_at)` makes a re-fire
- * after eviction a no-op publish.
- */
+/** Re-fire after eviction is a no-op publish via dedupe on `(trigger_id, scheduled_fire_at)`. */
 export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
 
   for (const trigger of deps.registry.due(now)) {
-    // Only timers produce timer events. No other kind carries a next_fire_at
-    // today, and one that did must not be published as an alarm.
     if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
     fired += 1;
     const spec = v.parse(TimerSpecSchema, trigger.spec);

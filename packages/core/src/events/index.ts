@@ -1,7 +1,3 @@
-/**
- * Run events — public surface.
- */
-
 export type {
   RunEvent,
   RunEventBase,
@@ -65,8 +61,6 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  // buildModelCallEvent lives in a sibling module — see its header for why the
-  // pricing edge cannot sit in model-call.ts.
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,

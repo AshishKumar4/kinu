@@ -1,12 +1,4 @@
-/**
- * Fold the next-soonest DO alarm out of the active triggers' fire times and
- * any durable-retry clocks (peer outbox, email outbox). Trigger times compete
- * only when in the future (due triggers were just handled by the alarm body);
- * a due/past-due retry is CLAMPED to `now` instead of dropped — a pending
- * delivery whose retry time already passed (reentrancy-skipped dispatch,
- * order-blocked receiver) must re-arm immediately, or it stalls until an
- * unrelated event wakes the DO. Returns null when nothing is pending.
- */
+/** A past-due retry is clamped to `now`, not dropped, or it stalls until an unrelated wake. */
 export function nextAlarmTime(
   now: number,
   triggerFireTimes: ReadonlyArray<number | null | undefined>,
@@ -21,11 +13,7 @@ export function nextAlarmTime(
   return candidates.length === 0 ? null : Math.min(...candidates);
 }
 
-// Minimal cron next-fire computation for the trigger registry. The minute and
-// hour fields accept wildcards, wildcard steps, or integer values. All other
-// fields must be wildcards.
-// Returns the next fire time (epoch ms) strictly after `from`, or null for an
-// unsupported/malformed expression.
+// Only minute and hour may be non-wildcard (`*`, `*/n`, or an integer); otherwise null.
 export function nextCronFire(cron: string, from: number): number | null {
   const parts = cron.trim().split(/\s+/);
 
@@ -41,8 +29,7 @@ export function nextCronFire(cron: string, from: number): number | null {
 
   const candidate = new Date(from);
   candidate.setUTCSeconds(0, 0);
-  // setUTCMinutes normalizes 60+ into the next hour; do not also roll the
-  // hour manually or boundary firings move an hour late.
+  // setUTCMinutes rolls 60+ into the next hour; rolling the hour manually too fires an hour late.
   candidate.setUTCMinutes(candidate.getUTCMinutes() + 1);
 
   for (let elapsedMinutes = 0; elapsedMinutes < 24 * 60; elapsedMinutes++) {

@@ -1,18 +1,10 @@
-/**
- * Per-trigger inbound rate limiting — a fixed one-minute window counted in
- * `webhook_rate_windows`, shared by webhook deliveries (keyed by trigger id)
- * and the inbound-email gate (one synthetic key for all senders).
- */
-
 import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives';
 import type { JsonValue } from '../../utils/json';
 
 const WINDOW_MS = 60_000;
 
-/** Exported so `hub/triggers.ts` stores the same default this gate enforces
- *  against. It does NOT share the range: 0 means "block" to a trigger and is
- *  illegal to this gate, so the two surfaces normalise differently on purpose. */
+/** Shared default with `hub/triggers.ts`; the range is not shared (0 means "block" there). */
 export const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 
 const MAX_RATE_LIMIT_PER_MIN = 10_000;
@@ -65,8 +57,6 @@ export function tryConsumeWebhookRateLimit(
   rateLimitPerMin: number,
   now: number,
 ): WebhookRateLimitDecision {
-  // A 0 rate is a closed gate, not a misconfiguration: the trigger means
-  // "block" by it, so the gate answers blocked instead of throwing.
   if (rateLimitPerMin === 0) {
     const blockedWindowStart = Math.floor(now / WINDOW_MS) * WINDOW_MS;
 

@@ -1,21 +1,6 @@
 /**
- * Webhook ingress — an HTTP delivery becomes a durable event.
- *
- * The backend in front of this owns exactly the transport: read the request,
- * hand over its headers and body, answer with the status this returns. Every
- * decision between those two points — the content-type pin, HMAC / bearer /
- * mTLS verification, the replay window, the rate limit, body parsing, the reply
- * channel, the oversize spill and the publish — is the same on any host, so it
- * lives here once.
- *
- * Auth modes:
- *   hmac    `X-Kinu-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), with
- *           `X-Kinu-Timestamp` inside a ±5 minute window, and the signed
- *           artifact CLAIMED once for the rest of that window (see
- *           {@link claimSignedDelivery}) — freshness alone admitted the same
- *           captured bytes twice across a dedupe-bucket boundary.
- *   bearer  `Authorization: Bearer <secret>`, compared in constant time.
- *   mtls    the edge verified a client certificate; no secret is involved.
+ * Webhook ingress. hmac: `X-Kinu-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), timestamp within
+ * ±5 min, signature claimed once for that window. bearer: constant-time compare. mtls: edge-verified.
  */
 
 import * as v from 'valibot';
@@ -32,27 +17,15 @@ import {
 import { sha256Hex } from '../../safety/argument-digest';
 import type { WebhookSecretStore } from './secrets';
 
-/** How far an HMAC delivery's timestamp may be from the receiver's clock. */
 const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
 export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
 
-/**
- * Where a webhook's shared secret lives.
- *
- * The ingress needs the secret and nothing else about it: on the cloud backend
- * it is a row in the workspace's own storage, and a host that keeps secrets
- * somewhere else entirely — a config file, a platform secret binding — supplies
- * the same one method.
- */
 export interface SecretStore {
   get(secretId: string): Promise<string | null>;
 }
 
-/** The spec a webhook trigger row carries, written by
- *  {@link registerDurableWebhook} and read back below. A stored row is claimed,
- *  not trusted: every field is read as optional, and an absent or unrecognised
- *  `auth_mode` demands the strictest mode (a verified client certificate). */
+/** Read as claimed, not trusted: an absent or unknown `auth_mode` demands mTLS, the strictest. */
 export interface WebhookTriggerSpec {
   label?: string;
   auth_mode: WebhookAuthMode;
@@ -86,21 +59,16 @@ export interface WebhookIngressDeps {
   triggers: TriggerRegistry;
   log: EventLog;
   replies: ReplyChannelStore;
-  /** The receiving agent's file plane — an oversize body is spilled here so the
-   *  woken turn can read the delivery it was woken by. */
   vfs: VFS;
   secrets: SecretStore;
-  /** Where the rate-limit windows live (the agent's own storage). */
   sql: SqlExec;
-  /** A fresh event was admitted — wake the agent loop (debounced drain). */
   onAdmitted(): void;
 }
 
 export interface RegisterWebhookOpts {
   label: string;
   auth_mode: WebhookAuthMode;
-  /** The shared secret the operator chose, when they chose one. Blank or
-   *  absent under hmac/bearer means "mint me one"; mTLS has none to mint. */
+  /** Blank or absent under hmac/bearer mints one. */
   secret?: string;
   accepted_content_type?: string;
   rate_limit_per_min?: number;
@@ -108,19 +76,13 @@ export interface RegisterWebhookOpts {
 
 export interface RegisteredWebhook {
   trigger_id: string;
-  /** The opaque handle the secret is stored under, never returned to a reader
-   *  of the trigger row. */
+  /** Never returned to a reader of the trigger row. */
   secret_id: string;
   auth_mode: WebhookAuthMode;
-  /** The plaintext secret this webhook now authenticates with, for the caller
-   *  to show its operator ONCE — null only for mTLS, which has none. Nothing
-   *  reads it back afterwards: the store holds the only other copy, and no
-   *  route serves it. */
+  /** Shown to the operator once; null only for mTLS. No route serves it again. */
   secret: string | null;
 }
 
-/** A fresh 256-bit webhook secret. Hex, so it survives every header, shell and
- *  config file an operator will paste it into. */
 function freshWebhookSecret(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -128,29 +90,14 @@ function freshWebhookSecret(): string {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-/** The operator's own secret when they gave one, a minted one when the field was
- *  absent or blank — a whitespace-only secret is no secret. */
+/** Whitespace-only counts as absent. */
 function webhookSecretOrMinted(provided: string | undefined): string {
   const trimmed = provided?.trim() ?? '';
 
   return trimmed === '' ? freshWebhookSecret() : trimmed;
 }
 
-/**
- * Register a durable webhook trigger, WITH the credential its auth mode needs.
- *
- * The secret is decided here rather than by each caller, because "hmac with no
- * secret" is not a webhook: `verifyWebhookAuth` answers `no hmac secret
- * configured` to every delivery and no route can set one afterwards, so a
- * caller that forgot to pass one created a 201-reported trigger that could
- * never receive anything. An operator's own secret is kept; a blank one is
- * minted; mTLS keeps none.
- *
- * Storing it is part of registering it: a trigger left active with no stored
- * secret is that same unusable row, so a failed write revokes the trigger and
- * the failure reaches the caller. The trigger's URL is published by the caller
- * only after this returns, so nothing can be delivered to a half-created one.
- */
+/** A failed secret write revokes the trigger: an hmac trigger without a secret can never receive. */
 export async function registerDurableWebhook(
   registry: TriggerRegistry,
   secrets: Pick<WebhookSecretStore, 'put' | 'deleteByTrigger'>,
@@ -186,14 +133,7 @@ export async function registerDurableWebhook(
   return { trigger_id, secret_id, auth_mode: opts.auth_mode, secret };
 }
 
-/**
- * Verify a delivery against its trigger's auth mode.
- *
- * A verified HMAC delivery also names its `claim`: the identity of the signed
- * artifact it presented, which is what makes a signature single-use for the
- * rest of its acceptance window. Bearer and mTLS have no such artifact — the
- * credential is the same on every legitimate request — so they carry none.
- */
+/** Only HMAC yields a `claim` (the signed artifact), making the signature single-use. */
 async function verifyWebhookAuth(
   deps: WebhookIngressDeps,
   spec: Partial<WebhookTriggerSpec>,
@@ -231,11 +171,6 @@ async function verifyWebhookAuth(
     return {
       ok: true,
       ingress: 'webhook_hmac',
-      // The signed bytes, hashed: two deliveries share this only when they
-      // present the same timestamp and the same signature, which is exactly
-      // what a replay is. It stops being admissible when the window the
-      // signature was verified against closes, so that is when the claim
-      // stops being worth keeping.
       claim: {
         key: `hmac:${sha256Hex(`${String(ts)}.${opts.hmac_signature}`, 32)}`,
         expiresAt: ts + HMAC_TIMESTAMP_WINDOW_MS,
@@ -269,7 +204,6 @@ async function verifyWebhookAuth(
   return { ok: true, ingress: 'webhook_mtls' };
 }
 
-/** Gate + publish one webhook delivery. Runs inside the agent's storage. */
 export async function acceptWebhookDelivery(
   deps: WebhookIngressDeps,
   opts: WebhookDelivery,
@@ -309,25 +243,13 @@ export async function acceptWebhookDelivery(
   try {
     parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
   } catch (error) {
-    // A JSON content-type with a body that will not parse is a sender's bug,
-    // not ours: keep the raw text so the durable event still carries what
-    // arrived, and let every other failure propagate.
+    // Unparseable JSON is kept as raw text; other failures propagate.
     if (classify({ cause: error }) !== 'malformed-input') throw error;
     parsedBody = opts.body_text;
   }
 
-  // THE SIGNED ARTIFACT IS SPENT HERE, before anything durable happens.
-  //
-  // Freshness is not single-use: the same captured timestamp, body and
-  // signature verify for the whole ±5 minute window, and admission identity was
-  // the body hash inside the RECEIVER's five-minute bucket — so one capture
-  // replayed either side of a bucket boundary published two events and woke two
-  // turns from one authorization. The claim is what makes it once.
-  //
-  // A held claim answers as the duplicate it is (the event the first delivery
-  // produced, if it got that far), never as a rejection: a sender retrying
-  // because it never saw our 202 and an attacker replaying the capture are the
-  // same bytes, and the honest answer to both is "already have it".
+  // Spend the claim before anything durable: freshness alone admits a replay across a dedupe
+  // bucket boundary. A held claim answers as a duplicate, never a rejection.
   const held = auth.claim ? claimSignedDelivery(deps.sql, opts.trigger_id, auth.claim, opts.now) : null;
 
   if (held !== null) {
@@ -336,13 +258,7 @@ export async function acceptWebhookDelivery(
 
   const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
 
-  // Open a reply channel for the event system. HTTP delivery itself returns
-  // 202 immediately; a future held-response path can wait on this channel
-  // without changing the durable event shape.
-  // No `ttl_ms_override`: `http_pending` already carries this kind's TTL in
-  // reply-channel.ts's own table, and the override here was a second copy of that
-  // same 30_000 — two names for one policy, which is how one of them gets edited
-  // alone.
+  // No `ttl_ms_override`: the `http_pending` TTL lives in reply-channel.ts.
   deps.replies.open({
     event_id: 'pending',
     kind: 'http_pending',
@@ -350,11 +266,7 @@ export async function acceptWebhookDelivery(
     payload_policy: 'redact',
   }, opts.now);
 
-  // A delivery larger than the brief budget is spilled to this agent's own
-  // file plane first, so the woken turn gets a readable path alongside the
-  // brief instead of an unreachable — and, for JSON, syntactically broken —
-  // fragment of the thing that woke it. After the auth + rate gates, so a
-  // rejected delivery never writes a file.
+  // Spill after the auth and rate gates so a rejected delivery never writes a file.
   const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
   const spilled = await spillEventContent(deps.vfs, bodySerialized);
 
@@ -377,30 +289,16 @@ export async function acceptWebhookDelivery(
     now: opts.now,
   });
 
-  // What the claim above now stands for, so a replay is answered with the event
-  // rather than with a bare acknowledgement.
   if (auth.claim) bindClaimedDelivery(deps.sql, opts.trigger_id, auth.claim.key, id);
 
-  // Wake the agent to act on the new webhook event — an autonomous turn,
-  // debounced so a delivery burst drains as ONE turn. Only when newly
-  // admitted (a duplicate is already bound or in flight).
   if (admitted) deps.onAdmitted();
 
   return { status: 'admitted', event_id: id, admitted };
 }
 
-// ── The one-time claim on a signed delivery ──────────────────────
-
 const ClaimRowSchema = v.object({ event_id: v.nullable(v.string()) });
 
-/**
- * The tables webhook ingress admits deliveries against: the per-trigger rate
- * windows, and the claims that make a verified signature single-use.
- *
- * One call rather than two, because a host that provisioned the rate window and
- * not the claim table would still admit deliveries — replayable ones — and
- * nothing downstream would say so.
- */
+/** One call so a host cannot provision rate windows without the claim table. */
 export function initWebhookIngressTables(sql: SqlExec): void {
   initWebhookRateLimitTables(sql);
   sql.exec(`
@@ -427,14 +325,8 @@ export function initWebhookIngressTables(sql: SqlExec): void {
   `);
 }
 
-/**
- * Spend one signed delivery, or report the claim already held.
- *
- * Returns null when THIS delivery took the claim, and the held row when an
- * earlier one did. Read-then-insert with no await between them: a Durable
- * Object's input gate does not reopen inside a synchronous run, so two
- * deliveries of the same signature cannot both see it free.
- */
+/** Null when this delivery took the claim. No await between read and insert: a DO's input gate
+ *  does not reopen inside a synchronous run. */
 function claimSignedDelivery(
   sql: SqlExec,
   triggerId: string,
@@ -458,7 +350,6 @@ function claimSignedDelivery(
   return null;
 }
 
-/** Name the event a spent claim produced. */
 function bindClaimedDelivery(sql: SqlExec, triggerId: string, claim: string, eventId: string): void {
   sql.exec(
     `UPDATE webhook_replay_claims SET event_id = ? WHERE trigger_id = ? AND claim = ?`,

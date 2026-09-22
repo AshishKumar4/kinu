@@ -1,33 +1,5 @@
-/**
- * TriggerRegistry — owns the durable subscriptions that produce events:
- *
- *   webhook_durable   — operator-created, stable URL, durable beyond agent restart
- *   webhook_ephemeral — LLM-created, TTL-bounded
- *   timer_oneshot     — single alarm
- *   timer_cron        — recurring (UTC cron expression)
- *   process_watch     — sandbox process lifecycle
- *   file_watch        — sandbox FS change
- *   peer_inbox        — accepting peer-agent messages
- *   mcp_route         — agent's MCP server route
- *
- * Lifecycle (per §9 of the spec):
- *
- *   creation  — `register()`; writes a `triggers` row, schedules alarm if applicable
- *   fork      — defaults per-kind; overridable per-trigger via `fork_policy`
- *   archive   — `pauseAll()`; rows transition `state='paused'`; alarms become no-ops
- *   delete    — `revokeAll()`; rows transition `state='revoked'`; alarms cleared
- *
- * Fork policies (per-kind default):
- *
- *   webhook_durable   sever  (URL stays with parent; child has none)
- *   webhook_ephemeral sever
- *   timer_oneshot     sever
- *   timer_cron        copy   (both fire independently)
- *   process_watch     share  (both observe the same sandbox)
- *   file_watch        share
- *   peer_inbox        copy   (each agent has its own inbox)
- *   mcp_route         sever  (child has no MCP exposure)
- */
+/** Durable event-producing subscriptions, scoped to one actor. Per-kind fork defaults in
+ *  {@link DEFAULT_FORK_POLICY}; pause makes alarms no-ops, revoke clears them. */
 
 import * as v from 'valibot';
 import {
@@ -37,11 +9,7 @@ import { ulid } from './ulid';
 import type { SqlExec, SqlExecRow, SqlValue } from '../../types/primitives';
 import type { ActorHandle } from '../../identity/actor-handle';
 import { parseJsonObject, type JsonObject } from '../../utils/json';
-// The DEFAULT is shared with the gate that enforces it; the RANGE is not. This
-// carried its own `?? 60`, a second copy of the same number, but it deliberately
-// does not call `normalizeWebhookRateLimitPerMin`: 0 means "block" to a trigger and
-// that function rejects it, so a trigger keeps `?? ` rather than `|| ` and keeps its
-// own admission rule.
+// Default only: 0 means "block" here, which `normalizeWebhookRateLimitPerMin` rejects.
 import { DEFAULT_RATE_LIMIT_PER_MIN } from '../ingress/rate-limit';
 
 export type ForkPolicy = 'copy' | 'sever' | 'share';
@@ -91,26 +59,14 @@ const OptionalNextFireRowSchema = v.object({ next_fire_at: v.nullable(v.number()
 const NextFireRowSchema = v.object({ next_fire_at: v.number() });
 
 export interface AlarmScheduler {
-  /** Ask the host to wake at this time (or earlier). Idempotent — multiple calls
-   *  converge on the soonest pending time.
-   *
-   *  AWAITED, NOT FIRE-AND-FORGET. On the cloud backend the host is a Durable
-   *  Object and arming means a storage write through the agents-SDK scheduler;
-   *  `ctx.waitUntil` cannot hold that write open (`do.wait_until.no_op`) and a
-   *  promise still in flight when the object is reset is cancelled with no
-   *  signal (`do.background_task.cancelled_on_reset`). The only retention a
-   *  Durable Object has is an await inside the invocation that asked for the
-   *  wake, so this returns the promise instead of discarding it. */
+  /** Awaited: on a Durable Object arming is a storage write that `ctx.waitUntil` cannot hold
+   *  (`do.wait_until.no_op`, `do.background_task.cancelled_on_reset`). */
   scheduleAt(ts: number): Promise<void>;
 }
 
 export class TriggerRegistry {
   private readonly actorId: string;
 
-  /** Bind the registry to ONE actor. A trigger produces events into ITS
-   *  actor's inbox, so a pause, a revoke or a fork plan is that actor's
-   *  question — and `pauseAll`/`revokeAll` mean "everything this actor
-   *  registered", never "everything in the workspace". */
   constructor(
     private readonly sql: SqlExec,
     private readonly actor: ActorHandle,
@@ -119,7 +75,6 @@ export class TriggerRegistry {
     this.actorId = actor.actorId;
   }
 
-  /** Create a new trigger. Returns the trigger id. */
   async register(spec: RegisterSpec, now: number): Promise<TriggerId> {
     this.actor.assertCurrent();
     const id = ulid();
@@ -172,9 +127,7 @@ export class TriggerRegistry {
     return rows.map(rowToTrigger);
   }
 
-  /** Mark a trigger paused (e.g. agent archived). Alarm firings check
-   *  `state` in the same transaction as alarm processing and silently
-   *  drop if paused. Returns true if state changed. */
+  /** Paused triggers' alarm firings are dropped silently. */
   pause(id: TriggerId, now: number): boolean {
     const before = this.get(id);
 
@@ -187,8 +140,7 @@ export class TriggerRegistry {
     return true;
   }
 
-  /** Resume a paused trigger. Does NOT backfill missed alarm firings —
-   *  `paused_at` defines the "missed window" that's gone. */
+  /** Missed firings during the pause are not backfilled. */
   async resume(id: TriggerId, now: number): Promise<boolean> {
     const before = this.get(id);
 
@@ -198,7 +150,6 @@ export class TriggerRegistry {
       this.actorId, id,
     );
 
-    // Re-schedule the trigger if it has a next_fire_at in the future.
     const fire = this.sql.exec(
       `SELECT next_fire_at FROM triggers WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray().map((row) => v.parse(OptionalNextFireRowSchema, row));
@@ -210,7 +161,6 @@ export class TriggerRegistry {
     return true;
   }
 
-  /** Pause every active trigger (agent archive). */
   pauseAll(now: number): number {
     const before = this.list({ state: 'active' }).length;
     this.sql.exec(
@@ -221,7 +171,6 @@ export class TriggerRegistry {
     return before;
   }
 
-  /** Resume every paused trigger (agent unarchive). */
   async resumeAll(now: number): Promise<number> {
     const candidates = this.list({ state: 'paused' });
     this.sql.exec(
@@ -229,7 +178,6 @@ export class TriggerRegistry {
        WHERE actor_id = ? AND state = 'paused'`, this.actorId,
     );
 
-    // Re-arm alarms for triggers whose next_fire_at is in the future.
     const fireRows = this.sql.exec(
       `SELECT next_fire_at FROM triggers
        WHERE actor_id = ? AND state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at > ?`,
@@ -244,8 +192,6 @@ export class TriggerRegistry {
     return candidates.length;
   }
 
-  /** Permanently revoke a trigger. Used on agent delete + LLM-requested
-   *  cancel + ephemeral webhook TTL expiry. */
   revoke(id: TriggerId, now: number): boolean {
     const before = this.get(id);
 
@@ -259,7 +205,6 @@ export class TriggerRegistry {
     return true;
   }
 
-  /** Revoke every trigger (agent delete). Idempotent. */
   revokeAll(now: number): number {
     const before = this.list().filter(t => t.state !== 'revoked').length;
     this.sql.exec(
@@ -270,11 +215,7 @@ export class TriggerRegistry {
     return before;
   }
 
-  // ── alarm wakeup path ──────────────────────────────────────────
-
-  /** Triggers whose `next_fire_at` is due. Caller uses these to produce
-   *  Timer events (or whatever the trigger kind dictates). After producing,
-   *  the caller must call `markFired()`. */
+  /** The caller must call `markFired()` after producing events. */
   due(now: number): TriggerRow[] {
     this.actor.assertCurrent();
 
@@ -291,8 +232,6 @@ export class TriggerRegistry {
     return rows.map(rowToTrigger);
   }
 
-  /** Record that a trigger fired. Recomputes `next_fire_at` for cron;
-   *  clears it for one-shot. */
   async markFired(id: TriggerId, now: number, nextFireAt: number | null): Promise<void> {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -307,12 +246,7 @@ export class TriggerRegistry {
     if (nextFireAt) await this.alarm.scheduleAt(nextFireAt);
   }
 
-  // ── fork ───────────────────────────────────────────────────────
-
-  /** Returns the trigger rows that the FORK child should inherit, with new
-   *  ids assigned. Caller copies them into the child DO. Severed kinds are
-   *  not included; shared kinds reference the original ids (the spec column
-   *  contains the share linkage). */
+  /** Severed kinds are omitted; shared kinds keep the original ids. */
   forkPlan() {
     const all = this.list({ state: 'active' });
     const copy: TriggerRow[] = [];
@@ -324,7 +258,6 @@ export class TriggerRegistry {
       if (policy === 'copy')  copy.push(t);
 
       if (policy === 'share') share.push(t);
-      // 'sever' → not included
     }
 
     return { copy, share };

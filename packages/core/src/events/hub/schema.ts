@@ -1,31 +1,6 @@
 /**
- * `agent_log` — the single append-only ledger for every event, phase,
- * step, tool call, tool result, reactor decision, and reply attempt in
- * an agent's lifetime. Discriminated by `kind`.
- *
- * Partial indexes per kind are mandatory — without them recovery scans
- * regress to table-scans on the hot path.
- *
- * EVERY table here is ACTOR-SCOPED, in the primary key. One workspace database
- * holds every logical actor, and each of them has its OWN inbox: a delegated
- * task admitted for a hired subordinate must not drain on the root, and a
- * reply channel opened for one actor's event is not another's to answer.
- *
- * `dedupe_key` is the sharpest case and is why the uniqueness is composite.
- * The key is the INGRESS's identity — a webhook delivery id, a message id, a
- * peer envelope id — so two actors handed the same upstream event legitimately
- * present the same key. A table-wide unique index would silently dedupe the
- * second actor's ingress against the FIRST actor's row: one actor's inbox
- * swallowing another's event, with nothing anywhere recording the loss.
- *
- * Sibling table `reply_channels` carries durable reply-channel rows.
- *
- * Sibling table `triggers` carries registered triggers.
- *
- * Pending outbound peer-agent deliveries live in `outbox_peer`, owned by the
- * shared outbox (`events/outbox.ts`), which creates its own schema.
- *
- * The DDL is idempotent. Safe to call on every DO boot.
+ * Hub tables. Every table is actor-scoped in its primary key, and `dedupe_key` uniqueness is
+ * per actor: two actors handed the same upstream event must each keep their own row.
  */
 
 import type { SqlExec } from '../../types/primitives';
@@ -57,73 +32,54 @@ CREATE TABLE IF NOT EXISTS agent_log (
 )`;
 
 const INDEXES: ReadonlyArray<string> = [
-  // Recovery hot path: pending events ordered by priority desc, received_at asc.
-  // Partial index keyed on (kind='event' AND turn_id IS NULL).
   `CREATE INDEX IF NOT EXISTS idx_agent_log_events_pending
    ON agent_log (actor_id, priority, received_at)
    WHERE kind = 'event' AND turn_id IS NULL`,
 
-  // Activation recovery scans only open delivery leases.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_events_consumed
    ON agent_log (actor_id, consumed_at)
    WHERE kind = 'event' AND consumed_at IS NOT NULL`,
 
-  // Phase lookups: latest phase row per turn.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_phase_current
    ON agent_log (actor_id, turn_id, id DESC)
    WHERE kind = 'phase'`,
 
-  // Steps per turn: ordered traversal for SSE replay + recovery.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_steps_per_turn
    ON agent_log (actor_id, turn_id, step_idx)
    WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')`,
 
-  // Unique dedupe key, PER OWNER. NULL values do not participate in
-  // uniqueness. The owner leads because the key is the upstream ingress's
-  // identity, not this workspace's: two hosted actors handed the same webhook
-  // delivery each owe their own event, and a table-wide index would drop the
-  // second one as a duplicate of the first actor's row.
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_log_dedupe
    ON agent_log (actor_id, dedupe_key)
    WHERE dedupe_key IS NOT NULL`,
 
-  // Per-trace event counting for trace-budget checks.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_trace_events
    ON agent_log (actor_id, trace_id, received_at)
    WHERE kind = 'event'`,
 
-  // Reply attempt audit: by event.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_reply_attempts
    ON agent_log (actor_id, parent_id)
    WHERE kind = 'reply_attempt'`,
 
-  // Generic by-trace scan.
   `CREATE INDEX IF NOT EXISTS idx_agent_log_by_trace
    ON agent_log (actor_id, trace_id, id)`,
 
-  // Recent rows ordered by receipt (operator UI timeline).
   `CREATE INDEX IF NOT EXISTS idx_agent_log_received_at
    ON agent_log (actor_id, received_at DESC)`,
 ];
 
 const VIEWS: ReadonlyArray<string> = [
-  // Events only. Used by the operator UI's events sidebar and the LLM-facing
-  // `recent_events` tool.
   `CREATE VIEW IF NOT EXISTS events_v AS
    SELECT actor_id, id, turn_id, parent_id AS caused_by, trace_id, ingress, variant, trust,
           priority, payload_visibility, payload, received_at, schema_version, dedupe_key
    FROM agent_log
    WHERE kind = 'event'`,
 
-  // Run-event trace (steps + tool calls + tool results + reactor decisions).
-  // SSE streamer reads from this. eventIndex semantics: row id ordering.
   `CREATE VIEW IF NOT EXISTS run_event_v AS
    SELECT actor_id, id, turn_id, step_idx, kind, parent_id, payload, received_at
    FROM agent_log
    WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
    ORDER BY actor_id, turn_id, step_idx, id`,
 
-  // Phase transition log.
   `CREATE VIEW IF NOT EXISTS turn_phase_log_v AS
    SELECT actor_id, id, turn_id, payload, received_at
    FROM agent_log
@@ -193,7 +149,6 @@ const TRIGGERS_INDEXES: ReadonlyArray<string> = [
    ON triggers (actor_id, kind, state)`,
 ];
 
-/** Initialize all hub tables, indexes, and views. Idempotent. */
 export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(AGENT_LOG_DDL);
 

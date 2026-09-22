@@ -1,13 +1,5 @@
-/**
- * Drain pending hub events into one synthetic user turn.
- *
- * The reactor's job is to wake the agent when external events arrive (webhooks,
- * timers, peer messages, …) and let it act on them in a normal Think turn. This
- * pure helper picks the externally-triggered pending events — {@link
- * wakesADrain} states which those are — and renders them into a single user
- * message. The orchestrator binds the returned ids (markConsumed) before
- * injecting the message, so a concurrent drain can't double-process them.
- */
+/** Renders wake-eligible pending events into one synthetic user turn; the orchestrator binds the ids
+ *  (markConsumed) before injecting so a concurrent drain cannot double-process them. */
 import * as v from 'valibot';
 import type { KinuEvent } from './types';
 import type { WorkMode } from '../../types/turn';
@@ -15,19 +7,13 @@ import { renderForLLM } from './visibility';
 import { JsonObjectSchema } from '../../utils/json';
 
 export interface DrainBatch {
-  /** Event ids to bind (markConsumed) before injecting the turn. */
   readonly ids: string[];
-  /** The synthetic user-message text that drives the autonomous turn. */
   readonly text: string;
-  /** The same events rendered for splicing into a LIVE turn's next step —
-   *  the mid-turn delivery must not tell the model to stop what it is doing. */
+  /** For splicing into a live turn: must not tell the model to stop what it is doing. */
   readonly midTurnText: string;
-  /** Mission budget labels the drained schedules declared. The woken turn runs
-   *  under all of them, so its model calls and everything it spawns debit each
-   *  one. Empty for every ordinary drain. */
+  /** The woken turn is debited against every one. */
   readonly missions: string[];
-  /** Explicit mode inherited from delegated work. Null keeps the event's
-   * established cron/background/chat classification. */
+  /** Null keeps the event's cron/background/chat classification. */
   readonly mode: WorkMode | null;
 }
 
@@ -46,40 +32,14 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
   return mode.success ? mode.output : null;
 }
 
-/** One untrusted field, flattened so it cannot end the drain entry it sits in.
- *  Every CR/LF becomes a visible `\n` escape rather than a real break: the
- *  content is still readable, and a reader of the list can tell that the
- *  sender wrote a newline instead of seeing the effect of one. */
+/** Escapes CR/LF so an untrusted field cannot forge an extra drain entry. */
 function oneLine(value: string): string {
   return value.replace(/\r\n|\r|\n/g, '\\n');
 }
 
 /**
- * Would this pending event wake a turn?
- *
- * TWO exclusions, and they are separate rules.
- *
- * The agent's own `self_emit` / `internal` rows never wake one: the
- * anti-self-wake-loop rule.
- *
- * A `subordinate_task` row never wakes one either, because it is not an
- * external event to react to. An assignment IS the subordinate's whole turn
- * input, and it belongs to the delegation runner (`drainAssignments`), which
- * runs the brief verbatim as that turn. The reactor DIGESTS: it renders its
- * batch as "1 event arrived while you were idle … [subordinate_task] from
- * workspace …" and hands that summary to the host's turn admission. Both
- * halves are wrong for an assignment — the child reads a paraphrase of its
- * brief instead of the brief, and on a backend whose hosted admission
- * re-publishes a queued turn as a new assignment the two runners feed each
- * other. Measured 2026-09-17 in the workerd pool: one hire brief produced 242
- * `subordinate_task` rows, bodies nesting 253 → 850 characters.
- *
- * Stated ONCE here because three readers need it: the batch below, the wake
- * fold that decides whether a workspace still owes itself an alarm
- * (`EventLog.nextPendingDrainAt`), and the delegation runner, which owns
- * exactly what this excludes. Spelled twice they drift the moment a fourth
- * ingress is added, and the failure is silent in the direction that matters: a
- * workspace that arms no wake for work it will later agree to drain.
+ * Self-emitted/internal rows never wake a turn (anti-self-wake loop); `subordinate_task` rows belong
+ * to `drainAssignments`. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
  */
 export function wakesADrain(event: KinuEvent): boolean {
   return event.ingress !== 'self_emit'
@@ -87,23 +47,17 @@ export function wakesADrain(event: KinuEvent): boolean {
     && event.variant !== 'subordinate_task';
 }
 
-/** Externally-triggered pending events → one drain batch, or null if there are
- *  none (the agent's own self-emitted/internal events never wake a new turn). */
 export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
   const pending = events.filter(wakesADrain);
 
   if (pending.length === 0) return null;
-  // A delegated Plan event can never share a turn with Build or neutral work.
-  // Select the oldest event's homogeneous mode group; the post-turn drain
-  // immediately picks up the remaining groups in arrival order.
+  // Plan and Build never share a turn: take the oldest event's mode group; the rest drain next.
   const mode = delegatedEventMode(pending[0]);
   const drainable = pending.filter((event) => delegatedEventMode(event) === mode);
 
   const lines = drainable.map((e) => {
     const r = renderForLLM(e);
 
-    // Peer asks carry a mechanical reply route: the sender opened a peer-back
-    // channel keyed on this event id and is awaiting the answer.
     const replyHint = (
       (e.payload_visibility === 'full' || e.payload_visibility === 'redact')
       && e.variant === 'peer_agent'
@@ -112,14 +66,7 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
       ? ` [the sender awaits your answer — answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
       : '';
 
-    // ONE LINE PER EVENT, and the boundary is ours rather than the sender's.
-    // These entries are joined with '\n' below, and several briefs embed
-    // plain-text sender-controlled bodies: an email body, a subordinate's
-    // report, a process's stderr. Unfolded, a body containing a newline followed
-    // by "- [timer] from owner: ..." renders as an additional, visually identical
-    // drain entry, so external content could add events the agent believes
-    // arrived. Folding the line breaks out of the untrusted fields is what makes
-    // the count above and the list below agree.
+    // One line per event: sender-controlled bodies are folded so they cannot fake extra entries.
     return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
   });
 
