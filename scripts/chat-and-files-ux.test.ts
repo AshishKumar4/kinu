@@ -31,6 +31,7 @@ import type { Page } from 'puppeteer';
 
 import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
 import { codenameFor, parseJsonArray, parseJsonValue, redactPayload, type JsonValue } from '@kinu.run/core';
+import { present } from '@kinu.run/test-utils';
 import { PRIMARY_NAV } from '../packages/cf-backend/src/components/nav';
 
 /** One live-tail message, as the browser laid it out. */
@@ -327,7 +328,7 @@ async function run(): Promise<Observed> {
       );
     }
 
-    const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW]!;
+    const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW];
 
     const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
       '[data-chat-error]',
@@ -527,10 +528,11 @@ async function run(): Promise<Observed> {
     await files.hover(rowSelector('SOUL.md'));
     await files.click(`${rowSelector('SOUL.md')} [data-files-rename]`);
     await files.waitForSelector('[data-files-rename-input]');
-    const renameInput = await files.$('[data-files-rename-input]');
-    await renameInput!.evaluate((el) => { if (el instanceof HTMLInputElement) el.value = ''; });
-    await renameInput!.type('CREDO.md');
-    await renameInput!.press('Enter');
+    const renameInput = present(await files.$('[data-files-rename-input]'), 'the rename input');
+
+    await renameInput.evaluate((el) => { if (el instanceof HTMLInputElement) el.value = ''; });
+    await renameInput.type('CREDO.md');
+    await renameInput.press('Enter');
     await waitForRow('CREDO.md');
     const filesAfterRename = await rowNames();
 
@@ -647,7 +649,7 @@ describe('the streaming turn, as a browser lays it out', () => {
   });
 
   test('the caret is drawn, and drawn INSIDE the last block of the streamed text', () => {
-    const tail = observed.tails[TEXT]!;
+    const tail = observed.tails[TEXT];
     // Cut `p-streaming` off the text block, or delete the CSS rule, and the
     // pseudo-element stops having a width.
     expect(tail.caretWidth).toBe('2px');
@@ -656,7 +658,7 @@ describe('the streaming turn, as a browser lays it out', () => {
   });
 
   test('a code fence carries the caret inside the fence', () => {
-    const tail = observed.tails[CODE_FENCE]!;
+    const tail = observed.tails[CODE_FENCE];
     // `::after` on the <pre> puts it in the code block's own flow. No height
     // assertion here, and the reason is not a concession: remark terminates a
     // fence's text with a newline, `white-space: pre` keeps it, so the caret
@@ -668,36 +670,36 @@ describe('the streaming turn, as a browser lays it out', () => {
   test('a turn that went quiet between steps says so at its tail', () => {
     // Prose closed, both calls settled, request still open. This is the state
     // with no active part of its own to draw, and it still has to say so.
-    expect(observed.tails[AFTER_TOOLS]!.thinkingRows).toBe(1);
-    expect(observed.tails[AFTER_TOOLS]!.caretWidth).toBe('none');
+    expect(observed.tails[AFTER_TOOLS].thinkingRows).toBe(1);
+    expect(observed.tails[AFTER_TOOLS].caretWidth).toBe('none');
   });
 
   test('a turn before its first token says so', () => {
-    expect(observed.tails[NO_PARTS]!.thinkingRows).toBe(1);
+    expect(observed.tails[NO_PARTS].thinkingRows).toBe(1);
   });
 
   test('a call in flight owns the running state — no second claim under it', () => {
     // One stream position reports one current activity.
-    expect(observed.tails[TOOL_IN_FLIGHT]!.thinkingRows).toBe(0);
-    expect(observed.tails[TOOL_IN_FLIGHT]!.runningIndicators).toBe(1);
-    expect(observed.tails[TOOL_IN_FLIGHT]!.caretWidth).toBe('none');
+    expect(observed.tails[TOOL_IN_FLIGHT].thinkingRows).toBe(0);
+    expect(observed.tails[TOOL_IN_FLIGHT].runningIndicators).toBe(1);
+    expect(observed.tails[TOOL_IN_FLIGHT].caretWidth).toBe('none');
   });
 
   test('streaming reasoning marks its own block live instead of adding a row', () => {
-    expect(observed.tails[REASONING]!.thinkingRows).toBe(0);
-    const reasoning = observed.tails[REASONING]!.reasoning;
+    expect(observed.tails[REASONING].thinkingRows).toBe(0);
+    const reasoning = present(observed.tails[REASONING].reasoning, 'the streaming reasoning block');
 
-    expect(reasoning).not.toBeNull();
-    expect(reasoning!.viewportHeight).toBeGreaterThan(0);
-    expect(reasoning!.viewportHeight).toBeLessThanOrEqual(reasoning!.lineHeight * 4);
-    expect(reasoning!.pulse).toBe('pulse');
-    expect(reasoning!.duration).toBe('1.6s');
-    expect(reasoning!.textAnimation).toBe('none');
-    expect(observed.reducedMotionTails[REASONING]!.reasoning!.pulse).toBe('none');
+    expect(reasoning.viewportHeight).toBeGreaterThan(0);
+    expect(reasoning.viewportHeight).toBeLessThanOrEqual(reasoning.lineHeight * 4);
+    expect(reasoning.pulse).toBe('pulse');
+    expect(reasoning.duration).toBe('1.6s');
+    expect(reasoning.textAnimation).toBe('none');
+    expect(present(observed.reducedMotionTails[REASONING].reasoning, 'the reduced-motion reasoning block').pulse)
+      .toBe('none');
   });
 
   test('a turn actively writing text is never also announced as thinking', () => {
-    expect(observed.tails[TEXT]!.thinkingRows).toBe(0);
+    expect(observed.tails[TEXT].thinkingRows).toBe(0);
   });
 });
 
@@ -737,7 +739,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
   test('the owner\'s own message is still the owner\'s bubble, pushed right', () => {
     // The denominator. Without it, a change that turned EVERY row into an event
     // card would satisfy every assertion below.
-    const typed = observed.chat[TYPED_ROW]!;
+    const typed = observed.chat[TYPED_ROW];
     expect(typed.userBubbles).toBe(1);
     expect(typed.systemEvent).toBeNull();
     expect(typed.offsetFromCentrePx).toBeGreaterThan(20);
@@ -748,14 +750,14 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // a bare UUID id and `kinuEvent: fork_interrupted`, no author stamp,
     // which is what five rows in the owner's live workspaces look like. Under
     // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
-    const fork = observed.chat[UNSTAMPED_FORK_ROW]!;
+    const fork = observed.chat[UNSTAMPED_FORK_ROW];
     expect(fork.userBubbles).toBe(0);
     expect(fork.systemEvent).toBe('fork_interrupted');
     expect(Math.abs(fork.offsetFromCentrePx)).toBeLessThan(20);
   });
 
   test('a stamped harness turn lands the same way, without its event name mattering', () => {
-    const gate = observed.chat[STAMPED_GATE_ROW]!;
+    const gate = observed.chat[STAMPED_GATE_ROW];
     expect(gate.userBubbles).toBe(0);
     expect(gate.systemEvent).toBe('completion_gate');
     expect(Math.abs(gate.offsetFromCentrePx)).toBeLessThan(20);
@@ -765,7 +767,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // Collapsed by default is a measurement here, not a class name: the body
     // holds more than it shows. Clicking it makes the row taller and stops it
     // overflowing, which is the difference between folded and truncated.
-    expect(observed.chat[UNSTAMPED_FORK_ROW]!.folded).toBe(true);
+    expect(observed.chat[UNSTAMPED_FORK_ROW].folded).toBe(true);
     expect(observed.forkInterruptedAfterClick.folded).toBe(false);
   });
 
@@ -773,7 +775,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // `event_drain` renders its parsed events, not the generic card. A fallback
     // that captured everything would read as green here while erasing four
     // purpose-built renderings.
-    const drain = observed.chat[DRAIN_ROW]!;
+    const drain = observed.chat[DRAIN_ROW];
     expect(drain.systemEvent).toBeNull();
     expect(drain.userBubbles).toBe(0);
   });
@@ -990,6 +992,13 @@ describe('a node the provider rate-limited, as the run list reads it', () => {
  * table that type-checks and still fails the client's parse is exactly what
  * happened, and only a browser can see the difference.
  */
+/** Every panel's rounded width, left to right. */
+function panelWidths(page: Page): Promise<number[]> {
+  return page.evaluate(
+    () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
+  );
+}
+
 describe('the gallery shell photographs a healthy neighbour', () => {
   test('the real shell shares identity, width, and one settings action', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -1026,9 +1035,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-composer-root]');
 
-      const chatPanels = await page.evaluate(
-        () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
-      );
+      const chatPanels = await panelWidths(page);
 
       const workspaceButton = await page.$('button[aria-pressed="false"]');
       await workspaceButton?.click();
@@ -1038,9 +1045,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
         )),
       );
 
-      const workspacePanels = await page.evaluate(
-        () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
-      );
+      const workspacePanels = await panelWidths(page);
 
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       await page.close();
@@ -1062,6 +1067,16 @@ describe('the gallery shell photographs a healthy neighbour', () => {
  * then proves the REAL page wires the same flow: its own hook, its own
  * navigation, its own facet column.
  */
+/** Waits until the agents strip's current tab carries the codename the new
+ *  conversation was born with: never blank, never Main, never "Untitled". */
+async function waitForNewAgentOpen(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
+
+    return title !== '' && title !== 'Main' && !title.includes('Untitled');
+  });
+}
+
 describe('an additional agent, as an ordinary conversation', () => {
   const MISSION = 'Audit the checkout flow end to end and fix what breaks';
   const SEED_ROLE = 'Fixture-role QA lead';
@@ -1126,11 +1141,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       // was born with: a real name, never "Untitled". "New agent" is the
       // create button's label, not the conversation's title.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => {
-        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
-
-        return title !== '' && title !== 'Main' && !title.includes('Untitled');
-      });
+      await waitForNewAgentOpen(page);
       const afterCreate = await rig.bodyText();
       expect(afterCreate).not.toContain('Add a subordinate');
       expect(afterCreate).not.toContain('Role');
@@ -1291,11 +1302,7 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       // The affordance is intact: the next click creates and opens the agent.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => {
-        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
-
-        return title !== '' && title !== 'Main' && !title.includes('Untitled');
-      });
+      await waitForNewAgentOpen(page);
       // Exactly one record for exactly one failure — the create that landed
       // added nothing, and nothing was ever unhandled.
       expect(diagnostics).toHaveLength(1);
@@ -1330,11 +1337,7 @@ describe('an additional agent, as an ordinary conversation', () => {
 
       // Retry lands: the banner clears and the new conversation opens.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => {
-        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
-
-        return title !== '' && title !== 'Main' && !title.includes('Untitled');
-      });
+      await waitForNewAgentOpen(page);
       // 9593645b0: the banner's spelling, if it wrongly returned.
       expect(await page.evaluate(() => document.body.innerText)).not.toContain('Could not create an agent');
       await page.close();
@@ -1352,11 +1355,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       // One click on the page's own strip: the hook's zero-argument RPC, the
       // navigate, the facet column — all the page's real wiring.
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => {
-        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
-
-        return title !== '' && title !== 'Main' && !title.includes('Untitled');
-      });
+      await waitForNewAgentOpen(page);
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).not.toContain('Add a subordinate');
       expect(body).not.toContain('Mission');
@@ -1391,11 +1390,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForSelector('nav[aria-label="Workspace agents"]');
 
       await page.click('[aria-label="New agent"]');
-      await page.waitForFunction(() => {
-        const title = (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').trim();
-
-        return title !== '' && title !== 'Main' && !title.includes('Untitled');
-      });
+      await waitForNewAgentOpen(page);
       await page.waitForFunction(() => {
         const input = document.querySelector('[data-agent-pane] input[aria-label="Model"]');
 
@@ -1713,8 +1708,9 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      const textarea = await page.waitForSelector('[data-composer-root] textarea');
-      await textarea!.type('admit exactly one turn');
+      const textarea = present(await page.waitForSelector('[data-composer-root] textarea'), 'the composer textarea');
+
+      await textarea.type('admit exactly one turn');
       await page.evaluate(() => {
         document.documentElement.dataset.galleryChatSends = '0';
         document.documentElement.dataset.galleryChatHold = '1';
@@ -2236,10 +2232,11 @@ describe('composer and message continuity at browser boundaries', () => {
       const page = await newPage();
       await page.setViewport({ width: 760, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
-      const textarea = await page.waitForSelector('[data-composer-root] textarea');
-      await textarea!.focus();
+      const textarea = present(await page.waitForSelector('[data-composer-root] textarea'), 'the composer textarea');
 
-      await textarea!.evaluate((input) => {
+      await textarea.focus();
+
+      await textarea.evaluate((input) => {
         input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '変換' }));
         input.dispatchEvent(new KeyboardEvent('keydown', {
           key: 'Enter', bubbles: true, cancelable: true, isComposing: true,
@@ -2247,7 +2244,7 @@ describe('composer and message continuity at browser boundaries', () => {
       });
       expect((await continuityProbe(page)).sends).toBe(0);
 
-      await textarea!.evaluate((input) => {
+      await textarea.evaluate((input) => {
         input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '変換' }));
         const keyCode229 = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
         Object.defineProperty(keyCode229, 'keyCode', { value: 229 });
@@ -2261,7 +2258,7 @@ describe('composer and message continuity at browser boundaries', () => {
       );
 
       await page.click('[data-continuity-reset]');
-      await textarea!.focus();
+      await textarea.focus();
       await page.keyboard.type('two lines');
       await page.waitForFunction(
         () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-draft') === 'two lines',
@@ -2282,9 +2279,9 @@ describe('composer and message continuity at browser boundaries', () => {
       const page = await newPage();
       await page.setViewport({ width: 760, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
-      const textarea = await page.waitForSelector('[data-composer-root] textarea');
+      const textarea = present(await page.waitForSelector('[data-composer-root] textarea'), 'the composer textarea');
 
-      const paste = (kind: 'plain' | 'html' | 'file' | 'same-metadata') => textarea!.evaluate((input, flavor) => {
+      const paste = (kind: 'plain' | 'html' | 'file' | 'same-metadata') => textarea.evaluate((input, flavor) => {
         const data = new DataTransfer();
 
         const file = new File(['abc'], 'notes.txt', {
@@ -2706,7 +2703,7 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         await page.waitForFunction((text) => document.querySelector('[data-code-sample="stream"] .shiki code')?.textContent === text, {}, updated);
 
         const streamed = await page.$eval('[data-code-sample="stream"]', (sample) => {
-          const colors = new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color));
+          const tokenColors = new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color));
           let scrollable = false;
 
           for (const element of sample.querySelectorAll('div, pre')) {
@@ -2716,7 +2713,7 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
             element.scrollLeft = 0;
           }
 
-          return { colors: colors.size, scrollable };
+          return { colors: tokenColors.size, scrollable };
         });
 
         expect(streamed.colors).toBeGreaterThan(1);
@@ -2755,7 +2752,7 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
         })));
 
       const aside = await page.$eval('aside', (rail) => {
-        const rows = [...rail.querySelectorAll('a[href^="/workspace/"]')]
+        const workspaceRows = [...rail.querySelectorAll('a[href^="/workspace/"]')]
           .map((a) => ({ height: a.getBoundingClientRect().height, font: getComputedStyle(a).fontSize }));
 
         const buttons = [...rail.querySelectorAll('button')];
@@ -2764,7 +2761,7 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
         const accountLabel = account?.querySelector('span.min-w-0') ?? account?.querySelector('span');
 
         return {
-          rows,
+          rows: workspaceRows,
           account: accountLabel === null || accountLabel === undefined
             ? null
             : { height: accountLabel.getBoundingClientRect().height, font: getComputedStyle(accountLabel).fontSize },
@@ -3117,6 +3114,12 @@ function workSections(page: Page): Promise<WorkSection[]> {
   }));
 }
 
+/** Waits until the Work tab has drawn the section under `title`. */
+async function waitForWorkSection(page: Page, title: string): Promise<void> {
+  await page.waitForFunction((label: string) => [...document.querySelectorAll('section')]
+    .some((node) => node.querySelector('.p-label')?.textContent === label), {}, title);
+}
+
 /** Rows the journal is rendering right now: the feed is one group of row
  *  children, so its length is the chip's answer. */
 function journalRows(page: Page): Promise<number> {
@@ -3146,8 +3149,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=work&lane=settled`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => [...document.querySelectorAll('section')]
-        .some((node) => node.querySelector('.p-label')?.textContent === 'Journal'));
+      await waitForWorkSection(page, 'Journal');
 
       const sections = await workSections(page);
 
@@ -3233,8 +3235,7 @@ describe('WorkTab draws a section only when it has something to show', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 2400 });
       await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => [...document.querySelectorAll('section')]
-        .some((node) => node.querySelector('.p-label')?.textContent === 'Journal'));
+      await waitForWorkSection(page, 'Journal');
 
       const journal = (await workSections(page)).find((section) => section.title === 'Journal');
       const chips = await page.$$('section button[aria-pressed]');
@@ -3281,8 +3282,7 @@ describe('the Work tab reads the workspace, not the actor', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => [...document.querySelectorAll('section')]
-        .some((node) => node.querySelector('.p-label')?.textContent === 'Plans'));
+      await waitForWorkSection(page, 'Plans');
 
       const plans = (await workSections(page)).find((section) => section.title === 'Plans');
 
@@ -3311,8 +3311,7 @@ describe('the Work tab reads the workspace, not the actor', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => [...document.querySelectorAll('section')]
-        .some((node) => node.querySelector('.p-label')?.textContent === 'Plans'));
+      await waitForWorkSection(page, 'Plans');
 
       const needs = (await workSections(page)).find((section) => section.title === 'Needs you');
 
@@ -3360,8 +3359,7 @@ describe('the Work tab reads the workspace, not the actor', () => {
       const page = await newPage();
       await page.setViewport({ width: 430, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => [...document.querySelectorAll('section')]
-        .some((node) => node.querySelector('.p-label')?.textContent === 'Learnings'));
+      await waitForWorkSection(page, 'Learnings');
 
       const learnings = (await workSections(page)).find((section) => section.title === 'Learnings');
 
@@ -3459,10 +3457,19 @@ describe('the workbench type scale, as the browser computes it', () => {
       await page.waitForSelector('.prose-chat');
       await page.waitForSelector('[data-tool-state] strong');
 
-      const measured = await page.evaluate(() => ({
-        prose: getComputedStyle(document.querySelector('.prose-chat')!).fontSize,
-        toolLabel: getComputedStyle(document.querySelector('[data-tool-state] strong')!).fontSize,
-      }));
+      const measured = await page.evaluate(() => {
+        const prose = document.querySelector('.prose-chat');
+        const toolLabel = document.querySelector('[data-tool-state] strong');
+
+        if (prose === null) throw new Error('the shell frame drew no .prose-chat');
+
+        if (toolLabel === null) throw new Error('the shell frame drew no tool-state label');
+
+        return {
+          prose: getComputedStyle(prose).fontSize,
+          toolLabel: getComputedStyle(toolLabel).fontSize,
+        };
+      });
 
       await page.close();
 
@@ -3485,6 +3492,67 @@ describe('the workbench type scale, as the browser computes it', () => {
  * persists, and a passive arrival raises a "Preview ready" chip where the
  * reader already is — only an explicit click navigates.
  */
+/** Waits until the trailing panel reports `want`; `'open'` is any width past
+ *  the 200px an opened column clears. */
+async function waitForInspectorWidth(page: Page, want: number | 'open'): Promise<void> {
+  await page.waitForFunction((target: number | 'open') => {
+    const panels = [...document.querySelectorAll('[data-panel]')];
+    const width = Math.round(panels[1]?.getBoundingClientRect().width ?? 0);
+
+    return target === 'open' ? width > 200 : width === target;
+  }, {}, want);
+}
+
+/** Waits until two frames report the same trailing-panel width, and that width
+ *  is the asked-for state. A commit and any write-back it schedules land inside
+ *  one frame, so a width that survives two is the settled one. */
+async function inspectorSettled(page: Page, want: 'open' | 'collapsed' | 'any'): Promise<void> {
+  await page.waitForFunction((state: 'open' | 'collapsed' | 'any') => {
+    const width = () => Math.round(
+      document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+    );
+
+    const first = width();
+    const wanted = state === 'any' || (state === 'open' ? first > 200 : first <= 2);
+
+    return new Promise<boolean>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve(wanted && width() === first)));
+    });
+  }, {}, want);
+}
+
+/** The trailing panel's rounded width, and every key the page holds in
+ *  `localStorage`. `Storage` is read through its own index API: it is a host
+ *  object, and spreading it would lose the accessors it is defined with. */
+async function readInspectorState(page: Page): Promise<{ width: number; stored: Record<string, string> }> {
+  return await page.evaluate(() => {
+    const stored: Record<string, string> = {};
+
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+
+      if (key === null) continue;
+
+      const value = localStorage.getItem(key);
+
+      if (value !== null) stored[key] = value;
+    }
+
+    return {
+      width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+      stored,
+    };
+  });
+}
+
+/** The separator's centre, once it is on the page: where a drag starts. */
+async function separatorCentre(page: Page): Promise<{ x: number; y: number }> {
+  const separator = present(await page.waitForSelector('[data-separator]'), 'the inspector separator');
+  const box = present(await separator.boundingBox(), 'the separator bounding box');
+
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
 describe('the workspace inspector at the actual WorkspacePage boundary', () => {
   test('collapsed until something arrives, then resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -3497,15 +3565,10 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // own scripts run and records the mount itself, so the insertion record
       // — not the element's presence at sample time — is the observable state.
       await page.evaluateOnNewDocument(() => {
-        // SAFETY: the recorder is this test's own global; the cast names its
-        // shape because a plain `window` carries no such field.
-        const w = window as Window & { __inspectorMount?: { inserted: boolean; expand: boolean; width: number }[] };
-        w.__inspectorMount = [];
-        new MutationObserver((mutations) => {
-          // SAFETY: same recorder, re-narrowed inside the callback's own scope.
-          const w = window as Window & { __inspectorMount?: { inserted: boolean; expand: boolean; width: number }[] };
-          const record = w.__inspectorMount!;
+        const record: InspectorMountSample[] = [];
 
+        window.__inspectorMount = record;
+        new MutationObserver((mutations) => {
           if (record.length >= 500) return;
 
           const containsExpand = (node: Node): boolean => node instanceof Element
@@ -3534,11 +3597,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // signal has not arrived yet, so nothing reopens it.
       await page.waitForFunction(
         () => {
-          // SAFETY: `__inspectorMount` is constructed on this window by the
-          // evaluateOnNewDocument recorder installed above, so the field is
-          // present from page load.
-          const record = (window as Window & { __inspectorMount?: { inserted: boolean; expand: boolean; width: number }[] })
-            .__inspectorMount;
+          const record = window.__inspectorMount;
 
           return record !== undefined
             && record.some((sample) => sample.inserted || sample.expand)
@@ -3551,11 +3610,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Work stays current, only the explicit click navigates.
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
       await page.waitForSelector('[data-preview-ready]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      });
+      await waitForInspectorWidth(page, 'open');
       expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
 
       await page.click('[data-preview-ready]');
@@ -3591,11 +3646,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.waitForSelector('[data-inspector-expand]');
       expect(await inspectorWidth()).toBeLessThanOrEqual(2);
       await page.click('[data-inspector-expand]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      });
+      await waitForInspectorWidth(page, 'open');
 
       await page.close();
     });
@@ -3619,19 +3670,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // cannot fit 2000px beside the chat minimum, so it commits what fits.
       // The column's committed width is stable across frames once the
       // write's commit — and any persist its report triggers — has landed.
-      await page.waitForFunction(() => {
-        const width = () => Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? 0);
+      await inspectorSettled(page, 'open');
 
-        return new Promise<boolean>((resolve) => {
-          const first = width();
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(first > 200 && width() === first)));
-        });
-      });
-
-      const state = await page.evaluate(() => ({
-        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
-        stored: { ...localStorage },
-      }));
+      const state = await readInspectorState(page);
 
       // Constrained on screen, preferred in storage, and — nothing here was
       // the user's explicit choice, so no choice is written for this
@@ -3656,11 +3697,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
-      });
+      await waitForInspectorWidth(page, 340);
 
       // resetToDefault at the committed 340 issues a no-op write: the
       // library emits nothing, and nothing marks the next emission as
@@ -3672,10 +3709,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // A real drag follows: pointerdown marks the input, the release
       // commit persists the width the user's hand chose. The inspector is
       // the trailing panel — dragging the separator right narrows it.
-      const separator = await page.waitForSelector('[data-separator]');
-      const box = await separator!.boundingBox();
-      const x = box!.x + box!.width / 2;
-      const y = box!.y + box!.height / 2;
+      const { x, y } = await separatorCentre(page);
       await page.mouse.move(x, y);
       await page.mouse.down();
       await page.mouse.move(x + 60, y, { steps: 4 });
@@ -3687,10 +3721,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
       ) === 280);
 
-      const state = await page.evaluate(() => ({
-        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
-        stored: { ...localStorage },
-      }));
+      const state = await readInspectorState(page);
 
       expect(state.width).toBe(280);
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
@@ -3713,11 +3744,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      });
+      await waitForInspectorWidth(page, 'open');
 
       const before = await page.evaluate(() => Math.round(
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
@@ -3730,10 +3757,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
       ) < prev, {}, before);
 
-      const state = await page.evaluate(() => ({
-        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
-        stored: { ...localStorage },
-      }));
+      const state = await readInspectorState(page);
 
       expect(state.width).toBeLessThan(before);
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
@@ -3752,8 +3776,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         // Every listener the page registers is counted by target+type; the
         // same accounting on remove keeps a live tally.
-        const w: Window & { __liveListeners?: Map<string, number> } = window;
-        w.__liveListeners = new Map();
+        const listeners = new Map<string, number>();
+
+        window.__liveListeners = listeners;
 
         const tally = (target: EventTarget, type: string, delta: number) => {
           // The separator div carries `data-separator` (the library sets it);
@@ -3762,14 +3787,14 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
           // other target matches neither and is skipped.
           if (target instanceof HTMLElement && target.dataset['separator'] !== undefined) {
             const key = `sep:${type}`;
-            w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
+            listeners.set(key, (listeners.get(key) ?? 0) + delta);
 
             return;
           }
 
           if (target instanceof Document) {
             const key = `doc:${type}`;
-            w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
+            listeners.set(key, (listeners.get(key) ?? 0) + delta);
           }
         };
 
@@ -3798,9 +3823,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.waitForSelector('[data-separator]');
 
       const readTally = () => {
-        const w: Window & { __liveListeners?: Map<string, number> } = window;
+        const listeners = window.__liveListeners;
 
-        return Object.fromEntries(w.__liveListeners!);
+        if (listeners === undefined) throw new Error('the listener tally was never installed');
+
+        return Object.fromEntries(listeners);
       };
 
       const baseline = await page.evaluate(readTally);
@@ -3838,11 +3865,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-separator]');
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      });
+      await waitForInspectorWidth(page, 'open');
 
       // Press without release: the input mark is set and no clear is
       // scheduled — only the separator's own detach can retire it. The
@@ -3894,9 +3917,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       expect(await page.evaluate((key: string) => localStorage.getItem(key), openKey)).toBeNull();
 
-      const state = await page.evaluate(() => ({ ...localStorage }));
+      const { stored } = await readInspectorState(page);
 
-      expect(state['kinu.inspector.ashish@example.com']).toBe('300');
+      expect(stored['kinu.inspector.ashish@example.com']).toBe('300');
 
       await page.close();
     });
@@ -3914,11 +3937,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
-      });
+      await waitForInspectorWidth(page, 340);
 
       // A full remount: the restored tree's announcement is its own, so the
       // drag below is the first commit anyone could mistake — it must read
@@ -3931,21 +3950,8 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Quiesce the fresh tree so the coordinates below are live. The
       // inspector is the trailing panel — dragging the separator right
       // narrows it from 340 to its 280 floor.
-      await page.waitForFunction(() => {
-        const widths = () => Math.round(
-          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-        );
-
-        const first = widths();
-
-        return new Promise<boolean>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
-        });
-      });
-      const separator = await page.waitForSelector('[data-separator]');
-      const box = await separator!.boundingBox();
-      const x = box!.x + box!.width / 2;
-      const y = box!.y + box!.height / 2;
+      await inspectorSettled(page, 'any');
+      const { x, y } = await separatorCentre(page);
       await page.mouse.move(x, y);
       await page.mouse.down();
       await page.mouse.move(x + 60, y, { steps: 4 });
@@ -3963,22 +3969,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Settle, then assert: whatever the drag commit classified, every
       // commit it schedules (including a policy write-back) has landed —
       // the settled width plus the stored values pin the classification.
-      await page.waitForFunction(() => {
-        const widths = () => Math.round(
-          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-        );
+      await inspectorSettled(page, 'any');
 
-        const first = widths();
-
-        return new Promise<boolean>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
-        });
-      });
-
-      const state = await page.evaluate(() => ({
-        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
-        stored: { ...localStorage },
-      }));
+      const state = await readInspectorState(page);
 
       expect(state.width).toBe(280);
       expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
@@ -4000,11 +3993,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 400;
-      });
+      await waitForInspectorWidth(page, 400);
 
       await page.setViewport({ width: 600, height: 900 });
       await page.waitForFunction(() => document.querySelector('[data-separator]') === null);
@@ -4018,17 +4007,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // product one. One ArrowRight step is five percentage points,
       // landing the 400px inspector near 328 — off the seed, inside
       // bounds, exactly the user's.
-      await page.waitForFunction(() => {
-        const widths = () => Math.round(
-          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-        );
-
-        const first = widths();
-
-        return new Promise<boolean>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
-        });
-      });
+      await inspectorSettled(page, 'any');
       await page.evaluate(() => {
         document.querySelector<HTMLElement>('[data-separator]')?.focus();
       });
@@ -4042,22 +4021,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       // Settle, then assert: whatever the keypress commit classified, every
       // commit it schedules (including a policy write-back) has landed.
-      await page.waitForFunction(() => {
-        const widths = () => Math.round(
-          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-        );
+      await inspectorSettled(page, 'any');
 
-        const first = widths();
-
-        return new Promise<boolean>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
-        });
-      });
-
-      const state = await page.evaluate(() => ({
-        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
-        stored: { ...localStorage },
-      }));
+      const state = await readInspectorState(page);
 
       // Fractional shares round differently across read paths, so the
       // committed width can differ a pixel from the rect read; a stored
@@ -4085,18 +4051,14 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // The signal opens the policy-collapsed column on the workspace's
       // behalf — with no account it still opens, it just cannot persist.
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      });
+      await waitForInspectorWidth(page, 'open');
 
       // The collapse control is still the user's own act; with no account it
       // claims the close for the session and writes nothing anywhere.
       await page.click('[data-inspector-collapse]');
       await page.waitForSelector('[data-inspector-expand]');
 
-      const stored = await page.evaluate(() => ({ ...localStorage }));
+      const { stored } = await readInspectorState(page);
 
       expect(Object.keys(stored).filter((key) => key.startsWith('kinu.inspector.'))).toEqual([]);
 
@@ -4122,16 +4084,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.waitForSelector('[data-preview-ready]');
       // Settle past the window the signal would have opened in: the panel
       // stays at its collapsed size and the choice is still '0'.
-      await page.waitForFunction(() => {
-        const width = () => Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1);
+      await inspectorSettled(page, 'collapsed');
 
-        return new Promise<boolean>((resolve) => {
-          const first = width();
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(first <= 2 && width() === first)));
-        });
-      });
-
-      const stored = await page.evaluate(() => ({ ...localStorage }));
+      const { stored } = await readInspectorState(page);
 
       expect(stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
 
@@ -4153,11 +4108,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]');
-      await page.waitForFunction(() => {
-        const panels = [...document.querySelectorAll('[data-panel]')];
-
-        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 300;
-      });
+      await waitForInspectorWidth(page, 300);
 
       // One task, two control acts: the dblclick's resetToDefault claims 340
       // and issues the write; the collapse clicks before its report settles
@@ -4173,10 +4124,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.waitForSelector('[data-inspector-expand]');
 
-      const state = await page.evaluate(() => ({
-        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
-        stored: { ...localStorage },
-      }));
+      const state = await readInspectorState(page);
 
       expect(state.width).toBeLessThanOrEqual(2);
       expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
@@ -4195,11 +4143,24 @@ interface CreateProbe {
   release: (() => void) | null;
 }
 
+/** One sample the inspector-mount observer took: whether that mutation inserted
+ *  the expand handle, whether the handle is on the page, and the trailing
+ *  panel's rounded width (-1 when there is no panel yet). */
+interface InspectorMountSample {
+  inserted: boolean;
+  expand: boolean;
+  width: number;
+}
+
 declare global {
   interface Window {
     __createProbe: CreateProbe;
     /** Every `input` frame the pane sent the gallery's workspace shell (`gallery-terminal.ts`). */
     __kinuTerminalInput?: string[];
+    /** Installed by the inspector suite's MutationObserver at document start. */
+    __inspectorMount?: InspectorMountSample[];
+    /** Listener counts by target and type, kept by the patched `EventTarget`. */
+    __liveListeners?: Map<string, number>;
   }
 }
 
@@ -4224,7 +4185,9 @@ describe('the home creation form, as a browser submits it', () => {
         // The member the Bun fetch type requires, forwarded from the callable
         // being wrapped — the pattern client-error/feedback-ux already use.
         window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
-          if (init?.method === 'POST' && String(input).includes('/api/user/workspaces')) {
+          const url = input instanceof Request ? input.url : input.toString();
+
+          if (init?.method === 'POST' && url.includes('/api/user/workspaces')) {
             probe.posts += 1;
 
             // First POST: refuse it on release. Every later one: the entry the
