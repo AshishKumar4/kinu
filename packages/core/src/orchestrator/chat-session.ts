@@ -1,62 +1,10 @@
 /**
- * ChatSession — the ONE turn loop, in core.
- *
- * Seeded from the local backend's session and generalized over the seams both
- * backends already share: `ActorSession`, `Inbox`, `PendingSendStore`, the
- * canonical SessionTranscript references, the event log, the run
- * recorder and core's terminal ledger. A backend supplies what the loop cannot
- * know — how a turn is assembled, what a settled turn owes, its effect bodies,
- * its driver lease and where events go — through {@link ChatSessionPorts} and
- * {@link ChatTransport}.
- *
- * The invariants, each of which is a line of the loop rather than a note about
- * it:
- *
- *   ONE TURN AT A TIME. A single serialized pump drains a FIFO; a turn that
- *   starts always terminates — exactly one `turn-end`, a closed run, a released
- *   lease — and no second turn opens until it has.
- *
- *   A SEND WHILE A TURN EXISTS SPLICES. `send` while a turn is running, or a
- *   user turn is queued and not yet opened, goes through the actor's inbox and
- *   lands at that turn's next step; nothing running starts a user turn. A
- *   splice that never sees a step boundary reruns as the immediate next turn.
- *   Which of the two happened is answered where it is decided — at the drain
- *   or at the rerun's settle — never guessed at admission.
- *
- *   DURABLE BEFORE ACKNOWLEDGED. Every accepted send is a `pending_steers` row
- *   before the caller hears it was taken; a user turn's opening row is on disk
- *   at admission, before the model is asked anything.
- *
- *   LANDED ROWS AT THE DRAIN. A steer the model has read is a durable user row
- *   parented to its turn's opening row, written when the drain saw it and in
- *   the same transaction as the reservation it spends.
- *
- *   THE COMMIT IS ONE TRANSACTION. The answer, the retirement of the
- *   reservations it spends and the frozen roster of what it owes land together
- *   or not at all.
- *
- *   LEFTOVER RERUNS AS ONE USER-ORIGIN TURN. Steers a settling turn could not
- *   splice rerun at the queue front as the operator's next turn, each id
- *   reserved to that turn before it is admitted.
- *
- *   RESTART REPLAYS. On open, acknowledged sends a dead process left are
- *   restored — mid-turn rows into the inbox, idle rows as reruns in acceptance
- *   order; a stranded event delivery is re-pended under the single-driver
- *   lease; owed terminal effects resume through the backend's ledger.
- *
- *   AN INTERRUPTED TURN CONTINUES. A turn the process died inside is re-opened
- *   by the next one where it stopped, not restarted, and ONCE: the
- *   continuation runs under the run the dead process opened, so the run that
- *   was open is the run that closes. The run ledger holds
- *   every completed step's messages (`step_finish`) and the in-flight step's
- *   output at the last partial cadence (`step_partial`, written on the first
- *   delta and then every {@link PARTIAL_FLUSH_EVERY}), and the continuation
- *   re-enters them as the assistant's own prior output, so the model makes
- *   only the remaining calls, no tool whose result is in the ledger runs
- *   again, a tool call cut before it answered is repaired to an explicit
- *   interrupted outcome the model reads, and the answer persisted is the
- *   concatenation the client streamed. A turn cut before any output is the
- *   degenerate case: nothing to re-enter, so it is the same turn run again.
+ * ChatSession: the one turn loop, shared by both backends through {@link ChatSessionPorts} and
+ * {@link ChatTransport}. Invariants: one turn at a time, and every started turn terminates (one
+ * `turn-end`, a closed run, a released lease); a send while a turn exists splices into it; every
+ * accepted send is durable before it is acknowledged; the commit is one transaction; leftovers rerun as
+ * one user-origin turn; restart replays pending sends and owed effects; an interrupted turn continues
+ * once, under the run it was open in.
  */
 
 import type { ModelMessage } from 'ai';
@@ -106,33 +54,14 @@ import { inheritedAsModelMessage } from '../heads/head-inference';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
-/**
- * How often an interrupted answer's partial text is made durable: on its first
- * delta, then every this many. ONE cadence for the two consumers of a partial
- * — the loop's own step ledger, which a continuation re-enters into the model
- * call, and a backend's wire replay store, which a reconnecting client is
- * replayed from — so the two never disagree about how much of the answer
- * survived an eviction.
- */
+/** One cadence for the step ledger and a backend's wire replay store, so they agree on what survived. */
 const PARTIAL_FLUSH_EVERY = 10;
 
-/** What one chunk of an in-flight answer means to the cadence: content that
- *  accrues toward the next flush, a settled tool result that flushes at once,
- *  or nothing the cadence counts. */
 export type PartialFlushSignal = 'content' | 'settled' | 'none';
 
-/**
- * The ONE decision of when an in-flight answer is made durable, for both
- * stores the doc above names: the first content chunk flushes, then every
- * {@link PARTIAL_FLUSH_EVERY} content chunks, and a settled tool result
- * flushes at once; a step boundary starts the count over. Each stream maps
- * its own chunk types onto the signal, and the rule is here so the two cannot
- * drift apart.
- */
+/** First content chunk flushes, then every {@link PARTIAL_FLUSH_EVERY}, and a settled tool result at once; a step boundary resets. */
 export interface PartialFlushCadence {
-  /** Whether this chunk makes the partial durable now. Counts it either way. */
   flushes(signal: PartialFlushSignal): boolean;
-  /** A step boundary: the next content chunk flushes again. */
   reset(): void;
 }
 
@@ -158,50 +87,26 @@ export function partialFlushCadence(): PartialFlushCadence {
   };
 }
 
-/**
- * The grace this backend allows a stranded event delivery: none.
- *
- * `EventLog.unbindStale` takes a grace because a Durable Object activation can
- * be racing its own predecessor and has no way to exclude it. This loop
- * does: {@link ChatSession.reclaimStrandedEventDeliveries} runs under the
- * single-driver lease, so no other process is driving this conversation and this
- * session has not drained yet — every OPEN lease is a dead process's by
- * construction. Waiting out a clock would only delay work that is already
- * provably abandoned.
- */
+/** None: reclamation runs under the single-driver lease, so every open lease is a dead process's. */
 const NO_STRANDED_DELIVERY_GRACE = 0;
 
-/**
- * One response's answer and everything it owes, as one durable commit.
- *
- * The run end is NOT carried here. `runTurn` classifies it once, before the
- * answer row is prepared, and both the roster frozen inside this commit and the
- * run row sealed after it read that one value — so they cannot disagree, and
- * the mid-work defect the classifier reports is filed once per turn.
- */
+/** The run end is classified once by `runTurn`, so the roster and the run row cannot disagree. */
 interface CommittedTurn {
   readonly messageId: string;
   readonly turn: CompletedTurn;
   readonly owed: readonly OwedEffect[];
-  /** What core claims this sequence under. Null for a response whose turn has
-   *  no durable identity: that sequence runs unledgered and records no intent. */
+  /** Null for a turn with no durable identity: it runs unledgered. */
   readonly transition: TerminalTransition | null;
 }
 
-/** Whether the turn reached disk. A failure is reported rather than thrown,
- *  because the signal settle after it must run either way. */
+/** Reported rather than thrown, because the signal settle after it must run either way. */
 type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: KinuError };
 
-/** What the frontends render. A superset of runChat's ChatEvent with the
- *  lifecycle + side-channel (evolution, broadcast, background) events. */
 export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode;
-      /** The opening row's id and the answer's id, both minted at admission,
-       *  so a transport can key a turn's frames and its persisted row. */
+      /** Both minted at admission. */
       turnId: string; messageId: string;
-      /** The other messages this turn carries: a rerun runs every leftover
-       *  as ONE turn under the first one's id, so the rest are answered by
-       *  this turn too and a transport closes their requests with it. */
+      /** A rerun answers every leftover as one turn; a transport closes their requests with it. */
       carried: readonly string[] }
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
@@ -209,74 +114,39 @@ export type SessionEvent =
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
-  // Job, event-delivery and connection lifecycle — the machinery AROUND a
-  // turn, kept apart from `evolution` so "the agent changed itself" and
-  // "a background job settled" never share a channel: `kinu exec
-  // --no-auto-evolve` pins evolution silent while jobs may still settle.
+  // Kept apart from `evolution`: `kinu exec --no-auto-evolve` silences evolution while jobs may still settle.
   | { type: 'background'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
-  /** The conversation now continues from before `entryId`: the durable head
-   *  moved, so every surface reading this session redraws its transcript from
-   *  the store rather than from what it holds. */
+  /** The durable head moved; surfaces redraw from the store. */
   | { type: 'history-reverted'; entryId: string }
-  /** One durable run-event, forwarded live as the recorder writes it. The
-   *  run_events table is the agent's instrumentation ledger (nudges, context
-   *  budget, refused budgets); a container-scoped database dies with the
-   *  container, so the stream is the only way an outside observer sees it. */
+  /** Forwarded live: a container-scoped database dies with the container. */
   | { type: 'run-event'; event: RunEvent };
 
 interface QueueItem {
   text: string;
-  /** Attachments for a user turn — forwarded to the model as file parts. */
   files?: ReadonlyArray<PromptFile>;
   metadata?: ProgrammaticTurn['metadata'];
-  /** The producer's name for the fact this programmatic turn announces. The
-   *  durable row's id is derived from it, so a re-announcement collides with
-   *  the row the first one wrote (see `persist`). */
+  /** The durable row id derives from it, so a re-announcement collides with the first row (see `persist`). */
   idempotencyKey?: string;
   kind: 'user' | 'programmatic';
-  /** The turn's durable id, minted at admission — not when the pump happens
-   *  to reach it. A steer accepted while the item sits queued binds to it,
-   *  the same way a cf steer binds to the turn whose message already exists. */
+  /** Minted at admission, so a steer accepted while queued binds to it. */
   turnId?: string;
-  /** The pending_steers row this user item was admitted as: present when the
-   *  accepted send itself is the message, retired when its user row is durable. */
+  /** Retired when its user row is durable. */
   pendingSendId?: string;
-  /** The durable ids of the pending rows a user-origin rerun merges into its
-   *  one row — retired with that row, so a restart cannot re-deliver them. */
+  /** Retired with the rerun's row, so a restart cannot re-deliver them. */
   steerIds?: readonly string[];
-  /** A user turn the seam reran from a settled turn's leftover steers — placed
-   *  at the queue front, behind only earlier reruns of the same settle. */
+  /** Placed at the queue front, behind only earlier reruns of the same settle. */
   rerun?: true;
-  /** A programmatic turn that is a move OFFERED, not an event that must be
-   *  heard: if an operator message is admitted ahead of it — queued behind it
-   *  here, or already durable — the pump yields the slot and settles it
-   *  'yielded' without running a turn. See ProgrammaticTurn.yieldsToUserMessage. */
+  /** An offer, not an event: if an operator message is admitted ahead, it settles 'yielded' without running (ProgrammaticTurn.yieldsToUserMessage). */
   yieldsToUserMessage?: boolean;
-  /** The turn a dead process left open, re-opened here under its own ids:
-   *  what it had already produced, re-entered ahead of the remaining calls. */
+  /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
-  /**
-   * Settle whoever queued this item — exactly once, and told whether the turn
-   * RAN.
-   *
-   * A refusal is the driver lease saying another process owns this
-   * conversation, which means this turn did not happen. That has to reach the
-   * producer, because the producer is the only one who can put things back: an
-   * event drain has rows bound to a turn nobody will run, and a person has a
-   * message that was never sent. Reporting a refused item as a completed one —
-   * which a success-only `resolve()` cannot help doing — loses the event and
-   * discards the message in silence.
-   */
+  /** Exactly once, and told whether the turn ran: a lease refusal must reach the producer, the only one who can put things back. */
   settle: (refusal: Refusal | null, yielded?: boolean) => void;
 }
 
-/** What a re-opened turn resumes from: the answer's id it was streaming under,
- *  the completed steps' messages and the cut step's output. */
 interface TurnContinuation {
-  /** The run the dead process opened. The continuation runs UNDER it — its
-   *  steps and its seal append to that run — so the run that was open is the
-   *  run that closes, and a later restart finds nothing to re-open. */
+  /** The continuation appends to it, so the open run is the run that closes. */
   readonly runId: string;
   readonly messageId: string;
   readonly steps: readonly ModelMessage[];
@@ -284,10 +154,7 @@ interface TurnContinuation {
 }
 
 
-/** A turn's input as the model message the working history carries: the
- *  attachments as file parts — the shape ai's convertToModelMessages emits
- *  for FileUIParts, so multimodal models receive them natively — then the
- *  text. */
+/** Attachments as file parts (convertToModelMessages' FileUIPart shape), then the text. */
 export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): ModelMessage {
   const fileParts = (item.files ?? []).map((f) => ({
     type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
@@ -298,16 +165,7 @@ export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): M
     : { role: 'user', content: item.text };
 }
 
-/**
- * A continuation's answer row. The cut step's text the last process left is
- * the answer's own head only when the step this process resumed IS the answer:
- * the cut step issued no tool call and this process finished it in one step
- * (or was cut again, and the streamed text stands). A cut inside a NARRATION
- * step — one that went on to call tools before the turn answered — leaves text
- * that belongs to that step, already in the client's rendering of it, and not
- * in front of the answer. The finished steps' text is never joined: it is in
- * the ledger as those steps' own messages.
- */
+/** The cut step's text heads the answer only when that step was the answer; narration-step text stays with its step. */
 function continuedAnswer(
   continuation: TurnContinuation | undefined,
   execution: Pick<ActorExecutionResult, 'text' | 'steps' | 'interrupted'>,
@@ -320,135 +178,76 @@ function continuedAnswer(
 }
 
 
-/** How events reach the client: the CLI's in-process callback today, a
- *  WebSocket frame writer on the hosted backend later. May throw — the session
- *  records the failure and the loop continues. */
+/** May throw: the session records the failure and the loop continues. */
 export interface ChatTransport {
-  /** Synchronous delivery lands before the caller's next statement; a
-   *  transport that must read durable state on a boundary returns a promise
-   *  and the session serializes it behind the events before it. */
+  /** A transport that must read durable state returns a promise, serialized behind earlier events. */
   deliver(event: SessionEvent): void | Promise<void>;
 }
 
-/** What the backend's assembly reads of an admitted turn. */
 export interface ChatTurnInput {
   readonly kind: 'user' | 'programmatic';
   readonly text: string;
   readonly files?: ReadonlyArray<PromptFile>;
   readonly metadata?: ProgrammaticTurn['metadata'];
-  /** The producer's name for the fact a programmatic turn announces, when it
-   *  named one: what a backend reads to know WHICH decision this turn is the
-   *  handoff of. Absent on a user turn. */
+  /** Absent on a user turn. */
   readonly idempotencyKey?: string;
 }
 
-/** One assembled turn, ready to execute. */
 export interface PreparedTurn {
-  /** Everything `ActorSession.execute` runs, except the task text the loop
-   *  supplies. */
   readonly execution: Omit<ActorExecutionInput, 'task'>;
-  /** The compaction key the turn measured its trigger under. */
   readonly sessionKey: string;
-  /** The window the turn was budgeted against, for overflow recovery. */
   readonly contextWindow: number;
-  /** The durable history length the compaction measurement was bound to. */
   readonly historyLength: number;
 }
 
-/** Every value the roster declaration reads, taken while the turn is still in
- *  memory. */
+/** Taken while the turn is still in memory. */
 export interface OwedTerminalEffectsInput {
   readonly turn: CompletedTurn;
   readonly status: RunEndReason;
   readonly credited: string | null;
   readonly messageId: string;
   readonly userText: string;
-  /** The `kinuEvent` a signal opened this turn under; undefined for a turn a
-   *  person's message opened. Read off the settling turn itself, so the roster
-   *  never answers from a later or earlier turn's item. */
+  /** Read off the settling turn itself; undefined for a person's message. */
   readonly event: string | undefined;
   readonly assistantText: string;
   readonly completed: boolean;
-  /** Whether the turn was CUT rather than failing. A task child's caller is
-   *  told which, because "interrupted" and "errored" are different answers to
-   *  the question it is blocked on. */
+  /** A task child's caller distinguishes interrupted from errored. */
   readonly interrupted: boolean;
   readonly startedAt: number;
-  /** The turn's inference history, for the shadow trial's recorded replay. */
   readonly trialContext: readonly ModelMessage[];
-  /** The tool surface the turn could reach, for the advisor's reachability
-   *  check. A cold replay has no live toolset to ask. */
+  /** A cold replay has no live toolset to ask. */
   readonly reachableTools: readonly string[];
   readonly overflowRetry: boolean;
-  /** The event deliveries this turn answered: the drain turn it was queued
-   *  for, and every signal it absorbed mid-turn. A backend with reply
-   *  channels owes each an outbound reply. */
+  /** A backend with reply channels owes each an outbound reply. */
   readonly answeredDeliveries: ReadonlySet<string>;
-  /** The turn's last model step ended at the output limit, and the turn was
-   *  not itself a continuation — ONE continuation is owed. */
+  /** At most one continuation is owed. */
   readonly outputContinuation: boolean;
-  /** The reminder this turn owes because it settled with open tasks: the
-   *  already-rendered signal text, or null when the decision said none. */
+  /** Null when the decision said none. */
   readonly taskReminder: { readonly text: string } | null;
 }
 
-/**
- * What the loop cannot know and the backend must supply. Each port is asked
- * per call, never captured.
- */
+/** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
-  /** Assemble the admitted turn — model, system prompt, tools, extensions —
-   *  and place its input on the actor's working history. Runs after the
-   *  opening row and the run are durable and before the first model call;
-   *  whatever it throws ends the turn as an error with one `turn-end`. */
+  /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
-  /** What the settled turn owes, as the backend's roster declares it. */
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
-  /** The once-only lifecycle over the backend's effect bodies. Asked per
-   *  call: the bodies close over stores built after this session. */
+  /** Asked per call: the bodies close over stores built after this session. */
   terminal(): TerminalTransitions;
-  /** Keep the platform alive until a terminal close settles. */
   holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void;
-  /** Whether this process may drive the conversation right now. Asked per
-   *  item at dequeue and before a drain binds rows; a refusal settles the item
-   *  to its producer rather than running it. Null when nothing coordinates. */
+  /** Asked per item at dequeue and before a drain binds rows; a refusal settles the item to its producer. */
   driverGate(): Refusal | null;
-  /** Arm the durable wake that re-drives owed work when the isolate dies
-   *  inside this turn, at the instant the loop names. Called at the turn's
-   *  synchronous open — an isolate killed mid-turn with nothing else owed
-   *  would otherwise sleep until an external event. Soonest-wins: free when
-   *  a wake already rides. A backend whose process IS the wake (the local
-   *  session) arms nothing here: a crashed turn there re-arms from the ledger
-   *  on the next start, and a timer inside the process it would have to
-   *  outlive is not a wake. */
+  /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
   armTurnWake(atMs: number): Promise<void>;
-  /** This actor's task list — the reminder decision reads it at commit, never
-   *  captured earlier: a replayed roster already froze its answer, and a live
-   *  one owes the list as it stands when the turn settles. */
+  /** Read at commit, never captured earlier. */
   taskList(): TaskListStore;
-  /** Whether this actor has background work in flight whose own settle wakes
-   *  the session — a reminder fired behind it would race the wake. */
+  /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
-  /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
-  /** The skill bodies a mid-turn send activates that the running turn does
-   *  not already carry, rendered for the next step, or null
-   *  (`steerSkillsBlock`). */
+  /** `steerSkillsBlock`. */
   steerSkills(text: string): Promise<string | null>;
-  /** Why a programmatic PLAN turn cannot be admitted here, or null when it
-   *  can: a plan turn ends in a review the operator decides on, and a backend
-   *  with no review surface refuses the turn at admission rather than run a
-   *  plan nobody can approve. */
+  /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
-  /**
-   * The workspace's prompt-cache warming lane, when the backend wired one.
-   *
-   * The SESSION drives it because the two instants it needs are the session's:
-   * a real provider request is starting, and the turn that just ended left a
-   * replayable request behind. Everything else about warming — the policy, the
-   * durable row, the accounting — is the lane's, and a backend with no durable
-   * wake wires none.
-   */
+  /** The session drives it because both instants it needs are the session's; the policy is the lane's. */
   readonly cacheWarming?: CacheWarmingLane;
 }
 
@@ -456,47 +255,29 @@ export interface ChatSessionOptions {
   readonly actorSession: ActorSession;
   readonly sessionId: string;
   readonly transcript: SessionTranscript;
-  /** The ONE pending-send ledger's store — every acknowledged send's row read
-   *  and write goes through core's PendingSendStore, the same object the cf
-   *  actor holds. Bound to the session's own actor id. */
+  /** Core's PendingSendStore, bound to the session's own actor id. */
   readonly pendingSends: PendingSendStore;
   readonly eventLog: EventLog;
-  /** Durable per-run event log (run_events) — the same recorder both
-   *  backends write. */
   readonly eventRecorder: RunEventRecorder;
   readonly compactionState: CompactionTriggerState;
-  /** A REAL transaction. The answer, the run row and the frozen roster are
-   *  committed inside one, and so are a drain's landed rows with the
-   *  reservations they spend. A torn write that reports success is what an
-   *  identity-function stand-in would buy. */
+  /** Must be a real transaction: answer, run row and roster commit together, as do a drain's rows and spent reservations. */
   readonly transaction: <T>(body: () => T) => T;
   readonly transport: ChatTransport;
   readonly ports: ChatSessionPorts;
-  /** How the session mints an answer's id — the key every durable row of the
-   *  answer is written under. Each owner names its minter: a random UUID, or
-   *  the id a harness must assert on before it reads it back. */
+  /** The key every durable row of the answer is written under. */
   readonly mintAnswerId: () => string;
 }
 
-/** What a surface says about the message it sends, beyond the words. */
 export interface SendOptions {
   readonly tier?: TierId;
-  /** The message's own id, when the client minted one: the opening row, the
-   *  reservation and every announcement then carry the id the client already
-   *  renders under, and a rerun of the message keeps it as its turn id.
-   *  Absent, the session mints one. */
+  /** Absent, the session mints one; a rerun keeps it as its turn id. */
   readonly id?: string;
-  /** The composer's mode, a fact on the message: a turn it starts runs under
-   *  it, and a splice's leftovers rerun under it. Build by default. */
+  /** A turn it starts, and its leftovers' rerun, run under it. Build by default. */
   readonly mode?: WorkMode;
 }
 
-/** A caller's wait for one message's landing: answered where the landing is
- *  decided, with the landing or the error that says the words never landed. */
 export type SendLandingWaiter = Pick<ReturnType<typeof Promise.withResolvers<SendLanding>>, 'resolve' | 'reject'>;
 
-/** The landing a driver-lease refusal answers: the message did not run here,
- *  and the holder is where it can. */
 function refusedLanding(refusal: Refusal): KinuError {
   return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
 }
@@ -506,54 +287,33 @@ export class ChatSession {
   private readonly sessionId: string;
   private readonly transcript: SessionTranscript;
   private readonly pendingSends: PendingSendStore;
-  /** The sends whose caller awaits a landing, by the id each was admitted
-   *  under: the message's own id, which a rerun of it keeps as its turn id.
-   *  Settled where the fate is decided — the step drain that splices it, the
-   *  settle of the turn that ran it, the interrupt that handed it back — and
-   *  never before, so no answer is a guess. A send admitted without a waiter
-   *  (`admit`) has no entry: its fate reaches surfaces as steer_status. */
+  /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
   private readonly transaction: <T>(body: () => T) => T;
   private readonly transport: ChatTransport;
-  /** The delivery still in flight, when a transport answered asynchronously. */
   private delivery: Promise<void> | null = null;
   private readonly ports: ChatSessionPorts;
   private readonly mintAnswerId: () => string;
   private ended = false;
-  /** The run the in-flight turn belongs to; null between turns. */
   private runId: string | null = null;
-  /** The id the in-flight turn's opening row carries — minted at turn start,
-   *  written by `persist`, and the scope every effect claim this turn makes is
-   *  keyed to. Null between turns. */
+  /** The scope every effect claim this turn makes is keyed to. Null between turns. */
   private turnId: string | null = null;
-  /** The running programmatic turn's opening row, as its commit will write
-   *  it, for a steer that lands before the commit; null for a user turn,
-   *  whose row is durable from admission. */
+  /** Null for a user turn, whose row is durable from admission. */
   private openingRow: PreparedConversationEntry | null = null;
-  /** The id the in-flight turn's answer is persisted under — minted with the
-   *  turn, streamed under, committed under. */
   private messageId = '';
-  /** The mechanical completion gate (core completion-gate.ts). Armed only by a
-   *  one-shot task turn: on the interactive surface the human reading the
-   *  answer is the check, so it never arms and costs nothing. */
+  /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
-  /** The stop-time task reminder's memory for this conversation — attempts
-   *  and the unanswered-reminder latch (core tasks/reminder.ts). */
+  /** core tasks/reminder.ts. */
   private readonly taskReminders = new TaskReminders();
-  /** FIFO of turns to run — user inputs + programmatic injects (reactor / job
-   *  wake), drained by a single serialized pump so turns never interleave. */
+  /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
   private pumpActive = false;
-  /** The idempotency key of the turn the pump is running RIGHT NOW, or null.
-   *  An item is shifted out of the queue before it runs and its durable row
-   *  lands at the end, so this is the only thing that says "already being said"
-   *  for the whole length of a turn. */
+  /** The only record that an item is being said for the whole length of a turn. */
   private runningAnnouncement: string | null = null;
-  /** The active pump run's completion, or null when idle — the awaitable
-   *  settleBackgroundWork() joins so a one-shot run can wait for wake turns. */
+  /** Joined by settleBackgroundWork(). */
   private activePump: Promise<void> | null = null;
 
   constructor(options: ChatSessionOptions) {
@@ -569,11 +329,8 @@ export class ChatSession {
     this.ports = options.ports;
     this.mintAnswerId = options.mintAnswerId;
 
-    // THE ONE SEND RULE, the loop's half: every send the session
-    // acknowledges is a pending_steers row first and a landed row or retired
-    // row after — never a buffer the process alone can lose. Bound here, not
-    // on the ActorSession's own wiring, because the hosted actor's session is
-    // built by the host without a view of this workspace's queue.
+    // Every acknowledged send is a pending_steers row first. Bound here because the hosted actor's session
+    // is built without a view of this workspace's queue.
     this.actorSession.bindSteerPersistence({
       onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
       prepareDrain: (rows, _atStep, reference) => this.prepareLandedSteers(rows, reference),
@@ -584,64 +341,27 @@ export class ChatSession {
     this.restorePendingSends();
   }
 
-  /** The active pump run's completion, or null when idle. */
   get pumpPromise(): Promise<void> | null { return this.activePump; }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
-  /** The runs this loop is driving, for the wake reconcile that seals what a
-   *  dead activation left open: the turn running now, and the one
-   *  {@link restoreOpenTurn} re-opened but has not yet started — that run is
-   *  continued under its own id, so it is open on purpose. */
+  /** Open on purpose, so the wake reconcile must not seal them. */
   drivenRuns(): readonly string[] {
     return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
   }
   get currentTurnId(): string | null { return this.turnId; }
-  /** No further programmatic turn is admitted, and a send this constructor
-   *  restored does not pump. The owner's teardown calls this first. */
+  /** The owner's teardown calls this first. */
   close(): void { this.ended = true; }
   get closed(): boolean { return this.ended; }
 
   /**
-   * Terminal transitions running right now, on the PUMP's own stack.
-   *
-   * A terminal effect settles a turn from inside the pump that ran it, and one
-   * of them (`event_drain`) delivers signals — which for a settling turn take
-   * the QUEUE arm, because the turn has no steps left to splice into. Awaiting
-   * that queued turn's EXECUTION from here cannot resolve: the executor is the
-   * caller. Settle -> inline drain -> enqueue -> wait for the pump -> pump
-   * waits for settle, with nothing timing out.
-   *
-   * So while this is non-zero, {@link enqueueTurn} answers at ADMISSION rather
-   * than at execution. That is the answer the drain actually wants — the signal
-   * seam compensates on anything but `queued`, and `queued` means accepted, not
-   * started. A caller outside the pump keeps the execution-awaiting contract,
-   * which the fiber wake path depends on.
-   *
-   * The terminal roster runs inside the pump, so an inline event drain must
-   * wait only for queue admission, not for execution by that same pump. A
-   * debounced drain runs outside this stack and does not exercise that
-   * re-entrant wait.
+   * Non-zero while a terminal transition runs on the pump's stack: {@link enqueueTurn} then answers at
+   * admission, since awaiting execution from inside the pump would deadlock.
    */
   private settlingDepth = 0;
 
-  /** Inject a programmatic turn into the same serialized loop the user drives —
-   *  backs the reactor + background-job wake. Self-starts the pump when idle so
-   *  a job that settles mid-idle wakes the agent immediately.
-   *
-   *  A producer that named the fact it is announcing (`idempotencyKey`) gets
-   *  that name carried onto the durable row, and a re-announcement of a fact
-   *  this session already recorded starts no turn at all: the row is already
-   *  there and already answered, so 'queued' is the truth the producer needs
-   *  (nothing was lost, do not compensate) without a second turn spent saying
-   *  it again. The check reads the same durable table the write lands in — the
-   *  ledger IS the store here — so a later process reaches the same answer. */
+  /** Self-starts the pump when idle. A re-announcement of an already recorded fact starts no turn and answers 'queued'. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    // The operator's own words, from the inbox — a settled turn's leftovers
-    // rerun, or a message that reached the inbox between one turn's settle
-    // and the next send. Either way the operator's IMMEDIATE next turn, ahead
-    // of everything else queued, behind only earlier user-origin turns, and
-    // answered at admission: the settle that reruns leftovers is on this
-    // pump's own stack, so its execution cannot be awaited from here.
+    // The operator's immediate next turn, answered at admission: its settle is on this pump's stack.
     if (input.origin === 'user') {
       const item: QueueItem = {
         text: input.text,
@@ -649,27 +369,16 @@ export class ChatSession {
         ...(input.files !== undefined && { files: input.files }),
         metadata: input.metadata,
         rerun: true,
-        // The opening row keeps the id the FIRST merged message already
-        // carries: the surface that rendered that message finds its row under
-        // the name it holds, and a transport that answers a client's request
-        // by the turn's id resolves it. Only a rerun of nothing named — no
-        // steer ids at all — mints one.
+        // Keeps the first merged message's id; only a rerun with no steer ids mints one.
         turnId: input.steerIds?.[0] ?? crypto.randomUUID(),
-        // The pending rows this rerun merges are spent by ITS durable row —
-        // retired with it in the same transaction, so a restart cannot
-        // re-deliver steers the rerun already carries.
+        // Retired with this rerun's row in the same transaction.
         steerIds: input.steerIds,
-        // The rerun IS where these words landed: a caller awaiting one hears
-        // `'turn'` once it has run, exactly as a turn it started itself.
         settle: (refusal) => {
           this.settleLandings(input.steerIds ?? [], refusal === null ? 'turn' : refusedLanding(refusal));
         },
       };
 
-      // A send that reached the queue while another user turn held the pump is
-      // still a send the session acknowledged: each id it merges gets a row
-      // bound to THIS turn's id before the item is admitted — `OR IGNORE`
-      // because a leftover rerun's ids already carry theirs.
+      // Each merged id is bound to this turn before admission; `OR IGNORE` because rerun ids already carry theirs.
       const mode: WorkMode = workModeForTurnMetadata(input.metadata) === 'plan' ? 'plan' : 'build';
 
       for (const steerId of item.steerIds ?? []) {
@@ -689,9 +398,7 @@ export class ChatSession {
       if (refusal !== null) return Promise.reject(new Error(refusal));
     }
 
-    // A job settling during shutdown must not start a turn the ending session
-    // will never drain: 'skipped' sends the caller down its durable-breadcrumb
-    // path instead, and the next run drains it from the event log.
+    // During shutdown: 'skipped' sends the caller down its durable path; the next run drains it.
     if (this.ended) return Promise.resolve({ status: 'skipped' });
 
     if (input.idempotencyKey !== undefined && this.hasAnnounced(input.idempotencyKey)) {
@@ -704,11 +411,7 @@ export class ChatSession {
       text: input.text,
       metadata: input.metadata,
       kind: 'programmatic',
-      // 'skipped' is what a producer with a durable retry plane acts on: the
-      // signal seam compensates on anything but 'queued', which is how an event
-      // drain gets its rows back when another process holds the driver lease.
-      // 'yielded' is neither: the offer was consumed at its slot, so nothing
-      // comes back and nothing is retried.
+      // The signal seam compensates on anything but 'queued'. 'yielded' is consumed: nothing is retried.
       settle: (refusal, yielded) => {
         if (yielded === true) {
           resolve({ status: 'yielded' });
@@ -726,9 +429,7 @@ export class ChatSession {
     this.queue.push(item);
 
     if (this.settlingDepth > 0) {
-      // Accepted, not started. `item.settle` still runs when the pump reaches
-      // it; resolving twice is harmless, and the caller gets an answer it can
-      // act on instead of a promise only it could complete.
+      // Accepted, not started; resolving twice is harmless.
       this.pump();
 
       return Promise.resolve({ status: 'queued' });
@@ -739,70 +440,29 @@ export class ChatSession {
     return promise;
   }
 
-  /** Is this fact already recorded in the durable transcript, already queued to
-   *  be, or being said right now? All three matter: a cold activation asks the
-   *  table, a second delivery inside one activation (recover + recoverOrphans
-   *  naming the same job) asks the queue, and a producer whose retry falls due
-   *  mid-turn asks the running key — neither of the others shows a turn that has
-   *  started and not yet persisted. */
+  /** Durable table (cold activation), queue (same activation), or the running key (mid-turn). */
   private hasAnnounced(identity: string): boolean {
     return this.announcementInFlight(identity) || this.announcementOnDisk(identity);
   }
 
-  /** Queued, or running right now. */
   announcementInFlight(identity: string): boolean {
     return this.runningAnnouncement === identity
       || this.queue.some((item) => item.idempotencyKey === identity);
   }
 
-  /** Recorded in the durable transcript — the half a later process can read. */
   announcementOnDisk(identity: string): boolean {
     return this.transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
   }
 
-  /** BackendHost seam — will there be a next step for a message to land on?
-   *
-   *  The actor owns the preparing/running boundary; settling has no next step.
-   *  A message received during asynchronous preparation can reach step zero.
-   *  A user turn this session has queued and not yet opened counts too: a
-   *  message arriving behind it rides that turn's first step rather than
-   *  queueing a turn of its own behind it.
-   *
-   *  A user splice and an event splice land at the same step tail as two
-   *  adjacent user-role messages, which every provider adapter groups into one
-   *  turn. */
+  /** Settling has no next step. A queued, unopened user turn counts: a message behind it rides its first step. */
   turnInFlight(): boolean {
     return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
   }
 
-  // ── Public driver API ──────────────────────────────────────────────
-
   /**
-   * Send the user's message — the one entry, whatever the session is doing —
-   * and answer where it LANDED, once that is known.
-   *
-   * A turn is running (or one this session queued has not yet opened): the
-   * message goes through the inbox. It lands at that turn's next step, where
-   * everything pending drains into one merged user message, and the answer is
-   * `'mid-turn'` at that step. Input that never sees a step boundary (the
-   * model was already writing its final answer) reruns as the immediate next
-   * turn, and the answer is `'turn'` when that turn has finished. The answer
-   * is never given at admission: which of the two happens is decided by the
-   * running turn, and a surface that read a guess as the truth counted a
-   * rerun's reply under the turn before it.
-   *
-   * Nothing is running: the message starts a user turn (and any programmatic
-   * turns it cascades) and the answer is `'turn'` when that turn has finished.
-   * Attachments (data-URL PromptFiles) become file parts on the turn's user
-   * message either way.
-   *
-   * REJECTS when the message did not land: another process holds this
-   * conversation's driver lease, so no turn ran, or an interrupt handed the
-   * words back before the model read them. Resolving would tell the person
-   * their words landed when they were dropped; the rejection says which.
-   *
-   * A caller that needs only the admission — the words are taken and owed a
-   * landing, which surfaces then follow as steer_status — uses {@link admit}.
+   * Send the user's message and resolve where it landed: `'mid-turn'` at a step or `'turn'` once its
+   * turn finished, never guessed at admission. Rejects when it did not land (lease refused, or handed
+   * back by an interrupt). Use {@link admit} for admission only.
    */
   async send(input: string | { text: string; files: ReadonlyArray<PromptFile> }, opts: SendOptions = {}): Promise<SendLanding> {
     const landing = Promise.withResolvers<SendLanding>();
@@ -812,16 +472,7 @@ export class ChatSession {
     return landing.promise;
   }
 
-  /**
-   * Admit the user's message: resolves once the words are reserved,
-   * announced, and owed a turn or a step, and rejects exactly where `send`
-   * refuses at the door. Where they land is decided later; a `landing` given
-   * here is registered under the message's id before the message can move,
-   * so it hears the landing however soon it comes. Without one, the landing
-   * reaches surfaces as steer_status (`landed`, `turn`, `returned`) — the
-   * channel a surface reads anyway, and one with no deadline, unlike a
-   * client call.
-   */
+  /** Resolves once the words are reserved and owed a landing; a `landing` is registered before the message can move. */
   async admit(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: SendOptions = {},
@@ -829,20 +480,16 @@ export class ChatSession {
   ): Promise<void> {
     const { text, files } = normalizePromptInput(input);
 
-    // The operator spoke: the reminder count starts over, whether these words
-    // splice into the live turn or open one of their own.
+    // The operator spoke: the reminder count starts over.
     this.taskReminders.noteUserPrompt();
 
-    // Nothing to say and nothing attached is not a message: refused at the
-    // door, never a blank turn or a blank steer the model is asked to read.
+    // Empty and unattached is refused at the door.
     if (text.trim() === '' && (files === undefined || files.length === 0)) {
       throw new KinuError('bad_input', 'send requires the message text');
     }
 
     if (this.turnInFlight()) {
-      // Identity is assigned on ACCEPTANCE, so the queued announcement, the
-      // landed one and the durable row are all the same message to a surface —
-      // which is what stops one being rendered twice under two names.
+      // Identity is assigned on acceptance, so a surface never renders the message twice.
       const id = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
       const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
@@ -851,9 +498,6 @@ export class ChatSession {
       if (landing !== null) this.landings.set(id, landing);
       const outcome = await this.actorSession.send(steer);
 
-      // Pending in the running turn's inbox, or queued as a turn of its own:
-      // either way the words are owed a landing, and the drain, the rerun's
-      // settle, or the interrupt answers it under this id.
       if (outcome === 'mid-turn' || outcome === 'queued') return;
       this.landings.delete(id);
       throw new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.');
@@ -861,16 +505,12 @@ export class ChatSession {
 
     const mode = opts.mode ?? 'build';
 
-    // The message's own facts, on the row it becomes: the mode it was typed
-    // under (build unless the composer said otherwise) and the tier it named.
     const metadata: JsonObject = {
       ...(opts.tier !== undefined && { profile_tier: opts.tier }),
       kinuMode: mode,
     };
 
-    // The acceptance and the row are the same fact: the pending_steers insert
-    // runs BEFORE the pump can begin the turn, so a process that dies after
-    // this line still owes the person the message it acknowledged.
+    // The pending_steers insert runs before the pump can begin the turn.
     const pendingSendId = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
     const turnId = opts.id ?? crypto.randomUUID();
 
@@ -880,10 +520,7 @@ export class ChatSession {
       text, files, metadata, kind: 'user',
       turnId, pendingSendId,
       settle: (refusal) => {
-        // A refusal means this process never owed the message — another driver
-        // took it — so the reservation goes with the refusal. Leaving it
-        // would re-deliver the words under the next session after the caller
-        // was already told no.
+        // A refusal takes the reservation with it, or the words would be re-delivered after the caller was told no.
         if (refusal) this.pendingSends.retire([pendingSendId]);
         this.settleLandings([turnId], refusal === null ? 'turn' : refusedLanding(refusal));
       },
@@ -891,7 +528,6 @@ export class ChatSession {
     this.pump();
   }
 
-  /** Answer the callers awaiting these messages' landings, if any. */
   private settleLandings(ids: readonly string[], fate: SendLanding | KinuError): void {
     for (const id of ids) {
       const landing = this.landings.get(id);
@@ -904,16 +540,10 @@ export class ChatSession {
     }
   }
 
-  /** Abort the in-flight turn (Ctrl+C / Esc). Pending steers are dropped —
-   *  an interrupt means "stop", not "stop and do what I typed" — but the
-   *  dropped texts are RETURNED so the surface can hand them back to the
-   *  user (the composer restore), never lose them silently: the chat already
-   *  rendered them as sent. */
+  /** Pending steers are dropped and returned so the surface can restore them. */
   interrupt(): string[] {
     const returned = this.actorSession.interrupt();
-    // The words came back to the surface: the reservation they were held under
-    // is spent, or a restart would re-deliver a steer the operator watched come
-    // back as text. A steer that carries no id never wrote a row to spend.
+    // The returned words' reservation is spent, or a restart would re-deliver them.
     const ids = returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]);
     this.pendingSends.retire(ids);
     this.settleLandings(ids, new KinuError('cancelled', 'The turn was stopped before the agent read this message; it is back in the composer.'));
@@ -921,25 +551,12 @@ export class ChatSession {
     return returned.map((steer) => steer.text);
   }
 
-  /** Stop the turn on screen (the composer's Stop button): the in-flight
-   *  model request is aborted, and the steers the model never saw STAY
-   *  queued — the settle reruns them as the operator's next user-origin turn.
-   *  The other verb, {@link interrupt}, hands them back instead. */
+  /** Unseen steers stay queued and rerun; {@link interrupt} hands them back instead. */
   stop(): void {
     this.actorSession.stop();
   }
 
-  /**
-   * Continue the conversation from before `entryId` — the operator's walk-back,
-   * and the ONE refusal that governs it: this loop's queue and the turn running
-   * on it are what "a turn is in flight" means, so the loop answers it for
-   * both backends.
-   *
-   * The event is emitted after the store has moved and the working history has
-   * been re-read, and its delivery is awaited: a surface redraws from the
-   * reverted transcript, so the caller's answer must not arrive before the
-   * redraw was sent.
-   */
+  /** The loop's queue and running turn define "in flight" for both backends. The event's delivery is awaited so the redraw precedes the answer. */
   async revertTo(entryId: string): Promise<void> {
     await this.actorSession.revertConversation(this.sessionId, entryId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', REVERT_NEEDS_IDLE);
@@ -948,24 +565,10 @@ export class ChatSession {
     await this.flushEvents();
   }
 
-  /** Run any pending event drain to completion NOW, bypassing the ~250ms
-   *  debounce window. The scheduler daemon fires due triggers then ends the
-   *  session immediately, so the debounced drain fireDueTriggers armed would
-   *  never fire (end() sets `ended`, and the drain timer skips when ended) —
-   *  the fired trigger's autonomous turn would be silently dropped. A batch
-   *  tick calls this before end() to flush its work synchronously. A direct
-   *  drain is safe: pending events are durable in the EventLog until
-   *  markConsumed, so drainPendingEvents consumes-or-returns them exactly once.
-   *  Interactive sessions keep the debounced path untouched — end() on Ctrl-C
-   *  must not suddenly run an autonomous turn. */
+  /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
   async flushPendingDrains(): Promise<void> {
     if (this.ended) return;
-    // Gated HERE as well as at the pump, because the drain BINDS the rows it
-    // selects (markConsumed) on its way to the pump. A refusal one step later
-    // is recoverable — the queue item settles refused and the drain hands the
-    // rows back — but a refusal here means they were never bound at all, which
-    // is the outcome to prefer when the answer is already knowable. The gate is
-    // the same object either way, and re-asking it costs one row read.
+    // Gated here too, because the drain binds rows on its way to the pump.
     const refusal = this.ports.driverGate();
 
     if (refusal) {
@@ -977,26 +580,7 @@ export class ChatSession {
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
-  /**
-   * Re-pend the event deliveries a dead process left leased.
-   *
-   * A drain BINDS its selected events to a synthetic `evt-…` turn and opens a
-   * recovery lease on them (`consumed_at`), then hands them to the signal seam,
-   * which either splices them into the live turn or queues one. Everything from
-   * that point until the turn's answer is on disk lives in ONE process's memory:
-   * kill it there and the rows stay bound to a turn nobody will ever run —
-   * invisible to `pending()`, so no later drain, wake or restart can see them.
-   * An event the log admitted then simply never happens.
-   *
-   * There is no clock here and there does not need to be one — see
-   * {@link NO_STRANDED_DELIVERY_GRACE} for why the lease this runs under is the
-   * whole argument. An answered delivery is never open, because a turn that
-   * reached disk closes its own lease ({@link closeEventDeliveryLeases}), which
-   * is what makes reclaiming the rest a recovery rather than a re-delivery.
-   *
-   * Call once at startup, before the recovery drain, so the rows it hands back
-   * are in that same drain's selection.
-   */
+  /** Call once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
   reclaimStrandedEventDeliveries(): void {
     const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
 
@@ -1009,12 +593,8 @@ export class ChatSession {
     });
   }
 
-  // ── Internals ──────────────────────────────────────────────────────
-
-  /** Deliver one event in order; {@link flushEvents} awaits whatever is still in flight. */
   emit(event: SessionEvent): void {
-    // A frontend listener's throw must not kill the agent loop; it is stated
-    // on stderr, the one channel left once the event stream itself failed.
+    // A listener's throw must not kill the loop; stderr is the one channel left.
     const failed = (cause: KinuError): void => {
       diagnostics.failure('session.event_listener_failed', cause, { eventType: event.type });
     };
@@ -1046,21 +626,14 @@ export class ChatSession {
     while (this.delivery !== null) await this.delivery;
   }
 
-  /** Kick the serialized turn pump if idle — idempotent, so a concurrent
-   *  enqueueTurn just appends and the running pump picks it up. The active
-   *  run's promise is tracked (pumpPromise) so settleBackgroundWork() can
-   *  await wake turns to completion. */
+  /** Idempotent; the active run's promise is tracked for settleBackgroundWork(). */
   pump(): void {
     if (this.pumpActive) return;
     this.pumpActive = true;
     const running = this.runPump();
 
-    // Assigned only if the pump is STILL running. `runPump` on an empty queue
-    // reaches no await, so it runs to completion inside this call and clears both
-    // fields on its way out — an unconditional assignment would reinstate a
-    // resolved promise as the live one, which every later `settleBackgroundWork`
-    // spins on forever. An empty kick is legitimate (a startup replay makes one),
-    // so the guard belongs here rather than at each caller.
+    // Assigned only if still running: an empty-queue run completes synchronously, and reinstating its
+    // resolved promise would spin settleBackgroundWork forever.
     if (this.pumpActive) this.activePump = running;
   }
 
@@ -1069,18 +642,8 @@ export class ChatSession {
       let item: QueueItem | undefined;
 
       while ((item = this.queue.shift())) {
-        // Checked per ITEM, immediately before the turn runs. A turn is the
-        // longest thing this process does and it writes the conversation, so
-        // two processes running turns over one database interleave them. An
-        // interactive gate takes the lease from a daemon here, which is what
-        // stops a user's turn landing inside a daemon-driven one; a gate that
-        // refuses means another process of this same kind is driving, and
-        // there is nothing to wait for.
-        //
-        // Settled with the refusal rather than emitted as an error: this turn
-        // did not run, and the ONE thing that must happen is that its producer
-        // hears so — an event drain compensates its rows back to pending, a
-        // person's send fails loudly. The producer owns what to say about it.
+        // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
+        // compensates.
         const refusal = this.ports.driverGate();
 
         if (refusal) {
@@ -1089,25 +652,18 @@ export class ChatSession {
           continue;
         }
 
-        // A turn that was OFFERED yields inside its slot: the check is here,
-        // at dequeue, never at admission — a user item queued after the offer
-        // was taken, or an operator row already durable, means somebody spoke
-        // first and that message is the turn now. Nothing runs, nothing is
-        // persisted; the offer is consumed.
+        // Checked at dequeue, never admission: somebody spoke first, so the offer is consumed.
         if (item.yieldsToUserMessage === true
           && (this.queue.some((queued) => queued.kind === 'user')
             || await this.transcript.operatorSpoke())) {
           diagnostics.event('genesis.yielded_to_message', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
-          // Durable beside the event: the ledger a reader opens after the fact.
           this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
           item.settle(null, true);
           continue;
         }
 
-        // The key of the turn about to run, so a producer asking whether this
-        // fact is already being said gets a truthful answer while it is.
         this.runningAnnouncement = item.idempotencyKey ?? null;
 
         try {
@@ -1124,29 +680,13 @@ export class ChatSession {
         }
       }
     } finally {
-      // Cleared synchronously as the loop exits — NOT in a .finally() callback,
-      // whose microtask would run after a just-resolved send()'s continuation
-      // and leave `pumping` stale-true, so the next send()'s pump() would no-op
-      // and orphan its queued turn.
+      // Cleared synchronously, not in .finally(): the microtask would leave `pumping` stale and orphan a queued turn.
       this.pumpActive = false;
       this.activePump = null;
     }
   }
 
-  /**
-   * A harness turn a terminal effect owes — the completion gate's confirming
-   * turn, the overflow retry — appended behind everything queued under the
-   * effect's own idempotency key, and kicked.
-   *
-   * Appended rather than unshifted, so anything already queued runs first — it
-   * verifies FINAL state. The pump is a no-op while one is running, which is
-   * the live case; on a startup replay there is no pump yet, and without this
-   * kick the turn would sit in the queue until some unrelated message arrived.
-   * The effect has already asked {@link announcementOnDisk} and
-   * {@link announcementInFlight}; a settle of `() => {}` because the effect
-   * that queued it does not wait on it — the turn's own durable row is what the
-   * effect's next replay finds.
-   */
+  /** Appended, not unshifted, so it verifies final state; kicked because a startup replay has no pump yet. */
   appendOwedTurn(input: { text: string; idempotencyKey: string; event: string }): void {
     this.queue.push({
       text: input.text,
@@ -1158,23 +698,9 @@ export class ChatSession {
     this.pump();
   }
 
-  /**
-   * Seal the in-flight run via the shared core turn-lifecycle bracket.
-   * Idempotent per run — clearing the id makes a second call a no-op.
-   *
-   * Takes the NAME, not the facts. `classifyRunEnd` owns the vocabulary and
-   * each caller runs it exactly once — it also reports the mid-work defect, so
-   * a second classification of one turn files the same defect twice. Computing
-   * `hadError ? 'error' : 'completed'` at a call site instead would seal a Stop
-   * as `'error'` — an interrupt throws `INTERRUPTED_TURN` and the catch folds
-   * that into `hadError` — while the cloud seals it `'aborted'`, counting the
-   * same user action as a failure on one backend and a choice on the other.
-   */
+  /** Idempotent per run. Takes the name: `classifyRunEnd` runs once per turn, so a Stop seals `aborted` on both backends. */
   private closeRun(end: RunEndClassification, lease: ActorTurnLease): RunEndReason {
-    // The durable claim closes under the SAME name the run does. It is settled
-    // before the early return below, because a second `closeRun` for one run is
-    // a no-op on the run row and must not leave the claim open either — and the
-    // claim's own settle is idempotent per turn.
+    // Settled before the early return, under the same name as the run.
     if (this.actorSession.turnClaim !== null) this.actorSession.settleTurnClaim(lease, end.reason);
 
     if (!this.runId) return end.reason;
@@ -1199,34 +725,16 @@ export class ChatSession {
     return end.reason;
   }
 
-  /**
-   * Run one queued turn under the guarantee every surface above depends on: a
-   * turn that starts always terminates — exactly one `turn-end`, and a run that
-   * is always closed.
-   *
-   * The turn's own stream has a failure path that emits `error`, flags the
-   * accumulator and finalizes normally. Everything BEFORE that stream exists —
-   * resolving the model, the skills, the system prompt — had no such path and
-   * threw straight out of the method, past an opened run and before any
-   * `turn-end`. The pump then logged it to stderr and resolved the caller, so a
-   * turn that never ran a step was reported as a turn that succeeded.
-   */
+  /** A started turn always terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
   private async processTurn(item: QueueItem): Promise<void> {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     const mode = workModeForTurnMetadata(item.metadata);
-    // The id the turn's opening row will carry, decided HERE rather than at
-    // persist time: the effect claims a tool makes mid-turn are keyed to it, and
-    // a re-announced programmatic turn must key to the same one its first
-    // announcement did — which is exactly what its idempotency key gives it.
+    // Decided here, not at persist: mid-turn effect claims are keyed to it.
     this.turnId = item.kind === 'programmatic'
       ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
       : item.turnId ?? crypto.randomUUID();
-    // The answer's id, minted with the turn's: the roster keys on it at the
-    // commit, and a transport streams the answer under it from the first chunk,
-    // so the row the client builds live and the row persisted are one message.
-    // A re-opened turn keeps the id it was streaming under: the client that
-    // reconnects holds that message, and the answer is one row either way.
+    // Minted with the turn; a re-opened turn keeps the id it was streaming under.
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
@@ -1245,28 +753,20 @@ export class ChatSession {
     });
 
     const startedAt = Date.now();
-    // Open this turn's run in the durable event log (core turn-lifecycle).
-    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
-    // one names its trigger. A re-opened turn continues the run it was left
-    // in; only a new turn opens a run.
+    // A re-opened turn continues its run; only a new turn opens one.
 
-    // The re-opened run is this run now, named by `runId` for as long as it
-    // runs; nothing else is held open on its behalf.
     if (this.reopenedRunId === this.runId) this.reopenedRunId = null;
 
     const lease = this.actorSession.beginTurn(
       { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,
     );
 
-    // The run row already exists for a continuation: what follows appends to
-    // it, and the identity it carries is the one being continued.
     if (item.continuation === undefined) openTurnRun(this.eventRecorder, this.runId, {
       agentId: lease.actorId,
       causedBy: event ?? 'chat',
       userMessage: item.text,
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
-      // The turn this run is for, so a process that dies inside it leaves the
-      // next one enough to re-open the same turn where it stopped.
+      // Enough for the next process to re-open the same turn.
       turn: {
         turnId: this.turnId, messageId: this.messageId, kind: item.kind, text: item.text,
         ...(item.metadata !== undefined && { metadata: item.metadata }),
@@ -1275,13 +775,7 @@ export class ChatSession {
       },
     });
 
-    // The turn's own wake, armed at its synchronous open: a kill inside the
-    // turn leaves the run row and the wake that re-drives it, rather than the
-    // row alone with nothing scheduled to notice it. Soonest-wins, so this is
-    // free when another wake already rides. At the recovery CEILING, not the
-    // first lap: this row seeds the chain for a kill, and the tick it delivers
-    // keeps a row while the turn is still open — it is not a maintenance pass
-    // inside every turn longer than a second.
+    // Armed at the synchronous open, at the recovery ceiling; soonest-wins.
     await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
@@ -1300,25 +794,7 @@ export class ChatSession {
     }
   }
 
-  /**
-   * Close the recovery lease on every event delivery THIS turn answered.
-   *
-   * A drain stamps the synthetic turn its rows are bound to onto whatever
-   * absorbed them: `drainTurnId` on the turn it queued, `replyTurnId` on the
-   * signal a live turn spliced. Both are read here, because both are ways an
-   * event gets answered and only one of them starts a turn of its own.
-   *
-   * The BINDING stays — it is what stops a second drain re-delivering the same
-   * event, and reply-channel and audit reads find the rows by it. The LEASE is
-   * the separable claim "a running turn still owes this delivery an answer",
-   * and closing it is the whole difference between an answered delivery and one
-   * {@link reclaimStrandedEventDeliveries} must hand back. The cloud backend
-   * closes it in `completeEventBatch`, after the outbound replies its turn owed;
-   * a local session has no transport in front of its reply channels, so the
-   * durable answer is all of what it owes.
-   */
-  /** The event deliveries the turn in flight has answered so far: the drain
-   *  turn it was queued for, and the reply turn of every signal absorbed. */
+  /** Closes the lease, keeping the binding that stops re-delivery. Reads both `drainTurnId` and `replyTurnId`. */
   private answeredDeliveries(item: QueueItem): ReadonlySet<string> {
     const answered = new Set(this.actorSession.orchestrator.inbox.answeredDeliveries);
     const queued = v.safeParse(v.string(), item.metadata?.drainTurnId);
@@ -1341,8 +817,6 @@ export class ChatSession {
     for (const turnId of drainTurns) this.eventLog.markTurnCompleted(turnId);
   }
 
-  /** The turn as it stands — the one shape the normal end and both failure
-   *  paths report. */
   private snapshotTurn(item: QueueItem, assistantResponse: string, turnId?: string | null): CompletedTurn {
     const completedTurn: Parameters<typeof snapshotCompletedTurn>[1] = {
       userMessage: item.text,
@@ -1356,17 +830,8 @@ export class ChatSession {
     return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
   }
 
-  /** The turn itself: assemble it, stream it, finalize it. Everything here may
-   *  throw; processTurn owns what that means. */
-  /**
-   * The in-flight step's output, made durable at the partial cadence: the
-   * text so far and the tool calls issued so far with their results, written
-   * on the step's first delta and then every {@link PARTIAL_FLUSH_EVERY}
-   * chunks, and at once when a tool answers. `step_finish` supersedes it for a
-   * step that finishes; a step that does not is what a continuation resumes
-   * from. Step indices count from the steps a continuation already carries,
-   * so the row names the same step the accumulator does.
-   */
+  /** Everything here may throw; processTurn owns what that means. */
+  /** `step_finish` supersedes it; indices count from the steps a continuation already carries. */
   private partialLedger(continuation: TurnContinuation | undefined) {
     let stepIndex = (continuation?.steps.length ?? 0) + 1;
     let text = '';
@@ -1396,8 +861,7 @@ export class ChatSession {
               ? { ...call, ...(event.success ? { result: event.result } : { error: event.error ?? event.result }) }
               : call);
             flush('settled');
-            // Any tool result is progress on the last reminder — the model
-            // answered it with work, so the next settle is judged fresh.
+            // Any tool result is progress on the last reminder.
             this.taskReminders.noteToolResult();
 
             return;
@@ -1420,12 +884,6 @@ export class ChatSession {
   private async runTurn(item: QueueItem, eventName: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
-    // The one rule for where the turn's conversation comes from, on both
-    // backends: a delivery's reply turn opens on the settled working revision
-    // (born from the delivery's conversation when this actor has none), every
-    // other turn appends, and prior output follows either. The message shape
-    // is a function of the input alone, so it is built here and not in each
-    // backend's prepareTurn.
     await this.actorSession.openTurnInput(lease, {
       item: input,
       message: turnInputMessage(input),
@@ -1435,14 +893,10 @@ export class ChatSession {
     const prepared = await this.ports.prepareTurn(input, lease);
 
     const partial = this.partialLedger(item.continuation);
-    /** Whether this process streamed anything of the answer at all — a token
-     *  or a call. A Stop before that leaves the operator's row alone. */
+    /** A Stop before any output leaves the operator's row alone. */
     let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
 
-    // A REAL provider request is about to run. It reads and rewrites the prefix
-    // itself, so any warm armed for the previous turn is void from here — and
-    // the durable counter this bumps is what stops a wake that fires mid-turn
-    // from adding a refresh beside the request in flight.
+    // A real request voids any armed warm; the durable counter stops a mid-turn wake from adding a refresh.
     this.ports.cacheWarming?.noteRequest();
 
     const execution = await this.actorSession.execute(lease, {
@@ -1474,18 +928,11 @@ export class ChatSession {
       }).enqueueRetry;
     }
 
-    // HOW THIS TURN ENDED, named once and read by everything downstream: the
-    // answer row's metadata, the roster's status, the claim and the run row.
-    // Once, because the classifier also files the mid-work defect, and a turn
-    // classified twice files it twice.
+    // Classified once: the classifier also files the mid-work defect.
     const facts: RunEndFacts = {
       completed: runError === null,
       interrupted,
       ...(runError !== null && { errorText: runError }),
-      // Unbounded here (runChat hands `stopWhen` straight to streamText), so
-      // this reads 'stop' on a turn that finished by itself. Reported anyway:
-      // a caller that does pass a real stop condition gets the same honest
-      // seal the cloud loop gets, from the same classifier.
       lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
     };
 
@@ -1497,21 +944,16 @@ export class ChatSession {
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
       id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
       turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
-      // The one terminal state a reader cannot infer from the answer itself:
-      // the turn stopped with work still pending, so the row says so and every
-      // surface reading it back — after a reload, in another tab — says so too.
       ...(end.reason === 'incomplete' && { metadata: { [TURN_END_METADATA_KEY]: end.reason } }),
     }) : null;
 
-    // The turn's whole durable record, in ONE commit — see {@link commitTurn}.
+    // One commit — see {@link commitTurn}.
     const commit = this.commitTurn({
       item,
       event: eventName,
       startedAt,
       assistantText: fullText,
-      // A turn cut before its first token has no answer row: the operator's
-      // row stands alone, on both backends, as it did before the switch — an
-      // empty assistant row was an empty bubble on every reload.
+      // A turn cut before its first token has no answer row.
       assistantRow: streamed || !interrupted,
       preparedAssistant,
       runError,
@@ -1522,16 +964,8 @@ export class ChatSession {
       overflowRetry,
     });
 
-    // Turn over for signal delivery — the same spine the cf backend runs, and
-    // for the same reason: exactly once per turn, after the actor enters
-    // settling, so late signals re-deliver rather than target a nonexistent step,
-    // outside every failure path, so nothing that throws can skip it.
-    //
-    // The verdict includes DURABILITY. A turn whose answer never reached disk
-    // did not answer the events its signals carried, so `completed: false` is
-    // the honest report: the seam re-queues them, and a re-delivery that cannot
-    // be queued hands their bound event rows back to pending. Settling them as
-    // answered leaves those rows bound forever to a turn nothing can read back.
+    // Exactly once per turn, after the actor enters settling, outside every failure path. A turn whose
+    // answer never reached disk reports `completed: false` so its events are re-queued.
     const durable = runError === null && 'committed' in commit;
     const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });
 
@@ -1546,10 +980,7 @@ export class ChatSession {
         errorText: runError ?? message.slice(0, 500),
       }), lease);
       diagnostics.failure('turn.persist_failed', commit.failure);
-      // The answer is not durable, so it is not published as one. The stream's
-      // deltas already went out — they are what the operator watched happen —
-      // but the terminal event carries no final answer, because a restart reads
-      // this turn back as a turn that produced nothing.
+      // Not durable, so the terminal event carries no final answer.
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
 
@@ -1559,24 +990,13 @@ export class ChatSession {
     const { turn, owed, transition } = commit.committed;
 
     try {
-      // The NEXT turn's measured compaction trigger (core turn-lifecycle).
       persistMeasuredPromptTokens(this.compactionState, prepared.sessionKey, this.actorSession.orchestrator.acc.lastPromptTokens, prepared.historyLength);
-      // The prefix this turn's LAST request left warm, if the provider's answer
-      // says it is worth keeping. The lane decides — one policy, both backends
-      // — and arms the backend's own durable wake; the request it would replay
-      // is the accumulator's, byte for byte.
+      // The lane decides whether the prefix is worth keeping.
       this.armCacheWarm(prepared);
 
       this.closeRun(end, lease);
-      // Core drives everything the settled turn causes from here: the in-process
-      // guard, the durable claim, the roster, the run and the close are ONE
-      // state machine, and this backend supplies only what it owns — the effect
-      // bodies below and the fiber that keeps the process alive for the
-      // detached tail. Until this existed the CLI released its claims the
-      // moment the transcript was persisted and had no recovery at all, so a
-      // device killed here lost the whole suffix.
-      //
-      // The core ledger already holds the roster committed with the answer.
+      // Core drives the settled turn's effects as one state machine; this backend supplies the bodies and
+      // the fiber. The ledger already holds the roster committed with the answer.
       this.settlingDepth += 1;
 
       try {
@@ -1592,9 +1012,6 @@ export class ChatSession {
     } catch (err) {
       const message = renderThrownChain({ cause: err });
       this.actorSession.orchestrator.acc.hadError = true;
-      // Finalization threw, so whatever the stream reported is superseded by a
-      // turn that could not be closed out — and an interrupt does not reach
-      // here, since `interrupted` is sealed on the arm above.
       this.closeRun(classifyRunEnd({
         completed: false,
         interrupted: false,
@@ -1604,25 +1021,13 @@ export class ChatSession {
         'turn.finalization_failed',
         toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
       );
-      // The answer IS durable here — the commit ran above, before the signal
-      // settle, so what failed is the bookkeeping around a turn a restart can
-      // still read back. That is why this path still reports the answer it
-      // reports: the failure is stated, and the turn is terminal either way.
-      // The intent row STAYS: the transition may never have been claimed.
+      // The answer is durable; only bookkeeping failed. The intent row stays: the transition may never have been claimed.
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn });
     }
   }
 
-  /**
-   * Hand the finished turn's last request to the warming lane.
-   *
-   * The spec comes from the turn's own prompt-cache identity, because that is
-   * what the request was addressed to and what the replay must be addressed to:
-   * a turn whose cache plan names no provider addressed no cache, so there is
-   * nothing to keep warm. Nothing here decides whether a warm happens — the
-   * lane's policy does.
-   */
+  /** No provider in the cache plan means nothing to keep warm. */
   private armCacheWarm(prepared: PreparedTurn): void {
     const lane = this.ports.cacheWarming;
     const cache = prepared.execution.chat.cache;
@@ -1636,53 +1041,29 @@ export class ChatSession {
   }
 
   /**
-   * Make this turn durable — the answer, the verdict its run row is sealed with
-   * and the frozen roster of everything the answer owes — as ONE commit.
-   *
-   * The roster is the only thing a later start can recover the suffix FROM, so
-   * it lands in the SAME commit as the answer. A whole finalization later — the
-   * assistant row here, core's claim after the signal settle, the compaction
-   * bookkeeping and the run seal — a process killed anywhere in between leaves
-   * a durable answer with no claim, and `resumeAll()` finds CLAIMS, so it finds
-   * nothing and that turn's takes, branches, recording, drain, trial and title
-   * are lost with nothing on disk saying they were owed. The intent row written
-   * inside this transaction is what closes that window.
-   *
-   * The transaction is the raw handle's, because `rt.storage.sql` and this
-   * session's `db` are the same connection — the runtime is built over it — so
-   * the messages, the intent and nothing else commit or roll back together.
-   *
-   * Never throws. A failure here is a turn whose answer did not reach disk, and
-   * the caller reports that as a turn that produced nothing.
+   * The answer, its run verdict and the frozen roster in one commit, since `resumeAll()` finds claims.
+   * Uses the raw handle: `rt.storage.sql` and `db` share the connection. Never throws.
    */
   private commitTurn(input: {
     readonly item: QueueItem;
     readonly event: string | undefined;
     readonly startedAt: number;
     readonly assistantText: string;
-    /** Whether an assistant row is written at all. False only for a turn
-     *  interrupted before it streamed anything. */
+    /** False only for a turn interrupted before it streamed anything. */
     readonly assistantRow: boolean;
     readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
     readonly interrupted: boolean;
-    /** How the turn ended, classified ONCE by the caller — see `closeRun`. */
+    /** Classified once by the caller — see `closeRun`. */
     readonly end: RunEndClassification;
-    /** The turn's inference history, for the shadow trial's recorded replay. */
     readonly trialContext: readonly ModelMessage[];
-    /** The tool surface the turn could reach, for the advisor's snapshot. */
     readonly reachableTools: readonly string[];
     readonly overflowRetry: boolean;
   }): TurnCommit {
     const { item, runError } = input;
 
-    // THE OUTPUT-LIMIT CONTINUATION, decided at the one moment all three facts
-    // are readable: the accumulator's last finish reason (reset at the next
-    // turn's start), the driving item, and what this turn absorbed. A turn
-    // already IS the continuation two ways, and both spend it: queued as its
-    // own turn (the `kinuEvent` stamp on the item) or spliced into a running
-    // one (the same signal at a step boundary). Reading only the first would
-    // let a spliced continuation earn a second one; the bound is exactly one.
+    // At most one output-limit continuation: a turn is already one if queued (item stamp) or spliced
+    // (absorbed signal).
     const outputContinuation = owesOutputLimitContinuation({
       completed: runError === null,
       lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
@@ -1691,20 +1072,13 @@ export class ChatSession {
     });
 
     try {
-      // One durable row PER steer (not per drain): the walk-back fork pivot
-      // matches individual user messages verbatim, exactly as surfaces and the
-      // JSONL transcript recorded them. A turn the harness enqueued opens on a
-      // `programmatic:`-prefixed row that also carries its provenance — the
-      // stamped metadata is what states authorship at rest; the prefix only keys
-      // the idempotency.
+      // One row per steer: the walk-back pivot matches individual messages. A harness turn's row carries its
+      // provenance; the `programmatic:` prefix only keys idempotency.
       const turnId = this.turnId ?? crypto.randomUUID();
-      // Minted at admission rather than inside `persist`, because the roster
-      // keys on it and the roster is frozen before the write.
+      // Minted at admission: the roster, frozen before the write, keys on it.
       const messageId = this.messageId;
 
-      // The confirming turn is over: what the agent did with its free re-look
-      // IS the gate's conversion number, and the run row carries it. Before the
-      // roster, so the turn that ANSWERED a gate cannot be gated again.
+      // Before the roster, so the turn that answered a gate cannot be gated again.
       if (input.event === COMPLETION_GATE_EVENT) {
         this.completionGate.settle({ toolCalls: this.actorSession.orchestrator.acc.toolCalls.length });
       }
@@ -1712,16 +1086,7 @@ export class ChatSession {
       const status = input.end.reason;
       const turn = this.snapshotTurn(item, input.assistantText, messageId);
 
-      // The stop-time reminder, decided where the list, the answer and the
-      // outcome are all readable together. The decision mutates the tracker —
-      // it IS the firing — so it runs exactly where the roster is frozen.
-      // The tracker is RAM anyway: a process cut loses the count wholesale,
-      // and the ledger row is what makes the delivery once-only.
-      //
-      // A turn that IS the reminder never owes another: its settle would read
-      // the same open list, and any tool call it made clears the progress
-      // latch — answering a reminder with a reminder is the loop, cut at the
-      // source rather than bounded by the cap.
+      // Decided where the roster is frozen: the decision is the firing. A turn that is the reminder never owes another.
       const taskReminder = input.event === TASK_REMINDER_EVENT
         ? null
         : this.taskReminders.decide({
@@ -1732,18 +1097,13 @@ export class ChatSession {
           asyncWakePending: this.ports.hasPendingAsyncWake(),
         });
 
-      // The roster keys every effect on the answer row; a turn cut before its
-      // first token writes none, and the roster's contract for that is an
-      // empty id, not an identity no effect could ever read back.
+      // No answer row: the roster's contract is an empty id.
       const answerId = input.preparedAssistant === null ? '' : messageId;
 
       const owed = this.ports.owedTerminalEffects({
         turn,
         status,
-        // Alternate Takes and steer branches were both captured mid-turn, before
-        // this id existed, and both are attributed to it — one decision, made by
-        // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
-        // here and again in the cf backend's onChatResponse.
+        // Attribution is core's (`creditedTurnId`, orchestrator/turn-lifecycle.ts).
         credited: creditedTurnId({
           messageId: answerId, completed: runError === null, workMode: this.actorSession.workMode,
         }),
@@ -1770,8 +1130,7 @@ export class ChatSession {
       this.transaction(() => {
         this.persist(input.preparedAssistant);
 
-        // The reservation the queue item was admitted as is spent by its own
-        // durable row — same transaction, so a restart sees one or neither.
+        // Same transaction, so a restart sees one or neither.
         this.pendingSends.retire([
           ...(item.pendingSendId === undefined ? [] : [item.pendingSendId]),
           ...(item.steerIds ?? []),
@@ -1782,8 +1141,7 @@ export class ChatSession {
 
       return { committed: { messageId, turn, owed, transition } };
     } catch (cause) {
-      // Classified AT the boundary that caught it rather than stored raw and
-      // interpreted later: this is the only place that knows what it was doing.
+      // Classified at the boundary that caught it.
       return {
         failure: toKinuError({
           doing: 'committing the finished turn and the roster its answer owes',
@@ -1801,19 +1159,9 @@ export class ChatSession {
     if (assistant !== null) this.transcript.appendAssistant(assistant);
   }
 
-  // ─── The pending-send ledger ─────────────────────────────────────────────
-  // One rule, one store, both backends: a send is a row before the client
-  // hears it. `this.pendingSends` is core's PendingSendStore over the
-  // workspace's own bun:sqlite database; the cf actor holds the same object
-  // over its Durable Object storage.
+  // The pending-send ledger: a send is a row before the client hears it.
 
-  /** The two facts one drain makes durable, in one transaction: the landed
-   *  user rows a surface reads, and the retirement of the reservations they
-   *  spent. Either both exist or neither does. The rows chain: the first under
-   *  the turn's opening message — durable at admission, so it is always on disk
-   *  here — and each later one under the steer before it, so a walk up from
-   *  the answer reaches every steer the model read. The stamp is the one
-   *  `describeLandedSteers` already gave each row. */
+  /** Landed rows and spent reservations in one transaction; rows chain from the opening message. */
   private async prepareLandedSteers(rows: readonly LandedSteerRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
     const turnId = this.turnId;
     const runId = this.runId;
@@ -1831,40 +1179,20 @@ export class ChatSession {
         this.pendingSends.retire([entry.id]);
       }
 
-      // Durable in the running turn: the one moment `'mid-turn'` is a fact.
       this.settleLandings(prepared.map((entry) => entry.id), 'mid-turn');
     };
   }
 
-  /** The turn a steer's reservation is bound to: the live turn when one is
-   *  running, else the user turn already admitted at the head of the queue —
-   *  the steer will land in its first step, so its row must name it. */
+  /** The live turn, else the admitted user turn at the queue head. */
   private steerTurnId(): string | null {
     if (this.actorSession.inFlight) return this.turnId;
 
     return this.queue.find((item) => item.kind === 'user')?.turnId ?? this.turnId;
   }
 
-  /**
-   * AN INTERRUPTED TURN CONTINUES — session start's half.
-   *
-   * The run ledger names the turn the last process died inside (`run_start`
-   * carries the turn's identity; `run_end` never came) and holds what it had
-   * produced: the finished steps' messages and the cut step's partial. That
-   * turn is re-queued FIRST, under its own opening row and answer id, with
-   * that output as its prior output, so the model picks up where it stopped.
-   * The reservation the turn was admitted from is still on disk — the commit
-   * that would have retired it never ran — so it is claimed by the re-opened
-   * item here, and {@link restorePendingSends} leaves it alone rather than
-   * queueing the same words a second time.
-   *
-   * The degenerate case: a turn cut before any output has an empty ledger, and
-   * the re-opened item is the same turn run again.
-   */
+  /** Re-queues the turn the last process died inside, first, with its output as prior output; its reservation is claimed here so {@link restorePendingSends} skips it. */
   private reopened: string | null = null;
-  /** The turn {@link restoreOpenTurn} re-opened, whose bound sends are its own. */
   private reopenedTurnId: string | null = null;
-  /** The run that turn continues under, held until the loop runs it. */
   private reopenedRunId: string | null = null;
 
   private restoreOpenTurn(): void {
@@ -1908,27 +1236,16 @@ export class ChatSession {
     });
   }
 
-  /** Session start's half of the send rule: the rows a dead process left
-   *  acknowledged, restored before any new work runs. Mid-turn rows re-enter
-   *  the inbox (they land in the next turn's first step); idle-queued rows
-   *  re-enter the pump in sequence order as turns of their own — the same
-   *  sweep the cf backend runs on wake, over this workspace's own store. */
+  /** Mid-turn rows re-enter the inbox; idle rows re-enter the pump in sequence order. */
   private restorePendingSends(): void {
-    // The row a re-opened turn was admitted from is that turn's, not a send to
-    // rerun; the rows bound to the re-opened turn land in its first step.
+    // Rows bound to the re-opened turn land in its first step.
     const rows = this.pendingSends.restore().filter((row) => row.id !== this.reopened);
 
     if (rows.length === 0) return;
 
     const midTurn: (UserSteer & { mode: WorkMode })[] = [];
-    // Sends bound to a turn no process is running any more — the activation
-    // that owned that turn died before its settle, and this one re-opened a
-    // different turn or none. Swept per dead turn into ONE user-origin rerun,
-    // the words in the order they were accepted, under the narrower mode any
-    // of them was typed in — plan, which admits reads and a review but no
-    // effect, so a message typed for review is never run for effect because
-    // it was merged with one that was: merging never widens what a message
-    // was typed under. Their reservations are spent by that rerun's own row.
+    // Sends bound to a dead turn: one rerun per turn, in acceptance order, under the narrowest mode (plan).
+    // Merging never widens a message's mode.
     const dead = new Map<string, PendingSendRow[]>();
     let queued = 0;
 
@@ -1936,8 +1253,7 @@ export class ChatSession {
       if (row.turnId === null) {
         this.queue.push({
           text: row.text, kind: 'user', turnId: crypto.randomUUID(),
-          // Re-run of an acknowledgement, not a fresh send: kept ahead of
-          // anything the new session admits, in the order they were accepted.
+          // Kept ahead of anything the new session admits.
           rerun: true,
           pendingSendId: row.id,
           metadata: { kinuMode: row.mode },
@@ -1977,10 +1293,7 @@ export class ChatSession {
     });
 
     if (queued > 0) {
-      // Not synchronous: the driver gate is installed by the caller that
-      // owns this session, after the constructor returns. A microtask lands
-      // after that hand-off; pumping from inside the constructor would run a
-      // turn under no lease at all.
+      // Not synchronous: the driver gate is installed after the constructor returns.
       queueMicrotask(() => {
         if (this.ended) return;
         this.pump();
