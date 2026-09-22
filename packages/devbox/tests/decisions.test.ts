@@ -410,30 +410,26 @@ describe('recovery is one decision per failure, with no count and no timeout', (
     }
   });
 
-  test('exhaustion refuses, repeats nothing, destroys nothing and moves nothing', () => {
-    for (const stage of STAGES) {
-      expect(recoveryStep({ owned: true, failure: 'exhausted', stage }))
-        .toEqual({ action: 'refuse', stage });
-    }
-  });
+  /** The failure classes an owned attempt settles on the spot, whatever stage
+   *  the ladder is at. */
+  const SETTLED: readonly { name: string; failure: RecoveryClass; action: 'refuse' | 'retry' }[] = [
+    { name: 'exhaustion refuses, repeats nothing, destroys nothing and moves nothing', failure: 'exhausted', action: 'refuse' },
+    // Nothing a retry reaches changes a permanent configuration, so spending
+    // the ladder on it would only destroy a container over a mount option.
+    { name: 'permanent configuration refuses on the first failure', failure: 'permanent', action: 'refuse' },
+    // The identity a stale owner failed on is already gone, so it is no
+    // evidence against the one that replaced it.
+    { name: 'a stale owner retries and does NOT advance the container-fault ladder', failure: 'stale-owner', action: 'retry' },
+  ];
 
-  test('permanent configuration refuses on the first failure', () => {
-    // Nothing a retry reaches changes it, so spending the ladder on it would
-    // only destroy a container over a mount option.
-    for (const stage of STAGES) {
-      expect(recoveryStep({ owned: true, failure: 'permanent', stage }))
-        .toEqual({ action: 'refuse', stage });
-    }
-  });
-
-  test('a stale owner retries and does NOT advance the container-fault ladder', () => {
-    // The identity it failed on is already gone, so it is no evidence against
-    // the one that replaced it.
-    for (const stage of STAGES) {
-      expect(recoveryStep({ owned: true, failure: 'stale-owner', stage }))
-        .toEqual({ action: 'retry', stage });
-    }
-  });
+  for (const settled of SETTLED) {
+    test(settled.name, () => {
+      for (const stage of STAGES) {
+        expect(recoveryStep({ owned: true, failure: settled.failure, stage }))
+          .toEqual({ action: settled.action, stage });
+      }
+    });
+  }
 
   test('abandoned work enters at REPLACE, because destruction is its cancellation', () => {
     // KINU-031: the work is `exec` calls inside the container, so no token can
@@ -1701,11 +1697,15 @@ function fakeIncidentStore() {
   return { store, rows };
 }
 
-function seedIncident(store: ReturnType<typeof fakeIncidentStore>, id: string): void {
-  store.rows.set(`devbox:incident:${id}`, {
+function seedIncident(store: ReturnType<typeof fakeIncidentStore>, id: string): IncidentRow {
+  const row: IncidentRow = {
     incidentId: id, stage: 'checkpoint', reason: 'r',
     processId: undefined, port: undefined, at: 0, attempts: 0,
-  });
+  };
+
+  store.rows.set(`devbox:incident:${id}`, row);
+
+  return row;
 }
 
 describe('incident ledger retention — delivered rows are bounded, pending never dropped', () => {
@@ -1713,11 +1713,8 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
     const box = fakeIncidentStore();
 
     for (let at = 0; at < INCIDENT_LEDGER_MAX_ROWS + 50; at += 1) {
-      seedIncident(box, `d${String(at).padStart(4, '0')}`);
-      const row = box.rows.get(`devbox:incident:d${String(at).padStart(4, '0')}`)!;
-      box.rows.set(row.incidentId && `devbox:incident:${row.incidentId}`, {
-        ...row, deliveredAt: at,
-      });
+      const row = seedIncident(box, `d${String(at).padStart(4, '0')}`);
+      box.rows.set(`devbox:incident:${row.incidentId}`, { ...row, deliveredAt: at });
     }
 
     for (let p = 0; p < 5; p += 1) seedIncident(box, `pending${p}`);

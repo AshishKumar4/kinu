@@ -10,12 +10,15 @@ import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
 import { chainBox } from './support/chain-box';
 import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 
-/** The numeric value of one `key=value` s3fs option, or undefined when the
- *  mount did not state it — which leaves s3fs's own default in charge. */
-function bound(options: readonly string[], key: string): number | undefined {
+/** The numeric value of one `key=value` s3fs option. A key the mount did not
+ *  state leaves s3fs's own default in charge, which is the whole defect here,
+ *  so its absence fails by name. */
+function bound(options: readonly string[], key: string): number {
   const stated = options.find((option) => option.startsWith(`${key}=`));
 
-  return stated === undefined ? undefined : Number(stated.slice(key.length + 1));
+  if (stated === undefined) throw new Error(`the store mount states no ${key}, leaving s3fs's default in charge`);
+
+  return Number(stated.slice(key.length + 1));
 }
 
 describe('the store mount states its own s3fs bounds', () => {
@@ -49,7 +52,7 @@ describe('the store mount states its own s3fs bounds', () => {
     expect(Number.isFinite(connect)).toBe(true);
     expect(Number.isFinite(silence)).toBe(true);
     expect(Number.isFinite(retries)).toBe(true);
-    expect(connect! * 1000).toBeLessThanOrEqual(DEFAULT_DEVBOX_POLICY.attachBudgetMs);
+    expect(connect * 1000).toBeLessThanOrEqual(DEFAULT_DEVBOX_POLICY.attachBudgetMs);
     // Under s3fs's own defaults on every axis, which is the whole finding.
     expect(connect).toBeLessThan(300);
     expect(silence).toBeLessThan(120);

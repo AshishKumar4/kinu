@@ -148,7 +148,11 @@ function plantReal(root: string, entries: readonly NodeEntry[]): void {
     }
 
     if (entry.kind === 'symlink') {
-      symlinkSync(entry.target!, at);
+      const { target } = entry;
+
+      if (target === undefined) throw new Error(`${entry.path} is a symlink with no target`);
+
+      symlinkSync(target, at);
       continue;
     }
 
@@ -159,7 +163,10 @@ function plantReal(root: string, entries: readonly NodeEntry[]): void {
       continue;
     }
 
-    const content = entry.content!;
+    const { content } = entry;
+
+    if (content === undefined) throw new Error(`${entry.path} is a file with no content`);
+
     writeFileSync(at, content.kind === 'dense' ? content.bytes : new Uint8Array(0));
     chmodSync(at, entry.mode);
     firstName.set(entry.ino, at);
@@ -248,6 +255,16 @@ const real = { upper: `${root}/upper`, base: `${root}/base`, stage: `${root}/sta
 
 const disk = new ContainerDisk();
 
+/** The same command as the emulation runs it. An unrecognised command is the
+ *  drift this suite exists to catch, so it is a failure rather than a skip. */
+function diskShell(command: string): ShellReply {
+  const reply = deltaCommand(command, disk);
+
+  if (reply === undefined) throw new Error(`the delta shell has no arm for: ${command.split('\n')[0]}`);
+
+  return reply;
+}
+
 let plan: DeltaPlan;
 
 beforeAll(() => {
@@ -271,7 +288,7 @@ describe('the delta shell against bash', () => {
   test('the upper probe lists the same entries', () => {
     const command = deltaProbeCommand(real.upper, excludes);
     const fromBash = parseDeltaProbe(realShell(command).stdout);
-    const fromDisk = parseDeltaProbe(deltaCommand(command, disk)!.stdout);
+    const fromDisk = parseDeltaProbe(diskShell(command).stdout);
     expect(comparable(fromDisk)).toEqual(comparable(fromBash));
     expect(fromBash.map((row) => row.path)).not.toContain('node_modules/pruned.js');
     expect(fromBash.map((row) => row.path)).not.toContain('vol/node_modules/pruned.js');
@@ -283,7 +300,7 @@ describe('the delta shell against bash', () => {
     const carried = probe.filter((entry) => entry.type !== 'd').map((entry) => entry.path);
     const statCommand = deltaBaseStatCommand(carried, real.base);
     const baseFromBash = parseDeltaBaseStat(realShell(statCommand).stdout, carried);
-    const baseFromDisk = parseDeltaBaseStat(deltaCommand(statCommand, disk)!.stdout, carried);
+    const baseFromDisk = parseDeltaBaseStat(diskShell(statCommand).stdout, carried);
 
     for (const path of carried) {
       const a = baseFromBash.get(path);
@@ -301,14 +318,18 @@ describe('the delta shell against bash', () => {
       index, upperPath: `${real.upper}/${path}`, basePath: baseFromBash.get(path)?.kind === 'file' ? `${real.base}/${path}` : null,
     }));
 
-    const wanted = new Map(hashFiles.map((path, index) => [index, {
-      upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
-      baseBlocks: baseFromBash.get(path)?.kind === 'file' ? Math.ceil(baseFromBash.get(path)!.size / DELTA_BLOCK_BYTES) : null,
-    }] as const));
+    const wanted = new Map(hashFiles.map((path, index) => {
+      const inBase = baseFromBash.get(path);
+
+      return [index, {
+        upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
+        baseBlocks: inBase?.kind === 'file' ? Math.ceil(inBase.size / DELTA_BLOCK_BYTES) : null,
+      }] as const;
+    }));
 
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);
-    const hashedByDisk = deltaCommand(hashCommand, disk)!;
+    const hashedByDisk = diskShell(hashCommand);
     // The expected side is hashed from the fixture's real bytes by this test —
     // the property "bash, the emulation and the file agree" fails when the
     // parser or the shell drifts, where comparing two parses could not.
@@ -321,7 +342,7 @@ describe('the delta shell against bash', () => {
     const fromBash = planDeltaPublication({ probe, baseFacts: baseFromBash, hashes, hashFiles, whiteouts: new Set() });
 
     const fromDisk = planDeltaPublication({
-      probe: parseDeltaProbe(deltaCommand(deltaProbeCommand(real.upper, excludes), disk)!.stdout),
+      probe: parseDeltaProbe(diskShell(deltaProbeCommand(real.upper, excludes)).stdout),
       baseFacts: baseFromDisk,
       hashes: parseDeltaBlockHashes(hashedByDisk.stdout, wanted),
       hashFiles,
@@ -345,12 +366,16 @@ describe('the delta shell against bash', () => {
   test('the stage leaves the same package', () => {
     const command = batch(buildDeltaStageOps(plan, { upperDir: real.upper, pkgDir: real.pkg }));
     const byBash = realShell(command);
-    const byDisk = deltaCommand(command, disk)!;
+    const byDisk = diskShell(command);
     expect(byBash.exitCode).toBe(0);
     expect(byDisk.exitCode).toBe(0);
     const packed = readReal(real.pkg);
     const first = plan.manifest.files[0].p;
-    const carriedUnder = packed.find((entry) => entry.kind === 'file' && entry.path.endsWith(`/${first}`))!.path.slice(0, -first.length);
+    const carrier = packed.find((entry) => entry.kind === 'file' && entry.path.endsWith(`/${first}`));
+
+    if (carrier === undefined) throw new Error(`the staged package carries no file ending in /${first}`);
+
+    const carriedUnder = carrier.path.slice(0, -first.length);
     const marker = `${real.pkg}/${carriedUnder}opaque/.wh..wh..opq`;
     expect(lstatSync(marker).uid).toBe(uid);
     expect(lstatSync(marker).gid).toBe(gid);
@@ -363,7 +388,7 @@ describe('the delta shell against bash', () => {
   test('attach prepares exact directory metadata without copying a file into the upper', () => {
     const command = batch(buildDeltaAttachOps(plan.manifest, real.upper2));
     expect(realShell(command).exitCode).toBe(0);
-    expect(deltaCommand(command, disk)?.exitCode).toBe(0);
+    expect(diskShell(command).exitCode).toBe(0);
 
     const served = readReal(real.upper2);
     expect(sameTree(served, disk.snapshot(real.upper2), '')).toBe('');

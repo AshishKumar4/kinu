@@ -740,11 +740,9 @@ export class FakeSandbox {
   #execRemoval(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     const removed = /^rm -r?f '([^']+)'$/.exec(command);
 
-    const targets = removed !== null
-      ? [removed[1] ?? '']
-      : command.startsWith('rm -rf ') ? quotedSegments(command) : null;
+    if (removed === null && !command.startsWith('rm -rf ')) return null;
 
-    if (targets === null) return null;
+    const targets = removed === null ? quotedSegments(command) : [removed[1] ?? ''];
 
     for (const target of targets) {
       for (const path of this.files.keys()) {
@@ -1355,7 +1353,11 @@ export class FakeSandbox {
 
     const entries = [...this.files.entries()]
       .filter(([entry]) => entry.startsWith(prefix))
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+      .sort(([left], [right]) => {
+        if (left < right) return -1;
+
+        return left > right ? 1 : 0;
+      });
 
     const encoded = new TextEncoder();
     const parts: Uint8Array[] = [];
@@ -1542,13 +1544,18 @@ export class FakeSandbox {
       })),
     }), args[0]);
 
-    const decoded = single.success ? single.output
-      : list.success ? list.output
-      : options.success ? options.output.ports
-      : undefined;
+    const askedPorts = (): readonly number[] => {
+      if (single.success) return [single.output];
 
-    const wanted: readonly number[] = decoded === undefined ? []
-      : Array.isArray(decoded) ? decoded : [decoded];
+      if (list.success) return list.output;
+
+      if (!options.success) return [];
+      const { ports } = options.output;
+
+      return Array.isArray(ports) ? ports : [ports];
+    };
+
+    const wanted = askedPorts();
 
     // Port 3000 is the Sandbox control listener, not a restored application.
     const dark = wanted.filter((port) => port !== this.defaultPort && !this.listening.has(port));
@@ -1663,6 +1670,30 @@ export const { Devbox } = await import('../../src/devbox');
  *  second spelling here would be a second opinion on the platform. */
 type BoxState = ConstructorParameters<typeof Devbox>[0];
 
+/** What a box reads off its platform handle. `container` is left out where the
+ *  fixture has no container yet at construction. */
+export interface BoxStateParts {
+  readonly storage: DurableObjectStorage;
+  readonly id: string;
+  readonly container?: { running: boolean };
+  readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
+}
+
+/** The platform handle a test box is constructed with. */
+export function boxState(parts: BoxStateParts): BoxState {
+  // SAFETY: `DurableObjectState` declares the platform handle a Durable Object
+  // is constructed with. The class under test reads `storage`, `container`,
+  // `id` and `blockConcurrencyWhile` off it and nothing else — the remaining
+  // members are WebSocket hibernation, facets and SQL, which no method under
+  // test reaches — and all four are provided here.
+  return {
+    storage: parts.storage,
+    id: { toString: () => parts.id },
+    container: parts.container,
+    blockConcurrencyWhile: parts.blockConcurrencyWhile,
+  } as BoxState;
+}
+
 /** The env a test box is constructed with: no bindings at all, which is what an
  *  ephemeral box — no store, nothing durable — really has. Named rather than
  *  `unknown`, because a boundary that admits anything admits an unparsed value
@@ -1707,21 +1738,16 @@ export function harness<Box>(
 ): Harness<Box> {
   const storage = fakeStorage();
 
-  // SAFETY: `DurableObjectState` declares the platform handle a Durable Object
-  // is constructed with. The class under test reads `storage`, `container` and
-  // `id` from it and nothing else — the remaining members are WebSocket
-  // hibernation, facets and `blockConcurrencyWhile`, which no method under test
-  // reaches — and all three are provided here.
-  const state = {
+  const state = boxState({
     storage: storage.handle,
-    id: { toString: () => id },
+    id,
     // The platform's critical section, as a stand-in that deliberately does NOT
     // provide the exclusion the real one does: the closure simply runs. That is
     // what lets a test park inside the section and prove the conditional write
     // refuses when the row changed under it. A stand-in that granted exclusion
     // would make the interleaving untestable and the assertion vacuous.
     blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
-  } as BoxState;
+  });
 
   const box = new Box(state, {});
   const container = FakeSandbox.last;

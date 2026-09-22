@@ -16,48 +16,8 @@ const KEY = 'v1/boxes/box/attempts/op/try/data-a';
 
 describe('the durability wire contracts', () => {
   test('counters and digests refuse unsafe representations', () => {
-    // A negative byte count is unrepresentable, so it is refused at the
-    // boundary rather than read as a huge unsigned length downstream.
-    expect(() => v.parse(UploadIntentSchema, {
+    const safe = {
       operationId: 'op-1',
-      attemptId: 'attempt-1',
-      boxId: 'box-1',
-      epoch: '7',
-      exactKey: KEY,
-      method: 'PUT',
-      byteLength: '-1',
-      sha256: SHA,
-      expiresAt: '100',
-    })).toThrow('Expected a canonical non-negative decimal string');
-    // A leading zero is a second spelling of one number: two instruments that
-    // compare intents byte for byte would disagree about identical requests.
-    expect(() => v.parse(UploadIntentSchema, {
-      operationId: 'op-1',
-      attemptId: 'attempt-1',
-      boxId: 'box-1',
-      epoch: '01',
-      exactKey: KEY,
-      method: 'PUT',
-      byteLength: '12',
-      sha256: SHA,
-      expiresAt: '100',
-    })).toThrow('Expected a canonical non-negative decimal string');
-    // A truncated digest cannot authenticate anything, so it never parses.
-    expect(() => v.parse(UploadIntentSchema, {
-      operationId: 'op-1',
-      attemptId: 'attempt-1',
-      boxId: 'box-1',
-      epoch: '7',
-      exactKey: KEY,
-      method: 'PUT',
-      byteLength: '12',
-      sha256: 'short',
-      expiresAt: '100',
-    })).toThrow('Expected a lowercase SHA-256 digest');
-    // An empty id names nothing, and the id is what binds an intent to the
-    // attempt it may be replayed against.
-    expect(() => v.parse(UploadIntentSchema, {
-      operationId: '',
       attemptId: 'attempt-1',
       boxId: 'box-1',
       epoch: '7',
@@ -66,7 +26,25 @@ describe('the durability wire contracts', () => {
       byteLength: '12',
       sha256: SHA,
       expiresAt: '100',
-    })).toThrow('Invalid length: Expected >=1 but received 0');
+    };
+
+    const unsafe = [
+      // A negative byte count is unrepresentable, so it is refused at the
+      // boundary rather than read as a huge unsigned length downstream.
+      { field: { byteLength: '-1' }, refusal: 'Expected a canonical non-negative decimal string' },
+      // A leading zero is a second spelling of one number: two instruments that
+      // compare intents byte for byte would disagree about identical requests.
+      { field: { epoch: '01' }, refusal: 'Expected a canonical non-negative decimal string' },
+      // A truncated digest cannot authenticate anything, so it never parses.
+      { field: { sha256: 'short' }, refusal: 'Expected a lowercase SHA-256 digest' },
+      // An empty id names nothing, and the id is what binds an intent to the
+      // attempt it may be replayed against.
+      { field: { operationId: '' }, refusal: 'Invalid length: Expected >=1 but received 0' },
+    ];
+
+    for (const { field, refusal } of unsafe) {
+      expect(() => v.parse(UploadIntentSchema, { ...safe, ...field })).toThrow(refusal);
+    }
   });
 
   test('restore work reports every hidden readiness dimension', () => {

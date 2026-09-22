@@ -4,7 +4,7 @@ import type { RestoreClockPhase } from '../src/devbox';
 import type { StoredValue } from '../src/storage';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import {
-  Devbox, FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, deliver, fakeStorage, gate, harness,
+  Devbox, FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness,
   scheduleTableOf, type Harness,
 } from './support/devbox-harness';
 
@@ -84,13 +84,11 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
   for (const [key, value] of rows) storage.rows.set(key, value);
   let activation: Promise<unknown> = Promise.resolve();
 
-  // SAFETY: the constructor's contract reads `storage`, `id`, `container` and
-  // `blockConcurrencyWhile` off its state and nothing else (devbox.ts
-  // constructor + `#activate`); the fake carries those four, and hands the
-  // gate's closure back so the test can wait on the activation itself.
-  const state = {
+  // The critical section hands the gate's closure back, so the test can wait
+  // on the activation itself.
+  const state = boxState({
     storage: storage.handle,
-    id: { toString: () => TEST_BOX_ID },
+    id: TEST_BOX_ID,
     container: { running: true },
     blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
       const run = closure();
@@ -98,11 +96,16 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
 
       return await run;
     },
-  } as ConstructorParameters<typeof Devbox>[0];
+  });
 
   const box = new TestBox(state, {});
+  const container = FakeSandbox.last;
 
-  return { box, container: FakeSandbox.last!, activation };
+  if (container === undefined) {
+    throw new Error('the substituted Sandbox base class did not run its constructor');
+  }
+
+  return { box, container, activation };
 }
 
 describe('the start hook owns restoration', () => {
@@ -498,15 +501,11 @@ describe('the start hook owns restoration', () => {
     // Built the way `harness` builds it — the same members the class reads at
     // construction — but with the dead row already present, which is what an
     // activation wakes into.
-    // SAFETY: the constructor's contract reads `storage`, `id` and
-    // `blockConcurrencyWhile` off its state and nothing else (devbox.ts
-    // constructor + `#activate`); the fake is constructed with exactly those
-    // three members.
-    const state = {
+    const state = boxState({
       storage: storage.handle,
-      id: { toString: () => TEST_BOX_ID },
+      id: TEST_BOX_ID,
       blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
-    } as ConstructorParameters<typeof Devbox>[0];
+    });
 
     new TestBox(state, {});
     // No waiting: this stub runs the gate closure inline inside `new`, and the

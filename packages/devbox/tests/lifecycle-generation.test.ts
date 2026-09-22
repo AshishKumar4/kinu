@@ -1076,8 +1076,11 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
       expect({ armed: armed(container), arms: armsBefore }).toEqual({ armed: 1, arms: 1 });
 
       // The row is due and the alarm loop has not delivered it yet.
-      const due = container.scheduleRows.find(row => row.callback === 'devboxStartup')!.time;
-      now = Math.ceil(due) * 1000 + 500;
+      const armedRow = container.scheduleRows.find(row => row.callback === 'devboxStartup');
+
+      if (armedRow === undefined) throw new Error('no devboxStartup row survived to wake this box');
+
+      now = Math.ceil(armedRow.time) * 1000 + 500;
 
       for (let poll = 0; poll < 4; poll += 1) await box.devboxState();
       await expect(box.exec('ls')).rejects.toThrow('A startup is armed');
