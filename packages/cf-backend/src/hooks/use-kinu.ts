@@ -507,7 +507,7 @@ function paneFrame(
 
 /** Runtime admission for plan broadcasts/RPC results. The browser treats the
  * actor boundary as untrusted even though both ends share the TypeScript type. */
-function parsePlanReview<Value>(value: Value): PlanReview | null {
+function parsePlanReview({ value }: { value: unknown }): PlanReview | null {
   const parsed = v.safeParse(PlanReviewSchema, value);
 
   return parsed.success ? parsed.output : null;
@@ -712,18 +712,21 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
     return { severity: "partial", title: action ?? "", scope: "", detail: "", retry: null };
   }
 
-  const scope = blocking
-    ? loaded ? "Showing last known data." : "Nothing has loaded yet."
-    : loaded ? "The conversation is available. Showing last known data." : "The conversation is available.";
+  const blocked = loaded ? "Showing last known data." : "Nothing has loaded yet.";
+  const available = loaded ? "The conversation is available. Showing last known data." : "The conversation is available.";
+  const scope = blocking ? blocked : available;
 
   // The labels are a noun list; the reasons are whatever an RPC rejected with,
   // so they are set down one after another rather than conjoined — "Network
   // connection lost. and MEMORY.md is unreadable" is not a sentence.
   const list = formatNaturalList(labels);
 
+  const sentenceCased = `${list.slice(0, 1).toUpperCase()}${list.slice(1)}`;
+  const blockedTitle = loaded ? `Couldn't refresh ${list}.` : "Couldn't open this workspace";
+
   const readTitle = blocking
-    ? loaded ? `Couldn't refresh ${list}.` : "Couldn't open this workspace"
-    : `${list[0]!.toUpperCase()}${list.slice(1)} could not be ${loaded ? "refreshed" : "loaded"}.`;
+    ? blockedTitle
+    : `${sentenceCased} could not be ${loaded ? "refreshed" : "loaded"}.`;
 
   const title = action === null ? readTitle : `${action} ${readTitle}`;
 
@@ -778,19 +781,25 @@ export async function loadWorkspaceSnapshot(
     return "loaded";
   } catch (error) {
     if (!isCurrent()) return "superseded";
-    const failed = errorMessage(error);
+    const failed = errorMessage({ cause: error });
     report("snapshot", failed);
 
     return { failed };
   }
 }
 
+/** One live read: the surface it speaks for, how to get it, what to do with
+ *  what came back, and who says whether this reader still owns the surface. */
+export interface LiveResourceRead<Value> {
+  readonly source: LiveRefreshSource;
+  readonly read: () => Promise<Value>;
+  readonly apply: (value: Value) => void;
+  readonly report: LiveRefreshReporter;
+  readonly isCurrent: () => boolean;
+}
+
 export async function refreshLiveResource<Value>(
-  source: LiveRefreshSource,
-  read: () => Promise<Value>,
-  apply: (value: Value) => void,
-  report: LiveRefreshReporter,
-  isCurrent: () => boolean,
+  { source, read, apply, report, isCurrent }: LiveResourceRead<Value>,
 ): Promise<void> {
   if (!isCurrent()) return;
 
@@ -802,7 +811,7 @@ export async function refreshLiveResource<Value>(
     report(source, null);
   } catch (error) {
     if (!isCurrent()) return;
-    report(source, errorMessage(error));
+    report(source, errorMessage({ cause: error }));
   }
 }
 
@@ -811,21 +820,26 @@ export interface UnavailableDevice { id: string; label: string; lastSeenAt: numb
 
 export type ConsentDecision = "once" | "always" | "deny";
 
+/** One consent decision on its way to the object, and the row it retires. */
+export interface PendingConsentResolution {
+  readonly consentId: string;
+  readonly decision: ConsentDecision;
+  readonly resolve: (id: string, choice: ConsentDecision) => Promise<void>;
+  readonly remove: (id: string) => void;
+  readonly report: ConsentResolutionReporter;
+  readonly isCurrent: () => boolean;
+}
+
 export function resolvePendingConsent(
-  consentId: string,
-  decision: ConsentDecision,
-  resolve: (id: string, choice: ConsentDecision) => Promise<void>,
-  remove: (id: string) => void,
-  report: ConsentResolutionReporter,
-  isCurrent: () => boolean,
+  { consentId, decision, resolve, remove, report, isCurrent }: PendingConsentResolution,
 ): Promise<void> {
-  return refreshLiveResource(
-    "consentResolution",
-    () => resolve(consentId, decision),
-    () => remove(consentId),
-    (_source, message) => report(consentId, message),
+  return refreshLiveResource({
+    source: "consentResolution",
+    read: () => resolve(consentId, decision),
+    apply: () => remove(consentId),
+    report: (_source, message) => report(consentId, message),
     isCurrent,
-  );
+  });
 }
 
 /** Initial-load retry backoff. Doubling from 1s, capped so a long outage keeps
@@ -906,14 +920,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
 
-  const workspace = targetString.success
-    ? targetString.output
-    : targetAddress.success ? targetAddress.output.workspace : undefined;
+  const addressed = targetAddress.success ? targetAddress.output.workspace : undefined;
+  const workspace = targetString.success ? targetString.output : addressed;
 
   const subordinate = targetAddress.success ? targetAddress.output.subordinate : undefined;
 
   const actorAddress = useMemo<KinuActorAddress>(() => {
-    const address: KinuActorAddress = { workspace: workspace || "default" };
+    const address: KinuActorAddress = { workspace: workspace === undefined || workspace === "" ? "default" : workspace };
 
     if (subordinate) address.subordinate = subordinate;
 
@@ -962,9 +975,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const liveRefreshAdmissionRef = useRef<LiveRefreshAdmission | null>(null);
 
-  if (liveRefreshAdmissionRef.current === null) {
-    liveRefreshAdmissionRef.current = createLiveRefreshAdmission();
-  }
+  liveRefreshAdmissionRef.current ??= createLiveRefreshAdmission();
 
   const liveRefreshAdmission = liveRefreshAdmissionRef.current;
 
@@ -972,13 +983,13 @@ export function useKinu(target?: string | KinuActorAddress) {
     source: LiveRefreshSource,
     read: () => Promise<Value>,
     apply: (value: Value) => void,
-  ) => refreshLiveResource(
+  ) => refreshLiveResource({
     source,
     read,
     apply,
-    setSourceError,
-    liveRefreshAdmission.admit(actorKey, source),
-  ), [actorKey, liveRefreshAdmission, setSourceError]);
+    report: setSourceError,
+    isCurrent: liveRefreshAdmission.admit(actorKey, source),
+  }), [actorKey, liveRefreshAdmission, setSourceError]);
 
   useEffect(() => {
     liveRefreshAdmission.activateActor(actorKey);
@@ -995,9 +1006,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   // workspace switch, so it IS "this workspace has last known data" — the fact
   // the banner needs to choose its sentence and the panes need before any of
   // them may say "none".
+  const loadedStatus: AsyncResource<AgentStatus> = agentStatus === null
+    ? { status: "loading" }
+    : { status: "ready", value: agentStatus };
+
   const snapshot: AsyncResource<AgentStatus> = errors.snapshot !== undefined
     ? { status: "error", message: errors.snapshot, last: agentStatus }
-    : agentStatus === null ? { status: "loading" } : { status: "ready", value: agentStatus };
+    : loadedStatus;
 
   const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
@@ -1409,12 +1424,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   agentRef.current = agent;
   const sessionRecoveryRef = useRef<SessionRecovery | null>(null);
 
-  if (sessionRecoveryRef.current === null) {
-    sessionRecoveryRef.current = createSessionRecovery({
-      refetch: () => setLoadGeneration((g) => g + 1),
-      forceRedial: () => agentRef.current?.reconnect(),
-    });
-  }
+  sessionRecoveryRef.current ??= createSessionRecovery({
+    refetch: () => setLoadGeneration((g) => g + 1),
+    forceRedial: () => agentRef.current?.reconnect(),
+  });
 
   const sessionRecovery = sessionRecoveryRef.current;
   // ── Session recovery: every reconnect re-fetches what the dead transport
@@ -1434,9 +1447,9 @@ export function useKinu(target?: string | KinuActorAddress) {
       if (!isFirst) {
         try {
           await refreshDeployedBuild();
-        } catch (error) {
+        } catch (cause) {
           diagnostics.failure('session.build_check_failed', toKinuError({
-            doing: 'check the deployed build after reconnect', cause: error, otherwise: 'io',
+            doing: 'check the deployed build after reconnect', cause, otherwise: 'io',
           }));
         }
       }
@@ -1487,8 +1500,8 @@ export function useKinu(target?: string | KinuActorAddress) {
         // load identically instead of two surfaces disagreeing about the socket.
         await rpc("getActorSnapshot", [subordinate]);
         setSourceError("snapshot", null);
-      } catch (error) {
-        setSourceError("snapshot", errorMessage(error));
+      } catch (cause) {
+        setSourceError("snapshot", errorMessage({ cause }));
       }
     }, 25_000);
 
@@ -1577,7 +1590,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
     knownSlates.current = new Set([...(previous ?? []), ...listing.map(slate => slate.id)]);
     setSlates(listing);
-    setSlateReloads((previous) => pruneSlateReloads(previous, listing));
+    setSlateReloads((reloads) => pruneSlateReloads(reloads, listing));
   }, []);
 
   const refreshSlates = useCallback(() => refreshCurrentLiveResource(
@@ -1721,7 +1734,8 @@ export function useKinu(target?: string | KinuActorAddress) {
             }));
           }
         } else if (msg.type === "branch_status") {
-          const status = msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running";
+          const settledOrRunning = msg.status === "error" ? "error" : "running";
+          const status = msg.status === "settled" ? "settled" : settledOrRunning;
 
           // A branch that has stopped is writing nothing. Its head id is
           // derived from the run id, so the accumulator can be retired without
@@ -1767,11 +1781,11 @@ export function useKinu(target?: string | KinuActorAddress) {
               },
             ]);
         } else if (msg.type === "signal_card") {
-          const card = parseSignalCardEvent(msg);
+          const card = parseSignalCardEvent({ value: msg });
 
           if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (msg.type === "plan_updated") {
-          const plan = parsePlanReview(msg.plan);
+          const plan = parsePlanReview({ value: msg.plan });
 
           if (plan) {
             const key = `${plan.id}:${plan.revision}`;
@@ -1788,17 +1802,17 @@ export function useKinu(target?: string | KinuActorAddress) {
             setArrivedReference(msg.reference);
           }
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
-          const roster = parseSubordinateRoster(msg.subordinates);
+          const roster = parseSubordinateRoster({ value: msg.subordinates });
 
           if (roster) {
             ++subordinateRefreshGeneration.current;
             setSubordinates(roster);
           }
         } else if (!isSubordinate && msg.type === "subordinate_event") {
-          const subordinateEvent = parseSubordinateActivityEvent(msg);
+          const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
 
           if (subordinateEvent) {
-            setSubordinateEvents((current) => current.some((event) => event.id === subordinateEvent.id)
+            setSubordinateEvents((current) => current.some((listed) => listed.id === subordinateEvent.id)
               ? current
               : [...current.slice(-49), subordinateEvent]);
           }
@@ -1818,14 +1832,14 @@ export function useKinu(target?: string | KinuActorAddress) {
     retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
   ]);
 
-  const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent(
+  const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent({
     consentId,
     decision,
-    (id, choice) => rpc("resolveDeviceConsent", [id, choice]),
-    (id) => setPendingConsents((previous) => previous.filter((consent) => consent.consentId !== id)),
-    setConsentResolutionError,
-    liveRefreshAdmission.admit(actorKey, `consentResolution:${consentId}`),
-  ), [actorKey, liveRefreshAdmission, rpc, setConsentResolutionError]);
+    resolve: (id, choice) => rpc("resolveDeviceConsent", [id, choice]),
+    remove: (id) => setPendingConsents((previous) => previous.filter((consent) => consent.consentId !== id)),
+    report: setConsentResolutionError,
+    isCurrent: liveRefreshAdmission.admit(actorKey, `consentResolution:${consentId}`),
+  }), [actorKey, liveRefreshAdmission, rpc, setConsentResolutionError]);
 
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
@@ -1838,10 +1852,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         }>("getExposedPorts", [executor]);
 
         return { executor, result } satisfies ExecutorPortRefresh;
-      } catch (error) {
+      } catch (cause) {
         return {
           executor,
-          result: { ports: [], error: errorMessage(error) },
+          result: { ports: [], error: errorMessage({ cause }) },
         } satisfies ExecutorPortRefresh;
       }
     }));
@@ -1897,7 +1911,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           refreshCurrentLiveResource(
             "plan",
             () => rpc<unknown>("getActivePlanReview", []),
-            (plan) => setActivePlan(parseActivePlanReview(plan)),
+            (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
           ),
         ]);
       } catch (cause) {
@@ -1991,7 +2005,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
 
     if (isSourceCurrent("plan")) {
-      const loadedPlan = parsePlanReview(snap.activePlan);
+      const loadedPlan = parsePlanReview({ value: snap.activePlan });
 
       if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
       setActivePlan(loadedPlan);
@@ -2026,34 +2040,34 @@ export function useKinu(target?: string | KinuActorAddress) {
     // the actor name this tab is looking at. The name is what the root resolves
     // through its directory, so a tab cannot ask about an actor that is not a
     // child of this workspace.
-    const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
+    const actorSnapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
 
     if (!isCurrent()) return;
     // This pane's own actor, before anything it can admit or ask for: the
     // frames the hosting seam stamps are only this chat's while the id
     // matches, and a page request without it reads the workspace's rows.
-    ownActorIdRef.current = snapshot.actorId;
-    setPaneActorId(snapshot.actorId);
+    ownActorIdRef.current = actorSnapshot.actorId;
+    setPaneActorId(actorSnapshot.actorId);
     setAgentStatus({
-      name: snapshot.name,
-      displayName: snapshot.displayName,
-      purpose: snapshot.role,
-      soul: snapshot.mission,
+      name: actorSnapshot.name,
+      displayName: actorSnapshot.displayName,
+      purpose: actorSnapshot.role,
+      soul: actorSnapshot.mission,
       createdAt: 0,
       scaffoldVersion: 0,
-      model: snapshot.model.model,
-      modelSource: snapshot.model.source,
-      reasoningEffort: snapshot.reasoningEffort,
+      model: actorSnapshot.model.model,
+      modelSource: actorSnapshot.model.source,
+      reasoningEffort: actorSnapshot.reasoningEffort,
       searchNodeCount: 0,
       craftedToolCount: 0,
       messageCount: messages.length,
       forkLineage: null,
     });
-    const loadedPlan = parseActivePlanReview(snapshot.activePlan);
+    const loadedPlan = parseActivePlanReview({ value: actorSnapshot.activePlan });
 
     if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
     setActivePlan(loadedPlan);
-    setSteerRuns(snapshot.pendingSteers);
+    setSteerRuns(actorSnapshot.pendingSteers);
   }
 
   // Roster loads may overlap across reconnects; their generation decides which
@@ -2074,7 +2088,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         const value = await rpc<unknown>("listSubordinates", []);
 
         if (generation !== subordinateRefreshGeneration.current) return;
-        const roster = parseSubordinateRoster(value);
+        const roster = parseSubordinateRoster({ value });
 
         if (!roster) throw new Error('Subordinate roster returned an invalid response');
         setSubordinates(roster);
@@ -2086,7 +2100,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
 
       if (thrown !== null && generation === subordinateRefreshGeneration.current) {
-        setSourceError("roster", errorMessage(thrown.cause));
+        setSourceError("roster", errorMessage(thrown));
       }
     })();
     subordinateRefreshTasks.current.set(generation, task);
@@ -2302,7 +2316,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
 
       if (thrown !== null && seq === searchSeq.current) {
-        setSourceError("memory", `Memory search failed: ${errorMessage(thrown.cause)}`);
+        setSourceError("memory", `Memory search failed: ${errorMessage(thrown)}`);
       }
     }, MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
@@ -2333,7 +2347,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     } catch (err) {
       // Roll the picker back to the actually-stored spec so it can't keep
       // showing a model that was never saved.
-      let reason = `Couldn't switch model: ${errorMessage(err)}`;
+      let reason = `Couldn't switch model: ${errorMessage({ cause: err })}`;
 
       try {
         const stored = subordinate === undefined
@@ -2344,7 +2358,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       } catch (rollbackErr) {
         // The rollback read failed too, so the picker is still showing a model
         // that was never stored. Say so rather than leaving it looking saved.
-        reason += ` — and the stored model couldn't be re-read (${errorMessage(rollbackErr)}), so the model shown may not be what's saved`;
+        reason += ` — and the stored model couldn't be re-read (${errorMessage({ cause: rollbackErr })}), so the model shown may not be what's saved`;
       }
 
       setSourceError("model", reason);
@@ -2364,7 +2378,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       setSourceError("model", null);
     } catch (err) {
       setAgentStatus((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
-      setSourceError("model", `Couldn't set the thinking level: ${errorMessage(err)}`);
+      setSourceError("model", `Couldn't set the thinking level: ${errorMessage({ cause: err })}`);
     }
   }, [rpc, setSourceError, subordinate, agentStatus?.reasoningEffort]);
 
@@ -2598,13 +2612,13 @@ export function useKinu(target?: string | KinuActorAddress) {
  *  `renderThrownChain` owns the first case for every reader in the repo; the two
  *  fallbacks are this surface's own, because a browser panel showing
  *  `[object Object]` has told the reader nothing. */
-function errorMessage<ErrorValue>(err: ErrorValue): string {
-  if (err instanceof Error && err.message) return renderThrownChain({ cause: err });
-  const text = v.safeParse(v.string(), err);
+function errorMessage({ cause }: { cause: unknown }): string {
+  if (cause instanceof Error && cause.message) return renderThrownChain({ cause });
+  const text = v.safeParse(v.string(), cause);
 
   if (text.success && text.output.trim()) return text.output;
 
-  try { return JSON.stringify(err) || "unknown error"; }
+  try { return JSON.stringify(cause) || "unknown error"; }
   catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
 }
 
@@ -2616,7 +2630,7 @@ function formatNaturalList(values: readonly string[]): string {
   return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
-function parseActivePlanReview<Value>(value: Value): PlanReview | null {
+function parseActivePlanReview({ value }: { value: unknown }): PlanReview | null {
   const parsed = v.safeParse(v.nullable(PlanReviewSchema), value);
 
   if (!parsed.success) {
@@ -2626,13 +2640,13 @@ function parseActivePlanReview<Value>(value: Value): PlanReview | null {
   return parsed.output;
 }
 
-function parseSubordinateRoster<Value>(value: Value): SubordinateRosterEntry[] | null {
+function parseSubordinateRoster({ value }: { value: unknown }): SubordinateRosterEntry[] | null {
   const parsed = v.safeParse(v.array(SubordinateRosterEntrySchema), value);
 
   return parsed.success ? parsed.output : null;
 }
 
-function parseSubordinateActivityEvent<Value>(value: Value): SubordinateActivityEvent | null {
+function parseSubordinateActivityEvent({ value }: { value: unknown }): SubordinateActivityEvent | null {
   const parsed = v.safeParse(SubordinateActivityEventSchema, value);
 
   return parsed.success ? parsed.output : null;

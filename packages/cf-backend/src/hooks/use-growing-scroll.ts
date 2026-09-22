@@ -85,11 +85,11 @@ export interface GrowingScrollOptions {
   onScrollPosition?: ((position: ConversationScroll) => void) | undefined;
 }
 
-export function useGrowingScroll<T extends GrowingScrollHost>({
+export function useGrowingScroll({
   grows, content, fetched, loading = false, exhausted = false,
   onReachEdge, initialScroll, onScrollPosition,
 }: GrowingScrollOptions) {
-  const el = useRef<T | null>(null);
+  const el = useRef<GrowingScrollHost | null>(null);
   const pinned = useRef(grows === "up");
   // Last committed scrollHeight. The "before" measurement for a prepend has to
   // come from the previous commit: a layout effect runs after the DOM has
@@ -113,7 +113,7 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
   // must restore the LATEST remembered position, not the first mount's.
   const pendingRestore = useRef<number | null>(null);
 
-  const tryRestore = useCallback((node: T) => {
+  const tryRestore = useCallback((node: GrowingScrollHost) => {
     const target = pendingRestore.current;
 
     if (target === null) return;
@@ -137,7 +137,7 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
     reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
   }, [grows]);
 
-  const maybeLoadMore = useCallback((node: T) => {
+  const maybeLoadMore = useCallback((node: GrowingScrollHost) => {
     const distance = grows === "up"
       ? node.scrollTop
       : node.scrollHeight - node.scrollTop - node.clientHeight;
@@ -164,7 +164,7 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
   // Callback ref so the listener survives conditional (re)mounts of the
   // container; an up-growing view starts at the bottom, a down-growing one at
   // the top, which is where each one's newest content already is.
-  const containerRef = useCallback((node: T | null) => {
+  const containerRef = useCallback((node: GrowingScrollHost | null) => {
     el.current?.removeEventListener("scroll", onScroll);
     el.current = node;
 

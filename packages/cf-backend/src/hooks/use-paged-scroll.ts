@@ -157,7 +157,7 @@ export function usePagedScroll<Item>({
         }
       }
 
-      if (thrown !== null && generation === walk.current) setError(describeError(thrown.cause));
+      if (thrown !== null && generation === walk.current) setError(describeError(thrown));
     })();
   }, [grows, exhausted]);
 

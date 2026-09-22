@@ -37,5 +37,9 @@ export function useCopy(resetMs = 1500): CopyControl {
 
 /** The label a copy button shows for each outcome. */
 export function copyLabel(status: CopyStatus, idle = "Copy"): string {
-  return status === "copied" ? "Copied!" : status === "failed" ? "Copy failed" : idle;
+  if (status === "copied") return "Copied!";
+
+  if (status === "failed") return "Copy failed";
+
+  return idle;
 }
