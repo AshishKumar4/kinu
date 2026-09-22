@@ -612,22 +612,40 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   });
 
-  test('sandbox: admission control that outlived its retries is also a platform gap', async () => {
-    // 429 on the container start-rate burst. `withSandboxRetry` has already spent
-    // three attempts, so what reaches the census is a container Kinu could not
-    // get — `unavailable`. Filed `io` it would have been a candidate defect in
-    // this tool, which is the platform's capacity ceiling wearing our name.
-    const census = censusOf(await escalate(createSandboxExecutor({
-      exec: async () => { throw new Error('Too many containers per second'); },
-      readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
-      unexposePort: async () => {}, getExposedPorts: async () => [],
-        ...sandboxHandleLifecycle,
-    })));
+  // The pair that makes either case mean something: the same thrown sandbox
+  // prose is filed by what it says happened, not by where it happened.
+  const sandboxFaults = [
+    {
+      // 429 on the container start-rate burst. `withSandboxRetry` has already spent
+      // three attempts, so what reaches the census is a container Kinu could not
+      // get — `unavailable`. Filed `io` it would have been a candidate defect in
+      // this tool, which is the platform's capacity ceiling wearing our name.
+      name: 'sandbox: admission control that outlived its retries is also a platform gap',
+      thrown: 'Too many containers per second', key: 'shell·unavailable', part: 'runtimeMissing' as const,
+    },
+    {
+      // The contrast that makes the case above mean something. Pooling the two under one
+      // prose string puts every container fault in the bucket that says "Kinu never
+      // provisioned this".
+      name: 'sandbox: a transport fault is NOT a platform gap',
+      thrown: 'the container hung up mid-write', key: 'shell·io', part: 'broke' as const,
+    },
+  ];
 
-    expect(census.byKey).toEqual([['shell·unavailable', 1]]);
-    expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
-  });
+  for (const c of sandboxFaults) {
+    test(c.name, async () => {
+      const census = censusOf(await escalate(createSandboxExecutor({
+        exec: async () => { throw new Error(c.thrown); },
+        readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
+        deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
+        unexposePort: async () => {}, getExposedPorts: async () => [],
+        ...sandboxHandleLifecycle,
+      })));
+
+      expect(census.byKey).toEqual([[c.key, 1]]);
+      expect(parts(census)).toEqual(onlyPart(c.part));
+    });
+  }
 
   test('sandbox: a classified not-ready refusal is asked once, never folded into the retry loop', async () => {
     // The caller-side answer the CF adapter mints for a devbox that is still
@@ -665,22 +683,6 @@ describe('each executor tool files its own failure in the right part', () => {
 
     expect(census.byKey).toEqual([['shell·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
-  });
-
-  test('sandbox: a transport fault is NOT a platform gap', async () => {
-    // The contrast that makes the case above mean something. Pooling the two under one
-    // prose string puts every container fault in the bucket that says "Kinu never
-    // provisioned this".
-    const census = censusOf(await escalate(createSandboxExecutor({
-      exec: async () => { throw new Error('the container hung up mid-write'); },
-      readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
-      unexposePort: async () => {}, getExposedPorts: async () => [],
-        ...sandboxHandleLifecycle,
-    })));
-
-    expect(census.byKey).toEqual([['shell·io', 1]]);
-    expect(parts(census)).toEqual(onlyPart('broke'));
   });
 
   test('nimbus: an absent binding is a platform gap; a narrow handle is a refusal', async () => {
