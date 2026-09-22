@@ -1,8 +1,4 @@
-/**
- * K_align — the Alignment Convergence Rate over the turn_outcomes ledger:
- * the correction rate per 100 graded turns by scaffold version, its Wilson
- * intervals, and the trend it will (and will not) claim.
- */
+/** K_align: corrections per 100 graded turns by scaffold version, with Wilson intervals and a guarded trend. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
@@ -15,9 +11,7 @@ import {
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
-/** The ledger and the actor it belongs to: `turn_outcomes` is keyed by
- *  `actor_id`, so a seed and a read under different handles would come back
- *  empty and read as "no graded turns" rather than as a scoping fault. */
+/** Seed and read share one actor handle, since `turn_outcomes` is keyed by actor. */
 function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -59,9 +53,7 @@ describe('alignmentConvergence', () => {
   });
 
   test('a missing ledger reads as empty rather than throwing', () => {
-    // The actor is issued over the SAME bare database, so `turn_outcomes` is
-    // genuinely absent: `createTestActors` writes the identity and actor
-    // tables and nothing else.
+    // `createTestActors` writes only identity tables, so `turn_outcomes` is genuinely absent.
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const k = alignmentConvergence(sql, createTestActors(sql, makeExecRaw(db)).main);

@@ -1,14 +1,7 @@
 /**
- * Evolution Changelog — the "what I changed about myself" digest.
- *
- * The transparency layer that lets the autonomy defaults ship ON: evolution
- * acts first, this reports honestly, and every line with a real undo path is revertable. It is a
- * READ MODEL over the durable ledgers that already exist (scaffold_versions +
- * shadow record, crafted_tools + its EMA columns, agent_facts, gepa_runs,
- * replay_evals, turn_outcomes) — no parallel event system, no new write path.
- * The only state it owns is the `changelog_seen_at` config marker (unseen
- * badge), and reverts dispatch to the REAL existing paths: scaffold rollback,
- * fact forget.
+ * Evolution changelog: a read model over the existing evolution ledgers, with
+ * no parallel event system. It owns only the `changelog_seen_at` marker;
+ * reverts dispatch to the real paths (scaffold rollback, fact forget).
  */
 
 import * as v from 'valibot';
@@ -52,61 +45,38 @@ export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] }
-  /** `<sectionId>:<version>` — a section's versions are numbered per section,
-   *  so neither half identifies a row on its own. */
+  /** `<sectionId>:<version>`; versions are numbered per section. */
   | { type: 'prompt_section_rollback'; target: string };
 
-
 export interface ChangelogEntry {
-  /** Stable id derived from the source ledger row — safe for revert-by-id. */
+  /** Derived from the source ledger row; safe for revert-by-id. */
   id: string;
   kind: ChangelogEntryKind;
-  /** Epoch ms of the change (drives ordering + the unseen count). */
+  /** Epoch ms; drives ordering and the unseen count. */
   at: number;
-  /** One-line human summary of what changed. */
   summary: string;
-  /** The evidence numbers behind it: shadow win-rate, EMA score, counts. */
+  /** Evidence numbers: shadow win-rate, EMA score, counts. */
   evidence: string;
-  /** Present only when a real revert path exists and the change is still in
-   *  effect. Absent = informational (measurement, already-reverted, …). */
+  /** Only when a real revert path exists and the change is still in effect. */
   revert?: ChangelogRevertAction;
-  /** Scaffold entries: the version, so UIs can fetch its diff. */
   scaffoldVersion?: number;
   /**
-   * Present only on a refinement route the OWNER still has to decide.
-   *
-   * A first-class field rather than something a surface infers from the prose,
-   * so a decided row cannot keep offering the action: this is absent the moment
-   * the disposition moves off `pending_owner_approval`. The surface fetches the
-   * bytes with `showRefinement(requestId, routeIndex)` and passes back the
-   * digest that call printed.
+   * Only on a skill route still `pending_owner_approval`, so decided rows never
+   * offer the action. Surfaces fetch bytes via `showRefinement` and pass back its digest.
    */
   decision?: { requestId: string; routeIndex: number };
-  /**
-   * Present only on a run that moved nothing — today, a refinement refused.
-   *
-   * The digest holds runs as well as changes, and this one is neither a change
-   * nor a measurement: it is the honest record that a review happened and
-   * proposed nothing. Set at the source so no surface has to read it out of the
-   * prose, and read by the one feed named for changes — `changesOnly`. The
-   * journal renders the unfiltered digest, because the needs-you queue counts
-   * these entries as unseen off the same read and points at it.
-   */
+  /** A run that moved nothing (a refused refinement); excluded by `changesOnly`. */
   noChange?: boolean;
-  /** Aggregate cards reuse the same entry model for expandable child rows. */
+  /** Child rows of an aggregate card. */
   items?: ChangelogEntry[];
 }
 
 export interface BuildChangelogOptions {
-  /** Only entries strictly newer than this (epoch ms). */
   since?: number;
-  /** Cap on returned entries (default 50). */
+  /** Default 50. */
   limit?: number;
-  /** When true, the digest keeps only entries that ARE a self-change: the
-   *  'outcomes' and 'replay' rows are measurements a closed window leaves
-   *  behind, and a {@link ChangelogEntry.noChange} run moved nothing. The
-   *  exclusion runs BEFORE the limit is taken, so a page of fresh bookkeeping
-   *  cannot push an older real change off the end. */
+  /** Drop measurements ('outcomes', 'replay') and `noChange` runs before the
+   *  limit, so bookkeeping cannot push a real change off the page. */
   changesOnly?: boolean;
   now?: number;
 }
@@ -114,9 +84,8 @@ export interface BuildChangelogOptions {
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 function scaffoldStatusChangeAt(sql: SqlExecutor, actor: ActorHandle): Map<number, number> {
-  // Promotions/rollbacks flip a status flag on an existing row, so written_at
-  // alone would hide them from the unseen window. The durable run_events log
-  // records both decisions with a timestamp — fold it in where present.
+  // Promotions/rollbacks only flip a status flag, so written_at would hide
+  // them; take the decision time from run_events.
   const byVersion = new Map<number, number>();
   actor.assertCurrent();
 
@@ -129,8 +98,7 @@ function scaffoldStatusChangeAt(sql: SqlExecutor, actor: ActorHandle): Map<numbe
     const at = Date.parse(r.ts);
 
     if (!Number.isFinite(at)) continue;
-    // A payload written by an older shape is skipped and written_at stands;
-    // that is the only failure here that is a value rather than a fault.
+    // An older payload shape is skipped and written_at stands.
     const payload = tolerate(() => parseJsonValue(r.payload), 'malformed-input');
     const parsed = v.safeParse(ScaffoldRunEventSchema, payload);
 
@@ -173,8 +141,7 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
 
     const trial = e.status === 'pending' ? ' (shadow trial in progress)' : '';
 
-    // What problem the version was FOR — the line the operator audits a
-    // self-change by. Re-derived from the stamped cell id, no label store.
+    // Re-derived from the stamped cell id; no label store.
     const targeting = e.pathology !== null
       ? ` · targets ${describePathology(e.pathology)}`
       : '';
@@ -198,7 +165,6 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
   });
 }
 
-
 function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   const rows = sql<{ name: string; description: string; created_at: number; updated_at: number; score: number; uses: number }>`
     SELECT name, description, created_at, updated_at, score, uses
@@ -208,13 +174,10 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
     const at = Math.max(r.updated_at, r.created_at);
     const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
     const readableName = r.name.replace(/[._-]+/g, ' ');
-    // Every tool is born scored at the neutral prior, so the EMA line is
-    // always real — there is no unscored case to label.
+    // Tools start at a neutral EMA prior, so the score is always real.
     const score = `EMA ${r.score.toFixed(2)} over ${r.uses} uses`;
 
-    // A crafted tool is not something the owner approves: the entry is
-    // informational, with no revert. Retiring a tool stays on the Tools
-    // surface's own path, not the Journal.
+    // No revert: retiring a tool belongs to the Tools surface.
     return {
       id: `tool:${r.name}:${at}`,
       kind: 'tool' as const,
@@ -250,8 +213,7 @@ type FactChangelogEntry = ChangelogEntry & {
   revert: Extract<ChangelogRevertAction, { type: 'fact_forget' }>;
 };
 
-/** Facts written before the value was JSON-encoded are stored as raw text —
- *  the one parse failure this read treats as a value. */
+/** Facts predating JSON encoding are raw text. */
 function factValueText(valueJson: string): string {
   const decoded = tolerate(() => parseJsonValue(valueJson), 'malformed-input');
   const text = v.safeParse(v.string(), decoded);
@@ -341,9 +303,7 @@ const SECTION_SUMMARY: Record<ScaffoldStatus, string> = {
   historical: 'I replaced earlier wording for my',
 };
 
-/** Evolved prompt sections. The one self-change that moves what the model reads
- *  on every turn, so the evidence line leads with the byte trade — the operator
- *  auditing prompt growth should not have to open a diff to see it. */
+/** Evidence leads with the byte trade, since sections are read every turn. */
 function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   const trials = promptSectionTrialRecord(sql, actor);
 
@@ -366,8 +326,7 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
         `${SECTION_VERB[row.status]} ${row.sectionId} v${String(row.version)} — ${row.rationale} · ${size} · ${trial}`,
     };
 
-    // Informational once it is already off: a rolled_back or historical row is
-    // not in the prompt, so there is nothing to take back.
+    // Rolled-back and historical rows are not in the prompt; nothing to revert.
     if (row.status === 'current' || row.status === 'pending') {
       entry.revert = { type: 'prompt_section_rollback', target: `${row.sectionId}:${String(row.version)}` };
     }
@@ -376,12 +335,8 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
   });
 }
 
-/** How much of a proposal's bytes a card carries. Enough to read the change and
- *  decide on it; the whole file is on the request, one fetch away. */
 const SOURCE_PREVIEW_CHARS = 1_200;
 
-/** How a refinement stage reads to the owner. Each is what the request IS, not
- *  what it hopes: `evaluating` promises no promotion, `gated` claims no trial. */
 const REFINEMENT_STAGE_PROSE = {
   requested: 'I have a review of my own recent failures queued',
   planning: 'I am reviewing my own recent failures',
@@ -392,8 +347,7 @@ const REFINEMENT_STAGE_PROSE = {
   refused: 'I reviewed my own recent failures and changed nothing',
 } satisfies Record<RefinementStage, string>;
 
-/** How a route's disposition reads. The three non-refusals are three different
- *  kinds of "not live yet", and the operator has to be able to tell them apart. */
+/** The three non-refusals are distinct kinds of "not live yet". */
 const REFINEMENT_DISPOSITION_PROSE = {
   applied: 'in effect now',
   pending_trials: 'pending held-out trials',
@@ -403,17 +357,8 @@ const REFINEMENT_DISPOSITION_PROSE = {
 } satisfies Record<RefinementDisposition, string>;
 
 /**
- * Continual refinements — a review of the agent's own failures, and where each
- * typed edit it proposed actually went.
- *
- * An aggregate card whose CHILDREN carry the reverts, because the artifacts are
- * not this row's: a fact reverts through `fact_forget` and a section through
- * `prompt_section_rollback`, exactly as they do when nothing proposed them.
- * A refinement-shaped revert would be a fourth way to undo three things.
- *
- * The parent is informational for the same reason. Taking back "I reviewed my
- * failures" is not an action; taking back what the review changed is, and that
- * is one child per change.
+ * An aggregate card per refinement; children carry the reverts through each
+ * artifact's own path (`fact_forget`, `prompt_section_rollback`).
  */
 function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   return createRefinementStore(sql, actor).list(limit).map((request) => {
@@ -424,10 +369,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
     const turns = `${String(request.turnIds.length)} graded turn${request.turnIds.length === 1 ? '' : 's'}`;
 
     const items: ChangelogEntry[] = request.routes.map((route, index) => {
-      // An EXCERPT of the bytes, read straight off the stored proposal. Enough
-      // to recognise the change while scanning; the whole file is behind
-      // `showRefinement`, which is the one endpoint that hands one out and the
-      // one an owner decides from.
+      // An excerpt; the full file comes only from `showRefinement`.
       const edit = request.proposal?.edits[index];
 
       const source = edit?.kind === 'prompt_section' || edit?.kind === 'skill'
@@ -449,13 +391,11 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
               : source}`),
       };
 
-      // Offered only while the decision is still owed. A decided row that kept
-      // advertising the action would invite a click the backend refuses.
+      // Only while the decision is still owed.
       if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
         item.decision = { requestId: request.id, routeIndex: index };
       }
 
-      // The owner's own revert, reached by the identity the route recorded.
       if (route.disposition === 'applied' && route.kind === 'fact') {
         item.revert = { type: 'fact_forget', target: route.target };
       }
@@ -477,9 +417,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
       items,
     };
 
-    // `refused` is the one stage that ends with the workspace as it started:
-    // the routes, if any, were all declined. Every other stage either changed
-    // something or is still on its way to doing so.
+    // `refused` is the only stage that leaves the workspace unchanged.
     if (request.stage === 'refused') entry.noChange = true;
 
     return entry;
@@ -488,8 +426,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
 
 type ReplayDirection = 'improved' | 'declined' | 'held' | 'reached';
 
-/** A move is only called improved/declined when the two intervals don't
- *  overlap. Two noisy means crossing is not a direction. */
+/** Improved/declined only when the intervals don't overlap. */
 function replayDirection(current: ScoreInterval, previous: ScoreInterval | undefined): ReplayDirection {
   if (previous === undefined) return 'reached';
 
@@ -526,10 +463,7 @@ function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Cha
   });
 }
 
-/** How a batch of verdicts was reached, honestly per source. A digest that reads
- *  "from real user follow-ups" over `execution` rows reports a person where the
- *  only witness was the runtime, and over `session_end` rows reports a reply
- *  that is precisely what never came. */
+/** Per-source phrasing, so `execution` and `session_end` rows never claim a user reply. */
 const OUTCOME_BATCH_PHRASE = {
   explicit: "from the user's thumbs",
   classifier: 'from how the user replied',
@@ -538,10 +472,7 @@ const OUTCOME_BATCH_PHRASE = {
   execution: 'by whether their tool calls ran',
 } satisfies Record<TurnOutcomeSource, string>;
 
-/** What ONE verdict rests on — the expandable answer to "why did it say that?".
- *  `row.evidence` is the classifier's own reason or the execution observation;
- *  a thumb and a session that ended are their own evidence, and rows written
- *  before the column carry none, so those phrase from the source instead. */
+/** Why one verdict was reached; rows without `evidence` phrase from their source. */
 function outcomeItemEvidence(row: TurnOutcomeRow): string {
   switch (row.source) {
     case 'classifier':
@@ -586,8 +517,7 @@ function outcomeEntry(
     at: newest,
     summary: `Graded ${rows.length} turn${rows.length === 1 ? '' : 's'} · ${provenance.join(' · ')}`,
     evidence: parts.join(' · '),
-    // Bounded by the digest's own limit, like every other aggregate: the batch
-    // reads 200 rows to count them honestly, which is not a list anyone reads.
+    // Bounded by the digest limit; the 200-row read is for counting only.
     items: rows.slice(0, limit).map((row) => {
       const request = row.userMessage.trim().replace(/\s+/gu, ' ');
 
@@ -602,10 +532,7 @@ function outcomeEntry(
   };
 }
 
-/**
- * Assemble the digest from the durable ledgers, newest first. Pure read —
- * call it at session end, on demand (RPC / slash command), whenever.
- */
+/** The digest from the durable ledgers, newest first. Pure read. */
 export function buildChangelog(
   sql: SqlExecutor, actor: ActorHandle, opts: BuildChangelogOptions = {},
 ): ChangelogEntry[] {
@@ -635,34 +562,22 @@ export function buildChangelog(
   return kept.slice(0, limit);
 }
 
-/** How deep the unseen window is read. Past this the badge stops counting, so
- *  it is generous: a workspace left alone for a week is not "99 unseen". */
+/** Unseen badge ceiling. */
 const UNSEEN_WINDOW_LIMIT = 99;
 
-/**
- * Entries newer than the seen marker, newest first.
- *
- * The badge counts these; the needs-you queue also reads WHICH of them carry a
- * `revert`, because the digest holds measurements (a graded turn, a replay
- * eval, a GEPA pass) as well as changes, and only the changes can be kept or
- * reverted.
- */
+/** Entries newer than the seen marker, newest first. */
 export function listUnseenChangelog(
   sql: SqlExecutor, actor: ActorHandle, seenAt: number,
 ): ChangelogEntry[] {
   return buildChangelog(sql, actor, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT });
 }
 
-/** Entries newer than the seen marker — the badge count. */
 export function countUnseenChangelog(sql: SqlExecutor, actor: ActorHandle, seenAt: number): number {
   return listUnseenChangelog(sql, actor, seenAt).length;
 }
 
-// ── The one text renderer (TUI overlay + classic print + tests) ──
-// The marks come from the one canonical map in tui-presentation.ts — this
-// renderer carried its own drifted copy ('⚒'/'⏱'/'☑') for months. The import
-// is safe against the reverse edge: tui-presentation's import of
-// ChangelogEntryKind is type-only and erased at runtime.
+// Glyphs come from tui-presentation.ts; its import of ChangelogEntryKind is
+// type-only, so there is no runtime cycle.
 
 export function renderChangelogText(
   entries: ReadonlyArray<ChangelogEntry>,
@@ -691,8 +606,6 @@ export function renderChangelogText(
   return lines.join('\n');
 }
 
-// ── Revert dispatch — real paths only ────────────────────────────
-
 export interface ChangelogRevertContext {
   rt: AgentRuntime;
   facts: FactsStore;
@@ -717,8 +630,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   if (!row) return { ok: false, error: `scaffold v${version} not found` };
 
   if (row.status === 'pending') {
-    // Discard the in-trial pending through the existing decision machinery
-    // (restores the live file from the current version, flips the status).
+    // The decision machinery restores the live file from current and flips status.
     const pending = getPendingScaffold(sql, actor);
 
     if (!pending || pending.version !== version) {
@@ -734,9 +646,8 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
     return { ok: false, error: `scaffold v${version} is already ${row.status} — nothing to revert` };
   }
 
-  // Revert a promoted (live) version through the pointer-first rollback API:
-  // one atomic statement retires this version and promotes its predecessor,
-  // then the live view is refreshed from the predecessor's canonical source.
+  // Pointer-first rollback: one statement retires this version and promotes its
+  // predecessor, then the live view refreshes from the predecessor's source.
   const prev = sql<{ version: number }>`
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND version < ${version}
@@ -751,13 +662,8 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
 }
 
 /**
- * Take back an evolved prompt section.
- *
- * A pending one is discarded through the same decision machinery that would
- * have promoted it. A promoted one falls back to the version it superseded, or
- * — when it superseded nothing — to the template compiled into the bundle,
- * which is what `incumbentSectionSource` returns once no row is current. There
- * is no file to restore either way: the source IS the row.
+ * Pending: discarded via the decision machinery. Promoted: falls back to the
+ * superseded version, or to the bundled template when none (the row is the source).
  */
 function revertPromptSection(
   sql: SqlExecutor,
@@ -804,7 +710,6 @@ function revertPromptSection(
   return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
 }
 
-/** Execute one entry's revert action against the real machinery. */
 export async function executeChangelogRevert(
   ctx: ChangelogRevertContext,
   action: ChangelogRevertAction,
@@ -869,9 +774,8 @@ export async function executeChangelogRevert(
   }
 }
 
-/** Resolve an entry by id against a freshly-built digest and revert it. The
- *  shared backend entry point (cf RPC + local session) — id-addressed so a
- *  digest that shifted between list and revert can never hit the wrong row. */
+/** Id-addressed so a digest that shifted between list and revert cannot hit
+ *  the wrong row. Shared by cf RPC and local sessions. */
 export async function revertChangelogEntryById(
   ctx: ChangelogRevertContext,
   id: string,
@@ -896,11 +800,8 @@ export async function revertChangelogEntryById(
   if (!entry.revert) return { ok: false, error: `changelog entry ${id} is informational — nothing to revert` };
   const result = await executeChangelogRevert(ctx, entry.revert);
 
-  // The operator's own act, on the same audit stream the change it undoes was
-  // announced on — so the changelog that showed the change shows its reversal.
-  // Recorded here rather than by the caller: one backend wrote this row and
-  // the other did not, and a revert only the cloud remembered is a history
-  // that reads differently depending on where the owner happened to be.
+  // Recorded here, not by callers, so both backends log the reversal on the
+  // same audit stream that announced the change.
   if (result.ok) {
     void ctx.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
       VALUES (${ctx.rt.actor.actorId}, 'reflection',

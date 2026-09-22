@@ -1,14 +1,4 @@
-/**
- * GEPA — behaviour tests through the public surface.
- *
- * Asserts the algorithm's contract using deterministic mock metrics + a
- * deterministic mock reflection LM, so the optimisation runs are
- * reproducible byte-for-byte.
- *
- * No real LLM calls; no real scaffold execution. The point of these tests
- * is the algorithm's correctness, not the quality of the artefact produced
- * by any specific LM.
- */
+/** GEPA through the public surface, with deterministic metrics and reflection LM. */
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
@@ -20,8 +10,6 @@ import {
 } from './index';
 import { DELEGATION_RUBRIC } from '../delegation-features';
 
-// ── deterministic RNG ────────────────────────────────────────────
-
 function seededRng(seed: number): () => number {
   let s = seed;
 
@@ -31,8 +19,6 @@ function seededRng(seed: number): () => number {
     return s / 0xffffffff;
   };
 }
-
-// ── helpers to build candidates / instances ──────────────────────
 
 function mkInstance(id: string, input: string): EvalInstance<string> {
   return { id, input };
@@ -56,8 +42,6 @@ function mkCandidate(
     createdAt,
   };
 }
-
-// ── Pareto ───────────────────────────────────────────────────────
 
 describe('computeParetoFront', () => {
   test('empty pool returns empty', () => {
@@ -118,7 +102,7 @@ describe('parentSelectionWeights + sampleParentByWeight', () => {
   });
 
   test('falls back to bestAggregate when no Pareto signal yet', () => {
-    // Two identical-everywhere candidates — neither dominates → both weight 0.
+    // Identical everywhere: neither dominates, both weight 0.
     const a = mkCandidate('a', { i1: 0.5, i2: 0.5 }, 100);
     const b = mkCandidate('b', { i1: 0.5, i2: 0.5 }, 200);
     const sampled = sampleParentByWeight([a, b], ['i1', 'i2'], seededRng(1));
@@ -147,8 +131,6 @@ describe('bestAggregate', () => {
     expect(bestAggregate([newer, older])).toBe(older);
   });
 });
-
-// ── reflection helpers ───────────────────────────────────────────
 
 describe('rolloutMinibatch', () => {
   test('scores every instance and totals metric calls', async () => {
@@ -191,18 +173,14 @@ describe('renderReflectionPrompt', () => {
     expect(prompt).toContain('task input');
     expect(prompt).toContain('too verbose');
     expect(prompt).toContain('Turn process: 41 sequential steps, 0 team, 0 think');
-    // The rubric is one shared string now (evolution/delegation-features.ts), in
-    // the vocabulary the evidence line above it actually prints — the two inline
-    // copies had drifted into "team/think/heads" here and "hire/search" in the
-    // turn reflection, for one ladder.
+    // One shared rubric string (evolution/delegation-features.ts).
     expect(prompt).toContain(DELEGATION_RUBRIC);
     expect(prompt).toContain(
       'ground through inline with no hiring\n  and no exploration, is a lesson to decompose the work and delegate it',
     );
     expect(prompt).toContain('An accepted turn that hired or explored effectively earns credit');
     expect(prompt).toContain('Spawns that contributed nothing are delegation overhead');
-    // The prohibition is shown, not only named, and the unseen half of the eval
-    // set is stated rather than left for the reflector to infer.
+    // The prohibition is shown, and the unseen half of the eval set is stated.
     expect(prompt).toContain('Specific and tightly scoped, by contrast:');
     expect(prompt).toContain('One defect, one edit, named instances.');
     expect(prompt).toContain('do not remove or weaken anything the failures above do not implicate');
@@ -225,8 +203,6 @@ describe('renderReflectionPrompt', () => {
     expect(prompt).not.toContain('Delegation rubric');
   });
 });
-
-// ── runGepa end-to-end ───────────────────────────────────────────
 
 describe('runGepa', () => {
   test('returns seed when reflection LM declines to mutate', async () => {
@@ -300,12 +276,9 @@ describe('runGepa', () => {
       random: seededRng(1),
     });
 
-    // Seed (1 call) + rollouts on each iteration (3 × 1 = 3); no full-eval scoring
-    // for rejected candidates.
+    // Rejected candidates get no full-eval scoring.
     expect(result.history.length).toBe(1);
-    // Stop reason should be `no_improvement_possible` because we hit
-    // REJECTION_GIVE_UP (5) but only had 3 iterations — actually iterations
-    // exhausted comes first.
+    // Iterations run out before REJECTION_GIVE_UP (5).
     expect(result.stopReason).toBe('iterations_exhausted');
     // Scoring calls = seed-eval (1) + mutation rollouts (3 × 1).
     expect(scoringCalls).toBe(1 + 3 * 1);
@@ -316,8 +289,7 @@ describe('runGepa', () => {
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.5, feedback: '' });
     const reflectionLm = async () => 'unique-' + Math.random();
 
-    // Tight budget: only enough for the seed (2 calls) + 1 full iter (minibatch 1 + eval 2 = 3).
-    // Second iteration would need 3 more calls but only 0 left — should stop.
+    // Budget covers the seed (2) + one iteration (3); the second cannot be paid for.
     const result = await runGepa({
       seed: 'seed',
       evalSet,
@@ -375,15 +347,12 @@ describe('runGepa', () => {
   });
 });
 
-// ── train/val split discipline ───────────────────────────────────
-
 describe('runGepa — trainSet (upstream train/val discipline)', () => {
   test('reflection minibatches sample ONLY from trainSet; scoring runs on the full evalSet', async () => {
     const train = [mkInstance('neg1', 'failed task A'), mkInstance('neg2', 'failed task B')];
     const evalSet = [...train, mkInstance('pos1', 'accepted task C'), mkInstance('pos2', 'accepted task D')];
 
-    // Track which instances each phase touches. Rollouts happen on candidates
-    // already in the pool (the parent); eval-set scoring covers every id.
+    // Rollouts touch pool candidates; eval-set scoring covers every id.
     const rolledOut = new Set<string>();
     let scored = 0;
 
@@ -408,7 +377,7 @@ describe('runGepa — trainSet (upstream train/val discipline)', () => {
     expect(rolledOut.size).toBeGreaterThan(0);
 
     for (const id of rolledOut) expect(['neg1', 'neg2']).toContain(id);
-    // The winner was still scored on every val instance (regression guard).
+    // The winner was still scored on every val instance.
     expect([...result.winner.scores.keys()].sort()).toEqual(['neg1', 'neg2', 'pos1', 'pos2']);
   });
 
@@ -427,14 +396,9 @@ describe('runGepa — trainSet (upstream train/val discipline)', () => {
   });
 });
 
-// ── metric-call accounting ───────────────────────────────────────
-//
-// `metricCallsUsed` is what the caller pays for and what the persistence layer
-// reports. The existing tests all run under a budget of 100, so the ledger
-// could drift from the calls actually made and nothing would notice.
+// `metricCallsUsed` is what the caller pays for; checked against real invocations.
 
-/** Counts real metric invocations so the reported total can be checked against
- *  the truth rather than against itself. */
+/** Counts real metric invocations. */
 function countingMetric(score: (source: string, instanceId: string) => number) {
   const state = { calls: 0 };
 
@@ -485,9 +449,7 @@ describe('runGepa — metric-call accounting', () => {
   });
 
   test('the budget guard reserves a whole worst-case iteration, and no more', async () => {
-    // evalSet 2 + minibatch 1 = 3 per iteration; seed scoring takes 2 of 5.
-    // Exactly 3 remain, which is exactly enough — the guard must not round it
-    // away, and must stop before the iteration that cannot be paid for.
+    // 3 per iteration; seed takes 2 of 5, leaving exactly enough for one, not two.
     let call = 0;
     const { metric, state } = countingMetric(() => 0.5);
 
@@ -506,8 +468,7 @@ describe('runGepa — metric-call accounting', () => {
   });
 
   test('the reservation is sized by the train set, not by the requested minibatch', async () => {
-    // minibatchSize 3 over a 1-instance train set really costs 1. Reserving 3
-    // would abandon a run that is comfortably affordable.
+    // minibatchSize 3 over a 1-instance train set really costs 1.
     const { metric, state } = countingMetric((c) => (c === 'better' ? 1 : 0.2));
 
     const result = await runGepa({
@@ -537,8 +498,7 @@ describe('runGepa — metric-call accounting', () => {
       budget: { maxIterations: 1, maxMetricCalls: 100, minibatchSize: 2 },
       random: seededRng(1),
     });
-    // seed (3) + a real 2-instance rollout + scoring (3). A `?? ` fallback that
-    // accepted the empty array would silently reflect on no evidence at all.
+    // seed (3) + a real 2-instance rollout + scoring (3); an empty minibatch would reflect on nothing.
     expect(state.calls).toBe(8);
   });
 
@@ -565,9 +525,6 @@ describe('runGepa — metric-call accounting', () => {
   });
 });
 
-// ── the rejection state machine ──────────────────────────────────
-
-/** Collect every rejection reason the loop reports. */
 interface RejectionLog {
   reasons: string[];
   onIteration: (state: { accepted: boolean; rejectionReason?: string }) => void;
@@ -584,8 +541,7 @@ function rejectionLog(): RejectionLog {
 
 describe('runGepa — rejection reasons and the give-up counter', () => {
   test('a proposal identical to its parent is rejected as no_change, not as a duplicate', async () => {
-    // Both guards would stop the candidate, so only the REASON distinguishes
-    // them — and the reason is what the operator sees in the run log.
+    // Both guards stop the candidate; only the logged reason distinguishes them.
     const log = rejectionLog();
     await runGepa({
       seed: 'seed',
@@ -601,8 +557,7 @@ describe('runGepa — rejection reasons and the give-up counter', () => {
   });
 
   test('a proposal already in the pool but different from the parent is a duplicate', async () => {
-    // seed outscores everything, so best-aggregate keeps the parent at 'seed'
-    // and the re-proposed 'ALT' can only trip the pool-duplicate guard.
+    // The seed outscores everything, so re-proposed 'ALT' can only trip the pool-duplicate guard.
     const log = rejectionLog();
     await runGepa({
       seed: 'seed',
@@ -636,9 +591,7 @@ describe('runGepa — rejection reasons and the give-up counter', () => {
   });
 
   test('an accepted candidate resets the counter — scattered rejections never give up', async () => {
-    // Alternating reject/accept: six rejections in twelve iterations, never
-    // five in a row. A counter that only ever climbs would abandon the run
-    // halfway through and report no_improvement_possible.
+    // Six rejections in twelve iterations, never five in a row: the counter must reset.
     let call = 0;
     const log = rejectionLog();
 
@@ -663,8 +616,7 @@ describe('runGepa — rejection reasons and the give-up counter', () => {
   });
 
   test('a throwing onIteration hook does not abort the run', async () => {
-    // The hook is the caller's persistence/telemetry seam; a failure there
-    // must not cost the optimisation run that has already been paid for.
+    // A failing hook must not cost the paid-for run.
     const result = await runGepa({
       seed: 'seed',
       evalSet: [mkInstance('i1', 'a')],
@@ -678,8 +630,6 @@ describe('runGepa — rejection reasons and the give-up counter', () => {
     expect(result.winner.source).toBe('better');
   });
 });
-
-// ── constraints ──────────────────────────────────────────────────
 
 describe('runGepa — constraint checks', () => {
   const evalSet = [mkInstance('i1', 'a')];
@@ -727,8 +677,6 @@ describe('runGepa — constraint checks', () => {
   });
 });
 
-// ── specialists vs the generalist, and the Merge operator ────────
-
 interface SpecialistScores {
   [candidate: string]: Record<string, number>;
 }
@@ -753,11 +701,8 @@ const isMergePrompt = (p: string) => p.startsWith('You are merging two');
 
 describe('runGepa — winner selection over the whole pool', () => {
   test('the winner is the best mean in the POOL, even when it is not on the Pareto front', async () => {
-    // The front is the union of per-instance bests, so a generalist that wins
-    // no single instance is absent from it while still being the best overall
-    // artifact. Reading the winner off the front would ship a specialist that
-    // is worse on average — the exact failure the front exists to avoid on the
-    // other side (it preserves specialists, it does not select them).
+    // A generalist that wins no instance is absent from the front but best overall;
+    // the front preserves specialists, it does not select the winner.
     const prompts: string[] = [];
     const script = ['SPEC_A', 'SPEC_B', 'GENERALIST', 'FINAL'];
     let call = 0;
@@ -783,8 +728,7 @@ describe('runGepa — winner selection over the whole pool', () => {
   });
 
   test("parentSelection 'best-aggregate' reflects on the best mean, not on a sampled specialist", async () => {
-    // GENERALIST wins no instance, so its parent-selection weight is 0 and the
-    // weighted sampler can never return it. Only the best-aggregate path can.
+    // GENERALIST has weight 0, so only the best-aggregate path can return it.
     const prompts: string[] = [];
     const script = ['SPEC_A', 'SPEC_B', 'GENERALIST', 'FINAL'];
     let call = 0;
@@ -852,8 +796,7 @@ describe('runGepa — the Merge operator', () => {
     const { result } = await mergeRun({ useMerge: true, mergeEveryN: 2, maxMergeInvocations: 1 });
     const merged = present(result.history.find((c) => c.source === 'MERGED'), 'the merged candidate');
 
-    // Merge inherits two parents; the candidate type carries one id, so it
-    // must stay null rather than pointing at whichever was sampled last.
+    // Merge has two parents, so the single parent id stays null.
     expect(merged.parentId).toBeNull();
   });
 
@@ -866,9 +809,7 @@ describe('runGepa — the Merge operator', () => {
   });
 
   test('no complementary pair falls back to mutate instead of failing the iteration', async () => {
-    // Every candidate scores identically, so no pair is ever complementary.
-    // Turning that into a rejection would give up after 5 iterations and
-    // return the seed, wasting the whole budget whenever merge is enabled.
+    // No pair is ever complementary; that must not count as a rejection that ends the run.
     let call = 0;
     const log = rejectionLog();
 

@@ -1,23 +1,7 @@
 /**
- * K_align — the Alignment Convergence Rate.
- *
- * The one self-improvement metric computable from pure telemetry, with no
- * benchmark, no judge, and no LLM call: how often the user has to correct the
- * agent, per 100 graded turns, and whether that number is moving.
- *
- * It reads the `turn_outcomes` ledger (owned by outcomes.ts) and nothing else —
- * specifically, the rows a USER produced. Execution-sourced rows live in the
- * same ledger (the environment's verdict on turns nobody graded) and are
- * counted separately here rather than folded in: this metric's claim is about
- * how often a person had to correct the agent, and it would stop being true the
- * moment a workspace's headless traffic started moving the number.
- * Turns are segmented by the `scaffold_version` that served them, so each
- * segment is "how the agent behaved while it was THAT version of itself" and
- * the boundaries between segments are exactly the self-evolution events.
- * Honesty is the whole point. A rate over a handful of turns is noise, so
- * every rate here ships with a 95% interval, every segment carries whether it
- * is precise enough to mean anything, and the trend refuses to name a
- * direction it cannot support.
+ * K_align: user corrections per 100 user-graded turns, segmented by the
+ * `scaffold_version` that served them. Execution-sourced rows are counted
+ * separately, never folded into the rate. Every rate ships with a 95% interval.
  */
 
 import { wilsonInterval } from '../utils/stats';
@@ -25,80 +9,49 @@ import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { tableExists } from '../identity/schema';
 
-/** A rate is worth reading when its 95% interval spans no more than 20 points
- *  per 100 turns (±10). This replaces an arbitrary minimum-n rule: precision
- *  is what actually decides whether a rate is informative, and the n needed to
- *  reach it falls out of the data (≈60 graded turns at a 20% rate, ≈95 at 50%,
- *  far fewer when the rate is near zero). */
+/** A rate is readable when its 95% interval spans at most 20 points per 100 turns; precision, not a minimum n, decides. */
 const RELIABLE_INTERVAL_WIDTH = 0.2;
 
-/** A proportion with its uncertainty, expressed per 100 turns. */
 export interface RateInterval {
-  /** Point estimate, per 100 turns. */
   per100: number;
-  /** Bounds of the 95% interval, per 100 turns. */
+  /** 95% interval bounds, per 100 turns. */
   lowPer100: number;
   highPer100: number;
-  /** False when the interval is too wide to read as a rate (see above). */
   reliable: boolean;
 }
 
 export interface AlignmentTotals {
-  /** Turns a USER graded — the rate's denominator (accepted + corrected +
-   *  frustrated, from explicit/classifier/take_pick rows). */
+  /** User-graded turns (accepted + corrected + frustrated): the denominator. */
   turns: number;
-  /** corrected + frustrated, among those. */
   negatives: number;
-  /** Recorded but ungraded (no user verdict either way); excluded from the rate. */
+  /** Recorded but ungraded; excluded from the rate. */
   abandoned: number;
-  /** Rows the ENVIRONMENT graded (source `execution`), not a person. Counted
-   *  and reported, never folded into the rate: K_align is defined as how often
-   *  the USER has to correct the agent, and a machine verdict about whether the
-   *  agent's own commands ran answers a different question. Blending them would
-   *  make the headline number drift with how much headless traffic a workspace
-   *  saw. */
+  /** Environment-graded rows; reported, never folded into the rate. */
   executionGraded: number;
   rate: RateInterval;
   firstAt: number;
   lastAt: number;
 }
 
-/** One scaffold version's slice of the ledger. */
 export interface AlignmentSegment extends AlignmentTotals {
-  /** The scaffold version that served these turns; null for rows recorded
-   *  before a version was attributed. */
+  /** Null for rows recorded before a version was attributed. */
   scaffoldVersion: number | null;
 }
 
 export type AlignmentTrend = 'improving' | 'worsening' | 'flat' | 'insufficient';
 
 export interface AlignmentConvergence {
-  /** Oldest first — the order the agent lived them. */
+  /** Oldest first. */
   segments: AlignmentSegment[];
-  /** Every graded turn in the ledger, pooled. */
   overall: AlignmentTotals;
   trend: AlignmentTrend;
-  /** Change in the correction rate from the earliest to the latest reliable
-   *  segment, per 100 turns. Negative = fewer corrections = improving.
-   *  Null when the trend is 'insufficient'. */
+  /** Earliest to latest reliable segment; negative = improving. Null when the trend is 'insufficient'. */
   deltaPer100: number | null;
-  /** The two segments the trend compared, when a comparison was possible. */
   comparedVersions: { from: number | null; to: number | null } | null;
-  /** Plain-language statement of what this does and does not establish. */
   note: string;
 }
 
-/**
- * Wilson score interval for a binomial proportion.
- *
- * Chosen over the textbook Wald interval because Wald is badly miscalibrated
- * exactly where this metric lives — small n and rates near zero, where it
- * produces impossible negative bounds and collapses to zero width at k=0.
- * Wilson holds close to nominal coverage at small n, never leaves [0, 1], and
- * stays informative at k=0 (it reports "at most X%", which is a real finding).
- * Clopper-Pearson would also be defensible but is needlessly conservative and
- * would need an incomplete-beta implementation for no gain here.
- */
+/** Wilson score interval: unlike Wald, stays within [0, 1] and informative at small n and k=0. */
 
 function rateInterval(negatives: number, turns: number): RateInterval {
   const { lo: low, hi: high } = wilsonInterval(negatives, turns);
@@ -150,8 +103,6 @@ function pool(segments: ReadonlyArray<AlignmentSegment>): AlignmentTotals {
   };
 }
 
-/** Direction only when the two intervals do not overlap; anything else is the
- *  'flat' this ledger can defend. */
 function intervalTrend(from: RateInterval, to: RateInterval): AlignmentTrend {
   if (to.highPer100 < from.lowPer100) return 'improving';
 
@@ -160,14 +111,7 @@ function intervalTrend(from: RateInterval, to: RateInterval): AlignmentTrend {
   return 'flat';
 }
 
-/**
- * The trend, decided by whether the earliest and latest reliable segments'
- * 95% intervals overlap. Non-overlap is a deliberately conservative test —
- * stricter than a two-proportion test at the same nominal level — because the
- * failure mode this metric exists to prevent is reading a direction into
- * noise. Overlapping intervals report 'flat', which means "no change this
- * ledger can detect", not "provably unchanged".
- */
+/** Direction only when the earliest and latest reliable segments' 95% intervals do not overlap; 'flat' means no detectable change. */
 function decideTrend(
   segments: ReadonlyArray<AlignmentSegment>,
 ): Pick<AlignmentConvergence, 'trend' | 'deltaPer100' | 'comparedVersions'> {
@@ -203,16 +147,11 @@ function buildNote(segments: ReadonlyArray<AlignmentSegment>, gradedTurns: numbe
   return `The correction rate ${trend === 'improving' ? 'fell' : 'rose'} by more than both 95% intervals allow for chance.`;
 }
 
-/**
- * K_align over the whole `turn_outcomes` ledger. Pure read; returns an empty
- * result rather than throwing when the ledger does not exist — the same
- * contract every other reader over this table offers.
- */
+/** Pure read; empty result when the ledger does not exist. */
 export function alignmentConvergence(sql: SqlExecutor, actor: ActorHandle): AlignmentConvergence {
   actor.assertCurrent();
 
-  // Asked rather than caught: a missing table is the one expected condition, and a catch
-  // cannot tell it from a locked database — the doctrine's own named example.
+  // Asked rather than caught: a catch cannot tell a missing table from a locked database.
   const rows: RawSegmentRow[] = tableExists(sql, 'turn_outcomes')
     ? sql<RawSegmentRow>`
         SELECT scaffold_version,
@@ -239,7 +178,6 @@ function formatRate(rate: RateInterval): string {
     `(95% CI ${rate.lowPer100.toFixed(1)}–${rate.highPer100.toFixed(1)}${rate.reliable ? '' : ', too wide to read'})`;
 }
 
-/** One compact block for terminal output. */
 export function renderAlignmentConvergence(k: AlignmentConvergence): string {
   const delta = k.deltaPer100 === null ? '' :
     ` (${k.deltaPer100 > 0 ? '+' : ''}${k.deltaPer100.toFixed(1)} per 100 turns` +

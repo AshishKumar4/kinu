@@ -1,10 +1,4 @@
-/**
- * The calibration set: how it is drawn, how it is presented, how verdicts come
- * back, and what the report says with and without them.
- *
- * No LLM calls — the ledger is written directly, the way the classifier would
- * have written it.
- */
+/** The calibration set: draw, presentation, verdict ingest and report. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { testActorHandle } from '@kinu.run/test-utils';
@@ -24,13 +18,11 @@ function setup() {
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db));
 
-  // A real bound handle: the ledger is actor-scoped, so a fixture that could
-  // not fail `assertCurrent` would not be exercising the store these tests read.
+  // A real bound handle, since the ledger is actor-scoped.
   return { db, sql, actor: testActorHandle(sql) };
 }
 
-/** A ledger shaped like a real one: mostly accepted, a few corrections, fewer
- *  frustrations, spread over time and across two scaffold versions. */
+/** Mostly accepted, a few corrections, fewer frustrations, over time and two scaffold versions. */
 function seedLedger(sql: ReturnType<typeof makeSql>, actor: ActorHandle, spec: {
   accepted?: number; corrected?: number; frustrated?: number;
   source?: 'classifier' | 'explicit'; version?: number; startAt?: number;
@@ -59,8 +51,7 @@ function seedLedger(sql: ReturnType<typeof makeSql>, actor: ActorHandle, spec: {
   write('frustrated', spec.frustrated ?? 0);
 }
 
-/** Read back the classifier's verdict for a turn, so a test can label items
- *  agreeing or disagreeing with it on purpose. */
+/** The classifier's verdict, so tests can agree or disagree on purpose. */
 function predictionOf(sql: ReturnType<typeof makeSql>, outcomeId: string): TurnOutcome {
   return sql<{ outcome: TurnOutcome }>`SELECT outcome FROM turn_outcomes WHERE id = ${outcomeId}`[0].outcome;
 }
@@ -71,12 +62,9 @@ function outcomeLabel(outcomeId: string, label: OutcomeLabel): OutcomeLabelInput
   return { outcomeId, label };
 }
 
-// ── Budget allocation ────────────────────────────────────────────
-
 describe('allocateLabelBudget', () => {
   test('spends the whole budget and never a label more', () => {
-    // Rounding each share independently overshoots; a quota nobody asked for
-    // is as wrong as one that goes missing.
+    // Independent rounding overshoots the budget.
     for (const sizes of [[1600, 260, 90], [50, 50], [100, 40, 20], [7, 11, 13, 17], [999, 1]]) {
       for (const budget of [10, 37, 60, 100, 137]) {
         const quotas = allocateLabelBudget(sizes, budget);
@@ -95,8 +83,7 @@ describe('allocateLabelBudget', () => {
     expect(frustrated).toBeGreaterThan(10);
     expect(corrected).toBeGreaterThan(10);
     expect(accepted).toBeGreaterThan(corrected);
-    // Not fully proportional either — a proportional split would leave the
-    // rarest verdict about 5 labels, which measures nothing.
+    // A proportional split would leave the rarest verdict about 5 labels.
     expect(frustrated).toBeGreaterThan(Math.round((100 * 90) / 1950));
   });
 
@@ -116,8 +103,6 @@ describe('allocateLabelBudget', () => {
     expect(allocateLabelBudget([10, 10], 0)).toEqual([0, 0]);
   });
 });
-
-// ── The draw ─────────────────────────────────────────────────────
 
 describe('sampleForLabeling', () => {
   test('stratifies across verdicts instead of drowning in the majority one', () => {
@@ -139,7 +124,7 @@ describe('sampleForLabeling', () => {
     seedLedger(sql, actor, { accepted: 400 });
     const times = sampleForLabeling(sql, actor, { size: 40 }).map((item) => item.createdAt).sort((a, b) => a - b);
     const span = 399 * 60_000;
-    // First and last draws sit near the ends of the ledger's whole history.
+    // First and last draws sit near the ends of the ledger's history.
     expect(times[0] - 1_700_000_000_000).toBeLessThan(span * 0.1);
     expect(times[times.length - 1] - 1_700_000_000_000).toBeGreaterThan(span * 0.9);
   });
@@ -188,8 +173,7 @@ describe('sampleForLabeling', () => {
   });
 
   test('the drawn order does not follow the strata', () => {
-    // A file whose items arrive grouped by verdict would leak the answer the
-    // labeler is being asked for.
+    // Items grouped by verdict would leak the answer.
     const { sql, actor } = setup();
     seedLedger(sql, actor, { accepted: 300, corrected: 100, frustrated: 60 });
     const verdicts = sampleForLabeling(sql, actor, { size: 90 }).map((item) => predictionOf(sql, item.outcomeId));
@@ -197,8 +181,6 @@ describe('sampleForLabeling', () => {
     expect(runs).toBeGreaterThan(verdicts.length / 2);
   });
 });
-
-// ── The file ─────────────────────────────────────────────────────
 
 describe('the labeling file', () => {
   const items = [
@@ -209,7 +191,7 @@ describe('the labeling file', () => {
   test('never shows the classifier verdict it is asking about', () => {
     const rendered = renderLabelingFile(items);
     expect(rendered).toContain('deliberately NOT shown');
-    // The only outcome words present are the legend's, which every item shares.
+    // The only outcome words present are the legend's.
     const body = rendered.slice(rendered.indexOf('### 1/2'));
 
     for (const word of ['accepted', 'corrected', 'frustrated', 'abandoned']) {
@@ -288,8 +270,6 @@ describe('the labeling file', () => {
   });
 });
 
-// ── The label ledger ─────────────────────────────────────────────
-
 describe('the gold label ledger', () => {
   test('is append-only: a re-label adds a row and the newest wins', () => {
     const { sql, actor } = setup();
@@ -313,8 +293,7 @@ describe('the gold label ledger', () => {
   });
 
   test('every label counts, however many passes it took', () => {
-    // A windowed read would silently drop the turns the oldest labels speak
-    // for, and the estimate would quietly narrow to the recent ones.
+    // A windowed read would drop the turns the oldest labels speak for.
     const { sql, actor } = setup();
 
     for (let pass = 0; pass < 12; pass++) {
@@ -335,8 +314,6 @@ describe('the gold label ledger', () => {
     expect(goldLabels(sql, actor).size).toBe(0);
   });
 });
-
-// ── The report ───────────────────────────────────────────────────
 
 describe('calibrationReport', () => {
   test('an unlabeled ledger reports uncalibrated, not a number', () => {
@@ -379,8 +356,7 @@ describe('calibrationReport', () => {
   test('labels turn into a measured profile and a corrected rate', () => {
     const { sql, actor } = setup();
     seedLedger(sql, actor, { accepted: 800, corrected: 130, frustrated: 45 });
-    // A classifier that misses corrections: a fifth of what it called
-    // "accepted" was really a correction, and it over-called frustration.
+    // A fifth of "accepted" was really a correction, and frustration is over-called.
     const drawn = sampleForLabeling(sql, actor, { size: 120 });
     recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
@@ -407,8 +383,7 @@ describe('calibrationReport', () => {
     expect(report.kappa).not.toBeNull();
     expect(report.labelers).toEqual(['owner']);
 
-    // The classifier called 175/975 turns negative; the labels say many more
-    // of the "accepted" ones really were.
+    // The classifier called 175/975 turns negative; the labels say more were.
     expect(report.overall?.raw).toBeCloseTo(175 / 975, 6);
     expect(report.overall?.corrected.mean).toBeGreaterThan(report.overall?.raw ?? 1);
     expect(report.overall?.bias).toBeGreaterThan(0.05);
@@ -419,8 +394,7 @@ describe('calibrationReport', () => {
     expect(rendered).toContain("Cohen's κ:");
     expect(rendered).toContain('per 100 turns');
     expect(rendered).toContain('the classifier said');
-    // Judge drift: a profile measured months ago says nothing about today's
-    // classifier, so the report always dates itself.
+    // Judge drift: the report always dates itself.
     expect(rendered).toMatch(/last on \d{4}-\d{2}-\d{2}/);
   });
 
@@ -461,8 +435,7 @@ describe('calibrationReport', () => {
   });
 
   test('turns with an explicit user verdict are left out of the correction', () => {
-    // They are already ground truth; folding them in would dilute the measured
-    // error profile toward zero.
+    // Already ground truth; they would dilute the error profile toward zero.
     const { sql, actor } = setup();
     seedLedger(sql, actor, { accepted: 100, corrected: 30 });
     seedLedger(sql, actor, { accepted: 50, corrected: 50, source: 'explicit', version: 2, startAt: 1_800_000_000_000 });
@@ -490,7 +463,7 @@ describe('calibrationReport', () => {
     expect(newer.scaffoldVersion).toBe(2);
     expect(older.observed).toEqual({ events: 100, population: 300 });
     expect(newer.observed).toEqual({ events: 30, population: 330 });
-    // The versions had genuinely different rates, and still do after correction.
+    // The versions' different rates survive correction.
     expect(newer.rate?.corrected.mean).toBeLessThan(older.rate?.corrected.mean ?? 0);
     expect(renderCalibrationReport(report)).toContain('By scaffold version');
   });

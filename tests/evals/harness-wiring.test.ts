@@ -1419,7 +1419,7 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
     let boundary: Error | null = null;
 
     try {
-      await infraBoundary('turn on staging/eval-ws', () =>
+      await infraBoundary('turn on the deployment/eval-ws', () =>
         Promise.reject(new Error('the workspace socket closed')));
     } catch (error) {
       boundary = error instanceof Error ? error : null;

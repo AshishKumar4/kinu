@@ -125,7 +125,7 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
-  test('the staging identity runs Workers AI through the direct binding', async () => {
+  test('the eval identity runs Workers AI through the direct binding', async () => {
     const calls: Array<{ model: string; stream: boolean }> = [];
 
     const ai = Object.assign(stubAiBinding().binding, {

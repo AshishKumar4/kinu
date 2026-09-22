@@ -1,17 +1,7 @@
 /**
- * The prompt-section loop, end to end over a real turn-outcome ledger.
- *
- * `unit-prompt-section-evolution.test.ts` proves the gates in isolation. This
- * one proves the wire through the SHIPPED entry point — every test below
- * enters via `advancePromptSectionLane`, the one function the orchestrator
- * calls — that the drivers read the SAME ledger the scaffold optimiser reads,
- * that reflection is shown the train half only, that a winner reaches the
- * store as PENDING, that trials on the held-out half decide it, and that the
- * live prompt moves on the promotion and not one moment earlier.
- *
- * Every outbound call is scripted, so the pass is deterministic and nothing
- * reaches a network. The control plane is the production `ScaffoldControl`
- * seam, exactly as `unit-gepa-split-wiring.test.ts` uses it.
+ * The prompt-section loop end to end through `advancePromptSectionLane` over a real
+ * outcome ledger: reflection sees only the train half, a winner lands pending, held-out
+ * trials decide it, and the live prompt moves only on promotion.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -45,8 +35,7 @@ if (!target) throw new Error(`${TARGET_ID} is not registered`);
 
 const INCUMBENT = target.source;
 
-/** Same byte count as the incumbent, so the size rule is not what this file is
- *  about — it has its own suite. */
+/** Same byte count as the incumbent, so the size rule is not under test here. */
 const CANDIDATE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 
 const config: ScaffoldControl['config'] = {
@@ -73,14 +62,7 @@ interface ScriptedControl {
   judgePrompts: string[];
 }
 
-/**
- * A control plane that answers deterministically and REFUSES to roll out.
- *
- * `surface` throws on purpose. A section metric that ever ran a scaffold would
- * be paying a whole turn per instance to answer a counterfactual about prose,
- * and this is the assertion that says so: if the metric grows a rollout, every
- * test in this file goes red rather than slow.
- */
+/** `surface` throws: a section metric must never run a scaffold. */
 function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => number): ScriptedControl {
   const reflectionPrompts: string[] = [];
   const judgePrompts: string[] = [];
@@ -117,8 +99,7 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
       judge: async ({ prompt, schema }) => {
         judgePrompts.push(prompt);
 
-        // The candidate wording appears verbatim in the scoring prompt, which
-        // is how the judge is told what it is grading.
+        // The judge sees the candidate wording verbatim in the scoring prompt.
         return v.parse(schema, {
           score: judgeScore(prompt.includes(CANDIDATE) ? CANDIDATE : INCUMBENT),
           feedback: 'the wording decides it',
@@ -160,15 +141,8 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
 }
 
 /**
- * The turns `turn_outcomes` structurally cannot grade, graded.
- *
- * The ledger classifies turn N from user message N+1, so a headless run, a
- * one-shot invocation, and the case the owner asked about — the agent grinding
- * serially through work a search capability was sitting right there for — all
- * leave it silent. Each note goes through the REAL writer and needs a real
- * conversation pair, because the row stores a turn id and never a copy of the
- * text: a fixture that INSERTed the row by hand would certify a shape the
- * writer does not produce.
+ * Advisor notes for turns the ledger cannot grade, written through the real writer
+ * over a real conversation pair, since the row stores a turn id and not the text.
  */
 async function seedAdvisorNotes(rt: AgentRuntime, count: number): Promise<void> {
   const history = storesFor(rt).history;
@@ -188,13 +162,7 @@ async function seedAdvisorNotes(rt: AgentRuntime, count: number): Promise<void> 
   }
 }
 
-/**
- * One turn of the shipped lane, unwrapped to the pass it ran.
- *
- * Everything in this file enters through `advancePromptSectionLane` — the
- * orchestrator's own entry — so no test can reach an internal that production
- * never calls.
- */
+/** Enters through the orchestrator's own entry point. */
 async function lanePass(control: ScaffoldControl) {
   const step = await advancePromptSectionLane(control);
 
@@ -203,7 +171,7 @@ async function lanePass(control: ScaffoldControl) {
   return { ...step.pass, sectionId: step.sectionId };
 }
 
-/** Same, for the lane's other move: the trials a pending candidate is owed. */
+/** The trials a pending candidate is owed. */
 async function laneTrials(control: ScaffoldControl) {
   const step = await advancePromptSectionLane(control);
 
@@ -212,11 +180,7 @@ async function laneTrials(control: ScaffoldControl) {
   return { ...step.trials, sectionId: step.sectionId };
 }
 
-/**
- * Every section registered before `uptoId` has had its pass, so the lane's
- * derived rotation — least-recently-passed, ties to registry order — selects
- * `uptoId` next.
- */
+/** Every section before `uptoId` has had its pass, so the rotation selects `uptoId` next. */
 function seedRotationPast(rt: AgentRuntime, uptoId: string): void {
   for (const section of PROMPT_SECTION_TARGETS) {
     if (section.id === uptoId) break;
@@ -225,9 +189,7 @@ function seedRotationPast(rt: AgentRuntime, uptoId: string): void {
 }
 
 describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
-  // The refusal is ledger-shaped, not section-shaped — it fires before any
-  // section-specific work — so these enter on whatever the fresh rotation
-  // selects first.
+  // The refusal fires before section-specific work, so any rotation target serves.
   test('refuses, by the ledger\'s own name, when nothing was ever labeled', async () => {
     const rt = evolvableRuntime();
     const { control } = scriptedControl(rt, () => 0.9);
@@ -246,11 +208,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     expect(guardsOnly.error).not.toContain('no outcome-labeled turns yet');
   });
 
-  /**
-   * The closure. Before this, a workspace whose only negative signal was an
-   * advisor note got the refusal above — the note was written, read by nothing,
-   * and the loop the owner asked for ended in a table.
-   */
+  /** Advisor notes are negative signal when the ledger has none. */
   test('an advisor note is a failure to optimise toward, where the ledger has none', async () => {
     const rt = evolvableRuntime();
     seedRotationPast(rt, TARGET_ID);
@@ -265,13 +223,10 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.proposed).toBe(true);
-    // Selection rested on a note the candidate was NOT written against: the
-    // newest of the three is held out, exactly as a ledger failure would be.
+    // The newest note is held out, as a ledger failure would be.
     expect(result.selectionWarning).toBeUndefined();
 
-    // The judge is told who complained, and it is not the user. A prompt that
-    // said "the user had to correct it" about a turn no user ever graded would
-    // be teaching the judge a fact the record does not hold.
+    // The judge is told the complaint came from a reviewer, not the user.
     const negativeScoring = judgePrompts.filter((prompt) => prompt.includes("Reviewer's note"));
     expect(negativeScoring.length).toBeGreaterThan(0);
 
@@ -281,16 +236,14 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
       expect(prompt).toContain('agents was reachable');
     }
 
-    // The class reaches the scoring evidence, which is the whole reason the
-    // writer stamps it.
+    // The class reaches the scoring evidence.
     expect(reflectionPrompts.join('\n')).toContain('a capability it had and did not use');
   });
 
   test('a note about a turn the ledger already graded is not counted twice', async () => {
     const rt = evolvableRuntime();
     await seedAdvisorNotes(rt, 3);
-    // The user came back and corrected `adv-1` after all. The ledger is the
-    // verdict where it spoke, so that turn must appear once — as a ledger row.
+    // Where the ledger spoke it is the verdict, so the turn appears once, as a ledger row.
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 'adv-1', outcome: 'corrected', confidence: 1, source: 'classifier',
       userMessage: failureTask(1), assistantResponse: '{"files":["a.txt"]}',
@@ -301,7 +254,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     const negatives = [...split.train, ...split.val.slice(0, split.heldOutNegatives)];
     expect(negatives).toHaveLength(3);
     expect(new Set(negatives.map((i) => i.input)).size).toBe(3);
-    // …and it is the ledger's own complaint that is scored, not the reviewer's.
+    // The ledger's complaint is scored, not the reviewer's.
     const graded = negatives.find((i) => i.input === failureTask(1));
     expect(graded?.expected).toMatchObject({ critic: 'user', followup: 'just tell me in prose' });
   });
@@ -323,25 +276,23 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     expect(result.byteDelta).toBe(0);
     expect(result.sectionId).toBe(TARGET_ID);
 
-    // Scored on the ledger, by a judge reading the prose — not by a rollout.
+    // Scored by a judge reading prose, not by a rollout.
     expect(judgePrompts.length).toBeGreaterThan(0);
 
     for (const prompt of judgePrompts) expect(prompt).toContain(`Section: ${TARGET_ID}`);
-    // Selection rested on held-out instances: the newest failures plus the
-    // accepted guards, never a task reflection was shown.
+    // Selection used held-out instances only.
     expect(reflectionPrompts.length).toBeGreaterThan(0);
     const shownToReflection = reflectionPrompts.join('\n');
     expect(shownToReflection).toContain('failure #');
     expect(shownToReflection).not.toContain('guard #');
 
-    // The run is in the lineage under its own target, next to scaffold runs
-    // and the seeded rotation rows.
+    // The run is in the lineage under its own target.
     const run = rt.storage.sql<{ target: string; target_ref: string | null }>`
       SELECT target, target_ref FROM gepa_runs WHERE target_ref = ${TARGET_ID}`[0];
 
     expect(run).toEqual({ target: 'prompt_section', target_ref: TARGET_ID });
 
-    // And the live prompt has not moved.
+    // The live prompt has not moved.
     expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({});
     expect(buildSystemPromptSync(rt, {
       sectionOverrides: activePromptSectionOverrides(rt.storage.sql, rt.actor),
@@ -350,18 +301,8 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
 });
 
 /**
- * The rotation, and why it is derived.
- *
- * A Durable Object field cannot carry it. Measured on the real actor: a cursor
- * held in memory advanced on ticks 25, 50 and 75 of one activation and appeared
- * in no durable table — `actor_config` held one key, the cadence — so every
- * activation restarted at the first section. Against a joint idle-eviction
- * window measured at 2-5 minutes, `guidance/operating` received every pass and
- * the other eight needed 225 consecutive turns without a pause.
- *
- * Driven through the lane, so each step is a real pass: the tie-scored judge
- * keeps every pass proposal-free, and it is the `gepa_runs` row the pass
- * writes that moves the rotation.
+ * The rotation is derived from `gepa_runs` because an in-memory cursor does not
+ * survive eviction. The tie-scored judge keeps every pass proposal-free.
  */
 describe('the rotation an eviction cannot reset', () => {
   const firstTwo = PROMPT_SECTION_TARGETS.slice(0, 2).map((section) => section.id);
@@ -382,10 +323,7 @@ describe('the rotation an eviction cannot reset', () => {
     const first = await lanePass(control);
     expect(first.sectionId).toBe(firstTwo[1]);
 
-    // A second caller over the same workspace continues from the ledger row
-    // the first pass wrote. There is no instance here to evict: the answer is
-    // a function of the ledger, which is the property the in-memory cursor
-    // could not hold.
+    // A second caller continues from the ledger row the first pass wrote.
     const second = await lanePass(control);
     expect(second.sectionId).toBe(PROMPT_SECTION_TARGETS[2].id);
   });
@@ -403,8 +341,7 @@ describe('the rotation an eviction cannot reset', () => {
     }
 
     expect(seen).toEqual(PROMPT_SECTION_TARGETS.map((section) => section.id));
-    // A full round done, the rotation comes back inside the same nine rather
-    // than answering idle or a tenth thing.
+    // After a full round the rotation wraps within the same nine.
     const roundTwo = await lanePass(control);
     expect(roundTwo.sectionId).toBe(seen[0]);
   });
@@ -440,16 +377,14 @@ describe('advancePromptSectionLane — trials before a new proposal', () => {
 
     const step = await lanePass(control);
     expect(step.sectionId).toBe(expected);
-    // The pass it ran is the row the next tick reads, so the lane advances
-    // itself with no cursor in between.
+    // The pass's own row advances the lane.
     const next = await lanePass(control);
     expect(next.sectionId).not.toBe(expected);
   });
 });
 
 describe('the lane\'s trials — held-out trials decide it', () => {
-  /** A proposal under trial, reached the way production reaches it: the lane
-   *  ran the pass, and the pass left a candidate PENDING. */
+  /** Reached as production reaches it: a lane pass left a candidate pending. */
   async function propose(control: ScaffoldControl): Promise<void> {
     seedRotationPast(control.rt, TARGET_ID);
     const pass = await lanePass(control);
@@ -462,10 +397,7 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     const { control } = scriptedControl(rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2));
     await propose(control);
 
-    // Each trials step scores both sources on the same instances, so the
-    // comparison is paired. The ladder needs 5 trials and 5 decisive ones
-    // before it can promote, so one step of three cannot — and must not —
-    // decide.
+    // Paired trials. The ladder needs 5 trials and 5 decisive ones, so one step of three cannot decide.
     const first = await laneTrials(control);
     expect(first.trialsRun).toBe(3);
     expect(first.decision).toBe('continue');
@@ -486,9 +418,7 @@ describe('the lane\'s trials — held-out trials decide it', () => {
   test('a candidate that loses on held-out turns is rolled back, and the prompt never moved', async () => {
     const rt = evolvableRuntime();
     seedLedger(rt, { failures: 6, guards: 4 });
-    // Wins during optimisation, loses under trial. The whole reason the winner
-    // is not promoted on its own GEPA score: that score is in-sample for the
-    // wording, and the trials are the out-of-sample test of it.
+    // Wins in optimisation, loses under trial: the GEPA score is in-sample.
     let optimising = true;
 
     const { control } = scriptedControl(rt, (candidate) => {
@@ -501,14 +431,12 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     await propose(control);
     optimising = false;
 
-    // The regression veto is checked first and hard: three decisive losses is
-    // past `maxRegressions`, so one trials step settles it and no further
-    // evidence is gathered on a candidate already known to be worse.
+    // Three decisive losses exceed `maxRegressions`, so one step settles it.
     const verdict = await laneTrials(control);
     expect(verdict.decision).toBe('rollback');
     expect(verdict.action).toBe('rollback');
 
-    // The candidate is gone from the store, and the live prompt never moved.
+    // The candidate is gone and the live prompt never moved.
     expect(getPendingPromptSection(rt.storage.sql, rt.actor, TARGET_ID)).toBeNull();
     expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({});
     expect(buildSystemPromptSync(rt, {

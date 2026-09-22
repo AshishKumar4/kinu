@@ -1,24 +1,7 @@
 /**
- * CONTINUAL REFINEMENT — the trajectory refiner, end to end over the real
- * owners.
- *
- * The capability under test: a refinement request reviews a trajectory, a
- * read-only temporary agent proposes the smallest typed edits, and each edit is
- * routed to the authority that ALREADY owns that artifact. Nothing here owns a
- * prompt, a fact, a skill or an agent — the request row holds the request and
- * the routing identities, and every artifact stays in its own store.
- *
- * Every test enters through the two shipped entry points — `requestRefinement`
- * and `advanceRefinementLane` — over the production `ScaffoldControl` seam, the
- * production `FactsStore`, the production section store, and the production
- * instruction-trust authority. Every outbound model call is scripted, so the
- * pass is deterministic and nothing reaches a network.
- *
- * What the file is really asserting, in one sentence each:
- *   • an LLM proposal never moves live behaviour by itself;
- *   • the only writes are into stores that already existed;
- *   • a crash or a duplicate delivery cannot double-apply or double-open;
- *   • an authority that cannot be written to is REFUSED by name, not mirrored.
+ * Continual refinement end to end over the real owners. Asserts: an LLM proposal
+ * never moves live behaviour by itself; writes land only in existing stores; a crash
+ * or duplicate delivery cannot double-apply; an unwritable authority is refused by name.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -62,13 +45,7 @@ import {
 import { extractJsonObject } from '../src/prompts/structured';
 import { renderIssues } from '../src/utils/json';
 
-/**
- * The failure count a refinement opens at.
- *
- * A literal here, not an import: the threshold is module-private, and its one
- * public statement is the `summary` sentence below — which this file asserts
- * names exactly this number, so the two cannot drift apart silently.
- */
+/** Module-private threshold; the `summary` assertion below keeps this literal in sync. */
 const MIN_REFINEMENT_DEBT = 3;
 
 import {
@@ -91,8 +68,7 @@ if (!target) throw new Error(`${TARGET_ID} is not registered`);
 
 const INCUMBENT = target.source;
 
-/** Byte-for-byte the incumbent's size, so the anti-bloat size rule is never
- *  what a test in this file is measuring — it has its own suite. */
+/** Same size as the incumbent, so the anti-bloat size rule is never under test here. */
 const CANDIDATE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 
 const config: ScaffoldControl['config'] = {
@@ -113,13 +89,7 @@ function promptText(prompt: LanguageModelV3Prompt): string {
   return text.join('\n');
 }
 
-/**
- * A control plane that scores deterministically and REFUSES to roll out.
- *
- * `surface` throws on purpose: a refinement pass that ever ran a scaffold would
- * be paying a whole turn to answer a counterfactual about prose, and this is
- * the assertion that says so.
- */
+/** `surface` throws: a refinement pass must never run a scaffold. */
 function scriptedControl(rt: AgentRuntime, history: SessionHistory, score: (candidate: string) => number): ScaffoldControl {
   const usage = {
     inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
@@ -150,8 +120,7 @@ function scriptedControl(rt: AgentRuntime, history: SessionHistory, score: (cand
   };
 }
 
-/** A refiner that answers with exactly this proposal, and records every brief
- *  it was handed so the tests can assert what the refiner was allowed to see. */
+/** Records every brief so tests can assert what the refiner saw. */
 function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => string)) {
   const answerOf = answer instanceof Function ? answer : () => answer;
   const requests: TemporaryRunRequest[] = [];
@@ -184,17 +153,8 @@ function proposalText(proposal: RefinementProposal): string {
 }
 
 /**
- * A refiner the TEST releases, so a pass can be held open inside its child
- * agent while something else reaches the same request.
- *
- * Only the first ask waits. That is the pass under test — the one still running
- * when a second delivery arrives or when recovery re-queues its claim — and a
- * later ask has to be able to finish, or the successor could never be observed.
- *
- * One answer per ask, in order, and the last one repeats. A re-asked refiner is
- * free to answer differently (it is a model), so giving the two passes different
- * proposals is what makes a second set of owner writes VISIBLE instead of hiding
- * inside the owners' own idempotence.
+ * Only the first ask waits for the test's release. One answer per ask, the last
+ * repeating; different answers make a second pass's owner writes visible.
  */
 function deferredRefiner(...answers: readonly RefinementProposal[]) {
   let asks = 0;
@@ -207,8 +167,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
     port: {
       run: async () => {
         asks += 1;
-        // Bound BEFORE the wait: the held pass answers what IT was asked, not
-        // whatever the counter reached while it was parked.
+        // Bound before the wait: the held pass answers what it was asked.
         const mine = Math.min(asks, answers.length) - 1;
 
         if (asks === 1) await gate;
@@ -263,20 +222,9 @@ function fixture(): Fixture {
 }
 
 /**
- * The negative + accepted turns the eval split needs to support an out-of-sample
- * selection.
- *
- * Turn ids are unique across calls on purpose: `listTurnOutcomes` resolves ONE
- * effective verdict per turn id, so re-seeding the same id would overwrite the
- * earlier failure instead of accruing a new one — which is precisely what debt
- * accumulation is about.
- *
- * Timestamps are distinct for the same reason. The ledger orders by
- * `created_at` and breaks ties on a random row id, so twenty rows written inside
- * one millisecond have no defined order — real turns are seconds apart, and a
- * fixture that pretends otherwise tests the tie-break instead of the rule.
+ * Turn ids are unique so each call accrues new debt (one effective verdict per id).
+ * Timestamps are distinct because same-millisecond rows have no defined order.
  */
-/** Distinct, ordered, and far enough from zero to read as a real clock. */
 const SEED_EPOCH = 1_700_000_000_000;
 
 let seeded = 0;
@@ -348,17 +296,14 @@ function activeSkill(name: string, trust: ActiveSkill['trust'], allowed: string[
   };
 }
 
-/** A valid skill file, and the ONE canonical path its own name resolves to. */
 const BREVITY_SKILL =
   '---\nname: brevity\ndescription: answer briefly\nallowed_tools: [read]\n---\nBe brief.';
 
 const BREVITY_PATH = skillPath('brevity');
 
-/** A file whose name collides with a shipped built-in. */
 const BUILTIN_CLASH =
   '---\nname: audit-implementation\ndescription: not the real one\n---\nMine now.';
 
-/** The user preference every crash-recovery case re-drives. */
 const FACT_EDIT: Extract<RefinementEdit, { kind: 'fact' }> = {
   kind: 'fact',
   key: 'user.answer_length',
@@ -386,15 +331,7 @@ function skillProposal(source: string, path = BREVITY_PATH): RefinementProposal 
   };
 }
 
-/**
- * One edit per writable authority — the memory store, the section store and the
- * owner's instruction trust.
- *
- * The shape every "did this pass run twice?" case needs: a duplicated pass shows
- * up in three different owners rather than in one, and the two that are not
- * keyed (a section version, staged bytes) are where a second write would be
- * visible at all.
- */
+/** One edit per writable authority, so a duplicated pass shows up in every owner. */
 function everyOwnerProposal(
   fact: Extract<RefinementEdit, { kind: 'fact' }>,
   section: string,
@@ -418,16 +355,13 @@ function everyOwnerProposal(
 
 const EVERY_OWNER_PROPOSAL = everyOwnerProposal(FACT_EDIT, CANDIDATE, BREVITY_SKILL);
 
-/** The same three owners, DIFFERENT bytes in each — the answer a re-asked
- *  refiner is free to give, and the only way a second pass's writes can be told
- *  apart from the first pass's. */
+/** Different bytes per owner, so a second pass's writes can be told apart. */
 const OTHER_OWNER_PROPOSAL = everyOwnerProposal(
   { ...FACT_EDIT, key: 'user.answer_shape' },
   `${INCUMBENT.slice(0, -6)}BRIEF.`,
   `${BREVITY_SKILL}\nName the ask.`,
 );
 
-/** What is actually on the workspace file plane, or null when nothing is. */
 async function readSkill(rt: AgentRuntime, path: string): Promise<string | null> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
 
@@ -443,8 +377,7 @@ async function writeSkill(rt: AgentRuntime, path: string, source: string): Promi
   await vfs.writeFile(path, source);
 }
 
-/** What the PROMPT would see: exactly what `discoverSkills` finds under
- *  SKILLS_DIR. The assertion that a staged proposal influences nothing. */
+/** What the prompt would see: `discoverSkills` under SKILLS_DIR. */
 async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
   const discovery = await discoverSkills(skillsVfsOver(vfs), { admissionTokens: 100_000 });
@@ -452,8 +385,7 @@ async function discoveredSkillNames(rt: AgentRuntime): Promise<string[]> {
   return discovery.skills.filter((skill) => skill.bodyRef.kind === 'file').map((skill) => skill.name);
 }
 
-/** What the OWNER's approval surface would list — the other reader that a
- *  SKILLS_DIR write would have reached. */
+/** The owner's approval surface, the other reader a SKILLS_DIR write would reach. */
 async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
 
@@ -464,8 +396,6 @@ async function gatheredSkillPaths(rt: AgentRuntime): Promise<string[]> {
 
   return sources.filter((source) => source.kind === 'skill').map((source) => source.path);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe('refinement request — durable, and behaviourally inert', () => {
   test('an explicit request returns a durable row at `requested` and changes nothing', async () => {
@@ -482,7 +412,7 @@ describe('refinement request — durable, and behaviourally inert', () => {
     expect(opened.stage).toBe('requested');
     expect(opened.id).toMatch(/^refine-/);
     expect(opened.turnIds.length).toBeGreaterThan(0);
-    // The request is a request. No artifact moved, and no model was called.
+    // No artifact moved, and no model was called.
     expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)).toEqual(before);
     expect(fx.facts.all()).toEqual([]);
 
@@ -532,19 +462,14 @@ describe('the refiner — bounded references, prior history, strict typed answer
     expect(requests).toHaveLength(1);
     const brief = requests[0].task;
 
-    // The trajectory it must review.
     expect(brief).toContain('always answer in one line');
     expect(brief).toContain('no, shorter please');
-    // The artifacts it may address, by owner id.
     expect(brief).toContain(TARGET_ID);
     expect(brief).toContain('user.tz');
-    // The schema it must answer in.
     expect(brief).toContain('prompt_section');
     expect(brief).toContain('subagent_spec');
 
-    // A second request over LATER failures is told what the first one did —
-    // refinement is cumulative or it is a treadmill. (Later failures, because
-    // the turns a request already took stop counting as debt.)
+    // A second request over later failures is told what the first one did.
     seedGradedTurns(fx.rt, 3);
 
     const { port: second, requests: secondRequests } = scriptedRefiner(proposalText({
@@ -558,13 +483,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
   });
 
   test('the refiner reads context refs itself — only the files this workspace has, at their real paths', async () => {
-    // PRODUCTION, 2026-09-03 (hardy-stone-a905df14): every automatic refinement
-    // was refused before the refiner started, because the lane named `MEMORY.md`
-    // at the root (genesis writes `memory/MEMORY.md`) and `AGENTS.md` in a
-    // workspace that had none, and the temporary-agent port refuses an absent
-    // path by name. The scripted refiner here never ran that port, which is how
-    // a test asserting the string `AGENTS.md` stayed green over a lane that
-    // could not run.
+    // The lane must offer only paths that exist; the temporary-agent port refuses absent ones.
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     await fx.rt.storage.vfs.mkdir('memory', { recursive: true });
@@ -642,16 +561,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
   });
 });
 
-/**
- * THE BRIEF AND THE SCHEMA ARE ONE CONTRACT.
- *
- * OWNER, 2026-09-16: a refinement was refused with `Invalid key: Expected
- * "scope" but received undefined; … Expected never but received "see_rpi"` —
- * the refiner answered a shape the parse has no slot for. The brief DESCRIBED
- * the answer in a template that was not a valid document (`"value":<json>`, a
- * three-character rationale under a forty-character floor) and never said that
- * an extra key refuses the whole proposal, so obeying it was not sufficient.
- */
+/** The brief's example must parse under the schema the refiner is held to. */
 describe('the brief and the schema are one contract', () => {
   test('the answer shape the brief prints is a document the schema accepts', async () => {
     const fx = fixture();
@@ -669,19 +579,15 @@ describe('the brief and the schema are one contract', () => {
     const section = brief.slice(brief.indexOf('## Your answer'));
     expect(section).toContain('## Your answer');
 
-    // The bytes the refiner is shown, read back through the parse it will be
-    // held to. A placeholder left in place is a legal value of its field, so
-    // there is a document in the brief a refiner can copy and be accepted for.
+    // A placeholder left in place is a legal value, so the printed document is acceptable as-is.
     const printed = extractJsonObject(section);
     const parsed = v.safeParse(RefinementProposalSchema, printed);
     expect(parsed.success ? 'accepted' : renderIssues(parsed.issues)).toBe('accepted');
     expect(parsed.success && JSON.stringify(parsed.output)).toBe(JSON.stringify(printed));
 
-    // Every kind the router can route is shown, at this request's own scope…
     for (const kind of REFINEMENT_EDIT_KINDS) expect(section).toContain(`"kind":"${kind}"`);
     expect(section).toContain('"scope":"workspace"');
-    // …and the two rules a shape cannot show are stated: strictness, and the
-    // rationale floor that holds for every kind rather than for `fact` alone.
+    // Strictness and the rationale floor are stated, since a shape cannot show them.
     expect(section).toContain('and no others');
     expect(section).toContain(`\`rationale\` is ${String(MIN_EDIT_RATIONALE)} characters or longer`);
   });
@@ -689,8 +595,7 @@ describe('the brief and the schema are one contract', () => {
   test('an answer missing the required keys is refused, classified, naming every key', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-    // The shape the owner's journal caught: one key with no slot, and all three
-    // required keys absent.
+    // One key with no slot, and all three required keys absent.
     const { port } = scriptedRefiner('{"see_rpi":"connected a session to my rpi 5"}');
     const deps = fx.deps(port);
 
@@ -704,8 +609,7 @@ describe('the brief and the schema are one contract', () => {
       expect(row.detail).toContain(`${key}: Invalid key`);
     }
 
-    // A classified refusal: the answer was the bad input, and this lane wrote
-    // nothing on the way to saying so.
+    // A classified refusal, and nothing written.
     expect(row.detail).toContain('bad_input');
     expect(row.proposal).toBeNull();
     expect(row.routes).toEqual([]);
@@ -735,7 +639,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    // The ONE memory authority holds it — no second fact store anywhere.
+    // The one memory authority holds it.
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.recall('user.answer_length')?.source).toContain(opened.id);
 
@@ -809,7 +713,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(route.target).toBe(`${TARGET_ID}:1`);
     expect(row.stage).toBe('evaluating');
 
-    // THE LOAD-BEARING ASSERTION: the live prompt is untouched.
+    // The live prompt is untouched.
     expect(activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor)[TARGET_ID]).toBeUndefined();
     expect(buildSystemPromptSync(fx.rt, {
       sectionOverrides: activePromptSectionOverrides(fx.rt.storage.sql, fx.rt.actor),
@@ -818,8 +722,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
   test('a section proposal needs measured behavioural evidence — degeneracy refuses it', async () => {
     const fx = fixture();
-    // Accepted turns only: nothing failed, so there is no failure to optimise
-    // toward and no honest score to propose against.
+    // Accepted turns only: no failure to optimise toward.
     const { accepted } = seedGradedTurns(fx.rt, 0, 3);
 
     const { port } = scriptedRefiner(proposalText({
@@ -862,25 +765,21 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(route.disposition).toBe('pending_owner_approval');
     expect(route.owner).toBe('instruction_approvals');
     expect(route.target).toBe(BREVITY_PATH);
-    // The digest is a FIELD, so settlement compares addresses rather than prose.
+    // The digest is a field, so settlement compares addresses rather than prose.
     expect(route.digest).toBe(instructionDigest(BREVITY_SKILL));
     expect(row.stage).toBe('evaluating');
 
-    // THE LOAD-BEARING ASSERTION. Nothing under SKILLS_DIR, so `discoverSkills`
-    // finds nothing: the proposal reaches neither the skills index nor the
-    // unverified reference tier, and the next turn's prompt is untouched.
+    // Nothing under SKILLS_DIR, so the proposal reaches no prompt.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
     expect(await gatheredSkillPaths(fx.rt)).toEqual([]);
-    // The bytes exist, staged where nothing reads them, and the owner can read
-    // them from the request view rather than from the prompt.
+    // Staged where nothing reads them; the owner reads them from the request view.
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity'))).toBe(BREVITY_SKILL);
     expect(refinementStagingPath(opened.id, 'brevity').startsWith(SKILLS_DIR)).toBe(false);
-    // And granting is still entirely the owner's act.
+    // Granting is still the owner's act.
     expect(fx.approvals.list()).toEqual([]);
 
-    // Unverified bytes carry no tool policy, so nothing this refinement wrote
-    // can bound a turn's tool surface.
+    // Unverified bytes carry no tool policy.
     const set: ActiveSkillSet = {
       active: [
         activeSkill('brevity', 'unverified', ['read']),
@@ -910,7 +809,7 @@ describe('routing — every typed edit lands in the store that already owns it',
       const route = routeFor(row.routes, 'skill');
       expect(route.disposition).toBe('refused');
       expect(route.reason).toContain(expected);
-      // Nothing was written anywhere, on any of the three refusals.
+      // Nothing was written on any of the three refusals.
       expect(await readSkill(fx.rt, edit.path)).toBeNull();
     }
   });
@@ -918,7 +817,7 @@ describe('routing — every typed edit lands in the store that already owns it',
   test('an existing final file or a standing decision refuses the proposal', async () => {
     const other = `${BREVITY_SKILL}\nSomebody else wrote this.`;
 
-    // (a) the final path already holds bytes — whoever wrote them.
+    // (a) the final path already holds bytes.
     const occupied = fixture();
     seedGradedTurns(occupied.rt, 3);
     await writeSkill(occupied.rt, BREVITY_PATH, other);
@@ -930,8 +829,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(aRoute.reason).toContain('already exists');
     expect(await readSkill(occupied.rt, BREVITY_PATH)).toBe(other);
 
-    // (b) an APPROVED standing decision, even with no file yet: the owner has
-    // already answered about that path and a proposal must not talk over it.
+    // (b) an approved standing decision, even with no file yet.
     const decided = fixture();
     seedGradedTurns(decided.rt, 3);
     decided.approvals.approve(BREVITY_PATH, instructionDigest(other));
@@ -971,8 +869,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // Undecided is not a verdict: the lane keeps waiting, with no clock on the
-    // owner.
+    // Undecided is not a verdict: no clock on the owner.
     expect((await advanceRefinementLane(deps)).step).toBe('idle');
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
@@ -990,8 +887,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(deps);
 
-    // The owner edited the file, then approved what they read. The digest moved,
-    // so this proposal's bytes are not what is in effect.
+    // The owner edited then approved different bytes, so this proposal is not in effect.
     fx.approvals.approve(BREVITY_PATH, instructionDigest(`${BREVITY_SKILL}\nedited.`));
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('rolled_back');
@@ -1040,7 +936,7 @@ describe('routing — every typed edit lands in the store that already owns it',
   });
 
   test('one request table, owning no artifact, in exactly the shape it ships', () => {
-    // A BARE database, so what this init creates is exactly what is measured.
+    // A bare database, so what this init creates is exactly what is measured.
     const bare = createTestSql();
 
     const tables = () => bare.sql<{ name: string }>`
@@ -1052,17 +948,12 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     expect(added).toEqual(['refinement_requests']);
 
-    // The names that would betray a second authority for an artifact.
+    // Names that would betray a second authority for an artifact.
     for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
       expect(added.some((name) => name.includes(forbidden))).toBe(false);
     }
 
-    // The whole row, pinned, `actor_id` FIRST. Both it and `claim` are part of
-    // the shipped CREATE rather than columns added to a live table afterwards:
-    // this row has never been released, so there is no workspace to reconcile a
-    // column into. `actor_id` leads because a refinement request belongs to the
-    // actor that accrued the debt — one workspace database holds several actors'
-    // requests and the routing this test names is per actor, not per workspace.
+    // The whole row, `actor_id` first: one workspace database holds several actors' requests.
     expect(bare.sql<{ name: string }>`
       SELECT name FROM pragma_table_info('refinement_requests')`.map((row) => row.name))
       .toEqual([
@@ -1078,8 +969,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
     store.open({ trigger: 'explicit', scope: 'workspace', turnIds: negatives });
 
-    // The row holds ids. The turn text lives in `turn_outcomes` and is not
-    // duplicated here, so the two can never disagree about what happened.
+    // The row holds ids; turn text stays in `turn_outcomes`.
     const stored = fx.rt.storage.sql<{ turn_ids: string }>`
       SELECT turn_ids FROM refinement_requests`;
 
@@ -1185,13 +1075,12 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    // A host claimed the request and died INSIDE the refiner: the row is
-    // `planning` with no proposal and nothing routed.
+    // A host died inside the refiner: `planning`, no proposal, nothing routed.
     expect(store.advance(opened.id, 'requested', 'planning')).toBe(true);
     expect(store.get(opened.id)?.proposal).toBeNull();
     expect(store.get(opened.id)?.routes).toEqual([]);
 
-    // Activation recovery owes it again — a lease is not the work.
+    // Activation recovery owes it again.
     expect(store.resetStalePlanning()).toBe(1);
     expect(store.get(opened.id)?.stage).toBe('requested');
 
@@ -1199,12 +1088,11 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     expect(runs).toBe(1);
     const row = present(store.get(opened.id), 'the refinement row');
     expect(row.routes).toHaveLength(1);
-    // A fact-only proposal has nothing to wait for, so it REACHES applied
-    // instead of parking in `gated` forever.
+    // A fact-only proposal reaches applied instead of parking in `gated`.
     expect(row.stage).toBe('applied');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
 
-    // Driving the lane again finds nothing owed and re-applies nothing.
+    // Driving the lane again re-applies nothing.
     const again = await advanceRefinementLane(deps);
     expect(again.step).toBe('idle');
     expect(runs).toBe(1);
@@ -1216,9 +1104,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     seedGradedTurns(fx.rt, 3);
     let runs = 0;
 
-    // A refiner whose SECOND answer differs. If recovery re-asked, the resumed
-    // pass would route a plan the earlier writes do not belong to — which is
-    // exactly what persisting the proposal first prevents.
+    // A second answer that differs: re-asking on recovery would route a different plan.
     const port: TemporaryAgentPort = {
       run: async () => {
         runs += 1;
@@ -1243,14 +1129,12 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     expect(runs).toBe(1);
     expect(store.get(opened.id)?.proposal).not.toBeNull();
 
-    // Simulate a process that died after the plan landed and after the write:
-    // the row is dragged back to `planning` with its plan intact.
+    // Simulate a death after the plan and the write landed.
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'planning' WHERE id = ${opened.id}`;
     expect(store.resetStalePlanning()).toBe(1);
     await advanceRefinementLane(deps);
 
-    // The plan was REUSED, so no second child agent ran and no second fact
-    // exists — the keyed authority adopted the value it already held.
+    // The plan was reused: no second child agent, no second fact.
     expect(runs).toBe(1);
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.recall('user.something_else')).toBeNull();
@@ -1269,9 +1153,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     const settledRoutes = present(store.get(opened.id), 'the refinement row').routes;
     expect(settledRoutes).toHaveLength(3);
 
-    // Now re-drive from `planning` once per completed write. Every pass must
-    // reach the same three routes, adopt rather than duplicate, and leave the
-    // owners holding exactly one record each.
+    // Re-drive from `planning` per completed write; every pass adopts rather than duplicates.
     for (let pass = 0; pass < 3; pass += 1) {
       void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'planning'
         WHERE id = ${opened.id}`;
@@ -1282,13 +1164,12 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
       expect(routes).toHaveLength(3);
       expect(routeFor(routes, 'fact').disposition).toBe('applied');
       expect(routeFor(routes, 'prompt_section').disposition).toBe('pending_trials');
-      // The SAME pending version every time: adopted, never re-proposed.
+      // The same pending version every time.
       expect(routeFor(routes, 'prompt_section').target).toBe(
         routeFor(settledRoutes, 'prompt_section').target);
       expect(routeFor(routes, 'skill').disposition).toBe('pending_owner_approval');
       expect(fx.facts.all()).toHaveLength(1);
-      // Staged, never promoted: no owner has decided, so SKILLS_DIR stays empty
-      // across every re-drive.
+      // Staged, never promoted, across every re-drive.
       expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
       expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
         .toBe(BREVITY_SKILL);
@@ -1305,25 +1186,16 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
     });
 
     store.advance(request.id, 'requested', 'planning');
-    // Stamped in 1970 and still recovered: the stale claim is what makes it
-    // owed, not how long ago it was made.
+    // Recovered because the claim is stale, not because it is old.
     expect(store.resetStalePlanning()).toBe(1);
     expect(store.get(request.id)?.stage).toBe('requested');
   });
 });
 
 /**
- * TWO PASSES AT ONCE, which both hosts really deliver.
- *
- * The cloud actor nudges this lane from the `/refine` callable AND drives it
- * from the off-turn cadence pass; the CLI session does the same. So two
- * `advanceRefinementLane` calls can be in flight over one workspace, and a third
- * party — activation recovery — can re-queue a claim while its refiner is still
- * running, because the engine that calls `resetStalePlanning` is constructed
- * LAZILY rather than at the activation boundary.
- *
- * What must hold through all of that: one temporary ask per plan, one write per
- * owner, one route set, and no elapsed lease anywhere.
+ * Hosts really deliver two concurrent `advanceRefinementLane` calls (callable plus
+ * cadence), and recovery can re-queue a claim mid-refiner because the engine is built
+ * lazily. Must hold: one ask per plan, one write per owner, one route set, no elapsed lease.
  */
 describe('two passes at once — the claim, and what recovery may not revoke', () => {
   test('two deliveries of the same step run ONE refiner and write each owner once', async () => {
@@ -1334,15 +1206,14 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
-    // Both drivers, before either can finish: the second one arrives while the
-    // first is inside its child agent.
+    // The second driver arrives while the first is inside its child agent.
     const nudge = advanceRefinementLane(deps);
     const cadence = advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('planning');
     refiner.release();
     const [first, second] = await Promise.all([nudge, cadence]);
 
-    // The claimer planned; the other found the row taken and did nothing.
+    // The claimer planned; the other found the row taken.
     expect(first.step).toBe('planned');
     expect(second.step).toBe('idle');
     expect(refiner.asks()).toBe(1);
@@ -1354,7 +1225,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(listPromptSectionVersions(fx.rt.storage.sql, fx.rt.actor, 50)).toHaveLength(1);
     expect(await readSkill(fx.rt, refinementStagingPath(opened.id, 'brevity')))
       .toBe(BREVITY_SKILL);
-    // Nothing went live off a proposal: the skill is staged, the section pending.
+    // Nothing went live off a proposal.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     expect(routeFor(row.routes, 'prompt_section').disposition).toBe('pending_trials');
   });
@@ -1370,18 +1241,16 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const inFlight = advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('planning');
 
-    // The real recovery caller, at the moment it really runs: an engine built on
-    // the turn AFTER the nudge started this planner.
+    // The real recovery caller: an engine built after the nudge started.
     const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
-    // Its constructor recovered what it owns — an empty review queue — and left
-    // the live refinement claim exactly where it was.
+    // It recovered its empty review queue and left the live claim alone.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
     expect(store.get(opened.id)?.stage).toBe('planning');
     expect(store.resetStalePlanning()).toBe(0);
 
     refiner.release();
     expect((await inFlight).step).toBe('planned');
-    // One ask, and the answer that was routed is the one this pass got.
+    // One ask, and its answer was routed.
     expect(refiner.asks()).toBe(1);
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(fx.facts.all()).toHaveLength(1);
@@ -1400,26 +1269,22 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     const revoked = advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('planning');
 
-    // A SECOND process recovering — a second CLI on this workspace file. It
-    // never issued this token, so it cannot tell the claim from a dead one and
-    // re-queues it, exactly as its own `resetStalePlanning` would.
+    // A second process cannot tell the claim from a dead one and re-queues it.
     void fx.rt.storage.sql`UPDATE refinement_requests
       SET stage = 'requested', claim = NULL WHERE stage = 'planning'`;
 
-    // The successor plans it from a SECOND refiner answer — the price of a
-    // recovery, and read-only, which is why re-driving is allowed at all.
+    // The successor plans from a second refiner answer.
     expect((await advanceRefinementLane(deps)).step).toBe('planned');
     expect(refiner.asks()).toBe(2);
 
-    // Now the revoked pass comes back with the FIRST answer, against owners the
-    // successor already wrote.
+    // The revoked pass returns with the first answer against owners the successor wrote.
     refiner.release();
     expect((await revoked).step).toBe('idle');
 
     const row = present(store.get(opened.id), 'the refinement row');
     expect(row.stage).toBe('evaluating');
     expect(row.routes).toHaveLength(3);
-    // One write per owner, and every one of them is the SUCCESSOR's.
+    // One write per owner, all the successor's.
     expect(fx.facts.all()).toHaveLength(1);
     expect(fx.facts.recall('user.answer_shape')?.value).toBe('one line');
     expect(fx.facts.recall('user.answer_length')).toBeNull();
@@ -1435,8 +1300,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     seedGradedTurns(fx.rt, 4);
     let asks = 0;
 
-    // The child-agent host going away mid-call: the port rejects, so the pass
-    // unwinds without refusing the request or recording anything.
+    // The port rejects mid-call: the pass unwinds without refusing or recording.
     const port: TemporaryAgentPort = {
       run: async () => {
         asks += 1;
@@ -1456,13 +1320,11 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     await expect(advanceRefinementLane(deps)).rejects.toThrow('the refiner host went away');
-    // The row is left claimed by a pass that is no longer running, and no owner
-    // was touched.
+    // Left claimed by a dead pass; no owner touched.
     expect(store.get(opened.id)?.stage).toBe('planning');
     expect(fx.facts.all()).toEqual([]);
 
-    // No new activation, no clock: the next pass in THIS process re-queues it
-    // and drives it to the end.
+    // The next pass in this process re-queues and finishes it.
     const step = await advanceRefinementLane(deps);
     expect(step.step).toBe('planned');
     expect(asks).toBe(2);
@@ -1483,14 +1345,13 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
 
     const claim = present(store.claim(request.id), 'the planning claim');
     expect(claim.held()).toBe(true);
-    // Stamped in 1970 and still not stale: the row is held by a pass that is
-    // running, and no amount of elapsed time is what ends that.
+    // A running pass's claim is never stale, however old.
     expect(store.resetStalePlanning()).toBe(0);
-    // Nor may a second pass take it while it is held.
+    // Nor may a second pass take it while held.
     expect(store.claim(request.id)).toBeNull();
 
     claim.release();
-    // The pass is over, so the claim is owed again — by activation, not by clock.
+    // Once the pass is over, activation owes it again.
     expect(store.resetStalePlanning()).toBe(1);
     expect(store.get(request.id)?.stage).toBe('requested');
     expect(claim.held()).toBe(false);
@@ -1522,8 +1383,7 @@ describe('promotion — the existing evaluated lane is the only thing that appli
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('evaluating');
 
-    // The EXISTING lane runs the trials and decides. Nothing in the refinement
-    // module promotes anything.
+    // The existing lane runs trials and decides; refinement promotes nothing.
     for (let i = 0; i < 20; i += 1) {
       const step = await advancePromptSectionLane(deps.control);
 
@@ -1552,8 +1412,7 @@ describe('promotion — the existing evaluated lane is the only thing that appli
       }],
     }));
 
-    // The candidate proposes well but TRIALS badly: the incumbent wins every
-    // paired comparison once the proposal exists.
+    // The candidate trials badly: the incumbent wins every paired comparison.
     let proposed = false;
 
     const deps = fx.deps(port, (candidate) => {
@@ -1591,8 +1450,7 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     const shallow = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(shallow.turnIds).toHaveLength(MIN_REFINEMENT_DEBT - 1);
     expect(shallow.owed).toBe(false);
-    // The threshold's one public statement. If the module's constant moves and
-    // this file's literal does not, this is the assertion that goes red.
+    // Goes red if the module's constant moves without this file's literal.
     expect(shallow.summary).toContain(`opens at ${String(MIN_REFINEMENT_DEBT)}`);
 
     seedGradedTurns(fx.rt, 1);
@@ -1619,13 +1477,11 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     expect(first?.stage).toBe('requested');
     expect(first?.turnIds).toEqual(debt.turnIds);
 
-    // The batch is TAKEN, so a later tick sees nothing owed rather than owing
-    // the same turns twice. That is the primary guard.
+    // Primary guard: the batch is taken, so nothing is owed twice.
     expect(await refinementDebtRequest(deps)).toBeNull();
     expect(store.list()).toHaveLength(1);
 
-    // The unique debt key is the second guard, for the derivation that raced
-    // the first one and reached the store with the same batch in hand.
+    // Second guard: the unique debt key, for a racing derivation.
     const replayed = store.open({
       trigger: 'evolution_debt',
       scope: 'workspace',
@@ -1660,7 +1516,7 @@ describe('evolution debt — the automatic trigger, and its visibility', () => {
     expect(remaining.turnIds).toEqual([]);
     expect(remaining.owed).toBe(false);
 
-    // Fresh failures accrue fresh debt under a DIFFERENT key.
+    // Fresh failures accrue debt under a different key.
     seedGradedTurns(fx.rt, MIN_REFINEMENT_DEBT, 0);
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
@@ -1678,9 +1534,7 @@ describe('the strict proposal boundary — an unknown field is refused, never dr
   });
 
   test('an unknown field on an EDIT refuses it — a dropped claim would be obeyed wrongly', () => {
-    // The case that makes strictness load-bearing rather than tidy: a
-    // permissive object would erase `scope` here and apply the fact at
-    // workspace scope, obeying a proposal nobody wrote.
+    // A permissive object would drop `scope` and apply the fact workspace-wide.
     const parsed = v.safeParse(RefinementProposalSchema, {
       scope: 'workspace',
       summary: 'x',
@@ -1726,7 +1580,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
   }
 
   test('a short or few-worded fragment is refused however truly it appears', async () => {
-    // "one line" IS in every seeded turn. It is still not evidence of intent.
+    // Present in every seeded turn, but not evidence of intent.
     for (const quote of ['one line', 'answer', 'in one line']) {
       const route = await routeQuote(quote);
       expect(route.disposition).toBe('refused');
@@ -1740,9 +1594,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
   });
 
   test('the agent\'s OWN words are not user evidence', async () => {
-    // The assistant response in every seeded turn. Long enough, and refused:
-    // a preference sourced from the agent's prose is the agent instructing
-    // itself.
+    // Sourced from the agent's own response: refused.
     const route = await routeQuote('a long rambling answer that nobody asked for');
     expect(route.disposition).toBe('refused');
     expect(route.reason).toContain('not quoted by the user');
@@ -1765,7 +1617,7 @@ describe('the quote gate — substantive, the user\'s own, and carried into the 
       .find((entry) => entry.id.startsWith(`refinement:${opened.id}`));
 
     expect(card?.items?.[0]?.evidence).toContain('always answer in one line');
-    // The child carries the OWNER's revert, not a refinement-shaped one.
+    // The child carries the owner's revert.
     expect(card?.items?.[0]?.revert).toEqual({ type: 'fact_forget', target: 'user.answer_length' });
     expect(card?.revert).toBeUndefined();
   });
@@ -1815,7 +1667,7 @@ describe('mixed outcomes settle honestly', () => {
 
     await advanceRefinementLane(deps);
     const settled = present(store.get(opened.id), 'the refinement row');
-    // The fact IS live. Calling the request rolled_back would be a lie about it.
+    // The fact is live, so the request is not rolled_back.
     expect(settled.stage).toBe('applied');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(settled.detail).toContain('1 edit in effect');
@@ -1841,13 +1693,12 @@ describe('the refiner never sees the set its proposal is scored on', () => {
     const split = await buildOutcomeEvalSplit(fx.rt.storage.sql, fx.rt.actor, fx.stores.history.transcript(CHAT_SESSION_ID), EVAL_SIZE);
     expect(split.heldOutNegatives).toBeGreaterThan(0);
 
-    // Every val instance is a turn the section metric will score a candidate
-    // against. None of them may appear in the brief.
+    // No val instance may appear in the brief.
     for (const instance of split.val) {
       expect(brief).not.toContain(instance.input);
     }
 
-    // The train half IS shown — reflection has to have something to fix.
+    // The train half is shown.
     expect(split.train.length).toBeGreaterThan(0);
     expect(brief).toContain(split.train[0].input);
     expect(brief).toContain('WITHHELD');
@@ -1861,7 +1712,7 @@ describe('evolution debt pages, and never loses an older row', () => {
     const debt = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
 
     expect(debt.turnIds).toHaveLength(12);
-    // The OLDEST twelve: those are the ones that have been waiting.
+    // The oldest twelve.
     expect(debt.turnIds).toEqual(negatives.slice(0, 12));
     expect(debt.summary).toContain('8 more waiting behind this batch');
   });
@@ -1877,9 +1728,7 @@ describe('evolution debt pages, and never loses an older row', () => {
     const first = await refinementDebtRequest(deps);
     expect(first?.turnIds).toHaveLength(12);
 
-    // THE REGRESSION THIS GUARDS: a windowed read would look at the newest
-    // twelve rows, find them all covered, and report no debt — leaving the
-    // eight OLDER failures behind a window that never reaches them again.
+    // A windowed read would see only covered rows and strand the older failures.
     const next = evolutionDebt(fx.rt.storage.sql, fx.rt.actor);
     expect(next.owed).toBe(true);
     expect(next.turnIds).toEqual(negatives.slice(12));
@@ -1895,7 +1744,7 @@ describe('evolution debt pages, and never loses an older row', () => {
     const fx = fixture();
     const { negatives: older } = seedGradedTurns(fx.rt, 3, 0);
     const { negatives: newer } = seedGradedTurns(fx.rt, 14, 0);
-    // A request takes the NEWEST rows explicitly, jumping the queue.
+    // A request takes the newest rows explicitly.
     createRefinementStore(fx.rt.storage.sql, fx.rt.actor).open({
       trigger: 'explicit', scope: 'workspace', turnIds: newer,
     });
@@ -1918,7 +1767,7 @@ describe('an account-scoped request never reaches a model or an owner', () => {
     expect(opened.detail).toContain('account scope is refused');
     expect(opened.scope).toBe('account');
 
-    // No child agent was spent, and the lane will not pick a refused row up.
+    // No child agent spent; the lane skips a refused row.
     expect((await advanceRefinementLane(deps)).step).toBe('idle');
     expect(requests).toEqual([]);
     expect(fx.facts.all()).toEqual([]);
@@ -1947,8 +1796,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
 
     expect(result.ok).toBe(true);
 
-    // The file is now where discovery reads it, AND it is already trusted —
-    // never briefly live-but-unverified.
+    // Promoted already trusted, never briefly live-but-unverified.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
     expect(await discoveredSkillNames(fx.rt)).toEqual(['brevity']);
     expect(fx.approvals.trustOf(BREVITY_PATH, BREVITY_SKILL)).toBe('approved');
@@ -1962,10 +1810,10 @@ describe('owner promotion — the approval is what makes a staged skill live', (
   test('a crash between the trust row and the file is repaired, already trusted', async () => {
     const { fx, deps, store, id, staged } = await stagedFixture();
 
-    // Exactly the crash window: the approval landed, the promotion did not.
+    // The crash window: approval landed, promotion did not.
     fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
-    // Nothing discovers a path with no file, so the window is inert.
+    // Nothing discovers a path with no file.
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
 
     // Whoever looks next completes it.
@@ -1975,7 +1823,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(await readSkill(fx.rt, staged)).toBeNull();
     expect(store.get(id)?.stage).toBe('applied');
 
-    // And it is idempotent: a second look changes nothing.
+    // Idempotent.
     await advanceRefinementLane(deps);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
   });
@@ -1995,8 +1843,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     const { fx, deps, id, staged } = await stagedFixture();
     await writeSkill(fx.rt, staged, `${BREVITY_SKILL}\nsomebody edited the staging.`);
 
-    // `show` reports the drift rather than hiding it, and the digest it prints
-    // is no longer the route's — so the token check refuses first.
+    // `show` reports the drift, so the token check refuses first.
     const shown = await showRefinementRoute(deps, { requestId: id, routeIndex: 0 });
     expect(shown.ok === true && shown.view.intact).toBe(false);
 
@@ -2009,14 +1856,14 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(drifted.ok).toBe(false);
     expect(drifted.ok === false && drifted.error).toContain('not the edit you were shown');
 
-    // And approving with the ORIGINAL token is refused at the staging check.
+    // The original token is refused at the staging check.
     const result = await decideRefinementRoute(deps, {
       requestId: id, routeIndex: 0, expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
     });
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toContain('changed since they were proposed');
-    // Nothing was trusted and nothing was promoted.
+    // Nothing trusted or promoted.
     expect(fx.approvals.list()).toEqual([]);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
   });
@@ -2031,8 +1878,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
 
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toContain('holds different bytes');
-    // The proposal is LEFT STAGED, so the collision is recoverable rather than
-    // a lost proposal.
+    // Left staged, so the collision is recoverable.
     expect(await readSkill(fx.rt, refinementStagingPath(id, 'brevity'))).toBe(BREVITY_SKILL);
     expect(fx.approvals.list()).toEqual([]);
   });
@@ -2058,8 +1904,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
 
   test('an undecided proposal waits forever — no clock, no default', async () => {
     const { fx, deps, store, id } = await stagedFixture();
-    // Ten passes, a request stamped in 1970, and still pending: only the owner
-    // ends this.
+    // Only the owner ends a pending request.
     void fx.rt.storage.sql`UPDATE refinement_requests SET created_at = 1, updated_at = 1
       WHERE id = ${id}`;
 
@@ -2072,7 +1917,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
   });
 
   test('every way a decision reference can be wrong is refused by name', async () => {
-    // (a) a settled request: its edits are not the owner's to decide any more.
+    // (a) a settled request.
     const settled = fixture();
     seedGradedTurns(settled.rt, 3);
     const factDeps = settled.deps(scriptedRefiner(proposalText(FACT_PROPOSAL)).port);
@@ -2087,7 +1932,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(onSettled.ok).toBe(false);
     expect(onSettled.ok === false && onSettled.error).toContain('already settled');
 
-    // (b) a request whose routes are not made yet.
+    // (b) routes not made yet.
     const early = fixture();
     seedGradedTurns(early.rt, 3);
     const earlyDeps = early.deps(scriptedRefiner(proposalText(FACT_PROPOSAL)).port);
@@ -2104,8 +1949,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(onEarly.ok).toBe(false);
     expect(onEarly.ok === false && onEarly.error).toContain('not routed yet');
 
-    // (c) a staged skill beside a non-skill edit: only the skill is decidable,
-    //     and the index that names the other one says so.
+    // (c) only the staged skill is decidable.
     const mixed = fixture();
     seedGradedTurns(mixed.rt, 3);
 
@@ -2129,7 +1973,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
     expect(onFact.ok).toBe(false);
     expect(onFact.ok === false && onFact.error).toContain('needs no decision from you');
 
-    // (d) a bad edit index, a bad request id, and a wrong digest token.
+    // (d) bad edit index, bad request id, wrong digest token.
     expect((await decideRefinementRoute(mixedDeps, {
       requestId: mixedReq.id, routeIndex: 9,
       expectedDigest: instructionDigest(BREVITY_SKILL), decision: 'approve',
@@ -2146,7 +1990,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
 
     expect(wrongToken.ok).toBe(false);
     expect(wrongToken.ok === false && wrongToken.error).toContain('not the edit you were shown');
-    // Nothing was granted by any of them.
+    // Nothing granted.
     expect(mixed.approvals.list()).toEqual([]);
     expect(await readSkill(mixed.rt, BREVITY_PATH)).toBeNull();
   });
@@ -2158,8 +2002,7 @@ describe('owner promotion — the approval is what makes a staged skill live', (
       requestId: id, routeIndex: 0, expectedDigest: digest, decision: 'reject',
     })).ok).toBe(true);
 
-    // Both `show` and a second decision refuse: the row says `rejected`, so
-    // there is nothing left to read or to decide.
+    // A `rejected` row has nothing left to show or decide.
     const shown = await showRefinementRoute(deps, { requestId: id, routeIndex: 0 });
     expect(shown.ok).toBe(false);
     expect(shown.ok === false && shown.error).toContain('already rejected');
@@ -2184,8 +2027,7 @@ describe('a hard kill at `gated` is still settled', () => {
     await advanceRefinementLane(deps);
     expect(store.get(opened.id)?.stage).toBe('applied');
 
-    // A host killed between routing and the settle inside `plan` leaves the row
-    // at `gated` with the fact already written. Nothing else will move it.
+    // Killed between routing and settle: `gated` with the fact written.
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${opened.id}`;
     const step = await advanceRefinementLane(deps);
     expect(step.step).toBe('settled');
@@ -2194,8 +2036,7 @@ describe('a hard kill at `gated` is still settled', () => {
 });
 
 describe('promotion never half-lands — the read-back is what allows the unlink', () => {
-  /** A file plane whose write of ONE path misbehaves. The narrow seam these
-   *  cases need: everything else on the plane keeps working. */
+  /** A file plane whose write of one path misbehaves. */
   function saboteur(
     rt: AgentRuntime,
     path: string,
@@ -2208,7 +2049,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 
       if (mode === 'throw') throw new Error('disk full');
 
-      // A torn write: the file exists and its bytes are not what was handed over.
+      // A torn write.
       return real(written, `${data instanceof Uint8Array ? '' : data}\ntruncated`);
     };
 
@@ -2238,15 +2079,14 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toContain('could not write');
 
-    // The trust row landed first and is harmless on its own; the bytes are
-    // still staged, so nothing is lost and nothing is live.
+    // The trust row alone is harmless; the bytes stay staged.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
     expect(await discoveredSkillNames(fx.rt)).toEqual([]);
-    // The route is untouched, so the request keeps waiting with the reason.
+    // The request keeps waiting with the reason.
     expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('pending_owner_approval');
 
-    // Repair the plane: the next settle finishes what the approval started.
+    // After repair, the next settle finishes.
     repair();
     await advanceRefinementLane(deps);
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
@@ -2266,13 +2106,11 @@ describe('promotion never half-lands — the read-back is what allows the unlink
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error).toContain('did not read back');
 
-    // The torn file is NOT deleted — this module does not own it — but the
-    // staging is intact, and the mismatch is surfaced rather than trusted.
+    // The torn file is not ours to delete; the mismatch is surfaced.
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
     expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('pending_owner_approval');
 
-    // And the collision persists honestly: a later settle refuses to overwrite
-    // bytes that are not the approved ones, and says so.
+    // A later settle refuses to overwrite unapproved bytes.
     stop();
     await advanceRefinementLane(deps);
     const row = present(store.get(id), 'the refinement row');
@@ -2283,14 +2121,14 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 
   test('a foreign file appearing at the target after approval is never overwritten', async () => {
     const { fx, deps, store, id, path } = await staged();
-    // The approval lands; the promotion has not run yet.
+    // Approved, not yet promoted.
     fx.approvals.approve(BREVITY_PATH, instructionDigest(BREVITY_SKILL));
     // Somebody else writes there in the window.
     const foreign = `${BREVITY_SKILL}\nsomebody else got here first.`;
     await writeSkill(fx.rt, BREVITY_PATH, foreign);
 
     await advanceRefinementLane(deps);
-    // Their bytes stand, ours stay staged, and the request keeps waiting.
+    // Their bytes stand, ours stay staged.
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(foreign);
     expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
     const row = present(store.get(id), 'the refinement row');
@@ -2304,7 +2142,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
 
     await advanceRefinementLane(deps);
     expect(store.get(id)?.stage).toBe('rolled_back');
-    // Staging that will never be promoted is state nothing will read.
+    // Staging that will never be promoted is removed.
     expect(await readSkill(fx.rt, path)).toBeNull();
     expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
   });
@@ -2316,13 +2154,12 @@ describe('promotion never half-lands — the read-back is what allows the unlink
       requestId: id, routeIndex: 0, expectedDigest: digest, decision: 'reject',
     })).ok).toBe(true);
 
-    // A crash drags the row back to `planning`; the plan is re-run.
+    // A crash drags the row back to `planning`.
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'planning' WHERE id = ${id}`;
     store.resetStalePlanning();
     await advanceRefinementLane(deps);
 
-    // The rejection stands. Re-routing would have asked the owner again about
-    // bytes they already refused.
+    // The rejection stands; the owner is not asked again.
     expect(present(store.get(id), 'the refinement row').routes[0]?.disposition).toBe('rejected');
     expect(await readSkill(fx.rt, refinementStagingPath(id, 'brevity'))).toBeNull();
     expect(store.get(id)?.stage).toBe('rolled_back');
@@ -2331,7 +2168,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
   test('show returns the WHOLE file, never a preview', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-    // A body far past any card's excerpt budget.
+    // Far past any card's excerpt budget.
     const long = `---\nname: brevity\ndescription: answer briefly\n---\n${'Be brief. '.repeat(600)}`;
     const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(long))).port);
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
@@ -2348,7 +2185,7 @@ describe('promotion never half-lands — the read-back is what allows the unlink
       expect(shown.view.target).toBe(BREVITY_PATH);
     }
 
-    // The CARD is bounded — it is for scanning, not for deciding.
+    // The card is bounded.
     const card = buildChangelog(fx.rt.storage.sql, fx.rt.actor, { limit: 50 })
       .find((entry) => entry.id.startsWith(`refinement:${opened.id}`));
 

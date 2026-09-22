@@ -1,9 +1,4 @@
-// The evolution loop's evidence budget: one policy, applied at every reader.
-//
-// The behaviour under test is not "text gets shorter" — it is that the END of a
-// long turn reaches the judge. A reader that keeps only the first n characters
-// makes a win that lands at step 9 of 12 invisible to the thing that is
-// supposed to select for it.
+// The evolution loop's evidence budget: the end of a long turn must reach the judge.
 import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -22,7 +17,7 @@ import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
-/** A seed candidate carrying `source` — the only field these prompts read. */
+/** A seed candidate carrying `source`, the only field these prompts read. */
 function candidate(source: string): GepaCandidate {
   return {
     id: 'p', parentId: null, source, scores: new Map(), feedback: new Map(),
@@ -30,8 +25,7 @@ function candidate(source: string): GepaCandidate {
   };
 }
 
-/** A trajectory whose decisive material is at the very end — the shape the old
- *  head-only slices could not see. */
+/** Decisive material at the very end. */
 function trajectory(chars: number, ending: string): string {
   return 'step boilerplate. '.repeat(Math.ceil(chars / 18)).slice(0, chars) + ending;
 }
@@ -114,8 +108,7 @@ describe('the readers can see the end of a long turn', () => {
       expect(prompt).toContain(`CURRENT-${ending}`);
     }
 
-    // One window, judged and recorded: the row is the evidence the verdict was
-    // formed on, not a differently-truncated view of it.
+    // The row is the evidence the verdict was formed on.
     const row = rt.storage.sql<{ task: string; current_output: string }>`
       SELECT task, current_output FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId} LIMIT 1`[0];
@@ -124,10 +117,7 @@ describe('the readers can see the end of a long turn', () => {
     expect(row.current_output).toContain(`CURRENT-${ending}`);
   });
 
-  // The budget is applied in ONE place. Applying it twice — the orchestration
-  // clamps, then the judge clamps what is already clamped — makes windowing a
-  // window report the SECOND pass's omission count, and the number the judge
-  // sees is wrong by four orders of magnitude.
+  // Windowing twice would report the second pass's omission count.
   test('the orchestrated path windows once, so the omission count is the true one', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
@@ -165,7 +155,7 @@ describe('the readers can see the end of a long turn', () => {
       },
     };
 
-    // The turn stores the live output WHOLE; the drain windows it once.
+    // The turn stores the live output whole; the drain windows it once.
     expect(queueTurnShadowTrial(control, {
       task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
     }, { pendingVersion: 1 })).toBe('queued');
@@ -176,7 +166,7 @@ describe('the readers can see the end of a long turn', () => {
 
     if (!prompt) throw new Error('expected shadow judge prompt');
     const omissions = [...prompt.matchAll(/(\d+) chars omitted from the middle/g)].map((match) => Number(match[1]));
-    // One window over the live output, reporting what it really dropped.
+    // One window, reporting what it really dropped.
     expect(omissions).toEqual([currentOutput.length - EVIDENCE_BUDGETS.shadowOutput]);
   });
 
@@ -197,9 +187,7 @@ describe('the readers can see the end of a long turn', () => {
     const sql = makeSql(db);
     initTurnOutcomeTables(makeExecRaw(db));
     initReplayTables(makeExecRaw(db));
-    // One actor for the seed and the pass: `turn_outcomes` is that actor's, so
-    // a replay under a second handle would sample an empty ledger and score
-    // nothing while reporting success.
+    // One actor for seed and pass, or the replay samples an empty ledger.
     const actor = createTestActors(sql, makeExecRaw(db)).main;
     recordTurnOutcome(sql, actor, {
       turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
