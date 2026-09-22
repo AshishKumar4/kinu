@@ -56,7 +56,9 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS user_workspaces (
       name          TEXT PRIMARY KEY,
       display_name  TEXT NOT NULL,
-      name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user')),
+      -- 'provisional' is a title the system DERIVED from the mission as a
+      -- stand-in; it is replaceable until a model answers (identity/naming.ts).
+      name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'provisional', 'user')),
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       archived_at   INTEGER,

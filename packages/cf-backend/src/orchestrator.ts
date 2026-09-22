@@ -241,7 +241,6 @@ import {
   buildWorkspaceOverview, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
-  isPlaceholderWorkspaceTitle,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import { decodeExperienceEntries, decodeExperienceEntry, decodeOptionalExperienceEntry } from './user/experience-wire';
@@ -268,6 +267,7 @@ import {
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
+import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork } from "./user/workspace-fork";
 import { agentEmailAddress } from "./email/inbound";
 import {
@@ -855,6 +855,7 @@ export class OrchestratorAgent extends ActorAgent {
       // told a `scribe` child it had the workspace's whole surface.
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
+      suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       mission: () => null,
@@ -3174,8 +3175,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  commits through the same propagation an owner rename does — which is
    *  also where the "a manual rename claimed it first" refusal lives (in
    *  UserDO's `name_origin`, not a local copy of it). */
-  protected async persistAutoTitle(displayName: string): Promise<boolean> {
-    return (await this.setAutoDisplayName(displayName)).applied;
+  protected async persistAutoTitle(displayName: string, origin: NameOrigin): Promise<boolean> {
+    return await this.propagateDisplayName(displayName, origin);
   }
 
   /**
@@ -3185,7 +3186,7 @@ export class OrchestratorAgent extends ActorAgent {
    * scheduler) commits to the root. Sync readers use whatever is hydrated;
    * every mutation path hydrates BEFORE deciding.
    */
-  protected _titleCache: { displayName: string; nameOrigin: 'user' | 'auto' } | null = null;
+  protected _titleCache: { displayName: string; nameOrigin: NameOrigin } | null = null;
   /** Whether the registry was read this activation. A null row (untitled) is
    *  an answer too — without this, every turn re-reads UserDO for a workspace
    *  nobody named. Failures leave it false so the next read retries. Protected
@@ -3207,7 +3208,7 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  private titleState(): { displayName: string; nameOrigin: 'user' | 'auto' } {
+  private titleState(): { displayName: string; nameOrigin: NameOrigin } {
     return this._titleCache ?? { displayName: this.name, nameOrigin: 'auto' as const };
   }
 
@@ -3300,7 +3301,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  the naming — decided at the root, in the same write. */
   private async propagateDisplayName(
     displayName: string,
-    origin: 'user' | 'auto',
+    origin: NameOrigin,
   ): Promise<boolean> {
     await this.hydrateTitle();
     let applied = true;
@@ -4197,16 +4198,6 @@ export class OrchestratorAgent extends ActorAgent {
    *  parsing arrives with the Triggers UI. */
 
   // ── Callable RPC methods ───────────────────────────────────────
-
-  private getDisplayName(): string {
-    // The title, not the slug: an untitled workspace answers "" here and every
-    // surface names it "Untitled workspace" through workspaceDisplayTitle —
-    // returning `this.name` put the slug back on screen as the workspace's name.
-
-    const state = this.titleState();
-
-    return isPlaceholderWorkspaceTitle(state.displayName, this.name) ? '' : state.displayName;
-  }
 
   @callable()
   async getReleaseBoard(limit = 20) {
@@ -5902,13 +5893,7 @@ export class OrchestratorAgent extends ActorAgent {
     return { displayName };
   }
 
-  async setAutoDisplayName(displayName: string) {
-    const applied = await this.propagateDisplayName(displayName, 'auto');
-
-    return { displayName: applied ? displayName : this.getDisplayName(), applied };
-  }
-
-  async setInitialDisplayName(displayName: string, nameOrigin: 'user' | 'auto') {
+  async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) {
     // Genesis only, right after the create path registered the row in the
     // root registry. The activation cache is seeded from what was just
     // written; the root remains the authority.

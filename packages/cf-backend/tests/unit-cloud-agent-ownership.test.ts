@@ -8,6 +8,7 @@ import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import { halfBornOrchestratorHarness, HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
 import type { UserCaller } from '@kinu.run/core';
+import type { WorkspaceRegistrationSource } from '../src/user/user-do';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 
@@ -26,11 +27,13 @@ const DEFAULT_ENVELOPE: ProfileCatalogEnvelope = {
  *  line the case reads back and `at` the timestamp its reservation carries. */
 function registerWorkspaceStub(
   calls: string[],
-  logged: (name: string, displayName?: string) => string,
+  logged: (name: string, displayName?: string, from?: WorkspaceRegistrationSource) => string,
   at: number,
 ) {
-  return async (_caller: UserCaller, name: string, displayName?: string) => {
-    calls.push(logged(name, displayName));
+  return async (
+    _caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource,
+  ) => {
+    calls.push(logged(name, displayName, from));
 
     return {
       entry: { name, displayName: displayName ?? name, createdAt: at, lastVisited: at, archivedAt: null },
@@ -127,7 +130,7 @@ function registryStub() {
 afterEach(() => { setDiagnosticsSink(createRecordingLogger()); });
 
 describe('cloud agent ownership safety', () => {
-  test('mission-only create does not block on generated cloud naming', async () => {
+  test('a mission-only create stores a PROVISIONAL title and leaves naming to the genesis turn', async () => {
     const calls: string[] = [];
     const background: Promise<unknown>[] = [];
 
@@ -143,7 +146,7 @@ describe('cloud agent ownership safety', () => {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      registerWorkspace: registerWorkspaceStub(calls, (name, displayName) => `register:${name}:${displayName ?? ''}`, 1),
+      registerWorkspace: registerWorkspaceStub(calls, (name, displayName, from) => `register:${name}:${displayName ?? ''}:${from?.nameOrigin ?? ''}`, 1),
       async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
@@ -158,7 +161,7 @@ describe('cloud agent ownership safety', () => {
       async setSoul() {
         calls.push('soul');
       },
-      async setInitialDisplayName(displayName: string, origin: 'user' | 'auto') {
+      async setInitialDisplayName(displayName: string, origin: string) {
         calls.push(`initial-title:${displayName}:${origin}`);
       },
       async setModel(model: string) {
@@ -168,9 +171,6 @@ describe('cloud agent ownership safety', () => {
         calls.push('baseline');
 
         return { ok: true as const };
-      },
-      async setAutoDisplayName(displayName: string) {
-        calls.push(`auto-title:${displayName}`);
       },
       async beginGenesisTurn() {
         calls.push('genesis');
@@ -201,10 +201,6 @@ describe('cloud agent ownership safety', () => {
         input: {
           purpose: 'Build a hello world app in react',
         },
-        options: {
-          waitUntil: (promise) => background.push(promise),
-          suggestDisplayName: async () => 'React Hello World',
-        },
       });
 
       // The slug is a permanent URL and Durable Object name. It remains
@@ -213,15 +209,24 @@ describe('cloud agent ownership safety', () => {
       expect(entry.name).not.toContain('hello');
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
-      expect(calls).toContain('initial-title:Build a hello world app in react:auto');
+      // THE #18 CONTRACT at this boundary. The title this create stores is the
+      // mission's first line, and it is recorded as the stand-in it is — in the
+      // registry row AND in the actor's activation cache — so the genesis turn's
+      // durable `auto_title` effect is still allowed to replace it. Recorded as
+      // 'user' (which is what an empty-check on the display name produced) it
+      // was the workspace's permanent name.
+      expect(calls).toContain('register:' + entry.name + ':Build a hello world app in react:provisional');
+      expect(calls).toContain('initial-title:Build a hello world app in react:provisional');
       expect(calls).toContain('soul');
       // The agent takes the first turn itself — after the soul, model and
       // effort are durable, and without the owner having to reprompt.
       expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('soul'));
       expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('model:@cf/zai-org/glm-5.3'));
-      expect(background).toHaveLength(1);
-      await Promise.all(background);
-      expect(calls).toContain('auto-title:React Hello World');
+      // NOTHING was detached to name it: the create used to fire a pre-turn
+      // model call, but only for a caller that had a Worker request behind it,
+      // so every other create was named by nothing at all. The genesis turn
+      // owes the naming now, for every caller, with a durable retry.
+      expect(background).toHaveLength(0);
 
       const purposeless = await createCloudWorkspaceForUser({
         env,
@@ -229,7 +234,6 @@ describe('cloud agent ownership safety', () => {
         userDO: userStub(env),
         caller: await testOwner(),
         input: {},
-        options: { waitUntil: (promise) => background.push(promise) },
       });
 
       // Nothing to name it after, so the memorable pair — its only remaining
@@ -238,7 +242,6 @@ describe('cloud agent ownership safety', () => {
       expect(purposeless.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
       expect(purposeless.displayName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
       expect(purposeless.displayName).not.toBe(purposeless.name);
-      expect(background).toHaveLength(1);
 
       const explicitlyTitled = await createCloudWorkspaceForUser({
         env,
@@ -246,12 +249,10 @@ describe('cloud agent ownership safety', () => {
         userDO: userStub(env),
         caller: await testOwner(),
         input: { displayName: 'Jarvis', purpose: 'My personal assistant' },
-        options: { waitUntil: (promise) => background.push(promise) },
       });
 
       expect(explicitlyTitled.displayName).toBe('Jarvis');
       expect(calls).toContain('initial-title:Jarvis:user');
-      expect(background).toHaveLength(1);
     } finally {
       globalThis.fetch = originalFetch;
     }

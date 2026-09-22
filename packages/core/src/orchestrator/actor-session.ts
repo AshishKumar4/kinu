@@ -266,7 +266,7 @@ export class ActorSession {
     const llm = this.runtime.advisorLlm;
 
     if (!this.advisorEnabled || llm === undefined || (turnId && engine.hasAdvisorNoteForTurn(turnId))) return null;
-    const contextWindow = contextWindowForModel(snapshot.model ?? '');
+    const contextWindow = contextWindowForModel(snapshot.model ?? '').window;
 
     const workspace = await this.options.advisor?.workspace()
       ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
@@ -279,7 +279,7 @@ export class ActorSession {
       gateOpen,
       guidance: await advisorWorkspaceGuidance({
         vfs: workspace,
-        limits: async () => ({ contextWindow, modelOutputLimit: contextWindow }),
+        limits: async () => ({ contextWindow, modelOutputLimit: null }),
       }),
       send,
       parent: this.options.advisor?.parent,

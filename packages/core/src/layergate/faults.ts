@@ -148,7 +148,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     models: 'the window table rots back to the default, and the clamp charges its marker on top of the cap instead of inside it',
     inject: (s) => ({
       ...s,
-      contextWindowForModel: () => 128_000,
+      contextWindowForModel: () => ({ measured: false, window: 128_000 }),
       clampToolResult: async (text) => {
         if (text.length <= DEFAULT_TOOL_RESULT_MAX_CHARS) return text;
         const headLen = Math.floor(DEFAULT_TOOL_RESULT_MAX_CHARS * 0.5);

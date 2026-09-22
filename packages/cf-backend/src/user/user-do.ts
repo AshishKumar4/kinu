@@ -94,6 +94,7 @@ import {
   JsonObjectSchema,
   decodeJsonValue,
   autoTitleMayReplace,
+  type NameOrigin,
 } from '@kinu.run/core';
 import {
   diagnostics,
@@ -565,6 +566,14 @@ export interface WorkspaceList {
   entries: WorkspaceEntry[];
   total: number;
   nextCursor: string | null;
+}
+
+/** Where a registration's title came from: the mission it may be derived from,
+ *  and the origin the caller decided for it. Together rather than as two more
+ *  positional arguments, because they answer one question. */
+export interface WorkspaceRegistrationSource {
+  purpose?: string;
+  nameOrigin?: NameOrigin;
 }
 
 /** What {@link UserDO.registerWorkspace} found under a name: the row it just
@@ -1149,14 +1158,21 @@ export class UserDO extends Agent<Env> {
    *  invalidation, peer lists, the CLI's config reconcile) where a capped page
    *  would silently drop targets. Identity fields only — the wide wire contract
    *  is listWorkspaces. */
-  async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
+  async listActiveWorkspaces(
+    caller: UserCaller,
+  ): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'> & { nameOrigin: NameOrigin }>> {
     await this.requireTier(caller, 'workspaces.read');
 
-    return this.sqlx<{ name: string; display_name: string; created_at: number }>(
-      `SELECT name, display_name, created_at FROM user_workspaces
+    // `name_origin` rides the row because a title's PROVENANCE is what tells a
+    // reader whether naming has finished: a `provisional` entry is showing the
+    // deterministic stand-in the create stored, not a name (identity/naming.ts).
+    return this.sqlx<{ name: string; display_name: string; created_at: number; name_origin: NameOrigin | null }>(
+      `SELECT name, display_name, created_at, name_origin FROM user_workspaces
        WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
        ORDER BY last_visited DESC`,
-    ).map((r) => ({ name: r.name, displayName: r.display_name, createdAt: r.created_at }));
+    ).map((r) => ({
+      name: r.name, displayName: r.display_name, createdAt: r.created_at, nameOrigin: r.name_origin ?? 'user',
+    }));
   }
 
   /**
@@ -1179,8 +1195,9 @@ export class UserDO extends Agent<Env> {
    * published the moment it lands.
    */
   async registerWorkspace(
-    caller: UserCaller, name: string, displayName?: string, purpose?: string,
+    caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource,
   ): Promise<WorkspaceRegistration> {
+    const { purpose, nameOrigin } = from ?? {};
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
@@ -1224,13 +1241,20 @@ export class UserDO extends Agent<Env> {
 
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
+    // THE ORIGIN THE CALLER DECIDED, when it decided one. Deriving it here from
+    // "is `displayName` empty" was the #18 root on this side: the create path
+    // hands over a title it DERIVED from the mission, which is non-empty and so
+    // read as the owner's choice — after which nothing was ever allowed to
+    // replace it, and the truncated prompt was the workspace's name forever.
+    // A caller that states nothing keeps the old reading.
+    const origin: NameOrigin = nameOrigin ?? (explicit !== '' ? 'user' : 'auto');
     // No ON CONFLICT clause: the read above and this write are one turn, so a
     // conflict here is unreachable — and if the two were ever separated by an
     // await, a silent upsert is exactly the wrong answer.
     this.sqlx(
       `INSERT INTO user_workspaces (name, display_name, name_origin, created_at, last_visited, create_pending)
        VALUES (?, ?, ?, ?, ?, 0)`,
-      name, title, explicit !== '' ? 'user' : 'auto', now, now,
+      name, title, origin, now, now,
     );
 
     return {
@@ -1625,7 +1649,7 @@ export class UserDO extends Agent<Env> {
    * succeeds.
    */
   async setWorkspaceDisplayName(
-    caller: UserCaller, name: string, displayName: string, origin: 'user' | 'auto',
+    caller: UserCaller, name: string, displayName: string, origin: NameOrigin,
   ): Promise<{ applied: boolean }> {
     const resolved = await this.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
@@ -1639,14 +1663,14 @@ export class UserDO extends Agent<Env> {
     // Both pending flags excluded as everywhere else: a workspace being torn
     // down, or one a fork has not committed yet, has no title to commit, so the
     // write reports the not-found answer.
-    const current = this.sqlx<{ name_origin: 'user' | 'auto' | null }>(
+    const current = this.sqlx<{ name_origin: NameOrigin | null }>(
       `SELECT name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
 
     if (!current) return { applied: false };
 
-    if (origin === 'auto' && !autoTitleMayReplace(current.name_origin)) return { applied: false };
+    if (origin !== 'user' && !autoTitleMayReplace(current.name_origin)) return { applied: false };
     this.sqlx(
       `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
       displayName, origin, name,
@@ -1657,11 +1681,11 @@ export class UserDO extends Agent<Env> {
 
   /** The root's current naming state for one workspace, or null when it holds
    *  no such row. This is what an actor hydrates its activation cache from. */
-  async getWorkspaceTitle(caller: UserCaller, name: string): Promise<{ displayName: string; nameOrigin: 'user' | 'auto' } | null> {
+  async getWorkspaceTitle(caller: UserCaller, name: string): Promise<{ displayName: string; nameOrigin: NameOrigin } | null> {
     await this.requireTier(caller, 'workspaces.read');
     validateWorkspaceName(name);
 
-    const row = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
+    const row = this.sqlx<{ display_name: string; name_origin: NameOrigin | null }>(
       `SELECT display_name, name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];

@@ -7,6 +7,7 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
+import type { NameOrigin } from '../identity/naming';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../profiles/catalog';
 import {
@@ -147,10 +148,10 @@ export interface AgentConfigStore {
   setCacheRetention(retention: CacheRetention): void;
   getDisplayName(): string | null;
   setDisplayName(name: string): void;
-  getNameOrigin(): 'user' | 'auto' | null;
-  setNameOrigin(origin: 'user' | 'auto'): void;
+  getNameOrigin(): NameOrigin | null;
+  setNameOrigin(origin: NameOrigin): void;
   /** Persist the visible title and its ownership in one SQLite statement. */
-  setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
+  setDisplayNameOrigin(name: string, origin: NameOrigin): void;
   /** The agent's current role id. An absent or invalid row reads as `task`. The read writes nothing. */
   getRoleSelection(): RoleId;
   /** Store the role id in the ONE role row. */
@@ -401,7 +402,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getNameOrigin() {
       const v = get(AGENT_CONFIG_KEYS.nameOrigin);
 
-      return v === 'user' || v === 'auto' ? v : null;
+      return v === 'user' || v === 'auto' || v === 'provisional' ? v : null;
     },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {

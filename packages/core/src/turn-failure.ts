@@ -23,8 +23,17 @@
  *  `auth` is a credential the provider refused — revoked, expired, or never
  *  connected. It is not `transient`: retrying without re-authenticating can
  *  only fail again, so nothing may read it as a blip worth another turn. The
- *  remedy is the re-auth path the error text names. */
-export type TurnFailureClass = 'context_length' | 'rate_limit' | 'auth' | 'transient';
+ *  remedy is the re-auth path the error text names.
+ *
+ *  `admission_refused` is OUR OWN gate declining to submit a request that does
+ *  not fit a measured window (orchestrator/turn-context.ts), and it is a class
+ *  of its own for the same reason: the history was already compacted and
+ *  re-measured, so neither a retry nor a second forced rebuild can change the
+ *  answer. It used to fall through to `transient`, which said "a blip, try
+ *  again" about a turn that could only refuse again — the wedge #20 was
+ *  reported as. The remedy is the person's: a new conversation, or less in
+ *  this one, and the refusal's own text says so. */
+export type TurnFailureClass = 'context_length' | 'rate_limit' | 'auth' | 'admission_refused' | 'transient';
 
 /** Marker metadata value stamped on the ONE enqueued retry turn — a retry
  *  turn that fails again never enqueues another (never loop). */
@@ -55,6 +64,12 @@ const RATE_LIMIT_PATTERNS: readonly RegExp[] = [
   /quota exceeded/i,
 ];
 
+/** Our own pre-submission refusal, verbatim from `refuseOversizedRequest`. It
+ *  is matched FIRST: the sentence names both a context window and a token
+ *  count, so every context-length pattern below would claim it and arm a
+ *  recovery that cannot help. */
+const ADMISSION_REFUSAL_PATTERN = /Request refused before submission/;
+
 
 /** A credential the provider refused: the HTTP status, the OAuth rejection
  *  code, the upstream plain text, or the remedy sentence our own wire layer
@@ -79,6 +94,8 @@ export interface TurnFailureSignals {
 
 /** Classify a failed turn's provider error text. */
 export function classifyTurnFailure(error: string, signals: TurnFailureSignals = {}): TurnFailureClass {
+  if (ADMISSION_REFUSAL_PATTERN.test(error)) return 'admission_refused';
+
   if (CONTEXT_LENGTH_PATTERNS.some((re) => re.test(error))) return 'context_length';
 
   if (RATE_LIMIT_PATTERNS.some((re) => re.test(error))) {

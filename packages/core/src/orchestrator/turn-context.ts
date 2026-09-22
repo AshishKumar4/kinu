@@ -37,7 +37,7 @@
 import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
-import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
+import { stepContextLimit, type ResolvedModelWindow } from '../prompting/step-prune';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import type { ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
@@ -77,18 +77,24 @@ export interface TurnContextInput {
  * is the answer's share of it, and `stepContextLimit` is the input allocation
  * the two produce. They are three distinct things and this module never
  * substitutes one for another.
+ *
+ * `limits.windowMeasured` decides whether this gate may REFUSE at all. A
+ * stand-in window still sizes the compaction it triggers — shrinking a history
+ * costs the turn nothing it cannot recover — but a request it cannot prove too
+ * large leaves here unrefused, and the provider, which knows its own window,
+ * answers.
  */
 export interface TurnAdmission {
   count?(request: CountableRequest): Promise<InputTokenCount>;
   /** Tool definitions that ride every request of the turn — part of what the
    *  provider prices, so part of what is measured. */
   tools?: ToolSet | undefined;
-  limits: ModelWindow;
+  limits: ResolvedModelWindow;
 }
 
 /**
- * The refusal a turn's assembly raises when the request it built does not fit,
- * with the compaction it was entitled to already spent.
+ * The refusal a turn's assembly raises when the request it built does not fit a
+ * MEASURED window, with the compaction it was entitled to already spent.
  *
  * Deliberately NOT worded as a context-length provider failure. The shared
  * turn-failure policy (turn-failure.ts) reads provider error TEXT and answers a
@@ -96,16 +102,23 @@ export interface TurnAdmission {
  * turn — which is the right answer to a REMOTE refusal, and the wrong answer
  * here: this request was already compacted and re-measured, so a retry turn
  * would be a second forced compaction of history that just proved it cannot
- * shrink enough. The turn fails honestly instead, and
- * `unit-turn-admission.test.ts` pins the classification so the wording cannot
- * drift into the pattern list.
+ * shrink enough. `ADMISSION_REFUSAL_MARK` is what that policy matches, so the
+ * refusal carries its own class — `admission_refused`, neither retried nor
+ * reported as a transient blip — and `unit-turn-admission.test.ts` pins it.
+ *
+ * The remedy sentence is part of the message because it is the only one that
+ * exists: the history cannot shrink further, so the person has to start a new
+ * conversation or drop what this one is carrying.
  */
+export const ADMISSION_REFUSAL_MARK = 'Request refused before submission';
+
 function refuseOversizedRequest(tokens: number, limit: number): KinuError {
   return new KinuError(
     'bad_input',
-    `Request refused before submission: the assembled request measures ${tokens.toLocaleString('en-US')} input tokens, ` +
+    `${ADMISSION_REFUSAL_MARK}: the assembled request measures ${tokens.toLocaleString('en-US')} input tokens, ` +
     `above the ${limit.toLocaleString('en-US')}-token allocation this model's window leaves for input after its answer reserve. ` +
-    'The history was compacted and re-measured, and still does not fit — nothing was sent to the provider.',
+    'The history was compacted and re-measured, and still does not fit — nothing was sent to the provider. ' +
+    'Start a new conversation, or remove what this one is carrying, to continue.',
   );
 }
 
@@ -218,9 +231,26 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
 
   if (tokens <= limit) return assembled;
 
-  // The request does not fit. A turn assembled with trigger:'force' has already
-  // spent its one forced compaction — the caller consumed an armed flag to get
-  // here — so there is nothing left to try and nothing is submitted.
+  // The request is over the allocation THIS window produces — and a window
+  // nobody measured produces an allocation nobody can stand behind. #20 is what
+  // acting on one costs: a 1M-window model whose spec matched no catalog entry
+  // was sized at 128k, refused at 64,000 tokens, and had no recovery left
+  // because the history was already as small as it goes. So a stand-in neither
+  // refuses nor spends the turn's forced compaction on a number it invented:
+  // the request leaves here and the provider, which knows its own window,
+  // answers. A remote context-length refusal then arms the real recovery
+  // (turn-failure.ts) against a fact instead of a guess.
+  if (!admission.limits.windowMeasured) {
+    diagnostics.event('admission.unmeasured_window', {
+      sessionKey: input.sessionKey, tokens, limit, contextWindow: admission.limits.contextWindow,
+    });
+
+    return assembled;
+  }
+
+  // A turn assembled with trigger:'force' has already spent its one forced
+  // compaction — the caller consumed an armed flag to get here — so there is
+  // nothing left to try and nothing is submitted.
   if (input.trigger === 'force') throw refuseOversizedRequest(tokens, limit);
 
   const compacted = await assemble('force');

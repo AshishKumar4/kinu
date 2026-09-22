@@ -398,7 +398,10 @@ export async function sharedPrefix(input: {
     (total, message) => total + JSON.stringify(message.content).length, 0,
   );
 
-  const window = contextWindowForModel(modelSpecOf(input.model));
+  // The stand-in window is what a swarm node budgets against when nothing has
+  // measured its model: a compaction threshold has to produce SOME number, and
+  // over-summarising a branch costs detail rather than the turn.
+  const window = contextWindowForModel(modelSpecOf(input.model)).window;
   const room = window * CONTEXT_COMPACTION_THRESHOLD;
 
   if (estimateTokens(chars) < room) return parent.transcript;
