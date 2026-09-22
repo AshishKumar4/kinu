@@ -84,14 +84,16 @@ export function commentCharacters(text: string, comments: readonly Comment[]): n
 /**
  * Comments a tool reads. `byLine` marks the ones whose reach is counted in
  * lines from the comment, so the line gap to the code they precede is compared
- * too; the rest are compared by the code they precede.
+ * too; the rest are compared by the code they precede. `block` marks the ones
+ * eslint reads only from a block comment, so a `//` line of prose starting
+ * "exported" is not one.
  */
-const DIRECTIVES: readonly { readonly pattern: RegExp; readonly byLine: boolean }[] = [
+const DIRECTIVES: readonly { readonly pattern: RegExp; readonly byLine: boolean; readonly block?: true }[] = [
   { pattern: /@ts-(?:expect-error|ignore)\b/g, byLine: true },
   { pattern: /@ts-(?:nocheck|check)\b/g, byLine: false },
   { pattern: /\b(?:eslint|oxlint)-disable-(?:next-)?line\b[^\n]*?(?=[ \t]+--[ \t]|$)/gm, byLine: true },
   { pattern: /\b(?:eslint|oxlint)-(?:disable|enable)(?![-\w])[^\n]*?(?=[ \t]+--[ \t]|$)/gm, byLine: false },
-  { pattern: /^[\s*]*(?:eslint|globals?|exported)[ \t][^\n]*/g, byLine: false },
+  { pattern: /^[\s*]*(?:eslint|globals?|exported)[ \t][^\n]*/g, byLine: false, block: true },
   { pattern: /\bbiome-ignore(?:-all|-start|-end)?\b[^:\n]*/g, byLine: true },
   { pattern: /\bprettier-ignore\b/g, byLine: true },
   { pattern: /\b(?:istanbul|c8|v8)[ \t]+ignore\b(?:[ \t]+\w+)*/g, byLine: true },
@@ -151,8 +153,9 @@ function directivesOf(side: Side): Directive[] {
   let order: SyntaxNode[] | undefined;
 
   for (const comment of side.comments) {
-    const tokens = DIRECTIVES.flatMap(({ pattern, byLine }) => [...comment.value.matchAll(pattern)]
-      .map((match) => ({ token: match[0].replace(/\s+/g, ' ').trim(), byLine })));
+    const tokens = DIRECTIVES.filter(({ block }) => block === undefined || comment.type === 'Block')
+      .flatMap(({ pattern, byLine }) => [...comment.value.matchAll(pattern)]
+        .map((match) => ({ token: match[0].replace(/\s+/g, ' ').trim(), byLine })));
 
     if (tokens.length === 0 && !comment.value.startsWith('!')) continue;
     order ??= renderedPreorder(side.parsed.root);
