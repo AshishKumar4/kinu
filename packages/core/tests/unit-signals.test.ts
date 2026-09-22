@@ -11,6 +11,7 @@ import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types
 import type { AgentSignal, SignalCardEvent } from '../src/types/signals';
 import { JsonObjectSchema } from '../src/utils/json';
 import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul';
+import { present } from '@kinu.run/test-utils';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 
@@ -102,8 +103,8 @@ describe('Inbox — one delivery time: the next step', () => {
     expect(await inbox.send(wake('mail from bob', { stepText: 'mid-turn: mail' }))).toBe('mid-turn');
     expect(queued).toEqual([]);
     expect(activity).toEqual([{ event: 'signal_injected', detail: 'event_drain → live turn' }]);
-    const step = await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a1')] });
-    expect(texts(step!)).toEqual(['q', 'a1', 'mid-turn: mail']);
+    const step = present(await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a1')] }), 'the prepared step');
+    expect(texts(step)).toEqual(['q', 'a1', 'mid-turn: mail']);
   });
 
   test('the SAME wake starts a turn when the agent is idle — one call site, both backends', async () => {
@@ -126,7 +127,7 @@ describe('Inbox — one delivery time: the next step', () => {
       metadata: { jobId: 'bgjob-1', status: 'completed' },
     })).toBe('mid-turn');
     expect(busy.queued).toEqual([]);
-    expect(texts((await busy.inbox.prepareStep({ stepNumber: 1, messages: [user('q')] }))!))
+    expect(texts(present(await busy.inbox.prepareStep({ stepNumber: 1, messages: [user('q')] }), 'the prepared step')))
       .toEqual(['q', 'job done']);
 
     // Idle: no next step exists, so delivery makes one. Metadata rides it.
@@ -168,7 +169,7 @@ describe('Inbox — one delivery time: the next step', () => {
       { kinuEvent: 'event_drain', kinuAuthor: 'harness', kinuMode: 'plan' },
       { kinuEvent: 'event_drain', kinuAuthor: 'harness', missionLabels: ['gamma'] },
     ]);
-    expect(texts((await inbox.prepareStep({ stepNumber: 1, messages: [user('q')] }))!))
+    expect(texts(present(await inbox.prepareStep({ stepNumber: 1, messages: [user('q')] }), 'the prepared step')))
       .toEqual(['q', 'plan result\n\nother mission']);
   });
 
@@ -185,7 +186,7 @@ describe('Inbox — one delivery time: the next step', () => {
 
     // The turn opens: its first step sees the other two at the tip.
     inbox.beginTurn(false);
-    expect(texts((await inbox.prepareStep({ stepNumber: 0, messages: [user('first')] }))!))
+    expect(texts(present(await inbox.prepareStep({ stepNumber: 0, messages: [user('first')] }), 'the prepared step')))
       .toEqual(['first', 'second\n\nthird']);
     release();
     expect(await first).toBe('queued');
@@ -210,7 +211,7 @@ describe('Inbox — one delivery time: the next step', () => {
     // that step even on a backend where nothing is in flight to ask about, and
     // it is not a wake — no activity line, no queue, ever.
     const { inbox, queued, activity } = setup({ turnInFlight: false });
-    expect(texts((await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]))!))
+    expect(texts(present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]), 'the prepared step')))
       .toEqual(['q', 'fork now']);
     expect(queued).toEqual([]);
     expect(activity).toEqual([]);
@@ -317,24 +318,24 @@ describe('Inbox — the mid-turn splice', () => {
     const { inbox } = setup({ turnInFlight: true });
     await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] });
     await inbox.send(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
-    const step1 = await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a1')] });
-    expect(texts(step1!)).toEqual(['q', 'a1', 'mid-turn: mail from bob']);
+    const step1 = present(await inbox.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a1')] }), 'the prepared step');
+    expect(texts(step1)).toEqual(['q', 'a1', 'mid-turn: mail from bob']);
 
     // Later steps rebuild from scratch — the injection re-applies at the same
     // base-coordinate position, keeping the cached prefix stable.
-    const step2 = await inbox.prepareStep({
+    const step2 = present(await inbox.prepareStep({
       stepNumber: 2, messages: [user('q'), assistant('a1'), assistant('a2')],
-    });
+    }), 'the prepared step');
 
-    expect(texts(step2!)).toEqual(['q', 'a1', 'mid-turn: mail from bob', 'a2']);
+    expect(texts(step2)).toEqual(['q', 'a1', 'mid-turn: mail from bob', 'a2']);
   });
 
   test('signals buffered together merge into ONE user message; all count as absorbed', async () => {
     const { inbox } = setup({ turnInFlight: true });
     await inbox.send(wake('t1', { stepText: 'first', replyTurnId: 'evt-1' }));
     await inbox.send(wake('t2', { stepText: 'second', replyTurnId: 'evt-2' }));
-    const step0 = await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]);
-    expect(texts(step0!)).toEqual(['q', 'first\n\nsecond\n\nfork now']);
+    const step0 = present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]), 'the prepared step');
+    expect(texts(step0)).toEqual(['q', 'first\n\nsecond\n\nfork now']);
     // Only what was DELIVERED settles — steering has no life past its step.
     expect(inbox.settle({ completed: true }).absorbed.map((s) => s.text))
       .toEqual(['t1', 't2']);
@@ -343,7 +344,7 @@ describe('Inbox — the mid-turn splice', () => {
   test('a signal with no stepText splices its turn text', async () => {
     const { inbox } = setup({ turnInFlight: true });
     await inbox.send(wake('only one rendering'));
-    expect(texts((await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }))!))
+    expect(texts(present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q')] }), 'the prepared step')))
       .toEqual(['q', 'only one rendering']);
   });
 });
@@ -443,10 +444,10 @@ describe('Inbox — turn boundaries', () => {
     await inbox.send(wake('t-waiting', { stepText: 'still pending' }));
 
     inbox.beginTurn(false);
-    const step0 = await inbox.prepareStep({ stepNumber: 0, messages: [user('q2')] });
+    const step0 = present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q2')] }), 'the prepared step');
     // Only the waiting signal injects — the dead turn's entry (recorded at
     // index 3, past this turn's array) is gone, and its absorbed record with it.
-    expect(texts(step0!)).toEqual(['q2', 'still pending']);
+    expect(texts(step0)).toEqual(['q2', 'still pending']);
     expect(inbox.settle({ completed: true }).absorbed.map((s) => s.text)).toEqual(['t-waiting']);
   });
 
@@ -460,8 +461,8 @@ describe('Inbox — turn boundaries', () => {
     // model re-sees the text and the fuller answer re-dispatches (a settled
     // reply channel no-ops, so this is idempotent).
     inbox.beginTurn(true);
-    const step0 = await inbox.prepareStep({ stepNumber: 0, messages: [user('q'), assistant('partial')] });
-    expect(texts(step0!)).toEqual(['q', 'partial', 'mail from bob']);
+    const step0 = present(await inbox.prepareStep({ stepNumber: 0, messages: [user('q'), assistant('partial')] }), 'the prepared step');
+    expect(texts(step0)).toEqual(['q', 'partial', 'mail from bob']);
     expect(inbox.settle({ completed: true }).absorbed.map((s) => s.text)).toEqual(['t1']);
 
     // A REGULAR next turn drops the settled signals — their turn answered.
@@ -486,9 +487,9 @@ describe('Inbox — turn boundaries', () => {
 describe('the workspace genesis signal', () => {
   test('an idle new workspace turns it into its own turn', async () => {
     const { inbox, queued } = setup({ turnInFlight: false });
-    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+    const genesis = present(workspaceGenesisSignal('Audit the OAuth callback flow.'), 'the workspace genesis signal');
 
-    expect(await inbox.send(genesis!)).toBe('queued');
+    expect(await inbox.send(genesis)).toBe('queued');
     expect(queued).toHaveLength(1);
     expect(queued[0].metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
   });
@@ -498,22 +499,22 @@ describe('the workspace genesis signal', () => {
     // The genesis is then a fact the running turn hears at its next step —
     // the same rule as every other send, with no second turn behind the first.
     const { inbox, queued } = setup({ turnInFlight: true });
-    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+    const genesis = present(workspaceGenesisSignal('Audit the OAuth callback flow.'), 'the workspace genesis signal');
 
-    expect(await inbox.send(genesis!)).toBe('mid-turn');
+    expect(await inbox.send(genesis)).toBe('mid-turn');
     expect(queued).toEqual([]);
-    expect(texts((await inbox.prepareStep({ stepNumber: 0, messages: [user('the racing turn')] }))!))
-      .toEqual(['the racing turn', genesis!.text]);
+    expect(texts(present(await inbox.prepareStep({ stepNumber: 0, messages: [user('the racing turn')] }), 'the prepared step')))
+      .toEqual(['the racing turn', genesis.text]);
   });
 
   test('the genesis offer yields to an operator message admitted before its slot', async () => {
     const { inbox, queued, cards } = setup({ turnInFlight: false, messageAdmitted: true });
-    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+    const genesis = present(workspaceGenesisSignal('Audit the OAuth callback flow.'), 'the workspace genesis signal');
 
     // The host found the person's message already admitted when the offered
     // turn reached its slot: the seam reports the yield, consumes the offer
     // (no compensate, no redelivery) and withdraws the card it opened.
-    expect(await inbox.send(genesis!)).toBe('yielded');
+    expect(await inbox.send(genesis)).toBe('yielded');
     expect(queued).toHaveLength(1);
     expect(queued[0].yieldsToUserMessage).toBe(true);
     expect(queued[0].metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
@@ -530,9 +531,9 @@ describe('the workspace genesis signal', () => {
 
   test('the genesis offer with nobody speaking still takes its own turn', async () => {
     const { inbox, queued } = setup({ turnInFlight: false });
-    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+    const genesis = present(workspaceGenesisSignal('Audit the OAuth callback flow.'), 'the workspace genesis signal');
 
-    expect(await inbox.send(genesis!)).toBe('queued');
+    expect(await inbox.send(genesis)).toBe('queued');
     expect(queued[0].yieldsToUserMessage).toBe(true);
   });
 

@@ -14,6 +14,7 @@ import {
   stepContextLimit,
   type ModelWindow,
 } from '../src/index';
+import { present } from '@kinu.run/test-utils';
 
 function toolExchange(i: number, outputChars: number): ModelMessage[] {
   const id = `call_${i}`;
@@ -83,16 +84,15 @@ describe('pruneStepToolOutputs', () => {
 
   test('over budget → OLD tool outputs shrink to head + marker, recent budget stays verbatim', () => {
     const messages = bigTurn();
-    const pruned = pruneStepToolOutputs(messages, budgetFor(WINDOW));
-    expect(pruned).toBeDefined();
+    const pruned = present(pruneStepToolOutputs(messages, budgetFor(WINDOW)), 'pruned step');
 
     // Never remove or reorder: same count, same roles, same positions.
-    expect(pruned!.length).toBe(messages.length);
-    expect(pruned!.map((m) => m.role)).toEqual(messages.map((m) => m.role));
+    expect(pruned.length).toBe(messages.length);
+    expect(pruned.map((m) => m.role)).toEqual(messages.map((m) => m.role));
 
     // Oldest three results (fall outside the 40k recent budget) truncated.
     for (const idx of [2, 4, 6]) {
-      const part = resultPart(pruned![idx]);
+      const part = resultPart(pruned[idx]);
       const text = outputText(part);
       expect(text.length).toBeLessThan(2_200);
       expect(text.startsWith('output-')).toBe(true);
@@ -104,20 +104,20 @@ describe('pruneStepToolOutputs', () => {
 
     // The newest three results (recent 40k-token budget) are the SAME objects.
     for (const idx of [8, 10, 12]) {
-      expect(pruned![idx]).toBe(messages[idx]);
+      expect(pruned[idx]).toBe(messages[idx]);
     }
 
     // Non-tool messages untouched by identity; the input array never mutates.
-    expect(pruned![0]).toBe(messages[0]);
-    expect(pruned![1]).toBe(messages[1]);
+    expect(pruned[0]).toBe(messages[0]);
+    expect(pruned[1]).toBe(messages[1]);
     expect(outputText(resultPart(messages[2])).length).toBeGreaterThan(40_000);
   });
 
   test('byte-stable across steps: a grown array re-truncates old parts to identical bytes', () => {
     const stepN = bigTurn();
     const stepN1 = [...bigTurn(), ...toolExchange(6, 40_000)];
-    const prunedN = pruneStepToolOutputs(stepN, budgetFor(WINDOW))!;
-    const prunedN1 = pruneStepToolOutputs(stepN1, budgetFor(WINDOW))!;
+    const prunedN = present(pruneStepToolOutputs(stepN, budgetFor(WINDOW)), 'pruned step');
+    const prunedN1 = present(pruneStepToolOutputs(stepN1, budgetFor(WINDOW)), 'pruned step');
 
     // Parts truncated at step N are truncated to the SAME bytes at step N+1.
     for (const idx of [2, 4, 6]) {
@@ -135,18 +135,18 @@ describe('pruneStepToolOutputs', () => {
   });
 
   test('idempotent: already-truncated outputs are never re-truncated', () => {
-    const pruned = pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW))!;
+    const pruned = present(pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW)), 'pruned step');
     // The pruned array is under budget now — nothing further to do.
     expect(pruneStepToolOutputs(pruned, budgetFor(WINDOW))).toBeUndefined();
   });
 
   test('re-pruning already-truncated outputs keeps identical bytes', () => {
-    const pruned = pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW))!;
+    const pruned = present(pruneStepToolOutputs(bigTurn(), budgetFor(WINDOW)), 'pruned step');
     const first = outputText(resultPart(pruned[2]));
     expect(first).toContain('…[truncated:');
     // Grow the turn so the pruner must run again over the truncated parts.
     const grown = [...pruned, ...toolExchange(6, 40_000), ...toolExchange(7, 40_000), ...toolExchange(8, 40_000)];
-    const repruned = pruneStepToolOutputs(grown, budgetFor(WINDOW))!;
+    const repruned = present(pruneStepToolOutputs(grown, budgetFor(WINDOW)), 'pruned step');
     // The already-truncated part passes through untouched — the marker still
     // reports the ORIGINAL serialized size, not the truncated one.
     expect(outputText(resultPart(repruned[2]))).toBe(first);
@@ -162,7 +162,7 @@ describe('pruneStepToolOutputs', () => {
       type: 'tool-result', toolCallId: 'call_0', toolName: 'shell',
       output: { type: 'error-text', value: `boom ${'e'.repeat(40_000)}` },
     };
-    const pruned = pruneStepToolOutputs(messages, budgetFor(WINDOW))!;
+    const pruned = present(pruneStepToolOutputs(messages, budgetFor(WINDOW)), 'pruned step');
     const part = resultPart(pruned[2]);
     expect(part.output.type).toBe('error-text');
     expect(outputText(part)).toContain('…[truncated:');
@@ -243,10 +243,9 @@ describe('pruneStepToolOutputs', () => {
 describe('composePrepareStep with pruning', () => {
   test('prune applies without extensions or a cache plan', async () => {
     const messages = bigTurn();
-    const result = await composePrepareStep({ prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] });
-    expect(result).toBeDefined();
-    expect(result!.messages.length).toBe(messages.length);
-    expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
+    const result = present(await composePrepareStep({ prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
+    expect(result.messages.length).toBe(messages.length);
+    expect(outputText(resultPart(result.messages[2]))).toContain('…[truncated:');
   });
 
   test('under budget with no extensions → no step override at all', async () => {
@@ -282,13 +281,12 @@ describe('composePrepareStep with pruning', () => {
 
     expect(ledger.size).toBe(20);
 
-    const result = await composePrepareStep({
+    const result = present(await composePrepareStep({
       prune: budget,
       dynamic: { ledger, snapshot: () => ({}) },
-    }, { stepNumber: 3, messages, steps: [] });
+    }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
 
-    expect(result).toBeDefined();
-    expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(result.messages[2]))).toContain('…[truncated:');
   });
 
   test('a caller-supplied prune reserve adds to the ledger overhead', async () => {
@@ -299,26 +297,23 @@ describe('composePrepareStep with pruning', () => {
 
     for (let i = 0; i < 6; i++) messages.push(...toolExchange(i, 28_000));
     const callerReserve = { ...budgetFor(WINDOW), reservedTokens: 5_000 };
-    const bare = await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages, steps: [] });
-    expect(bare).toBeDefined();
-    expect(outputText(resultPart(bare!.messages[2]))).toContain('…[truncated:');
+    const bare = present(await composePrepareStep({ prune: callerReserve }, { stepNumber: 1, messages, steps: [] }), 'prepared step');
+    expect(outputText(resultPart(bare.messages[2]))).toContain('…[truncated:');
     // An empty ledger (zero overhead) must preserve the caller reserve, not erase it.
     const ledger = new DynamicContextLedger();
 
-    const result = await composePrepareStep({
+    const result = present(await composePrepareStep({
       prune: callerReserve,
       dynamic: { ledger, snapshot: () => ({}) },
-    }, { stepNumber: 1, messages, steps: [] });
+    }, { stepNumber: 1, messages, steps: [] }), 'prepared step');
 
-    expect(result).toBeDefined();
-    expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
+    expect(outputText(resultPart(result.messages[2]))).toContain('…[truncated:');
   });
 
   test('cache markers land LAST, on the pruned array', async () => {
     const messages = bigTurn();
-    const result = await composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] });
-    expect(result).toBeDefined();
-    const out = result!.messages;
+    const result = present(await composePrepareStep({ cache: { strategy: { kind: 'anthropic' } }, prune: budgetFor(WINDOW) }, { stepNumber: 3, messages, steps: [] }), 'prepared step');
+    const out = result.messages;
     // Pruning happened…
     expect(outputText(resultPart(out[2]))).toContain('…[truncated:');
 
