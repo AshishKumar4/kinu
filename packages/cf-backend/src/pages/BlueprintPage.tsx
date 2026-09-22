@@ -48,13 +48,13 @@ export function SecretWarning({ warnings }: { warnings: BlueprintView["warnings"
 
   return (
     <div className="p-notice-warning rounded-md px-3 py-2.5 text-xs" role="alert">
-      <p className="flex items-center gap-1.5 font-medium"><WarningIcon size={14} /> Secret-shaped text in the source</p>
+      <p className="flex items-center gap-1.5 font-medium"><WarningIcon size={14} /> Possible secrets in the source</p>
       <p className="mt-1 opacity-90">
-        A blueprint carries no managed credential, but text someone pasted into the source cannot be proven absent. These lines look like secrets; check them before you rely on this blueprint.
+        A blueprint never carries your connected credentials, but it can carry text someone pasted into the source. These lines look like secrets. Check them before you use this blueprint.
       </p>
       <ul className="mt-1.5 space-y-0.5 font-mono">
         {warnings.map((warning) => (
-          <li key={`${warning.path}:${warning.line}:${warning.pattern}`}>{warning.path}:{warning.line} — {warning.message}</li>
+          <li key={`${warning.path}:${warning.line}:${warning.pattern}`}>{warning.path}:{warning.line}: {warning.message}</li>
         ))}
       </ul>
     </div>
@@ -82,7 +82,7 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
                 <li key={binding.name} className="flex flex-wrap items-baseline gap-x-2 text-sm">
                   <span className="font-mono p-text">{binding.name}</span>
                   {binding.target && <span className="p-text-2 text-xs">→ {binding.target}</span>}
-                  {binding.credentialed && <span className="p-badge-neutral rounded-sm px-1.5 py-0.5 text-[10px]">resolves as the forker</span>}
+                  {binding.credentialed && <span className="p-badge-neutral rounded-sm px-1.5 py-0.5 text-[10px]">runs as you</span>}
                 </li>
               ))}
             </ul>
@@ -149,7 +149,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
     <div className="min-h-screen p-bg p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
-        <span className="p-meta p-text-3">A shared blueprint</span>
+        <span className="p-meta p-text-3">Shared blueprint</span>
       </header>
       <main className="mx-auto max-w-3xl space-y-6 px-6 py-8">
         {err && <div className="p-notice-danger rounded-md px-3 py-2 text-xs">{err}</div>}
@@ -161,7 +161,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
                 <h1 className="p-display text-2xl">{view.title}</h1>
                 {view.description && <p className="mt-1 text-sm p-text-2">{view.description}</p>}
                 <p className="mt-2 p-meta p-text-3">
-                  A committed slate version with every binding unmapped. A fork runs in your workspace, with your connections, and nothing of the publisher's.
+                  A committed version of a slate, with every binding unmapped. A fork runs in your workspace on your own connections. Nothing of the publisher's comes with it.
                 </p>
               </div>
               <FilledButton onClick={fork} disabled={email === undefined} className="!h-9 shrink-0 !px-4 !text-sm">

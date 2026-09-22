@@ -93,7 +93,7 @@ function PageHeader() {
   return (
     <header className="border-b p-border pb-6">
       <Link to="/" className="p-btn-ghost -ml-2 mb-4 inline-flex h-6.5 items-center gap-1 rounded-md px-2 text-xs">
-        <ArrowLeftIcon size={12} /> Workspaces
+        <ArrowLeftIcon size={12} /> Home
       </Link>
       <p className="p-eyebrow">Account</p>
       {/* Page title in the display face at 26px: above the workbench scale by design. */}

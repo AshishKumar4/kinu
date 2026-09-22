@@ -622,26 +622,26 @@ async function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
 
-  if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
+  if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
   const requestInfo = await inspectCliAuth(env.AUTH_KV, code);
 
   if (!requestInfo) {
-    return html('Kinu CLI Auth', '<p>Unknown or expired CLI auth code.</p>', 400);
+    return html('Connect the Kinu CLI', '<p>This sign-in code is unknown or has expired. Run <code>kinu auth</code> again.</p>', 400);
   }
 
   if (requestInfo.status === 'expired') {
-    return html('Kinu CLI Auth', '<p>This CLI auth code expired. Run <code>kinu auth</code> again.</p>', 400);
+    return html('Connect the Kinu CLI', '<p>This sign-in code has expired. Run <code>kinu auth</code> again.</p>', 400);
   }
 
   if (requestInfo.status === 'approved' || requestInfo.status === 'consumed') {
-    return html('Kinu CLI Auth', '<p>This CLI auth request has already been approved. You can return to your terminal.</p>');
+    return html('Connect the Kinu CLI', '<p>This terminal is already approved. You can go back to it.</p>');
   }
 
   const csrf = randomToken(32);
   const expiresAt = new Date(requestInfo.expiresAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 
-  return html('Approve Kinu CLI', `
-    <p>Sign in this terminal to your Kinu account.</p>
+  return html('Connect the Kinu CLI', `
+    <p>A terminal asked to sign in to your Kinu account.</p>
     <dl>
       <div><dt>Terminal</dt><dd>${escapeHtml(requestInfo.deviceName)}</dd></div>
       <div><dt>Code</dt><dd><code>${escapeHtml(requestInfo.userCode)}</code></dd></div>
@@ -651,9 +651,9 @@ async function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>
     <form method="post" action="/cli/auth">
       <input type="hidden" name="userCode" value="${escapeHtml(requestInfo.userCode)}" />
       <input type="hidden" name="csrf" value="${escapeHtml(csrf)}" />
-      <button type="submit">Approve CLI</button>
+      <button type="submit">Approve this terminal</button>
     </form>
-    <p class="muted">Only approve this if the code matches the terminal you started.</p>
+    <p class="muted">Approve only if this code matches the one in your terminal.</p>
   `, 200, {
     headers: {
       'set-cookie': csrfCookie(csrf),
@@ -669,7 +669,7 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
   catch (e) { return accessError(toError({ cause: e }), request); }
 
   if (!isSameOriginPost(request)) {
-    return html('Kinu CLI Auth', '<p>Invalid approval origin.</p>', 403);
+    return html('Connect the Kinu CLI', '<p>This approval did not come from the approval page. Open the link from your terminal again.</p>', 403);
   }
 
   let form: FormData;
@@ -678,7 +678,7 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
   catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
 
-    return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400);
+    return html('Connect the Kinu CLI', '<p>The approval form was incomplete. Refresh the page and try again.</p>', 400);
   }
 
   const code = textField(form, 'userCode');
@@ -686,22 +686,22 @@ async function approveFromBrowser<Id>(request: Request, env: CliRoutesEnv<Id>): 
   const cookieCsrf = readCookie(request, CLI_APPROVAL_CSRF_COOKIE_NAME);
 
   if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
-    return html('Kinu CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
+    return html('Connect the Kinu CLI', '<p>This approval page has expired. Refresh it and try again.</p>', 403);
   }
 
-  if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
+  if (!code) return html('Connect the Kinu CLI', '<p>This link has no sign-in code. Run <code>kinu auth</code> in your terminal and open the link it prints.</p>', 400);
 
   try {
     await approveCliAuth(env, code, identity, clientKey(request));
 
-    return html('Kinu CLI Auth', '<p>CLI connected. You can return to your terminal.</p>', 200, {
+    return html('Connect the Kinu CLI', '<p>The Kinu CLI is connected. You can go back to your terminal.</p>', 200, {
       headers: {
         'set-cookie': clearCsrfCookie(),
         'cache-control': 'no-store',
       },
     });
   } catch (e) {
-    return html('Kinu CLI Auth', `<p>${escapeHtml(toError({ cause: e }).message)}</p>`, 400);
+    return html('Connect the Kinu CLI', `<p>${escapeHtml(toError({ cause: e }).message)}</p>`, 400);
   }
 }
 

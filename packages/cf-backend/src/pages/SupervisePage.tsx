@@ -255,7 +255,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const revoke = useCallback(async (triggerId: string) => {
     if (!agentId) return;
 
-    if (!confirm("Revoke this trigger? Its URL will stop working.")) return;
+    if (!confirm("Revoke this automation? It stops firing, and a webhook's URL stops working.")) return;
     setErr(null);
 
     try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(renderThrownChain({ cause: e })); }
@@ -280,13 +280,13 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Webhooks, timers and background jobs — what wakes this agent and what it has running.</p>
+      <p className="text-xs p-text-3 mb-3">Webhooks, timers and background jobs: what wakes this agent and what it has running.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null && (resource.status === "error"
         ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
         : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
-      {triggers !== null && triggers.length === 0 && <p className="text-xs p-text-3">No triggers. Create a webhook to wake this agent from another system.</p>}
+      {triggers !== null && triggers.length === 0 && <p className="text-xs p-text-3">No webhooks or timers yet. Use New webhook to let another system wake this agent.</p>}
       {triggers !== null && triggers.length > 0 && (
         <div className="rounded-md border p-border overflow-hidden text-xs">
           {triggers.map((t) => (
@@ -367,7 +367,7 @@ function TriggerLine({ trigger, onRevoke }: {
         onClick={onRevoke}
         disabled={trigger.state === "revoked"}
         className="p-text-3 hover:p-danger disabled:opacity-30 p-1 shrink-0"
-        title="Revoke"
+        title="Revoke" aria-label="Revoke"
       ><TrashIcon size={11} /></button>
     </div>
   );
@@ -442,7 +442,7 @@ export function NewWebhookCard({ result, onDismiss }: {
         <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
       </div>
       <p className="text-xs p-text-2">
-        Save the secret now. It appears once. The URL works until you revoke the trigger.
+        {result.secret ? "Save the secret now. Kinu shows it only once. " : ""}The URL works until you revoke this webhook.
       </p>
       <div className="space-y-2">
         <div>
@@ -492,7 +492,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
 
   const submit = useCallback(async () => {
     if (!label.trim()) {
-      setErr("label required");
+      setErr("Give the webhook a label.");
 
       return;
     }
@@ -516,7 +516,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       const msg = renderThrownChain({ cause: e });
 
       if (msg.includes("step-up")) {
-        if (confirm("Your login is too old. Sign in again?")) {
+        if (confirm("Creating a webhook needs a sign-in from the last five minutes. Sign in again now?")) {
           const login = new URL("/login", window.location.origin);
           login.searchParams.set("prompt", "login");
           login.searchParams.set("return_to", window.location.pathname + window.location.search);
@@ -532,7 +532,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
 
   return (
     <Modal
-      title="Create durable webhook"
+      title="New webhook"
       icon={<PlugIcon size={16} className="p-accent" />}
       onClose={onClose}
       busy={submitting}
@@ -550,7 +550,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
             placeholder="github-pr-events" />
         </label>
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Auth mode</div>
+          <div className="text-xs p-text-2 mb-1">Authentication</div>
           <select value={authMode} onChange={(e) => setAuthMode(v.parse(AuthModeSchema, e.target.value))} className={inputCls}>
             <option value="hmac">HMAC (signed body)</option>
             <option value="bearer">Bearer token (Authorization header)</option>
@@ -559,13 +559,13 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
         </label>
         {authMode !== "mtls" && (
           <label className="block">
-            <div className="text-xs p-text-2 mb-1">Secret <span className="p-text-3">(blank = auto-generate)</span></div>
+            <div className="text-xs p-text-2 mb-1">Secret</div>
             {/* A password field is redacted from a screenshot without being
                 annotated; the marker is carried too, so a later reveal toggle
                 that flips this to `text` cannot silently undo that. */}
             <input {...SECRET_REGION} type="password" value={secret}
               onChange={(e) => setSecret(e.target.value)} className={inputCls}
-              placeholder="leave blank to auto-generate" />
+              placeholder="Leave blank and Kinu generates one" />
           </label>
         )}
         <label className="block">

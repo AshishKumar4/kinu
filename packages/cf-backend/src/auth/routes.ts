@@ -154,9 +154,9 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
 async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
 
-  if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
+  if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
 
-  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>Browser auth storage is not configured.</p>', { status: 503 });
+  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
@@ -222,14 +222,14 @@ async function completeOAuth<Id>(
 ): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
 
-  if (!provider) return html('Sign in unavailable', '<p>This sign-in provider is not configured.</p>', { status: 404 });
+  if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
 
-  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>Browser auth storage is not configured.</p>', { status: 503 });
+  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
   const url = new URL(request.url);
   const state = url.searchParams.get('state');
 
-  if (!state) return html('Sign in failed', '<p>OAuth callback is missing state.</p>', { status: 400 });
+  if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
 
   let stage = 'state';
 
@@ -281,7 +281,7 @@ async function completeOAuth<Id>(
     }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
 
     return html('Sign in failed', `
-      <p class="lede">The sign-in request could not be completed. Return to sign in and try again.</p>
+      <p class="lede">Kinu could not finish signing you in. Return to sign in and try again.</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
       <p class="muted">Reason: <code>${escapeHtml(failure.reason)}</code></p>
       <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>

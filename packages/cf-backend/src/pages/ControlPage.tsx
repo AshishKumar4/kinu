@@ -82,8 +82,8 @@ export default function ControlPage(): ReactNode {
         <header className="space-y-1">
           <h1 className="p-display text-2xl">Control plane</h1>
           <p className="text-xs p-text-3">
-            View every account and workspace. Operator actions use owner RPCs and enter the audit log
-            before results appear.
+            Every account and workspace on this deployment. Each operator action runs through an
+            owner RPC and is written to the audit log before its result shows.
           </p>
         </header>
 
@@ -240,7 +240,7 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
 const RECONCILE_HINT = {
   ok: 'Matched to this account\u2019s registry when opened.',
   failed: 'The account registry was unavailable. These rows come from the index.',
-  skipped: 'A later page of the walk that reconciled on its first page.',
+  skipped: 'Checked against the account\u2019s registry on the first page only.',
 } satisfies Record<ReconcileReport['status'], string>;
 
 function UserDetailView(

@@ -176,7 +176,7 @@ describe('slate sharing surfaces', () => {
           try {
             const text = await blueprint.evaluate(() => document.body.innerText);
             expect(text).toContain('Issue triage');
-            expect(text).toContain('Secret-shaped text in the source');
+            expect(await blueprint.$('[role="alert"]')).not.toBeNull();
             expect(text).toContain('src/config.ts:4');
             expect(text).not.toContain('AKIA');
             expect(text).toContain('Fork into Kinu');
@@ -250,7 +250,7 @@ describe('slate sharing surfaces', () => {
             expect(text).toContain('A forker must connect');
             expect(text).toContain('GITHUB');
             expect(text).not.toContain('PEER (app');
-            expect(text).toContain('Secret-shaped text');
+            expect(await dialog.$('[role="dialog"] [role="alert"]')).not.toBeNull();
             expect(text).toContain('Share with users');
             expect(text).not.toMatch(/rate|spend|per hour|\$/);
             shots.push(await shoot(dialog, `share-dialog-${viewport}-${theme}`));

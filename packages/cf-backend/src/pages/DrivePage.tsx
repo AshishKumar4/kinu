@@ -202,9 +202,9 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
       </>}>
       <div className="space-y-3">
         <p className="text-xs p-text-2 leading-relaxed">
-          A skill is a folder with a <span className="font-mono p-text">SKILL.md</span>: front matter naming it, then the
-          instructions. It lands under <span className="font-mono p-text">{DRIVE_SKILLS_DIR}</span> and every workspace reads it from
-          its next turn.
+          A skill is a folder with a <span className="font-mono p-text">SKILL.md</span>: front matter that names it, then the
+          instructions. Kinu saves it under <span className="font-mono p-text">{DRIVE_SKILLS_DIR}</span>, and every workspace picks it up
+          on its next turn.
         </p>
         <textarea data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false}
           placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"}
@@ -305,11 +305,11 @@ function DriveRow({ folder, entry, first, onRename, onDelete, onMark }: {
           <DownloadSimpleIcon size={14} />
         </a>
         <button type="button" data-drive-rename onClick={onRename} disabled={reserved} className={ROW_ACTION}
-          title={reserved ? "Reserved folders keep their name" : `Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
+          title={reserved ? "This folder cannot be renamed" : `Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
           <PencilSimpleIcon size={14} />
         </button>
         <button type="button" data-drive-delete onClick={onDelete} disabled={reserved} className={`${ROW_ACTION} hover:p-danger`}
-          title={reserved ? "Reserved folders stay" : `Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
+          title={reserved ? "This folder cannot be deleted" : `Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
           <TrashIcon size={14} />
         </button>
       </span>
@@ -510,7 +510,7 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
             {listing.resource.status === "ready" && entries.length === 0 && (
               <div data-drive-empty className="px-5 py-10 text-center">
                 <p className="p-row-text p-text-3">This folder is empty.</p>
-                <p className="mt-1 p-meta p-text-4">Drop files here, or use Upload and New folder.</p>
+                <p className="mt-1 p-meta p-text-4">Drop files here, or use Upload or New folder.</p>
               </div>
             )}
             {listing.resource.status !== "loading" && entries.map((entry, index) => (

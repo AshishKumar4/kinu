@@ -43,9 +43,9 @@ const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;
 
 const BUCKETS: Record<"all" | Bucket, { label: string; empty: string }> = {
   all: { label: "All", empty: "No workspaces" },
-  needs: { label: "Needs you", empty: "Nothing needs you" },
-  working: { label: "Working", empty: "Nothing working" },
-  idle: { label: "Idle", empty: "Nothing idle" },
+  needs: { label: "Needs you", empty: "Nothing is waiting on you" },
+  working: { label: "Working", empty: "No workspace is working right now" },
+  idle: { label: "Idle", empty: "No idle workspaces" },
 };
 
 const SEGMENTS = BUCKET_IDS.map((id) => ({ id, label: BUCKETS[id].label }));
@@ -122,14 +122,14 @@ export default function WorkspacesPage() {
         {error !== null && (
           <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
             <span className="min-w-0 truncate">{error}</span>
-            <button type="button" onClick={refresh} className="shrink-0 underline">retry</button>
+            <button type="button" onClick={refresh} className="shrink-0 underline">Retry</button>
           </div>
         )}
 
         {entries.length === 0 && error === null && (
           <div className="p-card px-5 py-8 text-center">
             <p className="p-row-text p-text-3">No workspaces yet.</p>
-            <Link to={APP_ROUTES.home} className="mt-2 inline-block p-t-control p-accent">Create one →</Link>
+            <Link to={APP_ROUTES.home} className="mt-2 inline-block p-t-control p-accent">Create one on Home →</Link>
           </div>
         )}
 
