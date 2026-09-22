@@ -5096,7 +5096,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getNodeTranscript(runId: string, nodeId: string, request?: PageRequest): Promise<NodeTranscriptView | null> {
-    return readNodeTranscript(this.boundSql, this.actorHandle(), runId, nodeId, request ?? {});
+    return readNodeTranscript(this.boundSql, this.actorHandle(), { runId, nodeId }, request ?? {});
   }
 
   /**

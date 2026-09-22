@@ -867,14 +867,14 @@ export default function WorkspacePage() {
     [state.signalCards]);
 
   const messageCardIds = useMemo(() => new Set(state.messages.flatMap((msg) => {
-    const id = messageSignalId(msg.metadata);
+    const id = messageSignalId({ metadata: msg.metadata });
 
     return id ? [id] : [];
   })), [state.messages]);
 
   const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
     if (messageCardIds.has(card.id)) return [];
-    const turn = classifyProgrammaticTurn(card.metadata);
+    const turn = classifyProgrammaticTurn({ metadata: card.metadata });
 
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
@@ -1179,7 +1179,7 @@ export default function WorkspacePage() {
               )}
               {thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
-                const signalId = messageSignalId(msg.metadata);
+                const signalId = messageSignalId({ metadata: msg.metadata });
 
                 return (
                   <MessageView

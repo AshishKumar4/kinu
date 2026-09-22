@@ -24,7 +24,7 @@
  * (`kinu:new-agent`) — one click, no form; with no workspace mounted there is
  * nothing to create INTO, so the row only renders under an open workspace.
  */
-import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
+import { useEffect, useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
 } from "@phosphor-icons/react";
@@ -34,7 +34,7 @@ import { KinuLogo } from "./ui/KinuLogo";
 import { removeWorkspace, type WorkspaceEntry } from "../lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { useWorkspaceRpc } from "../hooks/use-kinu";
+import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle } from "./theme-toggle";
@@ -93,6 +93,25 @@ const SidebarAgentSchema = v.object({
   status: v.string(),
 });
 
+/** A subordinate's dot in the nested roster: working, waiting on the reader,
+ *  or neither. Its own vocabulary, not the search node's (`statusDot`). */
+function subordinateDot(status: string): string {
+  if (status === "working") return "p-dot-success p-dot-pulse";
+
+  if (status === "awaiting_input") return "p-dot-warning";
+
+  return "bg-[var(--c-fill)] border p-border";
+}
+
+/** What the rename row says while its socket is not carrying writes. */
+function connectionWait(status: ConnectionStatus): string {
+  if (status === "connecting") return "Connecting…";
+
+  if (status === "disconnected") return "Reconnecting…";
+
+  return "Could not connect";
+}
+
 /** Live per-workspace activity, bridged from the mounted WorkspacePage socket
  *  via a window event (only the open workspace has a live socket, so the roster
  *  reflects status for workspaces visited this session). */
@@ -119,6 +138,10 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   const [value, setValue] = useState(workspace.displayName);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // An Error carrying no words renders as an empty chain, which is nothing to
+  // report.
+  const reported = error !== null && error !== "";
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -165,9 +188,9 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
           aria-label="Cancel rename"
         ><XIcon size={12} /></button>
       </div>
-      {(error || connectionStatus !== "connected") && (
+      {(reported || connectionStatus !== "connected") && (
         <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 p-meta truncate ${error || connectionStatus === "error" ? "p-danger" : "p-text-3"}`} title={error ?? undefined}>
-          {error ?? (connectionStatus === "connecting" ? "Connecting…" : connectionStatus === "disconnected" ? "Reconnecting…" : "Could not connect")}
+          {error ?? connectionWait(connectionStatus)}
         </div>
       )}
     </form>
@@ -324,6 +347,16 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             // The slug is not the fallback: it is the address this row links to.
             const shown = workspaceDisplayTitle(a);
 
+            let dot: ReactNode = null;
+
+            if (live?.running) {
+              dot = <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />;
+            } else if (live !== undefined && live.unseenChangelog > 0) {
+              dot = <span className="block size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />;
+            } else if (isActive) {
+              dot = <span className="block size-1.5 rounded-full p-dot-accent" />;
+            }
+
             return (
               <li key={a.name}>
                 <div className="group relative mx-2">
@@ -349,15 +382,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                         {/* One dot, four honest states: working (green pulse),
                             unread self-changes (accent), the open workspace
                             (the mock's gold selection dot), plain row (none). */}
-                        <span className="size-1.5 shrink-0 rounded-full">
-                          {live?.running
-                            ? <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />
-                            : live !== undefined && live.unseenChangelog > 0
-                              ? <span className="block size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />
-                              : isActive
-                                ? <span className="block size-1.5 rounded-full p-dot-accent" />
-                                : null}
-                        </span>
+                        <span className="size-1.5 shrink-0 rounded-full">{dot}</span>
                         <span className={`min-w-0 flex-1 truncate p-row-text ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? 'italic p-text-3' : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
@@ -394,7 +419,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                         className="flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors hover:bg-[var(--c-elevated)]"
                         title={agentTitle(sub)}
                       >
-                        <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
+                        <span className={`size-1.5 shrink-0 rounded-full ${subordinateDot(sub.status)}`} />
                         <span className="min-w-0 flex-1 truncate p-row-text p-text-2">{agentTitle(sub)}</span>
                       </NavLink>
                     ))}
@@ -426,7 +451,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           clicking the row. */}
       <div className="border-t p-border px-4 py-3.5 relative" ref={userMenuRef}>
         <button
-          onClick={() => setShowUserMenu((v) => !v)}
+          onClick={() => setShowUserMenu((shown) => !shown)}
           className="flex w-full min-w-0 items-center gap-2.5 text-left"
         >
           {/* Avatar initial: sized to the fixed 26px circle, not the scale. */}

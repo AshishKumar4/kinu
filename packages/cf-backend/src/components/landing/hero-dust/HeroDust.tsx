@@ -122,7 +122,11 @@ function mountHeroDust(host: HTMLElement): () => void {
   const theme = new MutationObserver(onTheme);
 
   const handle: HeroDustHandle = {
-    renderer: () => (renderer === null ? 'pending' : still ? 'static' : 'canvas'),
+    renderer: () => {
+      if (renderer === null) return 'pending';
+
+      return still ? 'static' : 'canvas';
+    },
     frameTimes: () => playback.frameTimes(),
     time: () => field.time,
     count: () => count,

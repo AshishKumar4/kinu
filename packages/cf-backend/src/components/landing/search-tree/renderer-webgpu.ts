@@ -66,21 +66,28 @@ function bloomSize(width: number, height: number): readonly [number, number] {
  * falls back to Canvas2D on both, so nothing in here throws. A fault that
  * lands after a renderer exists is `onFault`'s, never a thrown listener.
  */
-export async function createWebGpuRenderer(
-  canvas: HTMLCanvasElement,
-  initialPalette: ArtPalette,
-  width: number,
-  height: number,
-  ratio: number,
-): Promise<WebGpuRendererOutcome> {
+interface WebGpuRendererRequest {
+  readonly canvas: HTMLCanvasElement;
+  readonly initialPalette: ArtPalette;
+  readonly width: number;
+  readonly height: number;
+  /** Device pixels per CSS pixel at the mount, before any resize. */
+  readonly ratio: number;
+}
+
+export async function createWebGpuRenderer({
+  canvas, initialPalette, width, height, ratio,
+}: WebGpuRendererRequest): Promise<WebGpuRendererOutcome> {
   // `attempted` lets the catch release a gpu `init` already produced.
   let attempted: Gpu | null = null;
+  // The live scale: every resize brings the ratio measured at that moment.
+  let scale = ratio;
 
   try {
     const gpu = await init();
     attempted = gpu;
 
-    const physical = (w: number, h: number): readonly [number, number] => [Math.max(1, Math.round(w * ratio)), Math.max(1, Math.round(h * ratio))];
+    const physical = (w: number, h: number): readonly [number, number] => [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
     let size = physical(width, height);
 
     const canvasSurface: Surface = surface(gpu, canvas, {
@@ -116,7 +123,7 @@ export async function createWebGpuRenderer(
       label: 'hero-pulses',
     });
 
-    const view = () => ({ resolution: size, ratio, time: 0 });
+    const view = () => ({ resolution: size, ratio: scale, time: 0 });
 
     const strokes: Draw = draw(gpu, {
       shader: strokesSource,
@@ -177,7 +184,7 @@ export async function createWebGpuRenderer(
       kind: 'webgpu',
       resize(nextWidth, nextHeight, nextRatio) {
         if (disposed) return;
-        ratio = nextRatio;
+        scale = nextRatio;
         size = physical(nextWidth, nextHeight);
         canvasSurface.resize(size);
         scene.resize(size);

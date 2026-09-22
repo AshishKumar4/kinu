@@ -66,7 +66,7 @@ function Rows({ value }: { value: JsonValue }): ReactNode {
   return (
     <>
       <div className="text-lg p-display tabular-nums">
-        {count === null ? '—' : count}
+        {count ?? '—'}
       </div>
       <pre className="p-annotation p-text-3 overflow-x-auto max-h-40 whitespace-pre-wrap">
         {JSON.stringify(value, null, 2)}
@@ -74,6 +74,49 @@ function Rows({ value }: { value: JsonValue }): ReactNode {
     </>
   );
 }
+
+/** The workspace-wide controls: one button each, same shape, different words. */
+const WORKSPACE_CONTROLS = [
+  {
+    action: 'jobs.clear',
+    label: 'Clear settled jobs',
+    body: (workspace: string) => `Drop every settled background job from ${workspace}. Running jobs are untouched.`,
+  },
+  {
+    action: 'shell_grants.revoke',
+    label: 'Revoke shell grants',
+    body: (workspace: string) => `Revoke every standing shell-approval grant in ${workspace}. The agent will have to ask again for each command.`,
+  },
+] as const;
+
+/** The three answers an operator can give one job row, in button order. */
+const JOB_CONTROLS = [
+  {
+    action: 'job.cancel',
+    label: 'Cancel',
+    title: 'Cancel this job',
+    body: (job: BackgroundJobRow, workspace: string) => `Stop ${job.kind} (${job.id}) in ${workspace}. Only a running job can be cancelled.`,
+  },
+  {
+    action: 'job.retry',
+    label: 'Retry',
+    title: 'Retry this job',
+    body: (job: BackgroundJobRow, workspace: string) => `Re-drive ${job.kind} (${job.id}) in ${workspace} as a new job. Kinu refuses to retry a job that succeeded.`,
+  },
+  {
+    action: 'job.dismiss',
+    label: 'Dismiss',
+    title: 'Dismiss this job',
+    body: (job: BackgroundJobRow, workspace: string) => `Drop ${job.kind} (${job.id}) from ${workspace}'s job list. The work is not undone.`,
+  },
+] as const;
+
+const JOB_STATUS_TONE: Record<BackgroundJobRow['status'], string> = {
+  running: 'p-accent p-t-status',
+  completed: 'p-success p-t-status',
+  failed: 'p-danger p-t-status',
+  cancelled: 'p-danger p-t-status',
+};
 
 /** A control an operator has picked but not yet confirmed. Held as the ACTION
  *  itself, so the modal cannot describe one thing and send another. */
@@ -148,6 +191,7 @@ export function WorkspaceDrilldown(
   // workspace name exactly. A prefix is not the name.
   const retypeRequired = pending?.action.action === 'workspace.remove';
   const confirmBlocked = busy || (retypeRequired && typedName !== workspace);
+  const confirmWord = pending?.danger === true ? 'Remove' : 'Confirm';
 
   return (
     <div className="space-y-4">
@@ -158,7 +202,7 @@ export function WorkspaceDrilldown(
       />
 
       {result !== null && (
-        <Notice tone={result.tone === 'ok' ? 'ok' : result.tone === 'warn' ? 'warn' : 'danger'}>
+        <Notice tone={result.tone}>
           {result.text}
         </Notice>
       )}
@@ -174,28 +218,20 @@ export function WorkspaceDrilldown(
           return (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  size="sm" variant="ghost" disabled={busy}
-                  onClick={() => confirm({
-                    action: { action: 'jobs.clear', userId, workspace },
-                    title: 'Clear settled jobs',
-                    body: `Drop every settled background job from ${workspace}. Running jobs are untouched.`,
-                    danger: false,
-                  })}
-                >
-                  Clear settled jobs
-                </Button>
-                <Button
-                  size="sm" variant="ghost" disabled={busy}
-                  onClick={() => confirm({
-                    action: { action: 'shell_grants.revoke', userId, workspace },
-                    title: 'Revoke shell grants',
-                    body: `Revoke every standing shell-approval grant in ${workspace}. The agent will have to ask again for each command.`,
-                    danger: false,
-                  })}
-                >
-                  Revoke shell grants
-                </Button>
+                {WORKSPACE_CONTROLS.map((control) => (
+                  <Button
+                    key={control.action}
+                    size="sm" variant="ghost" disabled={busy}
+                    onClick={() => confirm({
+                      action: { action: control.action, userId, workspace },
+                      title: control.label,
+                      body: control.body(workspace),
+                      danger: false,
+                    })}
+                  >
+                    {control.label}
+                  </Button>
+                ))}
                 <button
                   disabled={busy}
                   onClick={() => confirm({
@@ -247,7 +283,7 @@ export function WorkspaceDrilldown(
               Cancel
             </Button>
             <FilledButton danger={pending.danger} disabled={confirmBlocked} onClick={() => void runPending()}>
-              {busy ? 'Working…' : pending.danger ? 'Remove' : 'Confirm'}
+              {busy ? 'Working…' : confirmWord}
             </FilledButton>
           </>}
         >
@@ -307,8 +343,7 @@ function JobRows(
         <li key={job.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="p-annotation p-text-2">{job.kind}</span>
-            <span className={job.status === 'running' ? 'p-accent p-t-status'
-              : job.status === 'completed' ? 'p-success p-t-status' : 'p-danger p-t-status'}>
+            <span className={JOB_STATUS_TONE[job.status]}>
               {job.status}
             </span>
             <span className="p-meta p-text-3">{when(job.createdAt)}</span>
@@ -326,39 +361,20 @@ function JobRows(
           {job.label !== null && <div className="text-xs p-text-2">{job.label}</div>}
           {job.error !== null && <div className="p-row-text p-danger">{job.error}</div>}
           <div className="flex gap-1.5">
-            <Button
-              size="sm" variant="ghost" disabled={busy}
-              onClick={() => onPick({
-                action: { action: 'job.cancel', userId, workspace, jobId: job.id },
-                title: 'Cancel this job',
-                body: `Stop ${job.kind} (${job.id}) in ${workspace}. Only a running job can be cancelled.`,
-                danger: false,
-              })}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm" variant="ghost" disabled={busy}
-              onClick={() => onPick({
-                action: { action: 'job.retry', userId, workspace, jobId: job.id },
-                title: 'Retry this job',
-                body: `Re-drive ${job.kind} (${job.id}) in ${workspace} as a new job. Kinu refuses to retry a job that succeeded.`,
-                danger: false,
-              })}
-            >
-              Retry
-            </Button>
-            <Button
-              size="sm" variant="ghost" disabled={busy}
-              onClick={() => onPick({
-                action: { action: 'job.dismiss', userId, workspace, jobId: job.id },
-                title: 'Dismiss this job',
-                body: `Drop ${job.kind} (${job.id}) from ${workspace}'s job list. The work is not undone.`,
-                danger: false,
-              })}
-            >
-              Dismiss
-            </Button>
+            {JOB_CONTROLS.map((control) => (
+              <Button
+                key={control.action}
+                size="sm" variant="ghost" disabled={busy}
+                onClick={() => onPick({
+                  action: { action: control.action, userId, workspace, jobId: job.id },
+                  title: control.title,
+                  body: control.body(job, workspace),
+                  danger: false,
+                })}
+              >
+                {control.label}
+              </Button>
+            ))}
           </div>
         </li>
       ))}

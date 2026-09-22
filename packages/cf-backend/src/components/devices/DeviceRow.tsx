@@ -28,6 +28,16 @@ const SANDBOX_MODE_COPY = {
   files_only: "Files only.",
 } satisfies Record<DeviceMode, string>;
 
+/** What a revoked machine is said to have left running. An unknown count is
+ *  still a warning: the hub could not confirm anything stopped. */
+function unstoppedLine(count: number | undefined): string {
+  if (count === undefined) return "Commands may still run.";
+
+  if (count === 1) return "1 command has no confirmed termination and may still run.";
+
+  return `${count} commands have no confirmed termination and may still run.`;
+}
+
 export function DeviceRow({
   device, grants, onDeviceChanged, onGrantsChanged, onError, onRevoke,
   unstoppedCommands, onAcknowledge,
@@ -47,11 +57,7 @@ export function DeviceRow({
   const [switching, setSwitching] = useState(false);
 
   if (device.revokedAt !== null) {
-    const countLine = unstoppedCommands === undefined
-      ? "Commands may still run."
-      : unstoppedCommands === 1
-        ? "1 command has no confirmed termination and may still run."
-        : `${unstoppedCommands} commands have no confirmed termination and may still run.`;
+    const countLine = unstoppedLine(unstoppedCommands);
 
     return (
       <div data-device-incident={device.id} role="alert"

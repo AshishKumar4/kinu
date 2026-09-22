@@ -81,6 +81,16 @@ type SendState =
   | { phase: "sent"; id: string }
   | { phase: "failed"; reason: string };
 
+/** The send button's word: the attempt in flight, the one to make again, or
+ *  the first one. */
+function sendLabel(phase: SendState["phase"]): string {
+  if (phase === "sending") return "Sending…";
+
+  if (phase === "failed") return "Retry";
+
+  return "Send";
+}
+
 export function FeedbackModal({ onClose }: { onClose: () => void }) {
   const location = useLocation();
   const [note, setNote] = useState("");
@@ -103,7 +113,9 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     setShot({ phase: "capturing" });
     setMarks([]);
 
-    const captureFailed = <Thrown,>(thrown: Thrown): void => {
+    const captureFailed = (...rejection: [unknown]): void => {
+      const [thrown] = rejection;
+
       diagnostics.failure("feedback.capture_failed", toKinuError({
         doing: "capture the page for a feedback report", cause: thrown, otherwise: "unsupported",
       }));
@@ -156,7 +168,9 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
     let live = true;
 
-    const decodeFailed = <Thrown,>(thrown: Thrown): void => {
+    const decodeFailed = (...rejection: [unknown]): void => {
+      const [thrown] = rejection;
+
       diagnostics.failure("feedback.decode_failed", toKinuError({
         doing: "decode the captured screenshot for preview", cause: thrown, otherwise: "bad_input",
       }));
@@ -272,7 +286,9 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     const attempt = new AbortController();
     inFlight.current = attempt;
 
-    const sendFailed = <Thrown,>(thrown: Thrown): void => {
+    const sendFailed = (...rejection: [unknown]): void => {
+      const [thrown] = rejection;
+
       // A stopped request is the reporter's own doing: `stop` has already said
       // so, and an abort is not a failure this product should record.
       if (attempt.signal.aborted) return;
@@ -363,7 +379,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
               {sending ? "Stop" : "Cancel"}
             </Button>
             <FilledButton onClick={submit} disabled={!sendable} data-feedback-send>
-              {sending ? "Sending…" : send.phase === "failed" ? "Retry" : "Send"}
+              {sendLabel(send.phase)}
             </FilledButton>
           </>
         }

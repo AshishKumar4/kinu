@@ -6,7 +6,7 @@
  * under whose credentials. The grant the server cuts is exactly the read set
  * plus the ticked set — the dialog renders, it never decides.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GlobeIcon, UsersIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
@@ -60,6 +60,47 @@ function BindingRow({ binding, visibility, approved, onToggle, disabled }: {
   onToggle: (approval: Approval) => void;
   disabled: boolean;
 }) {
+  let members: ReactNode;
+
+  if (binding.problem !== undefined) {
+    members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{binding.problem}</p>;
+  } else if (binding.members.length === 0) {
+    members = <p className="p-text-4">No members.</p>;
+  } else {
+    members = (
+      <ul className="space-y-1 pl-3">
+        {binding.members.map((member) => {
+          const approval = { slate: binding.slate, binding: binding.name, member: member.member };
+          const key = approvalKey(approval);
+          const risk = visibility === "public" ? member.risk.public : member.risk.users;
+
+          if (member.effect === "read") {
+            return (
+              <li key={key} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span className="font-mono p-text-2">{member.member}</span>
+                <span className="p-badge-success rounded px-1.5 py-0.5 text-[10px]">read-only · granted</span>
+              </li>
+            );
+          }
+
+          const checked = approved.has(key);
+
+          return (
+            <li key={key} className={`rounded-md px-2 py-1.5 -mx-2 ${checked ? "p-tint-warning border" : ""}`}>
+              <label className="flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5">
+                <input type="checkbox" checked={checked} onChange={() => onToggle(approval)} disabled={disabled}
+                  aria-describedby={`risk-${key}`} data-approve={`${binding.name}.${member.member}`} />
+                <span className="font-mono p-text">{member.member}</span>
+                <span className="p-badge-warning rounded px-1.5 py-0.5 text-[10px]">mutating</span>
+              </label>
+              <p id={`risk-${key}`} className="mt-1 leading-relaxed p-text-3">{risk}</p>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+
   return (
     <li className="space-y-1.5 py-2">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -67,42 +108,7 @@ function BindingRow({ binding, visibility, approved, onToggle, disabled }: {
         <span className="p-badge-neutral rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide">{binding.kind}</span>
         <span className="p-text-3">→ {capabilityLabel(binding.capability)}</span>
       </div>
-      {binding.problem !== undefined ? (
-        <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{binding.problem}</p>
-      ) : binding.members.length === 0 ? (
-        <p className="p-text-4">No members.</p>
-      ) : (
-        <ul className="space-y-1 pl-3">
-          {binding.members.map((member) => {
-            const approval = { slate: binding.slate, binding: binding.name, member: member.member };
-            const key = approvalKey(approval);
-            const risk = visibility === "public" ? member.risk.public : member.risk.users;
-
-            if (member.effect === "read") {
-              return (
-                <li key={key} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <span className="font-mono p-text-2">{member.member}</span>
-                  <span className="p-badge-success rounded px-1.5 py-0.5 text-[10px]">read-only · granted</span>
-                </li>
-              );
-            }
-
-            const checked = approved.has(key);
-
-            return (
-              <li key={key} className={`rounded-md px-2 py-1.5 -mx-2 ${checked ? "p-tint-warning border" : ""}`}>
-                <label className="flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <input type="checkbox" checked={checked} onChange={() => onToggle(approval)} disabled={disabled}
-                    aria-describedby={`risk-${key}`} data-approve={`${binding.name}.${member.member}`} />
-                  <span className="font-mono p-text">{member.member}</span>
-                  <span className="p-badge-warning rounded px-1.5 py-0.5 text-[10px]">mutating</span>
-                </label>
-                <p id={`risk-${key}`} className="mt-1 leading-relaxed p-text-3">{risk}</p>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {members}
     </li>
   );
 }
@@ -156,7 +162,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
   useEffect(() => {
     if (fixture !== undefined) return;
     let live = true;
-    const failed = <Thrown,>(cause: Thrown): void => { if (live) setErr(renderThrownChain({ cause })); };
+    const failed = (...rejection: [unknown]): void => { if (live) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     Promise.all([
       rpc<SlateAnswer<unknown>>("slate", [{ op: "graph", id: slate }]),
@@ -209,12 +215,12 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, fixture 
     }
   }, [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy]);
 
-  const revoke = useCallback(async (share: string) => {
+  const revoke = useCallback(async (shareId: string) => {
     setErr(null);
 
     try {
-      await revokeLiveShare({ workspace, share });
-      setShares((previous) => previous.filter((row) => row.id !== share));
+      await revokeLiveShare({ workspace, share: shareId });
+      setShares((previous) => previous.filter((row) => row.id !== shareId));
     } catch (cause) {
       setErr(renderThrownChain({ cause }));
     }

@@ -11,7 +11,7 @@
  * presets expand one labelled field under the row. Removal is the ordinary
  * server remove, under the added row's own menu.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import {
   ArrowSquareOutIcon, CaretDownIcon, PlusIcon, TrashIcon, XIcon,
@@ -59,7 +59,9 @@ function presetWord(server: McpServerSummary | undefined) {
       return { word: 'Needs sign-in', dot: 'p-dot-warning' };
     case 'failed':
       return { word: 'Failed', dot: 'bg-[var(--c-danger)]' };
-    default:
+    case 'connecting':
+    case 'discovering':
+    case 'unknown':
       return { word: 'Connecting', dot: 'p-dot-warning' };
   }
 }
@@ -176,22 +178,26 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   // The row's one control, by what the row can do next: remove what it holds,
   // drop the field it opened, or add itself.
-  const trailing = added
-    ? <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => void remove()} />
-    : asking
-      ? (
-        <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
-          aria-label={`Cancel ${preset.title}`} title="Cancel" className={PLUGIN_ACTION}>
-          <XIcon size={14} />
-        </button>
-      )
-      : (
-        <button type="button" data-plugin-add onClick={connect} disabled={busy}
-          aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}
-          className={PLUGIN_ACTION}>
-          <PlusIcon size={16} />
-        </button>
-      );
+  let trailing: ReactNode;
+
+  if (added) {
+    trailing = <PresetMenu preset={preset} word={word} dot={dot} onRemove={() => void remove()} />;
+  } else if (asking) {
+    trailing = (
+      <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
+        aria-label={`Cancel ${preset.title}`} title="Cancel" className={PLUGIN_ACTION}>
+        <XIcon size={14} />
+      </button>
+    );
+  } else {
+    trailing = (
+      <button type="button" data-plugin-add onClick={connect} disabled={busy}
+        aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}
+        className={PLUGIN_ACTION}>
+        <PlusIcon size={16} />
+      </button>
+    );
+  }
 
   return (
     <PluginRow source={preset.id} state={word}

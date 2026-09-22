@@ -55,7 +55,9 @@ const MessageCreatedAtSchema = v.looseObject({
 });
 
 
-function messageCreatedAt<Message>(message: Message): string | number | Date | undefined {
+/** The SDK's message type declares no timestamp, so the stamp the transport
+ *  carried is read off the value itself. */
+function messageCreatedAt(message: UIMessage): string | number | Date | undefined {
   const parsed = v.safeParse(MessageCreatedAtSchema, message);
 
   return parsed.success ? parsed.output.createdAt : undefined;
@@ -227,7 +229,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   const summary = summarizeToolCall(toolName, input);
   const description = describeToolCall(toolName, input);
 
-  const failed = isError || !!provisionErr;
+  const failed = isError || provisionErr !== null;
   const prominent = effect === 'mutate' || isRunning;
 
   // The free-text previews — an eval program or a run command —
@@ -235,11 +237,26 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   // structured `redactPayload` walk never reaches them. They pass through the
   // same policy's value-level half (`redactSecrets`) before render: a token
   // inside a shell command is the same leak as one inside a named field.
-  const codePreview = toolName === "eval"
-    ? jsonString(input, "code")
-    : toolName === "shell"
-      ? jsonString(input, "command")
-      : null;
+  let codePreview: string | null = null;
+
+  if (toolName === "eval") codePreview = jsonString(input, "code");
+  else if (toolName === "shell") codePreview = jsonString(input, "command");
+
+  // The call's state once: the marker the tests read, the chip's colour and its
+  // words, so the three can never disagree.
+  let stateName = "done";
+  let stateTone = "p-badge-success";
+  let stateBadge: ReactNode = <><CheckCircleIcon size={11} weight="fill" />{durationLabel ?? "Done"}</>;
+
+  if (isRunning) {
+    stateName = "running";
+    stateTone = "p-accent-subtle p-accent";
+    stateBadge = <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>;
+  } else if (failed) {
+    stateName = "failed";
+    stateTone = "p-fill p-text-4";
+    stateBadge = <><WarningCircleIcon size={11} weight="fill" />Failed</>;
+  }
 
   return (
     <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
@@ -247,7 +264,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         type="button"
         onClick={onToggleExpand}
         aria-expanded={expanded}
-        data-tool-state={isRunning ? "running" : failed ? "failed" : "done"}
+        data-tool-state={stateName}
         data-tool-effect={effect}
         className={`group/tool grid w-full cursor-pointer items-center text-left transition-colors hover:bg-[var(--c-elevated)] ${prominent ? "grid-cols-[34px_minmax(0,1fr)_auto_auto] gap-3 px-3.5 py-3" : "grid-cols-[20px_minmax(0,1fr)_auto_auto] gap-2 px-3 py-2"}`}
       >
@@ -269,12 +286,8 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
             {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
           </span>
         )}
-        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${isRunning ? "p-accent-subtle p-accent" : failed ? "p-fill p-text-4" : "p-badge-success"}`}>
-          {isRunning
-            ? <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>
-            : failed
-              ? <><WarningCircleIcon size={11} weight="fill" />Failed</>
-              : <><CheckCircleIcon size={11} weight="fill" />{durationLabel ?? "Done"}</>}
+        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${stateTone}`}>
+          {stateBadge}
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
@@ -313,14 +326,15 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               unreadable for exactly the multi-line commands worth expanding
               to read. The runtime stays visible in the collapsed row's `@x`
               badge, so nothing is lost by not repeating it here. */}
-          {codePreview !== null ? (
+          {codePreview !== null && (
             <CodeBlock className={toolName === "eval" ? "language-js" : "language-bash"}>{redactSecrets(codePreview)}</CodeBlock>
-          ) : input != null ? (
+          )}
+          {codePreview === null && input != null && (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
               <div className="max-h-40 overflow-auto"><CodeBlock className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
-          ) : null}
+          )}
           {output != null && (
             <div>
               <div className="p-eyebrow mb-1">Output</div>
@@ -416,12 +430,19 @@ function ShownCaption({ state }: { state: CardState }) {
   );
 }
 
+/** How a returned job reads: its mark, its tone and what it did. */
+function backgroundEventMeta(status: string) {
+  if (status === "completed") return { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" };
+
+  if (status === "cancelled") return { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" };
+
+  return { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
+}
+
 /** A background job returning into the conversation — a full-width system row.
  *  The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
-  const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
-    : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
-    : { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
+  const meta = backgroundEventMeta(status);
 
   return (
     <div className="animate-fade-in">
@@ -535,15 +556,19 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
   if (devices === null) return null;
   const [only] = devices;
 
+  let offline: ReactNode = <span>No computer connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>;
+
+  if (only !== undefined && devices.length === 1) {
+    offline = <span>{only.label} is offline</span>;
+  } else if (devices.length > 1) {
+    offline = <span>Your computers are offline</span>;
+  }
+
   return (
     <div className="flex justify-center animate-fade-in py-1">
       <div className={SYSTEM_PILL}>
         <DesktopTowerIcon size={13} className="p-warning" weight="fill" />
-        {only !== undefined && devices.length === 1
-          ? <span>{only.label} is offline</span>
-          : devices.length > 1
-            ? <span>Your computers are offline</span>
-            : <span>No computer connected <Link to="/devices" className="p-accent hover:underline">Connect</Link></span>}
+        {offline}
       </div>
     </div>
   );
@@ -740,7 +765,7 @@ export const MessageView = memo(function MessageView({
   const isLive = isLast && isStreaming && !isUser;
   // Fork button disabled on the mid-stream last assistant — that message
   // isn't durably persisted yet.
-  const canFork = !isLive && !!onFork && !!message.id;
+  const canFork = !isLive && onFork !== undefined && message.id !== "";
   // Expansion keyed by toolCallId on the message: a row that folds into a
   // group on the next stream update remounts, and row-local state would reset
   // with it.
@@ -753,7 +778,7 @@ export const MessageView = memo(function MessageView({
   // type them, so they get their own presentation instead of a user bubble.
   // The id goes in too: it is the provenance marker on rows written before the
   // author stamp existed, and the owner's oldest workspaces are full of them.
-  const programmatic = classifyProgrammaticTurn(message.metadata, message.id);
+  const programmatic = classifyProgrammaticTurn({ metadata: message.metadata, id: message.id });
 
   if (programmatic) {
     return (
@@ -785,7 +810,7 @@ export const MessageView = memo(function MessageView({
           {getMessageText(message)}
           {canFork && (
             <button
-              onClick={() => onFork!(message.id)}
+              onClick={() => onFork(message.id)}
               className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
               title="Fork from here"
             >
@@ -802,7 +827,7 @@ export const MessageView = memo(function MessageView({
             </button>
           )}
         </div>
-        {isSteeredMessage(message.metadata) && <SteeredMark state="landed" />}
+        {isSteeredMessage({ metadata: message.metadata }) && <SteeredMark state="landed" />}
         <MessageTimestamp createdAt={messageCreatedAt(message)} />
       </div>
     );
@@ -867,7 +892,7 @@ export const MessageView = memo(function MessageView({
             <div className="group relative w-full space-y-5">
               {s === forkSegment && canFork && (
                 <button
-                  onClick={() => onFork!(message.id)}
+                  onClick={() => onFork(message.id)}
                   className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
                   title="Fork from here"
                 >

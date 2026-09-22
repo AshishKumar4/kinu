@@ -167,7 +167,11 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const onSurface = useCallback((next: SurfaceKind) => setSurface(next), []);
 
   const slates = useMemo(
-    () => (isMovie ? discrete.slates : (kind === 'slate' ? [SLATE_SUMMARY] : [])),
+    () => {
+      if (isMovie) return discrete.slates;
+
+      return kind === 'slate' ? [SLATE_SUMMARY] : [];
+    },
     [isMovie, discrete.slates, kind],
   );
 
@@ -329,8 +333,8 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
 
       if (!approveFiredRef.current && stage?.querySelector('[data-plan-status]')?.textContent === 'Approved') {
         approveFiredRef.current = true;
-      } else if (!approveFiredRef.current && t >= MOVIE_CUES.approve) {
-        if (clickApprove()) approveFiredRef.current = true;
+      } else if (!approveFiredRef.current && t >= MOVIE_CUES.approve && clickApprove()) {
+        approveFiredRef.current = true;
       }
 
       syncFrame();

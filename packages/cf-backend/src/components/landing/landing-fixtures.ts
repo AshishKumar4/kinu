@@ -10,12 +10,30 @@
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary, type TabPresence } from '@kinu.run/core';
+import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type JsonValue, type Page, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary, type TabPresence } from '@kinu.run/core';
 import type { Rpc } from '@kinu.run/core';
 import type { BackgroundJob, SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import type { ModelMenuEntry, UserProfile, WorkspaceEntry } from '@/lib/user-api';
 
 const NOW = Date.now();
+
+/** What a fixture answers with: JSON, plus the product types the frames are
+ *  handed whole. A declared interface never satisfies `JsonValue`'s index
+ *  signature however JSON-shaped its fields are, so each one is named. */
+type FixtureReply =
+  | JsonValue
+  | undefined
+  | BackgroundJob
+  | PlanReview
+  | Page<RunSummary>
+  | readonly FixtureReply[]
+  | { readonly [field: string]: FixtureReply };
+
+/** A fixture's answer, through the round trip a real RPC makes: serialized,
+ *  read back as JSON, and handed over as the shape the caller asked for. */
+function answer<T>(value: FixtureReply): Promise<T> {
+  return new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
+}
 
 /** `retryBackgroundJob(id)` and `dismissBackgroundJob(id)`, as the Work tab calls them. */
 const JobIdArgsSchema = v.tuple([v.string()]);
@@ -149,8 +167,6 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
   let pending = CHECKOUT_PENDING;
 
   const rpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
-
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
 
     if (method === 'inspectSubordinate') {
@@ -235,8 +251,6 @@ const PageRequestSchema: v.GenericSchema<PageRequest> = v.object({
 });
 
 export const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
-
   if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
 
   if (method === 'getRunSummaries') {
@@ -313,8 +327,6 @@ export const PLAN_FIXTURE: PlanReview = {
  *  rather than claim a success the pane would display. */
 export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview | null = PLAN_FIXTURE): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
-
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
 
     if (method === 'inspectSubordinate') {

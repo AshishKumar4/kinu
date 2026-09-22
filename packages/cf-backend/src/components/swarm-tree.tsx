@@ -238,9 +238,9 @@ const NO_FOLDS: ReadonlySet<string> = new Set<string>();
  */
 interface LabelFont {
 	/** The 11px UI face the node's name is set in. */
-	name(text: string): number;
+	name: (text: string) => number;
 	/** The 9px mono face the score and the `+n`/`⋈k` badges are set in. */
-	badge(text: string): number;
+	badge: (text: string) => number;
 }
 
 /** One context and one pair of font strings for the document's lifetime. The
@@ -289,6 +289,25 @@ interface NodeLabel {
 	readonly end: number;
 }
 
+/** One node, and everything its label is measured against. */
+interface NodeLabelPlacement {
+	readonly node: PointNode;
+	readonly region: SwarmTreeRegion;
+	readonly collapsed: ReadonlySet<string>;
+	readonly fanIn: ReadonlyMap<string, number>;
+	readonly font: LabelFont;
+}
+
+/** The node's score as its column shows it: `failed` for a branch that failed,
+ *  nothing at all for one that never produced a score. */
+function nodeScore(node: ForkNode): string {
+	if (node.status === "failed") return "failed";
+
+	if (node.value === null) return "";
+
+	return `${Math.round(Math.min(1, Math.max(0, node.value)) * 100)}%`;
+}
+
 /**
  * One node's label, clipped to the room its column leaves it.
  *
@@ -296,17 +315,10 @@ interface NodeLabel {
  * they are the two facts a column of labels is scanned on, and a truncated
  * percentage is worse than a truncated sentence. What gives is the name.
  */
-function nodeLabel(
-	node: PointNode, region: SwarmTreeRegion, collapsed: ReadonlySet<string>,
-	fanIn: ReadonlyMap<string, number>, font: LabelFont,
-): NodeLabel {
+function nodeLabel(placement: NodeLabelPlacement): NodeLabel {
+	const { node, region, collapsed, fanIn, font } = placement;
 	const folded = collapsed.has(foldKey(region.runId, node.data.id));
-	const scored = node.data.status === "failed" || node.data.value !== null;
-
-	const score = !scored ? ""
-		: node.data.status === "failed" ? "failed"
-		: `${Math.round(Math.min(1, Math.max(0, node.data.value ?? 0)) * 100)}%`;
-
+	const score = nodeScore(node.data);
 	const fold = folded ? ` +${subtreeCount(node.data)}` : "";
 	const join = fanIn.has(node.data.id) ? ` ⋈${fanIn.get(node.data.id) ?? 0}` : "";
 	const badge = `${fold}${join}`;
@@ -405,7 +417,7 @@ function layoutRegions(
 		const labels = new Map<string, NodeLabel>();
 
 		for (const node of nodes) {
-			const label = nodeLabel(node, region, collapsed, fanIn, font);
+			const label = nodeLabel({ node, region, collapsed, fanIn, font });
 			labels.set(node.data.id, label);
 			widest = Math.max(widest, node.y + label.end);
 		}
@@ -476,11 +488,11 @@ function scoreRamp(): (t: number) => string {
 	return d3.piecewise(d3.interpolateLab, [tok("--c-danger"), tok("--c-warning"), tok("--c-success")]);
 }
 
-function scoreToken(value: number): string {
-	const band = scoreBand(value);
-
-	return band === "success" ? "var(--c-success)" : band === "warning" ? "var(--c-warning)" : "var(--c-danger)";
-}
+const BAND_TOKEN = {
+	success: "var(--c-success)",
+	warning: "var(--c-warning)",
+	danger: "var(--c-danger)",
+} as const;
 
 function nodeFill(node: ForkNode, ramp: (t: number) => string): string {
 	// A failed branch has no score to show — it never produced one — so it is
@@ -551,8 +563,20 @@ function applyEmphasis(
 
 			return "none";
 		})
-		.attr("stroke-width", (d) => (selectedId === d.data.id ? 2.5 : d.data.status === "terminal" ? 2 : 1.4))
-		.attr("opacity", (d) => (selectedId === d.data.id || onPath.has(d.data.id) ? 1 : d.data.status === "pruned" ? 0.45 : 1))
+		.attr("stroke-width", (d) => {
+			if (selectedId === d.data.id) return 2.5;
+
+			if (d.data.status === "terminal") return 2;
+
+			return 1.4;
+		})
+		.attr("opacity", (d) => {
+			if (selectedId === d.data.id || onPath.has(d.data.id)) return 1;
+
+			if (d.data.status === "pruned") return 0.45;
+
+			return 1;
+		})
 		.attr("filter", (d) => {
 			if (selectedId === d.data.id) return "url(#mctsSelectGlow)";
 
@@ -649,7 +673,7 @@ export function SwarmTree({
 		const state = stateRef.current;
 
 		if (!svgRef.current || !zoomRef.current || !state || state.regions.length === 0) return;
-		const target = state.regions.find((r) => r.runId === selectedRunId) ?? state.regions[0]!;
+		const target = state.regions.find((r) => r.runId === selectedRunId) ?? state.regions[0];
 		const { x0, x1, y0, y1 } = target.band;
 		const w = Math.max(1, x1 - x0);
 		const h = Math.max(1, y1 - y0);
@@ -691,9 +715,10 @@ export function SwarmTree({
 		const ty = RULER_H + FIT_PAD - (fitsWhole ? scene.y0 : y0) * k;
 		const svg = d3.select(svgRef.current);
 		const to = d3.zoomIdentity.translate(tx, ty).scale(k);
+		const zoom = zoomRef.current;
 
-		if (animate) svg.transition().duration(280).call(zoomRef.current.transform, to);
-		else svg.call(zoomRef.current.transform, to);
+		if (animate) zoom.transform(svg.transition().duration(280), to);
+		else zoom.transform(svg, to);
 	}, [width, sceneH, selectedRunId]);
 
 	/**
@@ -730,7 +755,7 @@ export function SwarmTree({
 			.scale(k);
 
 		userMoved.current = true;
-		d3.select(svgEl).transition().duration(180).call(zoom.transform, to);
+		zoom.transform(d3.select(svgEl).transition().duration(180), to);
 	}, [width, sceneH]);
 
 	/**
@@ -778,7 +803,10 @@ export function SwarmTree({
 	// depth ruler and the zoom behavior. The transform lives on the zoom layer
 	// and is never reset by data updates, so polling cannot snap a pan back.
 	useEffect(() => {
-		const svg = d3.select(svgRef.current!);
+		const svgEl = svgRef.current;
+
+		if (svgEl === null) return;
+		const svg = d3.select(svgEl);
 		const defs = svg.append("defs");
 
 		for (const [id, blur] of [["mctsGlow", "3.5"], ["mctsSelectGlow", "5"]] as const) {
@@ -830,8 +858,11 @@ export function SwarmTree({
 	// here.
 	useEffect(() => {
 		const rootGroup = gRef.current;
+		// The zoom layer lives inside the svg, so the two are mounted together;
+		// the scene's transform is read off the svg further down.
+		const svgEl = svgRef.current;
 
-		if (rootGroup === null) return;
+		if (rootGroup === null || svgEl === null) return;
 		const g = d3.select(rootGroup);
 		g.selectAll("*").remove();
 
@@ -1061,7 +1092,7 @@ export function SwarmTree({
 				.append("tspan")
 				.text((d) => labelOf(d)?.score ?? "")
 				.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
-				.attr("fill", (d) => (d.data.status === "failed" ? "var(--c-danger)" : scoreToken(d.data.value ?? 0)));
+				.attr("fill", (d) => (d.data.status === "failed" ? "var(--c-danger)" : BAND_TOKEN[scoreBand(d.data.value ?? 0)]));
 			text.append("tspan")
 				.text((d) => labelOf(d)?.name ?? "")
 				.attr("fill", (d) => (d.data.status === "pruned" ? "var(--c-text-3)" : "var(--c-text-2)"));
@@ -1110,7 +1141,7 @@ export function SwarmTree({
 		// with them. Same restoration `applyEmphasis` gets, for the same reason.
 		applyWorking(rootGroup, workingRef.current);
 
-		const transform = d3.zoomTransform(svgRef.current!);
+		const transform = d3.zoomTransform(svgEl);
 		// The titles were just rebuilt at their scene anchors and have never been
 		// positioned, so they must be placed for the CURRENT transform whether or
 		// not a refit follows — `fit`'s transition then keeps moving them.
@@ -1122,7 +1153,9 @@ export function SwarmTree({
 			fit(animate);
 		} else {
 			g.selectAll("g.mcts-labels").attr("data-lod", transform.k >= LABEL_MIN_SCALE ? "" : null);
-			positionRuler(d3.select(rulerRef.current!), state, transform);
+			const ruler = rulerRef.current;
+
+			if (ruler !== null) positionRuler(d3.select(ruler), state, transform);
 		}
 	}, [regions, width, sceneH, collapsed, theme, selectedRunId, fit]);
 
@@ -1185,8 +1218,8 @@ export function SwarmTree({
 		const [sx, sy] = [t.applyX(target.y), t.applyY(target.x + region.shiftY)];
 
 		if (sx > 40 && sx < width - 40 && sy > RULER_H + 20 && sy < sceneH - 20) return;
-		d3.select(svgRef.current).transition().duration(320).call(
-			zoomRef.current.transform,
+		zoomRef.current.transform(
+			d3.select(svgRef.current).transition().duration(320),
 			d3.zoomIdentity
 				.translate(width / 2 - target.y * t.k, sceneH / 2 - (target.x + region.shiftY) * t.k)
 				.scale(t.k),
@@ -1476,7 +1509,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				{(node.status === "failed" || node.value !== null) && (
 					<span
 						className="text-base font-semibold leading-none"
-						style={{ color: node.status === "failed" ? "var(--c-danger)" : scoreToken(node.value ?? 0) }}
+						style={{ color: node.status === "failed" ? "var(--c-danger)" : BAND_TOKEN[scoreBand(node.value ?? 0)] }}
 					>
 						{node.status === "failed" ? "failed" : `${Math.round(Math.min(1, Math.max(0, node.value ?? 0)) * 100)}%`}
 					</span>

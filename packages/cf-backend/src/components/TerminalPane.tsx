@@ -39,7 +39,7 @@
  * decided over strings rather than over the DOM.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SandboxAddon } from "@cloudflare/sandbox/xterm";
@@ -47,7 +47,7 @@ import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
 import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
 import * as v from "valibot";
-import { useTheme, type ThemeMode } from "@/hooks/use-theme";
+import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
   type TerminalPaneOutput,
@@ -184,6 +184,16 @@ function mountPtyTerminal(
   };
 }
 
+/** xterm cannot read CSS custom properties, so the palette is applied
+ *  imperatively on every theme change — both axes, since either can move. */
+function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): void {
+  useEffect(() => {
+    const term = termRef.current;
+
+    if (term) term.options.theme = terminalTheme(theme.mode);
+  }, [termRef, theme]);
+}
+
 function PtyTerminal({ workspace, executor }: { workspace: string; executor: string }) {
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -231,13 +241,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     };
   }, [workspace, executor]);
 
-  // xterm cannot read CSS custom properties, so the palette is applied
-  // imperatively on every theme change — both axes, since either can move.
-  useEffect(() => {
-    const term = termRef.current;
-
-    if (term) term.options.theme = terminalTheme(theme.mode);
-  }, [theme]);
+  useTerminalPalette(termRef, theme);
 
   useEffect(() => {
     if (state !== "connected") return;
@@ -264,7 +268,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
           }
         } catch (cause) {
           if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-            setFailure(describeError(cause));
+            setFailure(describeError({ cause }));
           }
         } finally {
           if (keepaliveOperations.current.get(keepaliveKey) === owner) {
@@ -292,7 +296,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     );
 
     if (!response.ok) {
-      setFailure(describeError(await response.text()));
+      setFailure(describeError({ cause: await response.text() }));
 
       return;
     }
@@ -341,17 +345,29 @@ function resizeFrames(term: Terminal, socket: WebSocket): IDisposable {
   });
 }
 
-/** What both socket drivers undo on unmount: the socket's handlers and
- *  subscriptions, the socket, then the chrome. */
-function releaseSocketTerminal(socket: WebSocket, subscriptions: readonly (IDisposable | null)[], disposeChrome: () => void): void {
-  socket.onopen = null;
-  socket.onmessage = null;
-  socket.onclose = null;
-  socket.onerror = null;
+/** What both socket drivers undo on unmount: the copy in flight, the socket's
+ *  handlers and subscriptions, the socket, the chrome, then the terminal. */
+function releaseSocketPane(pane: {
+  socket: WebSocket;
+  subscriptions: readonly (IDisposable | null)[];
+  disposeChrome: () => void;
+  copyOperation: RefObject<TerminalOperation | null>;
+  termRef: RefObject<Terminal | null>;
+}): () => void {
+  return () => {
+    const { socket } = pane;
 
-  for (const subscription of subscriptions) subscription?.dispose();
-  socket.close();
-  disposeChrome();
+    pane.copyOperation.current = null;
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onclose = null;
+    socket.onerror = null;
+
+    for (const subscription of pane.subscriptions) subscription?.dispose();
+    socket.close();
+    pane.disposeChrome();
+    pane.termRef.current = null;
+  };
 }
 
 /**
@@ -452,20 +468,12 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
       setFailure("the connection dropped");
     };
 
-    return () => {
-      copyOperation.current = null;
-      releaseSocketTerminal(socket, [dataSubscription, resizeSubscription], disposeChrome);
-      termRef.current = null;
-    };
+    return releaseSocketPane({
+      socket, subscriptions: [dataSubscription, resizeSubscription], disposeChrome, copyOperation, termRef,
+    });
   }, [workspace, executor]);
 
-  // xterm cannot read CSS custom properties, so the palette is applied
-  // imperatively on every theme change — both axes, since either can move.
-  useEffect(() => {
-    const term = termRef.current;
-
-    if (term) term.options.theme = terminalTheme(theme.mode);
-  }, [theme]);
+  useTerminalPalette(termRef, theme);
 
   return (
     <div className="w-full h-full flex flex-col">
@@ -562,18 +570,12 @@ function WorkspaceTerminal({ workspace, executor }: { workspace: string; executo
       setFailure("the connection dropped");
     };
 
-    return () => {
-      copyOperation.current = null;
-      releaseSocketTerminal(socket, [dataSubscription, resizeSubscription], disposeChrome);
-      termRef.current = null;
-    };
+    return releaseSocketPane({
+      socket, subscriptions: [dataSubscription, resizeSubscription], disposeChrome, copyOperation, termRef,
+    });
   }, [workspace, executor]);
 
-  useEffect(() => {
-    const term = termRef.current;
-
-    if (term) term.options.theme = terminalTheme(theme.mode);
-  }, [theme]);
+  useTerminalPalette(termRef, theme);
 
   return (
     <div className="w-full h-full flex flex-col">
@@ -605,7 +607,7 @@ function LineTerminal(
   const termRef = useRef<Terminal | null>(null);
   const lineStateRef = useRef<LineTerminalState | null>(null);
 
-  if (lineStateRef.current === null) lineStateRef.current = new LineTerminalState();
+  lineStateRef.current ??= new LineTerminalState();
   const lineState = lineStateRef.current;
   const commandOperation = useRef<TerminalOperation | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -670,13 +672,13 @@ function LineTerminal(
             // A rejected exec produces no output row, so nothing else would
             // ever clear the marker or reprint the prompt.
             clearBusy(term, lineState);
-            term.write(`\x1b[31m${describeError(thrown.cause)}\x1b[0m\r\n`);
+            term.write(`\x1b[31m${describeError(thrown)}\x1b[0m\r\n`);
             writePrompt(term);
           }
         } catch (cause) {
           if (lineState.finishCommand(generation) && termRef.current === term) {
             clearBusy(term, lineState);
-            setFailure(describeError(cause));
+            setFailure(describeError({ cause }));
           }
         } finally {
           if (commandOperation.current === owner) commandOperation.current = null;
@@ -700,11 +702,7 @@ function LineTerminal(
     };
   }, [executor]);
 
-  useEffect(() => {
-    const term = termRef.current;
-
-    if (term) term.options.theme = terminalTheme(theme.mode);
-  }, [theme]);
+  useTerminalPalette(termRef, theme);
 
   // New outputs as ANSI rows, deduped so a re-render never reprints a row.
   useEffect(() => {

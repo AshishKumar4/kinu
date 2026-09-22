@@ -87,7 +87,8 @@ function missionOf(overview: WorkspaceOverview | null, title: string): string | 
 function hueOf(name: string): number {
   let hash = 0;
 
-  for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  // `for…of` walks whole code points, so every char here has one.
+  for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
 
   return hash % 360;
 }

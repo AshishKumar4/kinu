@@ -26,7 +26,11 @@ const ModelMenuEntrySchema = v.object({
   contextWindow: v.optional(v.number()),
 });
 
-function modelMenuEntry<Input>(input: Input): ModelMenuEntry | null {
+/** What the combobox hands its callbacks: a model, or one of the provider
+ *  groups that make up `items`. */
+type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
+
+function modelMenuEntry(input: PickerValue): ModelMenuEntry | null {
   const parsed = v.safeParse(ModelMenuEntrySchema, input);
 
   return parsed.success ? parsed.output : null;
@@ -39,8 +43,13 @@ const CLEAR_LABEL_UNUSED = "Clear selection (unused)";
 /** Empty clears the workspace override; the tier's effort applies. */
 const DEFAULT_EFFORT = "";
 
-const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
-  effort === DEFAULT_EFFORT ? "Default" : effort === "xhigh" ? "Extra high" : effort[0].toUpperCase() + effort.slice(1);
+const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string => {
+  if (effort === DEFAULT_EFFORT) return "Default";
+
+  if (effort === "xhigh") return "Extra high";
+
+  return effort[0].toUpperCase() + effort.slice(1);
+};
 
 /** The thinking level beside the model: the levels this model declares, or
  *  nothing when it declares none — a model that takes no level shows no
@@ -123,15 +132,15 @@ export function ModelPicker({
     <Combobox
       items={items}
       value={selected}
-      onValueChange={<Next,>(next: Next) => {
-        const entry = modelMenuEntry(next);
+      onValueChange={(next: PickerValue | null) => {
+        const entry = next === null ? null : modelMenuEntry(next);
 
         if (entry) onChange(entry.spec);
         else if (clearable) onChange("");
       }}
-      itemToStringLabel={<Item,>(item: Item) => modelMenuEntry(item)?.label ?? ''}
-      itemToStringValue={<Item,>(item: Item) => modelMenuEntry(item)?.spec ?? ''}
-      filter={<Item,>(item: Item, query: string) => {
+      itemToStringLabel={(item: PickerValue) => modelMenuEntry(item)?.label ?? ''}
+      itemToStringValue={(item: PickerValue) => modelMenuEntry(item)?.spec ?? ''}
+      filter={(item: PickerValue, query: string) => {
         const model = modelMenuEntry(item);
 
         return model ? modelMatchesQuery(model, query) : false;
@@ -202,8 +211,8 @@ export function ConnectedModelPicker({
   const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
 
   const fetchModels = useCallback(() => {
-    const loadFailed = <Thrown,>(thrown: Thrown): void => {
-      diagnostics.event("model_picker.load_failed", { error: renderThrownChain({ cause: thrown }) });
+    const loadFailed = (...rejection: [unknown]): void => {
+      diagnostics.event("model_picker.load_failed", { error: renderThrownChain({ cause: rejection[0] }) });
       setMenu("error");
     };
 

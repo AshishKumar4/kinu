@@ -21,7 +21,7 @@
  * the answer highlighted away from the steps that reached it, the path back to
  * the root, and four distinguishable ways for there to be nothing to show.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import {
   BrainIcon, CaretDownIcon, CaretRightIcon, CheckCircleIcon, GitForkIcon,
@@ -248,6 +248,14 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
   );
 }
 
+/** The fourth metric: a running branch reports when its last step landed, a
+ *  settled one how long the whole branch took. Either can be absent. */
+function clockValue(view: NodeTranscriptView, live: boolean): string {
+  if (!live) return view.wallClockMs > 0 ? `${view.wallClockMs}ms` : "—";
+
+  return view.lastStepAt === null ? "—" : timeAgo(view.lastStepAt);
+}
+
 /**
  * A transcript, given the view — no fetching, no surface state.
  *
@@ -313,7 +321,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   // The trace grows UP as the reader walks back: the same hook the chat columns
   // use, so the prepend is compensated and the edge fires the next page without
   // this panel growing a second scroll policy.
-  const scrollerRef = useGrowingScroll<HTMLDivElement>({
+  const scrollerRef = useGrowingScroll({
     grows: "up",
     content: messages,
     fetched: older?.steps.length ?? 0,
@@ -392,10 +400,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
         <Metric label="Steps" value={view.stepCount} />
         <Metric label="Tools" value={view.toolCount} />
         <Metric label="Tokens" value={fmtTokens(usageTotal(view.usage))} />
-        <Metric label={live ? "Last step" : "Wall"}
-          value={live
-            ? (view.lastStepAt === null ? "—" : timeAgo(view.lastStepAt))
-            : (view.wallClockMs > 0 ? `${view.wallClockMs}ms` : "—")} />
+        <Metric label={live ? "Last step" : "Wall"} value={clockValue(view, live)} />
       </div>
     </div>
   );
@@ -522,7 +527,8 @@ export function useNodeTranscript({ runId, nodeId, rpc, headActivity, headDeltas
   // With nothing walked yet, the boundary is the view's own; after, it is the
   // frozen one.
   const hasMore = walk.steps.length > 0 ? walk.hasMore : view?.steps.status === 'more';
-  const below = walk.steps.length > 0 ? walk.below : (view?.steps.status === 'more' ? view.steps.next : null);
+  const viewBelow = view?.steps.status === 'more' ? view.steps.next : null;
+  const below = walk.steps.length > 0 ? walk.below : viewBelow;
   const walkRef = useRef(subject);
   walkRef.current = subject;
   const inFlight = useRef<OlderPageLoad | null>(null);
@@ -633,6 +639,30 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
     );
   }
 
+  let body: ReactNode = null;
+
+  if (view) {
+    body = (
+      <TranscriptBody view={view} onSelect={onSelect} older={older} onLoadOlder={loadOlder}
+        pending={pending} />
+    );
+  } else if (resource.status === "loading") {
+    body = (
+      <div className="flex-1 flex items-center justify-center gap-2 p-t-status p-text-2">
+        <Loader size="sm" />Reading the branch…
+      </div>
+    );
+  } else if (resource.status === "ready") {
+    // The read succeeded and neither store holds this node — distinct from
+    // a node that recorded nothing, which returns a view with no steps.
+    body = (
+      <div className="flex-1 flex items-center justify-center">
+        <EmptyState icon={<TreeStructureIcon size={28} />} title="This branch is no longer in the run"
+          hint={`Nothing is recorded for ${drawnLabel}. The search pruned it, or the run was rewritten.`} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-0 flex-1 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
       {/* A failed read is its own state, and it keeps whatever last loaded
@@ -641,22 +671,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
         <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
           className="shrink-0 border-b p-border px-4 py-2" />
       )}
-      {view ? (
-        <TranscriptBody view={view} onSelect={onSelect} older={older} onLoadOlder={loadOlder}
-          pending={pending} />
-      )
-        : resource.status === "loading" ? (
-          <div className="flex-1 flex items-center justify-center gap-2 p-t-status p-text-2">
-            <Loader size="sm" />Reading the branch…
-          </div>
-        ) : resource.status === "ready" ? (
-          // The read succeeded and neither store holds this node — distinct from
-          // a node that recorded nothing, which returns a view with no steps.
-          <div className="flex-1 flex items-center justify-center">
-            <EmptyState icon={<TreeStructureIcon size={28} />} title="This branch is no longer in the run"
-              hint={`Nothing is recorded for ${drawnLabel}. The search pruned it, or the run was rewritten.`} />
-          </div>
-        ) : null}
+      {body}
     </div>
   );
 }

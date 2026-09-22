@@ -42,16 +42,16 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
 
   useEffect(() => {
     if (workspaces !== undefined) return;
-    let live = true;
-    const failed = <Thrown,>(cause: Thrown): void => { if (live) setErr(renderThrownChain({ cause })); };
+    let mounted = true;
+    const failed = (...rejection: [unknown]): void => { if (mounted) setErr(renderThrownChain({ cause: rejection[0] })); };
 
     listWorkspaces().then((list) => {
-      if (!live) return;
+      if (!mounted) return;
       setRoster(list.entries);
       setTarget(list.entries[0]?.name ?? NEW_WORKSPACE);
     }).catch(failed);
 
-    return () => { live = false; };
+    return () => { mounted = false; };
   }, [workspaces]);
 
   const submit = useCallback(async () => {
