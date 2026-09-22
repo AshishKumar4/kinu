@@ -1,24 +1,7 @@
 /**
- * The once-only lifecycle of ONE settled response: claim it, run what it owes,
- * close it when nothing is owed any more, and hand an interrupted one to the
- * next activation.
- *
- * A turn's answer causes a sequence of side effects, and the effects themselves
- * are the {@link TerminalEffectLedger}'s subject. What lives here is the
- * boundary AROUND them: the durable claim that says this response's sequence was
- * started, the in-activation guard that stops a duplicate callback re-entering
- * it, and the close that may only happen once the ledger holds nothing owed.
- *
- * Backend-neutral on purpose. The Durable Object and the CLI answer the same
- * question — "what did this response still owe when the process went away?" —
- * and one state machine over one table is what makes an interrupted device turn
- * and an evicted isolate the same problem with the same answer. Two
- * implementations of it drift: a claim-and-sweep on one side against a release
- * at persist time with no recovery at all on the other.
- *
- * What a backend still supplies is only the two things it genuinely owns: the
- * effect IMPLEMENTATIONS, and the WAKE that brings a process back for an owed
- * row (a DO alarm, or the CLI's startup driver).
+ * The once-only lifecycle of one settled response: claim, run what it owes ({@link TerminalEffectLedger}),
+ * close when nothing is owed, hand an interrupted one to the next activation. Backend-neutral; a backend
+ * supplies only effect implementations and the wake.
  */
 import { claimToolEffect, settleToolEffect, type ToolEffectKey } from '../tools/effect-claim';
 import { argumentDigest } from '../safety/argument-digest';
@@ -34,112 +17,45 @@ import {
   type TerminalSequenceRun,
 } from './terminal-effects';
 
-/**
- * The effect-claim call id every terminal transition is filed under.
- *
- * A constant, suffixed with the response's own message id: a turn fires this
- * hook once per response and a continuation keeps the turn's user-message id, so
- * a key on the turn alone let the first continuation close the claim and the
- * final response — carrying the actual answer — read `done` and skip everything
- * it owed.
- */
+/** Suffixed with the response's message id: a continuation keeps the turn's user-message id. */
 export const TERMINAL_TRANSITION_CALL_ID = 'terminal:response';
 
-/** The recorded disposition. A terminal transition has no value to hand back, so
- *  what is written is the fact that it finished. */
 const TERMINAL_TRANSITION_SETTLED = '"settled"';
 
-/** How many times the recovery wake is attempted when the ledger could not arm
- *  its own. More than one because a storage write fails transiently; bounded
- *  because a wake that refuses twice refuses for a reason a third call cannot
- *  change. */
+/** Bounded: a wake that refuses twice refuses for a reason a third call cannot change. */
 const TERMINAL_RECOVERY_ARM_ATTEMPTS = 2;
 
-/** One response's terminal sequence, named by the durable turn it belongs to and
- *  the assistant message that carries its answer. */
 export interface TerminalTransition {
   readonly turnId: string;
   readonly messageId: string;
 }
 
-/**
- * What a terminal transition's claim says about this attempt.
- *
- *   • `first`     — nobody has run it. Run everything.
- *   • `resumed`   — a previous attempt began it and never recorded a result. Run
- *     it again: the per-effect ledger decides what that means for each effect,
- *     skipping the ones already completed and deferring the ones whose schedule
- *     has not come round.
- *   • `done`      — it already completed. Nothing to do.
- *   • `unclaimed` — the response has no durable identity to claim against. The
- *     sequence still runs; saying so is more honest than inventing an identity
- *     every such response would share.
- */
+/** `resumed`: begun and never recorded; the ledger decides per effect. `unclaimed`: no durable identity, runs unledgered. */
 export type TerminalDisposition = 'first' | 'resumed' | 'done' | 'unclaimed';
 
 export interface TerminalTransitionDeps {
   readonly sql: SqlExecutor;
-  /** Whose turn is settling. Every row this transition claims, releases or
-   *  prunes — the effect ledger's and the tool-effect claims' — is that actor's,
-   *  and an id alone is not authority over a sibling's suffix. */
+  /** An id alone is not authority over a sibling's suffix. */
   readonly actor: ActorHandle;
-  /** What this actor can actually run. A row naming an effect absent here is
-   *  blocked by the ledger rather than silently skipped. */
+  /** A row naming an absent effect is blocked, not skipped. */
   readonly effects: TerminalEffectTable;
   readonly now: () => number;
   /** Read per call, so a test can arm a cut after construction. */
   readonly fault?: () => TerminalEffectFault | null;
-  /**
-   * Commit a group of writes as ONE durable unit.
-   *
-   * The claim and its whole roster go through this. Inside a Durable Object a
-   * synchronous run is already atomic, so the identity function is honest there;
-   * a process that can die between two statements — a CLI — must supply a real
-   * transaction, or a kill mid-insert leaves a PREFIX of the roster that recovery
-   * reads as the whole of it and closes over.
-   */
+  /** Claim and roster go through this. A process that can die between statements must supply a real transaction. */
   readonly transaction?: <T>(body: () => T) => T;
-  /**
-   * Whether this durable turn may still produce another response.
-   *
-   * Gates the turn-wide tool-claim release. An auto-continuation can already be
-   * executing tools under the same turn before it has any terminal claim of its
-   * own, so counting open terminal claims says "nobody is using this turn" while
-   * somebody is — and deleting the live claim leaves the next interruption free
-   * to replay an external tool with no guard.
-   */
+  /** Gates the turn-wide tool-claim release: an auto-continuation may run tools before it has a terminal claim. */
   readonly turnIsLive?: (turnId: string) => boolean;
-  /**
-   * Bring a process back at this instant, because rows are still owed.
-   *
-   * The one genuinely per-backend part of recovery: a Durable Object writes a
-   * schedule row, and a CLI has its next start. An instant in the past means a
-   * row is due now.
-   */
+  /** A past instant means due now. */
   readonly scheduleRetry: (atMs: number) => Promise<void>;
 }
 
-/**
- * The transition lifecycle, over one storage.
- *
- * One object rather than a set of helpers because the ORDERING is what it owns,
- * and every one of those orderings was a defect before it existed: claim before
- * the first effect, disposition before release, close only on an empty owed set,
- * prune only after the close.
- */
+/** Owns the ordering: claim before the first effect, disposition before release, close only on an empty owed set, prune after close. */
 export class TerminalTransitions {
-  /** The per-effect ledger this lifecycle wraps. Exposed because a caller
-   *  declares effects and reads back what is owed; it never reaches past this
-   *  for the claim, the close or the sweep. */
+  /** Callers never reach past this for the claim, the close or the sweep. */
   readonly ledger: TerminalEffectLedger;
 
-  /**
-   * Sequences this PROCESS has already entered.
-   *
-   * A duplicate callback arriving while the first is still running its effects
-   * would otherwise re-enter every pending one beside it. The durable rows close
-   * that window across a restart; this closes it inside one.
-   */
+  /** Guards against a duplicate callback re-entering pending effects within one process. */
   private readonly inFlight = new Set<string>();
 
   constructor(private readonly deps: TerminalTransitionDeps) {
@@ -160,14 +76,11 @@ export class TerminalTransitions {
     this.ledger = new TerminalEffectLedger(withTransaction);
   }
 
-  /** The sequence id every effect row of one transition is filed under. */
   sequenceId(transition: TerminalTransition): string {
     return `${transition.turnId}/${transition.messageId}`;
   }
 
-  /** The versioned effect-claim identity of one transition. The digest binds the
-   *  row to the turn, so a differently shaped future claim on the same id cannot
-   *  silently match this one. */
+  /** The digest binds the row to the turn. */
   private key(transition: TerminalTransition): ToolEffectKey {
     return {
       turnId: transition.turnId,
@@ -179,7 +92,6 @@ export class TerminalTransitions {
     };
   }
 
-  /** Claim this transition before any of its effects run. */
   begin(transition: TerminalTransition | null): TerminalDisposition {
     if (transition === null) return 'unclaimed';
     const claim = claimToolEffect(this.deps.sql, this.deps.actor, this.key(transition));
@@ -192,7 +104,7 @@ export class TerminalTransitions {
   }
 
   /** Record the frozen roster and its claim together, before any effect runs.
-   * A local adapter includes this synchronous write in its answer transaction. */
+     * A local adapter includes this synchronous write in its answer transaction. */
   record(transition: TerminalTransition | null, owed: readonly OwedEffect[]): TerminalDisposition {
     const commit = this.deps.transaction ?? (<T>(body: () => T): T => body());
 
@@ -205,10 +117,7 @@ export class TerminalTransitions {
     });
   }
 
-  /** Enter one sequence, or report that this process is already inside it.
-   *  Released by {@link leave}, never in a `finally` around the effects: an
-   *  interruption must leave the durable rows, not a cleared flag, as the
-   *  record. */
+  /** Released by {@link leave}, never in a `finally`: an interruption must leave the durable rows as the record. */
   enter(transition: TerminalTransition): boolean {
     const id = this.sequenceId(transition);
 
@@ -222,57 +131,27 @@ export class TerminalTransitions {
     this.inFlight.delete(this.sequenceId(transition));
   }
 
-  /** How many sequences this process currently owns. The join condition a
-   *  recovery sweep is finished against: it acquires each sequence it resumes
-   *  and releases through the normal close, so zero means every one it entered
-   *  reached a disposition. */
+  /** Zero means every sequence a sweep entered reached a disposition. */
   get inFlightCount(): number {
     return this.inFlight.size;
   }
 
   /**
-   * Drive ONE settled response, end to end.
-   *
-   * The whole state machine, in one place, because every ordering in it is a
-   * correctness constraint and not a style choice: the roster built before
-   * anything durable exists, the in-process guard before the durable claim, the
-   * claim and the whole roster committed as one unit, and the close only once
-   * the detached tail has reported.
-   *
-   * A RESUMED response does not re-declare. Its roster is frozen at what the
-   * first attempt claimed: a second declaration reads live state that has moved
-   * — a scaffold candidate that did not exist then, a config flag since flipped —
-   * and would append rows to a sequence already under way, scoring this turn
-   * against a world it never ran in. The recorded rows are what it owed.
-   *
-   * `hold` is the ONE genuinely per-backend piece: a Durable Object runs the
-   * close on a durable fiber that keeps the isolate alive, and a CLI awaits it
-   * before the process exits. Core decides WHEN to close; the backend decides
-   * what keeps the runtime alive until it does.
+   * Every ordering here is a correctness constraint. A resumed response does not re-declare: its roster is
+   * frozen at what the first attempt claimed. `hold` keeps the runtime alive for the close (per backend).
    */
   async settle(input: {
     readonly transition: TerminalTransition | null;
-    /** The roster this response owes. Called exactly once, BEFORE any durable
-     *  write, and its result is used only on a first attempt — a resumed response
-     *  replays what it already claimed. */
+    /** Called once, before any durable write; used only on a first attempt. */
     readonly declare: () => readonly OwedEffect[];
-    /** Carry the close. Handed the transition being closed and a thunk that
-     *  joins the detached tail and settles it; the backend decides what stays
-     *  alive for the thunk. Never called for an unledgered response — there is
-     *  nothing to close. */
+    /** The backend decides what stays alive for the thunk. Never called for an unledgered response. */
     readonly hold: (transition: TerminalTransition, close: () => Promise<void>) => void;
   }): Promise<void> {
     const { transition, declare, hold } = input;
-    // BUILT FIRST, before anything durable exists. A throw while gathering — a
-    // projection that cannot serialize, a read that fails — must not leave an
-    // open claim with no rows behind it, because recovery reads an empty roster
-    // as a finished one and closes over everything the response owed.
+    // Built first: a throw here must not leave an open claim with no rows, which recovery reads as finished.
     const owed = declare();
 
-    // No durable identity means no key to claim against — a response that never
-    // opened on a persisted message. The sequence still has to run, so it runs
-    // unledgered, and saying that is more honest than inventing an identity every
-    // such response would share.
+    // No durable identity: run unledgered rather than invent a shared identity.
     if (transition === null) {
       await this.runUnledgered(owed);
 
@@ -303,9 +182,7 @@ export class TerminalTransitions {
     try {
       run = await this.ledger.drive(this.sequenceId(transition));
     } catch (err) {
-      // RELEASED, then RE-ARMED. `shell` can reject while arming the first wake:
-      // a live process holding the sequence is one every later sweep skips, and
-      // rows owed with no wake behind them are rows nothing comes back for.
+      // Released, then re-armed: a held sequence is skipped by later sweeps, and owed rows need a wake.
       this.leave(transition);
       await this.armRecovery(transition, { cause: err });
       throw err;
@@ -317,14 +194,7 @@ export class TerminalTransitions {
     });
   }
 
-  /**
-   * Run a roster with no ledger behind it.
-   *
-   * The path a response with no durable identity takes. Nothing here is
-   * recoverable — there is no row to recover from — so the bodies run through the
-   * same declared effects and their outcomes are dropped. Detached bodies still
-   * start in order and concurrently; this caller owns them until all settle.
-   */
+  /** Nothing is recoverable here; detached bodies still start in order and this caller owns them until settled. */
   private async runUnledgered(owed: readonly OwedEffect[]): Promise<void> {
     const detached: Promise<void>[] = [];
 
@@ -352,21 +222,11 @@ export class TerminalTransitions {
     await Promise.all(detached);
   }
 
-  /** When to come back, given the sequences this process is still running. */
   nextRetryAt(): number | null {
     return this.ledger.nextRetryAt(this.inFlight);
   }
 
-  /**
-   * Record that the sequence finished — but ONLY once every effect it owes has
-   * reached a terminal disposition.
-   *
-   * The gate is the guarantee. While one effect is still pending the outer row
-   * keeps its null result, so the next activation is handed the suffix instead
-   * of being told the turn was done. Called only on the path where every effect
-   * returned: a throw must leave the row with no result, which is what makes the
-   * interruption legible, so this must never move into a `finally`.
-   */
+  /** Records completion only once every effect is terminal; must never move into a `finally`. */
   end(transition: TerminalTransition | null): void {
     if (transition === null) return;
     this.leave(transition);
@@ -381,29 +241,18 @@ export class TerminalTransitions {
       return;
     }
 
-    // Disposition first, release second. Between the two the turn's answer is
-    // already durable and its effects have already happened, so the only reader
-    // that can arrive in between is a recovery — and it reads a settled row.
+    // Disposition first, release second.
     settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED);
 
-    // The tool claims are released only once NO response of this durable turn
-    // can still be settling. Transitions are per response and the close is
-    // detached, so an auto-continuation's next response can already have claimed
-    // a tool while the previous one's effects are still reporting — and a
-    // turn-wide delete here removed that live claim, leaving the next
-    // interruption free to replay an external tool with no guard. The terminal
-    // rows themselves are the witness: while one is open, somebody may still be
-    // using the turn.
+    // Tool claims are released only when no response of this turn can still be settling; open terminal rows
+    // are the witness.
     const openResponses = this.deps.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM tool_effect_claims
       WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
         AND normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}
         AND result_json IS NULL`[0]?.n ?? 0;
 
-    // A live turn may still be MID-CONTINUATION: the next response can already
-    // be executing tools under this turn id and will not have its own terminal
-    // claim until it produces an answer, so an open-claim count of zero does not
-    // mean nobody is using the turn.
+    // A live turn may be mid-continuation with no terminal claim yet, so zero open claims is not enough.
     if (openResponses === 0 && !(this.deps.turnIsLive?.(transition.turnId) ?? false)) {
       void this.deps.sql`DELETE FROM tool_effect_claims
         WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
@@ -413,14 +262,7 @@ export class TerminalTransitions {
     this.ledger.prune(sequenceId);
   }
 
-  /**
-   * The sequences that were claimed and never settled.
-   *
-   * A row with no result is a response that landed and then stopped part-way
-   * through what it caused. The identity comes back off the row itself — the
-   * message id is the call-id suffix — which is what lets a recovery address the
-   * same sequence the interrupted attempt was running.
-   */
+  /** Claimed and never settled; the message id comes back off the call-id suffix. */
   incomplete(): TerminalTransition[] {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
 
@@ -434,8 +276,7 @@ export class TerminalTransitions {
     }));
   }
 
-  /** Whether ANY sequence is owed — one indexed LIMIT-1 read, for the
-   *  activation-time arm decision that must not materialize the roster. */
+  /** One indexed LIMIT-1 read that must not materialize the roster. */
   hasIncomplete(): boolean {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
 
@@ -446,37 +287,16 @@ export class TerminalTransitions {
     `.length > 0;
   }
 
-  /**
-   * Finish what one interrupted sequence still owes, from storage.
-   *
-   * Every input comes off its row, so this needs no hydrated turn and no
-   * actor-specific knowledge: it replays what is due, leaves what is not, and
-   * then closes the outer row — which {@link end} does only if nothing is still
-   * owed, so a genuinely unfinished sequence stays offered.
-   */
+  /** Every input comes off its row; {@link end} closes only if nothing is still owed. */
   async resume(transition: TerminalTransition): Promise<void> {
     await this.ledger.replayOwed(this.sequenceId(transition));
     this.end(transition);
   }
 
-  /**
-   * The whole recovery sweep: every open claim, resumed.
-   *
-   * The entry point for a cold start and for the retry alarm. It reads the
-   * roster from storage rather than from a sequence a caller happens to name,
-   * because the sequences that need it are precisely the ones whose process is
-   * gone.
-   *
-   * Never throws: one unrecoverable response must not stop the next one.
-   */
+  /** Reads the roster from storage. Never throws: one unrecoverable response must not stop the next. */
   async resumeAll(): Promise<void> {
     for (const transition of this.incomplete()) {
-      // ACQUIRED, not merely checked. Two entry points reach this — the startup
-      // reconcile and the retry wake — and so does every wake {@link
-      // armOwedRecovery} arms for an interrupted activation; they interleave at
-      // every await inside the replay. Checking without joining let them all
-      // pass, snapshot the same pending row and invoke the same external effect
-      // concurrently.
+      // Acquired, not merely checked: startup reconcile and retry wakes interleave, and must not replay one row concurrently.
       if (!this.enter(transition)) continue;
 
       try {
@@ -488,38 +308,18 @@ export class TerminalTransitions {
           cause: err,
           otherwise: 'unavailable',
         }), { turnId: transition.turnId, messageId: transition.messageId });
-        // RE-ARMED. A close that threw leaves an incomplete claim with, possibly,
-        // no owed row behind it — and the wake below is derived from owed rows,
-        // so it would arm nothing and an idle process would never retry the
-        // close.
+        // Re-armed: a close that threw may leave no owed row for the wake to derive from.
         await this.armRecovery(transition, { cause: err });
       }
     }
   }
 
-  /**
-   * The wake for what an interrupted activation still owes, and NO replay here.
-   *
-   * What a caller that must not await a replay asks for. The other entries — a
-   * cold start's reconcile, the retry alarm — run with no queue behind them and
-   * may spend what a replay costs: an SMTP round trip, a judge's model call, a
-   * wait on another agent's live head. A Durable Object's fiber-recovery hook
-   * may not, because the platform awaits that hook inside the object's init
-   * gate, where every request on the object waits with it.
-   *
-   * So nothing is written and nothing is replayed: the owed rows already ARE the
-   * record of what is due, and this leaves the sanctioned way back to them. The
-   * claim join in {@link resumeAll} is what makes that re-entry safe — the wake
-   * acquires each sequence before resuming it, so an armed wake and a concurrent
-   * sweep cannot both replay one row.
-   */
+  /** Arms the wake without replaying, for a caller that must not await (a fiber-recovery hook runs inside the init gate). {@link resumeAll}'s claim join makes the re-entry safe. */
   async armOwedRecovery(): Promise<void> {
     const owed = this.incomplete();
 
     if (owed.length === 0) return;
-    // The ledger's own instant when it has one, so a sequence mid-backoff is not
-    // woken early only to defer itself again; the base delay otherwise, which is
-    // what a claim with nothing owed behind it needs in order to be closed.
+    // The ledger's own instant when it has one; the base delay otherwise.
     const at = this.nextRetryAt() ?? this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS;
     const armed = await this.armWake(at);
 
@@ -536,14 +336,7 @@ export class TerminalTransitions {
     }), { owed: owed.length });
   }
 
-  /**
-   * A detached close that rejected, on whatever carrier held it.
-   *
-   * RELEASED: a sequence this process still holds is one every later sweep
-   * skips, which is the one way this design wedges. RE-ARMED: the close
-   * carries the ledger's own final wake, so the rejection can BE that wake
-   * failing, and the rows would stay owed with nothing coming back for them.
-   */
+  /** Released and re-armed: the rejection may be the ledger's final wake failing. */
   async closeFailed(transition: TerminalTransition, failure: { readonly cause: unknown }): Promise<void> {
     this.leave(transition);
     diagnostics.failure('turn.terminal_transition_close_failed', toKinuError({
@@ -552,24 +345,7 @@ export class TerminalTransitions {
     await this.armRecovery(transition, failure);
   }
 
-  /**
-   * Leave a durable way BACK to a sequence whose ledger arm failed.
-   *
-   * `TerminalEffectLedger.run` rejects when the wake it arms fails. The rows are
-   * written and owed at that point, but nothing is due to come back for them:
-   * the response is already persisted and this hook is not re-fired.
-   *
-   * So the wake is attempted again, bounded — a storage write fails transiently,
-   * and a call that refuses twice refuses for a reason a third cannot change.
-   * When every attempt refuses the rows stay owed and VISIBLE with a named
-   * failure, and the next start from any cause sweeps them. That is the honest
-   * state rather than a claim of recovery that was never armed.
-   *
-   * Bounded retries of the SANCTIONED wake and nothing cleverer: a backend's
-   * wake is the only carrier it has, and reaching around it — a Durable Object
-   * writing the platform alarm slot directly, say — destroys the scheduler that
-   * owns it.
-   */
+  /** Bounded retries of the backend's sanctioned wake; when all refuse, rows stay owed and visible with a named failure. Never reach around the wake. */
   async armRecovery(
     transition: TerminalTransition,
     failure: { readonly cause: unknown },
@@ -588,9 +364,7 @@ export class TerminalTransitions {
     });
   }
 
-  /** One BOUNDED attempt at the backend's own wake, saying which outcome it
-   *  was. Two callers arm the same wake for different reasons and report the
-   *  refusal differently, so the attempt is shared and the reporting is not. */
+  /** Shared attempt; callers report the refusal differently. */
   private async armWake(atMs: number): Promise<{ armed: true } | { armed: false; refusal: unknown }> {
     let refusal: unknown;
 
@@ -607,12 +381,7 @@ export class TerminalTransitions {
     return { armed: false, refusal };
   }
 
-  /**
-   * The sweep, plus the wake for whatever it could not finish.
-   *
-   * What a durable retry fires into. Idempotent: it reads the owed roster from
-   * storage and re-arms from what is left, so a duplicate wake costs one read.
-   */
+  /** Idempotent: re-arms from what is left. */
   async replayOwedAndRearm(): Promise<void> {
     await this.resumeAll();
     const next = this.nextRetryAt();

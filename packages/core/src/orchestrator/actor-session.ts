@@ -49,30 +49,12 @@ export interface ActorAdvisorContext {
 export interface ActorSessionOptions {
   readonly runtime: AgentRuntime;
   readonly orchestration: AgentOrchestratorDeps;
-  /** The actor's durable claim ledger. REQUIRED: a turn that cannot write its
-   *  claim cannot issue an effect, so there is no arm of this class that runs
-   *  without one and no host that may decline to wire it. */
+  /** Required: a turn that cannot write its claim cannot issue an effect. */
   readonly claims: ActorClaimStore;
   readonly history: SessionHistory;
-  /**
-   * The installed build the host publishes for its BUILTIN loop, or null when
-   * it publishes none.
-   *
-   * Null is recorded as unknown and read back as unknown. It is not filled in
-   * from a package version that ships as a placeholder, from a descriptor, or
-   * from a digest of the words that name the builtin arm: a claim that says
-   * "this ran under build X" when nobody knows X is worse than one that says
-   * the build is unknown.
-   */
+  /** Null is recorded and read back as unknown, never filled in from a placeholder version or descriptor. */
   readonly installedBuild: string | null;
-  /**
-   * The actor's run-event recorder, for the context-edit evidence the working
-   * history writes.
-   *
-   * Optional and null-tolerant on purpose: the revision rows are the durable
-   * record either way, and a host with no recorder gets no event rather than a
-   * fabricated one.
-   */
+  /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
 }
@@ -92,31 +74,22 @@ export interface ActorExecutionInput {
   readonly extensions: readonly KinuExtension[];
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   readonly scaffoldSpend?: ModelCallSpend;
-  /** Re-checked by the runner before each model call, for a kind whose
-   *  liveness is owned outside this session (a head or a swarm node whose
-   *  controller may have finished with it). */
+  /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
-  /** Stream options the scaffold bridge passes through, for the same kinds. */
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
 }
 
 export interface ActorExecutionResult {
   readonly text: string;
-  /** The turn's answer as the runner selected it (the final step's text),
-   *  or null when the steps carried none and `text` is what streamed or a
-   *  synthesis of the tool results. */
+  /** The runner's selected answer, or null when the steps carried none. */
   readonly answer: string | null;
-  /** How many steps the turn finished in this process. A continuation reads
-   *  it to tell whether the answer is the cut step it resumed (one step) or a
-   *  later step whose narration the cut text belongs to. */
+  /** A continuation reads it to tell whether the answer is the cut step it resumed. */
   readonly steps: number;
   readonly failure: Error | null;
   readonly interrupted: boolean;
   /** Null when preparation failed before any program was selected. */
   readonly program: ActorTurnProgram | null;
-  /** The durable claim this execution ran under — written before the first
-   *  effect, and the identity every revision of the turn is keyed to. Null
-   *  only when preparation failed before the claim was admitted. */
+  /** Written before the first effect; null only when preparation failed before admission. */
   readonly claim: ActorTurnClaim | null;
   /** Admission evidence from the claim ledger; empty when no claim was admitted. */
   readonly admittedMessages: readonly ModelMessage[];
@@ -131,15 +104,11 @@ interface ActiveTurn {
   phase: 'preparing' | 'running' | 'settling';
   profile: ResolvedTurnProfile | null;
   profileInputs: ProfileAuthorityInputs | null;
-  /** Set the moment the durable claim is admitted, cleared never: a settled
-   *  turn's claim is still the identity its late work is attributed to. */
+  /** Never cleared: a settled turn's claim still attributes its late work. */
   claim: ActorTurnClaim | null;
   claimSettled: boolean;
 }
 
-/** One refusal, one sentence: the walk-back is refused by whatever sees work in
- *  flight first — this actor's own turn, or the queue its host's loop holds —
- *  and the operator reads the same thing either way. */
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
 
 /** A logical actor's mutable execution state, independent of its physical host.
@@ -150,14 +119,7 @@ export class ActorSession {
   readonly runtime: AgentRuntime;
   readonly orchestrator: AgentOrchestrator;
   readonly canonical: SessionHistory;
-  /**
-   * The one ledger of woven dynamic-context blocks: the turn weaves through
-   * it, the host's compaction plane prunes it, and every rewrite of the
-   * model-visible stream (a new compaction plan, a walk-back, a cleared
-   * conversation) resets it, because frozen block positions mean nothing
-   * against a stream they were not positioned in. In-memory only, so a cold
-   * start attaches exactly one fresh block.
-   */
+  /** Every rewrite of the model-visible stream resets it: frozen block positions mean nothing on another stream. In-memory only. */
   readonly dynamic = new DynamicContextLedger();
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
@@ -176,16 +138,7 @@ export class ActorSession {
     });
   }
 
-  /** Bind the backend's durable steer persistence onto this actor's inbox.
-   *  Called once, when the session that owns the actor is built — the actor
-   *  itself is created inside `createActorHost`, which has no opinion about
-   *  where a CLI workspace keeps its accepted sends.
-   *
-   *  `onDrain` sees the DESCRIBED rows (the same shape `landedSteers`
-   *  records), so the backend writes exactly the ids the durable transcript
-   *  will carry; `landed` is only recorded after it returns, so a failed
-   *  write cannot leave a row the backend never saw. `turnId` defaults to
-   *  the live turn's id when the binding does not need a queue-aware view. */
+  /** Called once, when the owning session is built. `landed` is recorded only after `onDrain` returns, so a failed write leaves no unseen row. */
   bindSteerPersistence(deps: {
     readonly onAccept?: (steer: AcceptedSteer) => void;
     readonly prepareDrain?: (rows: readonly LandedSteerRow[], atStep: number, reference: MessageReference) => Promise<(selection: ContextSelection) => void>;
@@ -238,8 +191,7 @@ export class ActorSession {
   }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
-  /** The admitted turn's durable claim, or null before it is written. A host
-   *  reads it to settle the claim under the outcome IT named. */
+  /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
 
   get advisorEnabled(): boolean {
@@ -258,8 +210,6 @@ export class ActorSession {
     };
   }
 
-  /** This turn's advisor lane, when this actor has an advisor that is on
-   *  (`startAdvisorLane`: one lane per turn, answered at its checkpoint). */
   startAdvisorLane(lane: AdvisorLaneStart): Promise<void> {
     if (this.runtime.advisorLlm === undefined || !this.advisorEnabled) return Promise.resolve();
 
@@ -314,15 +264,7 @@ export class ActorSession {
     });
   }
 
-  /**
-   * Continue the chat from before `entryId`, on the context the actor held
-   * there. One path for every backend: the durable head and the context
-   * selection move together inside the store's transaction, the woven dynamic
-   * blocks are forgotten with the stream they were positioned in, and the
-   * working history is re-read from the store. Refused while a turn is in
-   * flight here; `assertIdle` is the host's own further condition (a queued
-   * turn its loop holds, say), raised inside the same transaction.
-   */
+  /** Refused while a turn is in flight; `assertIdle` is the host's further condition, raised in the same transaction. */
   async revertConversation(sessionId: string, entryId: string, assertIdle: () => void): Promise<void> {
     this.canonical.revertTo(sessionId, entryId, () => {
       if (this.inFlight) throw new KinuError('denied', REVERT_NEEDS_IDLE);
@@ -349,9 +291,6 @@ export class ActorSession {
     return pending;
   }
 
-  /** The ownership fence an input write runs under: this process still holds
-   *  the actor, and the lease's turn is still in its preparing phase. The
-   *  refusal text names which write was refused. */
   private preparingTurnFence(lease: ActorTurnLease, refusal: string): () => void {
     return () => {
       this.runtime.actor.assertCurrent();
@@ -389,18 +328,7 @@ export class ActorSession {
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
-  /**
-   * Place an admitted turn's input on the working history — the ONE rule for
-   * where a turn's conversation comes from, on every backend.
-   *
-   * A turn queued to answer a delivery (`metadata.drainTurnId`) is a delegated
-   * turn: it opens on the actor's settled working revision, and an actor with
-   * no conversation of its own yet — a child hired for context, whose first
-   * turn is the delivery — is born from the conversation the delivery names,
-   * read lazily since most actors never need it. Every other turn appends its
-   * input. Either way a re-opened turn's prior output follows the input, so
-   * the model continues its own answer rather than starting one.
-   */
+  /** The one rule for where a turn's conversation comes from: a delivery turn (`metadata.drainTurnId`) opens on the settled working revision; others append. */
   async openTurnInput(lease: ActorTurnLease, input: {
     readonly item: Pick<ChatTurnInput, 'metadata'>;
     readonly message: ModelMessage;
@@ -426,13 +354,7 @@ export class ActorSession {
 
 
 
-  /**
-   * Admit one turn on this live instance, under the ids the host issued for it.
-   *
-   * The run id rides the lease because the durable claim binds it: a turn's
-   * effects are attributed to the activation's run, and a recovered activation
-   * that re-admits the same turn writes its own run id under a new epoch.
-   */
+  /** A recovered activation re-admitting the same turn writes its own run id under a new epoch. */
   beginTurn(
     ids: { readonly runId: string; readonly turnId: string },
     mode: WorkMode,
@@ -470,16 +392,13 @@ export class ActorSession {
     this.orchestrator.restrictTurnWorkMode(this.mode);
   }
 
-  /** The user's message, through the inbox: it rides the running turn's next
-   *  step, or, when nothing is running, becomes the next user turn. */
   send(steer: UserSteer & { readonly id: string; readonly mode?: WorkMode }): Promise<SendOutcome> {
     return this.orchestrator.inbox.send({
       kind: USER_MESSAGE_SIGNAL_KIND,
       text: steer.text,
       user: {
         id: steer.id,
-        // The composer's mode when the message names one; the running turn's
-        // otherwise — a leftover reruns under the mode its words were typed in.
+        // A leftover reruns under the mode its words were typed in.
         mode: steer.mode ?? this.mode,
         ...(steer.files !== undefined && { files: steer.files }),
       },
@@ -493,21 +412,12 @@ export class ActorSession {
     return dropped;
   }
 
-  /** Abort the turn in flight and nothing else: what the model has not read
-   *  stays queued, for the settle to rerun as the operator's next turn. */
+  /** Unread input stays queued for the settle to rerun. */
   stop(): void {
     if (this.active?.phase !== 'settling') this.active?.abort.abort();
   }
 
-  /**
-   * Release the lease.
-   *
-   * A claim the host never named an outcome for is settled `indeterminate` —
-   * the same word the tool-effect claim uses — because that is what is known:
-   * the turn was admitted, the lease is being released, and nothing states how
-   * it ended. Naming it `completed` here would be the host's silence read as
-   * success.
-   */
+  /** An unnamed outcome settles `indeterminate`, never `completed`. */
   finishTurn(lease: ActorTurnLease): void {
     const active = this.requireTurn(lease);
 
@@ -517,9 +427,7 @@ export class ActorSession {
     this.active = null;
   }
 
-  /** Name the outcome of the admitted turn's durable claim. Called by the host
-   *  once the turn's answer is durable — the claim outlives this instance, so
-   *  what closes it is a fact about the turn, not about the activation. */
+  /** Called once the turn's answer is durable. */
   settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
     const active = this.requireTurn(lease);
 
@@ -534,17 +442,8 @@ export class ActorSession {
   }
 
   /**
-   * Run the admitted turn: PREPARE the program, CLAIM it durably, then consume
-   * the events — in that order, and the order is the contract.
-   *
-   * Preparation pins the selected version's immutable bytes and their digest.
-   * The claim writes that identity, the issued actor/run/turn/epoch, the turn's
-   * work mode and the context the turn was admitted against — all of it durable
-   * BEFORE the event stream is started, which is before any model, tool or
-   * provider work exists. `startActorTurn` builds the stream but runs nothing:
-   * an async generator's body begins at its first `next()`, which is the loop
-   * below. So a crash between the claim and the first token leaves a claim, and
-   * a crash before the claim leaves a turn that provably did nothing.
+   * Prepare, claim durably, then consume events: the order is the contract. `startActorTurn` runs nothing
+   * until the first `next()`, so a crash before the claim leaves a turn that provably did nothing.
    */
   async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void | Promise<void>): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
@@ -624,8 +523,7 @@ export class ActorSession {
           case 'tool-call': pending.push(event); break;
           case 'tool-result': this.recordToolResult(pending, event); break;
 
-          // Reasoning is written to the durable output by `observe` above and
-          // is never the turn's answer, so the accounting here ignores it.
+          // Reasoning is never the turn's answer.
           case 'reasoning-delta': break;
 
           case 'step-finish':
@@ -638,20 +536,8 @@ export class ActorSession {
           case 'error': {
             this.orchestrator.acc.hadError = true;
 
-            // AN `error` EVENT IS A FAILURE, not a note beside a successful turn.
-            // A thrown cause reaches the catch below and becomes `failure`, but
-            // the scaffold loop reports a dead provider by PUSHING this event
-            // instead of throwing (`scaffold/executor.ts`), so a turn whose
-            // model never answered arrived here with `failure` still null: the
-            // result read as completed, `runHeadInference` saw no break, and
-            // `settleTurnClaim(lease, 'completed')` wrote COMPLETED into the
-            // admission ledger for a turn that produced nothing. A claim that
-            // lies about how a turn ended is worse than no claim, because
-            // recovery verifies claims and would resume nothing.
-            //
-            // FIRST failure wins, and an abort is not one: an interrupted turn
-            // has its own outcome and its own message, and the arms below
-            // already distinguish them.
+            // An `error` event is a failure: the scaffold loop pushes it instead of throwing (`scaffold/executor.ts`),
+            // and a claim must not settle `completed` for a turn that produced nothing. First failure wins; an abort is not one.
             if (failure === null
               && !active.abort.signal.aborted
               && event.message !== INTERRUPTED_TURN) {
@@ -664,18 +550,7 @@ export class ActorSession {
           case 'done':
             this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
 
-            // THE TURN'S ANSWER, over what it streamed. `text` above is every
-            // delta this session saw — one step's narration after another on a
-            // multi-step turn — while the runner's `done` carries the answer
-            // the turn stopped on and already falls back to the steps and to a
-            // tool synthesis when the model ended without prose. Preferring
-            // the deltas made the durable reply the narration and the answer
-            // concatenated: measured 2026-09-16 on build cba44dcb9, the
-            // `public-failure-recovery` episode's answers to "reply with only
-            // PASS or FAIL" were stored as three narration lines with FAIL run
-            // onto the end of the last. The deltas stay the fallback for a
-            // turn that produced no `done` at all — an interrupt throws past
-            // this arm, and the cut text is what the operator saw.
+            // The runner's `done` answer wins over the concatenated deltas; deltas are the fallback when there is no `done`.
             if (event.text.trim()) text = event.text;
 
             if (event.answer !== undefined && event.answer.trim()) answer = event.answer;
@@ -757,10 +632,7 @@ export class ActorSession {
     });
   }
 
-  /** Pair a tool's outcome with the most recent issued call that owns it and
-   *  record the whole exchange — success or refusal — on the turn's spend.
-   *  The most-recent match is last-in-first-out: a tool-call event for the same
-   *  id issued after this one already matched and was removed. */
+  /** Last-in-first-out match: a later call with the same id already matched and was removed. */
   private recordToolResult(
     pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>,
     event: Extract<ChatEvent, { type: 'tool-result' }>,
@@ -769,9 +641,7 @@ export class ActorSession {
 
     while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
     const call = index < 0 ? undefined : pending.splice(index, 1)[0];
-    // The VALUE the tool returned is what the ledger records; the rendered
-    // text is for readers that render. A tool that returned nothing records
-    // the text it rendered to, which is what such a tool's row has always read.
+    // The ledger records the returned value; a tool that returned nothing records its rendered text.
     const timed = event.durationMs === undefined ? {} : { durationMs: event.durationMs };
     this.orchestrator.acc.recordToolCall(event.success
       ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result, ...timed }

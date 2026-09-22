@@ -1,23 +1,7 @@
 /**
- * HeadJournal — persistent journal of all head activity, owned by ONE actor.
- *
- * Lives on the actor's SQLite. Heads themselves run as Facets with their own
- * ephemeral storage; the journal is the spawning actor's *view* of head
- * lifecycle — used by the UI, telemetry, and merge gathering.
- *
- * PRIVATE, and every statement below says so. The run this journal describes is
- * the one THIS actor split: its live roster is carried into this actor's model
- * steps, its reconciliation settles the heads this actor spawned, and
- * `findResumableRun` reclaims by TASK TEXT — so without an owner predicate two
- * actors splitting the same task would reclaim each other's root and grow one
- * tree from two separate runs. The scope column is on each of the five tables
- * rather than joined back to `head_runs`, so the roster read taken on every
- * model step stays one indexed scan.
- *
- * Tables initialized by `initHeadsTables` (schema.ts):
- *   head_journal        — spawn + status + final report metadata per head
- *   head_evidence       — pieces of evidence each head considered
- *   head_merge_results  — cached merge synthesis per root_id
+ * HeadJournal: the spawning actor's persistent view of head lifecycle, private to that actor.
+ * Every statement carries the owner predicate: `findResumableRun` reclaims by task text, so two actors
+ * splitting one task would otherwise reclaim each other's root. Tables: `initHeadsTables` (schema.ts).
  */
 
 import * as v from 'valibot';
@@ -35,7 +19,6 @@ import { mapPage, seekPage, StaleCursorError, type Page, type PageRequest } from
 import type { ActiveRoster } from '../prompting/volatile-context';
 
 
-/** The whole-trace totals a paged transcript reports beside its page. */
 export interface StepTotals {
   readonly steps: number;
   readonly toolCalls: number;
@@ -43,7 +26,6 @@ export interface StepTotals {
 
 const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
-/** One recorded tool call of a head step, as `head_steps.tool_calls_json` holds it. */
 const ToolCallSchema = v.object({
   toolCallId: v.optional(v.string()),
   name: v.string(),
@@ -51,7 +33,6 @@ const ToolCallSchema = v.object({
   output: v.optional(v.unknown()),
 });
 
-/** One changed file, as `head_journal.file_changes_json` holds it. */
 const FileChangeSchema = v.object({
   path: v.string(),
   status: v.picklist(['added', 'removed', 'changed']),
@@ -60,26 +41,20 @@ const FileChangeSchema = v.object({
   binary: v.optional(v.boolean()),
 });
 
-/** One artifact a head pointed at, as `head_journal.artifacts_json` holds it. */
 const ArtifactRefSchema = v.object({
   kind: v.picklist(['file', 'port', 'memory', 'note']),
   ref: v.string(),
   description: v.optional(v.string()),
 });
 
-/** A JSON array column, read back through the shape this module wrote it in.
- *  This module is the column's only writer, so a blob of any other shape is
- *  corruption: it propagates, named, rather than reading back as "this head
- *  recorded nothing" or as fields a type only claimed. */
+/** This module is the column's only writer, so any other shape is corruption and propagates, named. */
 function parseArray<Item extends v.GenericSchema>(item: Item, json: string | null): v.InferOutput<Item>[] {
   if (json === null || json === '') return [];
 
   return v.parse(v.array(item), JSON.parse(json));
 }
 
-/** A run's status when its root kept no row of its own: still running while any
- *  head is; otherwise completed once the merge lands, else `partial` to surface
- *  that the heads finished without a synthesis. */
+/** Rootless run status: running while any head is; completed once merged, else `partial`. */
 function runStatusOf(heads: readonly HeadRunHeadView[], merged: boolean): string {
   if (heads.some((h) => h.status === 'running')) return 'running';
 
@@ -88,12 +63,9 @@ function runStatusOf(heads: readonly HeadRunHeadView[], merged: boolean): string
   return heads.every((h) => h.status === 'completed') ? 'completed' : 'partial';
 }
 
-/** The `head_steps` columns a recorded step is read back from. */
 type StepRow = { text: string | null; reasoning: string | null; tool_calls_json: string | null };
 
-/** One stored trace row as the step it recorded. A NULL `reasoning` reads back
- *  ABSENT and not empty: a model that wrote none and a model that wrote a blank
- *  line are the same to a reader, and `HeadStep` spells that by omission. */
+/** A NULL `reasoning` reads back absent, not empty. */
 function stepOf(row: StepRow): HeadStep {
   return {
     text: row.text ?? '',
@@ -102,19 +74,7 @@ function stepOf(row: StepRow): HeadStep {
   };
 }
 
-/**
- * The stored usage columns as a {@link Usage}.
- *
- * A NULL column becomes an ABSENT field, which is the whole point of the
- * columns having no default: it keeps "this head's provider never reported"
- * distinguishable from "this head reported zero" all the way out to the
- * surface, where the difference is a head that may have cost real money versus
- * one that demonstrably cost nothing.
- *
- * Exported for `read-models/workspace-spend.ts`, which reads the same row for
- * the workspace total. Two decoders over one storage shape is how a head's
- * cache reads end up counted on one surface and dropped on the other.
- */
+/** A NULL column becomes an absent field (never reported, not zero). Shared with `read-models/workspace-spend.ts` so there is one decoder. */
 export function storedUsage(row: StoredHeadUsage): Usage {
   const usage: { -readonly [K in keyof Usage]: number } = {};
 
@@ -127,20 +87,7 @@ export function storedUsage(row: StoredHeadUsage): Usage {
   return usage;
 }
 
-/**
- * The columns behind a {@link HeadRunHeadView}, and the fold from them.
- *
- * `last_step_at` is an aggregate over `head_steps` rather than a column on the
- * head row: the steps ARE the progress record, so a second field could only ever
- * disagree with them. That aggregate is ALL a run view takes from that table —
- * the prose belongs to {@link HeadJournal.readSteps}, which one opened branch
- * asks for by id.
- *
- * Usage arrives as {@link StoredHeadUsage}, not as two token columns: {@link
- * storedUsage} folds every usage column the journal stores, and naming a subset
- * here is how a cache-read or reasoning figure gets dropped on the way to a
- * surface while every type still checks.
- */
+/** `last_step_at` aggregates `head_steps`, the progress record; usage arrives whole as {@link StoredHeadUsage}. */
 interface HeadViewRow extends StoredHeadUsage {
   id: string; parent_id: string | null; depth: number;
   task: string; rationale: string | null; status: string;
@@ -176,36 +123,24 @@ export interface HeadJournalRow extends StoredHeadUsage {
   merge_strategy: MergeStrategy;
 }
 
-/** One still-open head run, as the live fork roster needs it. */
 export interface LiveHeadRun {
   readonly rootId: HeadId;
-  /** The split's "why", as recorded by recordSplit. Empty when never labelled. */
+  /** Empty when never labelled. */
   readonly rationale: string;
   readonly running: number;
   readonly total: number;
 }
 
-/**
- * Why a head carries no report of its own on a run that settled.
- *
- * The synthesis is the run's answer, and it is written from the reports that
- * arrived. A head still in flight when that happens has missed its own run:
- * `head_merge_results` is what every reader treats as the settlement, so the
- * head cannot report into it afterwards. Its own sentence rather than
- * `FORK_INTERRUPTED_REASON`, which is about a later activation finding no
- * executor — a different fact with a different remedy.
- */
+/** Its own sentence, not `FORK_INTERRUPTED_REASON`: the synthesis went ahead without this head. */
 export const UNREPORTED_AT_MERGE_REASON =
   'no report at the synthesis: the run merged what had arrived, and this head '
   + 'was still in flight when it did';
 
-/** One run whose heads were still marked `running` when nothing was left to
- *  run them — what {@link HeadJournal.abandonRunning} settled. */
+/** What {@link HeadJournal.abandonRunning} settled. */
 export interface AbandonedHeadRun {
   readonly rootId: HeadId;
-  /** The split's "why", as recorded by recordSplit. Empty when never labelled. */
+  /** Empty when never labelled. */
   readonly rationale: string;
-  /** Heads this settled — the ones the roster had been counting as running. */
   readonly abandoned: number;
   readonly total: number;
 }
@@ -213,15 +148,12 @@ export interface AbandonedHeadRun {
 export class HeadJournal {
   protected readonly actorId: string;
 
-  /** Bind the journal to ONE actor. `actorId` is captured from the handle once
-   *  so a live journal cannot be re-pointed, and `assertCurrent()` runs before
-   *  every statement — the binding's own validation, not a second policy. */
+  /** `actorId` is captured once; `assertCurrent()` runs before every statement. */
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }
 
-  /** Record the run identity for a split so its heads group under one root —
-   *  the rationale is the "why split", shown as the run's header label. */
+  /** The rationale is the run's header label. */
   recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at)
@@ -230,44 +162,10 @@ export class HeadJournal {
   }
 
   /**
-   * Open this branch's row — or RE-OPEN the row this id already has.
-   *
-   * THE ONE RESET TRANSITION, and both re-drive paths reach it. It is an UPSERT
-   * because a branch has no durable checkpoint: a re-drive can only re-RUN it, and
-   * the one thing it must not do is re-run it as a NEW branch. Both callers therefore
-   * arrive with an id they already used —
-   *
-   *   - a swarm's re-entry re-runs a node that was spawned and never recorded a tree
-   *     row, under the id its own row carries (`strategy/swarm-resume.ts`);
-   *   - a fork's re-drive re-spawns a head whose id is DERIVED from its branch point
-   *     and slot rather than minted (`heads/controller.ts`).
-   *
-   * so neither needs a reset of its own, and there is no second place where a head
-   * row's outcome is cleared.
-   *
-   * A plain `INSERT` cannot be reached twice, so a re-drive would have to retire the
-   * previous rows and mint a parallel set: a five-branch request would grow five
-   * fresh `aborted` rows per attempt until thirty rows described five branches, and
-   * the surface would draw every one of them as a failure.
-   *
-   * WHAT A RE-OPEN CLEARS is everything the previous attempt asserted about an
-   * OUTCOME — the terminal status, its clock, its summary, its error, its decisions
-   * and artifacts, and every usage column. Usage especially: a re-attempt that
-   * inherited the dead one's token counts would bill the search twice for the work
-   * it is doing again.
-   *
-   * `spawned_at` MOVES TO NOW, and that is load-bearing rather than cosmetic.
-   * {@link markInterrupted} and {@link abandonRunning} are both bounded by
-   * `spawnedBefore`, so a re-opened row is outside a sweep running beside it —
-   * whichever order the two run in.
-   *
-   * THE STEPS GO WITH IT. `head_steps` is this branch's transcript and the seq space
-   * is its own, so leaving the dead attempt's tail under a shorter new one would
-   * render a transcript no single attempt ever produced.
-   *
-   * THE CONFLICT ARM IS THE RE-DRIVE, and a FIRST attempt never reaches it: a fresh
-   * root's ids have never been written. So this is not a general-purpose upsert with
-   * a hidden second meaning — the insert opens a branch, the update re-opens one.
+   * Open this branch's row, or re-open the one this id already has: the one reset transition, reached by
+   * swarm re-entry (`strategy/swarm-resume.ts`) and fork re-drive (`heads/controller.ts`). A re-open clears
+   * every outcome field (usage especially) and the branch's steps, and moves `spawned_at` to now so
+   * `spawnedBefore`-bounded sweeps skip it. A first attempt never reaches the conflict arm.
    */
   insertSpawn(input: HeadInput): void {
     this.actor.assertCurrent();
@@ -328,33 +226,9 @@ export class HeadJournal {
   }
 
   /**
-   * Mark heads still claiming to execute as `interrupted` — the FIRST half of a
-   * cold activation's reconciliation, and a non-terminal state.
-   *
-   * `running` means "spawned, and no report recorded". Nothing keeps a head alive
-   * across a process exit or a DO eviction, so at the start of an activation that
-   * predicate is false for every row still carrying it, whatever became of the
-   * executor. Left alone the row is PERMANENT, and its root then satisfies
-   * {@link listLive}'s running-head predicate forever, asserting the fork is in
-   * flight into every model step for the life of the workspace. That is what it
-   * did: `background_jobs` read `cancelled by operator` while the dynamic-context
-   * block kept rendering "4 of 4 heads running".
-   *
-   * WHY THIS IS NOT THE RETIREMENT. Curing that lie and DISCARDING the run are two
-   * different acts, and doing them in one write is what cost the owner a search:
-   * five heads were retired with "nothing left that could run it" while the durable
-   * job that could re-enter them was still re-drivable. `interrupted` says exactly
-   * what is known at this instant — the executor is gone, the outcome is not — so
-   * the roster stops claiming the work is live while the run stays re-enterable.
-   * {@link abandonRunning} is the terminal half, and it runs only for a run the
-   * resume gate refused.
-   *
-   * `spawnedBefore` bounds it to rows an EARLIER activation spawned, so a head this
-   * activation has already started is outside it whichever order the two run in.
-   *
-   * Returns the runs THIS call touched, which is a log of the transition and not
-   * the resume gate's offered set: a row an earlier activation already marked is
-   * not marked twice. {@link unfinishedRoots} is what the gate is offered.
+   * First, non-terminal half of cold-activation reconciliation: stale `running` rows become `interrupted`, so
+   * the roster stops claiming live work while the run stays re-enterable. Bounded by `spawnedBefore`.
+   * Returns only runs this call touched; the gate is offered {@link unfinishedRoots}.
    */
   markInterrupted(
     scope?: { readonly spawnedBefore?: number },
@@ -365,8 +239,7 @@ export class HeadJournal {
     const runs = this.unfinishedRuns(null, null, before);
 
     if (runs.length === 0) return [];
-    // No `error_message`: nothing has failed. The column is the retirement's, and
-    // writing a reason here is how a reader would come to believe the run ended.
+    // No `error_message`: nothing has failed; the column is the retirement's.
     void this.sql`UPDATE head_journal
       SET status = 'interrupted', completed_at = ${now}
       WHERE actor_id = ${this.actorId} AND status = 'running'
@@ -375,18 +248,7 @@ export class HeadJournal {
     return runs;
   }
 
-  /**
-   * Every root still holding an unfinished head — `running` or `interrupted` —
-   * spawned before `spawnedBefore`. The resume gate's OFFERED SET.
-   *
-   * Deliberately not {@link markInterrupted}'s return value. That names only the
-   * rows this activation transitioned, so a run an earlier activation marked was
-   * offered to nobody while {@link abandonRunning} swept exactly those rows: the
-   * re-drive the job registry had already claimed was retired underneath it, and
-   * the agent was told to re-fork work that was executing. The unfinished set is
-   * the same population the retirement reads, so what can be spared is what can
-   * be swept.
-   */
+  /** The resume gate's offered set: the same population {@link abandonRunning} sweeps, not {@link markInterrupted}'s return. */
   unfinishedRoots(spawnedBefore: number): HeadId[] {
     this.actor.assertCurrent();
 
@@ -394,35 +256,9 @@ export class HeadJournal {
   }
 
   /**
-   * Settle heads that are not going to report as `aborted` — the last terminal
-   * writer of `head_journal.status`.
-   *
-   * TWO CALLERS, one meaning: this run is over and nothing will continue it.
-   * The reconciliation calls it for a run the resume gate REFUSED, and a re-entry
-   * calls it `rootId`-scoped for the attempt it is taking over. Same transition and
-   * the same `error_message` column for both, so a reclaim does not become a second
-   * writer of the status this bug was caused by having only one of.
-   *
-   * The predicate covers `interrupted` as well as `running`, because
-   * {@link markInterrupted} runs first on every cold activation: a retirement that
-   * only looked at `running` would find nothing exactly when it is needed.
-   *
-   * `scope` narrows it, and all three narrowings are load-bearing.
-   *
-   * `rootId` narrows to one run — the re-entry's own scoping. Omitted, it sweeps
-   * every run.
-   *
-   * `exceptRoots` spares the runs the resume gate CLAIMED. Those are being
-   * continued, and telling the agent they were retired is both false and expensive:
-   * it is what sent the owner's agent off to re-fork a search that was running.
-   *
-   * `spawnedBefore` bounds the write to rows an earlier activation spawned, so a
-   * re-entry's own fresh heads are never retired by a sweep running beside it.
-   * Omitted, it sweeps regardless of spawn time, which is what a `rootId`-scoped
-   * reclaim wants: it is retiring exactly the attempt it is taking over.
-   *
-   * Returns the runs it settled so the caller can tell the agent — a fork
-   * disappearing from the roster is not the same as the agent learning it is gone.
+   * Settle unfinished (`running` or `interrupted`) heads as `aborted`; the last terminal writer of
+   * `head_journal.status`. `rootId` scopes to one run, `exceptRoots` spares gate-claimed runs, and
+   * `spawnedBefore` protects fresh heads. Returns the settled runs so the caller can tell the agent.
    */
   abandonRunning(
     reason: string,
@@ -438,13 +274,11 @@ export class HeadJournal {
     const before = scope?.spawnedBefore ?? null;
     const spared = new Set(scope?.exceptRoots ?? []);
 
-    // Filtered here rather than in the predicate: this executor binds one value per
-    // interpolation, so a set cannot cross into SQL without hand-built placeholders.
+    // Filtered here: this executor binds one value per interpolation, so a set cannot cross into SQL.
     const runs = this.unfinishedRuns('interrupted', root, before)
       .filter((run) => !spared.has(run.rootId));
 
-    // One write per run, for the same reason — and the retiring set is the runs
-    // just read, so the rows a caller is told about are exactly the rows written.
+    // One write per run over the runs just read, so reported rows are exactly the written rows.
     for (const run of runs) {
       void this.sql`UPDATE head_journal
         SET status = 'aborted', completed_at = ${now}, error_message = ${reason}
@@ -456,14 +290,7 @@ export class HeadJournal {
     return runs;
   }
 
-  /**
-   * Runs holding a head that has not reported, with the count this scope covers.
-   *
-   * ONE query for both transitions above, so the rows a caller is told about and
-   * the rows the following write touches cannot come to disagree about a scope.
-   * `alsoState` admits a second unfinished status beside `running` — null admits
-   * none, because null equals nothing in SQL.
-   */
+  /** One query for both transitions, so the reported and written scopes cannot disagree. A null `alsoState` admits nothing. */
   private unfinishedRuns(
     alsoState: string | null,
     root: HeadId | null,
@@ -490,29 +317,9 @@ export class HeadJournal {
   }
 
   /**
-   * The unfinished run for this task, or null — the reclaim that keeps ONE
-   * request from becoming N runs.
-   *
-   * A fork's background job is re-driven on eviction/exit recovery
-   * (jobs/runner.ts), and re-driving a fork means re-running its heads: they are
-   * ephemeral facets with no durable checkpoint, so there is nothing else a resume
-   * can do. A tree search survived that because its re-entry reclaims the same
-   * search by task (MctsSearchStore.findResumable), so its tree keeps ONE root_id
-   * across any number of re-drives. Heads had no such reclaim, so every re-drive
-   * minted a fresh nanoid root — one request appearing as four near-identical
-   * `merged · N branches` runs, each having really spawned and paid for its own
-   * N heads.
-   *
-   * Keyed the same way MCTS keys it: the task, plus not-yet-settled. `head_runs`
-   * has no status of its own, and a cached merge IS the settlement, so a run
-   * with no `head_merge_results` row is one that never reached an answer.
-   * Deliberately independent of `head_journal.status`: {@link abandonRunning}
-   * retires stale head rows at start of life, BEFORE any resume runs, so a
-   * head-status predicate would find nothing exactly when it is needed.
-   *
-   * THE OWNER PREDICATE IS WHAT MAKES THE TASK KEY SAFE. Two actors handed the
-   * same instruction split the same rationale text, so without it this reclaim
-   * would hand one actor the other's root and grow one tree from two runs.
+   * The unfinished run for this task, so one request stays one run across re-drives. Keyed like MCTS: the
+   * task plus no `head_merge_results` row; independent of head status, which `abandonRunning` may already
+   * have settled. The owner predicate is what makes the task key safe.
    */
   findResumableRun(task: string): HeadId | null {
     this.actor.assertCurrent();
@@ -527,17 +334,7 @@ export class HeadJournal {
     return rows[0]?.root_id ?? null;
   }
 
-  /**
-   * Record one finished step of a head that is still running.
-   *
-   * The ONLY writer of `head_steps`. A head calls this as each step lands, so
-   * `assembleRun` serves a branch's trace mid-flight rather than an empty pane for
-   * a running fork. Keyed `${headId}-s${seq}` and written with INSERT OR REPLACE
-   * so a retried step overwrites rather than duplicates.
-   *
-   * `created_at` is this step's own arrival time and is what liveness is read
-   * from — do not rewrite it in bulk later.
-   */
+  /** The only writer of `head_steps`, keyed `${headId}-s${seq}` with INSERT OR REPLACE. `created_at` is liveness: never rewrite it in bulk. */
   appendStep(headId: HeadId, seq: number, step: HeadStep): void {
     this.actor.assertCurrent();
     void this.sql`INSERT OR REPLACE INTO head_steps
@@ -554,19 +351,9 @@ export class HeadJournal {
       WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq`.map(stepOf);
   }
 
-  /** Reading bound and default for one trace page. A page is what one click
-   *  opens; the whole trace stays reachable through the cursor. */
   static readonly STEP_PAGE = { limit: 60, max: 200 } as const;
 
-  /**
-   * One page of a head's recorded trace — newest page first, each page
-   * oldest-first, cursor anchored on the row id (`${headId}-s${seq}`; `seq` is
-   * the total order, so a seek on it cannot tie). The page is built over the
-   * RAW rows and only then reversed, so the cursor is minted on the row the
-   * query actually stopped at, exactly as the chat history's
-   * `chronological` does. `readSteps` stays for the readers that reconstruct
-   * the whole trace server-side (swarm resume); the page is the wire contract.
-   */
+  /** Newest page first, each page oldest-first; the cursor is minted on the raw row the query stopped at. */
   readStepsPage(headId: HeadId, request: PageRequest = {}): Page<HeadStep> {
     this.actor.assertCurrent();
     const limit = Math.max(1, Math.min(HeadJournal.STEP_PAGE.max, Math.floor(request.limit ?? HeadJournal.STEP_PAGE.limit)));
@@ -586,9 +373,6 @@ export class HeadJournal {
       limit, (row) => row.id), (rows) => rows.slice().reverse().map(stepOf));
   }
 
-  /** How much trace this head has, steps and tool calls across them — the
-   *  honest totals behind the transcript's metrics when only a page is on the
-   *  wire. Two aggregates, one scan. */
   countSteps(headId: HeadId): StepTotals {
     this.actor.assertCurrent();
 
@@ -599,10 +383,7 @@ export class HeadJournal {
     return { steps: row?.steps ?? 0, toolCalls: row?.tools ?? 0 };
   }
 
-  /** The seq an anchor names, or StaleCursorError when it names nothing — the
-   *  caller restarts the walk rather than resuming from a row that is gone. A
-   *  cursor minted against another actor's trace names nothing here, which is
-   *  the same answer as a row that has been re-opened away. */
+  /** StaleCursorError when the anchor names nothing, including another actor's trace. */
   private stepAnchor(headId: HeadId, after: string): number {
     const row = this.sql<{ seq: number }>`
       SELECT seq FROM head_steps
@@ -667,26 +448,8 @@ export class HeadJournal {
   }
 
   /**
-   * The settlement — and the transition that CLOSES the roster.
-   *
-   * A cached merge IS the run's settlement: `findResumableRun` treats a run with
-   * a `head_merge_results` row as finished, and `assembleRun` reports it
-   * `completed`. So every head still claiming to execute has to be settled HERE,
-   * in the same transition, and before the merge row exists: a settled run whose
-   * roster still counts a running head is a run the surface describes as *settled
-   * · 1 running · 3 reported*, and a run that has already synthesised cannot
-   * accept a report from that head afterwards.
-   *
-   * `aborted` with a reason, which is the terminal state {@link abandonRunning}
-   * writes for the same fact — a head that will not report. NOT
-   * `FORK_INTERRUPTED_REASON`: that sentence is about a later activation finding
-   * no executor, and what happened here is that the synthesis went ahead without
-   * this head. The counts stay total-consistent because the status moves and
-   * nothing else does — no row is added, none is removed.
-   *
-   * Idempotent in both halves: `INSERT OR REPLACE` for the merge, and a
-   * predicate that matches only unfinished rows, so settling twice writes the
-   * same row and touches no head the first pass already closed.
+   * The settlement: a cached merge closes the run, so every unfinished head is settled `aborted` in the same
+   * transition, before the merge row exists. Idempotent in both halves.
    */
   cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
     this.actor.assertCurrent();
@@ -713,25 +476,7 @@ export class HeadJournal {
               ${Date.now()}, ${strategy})`;
   }
 
-  /**
-   * The runs that still have a head in flight — the live fork roster the
-   * dynamic context carries into every model step.
-   *
-   * Deliberately narrower than {@link listRuns}: no per-head steps, no merge
-   * synthesis, one query. It is read on every request of every turn, and a
-   * roster line only has to say which run is open and how far along it is.
-   *
-   * The `root_id IN (running)` subquery is what keeps it that way. Aggregating
-   * the whole table first and filtering the groups with `HAVING running > 0`
-   * reads every head ever spawned — the journal has no GC, so that scan grows
-   * for the life of the workspace and is paid on every model step, against a
-   * roster that is empty almost all the time. Measured on bun:sqlite with this
-   * DDL, one live root among settled ones: 1.6 ms at 4k head rows and 41.5 ms
-   * at 80k, versus 0.004 ms and 0.007 ms here — the scan grows with the table
-   * and this does not. Selecting the open roots off
-   * `idx_head_journal_status` first bounds the aggregate to those roots, and
-   * the result is identical: every root with a running head, and no other.
-   */
+  /** Read on every model step, so the `root_id IN (running)` subquery bounds the aggregate to open roots via `idx_head_journal_status` instead of scanning all history. */
   listLive(limit = 8): ActiveRoster<LiveHeadRun> {
     this.actor.assertCurrent();
 
@@ -762,14 +507,7 @@ export class HeadJournal {
     return { items, total };
   }
 
-  /**
-   * Every run with a head still marked running, as full run projections.
-   *
-   * This is an authority/recovery read, not a UI page: omitting a 101st root
-   * would leave it permanently live after an activation sweep. The root query
-   * stays bounded by the running-status index rather than by journal history,
-   * then each root uses the same projection as listRuns/readRun.
-   */
+  /** An authority/recovery read, not a UI page: it must not be windowed. */
   listRunningRuns(): HeadRunView[] {
     this.actor.assertCurrent();
 
@@ -783,11 +521,7 @@ export class HeadJournal {
     return roots.map((row) => this.assembleRun(row.root_id, row.spawned_at));
   }
 
-  /** Whether ANY head is still unfinished — `running` OR `interrupted`, one
-   *  LIMIT-1 read for the activation-time arm decision that must not
-   *  materialize a run. `interrupted` counts because the resume gate re-offers
-   *  every unfinished root: a prior reconcile leaves claimed and gate-failed
-   *  roots interrupted on purpose, and their recovery is still owed. */
+  /** `interrupted` counts: claimed and gate-failed roots are left interrupted on purpose. */
   hasUnfinishedHeads(): boolean {
     this.actor.assertCurrent();
 
@@ -797,13 +531,7 @@ export class HeadJournal {
         AND (status = 'running' OR status = 'interrupted') LIMIT 1`.length > 0;
   }
 
-  /**
-   * Running heads of BRANCH runs alone, as bare id/root pairs, oldest first,
-   * LIMIT-bounded — the activation sweep's read. The filter and the budget sit
-   * in the query because the sweep runs in the init gate: sealing a row moves
-   * it off `status = 'running'`, so the mutation is the cursor and a backlog
-   * deeper than one budget drains across wakes without a stored position.
-   */
+  /** The activation sweep's read, run in the init gate. Sealing moves a row off `running`, so the mutation is the cursor. */
   listRunningBranchHeads(
     prefix: string, limit: number, spawnedBefore: number,
   ): { id: HeadId; rootId: HeadId; task: string }[] {
@@ -817,12 +545,7 @@ export class HeadJournal {
       .map((row) => ({ id: row.id, rootId: row.root_id, task: row.task }));
   }
 
-  /** Recent runs for the Exploration surface, grouped by root_id. Grouping is
-   *  driven by head_journal (always present) so top-level splits — whose
-   *  synthetic root has no head row and whose heads all have parent_id NULL —
-   *  collapse into ONE run instead of N empty roots. head_runs supplies the
-   *  rationale label; head_steps the per-head trace; head_merge_results the
-   *  synthesis. */
+  /** Grouped by root_id from head_journal, so a top-level split collapses into one run. */
   listRuns(limit: number): HeadRunView[] {
     this.actor.assertCurrent();
 
@@ -834,9 +557,7 @@ export class HeadJournal {
     return roots.map((r) => this.assembleRun(r.root_id, r.spawned_at));
   }
 
-  /** One named run, independent of the recent-list window used by summaries.
-   *  Null for a root this actor never ran, which is also the answer for a root
-   *  a sibling owns. */
+  /** Null for a root this actor never ran, including one a sibling owns. */
   readRun(rootId: HeadId): HeadRunView | null {
     this.actor.assertCurrent();
 
@@ -847,28 +568,7 @@ export class HeadJournal {
     return row?.spawned_at == null ? null : this.assembleRun(rootId, row.spawned_at);
   }
 
-  /**
-   * One head, as a reader of a single branch needs it — the same projection
-   * {@link listRuns} folds, scoped to one id instead of to a run.
-   *
-   * Two scopings of ONE projection: the batch query in {@link assembleRun} joins
-   * every head of a run in a single pass, and this one answers a reader that
-   * opened exactly one branch. Both hand their row to {@link headViewOf}, so
-   * neither can describe a head differently from the other. Neither loads the
-   * trace — {@link readSteps} is its own read, taken by the one reader that
-   * renders prose.
-   *
-   * EVERY USAGE COLUMN IS NAMED, and that is this projection's own defect
-   * closed rather than a detail of the query. {@link storedUsage} folds all
-   * seven, {@link HeadViewRow} declares all seven, and this SELECT named two —
-   * so a column the query never asked for came back `undefined`, which
-   * `storedUsage` cannot tell from a provider that reported nothing. The
-   * surface that reads one branch's spend (`read-models/node-transcript.ts`,
-   * whose `usage` says "absent fields mean the provider never reported that
-   * count") therefore showed every head as having no cache reads, no reasoning
-   * tokens and no `neurons` — the fractional figure Workers AI actually bills —
-   * while the run projection beside it reported all of them from the same rows.
-   */
+  /** Same projection as {@link listRuns} via {@link headViewOf}. Every usage column must be named: an unselected one reads back as never reported. */
   readHeadView(headId: HeadId): HeadRunHeadView | null {
     this.actor.assertCurrent();
 
@@ -885,21 +585,7 @@ export class HeadJournal {
     return row ? headViewOf(row) : null;
   }
 
-  /**
-   * WHEN THIS HEAD LAST DID ANYTHING — its newest step, or its spawn where it has
-   * taken none — and null for a head this journal never opened.
-   *
-   * THE LIVENESS READ, for a watchdog that has to tell a head which is between steps
-   * from one which is wedged on a call that never answers. It is the same aggregate
-   * {@link readHeadView} folds, asked once per envelope per head without the rest of
-   * the projection. Both read `MAX(created_at)` over the same two tables, so there is
-   * one definition of progress and this is its cheap scoping.
-   *
-   * NULL IS ABSENT AND NOT ZERO: a head with no row has not been spawned, which a caller
-   * distinguishes from a head spawned and idle since. Falling back to `spawned_at` inside
-   * the row is not the same fabrication — a head that has taken no step has been idle
-   * since it was spawned, which is a fact the row states.
-   */
+  /** Newest step, or spawn when none; null for a head never opened (absent, not zero). Same `MAX(created_at)` as {@link readHeadView}. */
   lastActivityAt(headId: HeadId): number | null {
     this.actor.assertCurrent();
 
@@ -913,9 +599,6 @@ export class HeadJournal {
   }
 
   private assembleRun(rootId: HeadId, spawnedAt: number): HeadRunView {
-    // last_step_at comes from the trace itself rather than a column on the head
-    // row: the steps ARE the progress record, so a second field could only ever
-    // disagree with them.
     const rows = this.sql<HeadViewRow>`
       SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,
              j.token_input, j.token_output, j.token_cache_read, j.token_cache_write,
@@ -926,9 +609,7 @@ export class HeadJournal {
       WHERE j.actor_id = ${this.actorId} AND j.root_id = ${rootId}
       GROUP BY j.id ORDER BY j.depth, j.spawned_at`;
 
-    // A recursive sub-split's parent head is the run header, not one of its own
-    // children; for top-level splits (synthetic root) nothing matches, so all
-    // rows are heads.
+    // A sub-split's parent head is the run header; for a synthetic root nothing matches.
     const rootRow = rows.find((h) => h.id === rootId) ?? null;
 
     const heads: HeadRunHeadView[] = rows
@@ -940,8 +621,7 @@ export class HeadJournal {
 
     const rationale = runRow?.rationale ?? rootRow?.rationale ?? '';
 
-    // An empty task column is an absent one here: a run header with no text of
-    // its own is labelled by its rationale, then by its first head's task.
+    // An empty task is labelled by the rationale, then the first head's task.
     const named = [rootRow?.task, rationale, heads.at(0)?.task].find((candidate) => candidate !== undefined && candidate !== '');
     const task = named ?? '(head run)';
 
@@ -958,10 +638,7 @@ export class HeadJournal {
     return { rootId, task, rationale, status, spawnedAt, heads, merge };
   }
 
-  /** What each head in this tree changed on the shared planes, heads that
-   *  changed nothing omitted. The queryable form of MergeResult.fileChanges —
-   *  rebuilt from the journal rather than cached beside the merge, so a replay
-   *  can never disagree with the live run. */
+  /** Rebuilt from the journal, not cached, so a replay cannot disagree with the live run. */
   readFileChanges(rootId: HeadId): HeadFileChangeSet[] {
     this.actor.assertCurrent();
 
@@ -996,8 +673,6 @@ export class HeadJournal {
     const r = rows[0];
 
     if (!r) return null;
-    // Evidence aggregate + headIds are not cached as separate columns —
-    // rebuild from head_journal/head_evidence on demand.
     const tree = this.readTree(rootId);
     const evidence: Evidence[] = tree.flatMap((h) => this.readEvidence(h.id));
     const headIds: HeadId[] = tree.filter((h) => h.parent_id == null || h.parent_id === '').map((h) => h.id);
@@ -1011,17 +686,14 @@ export class HeadJournal {
       blindSpots: parseArray(v.string(), r.blind_spots_json),
       evidenceAggregate: evidence,
       headIds: ids,
-      // Per-head grounded scores are a live-run signal, not persisted as columns;
-      // the cached read (UI replay) carries none.
+      // Grounded scores are live-only; the cached read carries none.
       headScores: [],
       fileChanges: this.readFileChanges(rootId),
       grounded: false,
       costSummary: {
         headCount: r.cost_head_count,
         headsWithFindings: this.countHeadsWithFindings(ids),
-        // NULL back to an absent field: the domain type spells "no head
-        // reported" by omission, the column by NULL, and a replayed merge must
-        // make the same claim the live one made.
+        // NULL back to an absent field, as the live merge reported it.
         totalTokens: r.cost_total_tokens ?? undefined,
         totalWallClockMs: r.cost_total_wall_ms,
         maxDepth: r.cost_max_depth,
@@ -1029,9 +701,7 @@ export class HeadJournal {
     };
   }
 
-  /** How many of these heads banked a finding. Derived from the journal rows
-   *  rather than stored as a column, so a replayed merge can never disagree with
-   *  the live one — and through the SAME predicate the merge path uses. */
+  /** Derived through the same predicate as the merge path, not stored. */
   private countHeadsWithFindings(headIds: readonly HeadId[]): number {
     return headIds.filter((id) => {
       const row = this.sql<{ status: string; decisions_json: string | null; artifacts_json: string | null }>`
@@ -1041,8 +711,6 @@ export class HeadJournal {
       if (!row) return false;
 
       return headProducedFindings({
-        // 'running' is not a terminal status: a head still in flight has banked
-        // nothing beyond what the recorded arrays below already show.
         status: row.status === 'completed' ? 'completed' : 'aborted',
         evidence: this.readEvidence(id),
         decisions: parseArray(DecisionSchema, row.decisions_json),
