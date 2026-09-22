@@ -47,6 +47,20 @@
  *   - THE CEILING is the highest complexity in the tree. Nothing may exceed it,
  *     locked or not, so the envelope cannot widen without an argument.
  *
+ * ## What `--lock` may write
+ *
+ * The lock only shrinks or is re-keyed. `--lock` lowers the ceiling, lowers the
+ * budget line, lowers a function's number and drops a function that no longer
+ * reaches the line; it refuses to raise any of them, and a refused run writes
+ * nothing at all. The one key it will record that the lock has never held is one
+ * paid for by a key that vanished at the same number or higher — a rename or a
+ * file move — or one below the line the lock already held, which the line
+ * descending onto it puts in scope at a number that was always inside the
+ * budget. So the ceiling is an argument to have before the commit rather than a
+ * number that moves while the gate stays green: measured over the 57 revisions
+ * of this lock, 18 entries were re-recorded HIGHER across 14 functions in the
+ * two weeks after it shipped.
+ *
  * Measured 2026-09-01 over 1,906 parseable tracked files and 48,048 functions:
  * p50 1, p90 4, p99 14, p99.9 39, ceiling 126 (`handleUserRequest`). 47
  * functions sit at or above the line. So today's code passes by construction
@@ -74,7 +88,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 
 import * as v from 'valibot';
 
-import { assertMeasured, finding } from './gate-ratchet';
+import {
+  assertMeasured, finding, refuseLock, shrinkOnly,
+  type LockedNumber, type LockRefusal,
+} from './gate-ratchet';
 import { isParseable, readMatching } from './sources';
 import { declaredName, parse, type SyntaxNode } from './syntax';
 
@@ -323,6 +340,8 @@ const LockEntrySchema = v.object({
   complexity: v.pipe(v.number(), v.minValue(1)),
 });
 
+type LockEntry = v.InferOutput<typeof LockEntrySchema>;
+
 /**
  * The budget, machine-written by `--lock` and never edited by hand.
  *
@@ -349,6 +368,87 @@ export function writeBudget(budget: Budget, path = LOCK): number {
   writeFileSync(path, `${JSON.stringify(budget, null, 2)}\n`);
 
   return budget.inventory.length;
+}
+
+/** The two tree-wide numbers ride the same shrink rule as the inventory, under
+ *  keys no function can collide with: a function is keyed `file#name` and
+ *  always carries the `#`. */
+const CEILING = 'ceiling';
+
+const BUDGET_LINE = 'budget line';
+
+export interface ShrunkBudget {
+  /** What `--lock` writes, or nothing at all when the merge was refused. */
+  readonly budget: Budget | undefined;
+  readonly refusals: readonly LockRefusal[];
+}
+
+/**
+ * The budget `--lock` is allowed to write over the one already recorded: the
+ * ceiling, the line and every function's number fall to the lower of the two,
+ * and anything that would rise is refused with nothing written.
+ *
+ * A function the lock has never held is refused unless it is BELOW the line the
+ * lock already held, or `shrinkOnly` finds it a vanished key to be paid for by.
+ * The first arm is the line descending: the functions a lower line newly covers
+ * were inside the budget the whole time and are recorded at their own numbers,
+ * because refusing them would make tightening the line impossible and leave
+ * hand-editing the lock as the only way forward.
+ */
+/**
+ * The budget this run would write, read at the line the lock will HOLD: the
+ * lower of the held line and the measured one. A measured line that rose would
+ * otherwise leave the functions between the two lines out of the inventory
+ * while `shrinkBudget` keeps the line where it was, and the next run would then
+ * report them as entrants against a line the lock never raised.
+ */
+export function lockCandidate(
+  previous: Budget,
+  measured: readonly Measured[],
+  spread: Distribution,
+  census: { readonly measuredAt: string; readonly files: number },
+): Budget {
+  const line = Math.min(previous.line, spread.line);
+
+  return {
+    measuredAt: census.measuredAt,
+    files: census.files,
+    functions: spread.functions,
+    ceiling: spread.ceiling,
+    line,
+    inventory: inventory(measured, line).map((entry) => ({ key: keyOf(entry), complexity: entry.complexity })),
+  };
+}
+
+export function shrinkBudget(previous: Budget, candidate: Budget): ShrunkBudget {
+  const held = new Set(previous.inventory.map((entry) => entry.key));
+
+  const numbered = (budget: Budget, governed: readonly LockEntry[]): LockedNumber[] => [
+    { key: CEILING, value: budget.ceiling },
+    { key: BUDGET_LINE, value: budget.line },
+    ...governed.map((entry) => ({ key: entry.key, value: entry.complexity })),
+  ];
+
+  const { merged, refusals } = shrinkOnly(
+    numbered(previous, previous.inventory),
+    numbered(candidate, candidate.inventory.filter((entry) =>
+      held.has(entry.key) || entry.complexity >= previous.line)),
+  );
+
+  const accepted = new Map(merged.map(({ key, value }) => [key, value]));
+
+  return {
+    refusals,
+    budget: refusals.length > 0 ? undefined : {
+      ...candidate,
+      ceiling: accepted.get(CEILING) ?? candidate.ceiling,
+      line: accepted.get(BUDGET_LINE) ?? candidate.line,
+      inventory: candidate.inventory.map((entry) => ({
+        key: entry.key,
+        complexity: accepted.get(entry.key) ?? entry.complexity,
+      })),
+    },
+  };
 }
 
 /** One reason this run is not green. */
@@ -451,21 +551,25 @@ if (import.meta.main) {
     ['functions at or above the line', inventory(measured, spread.line).length],
   ]);
 
+  // `--lock` records the tree against the lock it already holds: see
+  // `shrinkBudget` for the merge, which lowers and re-keys and nothing else.
   if (process.argv.includes('--lock')) {
-    const count = writeBudget({
-      measuredAt: new Date().toISOString().slice(0, 10),
-      files: files.size,
-      functions: spread.functions,
-      ceiling: spread.ceiling,
-      line: spread.line,
-      inventory: inventory(measured, spread.line).map((entry) => ({
-        key: keyOf(entry), complexity: entry.complexity,
-      })),
-    });
+    const previous = readBudget();
 
+    const { budget: shrunk, refusals } = shrinkBudget(
+      previous,
+      lockCandidate(previous, measured, spread, { measuredAt: new Date().toISOString().slice(0, 10), files: files.size }),
+    );
+
+    if (shrunk === undefined) {
+      printDistribution(spread, files.size);
+      process.exit(refuseLock('complexity', refusals, 'bring the function under its budget'));
+    }
+
+    const count = writeBudget(shrunk);
     printDistribution(spread, files.size);
-    console.log(`complexity: locked a ceiling of ${String(spread.ceiling)}, a budget line of `
-      + `${String(spread.line)} and ${String(count)} function(s) at or above it, over ${summary}`);
+    console.log(`complexity: locked a ceiling of ${String(shrunk.ceiling)}, a budget line of `
+      + `${String(shrunk.line)} and ${String(count)} function(s) at or above it, over ${summary}`);
     process.exit(0);
   }
 
@@ -494,7 +598,7 @@ if (import.meta.main) {
       silently: 'the envelope moves by one commit at a time and no reading of the tree ever '
         + 'says so, which is how the worst function here reached 126',
       fix: 'split the decision out, or move the branching into data. Raising the ceiling is a '
-        + 'decision to argue with evidence, never a way to clear a red gate',
+        + 'decision to argue with evidence, and `--lock` refuses to write one',
     }));
   }
 
@@ -507,8 +611,8 @@ if (import.meta.main) {
       silently: 'the hardest functions in this tree change identity with nobody reading the new '
         + 'list, so "which functions are the hardest to change" stops being a question with an '
         + 'answer — and the next one lands beside it for the same reason',
-      fix: `bring it under ${String(budget.line)}, or record it with `
-        + '`bun scripts/complexity.ts --lock` and say in the commit body why it has to be there',
+      fix: `bring it under ${String(budget.line)}. \`--lock\` will not record it: the lock `
+        + 'only shrinks, and a function that reaches the line is the argument, not the entry',
     }));
   }
 
@@ -519,7 +623,8 @@ if (import.meta.main) {
       found: `complexity ${String(entry.complexity)}, locked at ${String(was)}`,
       silently: 'the inventory ratchets the wrong way one branch at a time; every function in it '
         + 'is already at the hard end of this codebase',
-      fix: 'take the growth back out, or re-lock with the number and the reason in the commit body',
+      fix: 'take the growth back out. `--lock` refuses a number above the one recorded, so the '
+        + 'entry goes down or stays where it is',
     }));
   }
 
@@ -528,7 +633,8 @@ if (import.meta.main) {
       + 'reproduce at their recorded number.');
 
     for (const line of verdict.stale) console.error(`  ${line}`);
-    console.error('Run `bun scripts/complexity.ts --lock` to record it.');
+    console.error('Run `bun scripts/complexity.ts --lock` to record it. That command only '
+      + 'shrinks or re-keys the lock: it writes a number that fell and refuses one that rose.');
   }
 
   if (findings.length > 0) {
