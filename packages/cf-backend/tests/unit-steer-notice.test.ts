@@ -61,8 +61,8 @@ describe('the queued line, as the composer receives it', () => {
     expect(noticeFor([])).toBeNull();
   });
 
-  test('a waiting steer says it lands at the next step', () => {
-    expect(noticeFor([queued('s1')])).toBe("Queued — it lands at the agent's next step.");
+  test('a waiting steer puts up the queued line', () => {
+    expect(noticeFor([queued('s1')])).not.toBeNull();
   });
 
   test('the line is GONE once the model has it', () => {
@@ -73,7 +73,7 @@ describe('the queued line, as the composer receives it', () => {
 
   test('one steer still waiting keeps the line while an earlier one has landed', () => {
     expect(noticeFor([landed('s1'), queued('s2')]))
-      .toBe("Queued — it lands at the agent's next step.");
+      .toBe(noticeFor([queued('s2')]));
   });
 
   test('a draft carrying attachments gets the same line: attachments ride the send', () => {

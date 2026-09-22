@@ -1,39 +1,8 @@
 /**
- * PeerAgent transport — always-async agent-to-agent messaging.
- *
- * The one thing a host supplies is `deliver` — the hop that reaches another
- * agent (cross-DO RPC on the cloud backend). Everything around that hop —
- * ordering, backoff, dead-lettering, the write-ahead row — belongs to the
- * shared outbox (`events/outbox.ts`), which this transport configures with a
- * policy. The ask waiter is this file's own.
- *
- * Sender side:
- *   `PeerHub.send`/`ask`/`reply` queue an `outbox_peer` row; `dispatchOutbox()`
- *   drains due rows through that hop in per-receiver order, with
- *   exponential-backoff retries and a dead-letter state for permanent
- *   refusals. The host's alarm re-drives pending rows, so delivery survives
- *   eviction.
- *
- * Receiver side:
- *   `receivePeerMessage(...)` is invoked by the sender's hop. The receiver
- *   writes a PeerAgent event into its own EventLog and acks; the admitted event
- *   drains into a programmatic turn (AgentOrchestrator.drainPendingEvents).
- *
- * Ordering: per-(sender, receiver) preserved by sender's outbox id order +
- * receiver-side dedupe on `(sender_agent, sender_event_id)`.
- *
- * Cross-owner messaging requires the receiver to have granted the specific
- * sender access — the grant is enforced receiver-side (`hasGrant`, the owner's
- * UserDO on the cloud backend), never trusted from the sender's claim.
- *
- * Send-and-await (`ask`): the sender enqueues with `reply_expected`, the
- * receiver opens a `peer_back` reply channel keyed on the admitted event, and
- * the receiving agent answers with the agents tool's reply action. The answer
- * rides the same outbox transport back (topic `peer_reply`, body
- * `{ in_reply_to, content }`); the sender's in-memory ask waiter consumes it
- * inline — an answer that outlives the waiting activation arrives as a normal
- * peer event that wakes the sender's next turn instead. No elapsed bound exists
- * on either side: delivery is durable and event-based.
+ * Async agent-to-agent transport over the shared outbox; the host supplies only `deliver`.
+ * Per-(sender, receiver) order comes from outbox id order plus receiver-side dedupe on
+ * `(sender_agent, sender_event_id)`. Cross-owner grants are enforced receiver-side. `ask` has no
+ * elapsed bound: an answer outliving the waiting activation arrives as a normal peer event.
  */
 
 import * as v from 'valibot';
@@ -56,16 +25,13 @@ import {
 } from '../../utils/json';
 import { renderThrownChain } from '../../obs/index';
 
-// ── Wire shapes ──────────────────────────────────────────────────
-
 export interface PeerMessage {
-  sender_event_id: string;       // sender outbox row id — receiver-side dedupe
+  sender_event_id: string;
   sender_agent_name: string;
   sender_user_id: string;
   topic: string;
   body: JsonValue;
   mode: WorkMode;
-  /** The sender holds an ask waiter — open a peer-back reply channel. */
   reply_expected?: boolean;
 }
 
@@ -75,9 +41,6 @@ export interface ReceiveResult {
   reason?: string;
 }
 
-// ── Sender side ──────────────────────────────────────────────────
-
-/** One queued outbound peer message, exactly as the shared outbox stores it. */
 export interface PeerOutboxMessage {
   receiver_agent_name: string;
   receiver_user_id: string;
@@ -108,24 +71,15 @@ const PeerOutboxMessageSchema = v.object({
   reply_expected: v.boolean(),
 });
 
-// ── Receiver side ────────────────────────────────────────────────
-
 export interface ReceiverDeps {
   log: EventLog;
-  /** The receiver's own file plane — an oversize body is spilled here so the
-   *  event brief can name where the rest of it lives. */
   vfs: VFS;
-  /** Whether the sender is the same owner as this receiver. */
   isSameOwner(sender_user_id: string): Promise<boolean>;
-  /** Whether the receiver has explicitly granted this sender access. */
   hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
-  /** Open a peer-back reply channel for an admitted ask (reply_expected). */
   openPeerBackChannel?(event_id: string, msg: PeerMessage): void;
 }
 
-/** Receiver API: accept a peer message off the transport. Resolves admitted, or
- *  refused for a reason the next attempt would meet again; rejects when the
- *  receiver could not decide or record it, which the sender retries. */
+/** Resolves admitted or refused (permanent); rejects when undecided, which the sender retries. */
 export async function receivePeerMessage(
   deps: ReceiverDeps,
   msg: PeerMessage,
@@ -134,7 +88,7 @@ export async function receivePeerMessage(
   const same_owner = await deps.isSameOwner(msg.sender_user_id);
 
   const receiver_grant_present = same_owner
-    ? true   // same-owner peers don't need an explicit grant beyond ownership
+    ? true
     : await deps.hasGrant(msg.sender_agent_name, msg.sender_user_id);
 
   const serialized = JSON.stringify(msg.body);
@@ -153,7 +107,6 @@ export async function receivePeerMessage(
     return { admitted: false, reason: 'no grant from receiver for cross-owner sender' };
   }
 
-  // Spilled after the grant check so a refused message never writes a file.
   const spilled = await spillEventContent(deps.vfs, serialized);
 
   const payload: PeerAgentPayload = {
@@ -184,8 +137,7 @@ export async function receivePeerMessage(
       now,
     });
   } catch (err) {
-    // Arrival is still counted, and the failure goes back to the sender as a
-    // hop failure: answered as a refusal, it would dead-letter for good.
+    // Reported as a hop failure: a refusal would dead-letter for good.
     counted(false);
     throw err;
   }
@@ -197,12 +149,7 @@ export async function receivePeerMessage(
   return { admitted: published.admitted, event_id: published.id };
 }
 
-// ── PeerHub — sender/receiver endpoint over one agent's hub ─────
-
-/** Delivery retry policy: exponential backoff from 5s over at most 8 attempts, so
- *  the longest wait a row ever gets is 5_000·2⁶ = 320 s and then it dead-letters.
- *  Receiver refusals dead-letter immediately. There is no ceiling constant: a 1h
- *  ceiling cannot bind at 8 attempts, so it would be a bound that cannot fail. */
+/** Receiver refusals dead-letter immediately. */
 const MAX_DELIVERY_ATTEMPTS = 8;
 
 const RETRY_BASE_MS = 5_000;
@@ -214,63 +161,44 @@ interface PeerBackHolder {
   mode: WorkMode;
 }
 
-/** One message on its way onto the outbox, in this hub's own vocabulary — the
- *  row's snake_case column names are the store's, not the caller's. */
 interface OutboundPeerMessage {
   readonly receiverAgent: string;
   readonly receiverUserId: string;
   readonly topic: string;
   readonly body: JsonValue;
   readonly mode: WorkMode;
-  /** The sender is waiting on a `peer_back` reply for this one. */
   readonly replyExpected: boolean;
 }
 
 export interface PeerHubDeps {
-  /** The agent's own storage (`outbox_peer` lives next to agent_log). */
   sql: SqlExec;
   log: EventLog;
   replyChannels: ReplyChannelStore;
-  /** Thunk: the runtime's file plane is built lazily, so it is dereferenced
-   *  per received message, never at hub construction. */
+  /** Built lazily; dereferenced per received message. */
   vfs(): VFS;
   selfAgentName(): string;
-  /** The owning user id. Throw when the agent is unclaimed. */
+  /** Throws when the agent is unclaimed. */
   selfUserId(): string;
-  /** The hop to the receiver agent's `receivePeerMessage` — the only part of
-   *  this transport a host owns (cross-DO RPC on the cloud backend). */
   deliver(receiver_agent_name: string, msg: PeerMessage): Promise<ReceiveResult>;
   isSameOwner(sender_user_id: string): Promise<boolean>;
   hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
-  /** Arm the host's alarm so pending outbox rows are re-driven after eviction.
-   *  This is the outbox policy's `schedule` seam. Awaited: on the cloud backend
-   *  it is a Durable Object storage write, and a Durable Object has no way to
-   *  retain an unawaited one (`do.wait_until.no_op`). */
+  /** Awaited: on a Durable Object an unawaited storage write is not retained
+   *  (`do.wait_until.no_op`). */
   scheduleDispatch(at: number): Promise<void>;
-  /** A new external event was admitted — wake the agent loop (drain). */
   onAdmitted(): void;
   now?(): number;
 }
 
-/**
- * One agent's peer endpoint: the agents tool's ask/send/reply ride it, the
- * orchestrator's `receivePeerMessage` @callable and alarm handler drive it.
- */
 export class PeerHub {
-  /** In-memory ask waiters keyed by outbox id — alive only while an ask()
-   *  awaits inside the current activation. A reply with no live waiter (the
-   *  asking activation was evicted) stays a pending event and wakes a normal
-   *  turn. */
+  /** Live only within the asking activation; a reply without a waiter wakes a normal turn. */
   private readonly waiters = new Map<string, (envelope: { content: JsonValue | undefined }) => void>();
-  /** The shared durable outbox this transport's rows live in. */
   private readonly outbox: Outbox<PeerOutboxMessage>;
 
   constructor(private readonly deps: PeerHubDeps) {
     this.outbox = scheduledOutbox<PeerOutboxMessage>(deps.sql, 'peer', {
       maxAttempts: MAX_DELIVERY_ATTEMPTS,
       baseMs: RETRY_BASE_MS,
-      // Per-receiver delivery order: a backed-off head holds the rows queued
-      // behind it for that receiver and for no other.
+      // A backed-off head blocks only its own receiver's queue.
       orderBy: (message) => `${message.receiver_user_id}:${message.receiver_agent_name}`,
       schedule: (at) => deps.scheduleDispatch(at),
       send: (message, info) => this.deliverOne(message, info.id),
@@ -281,9 +209,6 @@ export class PeerHub {
     return this.deps.now?.() ?? Date.now();
   }
 
-  // ── Receiving ──────────────────────────────────────────────────
-
-  /** The receiving half, behind whatever RPC surface a host exposes. */
   async receive(msg: PeerMessage): Promise<ReceiveResult> {
     const now = this.now();
 
@@ -291,10 +216,7 @@ export class PeerHub {
       log: this.deps.log,
       vfs: this.deps.vfs(),
       isSameOwner: (uid) => this.deps.isSameOwner(uid),
-      // A reply correlated to an ask THIS agent delivered to THAT sender is
-      // implicitly accepted — asking is consenting to the answer. Without
-      // this, a cross-owner ask could never complete (the answer would need
-      // a reciprocal grant on the asker's side and dead-letter instead).
+      // Asking is consenting to the answer; otherwise a cross-owner ask could never complete.
       hasGrant: async (agent, uid) =>
         (await this.deps.hasGrant(agent, uid)) || this.isReplyToMyAsk(msg),
       openPeerBackChannel: (event_id, m) => {
@@ -318,8 +240,7 @@ export class PeerHub {
       const askId = this.resolveAskWaiter(msg);
 
       if (askId) {
-        // The awaiting ask() consumed the reply inline — bind the event so the
-        // post-turn drain never re-fires it as a fresh programmatic turn.
+        // Bind the event so the post-turn drain does not re-fire it.
         this.deps.log.markConsumed(result.event_id, `peer-ask-${askId}`, 0);
       } else {
         this.deps.onAdmitted();
@@ -329,9 +250,7 @@ export class PeerHub {
     return result;
   }
 
-  /** True iff `msg` is a reply envelope whose `in_reply_to` names an ask this
-   *  agent DELIVERED to exactly this sender. The outbox row id is only known to
-   *  that receiver, so the correlation is unforgeable by third parties. */
+  /** Unforgeable: only that receiver knows the outbox row id. */
   private isReplyToMyAsk(msg: PeerMessage): boolean {
     if (msg.topic !== PEER_REPLY_TOPIC) return false;
     const body = v.safeParse(ReplyBodySchema, msg.body);
@@ -349,7 +268,6 @@ export class PeerHub {
       && ask.output.reply_expected;
   }
 
-  /** Match a transport reply envelope to a live ask waiter. */
   private resolveAskWaiter(msg: PeerMessage): string | null {
     if (msg.topic !== PEER_REPLY_TOPIC) return null;
     const body = v.safeParse(ReplyBodySchema, msg.body);
@@ -364,9 +282,6 @@ export class PeerHub {
     return askId;
   }
 
-  // ── Sending ────────────────────────────────────────────────────
-
-  /** Fire-and-forget. */
   async send(input: { agent: string; userId: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome> {
     const id = await this.enqueue({
       receiverAgent: input.agent, receiverUserId: input.userId, topic: input.topic,
@@ -381,9 +296,7 @@ export class PeerHub {
     return { status: row?.state === 'sent' ? 'delivered' : 'queued', message_id: id };
   }
 
-  /** Send-and-await over the async transport. The wait has NO elapsed limit:
-   *  it ends when the reply is consumed, when the caller cancels it, or
-   *  immediately when the row dead-letters (a definitive refusal). */
+  /** No elapsed limit: ends on reply, caller cancel, or dead-letter. */
   async ask(input: {
     agent: string; userId: string; topic: string; message: string; mode: WorkMode; signal?: AbortSignal;
   }): Promise<PeerAskOutcome> {
@@ -415,7 +328,6 @@ export class PeerHub {
     throw new Error('the peer ask waiter resolved without a reply, cancellation, or a dead-letter');
   }
 
-  /** Answer a received peer ask through its peer-back reply channel. */
   async reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome> {
     const channel = this.deps.replyChannels.findOpenByEvent(input.eventId, 'peer_back');
 
@@ -434,16 +346,12 @@ export class PeerHub {
     return { ok: false, error: `reply not delivered (${outcome.outcome}${detail})` };
   }
 
-  /** ReplyDispatcher body for kind='peer_back': route the answer back to the
-   *  asker over the same durable outbox transport. */
   async dispatchPeerBack(channel: ReplyChannelRow, payload: JsonValue): Promise<{ delivered: boolean; detail?: string }> {
     let holder: PeerBackHolder;
 
     try {
       holder = v.parse(PeerBackHolderSchema, parseJsonObject(channel.holder_addr));
     } catch (error) {
-      // The same disclosure the inbound dispatcher renders at :430 — a malformed holder is
-      // a value the operator can act on only if the reason rides with it.
       return { delivered: false, detail: `malformed peer_back holder_addr: ${renderThrownChain({ cause: error })}` };
     }
 
@@ -454,7 +362,6 @@ export class PeerHub {
     });
     await this.dispatchOutbox();
 
-    // Durable handoff: the outbox owns retries from here on.
     return { delivered: true };
   }
 
@@ -471,19 +378,12 @@ export class PeerHub {
     return id;
   }
 
-  // ── Outbox dispatch ────────────────────────────────────────────
-
-  /** Deliver due pending outbox rows in per-receiver id order. Transient
-   *  failures back off and block that receiver's queue (ordering); receiver
-   *  refusals dead-letter the row. Reentrancy-guarded by the outbox — the alarm
-   *  and inline tool dispatches can overlap on the same activation. */
+  /** Reentrancy-guarded by the outbox: alarm and inline dispatches can overlap. */
   async dispatchOutbox(now = this.now()): Promise<void> {
     await this.outbox.drain(now);
   }
 
-  /** One delivery attempt, as the outbox policy's `send`. A resolved refusal is
-   *  permanent (the receiver will refuse the next attempt for the same reason);
-   *  a thrown hop is transport trouble and backs off. */
+  /** A resolved refusal is permanent; a thrown hop backs off. */
   private async deliverOne(message: PeerOutboxMessage, id: string): Promise<OutboxDisposition> {
     const parsed = v.safeParse(PeerOutboxMessageSchema, message);
 
@@ -508,25 +408,20 @@ export class PeerHub {
     try {
       result = await this.deps.deliver(queued.receiver_agent_name, wire);
     } catch (err) {
-      // A thrown hop is a value here: the disposition the outbox backs off on.
-      // Rendered rather than rethrown so the stored `last_error` keeps the chain.
       return { status: 'retry', reason: renderThrownChain({ cause: err }) };
     }
 
-    // Admitted now, or deduped by the receiver (a crash redelivery) — sent
-    // either way. Anything else is a refusal (e.g. no cross-owner grant).
+    // Deduped by the receiver (crash redelivery) still counts as sent.
     if (result.admitted || result.event_id) return { status: 'sent' };
 
     return { status: 'poison', reason: result.reason ?? 'rejected by receiver' };
   }
 
-  /** Soonest pending retry — folded into the host's alarm reschedule. */
   nextRetryAt(): number | null {
     return this.outbox.nextRetryAt();
   }
 
-  /** Register one ask waiter. Timer-less by ruling: it lives until a reply,
-   *  explicit cancellation, or activation eviction. */
+  /** Timer-less: lives until reply, cancellation, or eviction. */
   private registerWaiter(askId: string, signal?: AbortSignal) {
     let cancel!: () => void;
 

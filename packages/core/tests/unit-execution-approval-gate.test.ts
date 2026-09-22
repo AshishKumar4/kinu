@@ -1,19 +1,6 @@
 /**
- * Regression coverage for the executor-seam approval gate. The bypass it
- * closes: `run { command: "rm -rf /x" }` gated while the identical command
- * reached through codemode (`nimbus.exec(...)`, `sandbox.exec(...)`,
- * `device.exec(...)`) went ungated — which is what a gate living inside the
- * `shell` TOOL's own executor buys, instead of one at the boundary every path
- * actually shares.
- *
- * These tests exercise `gateProviderExec` and `DefaultExecutionRouter`
- * directly — the seam itself — independent of any tool/backend wiring, so they
- * fail immediately if `ExecutionRouter.register()` stops gating (the bypass
- * reopens) regardless of how `shell`/`eval` are built on top.
- *
- * Revert-proof: dropping the `gateProviderExec` call from `register()` so it is
- * just `this.providers.set(provider.name, provider)` turns every "closes the
- * bypass" test below red — verified by hand while writing this file.
+ * The executor-seam approval gate: a command gated via `shell` must also be gated via codemode
+ * (`nimbus.exec`, `sandbox.exec`, `device.exec`). Fails if `ExecutionRouter.register()` stops gating.
  */
 import { describe, test, expect } from 'bun:test';
 import { DefaultExecutionRouter } from '../src/execution/router';
@@ -28,8 +15,7 @@ const GATE = 'sudo rm -rf /var/lib/important';
 
 const ALLOW = 'echo hi';
 
-/** A minimal ExecutorProvider shaped like nimbus/sandbox/device — a real
- *  shell reachable through codemode's `<name>.exec()` namespace. */
+/** A minimal ExecutorProvider shaped like nimbus/sandbox/device. */
 function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus') {
   const executed: string[] = [];
 
@@ -84,8 +70,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
   });
 
   test('a gate-tier command with no approver wired is refused, not silently allowed', async () => {
-    // On `device`: on the agent's own sandbox this same string is housekeeping
-    // and there is nothing to refuse.
+    // On `device`; on the agent's own sandbox this string is housekeeping.
     const { provider, executed } = fakeShellProvider('device', 'device');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.exec.execute(GATE);
@@ -153,9 +138,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
 
     const gatedOnce = gateProviderExec(provider, firstPolicy);
 
-    // Simulate a second router (e.g. a CLI head reusing the parent's device
-    // provider verbatim — see cli-backend/runtime.ts buildCLIHeadRuntime)
-    // gating the ALREADY-gated provider again with a DIFFERENT policy.
+    // A second router (e.g. cli-backend/runtime.ts buildCLIHeadRuntime) re-gating the gated provider with another policy.
     const askedSecond: ShellApprovalRequest[] = [];
 
     const secondPolicy: ShellApprovalPolicy = {
@@ -172,8 +155,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
     expect(gatedTwice.tools.exec.execute).toBe(gatedOnce.tools.exec.execute);
 
     const result = await gatedTwice.tools.exec.execute(GATE);
-    // The FIRST policy answered (allow) — the second router's policy was
-    // never consulted, and the command ran exactly once.
+    // The first policy answered; the second was never consulted and the command ran once.
     expect(result).toBe(`ran: ${GATE}`);
     expect(askedFirst.length).toBe(1);
     expect(askedSecond).toEqual([]);
@@ -187,8 +169,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     const { provider, executed } = fakeShellProvider('nimbus');
     router.register(provider);
 
-    // This is EXACTLY the call codemode's `nimbus.exec("rm -rf /x")` makes —
-    // the router hands the LLM sandbox this same tools.exec.execute.
+    // The call codemode's `nimbus.exec("rm -rf /x")` makes.
     const result = await present(router.getProvider('nimbus'), 'the registered nimbus provider').tools.exec.execute(DENY);
     expect(result).toMatchObject({ error: expect.stringContaining('rm-rf-root') });
     expect(executed).toEqual([]);
@@ -216,7 +197,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
   });
 
   test('no policy supplied still gates — the default is strict/no-channel, never "ungated"', async () => {
-    const router = new DefaultExecutionRouter(); // no policy argument at all
+    const router = new DefaultExecutionRouter();
     const { provider, executed } = fakeShellProvider('nimbus');
     router.register(provider);
 
@@ -250,13 +231,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
   });
 });
 
-/**
- * The seam that makes a decision scope-aware: `gateProviderExec` passes
- * `provider.name` into `gateExec`. Cut that wire — hardcode any single
- * executor there — and one of these two goes red, because they are the same
- * command, the same policy and the same rule, differing only in which machine
- * the provider says it is.
- */
+/** `gateProviderExec` passes `provider.name` into `gateExec`; these differ only in which machine the provider is. */
 describe('the executor reaches the gate', () => {
   const HOUSEKEEPING = 'rm -rf node_modules';
 
@@ -326,7 +301,6 @@ describe('the executor reaches the gate', () => {
     expect(executed).toEqual([HOUSEKEEPING]);
     expect(asked).toEqual([]);
 
-    // …and buys nothing for the rule it did not name.
     expect(await device.tools.exec.execute('sudo reboot')).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(asked.map((r) => r.command)).toEqual(['sudo reboot']);
   });

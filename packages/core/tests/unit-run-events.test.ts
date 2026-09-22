@@ -1,6 +1,3 @@
-/**
- * Unit tests for RunEventRecorder.
- */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -24,8 +21,7 @@ function setup() {
   return { recorder: new RunEventRecorder(sql, actor), sql, actor };
 }
 
-/** One run with `count` events already in the log — the corpus a bound is
- *  observed against, since a bound is only visible when it cuts. */
+/** A bound is only visible when it cuts. */
 function seededRun(count: number): RunEventRecorder {
   const { recorder } = setup();
 
@@ -75,8 +71,6 @@ describe('RunEventRecorder.emit', () => {
     const { recorder, sql, actor } = setup();
     recorder.emit('run-1', { type: 'error', message: 'first' });
     recorder.emit('run-1', { type: 'error', message: 'second' });
-    // A second writer claims the recorder's cached next index out from under
-    // it. The colliding write must raise, and the live row must survive it.
     const runId = 'run-1';
     const live = '{"type":"error","eventIndex":2,"runId":"run-1","timestamp":"2026-09-05T00:00:00.000Z","message":"live"}';
     const ts = '2026-09-05T00:00:00.000Z';
@@ -97,12 +91,7 @@ describe('a tool result round-trips as the value the tool returned', () => {
   test("a detach handle read back off the ledger is still a handle", () => {
     const { recorder } = setup();
 
-    // What `run` hands back when a command outlives its window. The one
-    // reader that matters is a caller asking the LEDGER whether a call
-    // detached — `tests/first-run/background-settle` parses this row with
-    // `isBackgroundHandle` and waits on the job id it names — so a row that
-    // held a rendering of this object instead answered "no handle" and left
-    // that caller waiting for a wake it could not name.
+    // The ledger row must be the handle itself: `isBackgroundHandle` parses it to find the job id.
     const handle = { background: true, jobId: 'bgjob-probe', kind: 'run', message: 'Spawned; the settled result will wake you.' };
     recorder.emit('run-1', {
       type: 'tool_call_end', name: 'run', toolCallId: 'call-1',
@@ -175,14 +164,8 @@ describe('RunEventRecorder.read', () => {
     expect(recorder.read('run-1', { limit: 5 }).length).toBe(5);
   });
 
-  // KINU-N019: the route clamped only the upper bound, so a negative `limit`
-  // reached SQLite as `LIMIT -1` — which means NO limit — and one request read,
-  // parsed and serialized a run's whole history.
-  //
-  // Two layers, two questions. `read` owns the log's invariant (only a finite
-  // positive integer may reach SQL) and applies it to every caller including the
-  // in-object folds. `boundRunEventQuery` owns the ceiling on what an untrusted
-  // caller may ASK for, and `getRunEvents` applies it at the boundary.
+  // KINU-N019: `read` clamps every caller to a finite positive integer before SQL;
+  // `boundRunEventQuery` owns the ceiling for untrusted callers at `getRunEvents`.
   describe('read admits only a finite positive integer limit', () => {
     test('a negative limit reads one row, never the whole run', () => {
       const recorder = seededRun(40);
@@ -191,8 +174,7 @@ describe('RunEventRecorder.read', () => {
     });
 
     test('a negative limit stays bounded with a type filter too', () => {
-      // The filtered path derives its fetch window from `limit`, so an unbounded
-      // limit made a negative fetch window there as well.
+      // The filtered path's fetch window derives from `limit`.
       const recorder = seededRun(40);
       expect(recorder.read('run-1', { limit: -1, types: ['error'] }).length).toBe(1);
     });
@@ -217,9 +199,7 @@ describe('RunEventRecorder.read', () => {
     });
 
     test('an in-object window wider than the untrusted ceiling is honoured', () => {
-      // `getRunSummaries` folds a run's usage over 1000 events and prints the
-      // total as the workspace's spend. Narrowing it to the stranger's ceiling
-      // would be a truncated denominator presented as a settled figure.
+      // `getRunSummaries` folds 1000 events into spend; a stranger's ceiling would truncate it.
       const recorder = seededRun(RUN_EVENT_LIMIT_MAX + 120);
       expect(recorder.read('run-1', { limit: 1000 }).length).toBe(RUN_EVENT_LIMIT_MAX + 120);
     });
@@ -295,8 +275,7 @@ describe('RunEventRecorder.read', () => {
     expect(onlyText.every((e) => e.type === 'error')).toBe(true);
   });
   test('sparse matches past the first fetch window still fill the limit', () => {
-    // One match, a long run of another type, then five more matches. A read
-    // that fetches one window and slices returns only the first match.
+    // A fetch-one-window-and-slice read would return only the first match.
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'error', message: 'match-0' });
 
@@ -315,8 +294,6 @@ describe('RunEventRecorder.read', () => {
   });
 
   test('a filtered read past the last match ends at the run end', () => {
-    // The same sparse shape with fewer matches than the limit. The read walks
-    // to the run end and stops with what it found.
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'error', message: 'match-0' });
 
@@ -349,8 +326,7 @@ describe('RunEventRecorder.readSince', () => {
     expect(recorder.readSince('run-1', 100).length).toBe(0);
   });
   test('a negative limit reads one row, never the whole tail', () => {
-    // `LIMIT -1` in SQLite means no limit, so one negative value turns a tail
-    // read into a full read.
+    // `LIMIT -1` in SQLite means no limit.
     const { recorder } = setup();
 
     for (let i = 0; i < 40; i++) {
@@ -409,8 +385,7 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     expect(runs.map((r) => r.eventCount)).toEqual([1, 2]);
   });
   test('a negative count reads one run, never the whole log', () => {
-    // `LIMIT -1` in SQLite means no limit, so one negative value turns a page
-    // read into a full read.
+    // `LIMIT -1` in SQLite means no limit.
     const { recorder } = setup();
 
     for (let i = 0; i < 5; i++) {
@@ -442,11 +417,8 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
 
   test('runs whose latest events share a timestamp still have a decidable window', () => {
     const { recorder, sql, actor } = setup();
-    // The defect this ordering replaced: `ORDER BY MAX(ts) DESC` with no
-    // tiebreak over a TEXT column. When two runs' latest events carry the same
-    // stamp there is no answer to which one a LIMIT 1 contains, so a two-page
-    // walk could deliver one of them twice and the other never. Written
-    // directly, because the recorder cannot be made to collide on purpose.
+    // Ties on the latest stamp must not let a two-page walk duplicate one run and skip another.
+    // Written directly: the recorder cannot be made to collide.
     const same = '2026-08-17T00:00:00.000Z';
 
     for (const runId of ['run-A', 'run-B', 'run-C']) {
@@ -480,20 +452,8 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     expect(recorder.count('no-such')).toBe(0);
   });
 
-  /**
-   * Two changes met here, and carrying either one alone is silent.
-   *
-   * The window became `listRunsBefore(before, count)` ordered by MAX(rowid) — a
-   * decidable page. Independently, the reserved {@link WORKSPACE_RUN_ID} became
-   * the place a model call made BETWEEN runs is filed, and it is not a run.
-   * Keeping the new signature without the exclusion breaks no type and passes
-   * every gate: the only symptom is a fabricated run at the top of the owner's
-   * history. Keeping the exclusion without the ordering brings back an
-   * undecidable window. So both are asserted in one place.
-   *
-   * A real run sits beside the pseudo-run on purpose: an assertion that the list
-   * is EMPTY would read the same whether the clause worked or the query blew up.
-   */
+  /** Ordering by MAX(rowid) and excluding {@link WORKSPACE_RUN_ID} are asserted together: dropping
+     *  either is silent. A real run sits beside the bucket so an empty list cannot pass. */
   test('the workspace bucket is filed but never listed as a run', () => {
     const { recorder } = setup();
     recorder.emit('run-A', { type: 'run_start', agentId: 'a' });
@@ -501,25 +461,19 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     recorder.emit('run-B', { type: 'run_start', agentId: 'a' });
     recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'fast', usage: { input: 7 } });
 
-    // Listed: the real runs, newest write first. NOT listed: the bucket, even
-    // though its rows are the most recently written in the log.
+    // The bucket is not listed, even though its rows are newest.
     expect(recorder.listRunsBefore(null, 10).map((r) => r.runId)).toEqual(['run-B', 'run-A']);
 
-    // Excluded from the LIST, not from the log: every reader that names the
-    // bucket still gets its rows, which is how the spend read-model reaches them.
+    // Excluded from the list, not the log: the spend read-model still reaches its rows.
     expect(recorder.count(WORKSPACE_RUN_ID)).toBe(2);
     expect(recorder.read(WORKSPACE_RUN_ID).map((e) => e.type)).toEqual(['model_call', 'model_call']);
 
-    // And the exclusion does not perturb the page anchor: the bucket's rows are
-    // dropped before the grouping, so each real run's MAX(rowid) is its own and a
-    // one-per-page walk still reaches both exactly once.
+    // Dropped before grouping, so each run's MAX(rowid) anchor is its own.
     const first = recorder.listRunsBefore(null, 1);
     expect(first.map((r) => r.runId)).toEqual(['run-B']);
     expect(recorder.listRunsBefore(recorder.runSeq('run-B'), 10).map((r) => r.runId))
       .toEqual(['run-A']);
 
-    // The bucket has a position like anything else — it is a run id to `runSeq`,
-    // which is keyed explicitly and therefore not the list's business.
     expect(recorder.runSeq(WORKSPACE_RUN_ID)).toBeGreaterThan(present(recorder.runSeq('run-B'), "run-B's sequence"));
   });
 });
@@ -552,8 +506,7 @@ describe('RunEventRecorder.readRecentByType', () => {
   });
 
   test('limit is a real bound, keeping the NEWEST rows', () => {
-    // The distinction that matters for a percentile: a post-filter slice of a
-    // fetch window can come back short, or hold the oldest rows instead.
+    // A post-filter slice can come back short or hold the oldest rows.
     const { recorder } = setup();
 
     for (let i = 0; i < 10; i++) {
@@ -566,8 +519,7 @@ describe('RunEventRecorder.readRecentByType', () => {
     expect(steps.map((e) => (e.type === 'step_finish' ? e.stepIndex : -1))).toEqual([7, 8, 9]);
   });
   test('a negative limit reads one row, never the whole log', () => {
-    // `LIMIT -1` in SQLite means no limit, so one negative value turns a
-    // sample read into a full read.
+    // `LIMIT -1` in SQLite means no limit.
     const { recorder } = setup();
 
     for (let i = 0; i < 40; i++) {
@@ -627,8 +579,7 @@ describe('RunEventRecorder.spendByProducer', () => {
   test('sums every row in the log, not a window of them', () => {
     const { recorder } = setup();
 
-    // Past `readRecentByType`'s 200-row default and past any window a folded
-    // read would impose. A total is a sum, and a sum has no sample size.
+    // Past `readRecentByType`'s 200-row default: a total is a sum, not a sample.
     for (let i = 0; i < 450; i++) {
       recorder.emit('run-1', {
         type: 'step_finish', stepIndex: i, usage: { input: 10, output: 1 }, usd: 0.001,
@@ -650,7 +601,7 @@ describe('RunEventRecorder.spendByProducer', () => {
     recorder.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'fast', usage: { input: 5, output: 1 },
     });
-    // The lifecycle mirror of a direct call, which must NOT be counted again.
+    // The lifecycle mirror of a direct call must not be counted again.
     recorder.emit(WORKSPACE_RUN_ID, {
       type: 'model_operation', operationId: 'op-1', source: 'fast', op: 'complete',
       phase: 'end', outcome: 'ok', usage: { input: 5, output: 1 },
@@ -663,9 +614,7 @@ describe('RunEventRecorder.spendByProducer', () => {
   });
 
   test('a hired agent\'s turns are in the workspace total, under the same producer as the root\'s', () => {
-    // A hired agent is a logical actor of the same object, writing under its
-    // own actor_id. The Activity panel says "workspace", and a total scoped to
-    // the root's rows read a hired agent's whole conversation as nothing.
+    // A hired agent writes under its own actor_id; the workspace total must include it.
     const { recorder, sql } = setup();
     const hired = new RunEventRecorder(sql, testActorHandle(sql, { actorId: 'task-12qzhx' }));
     recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: { input: 100, output: 10 }, usd: 0.01 });
@@ -687,8 +636,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 
     const agent = recorder.spendByProducer().get('agent');
     expect(agent?.usage).toEqual({ input: 300, output: 30 });
-    // Nobody mentioned caching, so the workspace has no cache figure at all —
-    // which is a different claim from every step reading nothing from cache.
+    // No cache report means no cache figure, distinct from reading zero from cache.
     expect('cacheRead' in (agent?.usage ?? {})).toBe(false);
     expect(agent?.usd).toBeUndefined();
   });
@@ -696,9 +644,7 @@ describe('RunEventRecorder.spendByProducer', () => {
   test('every Usage field survives the sum', () => {
     const { recorder } = setup();
 
-    // The aggregate reads `payload` with `json_extract`, so a column it forgot
-    // would read as a field nobody reported. One call carrying all of them is
-    // what makes a forgotten alias fail here instead of on the owner's panel.
+    // `json_extract` columns are unchecked; one call carrying every field catches a forgotten alias.
     const every: Required<Usage> = {
       input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
       neurons: 0.5,
@@ -719,8 +665,7 @@ describe('RunEventRecorder.spendByProducer', () => {
     });
 
     const platform = recorder.spendByProducer().get('platform');
-    // Two calls, one of which the provider said nothing for — and the one that
-    // reported genuine zeros is a report, so it is not counted as silence.
+    // Reported zeros are a report, not silence.
     expect(platform).toMatchObject({ calls: 2, callsWithoutUsage: 1, unpricedCalls: 1 });
     expect(platform?.usage).toEqual({ input: 0, output: 0 });
   });
@@ -736,8 +681,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 
     const judge = recorder.spendByProducer().get('judge');
     expect(judge).toMatchObject({ calls: 2, callsWithoutUsage: 0, unpricedCalls: 1 });
-    // The dollars are a floor over the calls a catalog could price; the tokens
-    // are not, and both facts sit on the same row.
+    // Dollars are a floor; tokens are not.
     expect(judge?.usd).toBeCloseTo(0.004, 10);
     expect(judge?.usage).toEqual({ input: 300, output: 30 });
   });
@@ -751,10 +695,8 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
   test('counts completed non-plan turns after the boundary, across runs, and only those', () => {
     const { recorder, sql, actor } = setup();
 
-    // Twenty-five qualifying completed turns across twenty-five runs — the
-    // shape the cadence contract is stated over: one run fires exactly once.
-    // The first ten are backdated below an explicit boundary: emit stamps
-    // millisecond ISO times, so the two batches must not share one.
+    // 25 qualifying turns across 25 runs; the first ten sit below an explicit boundary (emit stamps
+    // millisecond ISO times, so batches must not share one).
     for (let i = 0; i < 10; i++) {
       recorder.emit(`run-a${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
     }
@@ -769,8 +711,7 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
 
     // A plan turn answers with a plan; it never ticks the improvement lane.
     recorder.emit('run-plan', { type: 'turn_end', turnIndex: 0, workMode: 'plan' });
-    // A turn_end row that carries no mode counts nothing: `json_extract`
-    // returns NULL for it, so absence never reads as build.
+    // A turn_end with no mode counts nothing: absence never reads as build.
     recorder.emit('run-no-mode', { type: 'turn_end', turnIndex: 0 });
 
     expect(recorder.completedWorkTurns(null)).toBe(25);
@@ -790,15 +731,13 @@ describe('RunEventRecorder.latestRunHeader', () => {
     recorder.emit('run-older', { type: 'run_end', reason: 'completed' });
     recorder.emit('run-newest', { type: 'run_start', agentId: 'a', userMessage: 'newest task' });
 
-    // The header is a two-payload read: rows between the boundaries exist to
-    // be skipped, and skipping them is the whole cost claim.
+    // Rows between the boundaries exist to be skipped; skipping them is the cost claim.
     for (let i = 0; i < 400; i++) {
       recorder.emit('run-newest', { type: 'error', message: `noise ${i}` });
     }
 
     recorder.emit('run-newest', { type: 'run_end', reason: 'error' });
-    // Between-run work files under the reserved aggregate; written last so a
-    // newest-row read that forgot the exclusion would lead with it.
+    // Written last so a newest-row read missing the exclusion would lead with it.
     recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge' });
 
     expect(recorder.latestRunHeader()).toEqual({ status: 'error', userMessage: 'newest task' });
@@ -840,8 +779,6 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
   });
 
   test('an open run whose start row cannot be read is said so, by run id, not silently passed over', () => {
-    // The process will never re-open this turn and the wake reconcile will
-    // seal it as interrupted: exactly the case a reader wants to hear about.
     const { recorder, sql, actor } = setup();
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
@@ -855,8 +792,7 @@ describe('RunEventRecorder.openTurn — the continuation ledger', () => {
       restore();
     }
 
-    // A readable start row that names no turn is a side lane, and the ledger
-    // says which run it passed over.
+    // A start row naming no turn is a side lane; the ledger says which run it passed over.
     const side = setup();
     const sideLog = createRecordingLogger();
     const restoreSide = setDiagnosticsSink(sideLog);

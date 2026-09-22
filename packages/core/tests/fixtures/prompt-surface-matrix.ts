@@ -1,26 +1,6 @@
 /**
- * The surfaces the system prompt is measured over.
- *
- * `prompt.ts` holds no prose: every line of it lives in
- * `prompting/section-templates.ts` as one addressable template, and the
- * builder renders the eleven of them through one override-aware seam. Both
- * properties are branch-shaped — a section that renders on one arm and not the
- * other, a family overlay, a plan-submission spelling — so measuring them takes
- * a matrix rather than one call: a branch nobody renders is a branch nobody
- * checked.
- *
- * This list covers each conditional at least once in each direction: the two
- * plan-submission spellings, both model-family overlays, each built-in role,
- * an offline device, a preview-capable executor, the empty tool surface, the
- * delegation rungs one at a time, and a workspace carrying instruction files
- * in both trust tiers. No resume case: provenance is turn-local and renders
- * no system section at all (prompting/volatile-context.ts).
- *
- * Consumers (`unit-prompt-sections.test.ts`): the per-section override
- * controls, which compare two LIVE renderings, and the whole-matrix byte
- * ceiling. Nothing here records prompt bytes — the prompt's content changes
- * deliberately, and a recorded rendering would only ever say which prompt
- * shipped the day it was recorded.
+ * Prompt surfaces covering each template conditional in both directions, for
+ * `unit-prompt-sections.test.ts`. No recorded bytes: comparisons are between live renderings.
  */
 
 import type { SystemPromptOptions } from '../../src/prompt';
@@ -63,17 +43,14 @@ const SKILL_HEADER: SkillHeader = {
   source: 'builtin',
 };
 
-/** The ambient index as the admission already decided to print it: this
- *  fixture states the lines, because re-admitting a corpus here would test the
- *  admission rather than the prompt's rendering of its answer. */
+/** Stated lines, so this tests rendering rather than admission. */
 const SKILLS_INDEX: SkillsIndex = {
   lines: [skillIndexLine(SKILL_HEADER)],
   omitted: 0,
   tokens: 0,
 };
 
-/** The same skill, active, with the body this turn's allocation paid for. A
- *  built-in body: its trust comes from where it ships, not from an approval. */
+/** Built-in body: trust comes from where it ships. */
 const ACTIVE_SKILL: ActiveSkill = {
   ...SKILL_HEADER,
   trust: 'builtin',
@@ -116,10 +93,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
       currentDate: '2026-01-01',
       cwd: '/workspace',
-      // Both trust tiers on one surface, which is the real shape of a workspace
-      // the owner approved once and the agent has since written to: the approved
-      // file keeps system placement, the other only earns the block that governs
-      // it (its bytes ride a user message, not this prompt).
+      // Both trust tiers: the approved file keeps system placement; the other rides a user message.
       agentsMd: {
         admitted: [
           { path: '/AGENTS.md', content: 'Root rules.', trust: 'approved' },
@@ -136,8 +110,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: {
       soulOverride: 'You are Kinu.',
       availableTools: ALL_TOOLS,
-      // The CLI registers one executor: the machine is the workspace, and
-      // there is no device runtime and no container there.
+      // The CLI registers one executor: the machine is the workspace.
       executors: [WORKSPACE],
       backend: 'cli-local',
       temporaryAsk: true,
@@ -241,23 +214,12 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: ['report'], registeredExecutors: [] },
   },
   {
-    // ONE case, not the `code-execution-with/without-temporary-ask` pair this
-    // replaces. `temporaryAsk` reaches the prompt only through the Delegation
-    // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('hire')`
-    // (prompt.ts) — so on a surface carrying `eval` and no `agents`
-    // tool the flag renders nothing in either position, and the two cases were
-    // one request under two names. The Code-execution section had its own
-    // temporary-delegation bullet until the 2026-09-03 delegation-nudge
-    // cutover; the pair outlived it.
+    // One case: without `agents`, `hasTemporaryAsk` is false either way (prompt.ts).
     name: 'code-execution',
     opts: { availableTools: ['eval'], registeredExecutors: [] },
   },
   {
-    // The task lifetime's TRUE direction, and the only case that renders it.
-    // Its false direction is `delegation-hire-only` above: the section branches
-    // on `hasTemporaryAsk`, not on why it is false, so a fourth case pairing
-    // these actions with `temporaryAsk: false` renders `delegation-hire-only`'s
-    // exact bytes and measures nothing.
+    // The only case rendering `hasTemporaryAsk` true; `delegation-hire-only` is the false direction.
     name: 'delegation-task-lifetime',
     opts: {
       availableTools: ['agents'],

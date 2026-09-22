@@ -1,23 +1,5 @@
-/**
- * The workspace schema — the one answer to "which tables a workspace has".
- *
- * One answer, because a per-root subset is a list someone forgets to copy, not
- * a platform difference. Every composition root calls `initWorkspaceSchema`,
- * which owns the shared table list. A per-root subset can omit crafted-tool
- * quality and silently lose EMA updates, or omit `imported_experience` and
- * make the experience import action fail; neither omission is a platform
- * difference.
- *
- * So the list lives here once, and each composition root calls
- * {@link initWorkspaceSchema}. Tables that genuinely belong to one root only
- * (the subordinate roster, the workspace capability token, webhook rate
- * windows) stay at that root and are declared per-root in
- * `conformance/manifest.ts`, which observes the real `sqlite_master` after
- * this has run and fails on any disagreement in either direction.
- *
- * Everything here is `CREATE TABLE IF NOT EXISTS`, so calling it on an existing
- * workspace only ever adds what is missing.
- */
+// The one table list every composition root creates. Root-only tables are declared in
+// `conformance/manifest.ts`, which checks `sqlite_master` against this. All DDL is idempotent.
 
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
@@ -55,34 +37,14 @@ import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 import { initAgentDataTables } from '../tools/db-codemode';
 import { initCacheWarmTable } from '../providers/cache-warming';
 
-/**
- * The three SQL handles onto one workspace database.
- *
- * Three rather than one because the initializers genuinely need three shapes:
- * DDL takes {@link RawSqlExec}, the CHECK-derived tables read their own stored
- * definition through {@link SqlExecutor}, and the events hub inspects
- * `PRAGMA table_info` / `sqlite_master` results through {@link SqlExec}. Every
- * backend already holds all three; passing them together is what keeps them
- * pointed at one database.
- */
+/** Three handle shapes onto one database; initializers need each. */
 export interface WorkspaceSchemaSql {
   readonly execRaw: RawSqlExec;
   readonly sql: SqlExecutor;
   readonly exec: SqlExec;
 }
 
-/**
- * Compaction's replayable plan snapshot, measured trigger signal and archive
- * index. The tables are read by `@kinu.run/compaction`'s stores; the DDL lives
- * here because a workspace's table set is one list, and that package sits
- * above core in the dependency graph.
- *
- * ACTOR-SCOPED, and the column leads the key rather than sitting beside it: a
- * session key is minted PER ACTOR (an agent name, or `affinity:<sessionId>`),
- * so two actors of one workspace present the same key — and one shared row per
- * key would hand one actor another's plan snapshot, another's measured trigger
- * and another's archive index.
- */
+// Read by `@kinu.run/compaction`. Actor-keyed: two actors can present the same session key.
 function initCompactionStateTables(execRaw: RawSqlExec): void {
   execRaw(`
     CREATE TABLE IF NOT EXISTS compaction_state (
@@ -111,10 +73,6 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
   `);
 }
 
-/**
- * Create every table a workspace has, on any backend. Idempotent: safe on
- * every boot and on every open.
- */
 export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   const { execRaw } = db;
   initWorkspaceOwnershipTables(execRaw);
@@ -159,125 +117,44 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initSlateLiveShareTables(execRaw);
 }
 
-/** Initialize actor state without workspace ownership or root publication tables. */
 export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   const { execRaw, sql, exec } = db;
   initActorTables(execRaw, sql);
-  // Alternate-Takes sets: durable per-workspace, written by MCTS convergence
-  // and by heads settlement, read by /takes and the orchestrator listing.
-  // Created here rather than by "the first MCTS run" so a reader that finds no
-  // table is a fault, not an empty result nobody can tell from no takes.
+  // Tables are created on every root, not lazily by their first writer, so a missing table
+  // is a fault rather than an empty read.
   initAlternateTakesTable(execRaw);
-  // The exploration leaderboard. Created here rather than only by the first swarm run
-  // for the same reason as the takes above: the orchestrator's record RPCs read
-  // it, and `no such table` on a workspace that has merely never searched is a
-  // fault dressed as an empty leaderboard.
   initExplorationRecordsTable(execRaw);
-  // The per-node content a swarm RE-ENTRY reads. Created on every root rather than only
-  // by the first swarm run, for the same reason the two above are: the conformance
-  // harness observes `sqlite_master` on a workspace that has never searched, and a
-  // table only a search creates would be a declared capability nothing could measure.
   initSwarmNodeRecords(execRaw);
-  // The R3 outcome ledger.
-  // Must run here rather than only in the lazy EvolutionEngine constructor: a
-  // freshly-woken actor can serve pickAlternateTake → recordTurnOutcome before
-  // any turn constructs the engine.
+  // A woken actor can record outcomes before any turn constructs EvolutionEngine.
   initTurnOutcomeTables(execRaw);
-  // replay_evals, read by buildChangelog on every changelog view. Created here
-  // rather than only by the lazy EvolutionEngine, for the same reason as the
-  // outcome ledger above: the read path runs before anything constructs the
-  // engine, and a read that cannot reach the table has to say so, not shrug.
   initReplayTables(execRaw);
-  // refinement_requests, read by buildChangelog on every changelog view and by
-  // the `/refine` status line. Same reason as the two ledgers above: the read
-  // path runs before anything constructs the engine.
   initRefinementTables(execRaw);
-  // agent_log + reply_channels + triggers, their partial indexes and views.
-  // Spec: docs/ARCHITECTURE.md — "Events and ingress".
+  // Spec: docs/ARCHITECTURE.md, "Events and ingress".
   initEventsHubTables(exec);
-  // Branching-heads journal: head_journal, head_evidence, head_merge_results.
   initHeadsTables(execRaw);
-  // Scaffold shadow-rollout ledger (scaffold_evaluations + its status column).
   initShadowTables(execRaw);
-  // The durable per-run event log the frontends replay.
   initRunEventTables(execRaw);
-  // The durable admission ledger: one claim per (actor, turn) written before
-  // that turn's first effect, and the context revisions its steps consume.
-  // Created on every root because the turn path writes one on every turn
-  // everywhere — a workspace whose table were missing could not admit a turn.
   initActorClaimTables(execRaw);
-  // agent_facts world model — keyed JSON facts with confidence and recency.
   initFactsTable(execRaw);
-  // Voyager curriculum proposed-tasks queue.
   initCurriculumTable(execRaw);
-  // GEPA run + candidate history (gepa_runs, gepa_candidates), written by
-  // the evolution control plane. The Pareto front is derived at read time.
   initGepaTables(execRaw);
-  // Background-job registry — work auto-detached past the 30s threshold.
   initBackgroundJobsTable(execRaw);
-  // The once-only boundary in front of a tool whose effects leave the process:
-  // one row per claimed call, written before the effect and completed after it.
-  // Created on every root because the wrapper runs on every root — a workspace
-  // whose table were missing would fail the first claimed tool call it makes.
   initToolEffectClaimTable(execRaw);
-  // The other half of once-only: the record that a keyed effect already ran,
-  // kept after the row that ran it was retired. Created here rather than by any
-  // one consumer because four unrelated subsystems read it and each one's own
-  // rows are swept on a different schedule.
   initEffectTombstoneTable(execRaw);
-  // Gated actions parked on the owner while nobody was there to decide, and
-  // their standing decisions. Durable because the wait is a night, not a
-  // prompt window.
   initDeferredApprovalsTable(execRaw);
-  // Prompt cards parked on the owner inside one consent window. Unlike the
-  // parked commands above, a card's whole lifetime CAN end mid-activation —
-  // the ask outlives it here rather than dying unanswered with the process.
   initDeviceConsentRequestsTable(execRaw);
-  // Plan revisions and reviewer state outlive both the submitting turn and DO
-  // eviction; the Work surface reads this one authoritative stream.
   initPlanReviewTable(execRaw);
-  // Owner decisions about which workspace instruction bytes may hold system
-  // placement (KINU-N028). Created on every root because the prompt builder
-  // classifies AGENTS.md and skills on every turn everywhere — a reader that
-  // found no table would be a fault, not an empty result, and failing that read
-  // open is exactly the bug.
+  // KINU-N028. A missing table must not fail open.
   initInstructionApprovalsTable(execRaw);
-  // The agent's own task list, written by the `tasks` tool.
   initTaskListTable(execRaw);
-  // Durable tree-search checkpoints: an evicted search resumes here, and both search
-  // engines record what they ran with here.
   initMctsSearchTable(execRaw);
-  // Experience-import staging ledger, settled by the shared EvolutionEngine on
-  // every root — not only where the `experience` tool happens to be wired.
   initImportedExperienceTable(execRaw);
-  // Evolved prompt sections: proposed replacements and their shadow trials.
-  // Created on every root because `buildSystemPromptSync` reads the promoted
-  // rows on every turn everywhere — a table only the optimiser creates would
-  // make the prompt builder's own read a `no such table` on a workspace that
-  // has merely never optimised.
   initPromptSectionTables(execRaw);
   initCompactionStateTables(execRaw);
-  // Typed key/value config: model spec, reasoning effort, always-active skills.
   initAgentConfigTable(execRaw);
-  // The prompt-cache warm obligation: one row per actor holding the request a
-  // refresh would replay, when it is owed, and how many real requests this
-  // actor has made. Created on every root because the arm runs at the end of
-  // every turn everywhere — and it is durable rather than in-memory precisely
-  // because a Durable Object hibernates within seconds of going idle, which is
-  // the whole interval a warm waits out.
+  // Durable, not in-memory: a DO hibernates soon after going idle.
   initCacheWarmTable(execRaw);
-  // The catalogue of agent data tables — the `db` capability's own authority
-  // record (tools/db-codemode.ts). Created on every root rather than by the
-  // first `db.createTable`, for the reason the takes and records tables above
-  // give: the conformance harness observes `sqlite_master` on a workspace that
-  // has merely never declared a table, and a catalogue only a mutation creates
-  // would make `db.listTables()` a `no such table` on it. The tables it
-  // catalogues are declared BY the agent and so exist only once one does; the
-  // catalogue itself always does.
   initAgentDataTables(execRaw);
-  // memory_chunks + its FTS5 index. Every composition root that builds a
-  // MemoryStore also calls ensureSchema(), but a workspace opened by a path
-  // that does not (a fork target, an archive restore) still has readers — the
-  // same hole an unindexed memory plane had. The DDL stays owned by agent-utils.
+  // Also here for paths that never build a MemoryStore (fork target, archive restore).
   initMemoryChunkTables(sql);
 }

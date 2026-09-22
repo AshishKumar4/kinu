@@ -43,34 +43,15 @@ import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components
 import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels } from "@/components/WorkbenchPanels";
-// The model picker reads /api/user/models (which unions the connected
-// providers' menus); the result is cached for the SPA session (see user-api).
 
-/* ── Transcript chrome ────────────────────────────────────────── */
-
-/**
- * Kumo's `Button` names this prop `shape`, and `anti-slop/no-shape-in-symbol-names`
- * bans the substring in every symbol name a JSX attribute included. The two are
- * only reconcilable by not writing the identifier, so the key is composed —
- * DECLARED here rather than left as an unexplained concatenation a reader would
- * take for obfuscation, and never a lint suppression comment, which the standing
- * rule forbids outright. (Naming that directive in prose is itself a finding:
- * the suppression gate matches the literal text wherever it appears, which is
- * how this comment first failed it.)
- *
- * The rule is aimed at names this repository CHOOSES ("shape" describes
- * structure rather than ownership); a vendor's required prop is not one of
- * those. Exempting external JSX attributes is a rule change with evidence, not
- * something to take while clearing a path, so it stays surfaced instead.
- */
+/** Composed key: Kumo's `Button` requires a `shape` prop, `anti-slop/no-shape-in-symbol-names`
+ *  bans the substring in symbol names, and lint suppression comments are forbidden. */
 const squareButtonVariant = "square";
 
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
-/** A workspace before its first turn. The mission it was created for is what
- *  the workspace IS, not something it was asked to do — so it is shown here as
- *  the standing brief rather than sent as an opening message that the agent
- *  would then try to carry out. */
+/** The mission is shown as the standing brief, not sent as an opening message
+ *  the agent would then try to carry out. */
 export function EmptyConversation({ mission }: { mission: string }) {
   const brief = isPlaceholderMission(mission) ? null : mission.trim();
 
@@ -88,8 +69,7 @@ export function EmptyConversation({ mission }: { mission: string }) {
   );
 }
 
-/** The bars a loading transcript draws. Fixed rather than random: a skeleton
- *  that reflows on every render is a second animation nobody asked for. */
+/** Fixed widths: a skeleton that reflows on every render is a second animation. */
 const SKELETON_ROWS: readonly { mine: boolean; width: string }[] = [
   { mine: true, width: "38%" },
   { mine: false, width: "82%" },
@@ -98,21 +78,8 @@ const SKELETON_ROWS: readonly { mine: boolean; width: string }[] = [
   { mine: false, width: "74%" },
 ];
 
-/**
- * The chat pane between connect and the transcript arriving.
- *
- * This state exists because the pane had no way to say "not yet". A workspace
- * whose conversation had not been delivered rendered {@link EmptyConversation}
- * — "Send the first message to start", under the mission — and then replaced it
- * with four hundred messages. Measured against production on 2026-08-20 that
- * window was 0.8-3.8 seconds of the app stating the opposite of the truth, and
- * it is the whole of what "clicking a workspace takes forever" felt like: the
- * page had painted, and what it had painted was wrong.
- *
- * Shaped like a transcript rather than centred like a spinner, so the messages
- * land where the bars already are instead of shifting the pane under the
- * reader.
- */
+/** Shown between connect and transcript arrival, where EmptyConversation would falsely
+ *  claim an empty chat. Transcript-shaped so messages land where the bars already are. */
 export function ConversationSkeleton() {
   return (
     <div className="space-y-5" role="status" aria-busy="true" data-testid="conversation-skeleton">
@@ -129,14 +96,8 @@ export function ConversationSkeleton() {
   );
 }
 
-/**
- * Device card. A device is connected and this workspace has no binding on it
- * yet, so the agent's action is waiting on the owner. One question: use this
- * machine for this workspace? "Use <device>" IS the binding, per
- * workspace, revocable on the Devices page. The card names
- * no tier, because a binding has none: what a command may reach is the
- * machine's own Sandbox setting, set on the device row.
- */
+/** Accepting creates a per-workspace binding, revocable on the Devices page. No tier:
+ *  what a command may reach is the device's own Sandbox setting. */
 export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
@@ -157,11 +118,6 @@ export function DeviceConsentCard({ consent, onResolve }: {
           </div>
         </div>
       </div>
-      {/* The strongest tier is never the highlighted button on a card about ONE
-          command. "Always" on an exec would record full filesystem and shell
-          access forever, from every ingress the workspace consumes, in answer
-          to a question about a single `printf`. For an exec the card offers
-          once or deny, and the standing decision lives on the Devices page. */}
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={() => onResolve(consent.consentId, "deny")}
             className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>
@@ -174,27 +130,10 @@ export function DeviceConsentCard({ consent, onResolve }: {
   );
 }
 
-/**
- * Terminal chat error — a turn failed (provider error, stream break) and
- * produced no visible answer.
- *
- * The retry RE-RUNS that turn rather than asking the same thing again: the
- * label says so, because a button that appends a duplicate user message on
- * every press leaves three identical turns in the transcript after three
- * attempts. The error body is shown verbatim; the hook clears the card on
- * the next send.
- *
- * A REPLAYED failure is not the same claim and does not get the same words.
- * The server retains its last terminal record until a later turn supersedes
- * it, so a workspace parked after a failure re-serves that failure to every
- * client that opens it — `sunlit-stone-4a20` still answers with the
- * `Unauthorized` its 2026-08-17 turn ended on. Presenting that as "the last
- * turn failed" reads as something that just happened, and sends the owner
- * chasing a fault that may be three days gone.
- */
+/** Retry re-runs the failed turn instead of appending a duplicate user message.
+ *  `replayed`: the server re-serves its last terminal record until a later turn supersedes it. */
 export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss }: {
   message: string;
-  /** The server is re-serving an older turn's outcome, not reporting a live one. */
   replayed?: boolean;
   streaming: boolean;
   onRetry: () => void;
@@ -237,9 +176,7 @@ interface TerminalCloseState {
   readonly message: string;
 }
 
-/** One terminal socket outcome for both workspace and subordinate chat. A
- * terminal close is not reconnecting; the SDK stopped redialling, so each pane
- * gets the same reason and recovery/navigation choices. */
+/** A terminal close means the SDK stopped redialling; it is not a reconnecting state. */
 function TerminalCloseBoundary({ close, onRetry }: {
   close: TerminalCloseState;
   onRetry: () => void;
@@ -259,7 +196,6 @@ function TerminalCloseBoundary({ close, onRetry }: {
   );
 }
 
-/** What a mirrored event reports about the work: finished, broken, or moving. */
 type EventOutcome = "done" | "failed" | "progress";
 
 function eventOutcome(status: string | undefined): EventOutcome {
@@ -276,14 +212,11 @@ const OUTCOME_MARK: Record<EventOutcome, { Icon: Icon; verb: string; tone: strin
   progress: { Icon: ClockIcon, verb: "reported progress", tone: "p-text-3" },
 };
 
-/** A subordinate's task assignment or progress report, mirrored into the main
- *  chat as a centered marker that links to that subordinate's tab. */
 function SubordinateEventCard({ event, workspace }: { event: SubordinateActivityEvent; workspace: string }) {
   const { Icon: outcomeIcon, verb: outcomeVerb, tone } = OUTCOME_MARK[eventOutcome(event.status)];
   const assigned = event.kind === "task";
   const Icon = assigned ? UserPlusIcon : outcomeIcon;
   const verb = assigned ? "assigned" : outcomeVerb;
-  // An event carrying no task of its own is a report, and its text is the line.
   const detail = event.task === undefined || event.task === "" ? event.content : event.task;
 
   return (
@@ -299,8 +232,6 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
     </div>
   );
 }
-
-/* ── Fork modal ───────────────────────────────────────────────── */
 
 function ForkModal({
   sourceName, messagesUpToHere, onCancel, onSubmit,
@@ -372,17 +303,8 @@ function ForkModal({
   );
 }
 
-/* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
-
-/** Drives one additional agent's conversation over its own facet socket. The
- *  Work Surface and Timeline stay workspace-scoped on the parent socket (§A5) —
- *  only the chat switches here. An ordinary conversation: messages, model pick,
- *  Auto/Plan, rename, send/steer/stop (no fork/feedback/takes/restore — the
- *  facet exposes none of those). Draft, mode and reading position are this
- *  conversation's own, carried by useConversationUiState across tab switches.
- *
- *  `title` is the parent roster's name for this agent — the roster is the
- *  source of truth the tabs and sidebar read, so the composer reads it too. */
+/** One subordinate's chat over its own facet socket; Work Surface and Timeline stay on
+ *  the parent socket. The facet exposes no fork/feedback/takes/restore. */
 function SubordinateChatColumn({
   workspace, subName, title,
 }: {
@@ -392,25 +314,16 @@ function SubordinateChatColumn({
 }) {
   const state = useKinu({ workspace, subordinate: subName });
 
-  // No model write from an agent pane: the workspace's pin is the only write
-  // the precedence order honours (workspace > explicit > role), and a facet
-  // socket's `setModel` went to the ROOT anyway — a pick here repinned the
-  // whole workspace under the actor's name. The snapshot carries the actor's
-  // effective model instead; the picker renders it read-only.
+  // No model write from an agent pane: only the workspace pin is honoured, and the
+  // snapshot carries the actor's effective model, rendered read-only.
 
   const ui = useConversationUiState(`${workspace}/agents/${subName}`);
   const input = ui.draft;
   const setInput = ui.setDraft;
-  // The Plan gate lives in the hook both chat columns share: a submitted plan
-  // locks this composer to Plan until the owner decides.
   const planGate = usePlanGatedMode(state.activePlan, ui);
   const effectiveMode = planGate.mode;
 
-  // The same older-history walk the workspace column runs, over this facet's
-  // own storage — named by this pane's actor, because the read serves whichever
-  // actor the request names and the workspace's own chat is the default. A
-  // subordinate keeps its own conversation, and a helper that worked for an
-  // hour has more of one than the SDK's hydration window holds.
+  // History reads name this pane's actor; the default actor is the workspace's own chat.
   const { history, transcript, thread } = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded,
     steerRuns: state.steerRuns, actor: state.paneActorId,
@@ -431,10 +344,6 @@ function SubordinateChatColumn({
 
   useAutogrow(inputRef, input);
 
-  // One submit, whatever the agent is doing: `sendChat` owns admission (one
-  // synchronous latch inside `useKinu`) and decides between starting a turn
-  // and handing the words to the running one; the draft is cleared only for
-  // a press that was taken.
   const { notice: steerNotice, send, stop } = useSteerActions({
     sendChat: (text, files) => state.sendChat(text, [...files], effectiveMode),
     abortChat: state.abortChat,
@@ -457,19 +366,14 @@ function SubordinateChatColumn({
 
   const as = state.agentStatus;
 
-  // The thread's one live indicator, decided here rather than by the last row:
-  // an admitted turn with the operator's message last has no assistant row to
-  // ask. See `threadLiveTail`.
+  // An admitted turn with the operator's message last has no assistant row to ask, so the
+  // live indicator is decided here. See `threadLiveTail`.
   const tail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
 
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
-          {/* Above the oldest message, exactly as the workspace column has it:
-              a walk in progress, a failed page with its retry, or the store's
-              own statement that this is the beginning. Suppressed only when
-              there is nothing at all, where the empty state below says more. */}
           {thread.entries.length > 0 && (
             <HistoryBoundary
               loading={history.loading}
@@ -545,11 +449,8 @@ function SubordinateChatColumn({
   );
 }
 
-/* ── Main page ────────────────────────────────────────────────── */
-
-/** Background reads and writes this page owns beyond the agent socket. Each
- *  keeps its own message so a recovery in one never hides a still-broken
- *  other, and so a failed hydrate is never rendered as "there is nothing". */
+/** Each source keeps its own error so one recovery never hides another failure, and a
+ *  failed hydrate never renders as "there is nothing". */
 const SIDE_SOURCES = [
   { source: "visit", label: "record this visit" },
   { source: "feedback", label: "load your turn feedback" },
@@ -558,11 +459,6 @@ const SIDE_SOURCES = [
 
 type SideSource = (typeof SIDE_SOURCES)[number]["source"];
 
-/**
- * The workspace load failure as the composer's status row, with the icon the
- * mapper cannot own. Empty when there is no failure — the composer renders
- * nothing for a healthy workspace.
- */
 function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): ComposerNotice[] {
   if (error === null) return [];
   const notice = workspaceLoadNotice(error, onRetry);
@@ -613,14 +509,7 @@ export default function WorkspacePage() {
     return () => window.removeEventListener("kinu:new-agent", open);
   }, [createAndOpenAgent]);
 
-  /* The workbench reads at the compact scale index.css gates on
-     `[data-workbench]`: the flag sits on this route's content root (line 1157),
-     so the rail, the drawer, and portaled chrome keep the default scale. */
-
-  // The picker awaits its own write. `setModel` records the failure on
-  // `state.error` and rolls the picker back to the stored spec before it
-  // resolves the reason, so this handler owns the settlement and has nothing
-  // to add to what the banner already shows.
+  // `setModel` records failure on `state.error` and rolls the picker back itself.
   const setModel = state.setModel;
 
   const onPickModel = useCallback(async (spec: string): Promise<void> => {
@@ -641,20 +530,14 @@ export default function WorkspacePage() {
     });
   }, []);
 
-  // ?altitude=supervise deep-links straight to the Supervise altitude (the
-  // /triggers/:id redirect and settings' Automations link use it).
+  // ?altitude=supervise deep-links to Supervise (/triggers/:id redirect, settings' Automations link).
   const [altitude, setAltitude] = useState<Altitude>(
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
 
-  // Work stays workspace-scoped: the panel is the same panel whichever chat
-  // tab is open, so it shows the workspace's own plan — only Agent and
-  // Activity are per agent.
   const visiblePlan = state.activePlan;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
-  // `?slate=<id>&unmapped=1` is where a blueprint fork lands: the slate's tab,
-  // on its unmapped-bindings panel. The tab exists only once the listing names
-  // the slate, so the jump waits for it.
+  // `?slate=<id>&unmapped=1` is a blueprint fork's landing; the jump waits until the listing names the slate.
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("slate"));
   const [unmappedSlate, setUnmappedSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("unmapped") === "1" ? new URLSearchParams(location.search).get("slate") : null);
   useEffect(() => {
@@ -662,30 +545,17 @@ export default function WorkspacePage() {
     setSurface(`slate:${landingSlate}`);
     setLandingSlate(null);
   }, [landingSlate, state.slates]);
-  // Draft, Auto/Plan and reading position belong to THIS conversation — the
-  // orchestrator's — and survive tab switches and revisits without leaking
-  // into any additional agent's composer.
   const ui = useConversationUiState(`${agentId ?? ""}/main`);
   const setChatMode = ui.setMode;
   const planGate = usePlanGatedMode(subName === undefined ? state.activePlan : null, ui);
   const effectiveChatMode = planGate.mode;
   const chatInput = ui.draft;
   const setChatInput = ui.setDraft;
-  const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
+  const [forkFor, setForkFor] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  // ── Older history ────────────────────────────────────────────────────────
-  // `state.messages` is the LIVE list: the SDK's `get-messages` seed (which is
-  // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
-  // plus everything the socket has streamed since. Anything older than that
-  // window exists only in storage and is reached one cursored page at a time.
-  //
-  // The seed can be empty while storage is not — the window is rebuilt from
-  // storage on every activation, and an activation that could not rebuild it
-  // serves nothing. So an empty seed starts the walk at the newest page rather
-  // than not starting it: the store is asked, and "there is nothing here" is
-  // then something the store said instead of something the socket failed to
-  // say. That is the report — a workspace whose conversation was gone.
+  // `state.messages` is the SDK's bounded newest window plus streamed messages; older history is
+  // paged from storage. An empty seed still starts the walk: an activation may fail to rebuild the window.
   const { history, transcript, thread } = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
   });
@@ -702,12 +572,8 @@ export default function WorkspacePage() {
   });
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
-  // Pending chat attachments — fed by the attach button, paste, and drag-drop
-  // onto the chat column; rendered as removable chips above the input. The hook
-  // owns the per-message AGGREGATE cap (all pending data-URL parts persist
-  // inside one DO message row, see core/cloud-wire) and spends it inside its
-  // reducer, so two additions started before either finished cannot both
-  // reserve the same remaining capacity.
+  // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
+  // reducer, so concurrent additions cannot reserve the same remaining capacity.
   const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
   const [dragOver, setDragOver] = useState(false);
 
@@ -726,9 +592,6 @@ export default function WorkspacePage() {
     if (!files.length) return;
     e.preventDefault();
     setDragOver(false);
-    // Handed straight over: the hook owns the conversion task through
-    // settlement and returns nothing to await, so a transition wrapped around
-    // this would resolve on an already-finished value and defer nothing.
     attachments.add(files);
   }, [attachments]);
 
@@ -746,9 +609,8 @@ export default function WorkspacePage() {
     });
   }, [agentId, reportSide]);
 
-  // Bridge the open workspace's live status to the sidebar roster (running dot +
-  // unseen-evolution dot). Only the mounted workspace has a live socket, so the
-  // roster reflects status for workspaces visited this session.
+  // Only the mounted workspace has a live socket, so the sidebar shows live status only for
+  // workspaces visited this session.
   useEffect(() => {
     if (!agentId) return;
     const running = state.isStreaming || state.backgroundJobs.some((j) => j.status === "running");
@@ -757,10 +619,7 @@ export default function WorkspacePage() {
         name: agentId,
         running,
         unseenChangelog: state.changelogUnseen,
-        // The sidebar's nested list is the WORKING roster — who is on this
-        // workspace and what they are doing. A dismissed agent's conversation
-        // stays reachable from the chat strip, which is the surface that owns
-        // reachability; repeating it in the nav would read as staffing.
+        // Dismissed agents stay reachable from the chat strip, not the sidebar's working roster.
         agents: state.subordinates.filter((sub) => sub.status !== "dismissed").map((sub) => ({
           name: sub.name, displayName: sub.displayName, status: sub.status,
         })),
@@ -768,9 +627,7 @@ export default function WorkspacePage() {
     }));
   }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen, state.subordinates]);
 
-  // The sidebar has no socket of its own. Once this page unmounts, its last
-  // activity snapshot is no longer live; clear it rather than leaving a green
-  // "working now" dot on a workspace whose connection has gone away.
+  // The sidebar has no socket; clear its snapshot on unmount so no stale "working" dot remains.
   useEffect(() => {
     if (!agentId) return;
 
@@ -782,9 +639,7 @@ export default function WorkspacePage() {
   }, [agentId]);
 
 
-  // Steer-as-Branch: while the agent streams, the composer's split affordance
-  // runs the draft as a parallel head (branchTurn) — the live turn continues;
-  // progress arrives as branch_status broadcasts (state.branchRuns).
+  // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
 
   const handleBranch = useCallback(() => {
@@ -792,10 +647,7 @@ export default function WorkspacePage() {
 
     if (!t || !state.isStreaming || effectiveChatMode === "plan") return;
     setBranchNotice(null);
-    // The composer is cleared only once the branch was actually accepted —
-    // clearing sooner destroys what the user typed when a branch is refused or
-    // fails. The identity check leaves anything typed while the RPC was in
-    // flight alone.
+    // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
     startTransition(async () => {
       try {
         const result = await state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]);
@@ -808,18 +660,6 @@ export default function WorkspacePage() {
     });
   }, [chatInput, effectiveChatMode, state]);
 
-  /**
-   * Send and Stop — the composer's pair, shared with the subordinate column so
-   * both surfaces give the same account of where a message went. `sendChat`
-   * owns admission (one synchronous latch inside `useKinu`) and decides
-   * between starting a turn and handing the words to the running one; the
-   * draft and its attachments are cleared only for a press that was taken.
-   *
-   * The thread the chat draws — every mid-turn message inside the turn that
-   * read it, and only an unplaceable one trailing — comes from `useChatThread`
-   * above, which owns that one rule for the live splice and the reloaded row
-   * alike.
-   */
   const { notice: steerNotice, send: handleSend, stop: handleStop } = useSteerActions({
     sendChat: (text, files) => state.sendChat(text, [...files], effectiveChatMode),
     abortChat: state.abortChat,
@@ -832,9 +672,7 @@ export default function WorkspacePage() {
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
 
-  // Thumbs feedback — hydrated from the server (it remembers across reloads)
-  // and only committed locally when the RPC succeeds; failures propagate to
-  // MessageFeedback so the toggle never lies about evolution-scoring input.
+  // Committed locally only after the RPC succeeds, so the toggle never misreports scoring input.
   const [feedbackByMessage, setFeedbackByMessage] = useState<Record<string, 'positive' | 'negative'>>({});
   useEffect(() => {
     if (state.connectionStatus !== "connected") return;
@@ -849,14 +687,11 @@ export default function WorkspacePage() {
     });
   }, [state.connectionStatus, state.rpc, reportSide]);
 
-  // Alternate Takes chips, keyed by assistant message id — hydrated on load
-  // and refreshed when a turn settles (a think convergence may have produced
-  // a fresh near-tied set for the answer that just streamed in).
+  // Refreshed when a turn settles: a think convergence may have produced a fresh near-tied set.
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
 
-  // A signal that started a turn has a durable message; one spliced into a
-  // running turn never will. Both are the same card, so the message renders it
-  // once it exists and the live list carries the rest — never both.
+  // A signal that started a turn renders on its message; one spliced into a running turn
+  // never gets a message. Each card renders once.
   const cardStates = useMemo(
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
@@ -874,9 +709,6 @@ export default function WorkspacePage() {
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
 
-  // One indicator for the whole thread, owned here. A turn admitted before its
-  // first assistant row has no message to ask about liveness, which is why the
-  // tail is the page's and not the last row's.
   const mainTail = threadLiveTail({ last: thread.entries.at(-1)?.message, liveness: state.liveness });
 
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
@@ -891,8 +723,7 @@ export default function WorkspacePage() {
         reportSide("takes", describeError({ cause }));
       }
     });
-    // settledBranchCount: a branch settling after the turn ended persists a
-    // fresh set — refetch so its chip can hydrate the comparison.
+    // settledBranchCount: a branch settling after the turn ended persists a fresh set.
   }, [state.connectionStatus, state.isStreaming, state.rpc, settledBranchCount, reportSide]);
 
   const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
@@ -904,12 +735,8 @@ export default function WorkspacePage() {
     return result;
   }, [state.rpc]);
 
-  // The walk-back. The conversation half is core's, over one RPC; the device
-  // half is the shadow-git store on the user's own machine, which the DO
-  // forwards to and which exists only while a device is connected. The dialog
-  // owns that decision — see RevertTurnDialog — and hands the plan here,
-  // because overwriting files on a real machine gets its own confirm with the
-  // paths on it, preceded by a safety snapshot.
+  // Device file restore exists only while a device is connected; overwriting real files gets
+  // its own confirm, preceded by a safety snapshot.
   const [revertFor, setRevertFor] = useState<string | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
   const [restorePlan, setRestorePlan] = useState<DeviceRestorePlan | null>(null);
@@ -945,16 +772,12 @@ export default function WorkspacePage() {
     });
   }, [state.rpc]);
 
-  // One inline-slate context for the whole page: the chat transcript's
-  // `slate://` links mount their card through it, and its Open button hops
-  // the same slate to the pane surface.
   const slateInline = useMemo(() => ({
     rpc: state.rpc,
     openSlate: (id: string): void => { setSurface(`${SLATE_PREFIX}${id}`); },
   }), [state.rpc]);
 
-  // First-paint loading: only when we genuinely have nothing to show.
-  // (STABILITY-AUDIT §A1 — never unmount on transient WS errors.)
+  // Never unmount on transient WS errors.
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
     <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
   );
@@ -967,9 +790,7 @@ export default function WorkspacePage() {
 
   const as = state.agentStatus;
   const rosterTitle = workspaceEntries.find((entry) => entry.name === agentId)?.displayName;
-  // NOT `|| agentId`. `agentId` is the slug in the address bar, and falling
-  // back to it is what titled a new workspace `handwrought-walnut-4166c321`.
-  // The URL still carries the id for anyone who needs one.
+  // No fallback to `agentId`: it is the URL slug, not a title.
   const statusTitle = as?.displayName;
   const storedTitle = statusTitle === undefined || statusTitle === "" ? rosterTitle : statusTitle;
   const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
@@ -978,20 +799,12 @@ export default function WorkspacePage() {
   return (
     <SlateInlineContext.Provider value={slateInline}>
     <div className="h-full flex flex-col" data-workbench>
-      {/* Non-destructive disconnect banner. The chat panel below stays
-          mounted so the in-flight assistant turn is preserved through
-          partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
-      {/* Mutually exclusive with the terminal state below by construction: the
-          spinner claims a reconnect is coming, which is only true while the SDK
-          is still attempting one. */}
+      {/* The chat stays mounted through reconnect so the in-flight turn survives. */}
       {state.connectionStatus === "disconnected" && !state.terminalClose && (
         <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
         </div>
       )}
-      {/* The same classification for a workspace that WAS on screen and then
-          lost access: it says so and keeps both affordances, rather than
-          spinning forever over a session that cannot come back. */}
       {state.terminalClose && (
         <div className="flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 text-xs p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
           <WarningCircleIcon size={12} className="shrink-0" />
@@ -1006,9 +819,6 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* The one identity row, and the workspace-scoped controls that belong
-          with it — including the altitude switch: RUN (this run,
-          mission-control) ⇄ SUPERVISE (the agent over time). */}
       <WorkspaceBar
         title={shownTitle}
         editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
@@ -1049,11 +859,6 @@ export default function WorkspacePage() {
           activePlan: state.activePlan,
         }}
         chat={(inspectorControl) => <>
-            {/* Agent tabs — the workspace's orchestrator + durable subordinates.
-                Roster + live status ride the parent socket; the CHAT below
-                switches per tab while Columns B/C stay workspace-scoped. This
-                strip is the chat column's only chrome, so it also carries what
-                acts on ONE conversation: clearing the main transcript. */}
             <SubordinateTabs
               workspace={agentId}
               subordinates={state.subordinates}
@@ -1072,13 +877,9 @@ export default function WorkspacePage() {
               </>}
             />
             {subName ? (() => {
-              // The parent roster is the one source the tabs and sidebar read,
-              // so the header reads it too; a deep link that lands before the
-              // roster row arrives shows the address until it does.
               const rosterEntry = state.subordinates.find((entry) => entry.name === subName);
 
-              // A dismissed agent no longer runs, so it has no socket to open:
-              // its kept chat is paged over this workspace's own.
+              // A dismissed agent has no socket; its kept chat is paged over this workspace's.
               if (rosterEntry?.status === "dismissed") {
                 return (
                   <KeptChatColumn key={subName} workspace={agentId} subName={subName}
@@ -1105,12 +906,7 @@ export default function WorkspacePage() {
                 </div>
               </div>
             )}
-            {/* Messages — generous padding for spacious feel.
-                ErrorBoundary'd so a single malformed message doesn't
-                whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
-            {/* One centred 780px reading measure. Every entry stays within it,
-                so prose remains readable while tables and activity rows gain space. */}
             <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-7 space-y-5">
               <ConversationStartBoundary
                 hasEntries={thread.entries.length > 0}
@@ -1180,7 +976,6 @@ export default function WorkspacePage() {
             </div>
             </ErrorBoundary>
 
-            {/* Device-consent cards — an agent wants to use a connected device */}
             {state.pendingConsents.length > 0 && (
               <div className="p-thread-column space-y-2 pb-1">
                 {state.pendingConsents.map((c) => (
@@ -1189,10 +984,6 @@ export default function WorkspacePage() {
               </div>
             )}
 
-            {/* Input. Everything the composer needs to say goes through
-                `notices`, so a failure, a warning and a progress line all read
-                as the same kind of object instead of five improvised rows.
-                `Composer` owns paste, the file input and the attachment chips. */}
             <div className="border-t p-border p-sidebar">
               <Composer
                 textareaRef={chatInputRef}
@@ -1221,10 +1012,6 @@ export default function WorkspacePage() {
                     action: { label: "Reload", icon: <ArrowsClockwiseIcon size={11} />, onClick: () => window.location.reload() },
                   }] : []),
                   ...(attachments.refusal ? [{ id: "attach", tone: "warning" as const, text: attachments.refusal }] : []),
-                  // Each side read that failed, named. These are collected by
-                  // reportSide and would otherwise be recorded and never shown,
-                  // which is the "there is nothing" reading SIDE_SOURCES exists
-                  // to prevent.
                   ...SIDE_SOURCES.flatMap(({ source, label }) => {
                     const message = sideErrors[source];
 
@@ -1246,12 +1033,7 @@ export default function WorkspacePage() {
             )}
         </>}
         inspector={(
-          // `planOwner` is the pane's own actor AS THE WORK READ NAMES IT:
-          // every owner `listWorkspaceWork` reports is an actor's registered
-          // name, and the root's is the workspace's own
-          // (`createMain({ name: this.name })`). A literal "main" matched no
-          // owner at all, so the root's own plan read as a foreign actor's —
-          // read-only, with no decision on it and no review when it arrived.
+          // `planOwner` must be the actor's registered name as the work read reports it; the root's is the workspace name.
           <WorkSurface
             surface={surface}
             previewFocus={state.previewFocus}
@@ -1306,7 +1088,6 @@ export default function WorkspacePage() {
               setForkFor(null);
               await navigate(result.url);
             } catch (err) {
-              // Surface the error inside the modal — return string rejects.
               throw err instanceof Error ? err : new Error(String(err));
             }
           }}
@@ -1317,10 +1098,7 @@ export default function WorkspacePage() {
         messageId={revertFor}
         rpc={state.rpc}
         onClose={() => setRevertFor(null)}
-        // The walk is reset with the revert, not after it: a first history page
-        // already in flight belongs to the conversation being walked back, and
-        // without a new generation it lands afterwards and puts the removed
-        // messages straight back on screen.
+        // Reset with the revert: an in-flight first page would otherwise restore the removed messages.
         onReverted={history.reset}
         onRestorePlan={setRestorePlan}
       />}
@@ -1337,10 +1115,7 @@ export default function WorkspacePage() {
           onClose={() => setShowClearConfirm(false)}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
-            {/* The walk is reset with the same press, not after it: a first
-                history page already in flight belongs to the conversation being
-                cleared, and without a new generation it landed afterwards and
-                put the cleared messages straight back on screen. */}
+            {/* Reset in the same press: an in-flight first page would otherwise restore the cleared messages. */}
             <FilledButton danger onClick={() => {
               state.clearHistory();
               history.reset();
@@ -1366,9 +1141,6 @@ const RESTORE_MARK = {
   delete: { mark: "-", tone: "p-danger" },
 } satisfies Record<FileRestoreChange["kind"], { mark: string; tone: string }>;
 
-/** The device-file restore confirm. Shows the whole plan in the app's own
- *  destructive-action treatment rather than crammed into a native `confirm()`
- *  dialog — this overwrites files on the user's real machine. */
 function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
   plan: DeviceRestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
 }) {

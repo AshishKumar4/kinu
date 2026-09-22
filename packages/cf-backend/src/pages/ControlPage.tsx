@@ -1,16 +1,4 @@
-/**
- * `/control` — the admin control plane.
- *
- * Reachable only by a session whose verified email is in `CONTROL_PLANE_ADMINS`;
- * every read behind it answers 404 to anyone else, so a non-operator who guesses
- * this URL gets the same "not an operator" sentence and learns nothing about what
- * is here. The gate is server-side in `control-plane/routes.ts` — this page is a
- * view of an authorized answer, never the thing that decides.
- *
- * ONE PAGE, TABBED, because the tabs are one operator's one job: find the
- * account, find the workspace, see what it is doing, and act. Splitting them
- * across routes would put a page load between two halves of one question.
- */
+/** Access is gated server-side in `control-plane/routes.ts`; non-operators get 404. */
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
@@ -47,22 +35,12 @@ function isTab(value: string | null): value is TabKey {
   return value !== null && Object.hasOwn(TABS, value);
 }
 
-/**
- * ENROLLED IN `scripts/wired.lock.json` — `gate:wired` cannot see this page's
- * consumer, and the absence is the gate's, not the code's. `App.tsx` reaches it
- * through `lazy(() => import('./pages/ControlPage'))`; a dynamic `import()` is
- * an expression that binds no name, so there is no named edge to follow, while
- * a static `import Page from` would be followed. `pages/MCTSExplorer.tsx` is
- * locked for the identical reason. The split is deliberate: every read behind
- * this page answers 404 to non-operators, so its code has no business in the
- * bundle every signed-in user downloads.
- */
+/** Enrolled in `scripts/wired.lock.json`: `gate:wired` cannot follow the lazy `import()` in `App.tsx`. */
 export default function ControlPage(): ReactNode {
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
   const tab: TabKey = isTab(raw) ? raw : 'overview';
-  // The selected user and workspace live in the URL so an operator can send a
-  // colleague the exact view they are looking at, and a reload keeps it.
+  // Selection lives in the URL so a view is shareable and survives reload.
   const user = params.get('user');
   const workspace = params.get('workspace');
 
@@ -82,8 +60,8 @@ export default function ControlPage(): ReactNode {
         <header className="space-y-1">
           <h1 className="p-display text-2xl">Control plane</h1>
           <p className="text-xs p-text-3">
-            View every account and workspace. Operator actions use owner RPCs and enter the audit log
-            before results appear.
+            Every account and workspace on this deployment. Each operator action runs through an
+            owner RPC and is written to the audit log before its result shows.
           </p>
         </header>
 
@@ -110,10 +88,7 @@ export default function ControlPage(): ReactNode {
               <ArrowLeftIcon size={12} /> Back
             </button>
             {user === null ? (
-              // A workspace name is unique inside one account and nowhere else,
-              // so the plane refuses to read one without being told whose it is.
-              // Reached only by a hand-edited URL: every row that opens this view
-              // carries its owner.
+              // Workspace names are unique only per account, so the owner is required.
               <Notice tone="warn">
                 Open a workspace from the Workspaces tab or an account row.
               </Notice>
@@ -149,8 +124,6 @@ function TabBody(
   }
 }
 
-/* ── Overview ────────────────────────────────────────────────────────────── */
-
 function OverviewView(): ReactNode {
   const { load, reload } = useControlRead(fetchOverview, []);
 
@@ -175,12 +148,8 @@ function OverviewView(): ReactNode {
   );
 }
 
-/** What the walk reads off a page: whether another one exists and where it
- *  starts. */
 type WalkedPage = { readonly status: 'end' } | { readonly status: 'more'; readonly next: SeekCursor };
 
-/** The walk every list here keeps: the page it is showing and the cursor that
- *  opens the next one. */
 function usePageWalk() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -196,8 +165,6 @@ function usePageWalk() {
 
   return { cursor, page, next, first };
 }
-
-/* ── Users ───────────────────────────────────────────────────────────────── */
 
 function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
@@ -234,13 +201,11 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
   );
 }
 
-/** The three things a drilldown page can say about the index it is showing. Read
- *  off the server's own report rather than derived, so a continuation page does
- *  not claim a reconcile it did not run. */
+/** Read from the server's report so a continuation page does not claim a reconcile it did not run. */
 const RECONCILE_HINT = {
   ok: 'Matched to this account\u2019s registry when opened.',
   failed: 'The account registry was unavailable. These rows come from the index.',
-  skipped: 'A later page of the walk that reconciled on its first page.',
+  skipped: 'Checked against the account\u2019s registry on the first page only.',
 } satisfies Record<ReconcileReport['status'], string>;
 
 function UserDetailView(
@@ -248,9 +213,6 @@ function UserDetailView(
     userId: string; onOpenWorkspace: (name: string) => void; onBack: () => void;
   },
 ): ReactNode {
-  // Walked like every other list here. Without the walk an account with more
-  // than one page of workspaces has every row past the ceiling unreachable,
-  // under copy that says the table is the registry's.
   const { cursor, page, next, first } = usePageWalk();
   const { load, reload } = useControlRead(() => fetchUserDetail(userId, cursor), [userId, cursor]);
 
@@ -297,8 +259,6 @@ function UserDetailView(
     </div>
   );
 }
-
-/* ── Workspaces ──────────────────────────────────────────────────────────── */
 
 function WorkspacesView(
   { onOpen }: { onOpen: (name: string, userId: string) => void },
@@ -355,8 +315,6 @@ function WorkspacesView(
   );
 }
 
-/* ── Incidents ───────────────────────────────────────────────────────────── */
-
 function IncidentsView(): ReactNode {
   const { load, reload } = useControlRead(fetchIncidents, []);
 
@@ -390,8 +348,6 @@ function IncidentsView(): ReactNode {
     </div>
   );
 }
-
-/* ── Feedback ────────────────────────────────────────────────────────────── */
 
 function FeedbackView(): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
@@ -435,14 +391,10 @@ function FeedbackView(): ReactNode {
   );
 }
 
-/* ── Metrics ─────────────────────────────────────────────────────────────── */
-
 function MetricsView(): ReactNode {
   const [hours, setHours] = useState(24);
 
-  // A refresh re-asks the server, and `refresh=1` makes the server re-ask
-  // Analytics: without it, the button would answer from the same 30-second-old
-  // batch and look broken while being correct.
+  // `refresh=1` makes the server re-query Analytics instead of returning its cached batch.
   const { load, reload } = useControlRead(
     (refresh?: boolean) => fetchMetrics(hours, undefined, refresh),
     [hours],
@@ -487,7 +439,6 @@ function MetricsView(): ReactNode {
   );
 }
 
-/** One panel of the metrics grid: its rows, or why it has none. */
 function PanelBody({ panel }: { panel: AnalyticsPanel }): ReactNode {
   if (panel.status === 'ok') return <MetricTable rows={panel.rows} />;
 
@@ -496,9 +447,6 @@ function PanelBody({ panel }: { panel: AnalyticsPanel }): ReactNode {
   return <div className="text-xs p-danger">{panel.reason}</div>;
 }
 
-/** A metric answer, rendered from whatever columns the query aliased. The
- *  columns are the query's business, so this reads them off the first row rather
- *  than hard-coding a set the builder owns. */
 function MetricTable({ rows }: { rows: Extract<AnalyticsPanel, { status: 'ok' }>['rows'] }): ReactNode {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
 
@@ -524,10 +472,7 @@ function MetricTable({ rows }: { rows: Extract<AnalyticsPanel, { status: 'ok' }>
   );
 }
 
-/* ── Audit ───────────────────────────────────────────────────────────────── */
-
-/** An attempt's outcome, in tone. A `pending` row is a settlement that was
- *  never recorded, which reads the same as a failure. */
+/** `pending` is a never-recorded settlement and reads as a failure. */
 const AUDIT_TONE: Record<ControlAuditRow['outcome'], string> = {
   ok: 'p-success p-t-status',
   denied: 'p-accent p-t-status',
@@ -576,8 +521,6 @@ function AuditView(): ReactNode {
     </div>
   );
 }
-
-/* ── One table, used by every list ───────────────────────────────────────── */
 
 interface TableRow {
   key: string;

@@ -1,9 +1,4 @@
-/**
- * "Fork into a workspace": pick one of my workspaces or start a new one, admit
- * the blueprint, and open the new slate on its unmapped-bindings panel. The
- * admission never runs the source; the panel is where the forker connects
- * their own MCP server, tool or executor for each requirement.
- */
+/** Admission never runs the source; the forker binds each requirement on the unmapped-bindings panel. */
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -19,7 +14,6 @@ import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 
 const NEW_WORKSPACE = "\u0000new";
 
-/** Where a fork lands: the workspace, with the new slate's surface open on its panel. */
 function forkedSlatePath(workspace: string, slate: string): string {
   return `/workspace/${encodeURIComponent(workspace)}?slate=${encodeURIComponent(slate)}&unmapped=1`;
 }

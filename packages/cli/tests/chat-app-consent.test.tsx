@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
+import { deviceConsentCanApprove } from '../src/tui/overlays';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '@kinu.run/core';
 
 afterEach(cleanupChats);
@@ -63,7 +64,7 @@ describe('inline shell approval', () => {
     const agent = fakeClient({ name: 'shell' });
     const screen = await mountChat(agent.client);
     const answer = agent.requestShellApproval({ ...shellRequest, command: 'sudo '.repeat(400) });
-    await screen.waitFor('resize warning', () => screen.frame().includes('Resize to inspect'));
+    await screen.waitFor('resize warning', () => screen.frame().includes('Enlarge the terminal'));
     screen.mockInput.pressKey('a');
     await screen.renderOnce();
     expect(screen.frame()).toContain('Run this command?');
@@ -100,7 +101,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your PC?'));
+    await screen.waitFor('the consent overlay', () => screen.frame().includes('Use your computer?'));
     await screen.mockInput.typeText('hidden draft');
     screen.mockInput.pressKey('l', { ctrl: true });
     screen.mockInput.pressTab();
@@ -140,7 +141,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressEnter();
     await screen.waitFor('settings below consent', () => screen.frame().includes('Filter settings'));
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run the suite' });
-    await screen.waitFor('consent above settings', () => screen.frame().includes('Use your PC?'));
+    await screen.waitFor('consent above settings', () => screen.frame().includes('Use your computer?'));
     screen.mockInput.pressEnter();
     await screen.waitFor('the one-time approval', () => decisions.length === 1);
     expect(decisions).toEqual(['once']);
@@ -170,7 +171,7 @@ describe('ChatApp consent ownership', () => {
     const screen = await mountChat(controlled.client);
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
     await screen.waitFor('the unapprovable consent warning', () =>
-      screen.frame().includes('Resize to inspect the full command'));
+      screen.frame().includes('Enlarge the terminal to read it all'));
     screen.mockInput.pressKey('a');
     screen.mockInput.pressKey('y');
     screen.mockInput.pressEnter();
@@ -182,5 +183,11 @@ describe('ChatApp consent ownership', () => {
     expect(decisions).toEqual(['deny']);
   });
 
-
+  test('a wide glyph is budgeted two columns, not four', () => {
+    // 24 half-width columns: "Command: " plus 39 emoji is 48 code points, two
+    // rows, and the 9-row terminal holds those two with the dialog's seven.
+    // Counted in UTF-16 units the same command reads as four rows and refuses.
+    expect(deviceConsentCanApprove({ command: '😀'.repeat(39) }, { width: 100, height: 11 })).toBe(true);
+    expect(deviceConsentCanApprove({ command: '😀'.repeat(40) }, { width: 100, height: 11 })).toBe(false);
+  });
 });

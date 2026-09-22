@@ -1,12 +1,4 @@
-/**
- * The Feedback affordance in the authenticated app's navigation.
- *
- * It owns the open state and nothing else, so the dialog — and through it the
- * rasteriser's own chunk — is only ever constructed after a click. `compact`
- * is the icon-only form the mobile header's action row uses; the rail gets the
- * labelled form, because a rail has room for a word and an unlabelled megaphone
- * does not say what it does.
- */
+/** Owns only the open state, so the dialog and the rasteriser's chunk are built after a click. */
 import { useState } from "react";
 import { MegaphoneIcon } from "@phosphor-icons/react";
 import { FeedbackModal } from "./FeedbackModal";

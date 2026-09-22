@@ -1,18 +1,6 @@
 /**
- * The Drive — the owner's one tenant, the same tree every workspace mounts on
- * its file plane at `/shared`. One folder at a time under a breadcrumb, each
- * entry on the roster's 56px line with its kind, size and age; the actions a
- * file manager owes — upload, new folder, rename, delete, download — and the
- * two that make this Drive a skills library: "Mark as skill" on any folder
- * that already is one, "Add skill" from a pasted SKILL.md, folder or zip.
- *
- * The URL is the folder: `/drive/projects/ops` lists `/projects/ops` on the
- * tenant, so a folder is a link a reader can hand on. `/drive/blueprints`
- * is the one folder whose contents are not bytes: it draws the shared library.
- *
- * The root is the page a reader lands on: the slates and blueprints they own
- * and the shares in both directions, each section a grid of tiles, with the
- * folder listing under them.
+ * The URL is the folder: `/drive/projects/ops` lists `/projects/ops` on the tenant.
+ * `/drive/blueprints` draws the shared library instead of bytes.
  */
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -40,7 +28,6 @@ import { inputCls } from "@/components/ui/form";
 import { DriveSections } from "@/components/drive/DriveSections";
 import { SharedLibraryView, type SharedLibraryProps } from "@/components/shared/SharedLibrary";
 
-/** The Drive's URL for a tenant folder. */
 function folderHref(path: string): string {
   return path === "/" ? APP_ROUTES.drive : `${APP_ROUTES.drive}${path}`;
 }
@@ -49,7 +36,6 @@ function childPath(folder: string, name: string): string {
   return folder === "/" ? `/${name}` : `${folder}/${name}`;
 }
 
-/** The browser's relative path for a picked folder entry, or its name. */
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
 }
@@ -58,7 +44,6 @@ function picked(files: FileList | null): PickedFile[] {
   return [...(files ?? [])].map((file) => ({ path: relativePathOf(file), file }));
 }
 
-/** The name a picked folder was chosen by: the first segment every entry shares. */
 function pickedFolderName(files: readonly PickedFile[]): string | null {
   const first = files[0]?.path.split("/")[0];
 
@@ -82,7 +67,6 @@ function Breadcrumbs({ path }: { path: string }) {
   );
 }
 
-/** A dialog that asks for one name and commits it. */
 function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: {
   title: string; icon: ReactNode; initial: string; label: string; action: string;
   onCommit: (name: string) => Promise<void>; onClose: () => void;
@@ -124,8 +108,6 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
   );
 }
 
-/** What a delete is about, per kind: the noun in the title and what goes with
- *  the entry. */
 const DELETE_COPY: Record<DriveEntry["kind"], { noun: string; also: string }> = {
   file: { noun: "file", also: "" },
   folder: { noun: "folder", also: " and everything inside it" },
@@ -168,7 +150,6 @@ function DeleteDialog({ entry, onConfirm, onClose }: { entry: DriveEntry; onConf
   );
 }
 
-/** Add a skill: the text of one SKILL.md, or a picked folder or zip. */
 function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -202,9 +183,9 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
       </>}>
       <div className="space-y-3">
         <p className="text-xs p-text-2 leading-relaxed">
-          A skill is a folder with a <span className="font-mono p-text">SKILL.md</span>: front matter naming it, then the
-          instructions. It lands under <span className="font-mono p-text">{DRIVE_SKILLS_DIR}</span> and every workspace reads it from
-          its next turn.
+          A skill is a folder with a <span className="font-mono p-text">SKILL.md</span>: front matter that names it, then the
+          instructions. Kinu saves it under <span className="font-mono p-text">{DRIVE_SKILLS_DIR}</span>, and every workspace picks it up
+          on its next turn.
         </p>
         <textarea data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false}
           placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"}
@@ -248,7 +229,6 @@ function EntryIcon({ entry }: { entry: DriveEntry }) {
   return <FileIcon size={18} className="shrink-0 p-text-3" />;
 }
 
-/** The line under a name: a file's size, a link's target, or the word folder. */
 function entryMeta(entry: DriveEntry): string {
   if (entry.kind === "file") return formatBytes(entry.size);
 
@@ -305,11 +285,11 @@ function DriveRow({ folder, entry, first, onRename, onDelete, onMark }: {
           <DownloadSimpleIcon size={14} />
         </a>
         <button type="button" data-drive-rename onClick={onRename} disabled={reserved} className={ROW_ACTION}
-          title={reserved ? "Reserved folders keep their name" : `Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
+          title={reserved ? "This folder cannot be renamed" : `Rename ${entry.name}`} aria-label={`Rename ${entry.name}`}>
           <PencilSimpleIcon size={14} />
         </button>
         <button type="button" data-drive-delete onClick={onDelete} disabled={reserved} className={`${ROW_ACTION} hover:p-danger`}
-          title={reserved ? "Reserved folders stay" : `Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
+          title={reserved ? "This folder cannot be deleted" : `Delete ${entry.name}`} aria-label={`Delete ${entry.name}`}>
           <TrashIcon size={14} />
         </button>
       </span>
@@ -324,7 +304,6 @@ interface Transfer {
   readonly error?: string;
 }
 
-/** The upload controls: files, a folder, or a zip to unpack, each its own picker. */
 function UploadMenu({ disabled, onFiles, onFolder, onZip }: {
   disabled: boolean;
   onFiles: (files: File[]) => void; onFolder: (files: PickedFile[]) => void; onZip: (file: File) => void;
@@ -393,7 +372,7 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
 
   useEffect(() => { setNotice(null); setDialog(null); }, [path]);
 
-  /** One upload, shown while it runs and kept on failure with its reason. */
+  /** Kept on failure with its reason. */
   const transfer = useCallback((name: string, work: () => Promise<void>): void => {
     const id = ++nextTransfer.current;
     setTransfers((rows) => [...rows, { id, name, status: "uploading" }]);
@@ -421,13 +400,12 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
     transfer(file.name, () => uploadZip(childPath(path, file.name.replace(/\.zip$/iu, "")), file));
   };
 
-  /** A change that lands, then the listing re-read to show it. */
   const act = async (work: () => Promise<void>): Promise<void> => {
     await work();
     listing.reload();
   };
 
-  /** Mark one folder; a refusal is the page's notice, since no dialog is open. */
+  /** A refusal is the page's notice, since no dialog is open. */
   const mark = (name: string): void => {
     startTransition(async () => {
       try {
@@ -510,7 +488,7 @@ export default function DrivePage({ library }: { library?: SharedLibraryProps } 
             {listing.resource.status === "ready" && entries.length === 0 && (
               <div data-drive-empty className="px-5 py-10 text-center">
                 <p className="p-row-text p-text-3">This folder is empty.</p>
-                <p className="mt-1 p-meta p-text-4">Drop files here, or use Upload and New folder.</p>
+                <p className="mt-1 p-meta p-text-4">Drop files here, or use Upload or New folder.</p>
               </div>
             )}
             {listing.resource.status !== "loading" && entries.map((entry, index) => (

@@ -1,10 +1,5 @@
-/**
- * The classifier's patterns are only as good as the errors they were measured against, so this
- * suite re-provokes each failure from the engine that raises it — SQLite via bun:sqlite (the same
- * SQLite that backs Durable Object storage) and Node's fs/process — rather than asserting against
- * a hardcoded message. A SQLite or Node upgrade that reworded an error fails here, which is the
- * only way a pinned pattern stays honest.
- */
+/** Re-provokes each failure from the engine that raises it, so an upstream rewording of an
+ *  error fails here instead of silently unpinning a pattern. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -13,10 +8,6 @@ import { scratchDir } from '@kinu.run/test-utils';
 
 import { classify, tolerate, tolerateAsync, type ExpectedFailure } from '../src/obs/expected-failure';
 
-/**
- * Runs `provoke` and returns the Error it raised. Every engine below raises an Error subclass, so
- * the helper narrows here rather than handing `unknown` back to each assertion.
- */
 function thrown(provoke: () => void): Error {
   try {
     provoke();
@@ -94,8 +85,7 @@ describe('tolerate', () => {
 
   test('propagates a failure of a DIFFERENT recognised kind — the workspace_capability defect', () => {
     const db = new Database(':memory:');
-    // The read that hid `workspace_capability`: tolerating "the workspace holds no token" must not
-    // also absorb "the table was never created", or the two become the same observation again.
+    // Tolerating "no token" must not also absorb "the table was never created".
     expect(() =>
       tolerate(
         () => db.query('SELECT token FROM workspace_capability LIMIT 1').all(),
@@ -134,8 +124,7 @@ describe('tolerate', () => {
       { name: 'malformed-input', cause: thrown(() => JSON.parse('{oops')) },
     ];
 
-    // A registry whose names outnumber the errors anyone can provoke is a list of guesses. Asserting
-    // the count here means adding a name without a provoked error fails this test.
+    // Every registered name must have a provoked error.
     expect(provoked.length).toBe(7);
 
     for (const { name, cause } of provoked) {

@@ -1,10 +1,4 @@
-// What a shell command's outcome looks like to the model.
-//
-// The regression these tests pin: a non-zero exit that returns stderr alone
-// sends a failing `pytest`/`make` — which writes its diagnostics to stdout —
-// to the model as an exit code and nothing else. Asserted through the
-// PUBLIC surfaces the model actually reads (the `shell` tool, codemode
-// `workspace.exec`, an executor's `exec`), not just the renderer.
+// A non-zero exit must not drop stdout (where pytest/make write diagnostics), on every public exec surface.
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -21,7 +15,6 @@ import type { Shell } from '../src/types/primitives';
 
 type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<CommandResult> };
 
-/** A pytest-shaped failure: everything diagnostic on stdout, nothing on stderr. */
 const PYTEST = {
   stdout: 'FAILED tests/test_math.py::test_add - assert 3 == 4\n1 failed, 2 passed',
   stderr: '',
@@ -92,8 +85,6 @@ describe('formatExecResult', () => {
   }
 
   test('a refusal round-trip keeps the exit the error carried', () => {
-    // Both channels — the text a refusal serialises to and the object a member
-    // answered with — must carry the same metadata the error held.
     const refusal = refusalOf(new KinuError('unavailable', 'no such command', { execution: { exitCode: 127 } }));
 
     expect(parseJsonValue(refusalText(refusal))).toMatchObject({

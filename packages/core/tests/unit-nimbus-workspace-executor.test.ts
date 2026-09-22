@@ -16,8 +16,6 @@ import type { ExecutorToolResult } from '../src/execution/types';
 import { present } from '@kinu.run/test-utils';
 import { CommandResultSchema } from '../src/execution/exec-result';
 
-/** The text an executor tool answered with — a structured answer where the
- *  test reads prose is the failure it is looking for. */
 function toolText(result: ExecutorToolResult): string {
   return v.parse(v.string(), result);
 }
@@ -158,9 +156,7 @@ describe('hosted Nimbus workspace provider', () => {
     const bytes = await nimbusSessionFiles(box).readRange('/home/user/large.png', 0, 512 * 1024);
 
     expect(bytes).toEqual(expected);
-    // The reader is fixed Node source. Path, offset and length travel only in
-    // its JSON environment payload — never interpolated into shell text — and
-    // it receives the admitted window, not an implicit whole-file read.
+    // Path/offset/length travel only in the reader's JSON env, never interpolated into shell text.
     expect(requestEnv).toBeDefined();
     const payload = Object.values(requestEnv ?? {})[0] ?? '';
     expect(payload).toContain('"path":"/home/user/large.png"');
@@ -195,9 +191,6 @@ describe('hosted Nimbus workspace provider', () => {
     });
     box.runtimes = { list: async () => ({ installed: [], available: [{ name: 'bun' }] }) };
 
-    // The plain `Shell` the shell tool drives carries the classification; the
-    // refusal text must name the command and both exits — the sandbox runtime
-    // and the install path this box's catalog CAN serve (`bun` is available).
     const shell = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
 
     expect(shell.exitCode).toBe(127);
@@ -206,8 +199,6 @@ describe('hosted Nimbus workspace provider', () => {
     expect(shell.refusal?.error).toContain('sandbox');
     expect(shell.refusal?.error).toContain('nimbus install');
     expect(shell.stderr).toContain('command not found');
-
-    // The executor's public tool surface answers the same refusal object.
 
     const { rt } = createTestRuntime();
 
@@ -233,8 +224,7 @@ describe('hosted Nimbus workspace provider', () => {
     box.exec = async (command) => command.startsWith('exit')
       ? { command, success: false, stdout: '', stderr: 'no', exitCode: 2 }
       : { command, success: false, stdout: '', stderr: 'grep: command not found', exitCode: 127 };
-    // No `runtimes` member: nothing on this box is installable, so the text
-    // may not promise `nimbus install` for this command.
+    // Nothing installable: the text may not promise `nimbus install`.
 
     const missed = await nimbusSessionShell(box).exec('grep -r thing .');
 
@@ -254,10 +244,7 @@ describe('hosted Nimbus workspace provider', () => {
     });
     box.runtimes = { list: async () => { throw new Error('session box catalog socket closed'); } };
 
-    // The thrown list is a FACT about this refusal's confidence: the text
-    // still names the bin, the sandbox exit and the install path — and says
-    // the catalog itself could not be read, because "no bins known" and
-    // "could not ask" are different answers.
+    // A failed catalog read is stated, since "no bins known" and "could not ask" differ.
     const missed = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
 
     expect(missed.exitCode).toBe(127);
@@ -292,9 +279,7 @@ describe('hosted Nimbus workspace provider', () => {
   });
 
   test('a listening port the host cannot address reaches the Ports surface as a reason, not as nothing', async () => {
-    // The host says why a port has no URL (a deployment with no preview host,
-    // a workspace whose name no hostname label can carry). Dropping the entry
-    // showed the owner an empty Ports panel over live servers.
+    // Portless entries keep the host's reason rather than being dropped from the Ports panel.
     const { rt } = createTestRuntime();
     const box = fakeBox();
     const reason = 'the workspace name "MyAgent" cannot be a preview hostname label';
@@ -315,15 +300,13 @@ describe('hosted Nimbus workspace provider', () => {
     await expect(provider.listExposedPorts()).rejects.toMatchObject({
       name: 'KinuError', code: 'unsupported', message: expect.stringContaining(reason),
     });
-    // The model reads the same reason on its own listing.
     expect(JSON.parse(toolText(await provider.tools.listPorts.execute()))).toEqual([
       { port: 4321, unavailable: reason },
     ]);
   });
 
   test('a port with a URL still lists, and one the host merely could not price is dropped', async () => {
-    // No reason means no claim: an entry with neither URL nor reason is the
-    // pre-existing shape (an SDK that answers no URL) and stays filtered.
+    // Neither URL nor reason: filtered.
     const { rt } = createTestRuntime();
     const box = fakeBox();
     box.ports = {
@@ -371,10 +354,7 @@ describe('a workspace whose host cannot compile node programs', () => {
   });
 
   test('a node program the host cannot compile refuses as unsupported, naming where it can run', async () => {
-    // The defect this closes: the raw V8 line reached the model as an `io`
-    // failure, which reads as "try again" and says nothing about the host. A
-    // retry cannot grow a compiler, so the answer is `unsupported`, and it
-    // names an executor that can rather than quoting the compiler.
+    // A missing compiler is `unsupported`, not a retryable `io` failure.
     const box = fakeBox();
     box.exec = async () => { throw new Error(CODEGEN_STDERR); };
 
@@ -384,9 +364,7 @@ describe('a workspace whose host cannot compile node programs', () => {
   });
 
   test('the same compiler failure under a command that never invoked node stays an io failure', async () => {
-    // The mark is a V8 string, and a build step that prints it while doing
-    // something else has not hit the node guard. Reclassifying that would tell
-    // the model a retry is pointless when it is not.
+    // The V8 mark in other output is not the node guard; reclassifying would wrongly forbid retry.
     const box = fakeBox();
     box.exec = async () => { throw new Error(CODEGEN_STDERR); };
 
@@ -418,8 +396,6 @@ describe('a workspace whose host cannot compile node programs', () => {
   });
 
   test('an exposure failure that is not an empty port still travels as io', async () => {
-    // Only the no-listener shape is reclassified; anything else keeps the
-    // seam's own answer for an unrecognised transport failure.
     const box = fakeBox();
     box.ports = {
       expose: async () => { throw new Error('preview signing secret is not set'); },
@@ -437,8 +413,7 @@ describe('the embedded workspace removes a tree natively', () => {
     const bundle = createWorkspaceBundle(database);
 
     try {
-      // `/home` is a mount the kernel's own in-memory nodes do not cover: this
-      // tree is exactly what once answered ENOENT to a recursive `rm`.
+      // `/home` is outside the kernel's in-memory nodes.
       await bundle.vfs.mkdir('home/user/tree/a/b', { recursive: true });
       await bundle.vfs.writeFile('home/user/tree/a/b/leaf.txt', 'leaf');
       await bundle.vfs.writeFile('home/user/tree/top.txt', 'top');
@@ -462,9 +437,7 @@ describe('the workspace generation is fabric\u2019s counter over one row', () =>
     const database = new Database(':memory:');
     const first = createWorkspaceBundle(database);
     const firstPid = (await first.session()).processes.spawn('probe', [], '/home/user').pid;
-    // A second open over the same rows is what an eviction and a restart
-    // are: the counter continues, so no pid the first incarnation handed
-    // out can be handed out again.
+    // A second open models eviction and restart: pids must not repeat.
     const second = createWorkspaceBundle(database);
     const secondPid = (await second.session()).processes.spawn('probe', [], '/home/user').pid;
 
@@ -475,10 +448,7 @@ describe('the workspace generation is fabric\u2019s counter over one row', () =>
   });
 
   test('a bump that did not persist refuses the open, on a boot that is not the first', async () => {
-    // Fabric's adopt swallows a failed put and stays on the previous value, so
-    // a guard that refused only a zero generation let a second boot run on
-    // the previous incarnation's floor — the pid repeat the counter exists to
-    // prevent. The read-back after the adopt is the whole guard.
+    // Fabric's adopt swallows a failed put; the read-back after it is the whole guard.
     const database = new Database(':memory:');
     const first = createWorkspaceBundle(database);
     await first.session();

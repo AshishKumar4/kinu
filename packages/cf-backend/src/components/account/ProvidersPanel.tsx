@@ -1,17 +1,6 @@
 /**
- * The providers panel — Cloudflare AI, ChatGPT (Codex) and BYO API keys.
- * Account settings shows it as the `providers` section; the setup card and
- * the onboarding wizard mount it as a modal, so every read below lives on the
- * panel rather than on a page.
- *
- * Every one of these reads describes what the account HAS connected, so none
- * of them may fail quietly: a swallowed rejection turned into "Connect
- * ChatGPT", no API keys and a Cloudflare OAuth CTA for an account that is
- * fully connected, walking the user into a needless re-grant. Each read is
- * its own resource so each also PUBLISHES independently: one unavailable
- * dependency stalls or fails its own card, never the ones beside it, and
- * every read runs under the api() helper's shared deadline rather than
- * waiting forever (KINU-073).
+ * Providers panel (Cloudflare AI, ChatGPT/Codex, BYO keys), also mounted as a modal.
+ * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
 import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { Combobox, Loader } from "@cloudflare/kumo";
@@ -36,8 +25,6 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-/** The one spelling of "this provider is connected", so Cloudflare and ChatGPT
- *  say it the same way. A detail is the account or gateway it is connected as. */
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -47,9 +34,6 @@ function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   );
 }
 
-/** A quiet destructive action: danger ink in the quiet box, so it reads as an
- *  action and as one that takes something away, without the filled danger the
- *  page reserves for a confirm. */
 const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
 
 export function ProvidersPanel({ returnTo }: { returnTo: string }) {
@@ -61,11 +45,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const accounts = useAsyncResource(listCloudflareAccounts);
 
   const reads = [creds, codex, models, catalog, gateways, accounts];
-  // One retry affordance: a mutation's onChanged and every card's Retry re-read
-  // the whole account, because the mutators invalidate more than their own row
-  // (connecting a provider changes the model menu, the catalog and the creds).
-  // A plain closure: every consumer calls it from an event handler, none keys
-  // an effect on it, so its per-render identity buys simplicity for free.
+  // Retry re-reads the whole account: mutators invalidate more than their own row.
   const reloadAll = () => { for (const read of reads) read.reload(); };
 
   return (
@@ -75,8 +55,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
           {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
             <div className="space-y-5">
               <ConnectedBadge />
-              {/* Which account serves Workers AI is upstream of which gateway
-                  is reachable, so it is asked first. */}
+              {/* Asked first: the account decides which gateway is reachable. */}
               <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
                 {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
               </CardSlot>
@@ -112,14 +91,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   );
 }
 
-// ── Cloudflare account selection ────────────────────────────────────
-
-/**
- * Which of the user's Cloudflare accounts serves this workspace's Workers AI.
- * Only rendered when there is a choice to make: a single-account user has
- * nothing to decide and gets no control. Picking an account clears the gateway
- * selection server-side and rediscovers gateways, so the caller reloads.
- */
+/** Rendered only with multiple accounts. Picking one clears the gateway server-side, so the caller reloads. */
 function CloudflareAccountSection({ status, onChanged }: {
   status: CloudflareAccountStatus | null;
   onChanged: () => void;
@@ -156,8 +128,6 @@ function CloudflareAccountSection({ status, onChanged }: {
     </Field>
   );
 }
-
-// ── Cloudflare AI Gateway selection ─────────────────────────────────
 
 function CloudflareGatewaySection({ status, returnTo, onChanged }: {
   status: CloudflareGatewayStatus | null;
@@ -218,8 +188,6 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
   );
 }
 
-// ── Codex device-code flow ──────────────────────────────────────────
-
 function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onChanged: () => void }) {
   const [flow, setFlow] = useState<DeviceFlowStart | null>(null);
   const [polling, setPolling] = useState(false);
@@ -251,18 +219,15 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
             setFlow(null);
             onChanged();
           } else if (result.error) {
-            // Still-pending polls return { connected: false } with no error;
-            // a reported error (expired/denied/no flow) is terminal — stop
-            // polling instead of hammering the endpoint forever.
+            // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
             stopPolling();
             setFlow(null);
             setError(result.error);
           } else {
-            setError(null); // still pending — clear any transient poll error
+            setError(null);
           }
         } catch (e) {
-          // Thrown = the poll request itself failed (network blip) — show it
-          // but keep polling; the flow may still complete.
+          // The poll request itself failed: show it but keep polling.
           setError(renderThrownChain({ cause: e }));
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);
@@ -315,8 +280,6 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
   );
 }
 
-// ── BYO API keys ────────────────────────────────────────────────────
-
 function ApiKeyManager({ creds, catalog, onChanged }: {
   creds: CredentialSummary[];
   catalog: ProviderCatalogEntry[];
@@ -330,7 +293,6 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
     try { await deleteCredential(key); onChanged(); } catch (e) { alert(renderThrownChain({ cause: e })); }
   }, [onChanged]);
 
-  // Connect-a-provider form — any models.dev catalog provider, searchable.
   const byCredKey = new Map(catalog.map((p) => [p.credKey, p]));
 
   const storedKeys = creds
@@ -356,7 +318,6 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
     }
   }, [selected, apiKey, onChanged]);
 
-  // openai-compat — user-chosen key suffix.
   const [compatName, setCompatName] = useState('');
   const [compatBaseURL, setCompatBaseURL] = useState('');
   const [compatApiKey, setCompatApiKey] = useState('');
@@ -386,7 +347,6 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
 
   return (
     <div className="space-y-5">
-      {/* Stored keys */}
       {storedKeys.length > 0 && (
         <div className="p-group">
           {storedKeys.map(({ key, provider }) => (
@@ -407,7 +367,6 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         </div>
       )}
 
-      {/* Connect any catalog provider */}
       <Field label="Connect a provider">
         <Combobox
           items={catalog}
@@ -451,7 +410,6 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         )}
       </Field>
 
-      {/* OpenAI-compat slot */}
       <Field label="OpenAI-compatible (Groq, Together, …)">
         <div className="grid gap-2 sm:grid-cols-[1fr_1.6fr_1fr]">
           <input

@@ -1,10 +1,4 @@
-/**
- * The model picker — THE one component for choosing a model anywhere in the
- * web UI (workspace toolbar, agent settings, user defaults). Searchable kumo
- * combobox over /api/user/models entries, grouped by provider (server order =
- * connected-provider preference order), current model pinned first, with
- * context-window and capability badges.
- */
+/** Shared model picker for every surface; groups follow server order (connected-provider preference). */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox, Select } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, BrainIcon, WarningCircleIcon } from "@phosphor-icons/react";
@@ -26,8 +20,6 @@ const ModelMenuEntrySchema = v.object({
   contextWindow: v.optional(v.number()),
 });
 
-/** What the combobox hands its callbacks: a model, or one of the provider
- *  groups that make up `items`. */
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 
 function modelMenuEntry(input: PickerValue): ModelMenuEntry | null {
@@ -36,8 +28,7 @@ function modelMenuEntry(input: PickerValue): ModelMenuEntry | null {
   return parsed.success ? parsed.output : null;
 }
 
-/** The clear button Kumo forces onto a non-clearable picker. Named so the
- *  stylesheet can remove it; must match the selector in index.css. */
+/** Must match the selector in index.css that hides Kumo's forced clear button. */
 const CLEAR_LABEL_UNUSED = "Clear selection (unused)";
 
 /** Empty clears the workspace override; the tier's effort applies. */
@@ -51,14 +42,7 @@ const effortLabel = (effort: ReasoningEffort | typeof DEFAULT_EFFORT): string =>
   return effort[0].toUpperCase() + effort.slice(1);
 };
 
-/** The thinking level beside the model: the levels this model declares, or
- *  nothing when it declares none — a model that takes no level shows no
- *  control. The same popup family as the model picker beside it.
- *
- *  The trigger is text at rest, like the model name it follows: Kumo's button
- *  look (a surface fill and a hairline ring) made the pair read as a label
- *  over a pill, and the composer wants one quiet row. The raise arrives on
- *  hover and on focus, where the control is being used. */
+/** Shows no control when the model declares no levels. */
 function EffortPicker({ options, value, onChange, disabled }: {
   options: readonly ReasoningEffort[];
   value: ReasoningEffort | null;
@@ -90,29 +74,18 @@ function EffortPicker({ options, value, onChange, disabled }: {
 
 export interface ModelPickerProps {
   models: ModelMenuEntry[];
-  /** Providers the server could not reach. Listed under the options so a
-   *  broken credential is visible instead of silently shortening the menu. */
+  /** Listed so a broken credential is visible instead of silently shortening the menu. */
   failures?: ProviderFailure[];
   /** Currently selected spec; '' = no explicit choice. */
   value: string;
   onChange: (spec: string) => void;
-  /** kumo combobox size — xs for toolbars, base for settings forms. */
   size?: "xs" | "sm" | "base";
-  /** Input placeholder while nothing is selected. */
   placeholder?: string;
-  /** Accessible name for the trigger input — a picker inside a labelled row
-   *  names what it picks ("fast model"), a standalone one defaults to the
-   *  component's own name. */
   label?: string;
   /** Allow clearing the selection back to '' (= inherit the default). */
   clearable?: boolean;
-  /** Read-only render: the trigger shows the value but opens no menu — an
-   *  agent pane's picker, where the model is the actor's resolved one and the
-   *  only write lives on the workspace's own tab. */
+  /** Read-only: shows the value but opens no menu. */
   disabled?: boolean;
-  /** The thinking level, offered from the selected model's declared levels.
-   *  Passed where the surface owns that choice too; the two triggers then
-   *  render as siblings, which the composer lays out as one row. */
   effort?: { value: ReasoningEffort | null; onChange: (effort: ReasoningEffort | null) => void };
   className?: string;
 }
@@ -150,12 +123,8 @@ export function ModelPicker({
       <Combobox.TriggerInput disabled={disabled}
         placeholder={placeholder}
         aria-label={label}
-        // Kumo renders the clear button unconditionally and offers no prop to
-        // suppress it, so a non-clearable picker ships an X that does nothing
-        // (onValueChange(null) is ignored below) and eats 8px of a label that
-        // is already clipping in the workspace toolbar. `p-combobox-no-clear`
-        // removes it and reclaims the padding; it selects on this exact label,
-        // which unit-combobox-clear-affordance.test.ts keeps in step.
+        // Kumo always renders the clear button; `p-combobox-no-clear` hides it by this
+        // exact label, kept in step by unit-combobox-clear-affordance.test.ts.
         clearLabel={clearable ? "Use default model" : CLEAR_LABEL_UNUSED}
         className={clearable ? className : `p-combobox-no-clear ${className ?? ""}`}
       />
@@ -194,18 +163,12 @@ export function ModelPicker({
 }
 
 /**
- * Self-fetching ModelPicker — the shared wrapper for every picker that isn't
- * handed a models list (chat toolbar, workspace settings). Owns the tri-state:
- * null = loading, "error" = transient fetch failure (retryable), [] = the
- * fetch succeeded and genuinely no provider is connected. Only the last one
- * earns the empty-state CTA — flashing it during load or on a flaky request
- * sent connected users through a full OAuth prompt=login.
+ * Tri-state: null = loading, "error" = retryable failure, [] = no provider connected.
+ * Only [] earns the empty-state CTA, which forces an OAuth prompt=login.
  */
 export function ConnectedModelPicker({
   value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
 }: Omit<ModelPickerProps, "models"> & {
-  /** Rendered when no provider is connected. Defaults to the Workers AI
-   *  reconnect CTA. */
   renderEmpty?: () => React.ReactNode;
 }) {
   const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
@@ -247,8 +210,7 @@ export function ConnectedModelPicker({
   }
 
   if (menu.models.length === 0) {
-    // A menu that is empty BECAUSE every provider failed is not an
-    // unconnected account — sending it through the OAuth CTA would be a lie.
+    // Empty because every provider failed is not an unconnected account; skip the OAuth CTA.
     if (menu.failures.length > 0) {
       return (
         <button
@@ -293,8 +255,6 @@ export function ConnectedModelPicker({
   );
 }
 
-/** One line per provider the server could not reach. Not selectable — it
- *  explains a gap in the list rather than offering a choice. */
 function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
   if (!failures?.length) return null;
 
@@ -316,8 +276,6 @@ function failureTitle(failures: ProviderFailure[]): string {
   return failures.map((f) => `${f.label ?? f.provider}: ${f.reason}`).join("\n");
 }
 
-/** A provider group's label: its official mark where simple-icons carries
- *  the brand, the id alone where it does not. */
 function ProviderLabel({ provider }: { provider: string }) {
   const brand = providerBrand(provider);
 

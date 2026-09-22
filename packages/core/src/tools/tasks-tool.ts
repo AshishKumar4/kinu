@@ -1,12 +1,6 @@
 /**
- * The `tasks` tool's dispatch logic — add / update / list over one
- * TaskListStore, plus `mode`, the agent's durable active role.
- *
- * The role lives in `actor_config`: one key per agent, resolved fresh at every
- * turn boundary (profiles/resolve.ts), so a switch made here lands on the NEXT
- * turn while the running step keeps the profile it already resolved. Switching
- * goes through profiles/role-change.ts — the owner's allow/approval/locked
- * policy decides whether a self-switch lands, stages or refuses.
+ * `tasks` tool dispatch: add / update / list over one TaskListStore, plus `mode`, the active role.
+ * A role switch (profiles/role-change.ts) lands on the next turn; the running step keeps its profile.
  */
 import {
   TaskListStore,
@@ -34,16 +28,13 @@ const TasksActionSchema = v.picklist(TASKS_TOOL_ACTIONS);
 
 const TitlesSchema = v.array(v.string());
 
-/** The task-list tool's one input shape. `titles` writes, `id` + `status`
- *  moves, `list` needs neither, and `mode` reads or switches the active role. */
+/** The task-list tool's one input shape. */
 export interface TasksToolInput {
   action: TasksToolAction;
   titles?: string[];
   id?: string;
   status?: TaskStatus;
-  /** For action=update: the operator's one-line annotation beside the item —
-   *  set, replaced, or cleared with null. Either `status` or `note` must be
-   *  present or the call changes nothing. */
+  /** For action=update: set, replace, or clear (null) the item's note. `status` or `note` is required. */
   note?: string | null;
   parent?: string | null;
   /** For action=mode: the role id to switch to. Omit to read the current one. */
@@ -106,8 +97,7 @@ function addTasks(taskList: TaskListStore, args: TasksToolInput, now: number): T
   return result;
 }
 
-/** `note` is three-valued: absent leaves the note alone, `null` clears it, a
- *  string sets it. The declared type is a claim — this is model input. */
+/** `note` is three-valued: absent leaves it, `null` clears it, a string sets it. */
 function readNote(note: string | null | undefined): string | null | undefined {
   if (note === undefined || note === null) return note;
   const parsed = v.safeParse(v.string(), note);
@@ -134,8 +124,7 @@ function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number):
   const task = taskList.update(args.id, { status: status?.output, note }, now);
 
   if (!task) throw new KinuError('missing', 'no task ' + args.id);
-  // The one thing closing a parent hides: work filed under it that is
-  // still open. Said at the moment the model would otherwise move on.
+  // Warn about still-open children when closing a parent.
   const openSubtasks = status?.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
   const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
 
@@ -144,13 +133,8 @@ function updateTask(taskList: TaskListStore, args: TasksToolInput, now: number):
   return result;
 }
 
-/** Build a tasks dispatcher over one runtime's task list and config. Both
- *  stores are injected, not constructed: the codemode projection must share
- *  the caller's exact TaskListStore instance (the one the dynamic-context
- *  snapshot reads), and the config store is the same handle the backend reads
- *  the active role from when it resolves the turn profile. `roleAuthority`
- *  supplies THIS turn's catalog envelope — without one there is nothing to
- *  validate a switch against, so switching refuses rather than storing blind. */
+/** Build a tasks dispatcher. Stores are injected: codemode must share the caller's exact
+ *  TaskListStore. Without `roleAuthority`, role switching refuses. */
 export function createTasksDispatcher(
   taskList: TaskListStore,
   config: AgentConfigStore,
@@ -158,18 +142,7 @@ export function createTasksDispatcher(
 ): (input: TasksToolInput) => TasksToolResult {
   return (args: TasksToolInput) => {
     const now = Date.now();
-    // `action` arrives from the model, and the AI SDK does NOT validate a
-    // jsonSchema-declared tool input: `Schema.validate` is left undefined, so
-    // `safeValidateTypes` returns the raw JSON untouched. The declared
-    // `TasksToolAction` is therefore a claim about this value, not a fact — and
-    // the switch below has four literal cases, so an unrecognised action fell
-    // out of the bottom into a branch the compiler believes unreachable. The
-    // model was answered `unknown tasks action 'list">'`: true, useless, and
-    // silent about the four words that would have worked.
-    //
-    // Parsed the way `status` already is below, and answered the way `agents`
-    // answers an unavailable action (agents-tool.ts) — WITH the vocabulary,
-    // which is what makes the model's next call succeed instead of repeat.
+    // The AI SDK does not validate jsonSchema tool input; answer an unknown action with the vocabulary.
     const action = v.safeParse(TasksActionSchema, args.action);
 
     if (!action.success) {

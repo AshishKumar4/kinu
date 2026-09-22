@@ -3,9 +3,7 @@ import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 
-/** One account read, rendered branch-locally: its card shows ITS data, ITS
- *  failure with the retry, or a quiet loader — one read stalling or rejecting
- *  never blanks the cards beside it (KINU-073). */
+/** One account read per card, so one read stalling or failing never blanks its neighbours. */
 export function CardSlot<T>({ resource, what, onRetry, children }: {
   resource: AsyncResource<T>;
   what: string;

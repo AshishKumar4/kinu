@@ -6,22 +6,17 @@ import { boxOf, createPlayback, readPalette, type FrameTimes } from '../search-t
 /** Its own seed, not the tree's: the two fields never share a picture. */
 const DUST_SEED = 91;
 
-/** Motes per CSS px² of the host; a 390×700 phone gets about 55. */
 const DENSITY = 1 / 5_000;
 
 const MIN_MOTES = 24;
 
 const MAX_MOTES = 90;
 
-/** The still a reduced-motion visitor sees: the field this far in, so the
- *  twinkle is mid-phase rather than uniform. Shorter than the tree's still,
- *  which has to have grown, scored, and pruned first; dust only has to shimmer. */
+/** Reduced-motion still: this far in so the twinkle is mid-phase. */
 const DUST_STILL_SECONDS = 6;
 
 const STATIC_STEP = 1 / 30;
 
-/** What a gate can read off the live dust: which renderer took the canvas,
- *  the last frames' cost, the field's clock, and how many motes it drew. */
 export interface HeroDustHandle {
   renderer(): 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
@@ -61,7 +56,6 @@ function mountHeroDust(host: HTMLElement): () => void {
     field.setAspect(next.height / next.width);
   };
 
-  /** One evolved frame, no clock: the still a reduced-motion visitor gets. */
   const paintStill = (): void => {
     if (renderer === null) return;
     const frozen = new DustField({ seed: DUST_SEED, count });
@@ -150,15 +144,7 @@ function mountHeroDust(host: HTMLElement): () => void {
   };
 }
 
-/**
- * The hero's backdrop where the copy stacks: below `lg` the paragraph spans
- * the full width, and the tree's seed, which sits in the copy's empty second
- * column on a wide screen, would run straight through the words — so the
- * living search tree stays a `lg`-and-up affair and the phone gets this dust
- * instead: a handful of gold motes adrift in the same warm light, faint
- * enough to sit under type. Canvas2D only, deliberately: the WebGPU chunk is
- * a download a phone should never pay for a decoration.
- */
+/** Below-`lg` hero backdrop, where the tree would cross the stacked copy. Canvas2D only: phones skip the WebGPU chunk. */
 export function HeroDust(): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
 

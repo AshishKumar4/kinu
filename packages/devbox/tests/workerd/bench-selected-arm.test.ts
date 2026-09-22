@@ -1,18 +1,8 @@
 import { SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
-// ── the guard in front of every instrumented route ──────────────────────────
-//
-// Every route execs commands inside a container and resolves a box prefix from
-// the arm it is asked for, so an arm this run did not deploy must be refused
-// BEFORE a prefix is derived — otherwise the reply describes a box the run never
-// created. `BENCH_SELECTED_ARMS` in `vitest.config.ts` deliberately names an arm
-// that is not the shipped one, so the refusal below is the live path rather than
-// a branch nothing reaches.
-//
-// The instrument's own judgement of what a run measured is proved in
-// `scripts/bench-devbox-decision.test.ts`, against hand-built facts with no
-// deployment.
+// An unselected arm is refused before a box prefix is derived from it. `vitest.config.ts`
+// sets `BENCH_SELECTED_ARMS` to a non-shipped arm so this refusal is the live path.
 
 describe('the selected-arm route guard', () => {
   it('refuses a state request for an arm this run did not deploy', async () => {
@@ -35,9 +25,6 @@ describe('the selected-arm route guard', () => {
     expect(await response.json()).toMatchObject({ ok: false, error: 'unauthorized' });
   });
 
-  /** Two requests that name no arm this run knows: one names none at all, the
-   *  other names one that does not exist. Neither may fall back to the shipped
-   *  arm, so both are refused with the same sentence. */
   const UNNAMED_ARMS = [
     { what: 'a request that names no arm at all', url: 'https://bench.test/state' },
     { what: 'an unknown arm name rather than defaulting to the shipped one', url: 'https://bench.test/state?strategy=snapshot-chai' },

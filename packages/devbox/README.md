@@ -6,6 +6,11 @@ A container is spot capacity. The platform recycles it between calls and the
 disk comes back blank. Devbox keeps files, revives background processes, and
 keeps a preview URL hostname.
 
+Every decision in this package, with the measurement that settled it, is in
+[docs/DEVBOX-DECISIONS.md](../../docs/DEVBOX-DECISIONS.md). Read it before you
+change the package. The block-layer design is in
+[docs/DEVBOX-BLOCK-LAYER.md](../../docs/DEVBOX-BLOCK-LAYER.md).
+
 Devbox extends `Sandbox` from `@cloudflare/sandbox`:
 
 ```ts
@@ -18,21 +23,21 @@ export class MyBox extends Devbox<Env> {
 }
 ```
 
-A subclass with no overrides is a working box with no durability. It reports
-that on every call.
+A subclass with no overrides is a working box with no durability. It says so
+on every call.
 
 ## Lifecycle
 
 `Devbox` owns this order:
 
-1. `onStart` restores inside `blockConcurrencyWhile`. It arms the container
-   schedule rows, then adopts the running instance when it is already restored,
-   else restores it — attach, workload restart, port exposure — under a polled
-   budget. The platform delivers nothing until the hook settles, so no caller
-   ever observes a half-restored box.
-2. A restore the gate cannot finish parks, never ladders: it records its reason
-   and arms the `devboxStartup` row, whose delivered frame continues it where
-   timers fire. A settled restore retires the startup row it no longer needs.
+1. Admission proves the SDK's control listener answers, through
+   `startAndWaitForPorts`, before the SDK calls `onStart`. A failed admission
+   records an incident and arms the `devboxStartup` row to try again.
+2. `onStart` adopts the running instance when it is already restored, or
+   restores it (attach, workload restart, port exposure) under one raced
+   budget. It then arms the container schedule rows and retires the startup
+   row. Public operations join that restore, and status cannot report ready
+   while it is pending.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
@@ -51,10 +56,8 @@ interface DevboxStorage {
 }
 ```
 
-`attach()` takes no deadline. The one restore attempt owns the budget: it
-runs on a delivered frame — the first readiness request after a container
-start, or the `devboxStartup` schedule row — under a raced budget whose
-deadline is delivered there. No strategy would use a deadline argument.
+`attach()` takes no deadline. The one restore attempt owns the budget and
+races it, so no strategy would use a deadline argument.
 
 `lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
 so tests can pin the reasoning without the platform.
@@ -68,8 +71,10 @@ whiteouts, into one delta replaced by atomic `PUT`. The chain never exceeds two
 layers.
 
 Attach mounts the store subtree read-only, then base, delta, and a fresh writable
-upper through `squashfuse` and `fuse-overlayfs`. It moves no bytes until a read,
-so it fits the container-start budget at any work-directory size.
+upper through `squashfuse` and `fuse-overlayfs`. A changed file stored as
+blocks in the delta is served by the read-only block lower in `block-lower/`.
+Attach moves no bytes until a read, so it fits the container-start budget at
+any work-directory size.
 
 The atomic `PUT` lets a reader see the old delta or the new one. Devbox writes
 the state record before cleanup. A crash between them leaves a complete unnamed
@@ -78,8 +83,8 @@ validates the object.
 
 Keys are `boxes/<box>/backups/<uuid>/data.sqsh` and `…/delta.sqsh`: one chain
 root per box, every generation beneath it. Key builders require a UUID, so no
-key can use `..` or another box's guess, and one mount over the box root serves
-every generation the box will ever publish — including one a rebase mints while
+key can use `..` or guess another box's key. One mount over the box root serves
+every generation the box will ever publish, including one a rebase mints while
 the previous generation's layers are still mounted.
 
 A record names two generations: the one it serves, and one fallback. A rebase
@@ -97,24 +102,23 @@ generation recovered. If both fail, the start fails with both reasons and
 deletes neither.
 
 Each layer carries two identities. The first is the SHA-256 of the bytes that
-landed: Devbox takes it while the upload streams, so it costs one CPU pass and
-no buffer, and it cannot be recovered later without reading the whole object
-back. The second is the version R2 mints for that upload and reports from every
-later `head`. A byte count cannot tell one archive from another archive of the
-same length. These can, so a same-length replacement is refused rather than
-mounted.
+landed. Devbox takes it while the upload streams, so it costs one CPU pass and
+no buffer; later it could only be recovered by reading the whole object back.
+The second is the version R2 mints for that upload and reports from every later
+`head`. A byte count cannot tell one archive from another of the same length.
+These can, so a same-length replacement is refused rather than mounted.
 
 A single-request upload also hands the digest to R2, so R2 verifies the bytes it
 received and reports that checksum afterwards. The Workers multipart API takes
-no checksum, so a large archive has no store-side digest — and that is what the
-version is for.
+no checksum, so a large archive has no store-side digest. The version covers
+that case.
 
-The digest decides when both sides have one: equal content is sound whatever the
-versions say. The version decides only when no digest can. That order matters,
-because a version belongs to an upload rather than to content: this chain can
+The digest decides when both sides have one: equal content is sound whatever
+the versions say. The version decides only when no digest can. The order
+matters because a version belongs to an upload, not to content. This chain can
 re-put identical bytes, so refusing on a new version alone would reject a
 healthy archive. An absent identity means UNKNOWN, never sound. A record written
-before these fields existed still attaches, and it learns them as layers are
+before these fields existed still attaches, and learns them as its layers are
 rewritten.
 
 The archive keeps `.git`. Git metadata is the only copy of a commit that was
@@ -130,8 +134,8 @@ less than the archive needs.
 
 Extraction is only for local development. A store mount needs outbound
 interception that plain local `wrangler dev` lacks, and extraction reads every
-byte on every attach. The host declares permission through `allowExtraction`,
-default false. A refused mount fails its checkpoint with its own reason, and an
+byte on every attach. The host allows it through `allowExtraction`, default
+false. A refused mount fails its checkpoint with its own reason, and an
 extract-mode record is refused at attach.
 
 I set that default after a deployed failure. A failed mount fell back to
@@ -143,51 +147,48 @@ A chain is written only after a mount proves its mode. Its stored attach
 postcondition is strict: a chain-mode record must end as an overlay or attach
 throws.
 
-The workspace therefore relies on an upper layer that honours writable
-`MAP_SHARED` mappings, which SQLite's WAL mode needs for its shared-memory
-index: `tests/workspace-mount-contract.test.ts` holds that contract against the
-shipped image, and against a FUSE fixture that refuses it to prove the case can
-go red.
+The upper layer must honour writable `MAP_SHARED` mappings, which SQLite's WAL
+mode needs for its shared-memory index. `tests/workspace-mount-contract.test.ts`
+holds that contract against the shipped image, and against a FUSE fixture that
+refuses it, to prove the test can go red.
 
 ## Platform constraints
-`onStart` runs inside `blockConcurrencyWhile`, and a Durable Object timer set
-inside that block is not delivered until the block releases. I measured a
-deployed Worker where its first operation after a stop answered 500:
+
+Restore runs once per fresh container, in the awaited `onStart` hook, after
+admission. The patched SDK keeps only storage work inside its
+`blockConcurrencyWhile` input blocks, so the restore's container calls are not
+held behind a closed input gate (D8 in the decision log). `scripts/do-init-
+gate.ts` holds the hook to that shape by name.
+
+The earlier shape put the restore inside the input block. On a deployed Worker
+the first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
-The call was canceled and the Durable Object was reset.` I then measured six
-fresh container starts of a restore placed inside that hook (2026-09-10,
-`bench/measure-first/DECISIVE-2026-09-05.md`): one admitted at 3,270 ms,
-five reset by the platform at 30.0 s with no phase stamped. The first command
-on a fresh container opens the SDK's control connection, whose connect abort
-(`@cloudflare/sandbox` `dist/sandbox-CPj2jsbz.js:3563`, 30 s) and retry
-backoff (`:812`, 3 s) are both `setTimeout` on the Durable Object; a
-container whose server is not yet accepting at the first attempt cannot be
-reached from inside the gate at all. So the hook reaches no container: it
-arms the schedule rows and marks the restore pending, and the first delivered
-frame restores under a raced budget whose deadline fires. `scripts/do-init-
-gate.ts` holds the hook to that shape by name. The box is admitted through
-`start()` on the instance, which the patched SDK marks healthy before the
-hook, so the restore's first command routes straight to the container rather
-than opening a nested start. Admission waits for the instance, never for an
-app port the restore has not started yet.
+The call was canceled and the Durable Object was reset.` Six fresh container
+starts of that shape (2026-09-10,
+`bench/measure-first/DECISIVE-2026-09-05.md`): one admitted at 3,270 ms, five
+reset by the platform at 30.0 s with no phase stamped. The first command on a
+fresh container opens the SDK's control connection, whose connect abort
+(`@cloudflare/sandbox` `dist/sandbox-CPj2jsbz.js:3563`, 30 s) and retry backoff
+(`:812`, 3 s) both run on the Durable Object. Admission now waits for that
+control listener, never for an app port the restore has not started yet.
 
 Every operation awaits `ensureReady()`, which resolves once the work directory is
 attached. A failed attach records an incident, refuses with its reason, and
 recovers by one bounded ladder: ask the same container identity again at the
 heartbeat cadence, then destroy and replace that identity, then refuse.
-Per-operation retry would record an incident for every operation on one broken
-box. The class is read from the SDK's own error codes, never from its prose:
-storage exhaustion and permanent configuration refuse at once, because asking
-again spends the same resource or reads the same input. Work the attach budget
-abandoned is still running inside the container, where no token here can fence
-it, so replacing the identity is its only cancellation.
+Retrying per operation would record an incident for every operation on one
+broken box. The class is read from the SDK's own error codes, never from its
+message text: storage exhaustion and permanent configuration refuse at once,
+because asking again spends the same resource or reads the same input. Work the
+attach budget abandoned is still running inside the container, where no token
+here can fence it, so replacing the identity is its only cancellation.
 
 The ladder is one durable row, `devbox:attach-recovery`, holding an owner token
 and a stage. Each attempt claims the row, preserving the stage it finds; every
 later write is conditional on the token still being there, and the compare and
 the write sit inside one critical section. An attempt that raced a newer
 attempt's success therefore changes zero rows. An unreadable row refuses the
-attempt before it attaches anything, and normalises itself to the terminal stage
+attempt before it attaches anything, and resets itself to the terminal stage
 so the refusal stays finite.
 
 A terminal refusal keeps its stage. Clearing it would let the next eviction
@@ -196,24 +197,25 @@ another. `attachNow()` is the explicit repair: it re-attempts the attach,
 destroys nothing, and refuses again if the attach fails again. Any attach that
 lands deletes the row.
 
-ONE BUDGET covers the whole restoration: the attach, the workload restart, each
+One budget covers the whole restore: the attach, the workload restart, each
 listener proof, each exposure, and the boot stamp. Wrapping `attach()` alone,
-with the listener proof carrying a window per port, leaves three silent ports
-adding about ninety seconds while every caller waits in the readiness gate and
-nothing bounds the total. Each step draws an allowance — what is left divided
-by the steps still declared, every probe and exposure and the boot stamp included
-— so no one step can spend what the rest still need, and nothing is reserved.
+with a listener-proof window per port, lets three silent ports add about
+ninety seconds while every caller waits in the readiness gate and nothing
+bounds the total. Each step draws an allowance of what is left divided by the
+steps still declared (every probe, exposure and the boot stamp included), so no
+one step can spend what the rest still need, and nothing is reserved.
 
-WHAT EXHAUSTION MEANS DEPENDS ON WHAT IS ABANDONED. The attach is mid-mount, so
-work abandoned there is work a retry would collide with and no token here can
-reach: it throws, and the recovery is to replace the container identity. Every
-step after the attach mutates no mount, so exhaustion there is REPORTED instead.
-The box stays attached, its specs stay, no failed port is exposed, `unready` names
-what did not come back, and an agent or an explicit `attachNow()` retries. A slow
-`npm run dev` therefore costs the box its readiness and nothing else — replacing a
-healthy container over it would be the cure that destroys the patient. The retry
-is safe to repeat: the walk asks the container before starting anything, so a
-process it already holds is left alone rather than started twice.
+What running out of budget means depends on what is abandoned. The attach is
+mid-mount, so work abandoned there is work a retry would collide with and no
+token here can reach: it throws, and the recovery is to replace the container
+identity. No step after the attach touches a mount, so running out there is
+reported instead. The box stays attached, its specs stay, no failed port is
+exposed, `unready` names what did not come back, and an agent or an explicit
+`attachNow()` retries. A slow `npm run dev` costs the box its readiness and
+nothing else; replacing a healthy container over it would do more harm than
+the slow server. The retry is safe to repeat: the walk asks the container
+before starting anything, so a process it already holds is left alone rather
+than started twice.
 
 A restored service that failed does not refuse operations, because the agent
 whose server failed is the one that can repair it. It fails readiness instead.
@@ -275,16 +277,14 @@ a baseline, content counts as change.
 
 ## Tests
 
-`bun test packages/devbox` runs the suites below and `bunx tsc --noEmit -p
+`bun test packages/devbox` runs every suite and `bunx tsc --noEmit -p
 packages/devbox` exits 0. Each suite passes standalone, and their standalone
 counts equal the directory total.
 
-NO TEST COUNT IS RECORDED HERE, deliberately. A count written here is wrong
-within the hour: two runs of the same commit minutes apart gave different totals
-while suites landed around them, so the number measures the moment it was
-written rather than the package. Run the command; it answers with
-today's total. What is worth writing down is which suite pins WHAT, which is what
-follows.
+This README records no test count. Two runs of the same commit minutes apart
+gave different totals while suites landed around them, so a count here would
+be wrong within the hour. Run the command for today's total. What stays true
+is which suite pins what:
 
 - `decisions.test.ts` pins quiesce timing, restart order, port tokens, listener
   probes, incident backoff, start budget, the recovery taxonomy and its ladder,
@@ -302,7 +302,8 @@ follows.
 - `strategy-conformance.test.ts` drives the shipped adapter through its own
   production ports over a durable store and a container disk a replacement
   blanks, dying at each commit sub-step. `workspace-mount-contract.test.ts`
-  holds the mmap and WAL contract below against the real image.
+  holds the mmap and WAL contract described under Storage against the real
+  image.
 - `independence.test.ts` rejects product-core imports and workspace dependencies;
   its third test proves the check can fail.
 - `workspace-resolution.test.ts` rejects `@kinu.run/*` resolving outside this
@@ -358,8 +359,8 @@ Every rule above has a unit test. Two deployed production-workerd runs of
 | `31158290` | 64 MiB base | wake 79 ms; deep slice 82 ms | 4,096 B committed | HTTP 200 before and after restart | heartbeat chain alive for 11 minutes; platform replaced and healed the container | workspace intact |
 | `e54c7de8` | passed; no separate byte figure recorded | wake 443 ms; deep slice 72 ms | passed | passed | passed | passed |
 
-These are two observations, not a latency distribution or evidence for later
-source changes. The probe writes each later JSON record under ignored
+These are two observations, not a latency distribution, and not evidence for
+later source changes. The probe writes each later JSON record under the ignored
 `bench-artifacts/`, including partial evidence and the phase error.
 
 The source keeps the earlier failure records behind these policies: `onStart` in

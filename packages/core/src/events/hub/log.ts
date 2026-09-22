@@ -1,37 +1,5 @@
-/**
- * EventLog — append-only ledger over the `agent_log` table.
- *
- * The only entry point that admits new events into the system is `publish()`.
- * It derives trust/priority/visibility from the ingress descriptor (never from
- * payload, never from caller), persists atomically with dedupe, and returns
- * an `EventId`.
- *
- * Operations:
- *
- *   publish(IngressDescriptor)                — admit a new event
- *   pending(opts?)                            — events not yet bound to a turn
- *   markConsumed(eventId, turnId, stepIdx)    — bind event to its handling turn
- *   defer(eventId, revisitCondition)          — push to a later turn
- *   dismiss(eventId, reason)                  — explicit drop (audit-only)
- *   query(opts)                               — generic read for UI / replay
- *
- * Append-only invariants:
- *
- *   - `id`, `trace_id`, `caused_by`, `ingress`, `variant`, `trust`,
- *     `priority`, `payload_visibility`, `received_at`, `dedupe_key` are
- *     immutable post-insert.
- *
- *   - `turn_id` and `step_idx` may transition from NULL to a value (binding)
- *     and from a value to a different value (replay-with-new-turn after an
- *     abort_replan). Each transition writes a `phase` row for audit.
- *
- *   - The dedupe UNIQUE index makes `publish()` idempotent at the storage
- *     level — duplicate idempotency keys return the existing event id. That
- *     index is `(actor_id, dedupe_key)`: the key is the UPSTREAM ingress's
- *     identity, so two hosted actors handed the same delivery each own an
- *     event, and a table-wide index would drop the second as a duplicate of
- *     the first actor's row.
- */
+/** Append-only ledger over `agent_log`; `publish()` is the only admission path. Identity columns
+ *  are immutable after insert; `turn_id`/`step_idx` may rebind, each transition writing a phase row. */
 
 import * as v from 'valibot';
 import { WorkModeSchema } from '../../types/turn';
@@ -62,22 +30,15 @@ import { diagnostics, toKinuError } from '../../obs/index';
 const EVENT_SCHEMA_VERSION = 1;
 
 export interface PublishResult {
-  /** The event id. If the event was a duplicate, this is the EXISTING id. */
+  /** The existing id when deduped. */
   id: EventId;
-  /** True if this was a brand-new admission; false if dedupe rejected. */
   admitted: boolean;
 }
 
 export interface PendingFilter {
-  /** Max number of events to return. Closed by {@link EventLog.pending} to a
-   *  finite positive integer, defaulting to
-   *  {@link PENDING_EVENT_LIMIT_DEFAULT}. */
   limit?: number;
-  /** Minimum priority. Defaults to 'background'. */
   min_priority?: Priority;
-  /** Restrict to a specific variant. */
   variant?: EventVariant;
-  /** Only events whose deferred revisit condition is now satisfied. */
   resolve_deferred?: { now: number; phase: 'idle' | 'merging' };
 }
 
@@ -85,61 +46,25 @@ export interface QueryFilter {
   trace_id?: TraceId;
   turn_id?: TurnId;
   variant?: EventVariant;
-  /** Inclusive lower bound on `received_at`. */
   since?: number;
-  /** Max number of events to return. Closed by {@link EventLog.query} to a
-   *  finite positive integer, defaulting to
-   *  {@link EVENT_QUERY_LIMIT_DEFAULT}, and by {@link boundEventQuery} to
-   *  {@link EVENT_QUERY_LIMIT_MAX} for an untrusted caller. */
   limit?: number;
 }
 
-/** Rows one {@link EventLog.query} read returns when the caller states no
- *  usable limit. */
 const EVENT_QUERY_LIMIT_DEFAULT = 100;
 
-/**
- * Rows one {@link EventLog.pending} read returns when the caller states no
- * usable limit.
- *
- * `analytics/query.ts` `PANEL_ROW_LIMIT` is also 50 and is deliberately
- * separate: that one sizes what a metrics panel shows an operator and is held
- * to Analytics Engine's query timeout, while this one sizes how much unbound
- * work one drain picks up. Moving either has no reason to move the other.
- */
+/** Sizes one drain's pickup; deliberately independent of `analytics/query.ts` `PANEL_ROW_LIMIT`. */
 const PENDING_EVENT_LIMIT_DEFAULT = 50;
 
-/**
- * The ceiling on a read an UNTRUSTED caller asked for.
- *
- * It is NOT the log's ceiling. `query` and `pending` enforce only that a finite
- * positive integer reaches SQL, because an in-object read states the window its
- * answer is correct over and must get it. How much a stranger may ask for is a
- * different question, and the boundary answers it.
- */
+/** Boundary ceiling for untrusted callers only; in-object reads are not capped. */
 const EVENT_QUERY_LIMIT_MAX = 500;
 
-/** An event query whose numeric bounds are closed — the only shape an
- *  untrusted caller's query may take once it crosses the object boundary. */
 export interface BoundedQueryFilter extends QueryFilter {
   since: number;
   limit: number;
 }
 
-/**
- * Close an untrusted caller's event bounds before they cross the object
- * boundary: `limit` becomes a finite integer in
- * [1, {@link EVENT_QUERY_LIMIT_MAX}] and `since` a finite non-negative
- * timestamp, whatever the caller passed.
- *
- * Absent and non-finite both mean UNSTATED and take the default. A route that
- * forwards `parseInt('abc', 10)` cannot be told apart from one that asked for
- * nothing, and guessing at the difference is not the boundary's job.
- *
- * `boundRunEventQuery` is this same policy over `run_events`. Both are one line
- * over {@link boundPageQuery}, so the two logs state different numbers without
- * carrying two answers to what a bound MEANS.
- */
+/** Absent and non-finite both mean unstated and take the default. Same policy as
+ *  `boundRunEventQuery`, via {@link boundPageQuery}. */
 export function boundEventQuery(filter: QueryFilter = {}): BoundedQueryFilter {
   return boundPageQuery(filter, {
     fallback: EVENT_QUERY_LIMIT_DEFAULT, max: EVENT_QUERY_LIMIT_MAX,
@@ -278,16 +203,7 @@ const SubordinateTaskPayloadSchema = v.object({
   message_id: v.optional(v.string()),
 });
 
-/**
- * The handoff fields, as STORED.
- *
- * `v.object` strips what it does not name, so a field added to
- * {@link SUBORDINATE_REPORT_HANDOFF_FIELDS} and forgotten here would be
- * written to the row and then dropped on the way back out — the parent
- * receiving a report whose concerns evaporated between two reads of one
- * event, with nothing throwing at either end. The `satisfies` is TOTAL over
- * that vocabulary, which turns the omission into a compile error.
- */
+/** `v.object` strips unnamed fields; the total `satisfies` makes a forgotten field a compile error. */
 const HandoffPayloadEntries = {
   concerns: v.optional(v.array(v.string())),
   deviations: v.optional(v.array(v.string())),
@@ -357,30 +273,13 @@ const RevisitConditionSchema = v.variant('kind', [
 export class EventLog {
   private readonly actorId: string;
 
-  /**
-   * Bind the ledger to ONE actor.
-   *
-   * Every logical actor in a workspace has its own inbox: a delegated task
-   * admitted for a hired subordinate is that subordinate's to drain, and the
-   * root must not answer it. `actorId` is captured from the handle once so a
-   * re-pointed handle cannot move a live log onto another actor's rows, and
-   * `assertCurrent()` runs before every statement so a retired actor stops
-   * reading and writing here at the instant its directory row is retired.
-   */
+  /** `actorId` is captured once so a re-pointed handle cannot move the log; `assertCurrent()` runs
+   *  before every statement so a retired actor stops at once. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }
 
-  // ── publish ─────────────────────────────────────────────────────
-
-  /**
-   * Admit a new event. Derives trust/priority/visibility from the ingress
-   * descriptor, persists in one transaction with dedupe, returns the id.
-   *
-   * The caused_by parameter, if present, links the new event to its causing
-   * event (sharing trace_id, advancing causal depth). If null, the new event
-   * is the root of its own trace.
-   */
+  /** Without `caused_by` the event roots its own trace. */
   publish(opts: {
     descriptor: IngressDescriptor;
     now: number;
@@ -390,24 +289,18 @@ export class EventLog {
     this.actor.assertCurrent();
     const { descriptor: d, now, caused_by, hmac_secret_for_visibility } = opts;
 
-    // 1. Derive trust/priority/visibility (pure functions).
     const derived = deriveFields(d);
 
-    // 2. Build the durable identity + dedupe key.
     const placeholderId = ulid();
     const trace_id = caused_by ? this.lookupTraceId(caused_by) ?? placeholderId : placeholderId;
     const dedupe_key = dedupeKeyForDescriptor(d, now);
 
-    // 3. Visibility transform: what actually goes into the payload column.
     const transform = applyVisibilityForStorage(
       d.payload, derived.payload_visibility, hmac_secret_for_visibility,
     );
 
     const storedPayload = preserveDelegatedMode(d, derived.payload_visibility, transform.stored);
 
-    // 4. Atomic dedupe + insert. The UNIQUE index on dedupe_key makes this
-    //    "exactly once" — if a duplicate is racing, INSERT OR IGNORE wins
-    //    and we read the original.
     if (dedupe_key !== null) {
       const held = this.idForDedupeKey(dedupe_key);
 
@@ -438,14 +331,7 @@ export class EventLog {
     return { id: placeholderId, admitted: true };
   }
 
-  /**
-   * The event already admitted under this idempotency key, if any.
-   *
-   * `publish` asks it to answer a duplicate with the original id, and an
-   * ingress whose sender REPLAYS asks it before doing any work of its own —
-   * a spill, a roster transition, a wake — so a replayed delivery is
-   * recognised as the one already held rather than acted on twice.
-   */
+  /** Replaying ingresses ask this before any work of their own (spill, roster, wake). */
   idForDedupeKey(key: string): EventId | null {
     this.actor.assertCurrent();
 
@@ -456,16 +342,9 @@ export class EventLog {
     return rows[0]?.id ?? null;
   }
 
-  // ── pending ─────────────────────────────────────────────────────
-
-  /** Events not yet bound to a turn. Ordered by priority desc, received_at asc.
-   *  Honors deferred-revisit conditions if `resolve_deferred` is passed. */
   pending(filter: PendingFilter = {}): KinuEvent[] {
     this.actor.assertCurrent();
 
-    // Same invariant as `query`, same reason: `LIMIT -1` reads the whole table
-    // and `LIMIT NaN` is a datatype mismatch. The ceiling is the boundary's
-    // question, not this read's.
     const limit = boundedInt(
       filter.limit, PENDING_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER,
     );
@@ -473,8 +352,7 @@ export class EventLog {
     const minPrio = filter.min_priority ?? 'background';
     const minPrioRank = PRIORITY_ORDER[minPrio];
 
-    // Exclude deferred (step_idx=-1) and dismissed (step_idx=-2) events from
-    // the normal pending list. Deferred rows surface via `resolve_deferred`.
+    // Deferred (step_idx=-1) and dismissed (step_idx=-2) are excluded.
     let sql = `
       SELECT id, parent_id, trace_id, ingress, variant, trust, priority,
              payload_visibility, payload, received_at, schema_version,
@@ -493,7 +371,6 @@ export class EventLog {
       bindings.push(filter.variant);
     }
 
-    // Priority filter via CASE-mapped order.
     sql += `
       AND (
         CASE priority
@@ -520,24 +397,13 @@ export class EventLog {
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
 
-    // One corrupt payload must not wedge the drain: the row is reported with
-    // its id and skipped, and the rest is returned.
     let events = rows.flatMap((row) => {
       const event = tryRowToEvent(row);
 
       return event === null ? [] : [event];
     });
 
-    // Resolve deferred events: those whose revisit condition is now satisfied.
-    //
-    // A deferral is TWO facts on the event's own row, and no second table:
-    // `step_idx = -1` marks it deferred, and {@link defer} writes the
-    // condition into the payload under `__defer_revisit`, where
-    // {@link deferredRows} parses it back through `RevisitConditionSchema`.
-    // A row whose condition no longer parses is skipped rather than resolved,
-    // so a corrupt payload cannot make an event due forever. Deferred rows are
-    // excluded from `pending()` unless `resolve_deferred` is set, and
-    // `markConsumed` clears the marker by binding a real `step_idx`.
+    // A row whose revisit condition no longer parses is skipped, never resolved.
     if (filter.resolve_deferred) {
       const deferred = this.queryDeferred(filter.resolve_deferred);
       events = events.concat(deferred);
@@ -546,17 +412,12 @@ export class EventLog {
     return events;
   }
 
-  /** Deferred events whose revisit condition is satisfied. */
   private queryDeferred(ctx: { now: number; phase: 'idle' | 'merging' }): KinuEvent[] {
     return this.deferredRows()
       .filter(({ cond }) => revisitConditionMet(cond, ctx))
       .map(({ event }) => event);
   }
 
-  /** Every deferred row that still carries a readable revisit condition, paired
-   *  with it. One read for the two questions asked of deferred rows: which are
-   *  due now (`queryDeferred`), and when the next one becomes due
-   *  ({@link nextPendingDrainAt}). */
   private deferredRows(): Array<{ event: KinuEvent; cond: RevisitCondition }> {
     this.actor.assertCurrent();
 
@@ -580,35 +441,8 @@ export class EventLog {
   }
 
   /**
-   * The earliest moment a drain would have work to do, or null when it would
-   * have none. THE INSTANT ONLY, not the wake: this answers when, and a host
-   * makes it a wake by arming a chain whose frame calls `drainPendingEvents`.
-   *
-   * A pending row is a promise the workspace made to itself, and until this
-   * existed the only thing that kept that promise was an in-memory debounce
-   * timer: an event admitted seconds before an eviction, or re-pended by a
-   * compensating signal, sat in `agent_log` with nothing scheduled to look at
-   * it again. The activation reconcile could not see it either, because the
-   * wake fold it reads (`nextWakeAt`) knew only about triggers and the two
-   * outboxes. So the row waited for the next unrelated ingress — hours, or
-   * never.
-   *
-   * THE WAKE IS THE HOST'S HALF AND IT IS NOT AUTOMATIC. This read first said
-   * it WAS the durable half of the reactor's wake; on the cf host it was not,
-   * because the actor carries two wake chains and the fold armed the one whose
-   * frame never drains. The row woke the object every second and stayed
-   * pending. Measured 2026-09-17 in the workerd pool (`two-turn.test.ts`,
-   * "drains an external event that reached an idle object"): under the fold
-   * alone the peer row stood `turn_id NULL, consumed_at NULL` after the wake it
-   * armed was delivered, and the tick re-armed the same callback; with the
-   * frame's drain phase the same row comes back bound to an `evt-` turn and the
-   * chain goes quiet. A host that folds this in owes the phase.
-   *
-   * Derived, never stored. `now` for anything drainable this instant; otherwise
-   * the soonest deferred `at`, which is the only revisit condition that names a
-   * time. `after_phase`, `after_event` and `after_seconds` resolve against
-   * something other than the clock, so no wake can be derived from them and
-   * arming one would only busy-loop the alarm.
+   * When a drain would next have work, or null. Only the instant: the host must arm a chain whose
+   * frame runs `drainPendingEvents`, or the row stays pending. Only `at` conditions name a time.
    */
   nextPendingDrainAt(now = Date.now()): number | null {
     const drainableNow = this.pending({ resolve_deferred: { now, phase: 'idle' } })
@@ -623,9 +457,6 @@ export class EventLog {
     return scheduled.length === 0 ? null : Math.min(...scheduled);
   }
 
-  // ── markConsumed ────────────────────────────────────────────────
-
-  /** Bind an event to the turn that's about to handle it. */
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -635,8 +466,6 @@ export class EventLog {
     );
   }
 
-  /** Close the recovery lease after a drain turn completed. The durable
-   *  turn binding remains available for reply dispatch and audit queries. */
   markTurnCompleted(turnId: TurnId): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -646,8 +475,7 @@ export class EventLog {
     );
   }
 
-  /** Reverse of `markConsumed` — used by abort_replan to un-bind events so
-   *  they re-enter the pending pool. */
+  /** Used by abort_replan to re-pend events. */
   unbind(eventId: EventId): void {
     this.actor.assertCurrent();
     this.sql.exec(
@@ -657,16 +485,7 @@ export class EventLog {
     );
   }
 
-  /**
-   * The synthetic drain turns whose recovery lease is still open.
-   *
-   * The same rows {@link unbindStale} would re-pend, read rather than reclaimed.
-   * An open lease means a turn was handed these events and has not closed them;
-   * that is either work nobody will answer (re-pend it) or a reply the turn
-   * already answered and never dispatched (finish it). Only the caller can tell
-   * which, because only the caller can see whether the turn produced a durable
-   * answer — so this reports, and the caller decides.
-   */
+  /** Reports open leases; only the caller can tell re-pend from finish-the-reply. */
   openDrainLeases(): TurnId[] {
     this.actor.assertCurrent();
 
@@ -678,8 +497,7 @@ export class EventLog {
     ).toArray().map((row) => v.parse(TurnIdRowSchema, row).turn_id);
   }
 
-  /** Whether ANY drain lease is open — one indexed LIMIT-1 read, for the
-   *  activation-time arm decision that must not materialize the roster. */
+  /** Indexed LIMIT-1 read; must not materialize the roster. */
   hasOpenDrainLease(): boolean {
     this.actor.assertCurrent();
 
@@ -692,23 +510,8 @@ export class EventLog {
   }
 
   /**
-   * Re-pend synthetic drain deliveries whose recovery lease is still open — a
-   * turn was handed these events and never closed the lease on them, so nobody
-   * is going to answer them and no later drain can see them.
-   *
-   * `olderThanMs` is REQUIRED, and it is a grace rather than a policy: a backend
-   * that cannot exclude the holder (a DO activation may be racing its own
-   * predecessor) reclaims only leases stranded that long, while a backend that
-   * holds an exclusive lease over the conversation states `0` and says at its
-   * call site why every open lease it can see is already dead. No default,
-   * because the two answers are opposite and a caller must pick one.
-   *
-   * `answered` names the drain turns that DID produce an answer and therefore
-   * owe a reply rather than a second asking. Re-pending one of those is quiet
-   * data loss: the sender is still waiting on a reply that already exists and
-   * gets a repeat of the question instead. The exclusion is a predicate and not
-   * an execution order on purpose — an ordering between this and the resume
-   * would have to hold on every path, and this holds whatever runs first.
+   * `olderThanMs` has no default: `0` only for a host holding an exclusive lease. `answered` turns
+   * owe a reply, and re-pending them would silently repeat the question.
    */
   unbindStale(
     olderThanMs: number,
@@ -744,11 +547,7 @@ export class EventLog {
     return rows.map((row) => row.id);
   }
 
-  // ── defer ───────────────────────────────────────────────────────
-
-  /** Push an event to a later turn. The revisit condition is stored in the
-   *  payload's `__defer_revisit` field (additive — doesn't alter the user
-   *  payload semantically). `step_idx = -1` marks the event as deferred. */
+  /** Condition stored under the payload's `__defer_revisit`; `step_idx = -1` marks deferred. */
   defer(eventId: EventId, revisitAt: RevisitCondition): void {
     this.actor.assertCurrent();
 
@@ -767,10 +566,7 @@ export class EventLog {
     );
   }
 
-  // ── dismiss ─────────────────────────────────────────────────────
-
-  /** Explicit drop. Persists the event with `step_idx = -2` (sentinel) so
-   *  it's never re-dispatched. The dismissal reason is appended to payload. */
+  /** `step_idx = -2` so it is never re-dispatched. */
   dismiss(eventId: EventId, reason: string, by: 'reactor' | 'tool' | 'system'): void {
     this.actor.assertCurrent();
 
@@ -789,23 +585,8 @@ export class EventLog {
     );
   }
 
-  // ── query ───────────────────────────────────────────────────────
-
-  /**
-   * Generic event read. Used by the operator UI and the LLM-facing
-   * `recent_events` / `list_pending_events` tools.
-   *
-   * The log's own invariant, applied to EVERY caller including the in-object
-   * reads that never cross a boundary: only a finite positive integer may reach
-   * SQL. SQLite reads `LIMIT -1` as no limit at all, so one negative value
-   * turns a page into a read, valibot-parse and serialize of the whole
-   * `agent_log` table, and it refuses `NaN` as a datatype mismatch — a 500 on a
-   * read that should simply have been clamped.
-   *
-   * No ceiling here, deliberately. How much an UNTRUSTED caller may ask for is
-   * a different question, and {@link boundEventQuery} answers it at the
-   * boundary.
-   */
+  /** Only a finite positive limit reaches SQL: SQLite treats a negative LIMIT as unbounded and
+   *  rejects NaN. No ceiling here; {@link boundEventQuery} caps untrusted callers. */
   query(filter: QueryFilter): KinuEvent[] {
     this.actor.assertCurrent();
 
@@ -837,7 +618,6 @@ export class EventLog {
     const rows = this.sql.exec(sql, ...bindings).toArray()
       .map((row) => v.parse(EventRowSchema, row));
 
-    // Same corrupt-row rule as `pending`: report with the row id, skip it.
     return rows.flatMap((row) => {
       const event = tryRowToEvent(row);
 
@@ -845,7 +625,6 @@ export class EventLog {
     });
   }
 
-  /** Single-event read by id. */
   get(eventId: EventId): KinuEvent | null {
     this.actor.assertCurrent();
 
@@ -860,9 +639,6 @@ export class EventLog {
     return rows.length > 0 ? rowToEvent(rows[0]) : null;
   }
 
-  // ── trace bookkeeping ───────────────────────────────────────────
-
-  /** Trace id of a referenced event, or null if not found. */
   private lookupTraceId(eventId: EventId): TraceId | null {
     this.actor.assertCurrent();
 
@@ -874,7 +650,6 @@ export class EventLog {
     return rows.length > 0 ? rows[0].trace_id : null;
   }
 
-  /** Number of events in a trace (used by per-trace budget). */
   traceEventCount(traceId: TraceId): number {
     this.actor.assertCurrent();
 
@@ -887,21 +662,13 @@ export class EventLog {
     return rows[0]?.n ?? 0;
   }
 
-  // ── audit-log writes (steps, tool calls, etc.) ─────────────────
-
-  /** Append a non-event row to the unified log (phase transitions, step
-   *  boundaries, tool calls/results, reactor decisions, reply attempts —
-   *  e.g. the email dispatcher's reply_attempt audit rows). Direct callers
-   *  must NOT use this to insert `kind='event'` rows — only `publish()` is
-   *  allowed. */
+  /** Never for `kind='event'` rows; only `publish()` inserts those. */
   appendNonEventRow(opts: {
     kind: 'phase' | 'step' | 'tool_call' | 'tool_result' | 'reactor_decision' | 'reply_attempt';
     turn_id: TurnId | null;
     step_idx: number | null;
     parent_id: string | null;
     trace_id: TraceId;
-    /** Serialized as the row's body and read back as a {@link JsonValue}; the
-     *  caller's own audit shape, whatever it holds. */
     payload: unknown;
     now: number;
   }): string {
@@ -920,8 +687,6 @@ export class EventLog {
     return id;
   }
 
-  /** The latest phase row for a turn. Orders by received_at desc (strictly
-   *  monotonic per write) with id desc as a tiebreaker. */
   currentPhase(turn_id: TurnId): { phase: string; at: number } | null {
     this.actor.assertCurrent();
 
@@ -939,8 +704,6 @@ export class EventLog {
     return { phase: phase.success ? phase.output : 'unknown', at: rows[0].received_at };
   }
 
-  /** All step / tool rows of a turn, ordered. Used by reactor snapshot
-   *  + recovery + SSE replay. */
   turnSteps(turn_id: TurnId): AgentLogRow[] {
     this.actor.assertCurrent();
 
@@ -961,8 +724,6 @@ export class EventLog {
   }
 }
 
-// ── helpers ──────────────────────────────────────────────────────
-
 function preserveDelegatedMode(
   descriptor: IngressDescriptor,
   policy: v.InferOutput<typeof PayloadPolicySchema>,
@@ -982,20 +743,14 @@ function preserveDelegatedMode(
   return { ...envelope.output, kinu_mode: descriptor.payload.kinu_mode };
 }
 
-/** Decode one event row, or null when its payload will not parse. A corrupt
- *  row is this log's own write gone bad, so it is reported with the row id
- *  and skipped rather than thrown: one bad row must not wedge the drain
- *  behind it. */
+/** A corrupt row is reported and skipped so it cannot wedge the drain. */
 function tryRowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent | null {
   try {
     return rowToEvent(row);
   } catch (err) {
     const failure = toKinuError({ doing: 'decode an event row', cause: err, otherwise: 'bad_input' });
 
-    // Only a corrupt payload is tolerated: it is the one value the caller
-    // treats as skip (flatMap null → []), so one bad row cannot wedge the
-    // drain behind it. Any other class — a cancelled drain, a denied read,
-    // an oom — is this read's own fault and propagates.
+    // Other failure classes are this read's own fault and propagate.
     if (failure.code !== 'bad_input') throw failure;
     diagnostics.failure('event.row_unreadable', failure, { id: row.id });
 

@@ -1,10 +1,4 @@
-/**
- * The one exclusive-choice control: a recessed pill of rounded segments, where
- * the pages need a filter rather than a page. Roving tabindex — the strip is
- * one tab stop, the arrows move inside it — with `aria-selected` on the chosen
- * segment. A segment may carry a count, drawn after its label in the small
- * tabular figure so a wide number never shifts the label's seat.
- */
+/** Roving tabindex: the strip is one tab stop, arrows move inside it. */
 import { useRef, useState } from "react";
 
 export interface SegmentOption<T extends string> {

@@ -91,7 +91,7 @@ describe('kinu setup recommends the native Workers AI model', () => {
   test('the other providers are still offered, one position further down', () => {
     const skipped = runSetup({ provider: '8' }, signedInHome());
     expect(skipped.exitCode).toBe(0);
-    expect(skipped.stdout).toContain('Skipped local model setup');
+    expect(skipped.stdout).toContain('Skipped choosing a model provider');
     expect(skipped.config.model).toBe('codex/gpt-5.5');
 
     const unknown = runSetup({ provider: 'nope' }, signedInHome());

@@ -1,27 +1,11 @@
 /**
- * Single canonical parser for the `---\n<yaml>\n---\n<body>` shape that
- * Claude-Code skills use (packages/core/src/skills/).
- *
- * Deliberately narrow YAML subset — sufficient for that use site,
- * deterministic, zero runtime deps. Supports:
- *
- *   - flat scalars:           `key: value`
- *   - quoted strings:         `key: "value"`  /  `key: 'value'`
- *   - booleans + null:        `key: true|false|null|~`
- *   - inline arrays:          `key: [a, b, c]`
- *   - block lists:            `key:\n  - item\n  - item`
- *   - one-level nested maps:  `key:\n  child: value\n  child2: value`
- *   - line comments:          `# …` (outside strings)
- *
- * Tabs are rejected. Multi-line strings are not supported (use `\n` in
- * quoted strings). Extra/unknown keys round-trip — callers slice into
- * an `ext` bag if they want forward-compat.
+ * Front-matter parser for skills: a narrow YAML subset (scalars, quoted strings,
+ * inline/block lists, one-level maps, `#` comments). Tabs and multi-line strings are rejected.
  */
 
 import * as v from 'valibot';
 import { isJsonObject, type JsonObject, type JsonValue } from './json';
 
-/** Successful parse: full front-matter map + body. */
 export interface MarkdownDoc {
   frontmatter: JsonObject;
   body: string;
@@ -39,19 +23,16 @@ export class MarkdownFrontmatterError extends Error {
   }
 }
 
-/** Parse a markdown file with `---` front-matter. Throws on malformed FM.
- *  Returns `{ frontmatter: {}, body: src }` when no front-matter is present. */
+/** Throws on malformed front-matter; returns the whole source as body when there is none. */
 export function parseMarkdownFrontmatter(src: string): MarkdownDoc {
   if (!src.startsWith('---')) {
     return { frontmatter: {}, body: src };
   }
 
-  // The opening `---` must be followed by a newline (or EOF), not e.g. `--- foo`.
   if (src.length > 3 && src[3] !== '\n' && src[3] !== '\r') {
     return { frontmatter: {}, body: src };
   }
 
-  // Find the closing fence on its own line.
   const closeMatch = src.match(/\n---\s*(\r?\n|$)/);
 
   if (!closeMatch || closeMatch.index === undefined) {
@@ -67,8 +48,7 @@ export function parseMarkdownFrontmatter(src: string): MarkdownDoc {
   return { frontmatter: parseFlatYaml(fmRaw), body };
 }
 
-/** Stringify a front-matter map back to the `---\n…\n---\n` form. Round-
- *  trips everything `parseMarkdownFrontmatter` can read. */
+/** Round-trips everything `parseMarkdownFrontmatter` can read. */
 export function stringifyMarkdownFrontmatter(
   doc: MarkdownDoc,
 ): string {
@@ -85,8 +65,6 @@ export function stringifyMarkdownFrontmatter(
 
   return lines.join('\n') + doc.body;
 }
-
-// ── implementation ───────────────────────────────────────────────
 
 function parseFlatYaml(src: string): JsonObject {
   const lines = src.split('\n');
@@ -121,8 +99,7 @@ function parseFlatYaml(src: string): JsonObject {
       continue;
     }
 
-    // Block form — look at the next non-blank line's first non-space char to
-    // disambiguate list (`- item`) from nested map (`childKey: ...`).
+    // Next non-blank line decides list (`- item`) vs nested map.
     const peek = findNextIndentedLine(lines, i + 1);
 
     if (peek == null) { out[key] = null; i++; continue; }
@@ -147,7 +124,6 @@ function parseFlatYaml(src: string): JsonObject {
       continue;
     }
 
-    // Nested map.
     const nested: JsonObject = {};
     i++;
 
@@ -160,7 +136,6 @@ function parseFlatYaml(src: string): JsonObject {
 
       if (!childMatch) break;
 
-      // Require at least 2-space indent — anything less is a top-level row.
       if (childMatch[1].length < 2) break;
       nested[childMatch[2]] = parseScalar(childMatch[3].trim());
       i++;
@@ -246,8 +221,6 @@ function parseScalar(s: string): FrontmatterScalar {
   return t;
 }
 
-// ── stringification ──────────────────────────────────────────────
-
 function renderEntry(key: string, value: JsonValue, indent: number): string[] {
   const pad = '  '.repeat(indent);
 
@@ -306,8 +279,7 @@ function renderEntry(key: string, value: JsonValue, indent: number): string[] {
 function quoteIfNeeded(s: string): string {
   const structural = s === '' || /[:#"'\\[\]{},]/.test(s) || /^[-?\s]/.test(s) || /\s$/.test(s) || s.includes('\n');
 
-  // A bare scalar that the parser reads back unchanged needs no quotes; one it
-  // would retype (true, 123, null, ~, 1.5) or reshape does.
+  // Quote only when the parser would retype or reshape the bare scalar.
   if (!structural && parseScalar(s) === s) return s;
 
   return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"';

@@ -38,7 +38,7 @@ export async function createCommand(name: string | undefined, opts: {
     : opts.alias ?? (interactive ? await ask('Alias command', named) : named);
 
   if (mode === 'cloud') {
-    const spinner = createSpinner('Creating cloud workspace...');
+    const spinner = createSpinner('Creating cloud workspace…');
     spinner.start();
 
     try {
@@ -85,7 +85,7 @@ export async function createCommand(name: string | undefined, opts: {
  *  no name to print because it does not have one yet — the slug is how it is
  *  addressed, and its first message titles it. */
 async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Promise<void> {
-  const spinner = createSpinner('Adding an agent to this workspace...');
+  const spinner = createSpinner('Adding an agent to this workspace…');
   spinner.start();
 
   try {

@@ -1,27 +1,5 @@
-// The one place `@cloudflare/sandbox` is substituted, and the platform stand-in
-// every Devbox class test runs on.
-//
-// WHY THE PLATFORM IS SUBSTITUTED AT ALL. The defects these tests exist for are
-// about ORDER and OWNERSHIP: which of a durable row and a container process
-// happens first, which of two overlapping startup attempts may write, whether a
-// port may be exposed after its listener said nothing, and what a box does the
-// second time one container identity fails. No pure decision can carry any of
-// that — those live in `decisions.test.ts` — so the only way to pin them is to
-// run the shipped methods. The class is a Durable Object and reaches its
-// container by EXTENDING `Sandbox`, which the platform requires and which
-// leaves no argument to inject; the module also imports `cloudflare:workers`,
-// which exists in no runtime but a Worker's. So this module replaces that ONE
-// SDK module and nothing else. That is the SDK boundary — the seam
-// `anti-slop/no-module-mocking` exists to push tests towards rather than away
-// from — and what stands behind it is a faithful container, not an expectation
-// recorder: it holds processes, answers listener probes, exposes ports, and
-// fails when a test says it fails.
-//
-// WHY IT IS SHARED. `mock.module` is process-wide, and `bun test` runs a
-// package's files in one process. Two test files each registering their own
-// stand-in for this module means the last one registered answers for both, and
-// the other file's fake never runs its constructor. One substitution, one fake,
-// imported by every file that needs the class.
+// The sole substitution of `@cloudflare/sandbox`: a faithful container stand-in for Devbox tests.
+// Shared because `mock.module` is process-wide; a second registration would replace this one.
 import { mock } from 'bun:test';
 
 import { createHash } from 'node:crypto';
@@ -31,17 +9,8 @@ import { describeThrown, type StartClock } from '../../src/lifecycle';
 import type { StoredValue } from '../../src/storage';
 import { sessionShellRefusal } from './session-shell';
 
-/**
- * A failure as `@cloudflare/sandbox` really presents one.
- *
- * Every error it raises is a `SandboxError` subclass carrying ONE `ErrorCode`:
- * `PROCESS_NOT_FOUND` for an id the container answered about and does not hold,
- * `NO_SPACE` for a filesystem that filled, `UNKNOWN_ERROR` for a container
- * failure it could not classify. The code is a GETTER on the class, not an own
- * property, and neither the base class nor its subclasses are exported — so a
- * stand-in that carried the code as a plain field would pass a check the
- * shipped SDK fails. This is the shape.
- */
+/** Models `@cloudflare/sandbox` errors: `code` is a getter on an unexported `SandboxError` class,
+ *  not an own property; a plain-field stand-in would pass checks the shipped SDK fails. */
 export class SandboxFailure extends Error {
   constructor(readonly errorResponse: { readonly code: string; readonly message: string }) {
     super(errorResponse.message);
@@ -53,33 +22,22 @@ export class SandboxFailure extends Error {
   }
 }
 
-/**
- * A parked call.
- *
- * `reached` is the half that makes an interleaving test deterministic: pinning
- * two overlapping attempts means acting at the exact moment one of them is
- * inside a given await, and counting microtasks to guess when that is would be
- * a race dressed up as a test. The fake resolves `reached` on entry and then
- * waits on `promise`.
- */
+/** `reached` resolves on entry, before waiting on `promise`, so a test acts while the call is
+ *  inside the await instead of counting microtasks, which would race. */
 export interface Gate {
-  /** Resolves when the call under the gate has been entered. */
   readonly reached: Promise<void>;
   readonly promise: Promise<void>;
   enter(): void;
   release(): void;
 }
 
-/** A start clock the test advances. Timers fire in due order, each at its
- *  own due time, and only when the test moves the clock past them — so a
- *  budget property is proven by the arithmetic of the budget, never by how
- *  fast the machine got to the parked step. */
+/** Timers fire in due order, each at its own due time, only when the test moves the clock,
+ *  so a budget is proven by its arithmetic, not by how fast the machine reached the step. */
 export interface ManualStartClock extends StartClock {
   /** Move the clock forward, firing every timer that comes due on the way. */
   advance(ms: number): void;
   /** Move the clock to the earliest armed timer and fire it alone. */
   tick(): void;
-  /** Timers armed and not yet fired or disarmed. */
   armed(): number;
 }
 
@@ -139,9 +97,8 @@ export function gate(): Gate {
   };
 }
 
-/** What the container holds for one process. The SDK's own status vocabulary;
- *  `isProcessLive` in the class under test reads it, and `waitForRunnerExit`
- *  reads the exit code a settled row carries. */
+/** Uses the SDK's own status vocabulary: `isProcessLive` reads `status`, and
+ *  `waitForRunnerExit` reads the exit code a settled row carries. */
 export interface FakeProcessRow {
   readonly id: string;
   readonly pid: number;
@@ -150,19 +107,12 @@ export interface FakeProcessRow {
   readonly exitCode?: number;
 }
 
-/** The row as the SDK hands it back from a start or a lookup: with its own
- *  `getLogs`, which the box reads when a runner exits non-zero. */
 export type LiveProcess = FakeProcessRow & {
   getLogs(): Promise<{ stdout: string; stderr: string }>;
 };
 
-/**
- * One supervised runner start, as the container sees it: the argv the box
- * composed, split back into words, and the control snapshot the box wrote to
- * the `--control` path before starting it. `action` and `resultPath` are the
- * two the fake itself has to read; a runner reads the rest with
- * {@link runnerOption}.
- */
+/** The box's argv split back into words, plus the control snapshot written to `--control`.
+ *  Only `action` and `resultPath` are read by the fake; runners read the rest via `runnerOption`. */
 export interface RunnerInvocation {
   readonly action: string;
   readonly resultPath: string | undefined;
@@ -170,15 +120,13 @@ export interface RunnerInvocation {
   readonly argv: readonly string[];
 }
 
-/** The value after `--<name>` in a runner argv, or undefined when absent. */
 export function runnerOption(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(`--${name}`);
 
   return index === -1 ? undefined : argv[index + 1];
 }
 
-/** The words of a command the box composed from single-quoted parts: `'word'`
- *  with `'\''` for a literal quote, which is the only quoting `runnerCommand`
+/** Parses only `'word'` with `'\''` for a literal quote: the sole quoting `runnerCommand`
  *  and the journal daemon's argv produce. */
 function quotedWords(command: string): string[] {
   const words: string[] = [];
@@ -190,8 +138,7 @@ function quotedWords(command: string): string[] {
   return words;
 }
 
-/** The single-quoted path segments of a composed shell command, in order. The
- *  chain's builders quote every path with `shellPath`, so the segments name
+/** The chain's builders quote every path with `shellPath`, so single-quoted segments name
  *  the mount points, sources and targets without re-parsing shell syntax. */
 function quotedSegments(command: string): string[] {
   return [...command.matchAll(/'([^']+)'/g)].map((match) => match[1] ?? '');
@@ -203,16 +150,13 @@ export interface StartRecord {
   readonly processId: string | undefined;
 }
 
-/** A `startProcess` that throws, and whether the container created the process
- *  before it did. Both happen: a refused start creates nothing, and a
- *  disconnect after the fork creates everything and returns nothing. The second
- *  is the window the durable reservation exists for. */
+/** A throwing `startProcess`: a refused start creates nothing; a disconnect after the fork
+ *  creates the process and returns nothing, the window the durable reservation exists for. */
 export interface StartFault {
   readonly error: Error;
   readonly created: boolean;
 }
 
-/** A request made through one of the SDK's distinct file relocation methods. */
 export interface FileOperation {
   readonly operation: 'rename' | 'move';
   readonly from: string;
@@ -221,16 +165,8 @@ export interface FileOperation {
 }
 
 
-/**
- * The container SDK's own schedule table, which lives in the Durable Object's
- * SQLite (`@cloudflare/containers`, `container.js:389-399`).
- *
- * ONE TABLE, TWO READERS, and that is why it is not a field on either fake: the
- * SDK writes it through `schedule()` and reads it through `listSchedules()`,
- * while the class under test sweeps it through `ctx.storage.sql` and deletes
- * through the SDK's `deleteSchedules`. Two copies could disagree about a row,
- * which is precisely the defect the sweep exists for.
- */
+/** The SDK's schedule table, shared by SDK `schedule()`/`listSchedules()` and the sweep via
+ *  `ctx.storage.sql`; one copy keyed by storage so no two fakes can disagree about a row. */
 const scheduleTables = new WeakMap<DurableObjectStorage, { callback: string; time: number }[]>();
 
 export function scheduleTableOf(
@@ -239,24 +175,16 @@ export function scheduleTableOf(
   const held = scheduleTables.get(storage);
 
   if (held !== undefined) return held;
-  // A box built on a storage this module did not make holds no rows: the fake
-  // registers its table when it builds the handle, so an absent one is a fresh
-  // table rather than a missing one.
+  // The fake registers its table when it builds the handle, so an absent table is fresh, not
+  // missing: a box on storage this module did not make holds no rows.
   const fresh: { callback: string; time: number }[] = [];
   scheduleTables.set(storage, fresh);
 
   return fresh;
 }
 
-/**
- * A platform member no devbox method reaches.
- *
- * The runtime's handles declare far more than this package uses — hibernation,
- * facets, alarms, bookmarks, the container control plane. None of it can be
- * exercised from a devbox line, so none of it is modelled, and each one names
- * itself when called: a stand-in that answered would answer wrongly, and one
- * that was simply absent would surface somewhere else as a missing property.
- */
+/** Unmodelled platform members throw by name: a stand-in that answered would answer wrongly,
+ *  and an absent one would surface elsewhere as a missing property. */
 function unreached(member: string): never {
   throw new Error(`the devbox platform stand-in does not implement ${member}`);
 }
@@ -264,42 +192,23 @@ function unreached(member: string): never {
 export interface FakeStorage {
   readonly rows: Map<string, StoredValue>;
   readonly handle: DurableObjectStorage;
-  /** Park the NEXT read of one key. Two awaits matter: the ladder row's read
-   *  before a decision, and its read inside the conditional write. Parking
-   *  either is how an interleaving is pinned rather than guessed — it is the
-   *  half of the ownership defect the container calls cannot reach, because the
-   *  fence stops a stale attempt before it ever calls one. */
+  /** Park the NEXT read of one key: the ladder row's read before a decision, or its read
+   *  inside the conditional write, to pin an interleaving the container calls cannot reach. */
   gateOn(key: string, held: Gate): void;
-  /**
-   * Fail the NEXT write of one key.
-   *
-   * The vehicle for a failure of the ATTEMPT rather than of a restoration step.
-   * An ephemeral box's `attach()` cannot fail — it has nowhere to attach from —
-   * so the nearest honest stand-in is the attempt's first durable write, which
-   * propagates exactly as a real attach failure does: past the recovery ladder,
-   * not into the incompleteness reason. Every step AFTER the attach reports
-   * instead of throwing, which is why a container fault cannot stand in for
-   * this.
-   */
+  /** Stands in for an attach failure: an ephemeral box's `attach()` cannot fail, and every later
+   *  step reports instead of throwing, so a container fault cannot propagate past the ladder. */
   faultOn(key: string, error: Error): void;
 }
 
-/**
- * The Durable Object's own storage, and the rows a test reads back.
- *
- * A Map behind the four operations the class uses, each with the contract the
- * runtime documents: `get` resolves undefined for a key that is not there,
- * `delete` answers whether a row existed, `list` answers the prefix range.
- */
+/** Durable Object storage double: a Map honouring the runtime contract for the four ops used.
+ *  `get` resolves undefined when absent, `delete` reports whether a row existed, `list` by prefix. */
 export function fakeStorage(): FakeStorage {
   const rows = new Map<string, StoredValue>();
   const schedules: { callback: string; time: number }[] = [];
   const gates: Record<string, Gate | undefined> = {};
   const faults: Record<string, Error | undefined> = {};
-  /** Write counter per key. A transaction records the counter of every key it
-   *  touches and refuses to commit one another writer moved meanwhile: the
-   *  runtime isolates concurrent transactions, so the second committer fails
-   *  instead of silently overwriting the first. Sequential flows never trip it. */
+  /** A transaction refuses to commit a key another writer moved meanwhile: the runtime
+   *  isolates concurrent transactions, so the second committer fails instead of overwriting. */
   const keyVersions = new Map<string, number>();
 
   const takeWriteFault = (key: string): Error | undefined => {
@@ -345,12 +254,8 @@ export function fakeStorage(): FakeStorage {
 
       return Promise.resolve(existed);
     },
-    // A DURABLE ROW'S READ-MODIFY-WRITE. The runtime runs the
-    // closure against a transaction whose writes land together when it
-    // settles and not at all when it throws; a closure that refused (the head
-    // CAS naming a stale parent) must leave the row it read untouched. Buffered
-    // for that reason rather than written through: a fake that committed each
-    // put as it happened could not hold the atomicity the CAS rests on.
+    // Writes are buffered and land only when the closure settles, none if it throws: a
+    // write-through fake could not hold the atomicity the head CAS rests on.
     transaction: async <T>(
       closure: (transaction: DurableObjectTransaction) => Promise<T>,
     ): Promise<T> => {
@@ -411,9 +316,8 @@ export function fakeStorage(): FakeStorage {
 
       return result;
     },
-    // The DO's own SQLite, as the ONE statement the class issues sees it. A fake
-    // that answered a statement it does not model would answer it wrongly, so
-    // anything else refuses by name — see `session-shell.ts` for why.
+    // Models only the one SQLite statement the class issues; anything else refuses by name,
+    // since a fake answering an unmodelled statement would answer it wrongly (`session-shell.ts`).
     sql: {
       exec: (query: string) => {
         if (!query.includes('FROM container_schedules')) {
@@ -440,37 +344,21 @@ export function fakeStorage(): FakeStorage {
   };
 }
 
-/**
- * The one command the boot-id stamp issues, and the last write a restoration
- * makes. Faulting or gating it fails or parks an attempt at its final await.
- *
- * THE PATH, NOT THE VERB. A prefix like `printf %s` identifies a command by the
- * least specific thing about it: the listener proof writes its answer with
- * `printf %s` too, so the fake would park that probe on the stamp gate, fire a
- * stamp fault at it, and count it as a stamp — a silent, wrong answer to a real
- * command, which is exactly the class of fake defect `session-shell.ts` exists
- * to stop. The boot-id path is what makes this command the stamp.
- */
+/** The boot-id stamp's command, a restoration's last write; matched by path, not verb, since
+ *  the listener proof also writes with `printf %s` and must not hit the stamp gate or fault. */
 export const STAMP_COMMAND = '> /tmp/devbox-boot-id';
 
 const IMAGE_DIRECTORIES = ['/', '/workspace', '/tmp', '/var/tmp'] as const;
 
-/**
- * The container, as the SDK presents it.
- *
- * Every fault is a QUEUE and every gate is one-shot, because these defects only
- * exist across two calls: a fake that could not express one attempt differing
- * from the next could not express them at all.
- */
+/** Faults are queues and gates are one-shot: the modelled defects exist only across two calls,
+ *  so the fake must let one attempt differ from the next. */
 export class FakeSandbox {
-  /** The instance the last `new Devbox(…)` built. The class extends this one,
-   *  so the box IS its container, and this is how a test reaches it without
-   *  re-describing the box as something it is not. */
+  /** The instance the last `new Devbox(…)` built; `Devbox` extends this class, so the box IS
+   *  its container and a test reaches the container through it. */
   static last: FakeSandbox | undefined;
 
-  /** The platform's container handle, and the object the Durable Object state
-   *  hands the class as `ctx.container`. One object, so a test that stops the
-   *  container and the class that reads `running` cannot disagree. */
+  /** Same object the Durable Object state hands the class as `ctx.container`, so a test that
+   *  stops the container and the class reading `running` cannot disagree. */
   readonly running = { running: true };
   defaultPort = 3000;
   readonly processes = new Map<string, FakeProcessRow>();
@@ -479,70 +367,36 @@ export class FakeSandbox {
   readonly execs: string[] = [];
   readonly exposures: { port: number; token: string | undefined; name: string | undefined }[] = [];
   readonly schedules: string[] = [];
-  /** THE SDK'S TABLE, shared with the Durable Object's SQLite: see
-   *  {@link scheduleTableOf}. */
+  /** The SDK's schedule table, shared with the Durable Object's SQLite: see {@link scheduleTableOf}. */
   readonly scheduleRows: { callback: string; time: number }[];
   /** Configured probe answers for services on a started container, retained
    *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
   readonly fileOperations: FileOperation[] = [];
-  /** Every bucket mount/unmount the box asked the SDK for, as
-   * `mount:<path>` / `unmount:<path>` rows. A quiesce's stop order is a
-   * property of THIS sequence, so the fake records it the way `execs` records
-   * commands. */
   readonly mountCalls: string[] = [];
-  /** Every mount operation and every exec, in ONE chronological sequence, as
-   *  `mount:<path>`, `unmount:<path>` and `exec:<first word>`. The stop order
-   *  is a property of the order ACROSS these two channels, so it is recorded
-   *  here rather than reconstructed from two separate lists. */
+  /** Mounts and execs share one chronological list: stop order is a property of the order
+   *  across both channels and cannot be reconstructed from two separate lists. */
   readonly sequence: string[] = [];
-  /** Paths the box's own `mountBucket` holds mounted, which is what
-   *  `/proc/mounts` reports for them. */
+  /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
   readonly s3fsMounts = new Set<string>();
-  /** The s3fs options each mount was asked for, by path. What the container's
-   *  s3fs runs under is decided entirely by this list: an option absent here
-   *  is s3fs's own default. */
+  /** s3fs runs under exactly these options; an option absent here is s3fs's own default. */
   readonly s3fsOptionsByMount = new Map<string, readonly string[]>();
-  /** While a holder is present an unmount answers with the EBUSY refusal a
-   *  real fusermount gives for a mount with open files. Cleared by the
-   *  holder-release command the way the real stop clears it by killing the
-   *  holder — unless the holder is marked `survives`, which is the shape a
-   *  still-busy unmount has to name rather than hide, or `session`, which is
-   *  the container's own exec channel: the scan NAMES that one and declines to
-   *  signal it, because killing an ancestor of the shell running the scan ends
-   *  the session the stop is speaking through, or `cwdOnly`, which holds the
-   *  mount by its working directory and is invisible to any scan that matches
-   *  only `/proc/<pid>/fd`. */
+  /** While a holder is present, unmount answers EBUSY as real fusermount does for open files;
+   *  the stop's holder-kill clears it unless `survives`, `session` (never signalled) or `cwdOnly`. */
   workdirHolder: {
     readonly pid: number;
     readonly comm: string;
     readonly survives?: boolean;
     readonly session?: boolean;
-    /** Holds the mount by cwd, not by an fd. Measured in deployed probe
-     *  `hp0901170218`: six of these, all invisible to an fd-only scan. Named,
-     *  never signalled — they are the container server's own children — so an
-     *  ordinary unmount stays refused and only a lazy detach releases it. */
+    /** Holds the mount by cwd, invisible to an fd-only scan. Named, never signalled (container
+     *  server's own children): ordinary unmount stays refused; only a lazy detach releases it. */
     readonly cwdOnly?: boolean;
   } | undefined;
-  /**
-   * WHERE THE SHARED SESSION SHELL IS STANDING.
-   *
-   * The SDK creates its default session with `cwd: "/workspace"` — the mount
-   * point — and `unmountBucket` goes through that session with no cwd of its
-   * own. A shell standing on a mount is a reference to it, so this field is
-   * what decides whether an unmount can succeed. Modelling it is the repair to
-   * this fake: without it, a deployed stop could refuse EBUSY while
-   * this suite stayed green, because the one reference that actually held the
-   * mount was not represented at all.
-   */
+  /** The SDK default session starts with `cwd: "/workspace"` (the mount point) and `unmountBucket`
+   *  runs in it without its own cwd; a shell standing on the mount holds it, so unmount can EBUSY. */
   sessionCwd = '/workspace';
-  /**
-   * The directories this container holds. A FRESH container holds what the
-   * image ships — `/workspace` and `/tmp` — and nothing under `/var/tmp/devbox`:
-   * that path is the devbox's own, created by whatever runs first. Commands
-   * earn directories by `mkdir -p`; a cwd absent from this set refuses the
-   * chdir, as the container does.
-   */
+  /** A fresh container holds only the image's dirs; `/var/tmp/devbox` is made by whatever runs
+   *  first. Commands earn dirs by `mkdir -p`; a cwd absent here refuses chdir, as the container does. */
   readonly directories = new Set<string>(IMAGE_DIRECTORIES);
   readonly fileOperationFailures = {
     rename: Array<Error>(),
@@ -551,38 +405,25 @@ export class FakeSandbox {
   readonly startFaults: StartFault[] = [];
   startFaultBeforeRunning: Error | undefined;
   startFaultAfterRunning: Error | undefined;
-  /**
-   * A STANDING refusal from the platform: every `start` is refused while this is
-   * set, and it is never consumed.
-   *
-   * The two fields above are one-shot, which models a transient blip. Capacity
-   * exhaustion is not a blip — measured live, a contended account refused the
-   * same box 21 times in 15 s — and the properties that matter under it (an
-   * operation is refused rather than admitted onto a box with no work
-   * directory; the box stays re-armable) are invisible to a fault that clears
-   * itself after the first ask.
-   */
+  /** A standing platform refusal: every `start` is refused while set; never consumed.
+   *  Models capacity exhaustion, which persists across retries, unlike the one-shot faults. */
   containerUnavailable: Error | undefined;
   providerStatus: 'running' | 'healthy' | 'stopped' | 'stopping' = 'healthy';
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
-  /** A kill failure for ONE id, consulted before the order-based queue. A test
-   *  about a single row's kill cannot use the queue: whichever kill runs first
-   *  consumes it, and a stop kills several. */
+  /** A kill failure for one id, consulted before the order-based queue: a stop kills several,
+   *  so a queued fault lands on whichever kill runs first. */
   readonly killFaultsById = new Map<string, Error>();
   readonly stampFaults: (Error | undefined)[] = [];
   startGate: Gate | undefined;
-  /** Parks the container's own admission probe — `start()`, which every attempt
-   *  awaits before it captures a generation. `startGate` is the process start;
-   *  these are two different calls and two different windows. */
+  /** Parks the container's own admission probe, `start()`, awaited before a generation is captured.
+   *  Distinct from `startGate` (the process start): two different calls and windows. */
   containerStartGate: Gate | undefined;
   /** Container is running, but the SDK has not invoked the port-proven hook. */
   containerHookGate: Gate | undefined;
   execGate: Gate | undefined;
-  /** How long every command waits INSIDE the container before answering — the
-   *  shape of a counted loop (`awaitLayer`, `awaitListenerCommand`), whose whole
-   *  duration belongs to one command. A real wait, because what is under test is
-   *  whether that duration can extend a caller's own window. */
+  /** Delay inside the container per command, modelling a counted loop (`awaitLayer`, `awaitListenerCommand`).
+   *  A real wait: the test checks whether one command's duration can extend a caller's window. */
   execDelayMs = 0;
   stampGate: Gate | undefined;
   exposeGate: Gate | undefined;
@@ -592,85 +433,47 @@ export class FakeSandbox {
   bootId: string | undefined;
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
-  /** Does the journal daemon's mount land once it is started? False is the
-   *  daemon that starts and never serves, which is the only reason the
-   *  readiness probe exists. */
+  /** False models a journal daemon that starts but whose mount never lands,
+   *  the case the readiness probe exists to catch. */
   journalMounts = true;
-  /** Does the journal daemon's control socket answer? False is the socket lost
-   *  while its daemon still runs and its mount still stands: the process table
-   *  and `/proc/mounts` both read healthy, and only the socket probe can see
-   *  it. A fresh daemon brings a fresh socket, so a daemon start sets this
-   *  back. True unless a test says otherwise, so no existing flow changes. */
+  /** False: socket lost while daemon and mount stand; process table and `/proc/mounts` read
+   *  healthy, only the socket probe sees it. A daemon start resets this (fresh socket). */
   journalSocketUp = true;
-  /**
-   * A SUPERVISED RUNNER, as the container runs it. A box starts `bun
-   * <runner> --action … --result <path>` as a supervised process, waits for
-   * the row to settle, and reads the reply from the result path; a test that
-   * sets this answers that process. Invoked from `startProcess` for every
-   * command carrying `--action`: the reply is written to {@link files} at the
-   * result path and the row settles `completed` with exit code 0; a throw
-   * settles it `failed` with exit code 1 and the message on stderr, which is
-   * what the box reads when a real runner dies. Unset, a runner start stays
-   * `running` for ever, which is the deployed shape of a runner nobody answers.
-   */
+  /** Answers `startProcess` for `--action` commands: reply goes to {@link files}, a throw fails
+   *  the row with exit 1 and stderr. Unset, the runner stays `running` like an unanswered one. */
   runner: ((invocation: RunnerInvocation) => Promise<string> | string) | undefined;
-  /** The container's files, as far as the box reads them: runner result paths
-   *  and workload files accepted through the SDK boundary. */
   readonly files = new Map<string, string>();
-  /** A workload write the fake accepted. A fixture uses this to hand
-   *  the same bytes to the runner's journal model; unset, the file write is
-   *  still kept in {@link files}. */
+  /** Lets a fixture hand accepted workload bytes to the runner's journal model;
+   *  unset, the write is still kept in {@link files}. */
   fileWritten: ((path: string, content: string) => Promise<void> | void) | undefined;
-  /**
-   * Overlay mounts this container serves, by work directory. Recorded when the
-   * box's own `fuse-overlayfs` command runs and reported back through
-   * `cat /proc/mounts`, which is what `isOverlayMounted` reads. Successful
-   * container termination clears them together with the local filesystem.
-   */
+  /** Recorded by the box's own `fuse-overlayfs` command and reported via `cat /proc/mounts`,
+   *  which `isOverlayMounted` reads; termination clears them with the local filesystem (P1). */
   readonly overlayMounts = new Set<string>();
-  /**
-   * Squashfs layer mount points this container serves. Recorded when the box's
-   * own `squashfuse` command runs, read back the same way, cleared by a stop
-   * for the same reason as the overlay above.
-   */
+  /** Recorded when the box's own `squashfuse` command runs and read back via `/proc/mounts`;
+   *  a stop clears them with the local filesystem, like `overlayMounts`. */
   readonly layerMounts = new Set<string>();
-  /**
-   * The chain store this container publishes through, set by snapshot-chain
-   * tests: the bucket objects the box's `objectFacts` reads and the root
-   * `chainStoreRoot` derives, so a `dd` through the store mount lands where
-   * the next attach looks. Unset, no chain command reaches the store.
-   */
+  /** Must be the bucket `objectFacts` reads and `chainStoreRoot` derives, so a `dd` through the
+   *  store mount lands where the next attach looks. Unset, no chain command reaches the store. */
   chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string;
-    /** Every object-store write attempt a publication makes, in order —
-     *  what the live run's publication meter reads. s3fs's `dd` publication
-     *  costs three (marker, empty placeholder, payload); the egress PUT
-     *  costs one. */
+    /** Every object-store write attempt a publication makes, in order. s3fs `dd` costs three
+     *  (marker, empty placeholder, payload); the egress PUT costs one. */
     attempts?: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[] } | undefined;
-  /**
-   * Staged archives by container path: what the box's own `mksquashfs`
-   * command measured, which the later `dd` of that same path publishes.
-   * These are local files, not the remote objects in chainStore.
-   */
+  /** Local files keyed by container path: what the box's `mksquashfs` produced, which a later
+   *  `dd` of that path publishes. Not the remote objects in chainStore. */
   readonly stagedArchives = new Map<string, Uint8Array>();
-  /**
-   * The retained change counter `checkChanges` answers with. Bumped by every
-   * SDK file write, which is what the real watcher observes; a version a
-   * caller holds still matches until such a write.
-   */
+  /** Bumped by every SDK file write, which is what the real watcher observes; a version a
+   *  caller holds still matches `checkChanges` until such a write. */
   changeVersion = 0;
 
-  /** Is a journal daemon process live? The fake's process table IS the
-   *  container's, so this is the same fact the daemon's own supervisor reads
-   *  rather than a flag a test sets beside it. */
+  /** The fake's process table is the container's, so this reads the same fact the daemon's
+   *  supervisor reads, not a flag a test sets beside it. */
   journalRunning(): boolean {
     return [...this.processes.values()].some(
       (row) => row.command.includes('kinu-journal-daemon') && row.status === 'running',
     );
   }
-  /**
-   * An explicit platform input block. The patched SDK's container hook does
-   * not hold one; delivered operations join Devbox readiness themselves.
-   */
+  /** An explicit platform input block. The patched SDK's container hook does
+   *  not hold one; delivered operations join Devbox readiness themselves. */
   initGate: Promise<void> | undefined;
 
   constructor(readonly ctx: DurableObjectState) {
@@ -678,8 +481,8 @@ export class FakeSandbox {
     this.scheduleRows = scheduleTableOf(ctx.storage);
   }
 
-  /** The SDK's own delete-by-callback (`container.js:1492-1494`), which is what
-   *  the class's sweep of unreachable rows goes through. */
+  /** Mirrors the SDK's delete-by-callback (`container.js:1492-1494`); the class's sweep
+   *  of unreachable rows goes through it. */
   deleteSchedules(callback: string): void {
     for (let index = this.scheduleRows.length - 1; index >= 0; index -= 1) {
       if (this.scheduleRows[index]?.callback === callback) this.scheduleRows.splice(index, 1);
@@ -689,35 +492,8 @@ export class FakeSandbox {
   onStart(): Promise<void> {
     return Promise.resolve();
   }
-  /**
-   * One command, answered as the container's PERSISTENT session shell answers
-   * it.
-   *
-   * THE PARSE COMES FIRST, and it is a real one — see `session-shell.ts`. A
-   * fake that accepted any string and answered it by prefix would pass a
-   * command template no shell would run: `releaseWorkdirHoldersCommand`
-   * reached run `e2e20260901140445` with no separator before its `done`, and
-   * every arm's stop came back as `Session 'sandbox-default' shell exited
-   * (exit code: 2)`. A fake that answers what a shell refuses cannot hold that
-   * class of defect.
-   */
-  /**
-   * Stand the session in `cwd`, or REFUSE — a cwd the container does not hold
-   * is a refusal, not a move.
-   *
-   * The session shell chdirs before it runs anything, so a command whose cwd
-   * does not exist never runs at all. A deployed box died of exactly
-   * that, twice on 2026-09-03: `Failed to change directory to
-   * '/var/tmp/devbox'`, on a fresh container where nothing had created the
-   * runtime directory its ports name as their cwd — and the mkdir that would
-   * have created it travelled through the very exec the chdir killed. A fake
-   * that accepted the chdir could not hold that class of defect.
-   *
-   * AND A CWD THAT IS ACCEPTED STAYS MOVED. One persistent session shell serves
-   * every command, so a cwd option is a `cd` that outlives its command — which
-   * is why the SDK's own `unmountBucket`, passing no cwd at all, inherits
-   * wherever the last caller left the shell.
-   */
+  /** A missing `cwd` is refused: the session shell chdirs first, so the command never runs.
+   *  An accepted `cwd` stays: one persistent session shell serves every command. */
   #chdir(cwd: string | undefined): { stdout: string; stderr: string; exitCode: number } | null {
     if (cwd === undefined) return null;
 
@@ -740,16 +516,8 @@ export class FakeSandbox {
     }
   }
 
-  /**
-   * THE RUNNER RESULT'S RETIREMENT and the chain's directory resets: `rm -f
-   * '<reply>'` after one attempt, `rm -rf '<dir>'` when the box is
-   * discarded, and a `rm -rf` of several directories at once, which is how
-   * `resetDirs` empties the upper and the stage. Every quoted path loses its
-   * subtree in the file table the runner writes into, so a reply the box
-   * retired cannot be read again by the next attempt on the same fixed result
-   * path. `rm -rf` of nothing absent is still success. Null for any other
-   * command.
-   */
+  /** Removes each quoted path's subtree so a retired reply cannot be read by the next attempt
+   *  on the same fixed result path; `rm -rf` of an absent path still succeeds. */
   #execRemoval(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     const removed = /^rm -r?f '([^']+)'$/.exec(command);
 
@@ -766,27 +534,8 @@ export class FakeSandbox {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  /**
-   * THE HOLDER-RELEASE COMMAND, answered the way the real container answers
-   * it: the signal work happens inside the same command, and STDOUT IS WHO IS
-   * STILL HOLDING WHEN IT ENDS. That last part is the point — a command that
-   * echoed the list it captured BEFORE signalling would still name a writer it
-   * had just killed successfully, which is how deployed runs `probe09011530`
-   * and `hp0901170218` both blamed a `bun` pid that the `/proc` report taken
-   * afterwards shows was already gone.
-   *
-   * The fake's `workdirHolder` IS its process table, so clearing it is what
-   * the real command's SIGTERM achieves; a holder marked `survives` is one the
-   * TERM and the KILL both failed on, one marked `session` is an ancestor of
-   * the scan's own shell, and one marked `cwdOnly` holds by working directory
-   * and is invisible to an fd match. None of the last three is signalled, so
-   * all three are still holding when the scan ends and all three are named.
-   *
-   * MATCHED ON THE SCAN ITSELF, not on the command's first word: adding an
-   * ancestor walk can change the prefix without changing the holder-release
-   * operation, and a prefix-keyed fake can then silently answer the wrong
-   * command. Null for any command that does not contain the scan.
-   */
+  /** Models the real holder release: stdout names who still holds after signalling, not before.
+   *  Matched on the `/proc/$pid/fd` scan, not the command prefix, which an ancestor walk changes. */
   #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     if (!command.includes('/proc/$pid/fd')) return null;
     const holder = this.workdirHolder;
@@ -810,15 +559,8 @@ export class FakeSandbox {
     return { stdout: 'none', stderr: `signalling: ${named}`, exitCode: 0 };
   }
 
-  /**
-   * THE SNAPSHOT-CHAIN COMMANDS, answered the way the container answers
-   * them: a FUSE mount is a mount `/proc/mounts` reports, an archive build
-   * reports `<exit> <bytes>` for the bytes it staged, and a publish through
-   * the store mount lands those bytes under the object key the box's
-   * `objectFacts` reads back. Matched on the binary each command runs, the
-   * one part of the template the strategy's own builders own. Null for any
-   * other command.
-   */
+  /** Answers snapshot-chain commands as the container does; matched on the binary each runs,
+   *  the one part of the template the strategy's builders own. Null for any other command. */
   #execChainCommand(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     const unmount = /\/usr\/bin\/fusermount3 -u '([^']+)'/.exec(command)?.[1];
 
@@ -871,15 +613,11 @@ export class FakeSandbox {
 
     if (command.includes('conv=fsync')) return this.#execPublish(command);
 
-    // THE UPPER FINGERPRINT: a hash of what the changed set holds, so an
-    // unchanged upper skips the commit the way the container's own walk
-    // decides. Content-hashed rather than metadata-hashed: this stand-in
-    // keeps no inodes or times, and a fingerprint that moved without a byte
-    // changing would commit where the box skips.
+    // Content-hashed, not metadata-hashed: this stand-in keeps no inodes or times, and a
+    // fingerprint moving without a byte change would commit where the box skips.
     if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
-      // The shipped caller fingerprints exactly one directory, the overlay
-      // upper, and nests its quoting inside another quoted command, so the
-      // path is matched rather than parsed out of the quoting.
+      // The shipped caller fingerprints only the overlay upper, inside nested quoting,
+      // so the path is matched rather than parsed out of the quoting.
       return {
         stdout: createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex'),
         stderr: '',
@@ -907,11 +645,8 @@ export class FakeSandbox {
     return null;
   }
 
-  /** The chain's publish over s3fs: `dd if='<archive>' of='<mounted path>'
-   *  conv=fsync` lands a staged archive under the object key the store mount
-   *  exposes — at THREE object attempts, because `mkdir -p` PUTs the
-   *  generation's marker and `create` PUTs an empty object before the flush
-   *  writes the payload (the measured shape of `b20260914045438`). */
+  /** Models an s3fs publish as three object attempts: `mkdir -p` PUTs the marker, `create` PUTs
+   *  an empty object, then the flush PUTs the payload (measured shape of `b20260914045438`). */
   #execPublish(command: string) {
     const archivePath = /if='([^']+)'/.exec(command)?.[1];
     const mountedPath = /of='([^']+)'/.exec(command)?.[1];
@@ -925,9 +660,8 @@ export class FakeSandbox {
 
     if (bytes === undefined) throw new Error(`the publish reads an archive nothing staged: ${archivePath}`);
 
-    // The store mount exposes the chain root: the shipped `mountedLayerPath`
-    // joins the fixed `/backups` mount and the key relative to that root, so
-    // the same join here cannot drift from it without failing loudly below.
+    // The store mount exposes the chain root: shipped `mountedLayerPath` joins `/backups` and
+    // the root-relative key, so this same join fails loudly below if the two drift.
     const relative = mountedPath.startsWith('/backups/')
       ? mountedPath.slice('/backups/'.length)
       : undefined;
@@ -945,11 +679,8 @@ export class FakeSandbox {
     return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
   }
 
-  /** The chain's publish through the mount's egress host: `bun
-   *  '<runtime>/devbox-publish.mjs' '<archive>' '<object-url>' <partBytes>`
-   *  writes the staged archive in ONE object attempt — what s3fs's `dd`
-   *  cannot do — and the store lands it under the mount's prefix plus the
-   *  URL's key. */
+  /** Models D15: the egress publish writes the staged archive in ONE object attempt (s3fs `dd`
+   *  cannot); the store lands it under the mount's prefix plus the URL's key. */
   #execPublishEgress(command: string) {
     const archivePath = /devbox-publish\.mjs' '([^']+)'/.exec(command)?.[1];
     const objectUrl = /devbox-publish\.mjs' '[^']+' '([^']+)'/.exec(command)?.[1];
@@ -991,19 +722,13 @@ export class FakeSandbox {
       throw refused;
     }
 
-    // TWO PRECONDITIONS BEFORE THE DISPATCH, each named: what the chdir does
-    // to a cwd the container does not hold, and what a command does to the set
-    // of directories it holds. The answers below are a dispatch a reader can
-    // follow; these are a different kind of thing and do not belong mixed into
-    // it.
     const refusedChdir = this.#chdir(options?.cwd);
 
     if (refusedChdir !== null) return refusedChdir;
     this.#recordDirectories(command);
     this.execs.push(command);
-    // The scan gets a NAME rather than its first word, because the ordering
-    // assertions read this row and a template whose first word changes must not
-    // silently stop matching them.
+    // The scan gets a fixed name, not its first word: ordering assertions read this row
+    // and must not silently stop matching when the template's first word changes.
     this.sequence.push(command.includes('/proc/$pid/fd')
       ? 'exec:release-workdir-holders'
       : `exec:${command.split(' ')[0]}`);
@@ -1022,23 +747,18 @@ export class FakeSandbox {
     }
 
     if (command === 'cat /proc/mounts') {
-      // EVERY path the box's own `mountBucket` holds, not just the work
-      // directory — the same fact `/proc/mounts` reports in a real container,
-      // so a strategy's read-back observes the world the fake changed rather
-      // than a world the test staged.
+      // Lists every path the box's `mountBucket` holds, as `/proc/mounts` does in a container,
+      // so a strategy's read-back observes the fake's changes, not test-staged state.
       const lines = [
         'proc /proc proc rw,relatime 0 0',
         ...[...this.s3fsMounts].map(
           (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
         ),
-        // The journal daemon's own mount, present exactly while it is serving.
         ...(this.journalRunning() && this.journalMounts
           ? ['kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev,relatime 0 0']
           : []),
-        // The overlay and layer mounts the box's own fuse commands established,
-        // present exactly until a stop takes the FUSE daemons down. `findMount`
-        // reads the mount point field and `isOverlayMounted` the fstype, so the
-        // fstype carries the mechanism the way the container reports it.
+        // Present until a stop takes the FUSE daemons down; the fstype must match the container's
+        // because `isOverlayMounted` reads it while `findMount` reads the mount point.
         ...[...this.overlayMounts].map(
           (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
         ),
@@ -1051,22 +771,18 @@ export class FakeSandbox {
     }
 
     if (command.startsWith('sync')) {
-      // `sync -f <dir> && sync; echo $?`: the flush this fake has no pages for,
-      // answered with the success the real command reports.
+      // `sync -f <dir> && sync; echo $?`: the fake holds no pages to flush, so it answers
+      // with the success the real command reports.
       return { stdout: '0', stderr: '', exitCode: 0 };
     }
 
     if (command.startsWith('test -e')) {
-      // `#pathExists` asks `test -e '<path>' && echo yes || echo no`; the fake
-      // holds no filesystem, so the answer is yes for any path a strategy
-      // asked about.
+      // The fake holds no filesystem, so `test -e` answers yes for any path a strategy asks about.
       return { stdout: 'yes', stderr: '', exitCode: 0 };
     }
 
-    // THE JOURNAL SOCKET PROBE, answered the way the container answers it:
-    // the words on stdout, with the exit code the `|| echo no` guarantees.
-    // Readers must take the WORDS: the exit is 0 either way, so an exit-code
-    // read cannot see a lost socket.
+    // Answers the journal socket probe as the container does: exit is 0 either way (`|| echo no`),
+    // so readers must take the stdout words; an exit-code read cannot see a lost socket.
     if (command.startsWith('test -S ')) {
       const serving = this.journalRunning() && this.journalMounts && this.journalSocketUp;
 
@@ -1102,10 +818,8 @@ export class FakeSandbox {
       if (bootId !== null) this.bootId = bootId[1];
     }
 
-    // THE LAZY DETACH, which is the strategy's last resort for a reference it
-    // may not revoke. `MNT_DETACH` removes the mount from the namespace even
-    // while a holder lives, so it clears BOTH the mount and the fake's holder
-    // row — the holder survives as a process, it just no longer holds a mount.
+    // Lazy detach (`MNT_DETACH`) removes the mount even while a holder lives, so it clears
+    // both the mount and the holder row; the holder process survives without a mount.
     if (command.includes('fusermount -uz')) {
       this.sequence.push('exec:lazy-unmount');
       this.s3fsMounts.delete('/workspace');
@@ -1118,16 +832,8 @@ export class FakeSandbox {
 
     if (release !== null) return release;
 
-    // THE JOURNAL READINESS PROBE, answered as the container answers it: the
-    // daemon serves once it has been started, unless a test says the mount
-    // never lands. The command WAITS inside the container, so one exec is the
-    // whole question — a fake that answered it per attempt would let the
-    // forty-round-trip loop this replaced pass again.
-    //
-    // Matched on the answer it prints rather than on a path or a first word:
-    // the command's shape is what the caller reads back, and a fake keyed on
-    // anything else answers the empty string to a command it stopped
-    // recognising.
+    // The readiness probe waits inside the container, so one exec answers it; never answer per attempt.
+    // Matched on the line it prints: a fake keyed on anything else answers '' to a reshaped command.
     if (command.includes('echo "socket=$socket mount=$mount"')) {
       const serving = this.journalRunning() && this.journalMounts;
 
@@ -1158,16 +864,8 @@ export class FakeSandbox {
     this.mountCalls.push(`unmount:${mountPath}`);
     this.sequence.push(`unmount:${mountPath}`);
 
-    // TWO REFERENCES REFUSE THIS, and the second one is the whole defect.
-    //
-    // A live holder is the obvious one. The other is THIS CALL'S OWN SESSION:
-    // the SDK issues `fusermount -u` through its default session, created with
-    // `cwd: "/workspace"` and given no cwd of its own here, and a shell standing
-    // on a mount holds that mount. So an unmount asked for while the session
-    // still stands inside the work directory is refused no matter how many
-    // holders were killed first — which is the deterministic reason every
-    // deployed stop refused, measured in probe `hp0901170218`, where the
-    // identical `fusermount -u` returned 0 the moment the session was parked.
+    // Models the SDK: `fusermount -u` runs in the default session (cwd `/workspace`), and a
+    // shell standing on a mount holds it, so unmount is refused even with no live holder.
     if (this.#mountIsBusy(mountPath)) {
       throw new Error(
         `fusermount -u failed (exit 1): fusermount: failed to unmount ${mountPath}: `
@@ -1249,10 +947,8 @@ export class FakeSandbox {
     const action = runnerOption(argv, 'action');
 
     if (action === undefined || this.runner === undefined) return this.#live(row);
-    // THE RUNNER ANSWERS BEFORE START REPLIES, which is one shape the real one
-    // has — a runner that completed before start replied — and the only
-    // deterministic one: the
-    // first exit poll finds a settled row, and the reply is at its path.
+    // The runner settles before start replies: a real shape and the only deterministic one, so
+    // the first exit poll finds a settled row with the reply at its path.
     const resultPath = runnerOption(argv, 'result');
     const controlPath = runnerOption(argv, 'control');
 
@@ -1270,8 +966,6 @@ export class FakeSandbox {
     return this.#live(row);
   }
 
-  /** One file, as the SDK's `readFile` answers it: the content, or the SDK's
-   *  refusal for a path the container does not hold. */
   async readFile(path: string): Promise<{ content: string }> {
     const content = this.files.get(path);
 
@@ -1280,10 +974,7 @@ export class FakeSandbox {
     return { content };
   }
 
-  /** One file write through the SDK boundary. The tests drive text; this
-   *  stand-in keeps the bytes at the path and tells an installed runner that a
-   *  workload mutation occurred. A write under the work
-   *  directory also lands in the overlay upper, which is where an overlayfs
+  /** A write under the work directory also lands in the overlay upper, where an overlayfs
    *  write really goes and what the chain's delta archiver walks. */
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
     this.files.set(path, content);
@@ -1298,11 +989,8 @@ export class FakeSandbox {
     return { success: true, path, timestamp: new Date().toISOString() };
   }
 
-  /**
-   * The retained change state the SDK keeps per watched directory: the
-   * version a caller holds still matches until a write moves it. A first call
-   * with no version establishes the baseline the way the SDK does.
-   */
+  /** Models the SDK's retained change state: a held version matches until a write moves it;
+   *  a first call with no `since` establishes the baseline and reports unchanged. */
   async checkChanges(
     _path: string,
     options?: { readonly since?: string },
@@ -1353,14 +1041,8 @@ export class FakeSandbox {
     return { success: true, path, files, count: files.length, timestamp: now };
   }
 
-  /**
-   * The bytes an archive of one container directory would hold: every file
-   * under it, sorted by path, each as its path, length and content. A
-   * stand-in for squashfs bytes, deterministic in the content, so two builds
-   * over unchanged files measure identically and any workload write changes
-   * the measure. The workload files match none of `CHAIN_EXCLUDES`, so the
-   * exclusion pass the real archiver applies is inert here.
-   */
+  /** Deterministic stand-in for squashfs bytes: unchanged files measure identically, any write
+   *  changes the measure. Workload files match no `CHAIN_EXCLUDES`, so exclusion is skipped. */
   synthesizeArchive(sourceDir: string): Uint8Array {
     const prefix = sourceDir.endsWith('/') ? sourceDir : `${sourceDir}/`;
 
@@ -1391,16 +1073,8 @@ export class FakeSandbox {
     return out;
   }
 
-  /**
-   * Process ids whose next poll STOPS the container.
-   *
-   * The platform reclaims an instance whenever it likes, and the process table
-   * a caller polls lives on this side of that: the record keeps answering
-   * `running` for a process whose reporter is gone. "The sandbox container
-   * stopped while the operation was pending" is that event named from the
-   * outside, and it is what every arm that lost an operation to a ceiling in
-   * `e2ecal0901002202` and `e2e20260901140445` was told.
-   */
+  /** Models the platform reclaiming an instance mid-poll: the process record still answers
+   *  `running` after its reporter is gone, so the poll must observe the container stop. */
   readonly stopsContainerOnPoll = new Set<string>();
 
   getProcess(id: string): Promise<LiveProcess | null> {
@@ -1418,9 +1092,8 @@ export class FakeSandbox {
     return Promise.resolve([...this.processes.values()]);
   }
 
-  /** What a process printed. A failure that reports the daemon's own words is
-   *  the difference between "the mount did not land" and a reader guessing, so
-   *  a test can stage those words and assert they travel. */
+  /** Tests stage a daemon's own output here to assert failures report its words,
+   *  not a guessed "the mount did not land". */
   readonly processLogs = new Map<string, { stdout: string; stderr: string }>();
 
   getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }> {
@@ -1485,21 +1158,12 @@ export class FakeSandbox {
     return new Response();
   }
 
-  /** The SDK runs the class's own start hook as part of starting a container.
-   *
-   *  ASKING A RUNNING CONTAINER TO START IS A HEALTH PROBE, not a second
-   *  instance: the SDK returns once the container is up and its port answers, so
-   *  a caller that always asks — which is how a restoration proves the instance
-   *  it is about to run commands on — must not read as a container start. The
-   *  ask is still recorded in `startWaitOptions`, and an injected fault still
-   *  fires, because "the probe was made" and "the probe failed" are both facts a
-   *  test needs. */
+  /** Starting a running container is a health probe, not a new instance: it adds no start,
+   *  but the ask is still recorded and an injected fault still fires. */
   async start(...args: unknown[]): Promise<void> {
     this.startWaitOptions.push(args[1]);
-    // The ADMISSION await, which a startup attempt sits inside before it owns
-    // anything. Parking here is the only way to pin what a superseded admission
-    // is allowed to do: nothing above it is durable yet, so the interleave
-    // cannot be reached from any other seam.
+    // Admission park: nothing before this point is durable, so it is the only seam that pins
+    // what a superseded admission may do.
     const admitting = this.containerStartGate;
 
     if (admitting !== undefined) {
@@ -1531,20 +1195,16 @@ export class FakeSandbox {
       await beforeHook.promise;
     }
 
-    // 2026-09-13 cloud block trace b20260913105359: an adoption RPC inside
-    // the SDK hook block never receives its reply. The patched SDK releases
-    // its storage block first; Devbox's readiness singleflight gates callers.
+    // Models the platform: an adoption RPC inside the SDK hook block never gets its reply,
+    // measured 2026-09-13. The storage block is released first; readiness singleflight gates callers.
     await this.onStart();
 
   }
 
-  /** Prove the Sandbox control listener or a requested application port
-   * before opening onStart. Only app listeners depend on restored workloads. */
+  /** Proves the control listener or a requested app port before opening onStart (D1);
+   *  only app listeners depend on restored workloads. */
   async startAndWaitForPorts(...args: unknown[]): Promise<void> {
-    // The app ports this call waits on, in every shape the SDK accepts: a bare
-    // port, a list, or the options object carrying `ports`. Decoded here, at
-    // the boundary the fake answers for — the rest parameter above is the one
-    // spelling of unknown this file allows, and anything else waits on nothing.
+    // The rest parameter is the one `unknown` this file allows; decode SDK port shapes here.
     const single = v.safeParse(v.number(), args[0]);
     const list = v.safeParse(v.array(v.number()), args[0]);
 
@@ -1628,10 +1288,8 @@ export class FakeSandbox {
   }
 }
 
-/** A real empty async iterator, not a generator with a dummy yield. The lifecycle
- *  harness never opens a staged archive, but Devbox imports the SDK decoder now;
- *  this keeps the mocked SDK's contract faithful while leaving stream decoding to
- *  the SDK boundary tests that own it. */
+/** A real empty async iterator keeps the mocked SDK `streamFile` contract faithful; stream
+ *  decoding is left to the SDK boundary tests that own it. */
 function emptyFileChunks() {
   const metadata = {
     mimeType: 'application/octet-stream',
@@ -1654,13 +1312,8 @@ await mock.module('@cloudflare/sandbox', () => ({
   streamFile: emptyFileChunks,
 }));
 
-// `scheduler.wait` is a Workers global, and two shipped loops await it: the gap
-// between listener probes and the wait for the provider's own stop transition.
-// A REAL timer on purpose, and the only one in these tests: both loops are the
-// behaviour under test — that the probe keeps asking, and that a stop is proved
-// rather than assumed — so replacing the clock would replace the property. The
-// waits are single-digit milliseconds under a test policy, and every assertion
-// is on a loop's outcome, never on elapsed time.
+// A real timer on purpose: the probe loop and the stop-transition wait are under test,
+// so faking the clock would replace the property. Assertions never read elapsed time.
 Object.defineProperty(globalThis, 'scheduler', {
   configurable: true,
   value: {
@@ -1673,18 +1326,14 @@ Object.defineProperty(globalThis, 'scheduler', {
   },
 });
 
-// Dynamic on purpose, and the only way this module can work: the substitution
-// above has to be registered BEFORE the class's own module graph resolves
-// `@cloudflare/sandbox`, and a static import is hoisted above it.
+// Dynamic import: the substitution above must register before the class's module graph
+// resolves `@cloudflare/sandbox`, and a static import would be hoisted above it.
 export const { Devbox } = await import('../../src/devbox');
 
-/** The platform handle the class is constructed with. Named from the class's
- *  own signature rather than restated: the Workers types parameterise it, and a
- *  second spelling here would be a second opinion on the platform. */
+/** Derived from the class's constructor signature: the Workers types parameterise it,
+ *  and a second spelling here would be a second opinion on the platform. */
 type BoxState = ConstructorParameters<typeof Devbox>[0];
 
-/** What a box reads off its platform handle. `container` is left out where the
- *  fixture has no container yet at construction. */
 export interface BoxStateParts {
   readonly storage: DurableObjectStorage;
   readonly id: string;
@@ -1692,15 +1341,8 @@ export interface BoxStateParts {
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
 }
 
-/**
- * The platform handle a test box is constructed with.
- *
- * The WHOLE `DurableObjectState`, not a view of it: the class reaches its
- * container by EXTENDING the SDK's `Sandbox`, whose own constructor takes the
- * platform handle in full, so nothing this fixture declares can make the
- * argument smaller. The four members the class reads are supplied; every other
- * one refuses by name rather than standing in quietly.
- */
+/** The whole `DurableObjectState`: the SDK `Sandbox` constructor takes the full handle.
+ *  Only the members the class reads are supplied; every other one refuses by name. */
 export function boxState(parts: BoxStateParts): BoxState {
   return {
     id: { toString: () => parts.id, equals: () => unreached('state.id.equals') },
@@ -1722,11 +1364,8 @@ export function boxState(parts: BoxStateParts): BoxState {
   };
 }
 
-/**
- * The container as the platform hands it to the object: the one live `running`
- * flag the fake owns and flips, and refusals for the control plane the class
- * reaches through the SDK rather than through `ctx.container`.
- */
+/** Only `running` is live; the rest refuse because the class reaches the control plane
+ *  through the SDK, never through `ctx.container`. */
 export function containerHandle(flag: { running: boolean }): Container {
   return {
     get running(): boolean { return flag.running; },
@@ -1745,28 +1384,19 @@ export function containerHandle(flag: { running: boolean }): Container {
   };
 }
 
-/** The env a test box is constructed with: no bindings at all, which is what an
- *  ephemeral box — no store, nothing durable — really has. Named rather than
- *  `unknown`, because a boundary that admits anything admits an unparsed value
- *  too. */
+/** An ephemeral test box has no store and nothing durable, so its env has no bindings.
+ *  Named rather than `unknown`: a boundary that admits anything admits an unparsed value too. */
 export type TestEnv = Record<string, never>;
 
-/** The Durable Object id every test box carries, and therefore the box prefix
- *  its strategy scopes the store to (`boxes/<id>`). */
+/** Also the box prefix the strategy scopes the store to (`boxes/<id>`). */
 export const TEST_BOX_ID = 'devbox-under-test';
 
-/**
- * Deterministic box identity from the same input production hashes:
- * `binding.idFromName(`${strategy}:${name}`)` (the bench fixture's `boxOf`).
- * Same input gives the same id and the same isolated storage; any difference
- * gives another box. Tests that need two boxes pass different names; tests
- * that need one keep the default below.
- */
+/** Hashes the same input production passes to `binding.idFromName(`${strategy}:${name}`)`;
+ *  equal inputs share one box and its storage, any difference gives another box. */
 export function deriveBoxId(strategy: string, name: string): string {
   return createHash('sha256').update(`${strategy}:${name}`).digest('hex');
 }
 
-/** One box, its container and its durable rows. */
 export interface Harness<Box> {
   readonly box: Box;
   readonly container: FakeSandbox;
@@ -1774,15 +1404,8 @@ export interface Harness<Box> {
   readonly storage: FakeStorage;
 }
 
-/**
- * One box on a fresh container and fresh durable rows.
- *
- * `id` is the Durable Object identity, defaulting to {@link TEST_BOX_ID} so a
- * test that does not care which box it addresses shares one. Pass `deriveBoxId`
- * output to model production, where the identity derives from strategy and name.
- * A fresh fixture starts stopped. Tests modelling a running but unsettled
- * instance set running explicitly; readiness refuses it until the hook runs.
- */
+/** `id` defaults to `TEST_BOX_ID`; pass `deriveBoxId` output to model production identity.
+ *  Starts stopped; a running-but-unsettled fixture is refused by readiness until the hook runs. */
 export function harness<Box>(
   Box: new (state: BoxState, env: TestEnv) => Box,
   id: string = TEST_BOX_ID,
@@ -1792,11 +1415,8 @@ export function harness<Box>(
   const state = boxState({
     storage: storage.handle,
     id,
-    // The platform's critical section, as a stand-in that deliberately does NOT
-    // provide the exclusion the real one does: the closure simply runs. That is
-    // what lets a test park inside the section and prove the conditional write
-    // refuses when the row changed under it. A stand-in that granted exclusion
-    // would make the interleaving untestable and the assertion vacuous.
+    // Deliberately grants no exclusion: the closure just runs, so a test can park inside it
+    // and prove the conditional write refuses when the row changed under it.
     blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
   });
 
@@ -1816,19 +1436,8 @@ export function harness<Box>(
   return { box, container, rows: storage.rows, storage };
 }
 
-/**
- * Run one operation the way the PLATFORM would deliver it: not before the init
- * gate opens.
- *
- * The difference matters for exactly one class of assertion, and it is the one
- * the container-start restore rests on. A test that calls `box.exec()` while
- * `onStart` is still held is asserting against an interleaving the runtime
- * cannot produce — no event is delivered to a Durable Object inside
- * `blockConcurrencyWhile` — so it would either prove nothing or prove a hazard
- * that does not exist. Going through here says "this request arrived DURING the
- * restore" honestly: it is issued then, and delivered when the platform would
- * deliver it.
- */
+/** Holds the operation until the init gate opens: no event reaches a Durable Object inside
+ *  `blockConcurrencyWhile`, so an earlier call tests an interleaving that cannot happen. */
 export async function deliver<T>(container: FakeSandbox, work: () => Promise<T>): Promise<T> {
   await container.initGate;
 

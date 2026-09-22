@@ -1,5 +1,3 @@
-// Trust derivation + lattice meet — pure functions.
-// Verifies the (ingress, variant) → trust table and the fan-in semantics.
 import { describe, test, expect } from 'bun:test';
 import {
   meetTrust, meetAll, trustSatisfies,
@@ -16,8 +14,7 @@ describe('meetTrust', () => {
     expect(meetTrust('owner', 'owner')).toBe('owner');
   });
   test('is commutative', () => {
-    // The reverse order of three pinned pairs: commutativity is three exact
-    // lattice values, not the function agreeing with itself.
+    // Reverse order of the pinned pairs: commutativity as exact lattice values.
     expect(meetTrust('external', 'owner')).toBe('external');
     expect(meetTrust('authenticated', 'self')).toBe('authenticated');
     expect(meetTrust('self', 'external')).toBe('external');

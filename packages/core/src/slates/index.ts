@@ -1,12 +1,4 @@
-/**
- * Worker-only slate storage, behind `@kinu.run/core/slates`.
- *
- * The storage modules here import the vendored agent-core runtime (SQLite
- * record seams, content-store base classes), which touches `node:util` at
- * module scope and cannot load in a browser; the runtime module texts ride
- * along as data — the `kinu:slate` server and client sources are the slate
- * API, authored in core and served by whichever backend hosts the worker.
- */
+/** Worker-only: the storage modules import the vendored runtime, which touches `node:util` at module scope. */
 export { SqliteSlateStore } from './store';
 
 export { WorkspaceSlateContentStore, type SlateContentFiles } from './content';

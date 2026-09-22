@@ -1,11 +1,5 @@
-/**
- * Behaviour tests for the read models — the folds an operator surface asks
- * for, now that they have one implementation instead of one per backend.
- *
- * These go through the public entry points with real storage (in-memory
- * SQLite, the canonical VFS), so they assert the SHAPES the surfaces consume
- * rather than how the fold is written.
- */
+/** Read models through public entry points over real storage, asserting the shapes surfaces
+ *  consume. */
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -45,7 +39,6 @@ import {
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
 import type { JsonValue } from '../src/utils/json';
 
-/** A workspace with the real schema — the same entry point both backends run. */
 function workspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -59,15 +52,12 @@ function workspace() {
 
 interface SeedRow { id: string; role: 'user' | 'assistant'; content: string }
 
-/** `n` transcript rows, m1 oldest. */
 function transcriptOf(n: number): SeedRow[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `m${i + 1}`, role: i % 2 === 0 ? 'user' as const : 'assistant' as const, content: `message ${i + 1}`,
   }));
 }
 
-/** The canonical session store over one workspace, and the chat transcript a
- *  surface reads through. */
 function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs: VFS }) {
   const history = new SessionHistory({
     sql: w.sql, actor: w.actor, transactionSync: (write) => w.db.transaction(write)(),
@@ -77,8 +67,7 @@ function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs:
   return { history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** Seed the canonical transcript, each entry the child of the one before it —
- *  the parentage a real turn writes. */
+/** Each entry is the child of the one before it, as a real turn writes. */
 async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[], after: string | null = null): Promise<void> {
   let parentId = after;
 
@@ -91,8 +80,7 @@ async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[],
   }
 }
 
-/** Every page, oldest first — the walk a caller performs, and the only way to
- *  observe that the pages join up without overlapping. */
+/** Every page, oldest first: the only way to observe pages join without overlap. */
 async function walkTranscript(transcript: SessionTranscriptReader, limit: number): Promise<string[]> {
   const ids: string[] = [];
   let cursor: SeekCursor | undefined;
@@ -106,9 +94,7 @@ async function walkTranscript(transcript: SessionTranscriptReader, limit: number
   }
 }
 
-/** A real job store plus a recording stand-in for the runner: this plane's
- *  contract with the runner is exactly these four calls, and the lifecycle
- *  behind them has its own tests (unit-background-job-runner). */
+/** Real job store plus a recording runner stand-in; the runner contract is these four calls. */
 function jobPlane() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -134,8 +120,6 @@ function jobPlane() {
 }
 
 describe('run reads', () => {
-  /** A bare event log — the only storage the run reads need. No caller closes
-   *  it: an in-memory Database is collected with the test. */
   function eventLog(): RunEventRecorder {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
@@ -157,8 +141,7 @@ describe('run reads', () => {
       runId: 'r1', causedBy: 'timer', userMessage: 'do the thing', status: 'completed',
       eventCount: 4, turnsWithoutUsage: 0,
     });
-    // `cacheRead` came from one turn only and is summed over that turn alone;
-    // the fields NEITHER turn reported stay absent instead of appearing as 0.
+    // Fields neither turn reported stay absent instead of appearing as 0.
     expect(summary?.usage).toEqual({ input: 15, output: 5, cacheRead: 2 });
   });
 
@@ -173,8 +156,7 @@ describe('run reads', () => {
 
     events.emit('big', { type: 'run_end', reason: 'completed' });
 
-    // THE RED DIRECTION: folding one window counted 999 of the 1100 turns and
-    // never reached the `run_end`, so usage read short and status read null.
+    // Folding one window would miss the `run_end`, so usage reads short and status null.
     const [summary] = getRunSummaries(events).items;
     expect(summary?.usage).toEqual({ input: 1100 });
     expect(summary).toMatchObject({ status: 'completed', eventCount: 1102 });
@@ -192,13 +174,11 @@ describe('run reads', () => {
     const silent = items.find((s) => s.runId === 'silent');
     const zeroed = items.find((s) => s.runId === 'zeroed');
 
-    // The provider said nothing: no field is present, and the count of silent
-    // turns is the denominator that says so.
+    // The provider said nothing; the silent-turn count is the denominator that says so.
     expect(silent?.usage).toEqual({});
     expect(silent?.turnsWithoutUsage).toBe(2);
 
-    // The provider said "zero": that IS a report, and it must not be folded
-    // into the same shape as the silence above.
+    // A reported zero is a report, distinct from the silence above.
     expect(zeroed?.usage).toEqual({ input: 0, output: 0 });
     expect(zeroed?.turnsWithoutUsage).toBe(0);
   });
@@ -229,14 +209,10 @@ describe('run timeline', () => {
   test('merges every source into one list ordered by time', () => {
     const { db, sql, execRaw, actor } = workspace();
     initRunEventTables(execRaw);
-    // Both halves of the merge under ONE actor: the event log and the job
-    // registry are each actor-private, so a fixture that bound them to two
-    // would assert over a timeline no single actor can see.
+    // Event log and job registry are each actor-private, so both bind the one actor.
     const events = new RunEventRecorder(sql, actor);
     const jobs = new BackgroundJobStore(sql, actor);
 
-    // The run events stamp themselves with the wall clock; the other sources
-    // carry their own, so they are placed after it to pin the ordering.
     events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
     const base = Date.now() + 1000;
     void sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
@@ -251,7 +227,6 @@ describe('run timeline', () => {
     expect(spans.map((s) => s.ts)).toEqual([...spans].sort((a, b) => a.ts - b.ts).map((s) => s.ts));
     // text_delta is the stream's own noise — never a span.
     expect(spans.some((s) => s.rawType === 'text_delta')).toBe(false);
-    // The evolution payload survives the merge, parsed.
     expect(spans[1]).toMatchObject({ kind: 'scaffold', label: 'v2 proposed', data: { version: 2 } });
     expect(spans[3]).toMatchObject({ kind: 'background', label: 'Background shell', detail: 'running in background' });
     db.close();
@@ -283,8 +258,6 @@ describe('run timeline', () => {
     })).toEqual([]);
     db.close();
 
-    // Identity only: the actor a store binds to exists in every workspace, and
-    // what is missing here is the read models' own tables.
     const bare = new Database(':memory:');
     const bareSql = makeSql(bare);
     const bareActor = createTestActors(bareSql, makeExecRaw(bare)).main;
@@ -303,8 +276,7 @@ describe('agent status', () => {
     void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
     await seedTranscript(chatStore(w).history, [{ id: 'm1', role: 'user', content: 'hi' }]);
 
-    // The caller resolves the model; the read model reports it as given, so a
-    // workspace on its tier's model never reads as having none.
+    // The read model reports the caller-resolved model as given.
     expect(await getAgentStatus({
       sql, vfs, actor, model: 'anthropic/claude-opus-5', reasoningEffort: 'high', name: 'fallback-name',
       displayName: 'Jarvis',
@@ -349,11 +321,7 @@ describe('agent status', () => {
   });
 
   test('a harness row walks back with the markers its card is drawn from', async () => {
-    // The production row, verbatim in shape: sunlit-stone-4a20's
-    // `fork_interrupted` notice. Reporting it `system` is half the answer — the
-    // chat draws the CARD from `kinuEvent`, and a page that reports the role
-    // and drops the marker leaves the renderer with a system row it can say
-    // nothing about.
+    // A `fork_interrupted` notice: the chat draws the card from `kinuEvent`, so the marker must survive.
     const w = workspace();
     const { history, transcript } = chatStore(w);
     const id = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
@@ -378,16 +346,8 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  /**
-   * The defect a bare `LIMIT` has: it answers a truncated window and a complete
-   * one with the identical shape, so a caller cannot tell "that is all there
-   * is" from "that is all you asked for".
-   *
-   * The third case is the one the limit+1 probe exists for. A page that exactly
-   * consumes the data is indistinguishable from a truncated one by row count
-   * alone — `rows.length === limit` is true for both — so an implementation
-   * that compares lengths reports `more` here and then serves an empty page.
-   */
+  /** A bare `LIMIT` cannot tell truncated from complete; an exactly-consumed page is the case the
+     *  limit+1 probe exists for. */
   test('a short page is exhaustion, a full page is not, and an exactly-full page is', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
@@ -399,17 +359,8 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  /**
-   * THE property. A message arriving between two page fetches is the normal
-   * case for a chat — the user scrolls up while the agent is still answering —
-   * and it is what separates a keyset cursor from an offset.
-   *
-   * An offset implementation fails this precisely: page 1 of `ORDER BY rowid
-   * DESC LIMIT 4` is m10..m7, the insert makes m11 the newest row, and `LIMIT 4
-   * OFFSET 4` then answers m7..m4 — m7 delivered twice. Shift the offset to
-   * compensate and it skips instead. There is no offset that is right, because
-   * an offset names a position in a sequence that changed.
-   */
+  /** A message arriving between page fetches must neither duplicate nor skip rows: the keyset-cursor
+     *  property no offset can satisfy. */
   test('a message arriving mid-pagination causes neither a duplicate nor a gap', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
@@ -421,15 +372,12 @@ describe('agent status', () => {
     if (first.status !== 'more') throw new Error('unreachable');
     expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
 
-    // The live turn lands while the reader is scrolling up.
     await seedTranscript(history, [{ id: 'm11', role: 'assistant', content: 'live arrival' }], 'm10');
 
     const second = await getChatHistoryPage(transcript, { limit: 4, cursor: first.next });
     expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
 
-    // No duplicate: nothing from page 1 reappears. No gap: m6 is the row
-    // immediately before m7, not m5. And the newer arrival never leaks into a
-    // page walking away from it.
+    // No duplicate, no gap (m6 directly before m7), and the newer arrival never leaks in.
     expect(second.items.map((m) => m.id)).not.toContain('m11');
 
     const walked = await walkTranscript(transcript, 4);
@@ -438,17 +386,11 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  /**
-   * A turn emits several entries inside one clock tick, so every row here
-   * shares a `recorded_at`: a timestamp cursor would have no boundary to seek
-   * on at all, and a timestamp ORDER BY no defined membership.
-   */
+  /** Rows share one `recorded_at`, so only a keyset on id has a boundary to seek on. */
   test('messages sharing one recorded instant still page without loss', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
     await seedTranscript(history, transcriptOf(6));
-    // Collapsed onto one instant, so a `recorded_at` cursor would have no
-    // boundary to seek on and a `recorded_at` ORDER BY no defined membership.
     void w.sql`UPDATE conversation_entries SET recorded_at = ${1_772_000_000_000}
       WHERE actor_id = ${w.actor.actorId} AND session_id = ${CHAT_SESSION_ID}`;
 
@@ -456,11 +398,7 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  /**
-   * The third state. A cursor whose anchor is gone must not answer "no rows",
-   * because that is the exhaustion answer and the caller would stop walking a
-   * conversation it never finished reading.
-   */
+  /** A cursor whose anchor is gone must not answer "no rows", the exhaustion answer. */
   test('a cursor whose anchor has vanished is refused, not reported as exhausted', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
@@ -473,12 +411,7 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  /**
-   * What a dismissed actor's pane pages through: a reader with no file plane,
-   * because nothing binds a retired actor's private home. An entry whose
-   * content spilled there keeps its place and says it is unavailable; the page
-   * around it reads whole, and neither the entry nor the page goes missing.
-   */
+  /** A dismissed actor's pane has no file plane: spilled entries say unavailable, the page reads whole. */
   test('a reader with no file plane pages a spilled entry as unavailable, in its place', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
@@ -509,8 +442,7 @@ describe('agent status', () => {
   test('the tool list carries each crafted tool with its live score', async () => {
     const { rt, db } = createTestRuntime();
     const sql = makeSql(db);
-    // Quality lives on the crafted_tools row itself; the store's create seeds
-    // the neutral prior, and this UPDATE stands in for a real usage history.
+    // This UPDATE stands in for a real usage history on the crafted_tools row.
     await rt.craftStore.create({
       name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
     });
@@ -562,8 +494,7 @@ describe('workspace change-set', () => {
 });
 
 describe('executor file plane', () => {
-  /** A router holding one executor, the way a real runtime hands one over —
-   *  including the one thing only the environment knows: where it starts. */
+  /** Includes where the executor starts, which only the environment knows. */
   function router(files?: VFS) {
     const provider = files === undefined
       ? { homeDir: async () => '/home/user' }
@@ -587,8 +518,6 @@ describe('executor file plane', () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');
 
-    // The browser opens an environment without knowing its paths. Cut
-    // homeDir() out of the read model and this lands somewhere else.
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '');
     expect(listed.path).toBe('/home/user');
     expect(listed.entries?.map((e) => e.name)).toContain('SOUL.md');
@@ -600,9 +529,7 @@ describe('executor file plane', () => {
     await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');
     await rt.storage.vfs.writeFile('/home/SHARED', 's');
 
-    // `..` from the agent's home is /home, NOT the filesystem root — the exact
-    // navigation the pane could not perform while every environment reported
-    // its working directory as the literal '.'.
+    // `..` from the agent's home is /home, not the filesystem root.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/user/..');
     expect(up.path).toBe('/home');
     expect(up.entries?.map((e) => e.name)).toContain('SHARED');
@@ -611,8 +538,7 @@ describe('executor file plane', () => {
 
   test('an environment with no file plane is an error value, not a throw', async () => {
     const { rt, db } = createTestRuntime();
-    // Unknown id, and a known executor that has no filesystem to browse (the
-    // device before a device connects) read the same way: a rendered reason.
+    // Unknown id and a device with no filesystem yet both read as a rendered reason.
     expect(await getExecutorFiles(router(rt.storage.vfs), 'ghost', ''))
       .toEqual({ error: 'Executor "ghost" has no file plane' });
     expect(await getExecutorFiles(router(), 'workspace', ''))
@@ -630,17 +556,14 @@ describe('executor file plane', () => {
 
     expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
     expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file — not previewable' });
-    // A plane with NO ranged read refuses an over-budget preview rather than
-    // fetching the file to slice it, and names the download instead. This
-    // workspace double has exactly the seven base VFS methods.
+    // A plane without ranged read (seven base VFS methods) refuses an over-budget preview and names
+    // the download.
     const refused = await readExecutorFile(r, 'workspace', 'big');
     expect(refused.content).toBeUndefined();
     expect(refused.error).toContain('no ranged read');
     expect(refused.error).toContain('download');
 
-    // The SAME file on a plane that CAN serve a prefix is previewed and
-    // truncated. Both halves are asserted because the viewer's behaviour splits
-    // on this capability, and the truncated-preview path is the common one.
+    // A plane that can serve a prefix previews and truncates.
     const ranged = {
       getProvider: (name: string) => (name === 'workspace' ? {
         homeDir: async () => '/home/user',
@@ -667,9 +590,7 @@ describe('executor file plane', () => {
     const r = router(rt.storage.vfs);
     expect(await writeExecutorFileOp(r, 'workspace', 'up.txt', { bytes: new TextEncoder().encode('hi') }))
       .toEqual({ ok: true });
-    // The test plane declares no compare-and-write, so the read carries the
-    // reason the viewer shows instead of an edit token. A plane that HAS one is
-    // covered in unit-executor-file-transfer.test.ts.
+    // No compare-and-write on this plane, so the read carries the reason instead of an edit token.
     expect(await readExecutorFile(r, 'workspace', 'up.txt')).toEqual({
       content: 'hi',
       readOnlyReason:
@@ -707,7 +628,6 @@ describe('background-job control plane', () => {
     expect(retry.ok).toBe(true);
     expect(retry.jobId).not.toBe('j1');
     expect(seen).toEqual([{ q: 'kinu' }]);
-    // Detached immediately — the work already proved slow once.
     expect(detached).toEqual([{ jobId: present(retry.jobId, 'the retried job id'), kind: 'search' }]);
     db.close();
   });
@@ -765,8 +685,7 @@ describe('background-job control plane', () => {
     });
 
     expect(outcome).toEqual({ ok: true, abortedTools: 0, deviceCommands: [] });
-    // Queued steers are NOT part of the outcome: they stay queued and run as
-    // the next turn once this one settles.
+    // Queued steers are not part of the outcome; they run as the next turn.
     expect(order).toEqual(['cancelChats', 'settled', 'broadcast']);
     db.close();
   });

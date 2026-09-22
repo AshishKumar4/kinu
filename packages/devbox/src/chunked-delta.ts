@@ -1,31 +1,12 @@
-/**
- * One cumulative delta object: whole records under tree/, nonzero changed
- * 16 KiB blobs under chunks/, and authenticated per-file index files beside
- * them. Manifest v2 names each index by file digest, root digest and count.
- *
- * Attach parses bounded changed-namespace records only. Demand reads resolve
- * each block through logarithmically many authenticated pages; a missing
- * override reads the base range, while an explicit hole reads zeros.
- *
- * Publication compares upper files with the base and merges untouched
- * records from a mounted delta. Files below 64 KiB, linked/nonregular files
- * and files with more than half zero blocks travel whole. This is cumulative
- * changed-set publication, not a pending-write bitmap or a mmap barrier.
- *
- * C3's 64 KiB overwrite touches at most five 16 KiB blocks, independent of
- * the base's size. Index bytes belong to the conditional encoding/framing
- * allowance, not the attach manifest. SnapshotChain's publication accounting
- * remains the model; the real-tools and live benches supply its wire premise.
- */
+/** One cumulative delta object: whole records under tree/, changed blocks under chunks/,
+ *  and authenticated per-file indexes; a missing override reads base, a hole reads zeros. */
 
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 import { buildDeltaIndex, DELTA_BLOCK_BYTES, DELTA_INDEX_PAGE_BYTES, DeltaIndexRefSchema, lookupDeltaIndex, type DeltaIndexRef, type DeltaOverride } from './delta-index';
 
-/** Bytes per delta block. Matches the 16 KiB nominal chunk the conformance
- *  cells budget against. */
-/** What the attach log says an upper was restored from. The bench reads a
- *  served fact against this same vocabulary, so there is no second copy. */
+/** What the attach log says an upper was restored from; the bench reads served facts
+ *  against this same vocabulary, so there is no second copy. */
 export const CHAIN_SERVED_WORDS = {
   base: 'base',
   held: 'base+delta already in this upper',
@@ -41,29 +22,26 @@ export { DELTA_BLOCK_BYTES } from './delta-index';
  *  their bytes. */
 const DELTA_WHOLE_FILE_THRESHOLD = 64 * 1024;
 
-/** A file more than half holes travels whole: hashing and copying a gigabyte
- *  of zeros to publish one data run is the whole-inode cost in a different
- *  hat, and a whole sparse file round-trips its exact hole geometry. */
+/** A file more than half holes travels whole: hashing and copying its zeros costs what the whole
+ *  inode would, and a whole sparse file round-trips its exact hole geometry. */
 const DELTA_SPARSE_WHOLE_FRACTION = 1 / 2;
 
 /** Shell operations per container command. Bounds the round trips of a
  *  many-file checkpoint without changing what any operation does. */
 export const DELTA_OPS_PER_COMMAND = 250;
 
-/** Layout of the staged package, mirrored at materialize time. Every byte of
- *  a sidecar lives under `.devbox-delta`, so a workspace file collides only by
- *  naming that directory AND validating as a manifest. */
+/** Staged package layout, mirrored at materialize time. A workspace file collides only by
+ *  living under `.devbox-delta` AND validating as a manifest. */
 export const DELTA_MANIFEST_NAME = '.devbox-delta/manifest.json';
 
 export const DELTA_TREE_DIR = '.devbox-delta/tree';
 
 const DELTA_CHUNK_DIR = '.devbox-delta/chunks';
 
-function shellPath(path: string): string {
+export function shellPath(path: string): string {
   return `'${path.replaceAll("'", `'\\''`)}'`;
 }
 
-/** Every ancestor directory of a tree-relative path, shallowest first. */
 function ancestorDirs(path: string): string[] {
   const parts = path.split('/');
   const out: string[] = [];
@@ -94,9 +72,7 @@ const FileSchema = v.variant('kind', [
 const DirSchema = v.pipe(v.object({ p: v.union([RelPath, v.literal('')]), mode: Count, uid: Count, gid: Count,
   opaque: v.optional(v.boolean()) }), v.check(dir => dir.p !== '' || dir.opaque === true, 'a root directory record must be opaque'));
 
-/** The manifest, as the stage writes it and the wake reads it back. A store
- *  object is untrusted input even though this module wrote it. `dirs` carries
- *  ancestor directories with attributes; `treplace` carries paths whose kind
+/** A store object is untrusted input even though this module wrote it. `treplace` paths
  *  crossed the dir/non-dir boundary and must be removed before planting. */
 export const DeltaManifestSchema = v.object({
   v: v.literal(2),
@@ -110,7 +86,6 @@ export const DeltaManifestSchema = v.object({
 export type DeltaManifest = v.InferOutput<typeof DeltaManifestSchema>;
 
 
-/** One upper entry as the probe reports it: eleven null-separated fields. */
 export interface DeltaProbeEntry {
   readonly path: string;
   /** find's `%y`, with `o` for an opaque directory proved by the native probe. */
@@ -124,13 +99,8 @@ export interface DeltaProbeEntry {
   readonly target: string;
 }
 
-/**
- * List the upper as one base64 line, `0 <payload>`: eleven null-separated
- * fields per record, so any byte but null may appear in a path. `-prune` is
- * the same matcher `archiveSizeCommand` walks, so delta and base exclude the
- * same regenerable trees. An empty upper reports `0 ` with no payload, which
- * is observably different from a failed walk.
- */
+/** `-prune` uses the same matcher as `archiveSizeCommand` so delta and base exclude alike.
+ *  An empty upper prints `0 ` with no payload, distinct from a failed walk. */
 export function deltaProbeCommand(upperDir: string, excludes: readonly string[]): string {
   const pruned: string[] = [];
 
@@ -156,7 +126,6 @@ export class DeltaNamespaceProbeFailed extends Error {
   }
 }
 
-/** Parse what {@link deltaProbeCommand} printed, or throw naming the refusal. */
 export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
   const space = stdout.indexOf(' ');
   const rc = space === -1 ? stdout.trim() : stdout.slice(0, space);
@@ -210,15 +179,8 @@ function zeroBlockDigest(length: number): string {
   return createHash('sha256').update(new Uint8Array(length)).digest('hex');
 }
 
-/**
- * Hash every 16 KiB block of the listed files, both sides, through `split`
- * and one `sha256sum` per side: no per-block processes. `USIDE <index>` and
- * `BSIDE <index>` introduce raw `sha256sum` lines; `BEMPTY <index>` marks an
- * absent or empty base; `NOSPLIT` reports a host without `split` (the caller
- * then carries big files whole). `split -a 4` is POSIX, so suffixes are
- * fixed-width and parse back to block indices; split outputs are removed per
- * file so the transient never exceeds two files' splits.
- */
+/** One `sha256sum` per side over `split` outputs, no per-block processes; `NOSPLIT` makes
+ *  the caller carry big files whole. Splits are removed per file to bound the transient. */
 export function deltaBlockHashCommand(input: {
   workDir: string;
   files: readonly { index: number; upperPath: string; basePath: string | null }[];
@@ -253,8 +215,7 @@ export function deltaBlockHashCommand(input: {
   return lines.join('\n');
 }
 
-/** What the hash run reported for one file. `base` is null for an absent or
- *  empty base side. */
+/** `base` is null for an absent or empty base side. */
 export interface DeltaFileHashes {
   readonly upper: ReadonlyMap<number, string>;
   readonly base: ReadonlyMap<number, string> | null;
@@ -270,9 +231,8 @@ function parseSplitSuffix(suffix: string): number | null {
   return index;
 }
 
-/** Parse what {@link deltaBlockHashCommand} printed. Throws when a side is
- *  short or a digest malformed: a plan built on half a file publishes a torn
- *  delta. Throws `NOSPLIT` as its own message so the caller can fall back. */
+/** Throws when a side is short or a digest malformed: a plan on half a file publishes a torn
+ *  delta. `NOSPLIT` is its own message so the caller can fall back. */
 export function parseDeltaBlockHashes(
   stdout: string,
   wanted: ReadonlyMap<number, { upperBlocks: number; baseBlocks: number | null }>,
@@ -346,7 +306,6 @@ export function parseDeltaBlockHashes(
   return out;
 }
 
-/** Base kinds in the planner's vocabulary; `stat -c %F` words map here once. */
 export type DeltaBaseKind = 'file' | 'dir' | 'link' | 'other';
 
 export interface DeltaBaseFact {
@@ -354,8 +313,7 @@ export interface DeltaBaseFact {
   readonly size: number;
 }
 
-/** Stat the base side of every carried path: one ordered line per path, so
- *  no name appears in the output. `ABSENT` marks a path the base lacks. */
+/** One line per path, in path order, so no name appears in the output; `ABSENT` marks a path the base lacks. */
 export function deltaBaseStatCommand(paths: readonly string[], lowerBase: string): string {
   const lines = ['# devbox-basestat-v1'];
 
@@ -366,8 +324,6 @@ export function deltaBaseStatCommand(paths: readonly string[], lowerBase: string
   return lines.join('\n');
 }
 
-/** What `stat --format=%F` prints, as the delta's own kind. A socket, a fifo or
- *  a device names none of these and travels as `other`. */
 const BASE_KIND = new Map<string, DeltaBaseKind>([
   ['regular file', 'file'],
   ['regular empty file', 'file'],
@@ -375,7 +331,6 @@ const BASE_KIND = new Map<string, DeltaBaseKind>([
   ['symbolic link', 'link'],
 ]);
 
-/** Parse what {@link deltaBaseStatCommand} printed, in path order. */
 export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Map<string, DeltaBaseFact | null> {
   const lines = stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
 
@@ -403,7 +358,6 @@ export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Ma
   return out;
 }
 
-/** The planner's complete input. */
 export interface DeltaPlanInput {
   readonly probe: readonly DeltaProbeEntry[];
   /** Carried paths only, null when the base holds nothing there. */
@@ -417,7 +371,6 @@ export interface DeltaPlanInput {
   readonly whiteouts: ReadonlySet<string>;
 }
 
-/** The plan: a manifest plus the chunk extractions that fill it. */
 export interface DeltaPlan {
   readonly manifest: DeltaManifest;
   /** Content digests to extract, each with the upper path and block to read. */
@@ -435,11 +388,8 @@ export function deltaHashCandidates(probe: readonly DeltaProbeEntry[]): string[]
     .sort();
 }
 
-/**
- * Turn probe facts into a publication plan. PURE. Throws when the facts
- * disagree: a hash count that does not match the probed size is a file that
- * changed mid-checkpoint.
- */
+/** Pure. Throws when probe facts disagree: a hash count that does not match the probed size
+ *  means the file changed mid-checkpoint. */
 export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   const files: DeltaManifest['files'] = [];
   const dirs: DeltaManifest['dirs'] = [];
@@ -561,10 +511,8 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
     if (group.length > 1) links.push([...group].sort());
   }
 
-  // A file over a base DIRECTORY: the directory is removed through the merged
-  // view before the file is planted, because only a whiteout hides its
-  // children. A directory over a base file needs nothing: an upper directory
-  // shadows a lower non-directory.
+  // A file over a base directory needs the directory removed first: only a whiteout hides its
+  // children. A directory over a base file needs nothing: an upper directory shadows it.
   for (const file of files) {
     const fact = input.baseFacts.get(file.p);
 
@@ -656,18 +604,11 @@ export function mergeDeltaPublication(plan: DeltaPlan, retained: DeltaManifest,
     links: [...links, ...next.links] }, chunks, indexes: mergedIndexes, retainedFiles };
 }
 
-/** Where the stage lives. */
 export interface DeltaStageLayout {
   readonly upperDir: string;
-  /** The package root the archiver packs. */
   readonly pkgDir: string;
 }
 
-/**
- * Stage a plan as container operations, one per line. `cp -a` carries whole
- * files with their metadata; `dd` extracts kept blocks out of the upper; the
- * manifest arrives as data.
- */
 export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): string[] {
   const treeDir = `${layout.pkgDir}/${DELTA_TREE_DIR}`;
   const chunkDir = `${layout.pkgDir}/${DELTA_CHUNK_DIR}`;
@@ -709,8 +650,6 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
   return ops;
 }
 
-/** The directories a manifest carries, created under `root` with their
- *  attributes, plus every ancestor a carried file needs. */
 function directoryOps(manifest: DeltaManifest, root: string): string[] {
   const wanted = new Set<string>();
 

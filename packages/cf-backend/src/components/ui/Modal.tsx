@@ -1,12 +1,4 @@
-/**
- * Shared modal shell — the dimmed overlay + centered card used by every dialog
- * (create agent, fork, create webhook). Click-outside and Esc both dismiss,
- * unless the dialog is `busy`: a stray backdrop click during an in-flight
- * create/clear/dismiss tears the dialog down mid-write and leaves the result
- * unreported. The policy lives here rather than in each of the six call sites,
- * which is how the guard goes missing from four of them.
- * Callers supply the header icon/title, the body, and an optional footer row.
- */
+/** Click-outside and Esc dismiss unless `busy`: tearing down mid-write leaves the result unreported. */
 import { useCallback, useEffect, type ReactNode } from "react";
 
 export interface ModalProps {
@@ -14,12 +6,9 @@ export interface ModalProps {
   onClose: () => void;
   icon?: ReactNode;
   children: ReactNode;
-  /** Right-aligned action row (buttons). Omit for bodies that render their own. */
   footer?: ReactNode;
-  /** Tailwind max-width class; defaults to a standard form width. */
   maxWidthClass?: string;
-  /** A write is in flight — backdrop and Escape stop dismissing. An explicit
-   *  Cancel stays the caller's to offer (or disable). */
+  /** Stops backdrop and Escape dismissal; Cancel stays the caller's to offer. */
   busy?: boolean;
 }
 

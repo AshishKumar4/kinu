@@ -1,39 +1,14 @@
 /**
- * Release signing: what makes a published build KINU'S bytes and not merely
- * the hub's.
- *
- * A daemon's UPDATE frame and the CLI's refresh used to prove one thing — the
- * archive hashes to the checksum the origin published — and the origin chose
- * both. A hostile or compromised deployment therefore had silent, persistent
- * code execution on every connected machine (SECURITY-devices C1, proven end
- * to end with a trojaned tarball on 2026-09-16). So every release is signed
- * at build with a key the deployment never holds: the build lane signs the
- * artifact checksums with `KINU_RELEASE_SIGNING_KEY`, publishes the signature
- * beside them in `kinu-version.json`, and the daemon, the launcher and the
- * CLI verify it against {@link RELEASE_SIGNING_PUBLIC_KEY}, pinned into their
- * bundles at build, BEFORE any byte reaches a live path. A checksum the
- * signature does not cover is refused; a frame whose signature fails is
- * logged and refused.
- *
- * Ed25519 over WebCrypto, so one implementation runs under Bun, Node and the
- * Workers runtime. The message is the canonical text {@link releaseMessage}
- * builds, never a JSON encoding, so a reordered or re-serialized manifest
- * still verifies.
+ * Release signing (SECURITY-devices C1): builds are signed with a key the deployment never holds, and daemon,
+ * launcher and CLI verify against {@link RELEASE_SIGNING_PUBLIC_KEY} before any byte reaches a live path.
+ * The signed message is the canonical text {@link releaseMessage} builds, never JSON.
  */
 import * as v from 'valibot';
 
-/**
- * The public half of the release signing key, hex. Generated once with
- * `bun scripts/release-signing-key.ts`; the private half is the build lane's
- * secret and never a deployment binding. Rotating it is a build that ships
- * the new key: a machine on an older build verifies the next release with
- * the key it carries, so a rotation lands under the old key first.
- */
+/** Hex. A rotation must ship under the old key first: older machines verify with the key they carry. */
 export const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b62115b2711438ab7fab12d30bfbaef';
 
-/** The environment variable a machine's OWN operator may set to pin another
- *  public key — the test harness signs with a key of its own. Never a wire
- *  input: a hub cannot reach a daemon's environment. */
+/** Operator-only override (test harness); never a wire input. */
 export const RELEASE_SIGNING_PUBLIC_KEY_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
 
 const MESSAGE_PREFIX = 'kinu-release-v1';
@@ -45,7 +20,6 @@ const ReleaseChecksumsSchema = v.record(
 
 export type ReleaseChecksums = v.InferOutput<typeof ReleaseChecksumsSchema>;
 
-/** What a signed release manifest carries beside the build stamp. */
 export const SignedReleaseSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.minLength(1)),
   checksums: ReleaseChecksumsSchema,
@@ -54,10 +28,7 @@ export const SignedReleaseSchema = v.object({
 
 export type SignedRelease = v.InferOutput<typeof SignedReleaseSchema>;
 
-/** The canonical bytes a release signature covers: the prefix, the version,
- *  then every artifact path with its checksum, sorted by path, one per line. */
-/** Codepoint order, never locale order: this order is part of the bytes the
- *  signature covers, so it must be the same on every machine. */
+/** Codepoint order, never locale order: it is part of the signed bytes. */
 function comparePaths(a: string, b: string): number {
   if (a < b) return -1;
 
@@ -92,10 +63,7 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Verify a release's signature against a public key. False for a
- *  signature that does not cover exactly this version and these checksums;
- *  a malformed signature is false too, never a throw — the caller refuses
- *  either way and logs which. */
+/** A malformed signature is false, never a throw. */
 export async function verifyRelease(release: SignedRelease, publicKeyHex: string): Promise<boolean> {
   const key = await crypto.subtle.importKey('raw', hexToBytes(publicKeyHex), { name: 'Ed25519' }, false, ['verify']);
   const signature = base64ToBytes(release.signature);
@@ -105,8 +73,7 @@ export async function verifyRelease(release: SignedRelease, publicKeyHex: string
   return crypto.subtle.verify('Ed25519', key, signature, releaseMessage(release.version, release.checksums));
 }
 
-/** Sign a release with the private key (PKCS#8, base64) — the build lane's
- *  call, and the test harness's with a key of its own. */
+/** Private key is PKCS#8 base64. */
 export async function signRelease(version: string, checksums: ReleaseChecksums, privateKeyPkcs8Base64: string): Promise<SignedRelease> {
   const key = await crypto.subtle.importKey('pkcs8', base64ToBytes(privateKeyPkcs8Base64), { name: 'Ed25519' }, false, ['sign']);
   const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', key, releaseMessage(version, checksums)));
@@ -118,12 +85,8 @@ function isKeyPair(generated: CryptoKey | CryptoKeyPair): generated is CryptoKey
   return 'privateKey' in generated && 'publicKey' in generated;
 }
 
-/** A fresh Ed25519 pair: the public half as hex for pinning, the private
- *  half as PKCS#8 base64 for the build lane's secret. */
 export async function generateReleaseSigningKey(): Promise<{ publicKeyHex: string; privateKeyPkcs8Base64: string }> {
-  // Ed25519 is a pair; the union the Workers types declare for this call
-  // covers the symmetric algorithms too, and a single key here would be a
-  // runtime that did not do what was asked.
+  // The Workers type union includes symmetric keys; Ed25519 must yield a pair.
   const generated: CryptoKey | CryptoKeyPair = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
 
   if (!isKeyPair(generated)) throw new Error('the runtime answered an Ed25519 key generation with no pair');

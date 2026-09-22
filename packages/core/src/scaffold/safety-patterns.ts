@@ -1,14 +1,6 @@
-/**
- * Canonical scaffold-safety patterns — the single source of truth.
- *
- * These gate what agent-authored scaffold (and GEPA-proposed scaffold)
- * source is allowed to contain. Both enforcement points — scaffold/modify.ts
- * and evolution/gepa/scaffold-bridge.ts — import from here: a copy of a
- * security blocklist drifts the moment one copy is edited.
- */
+/** Scaffold-safety patterns shared by scaffold/modify.ts and evolution/gepa/scaffold-bridge.ts. */
 
-/** Constructs the scaffold sandbox must never reference — module loaders,
- *  the global object, and dynamic code-gen escape hatches. */
+/** Module loaders, the global object, and dynamic code-gen escape hatches. */
 export const SCAFFOLD_FORBIDDEN_PATTERNS: readonly RegExp[] = [
   /\b(require|import)\s*[\w("']/,
   /\bglobalThis\b/,
@@ -16,11 +8,8 @@ export const SCAFFOLD_FORBIDDEN_PATTERNS: readonly RegExp[] = [
   /\bFunction\s*\(/,
 ];
 
-/** A scaffold must export the generator entry point `async function* run(rt, task)`. */
 export const SCAFFOLD_REQUIRED_SIGNATURE = /async\s+function\s*\*\s*run\s*\(rt\s*,\s*task\s*\)/;
 
-/** Human-readable list of the forbidden constructs — for prompt text that
- *  tells an LLM what it may not emit, so the prose can't drift from the
- *  enforced regexes. */
+/** Prose list of the forbidden constructs for LLM prompts. */
 export const SCAFFOLD_FORBIDDEN_DESCRIPTION =
   'require/import, globalThis, eval(), and Function()';

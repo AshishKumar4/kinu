@@ -1054,7 +1054,7 @@
       "file": "scripts/bench-devbox-strategies.ts",
       "kind": "hand-parser",
       "owner": "parseOptions",
-      "sourceSha256": "f5e715132f9b44ef666144493cf9087b379214612a91216d0710aa9b21be3dc6",
+      "sourceSha256": "3618796bea5caf0fc14a4a59277e1d99fabeefb28ab89924b109b67952eb66a7",
       "decision": "cli"
     },
     {

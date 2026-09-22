@@ -1,21 +1,5 @@
-/**
- * Container application rollout probe: how long a FRESH application takes to
- * report a healthy instance after `wrangler deploy`, and whether the bench
- * fixture's admission windows (`portWaitMs` 6,000, re-driven back to back)
- * change that.
- *
- * Two cells, each its own Worker and container application, serial:
- *
- *   passive — nothing touches the Durable Object until the platform's health
- *             row reports a provisioned instance; then one default-shaped
- *             `startAndWaitForPorts` is timed.
- *   churn   — from the moment the Worker answers, `probeStart('bench')` is
- *             re-driven the instant each 6 s window refuses, while the same
- *             health row is polled beside it.
- *
- * Every cell deletes its Worker and container application and proves both
- * absent. Observations land in `bench-artifacts/rollout-probe/<runId>/`.
- */
+/** Probe: time for a fresh container application to report a healthy instance after deploy,
+ *  passive vs re-driven `probeStart('bench')` admission windows; each cell deletes its app. */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -104,7 +88,6 @@ interface ProbeConfig {
   readonly dispose: () => void;
 }
 
-/** The probe config under a unique Worker name and the bench's own image. */
 function writeConfig(name: string): ProbeConfig {
   const parsed = parseJsonc(readFileSync(join(PROBE_DIR, 'wrangler.probe.jsonc'), 'utf8'), ProbeConfigSchema, 'probe config');
   const dir = join(tmpdir(), `rollout-probe-${name}`);
@@ -143,8 +126,6 @@ async function readHealth(applicationId: string, deployedAt: number): Promise<He
   }
 }
 
-/** One start the probe asks the deployed Worker for: which box, in which
- *  mode, measured from the deploy this cell is timing. */
 interface DriveRequest {
   readonly origin: string;
   readonly token: string;
@@ -174,7 +155,6 @@ async function drive({ origin, token, box, mode, deployedAt }: DriveRequest): Pr
   }
 }
 
-/** The Worker's own liveness, with a transport failure reported as status 0. */
 async function workerHealth(origin: string): Promise<number> {
   try {
     return (await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })).status;

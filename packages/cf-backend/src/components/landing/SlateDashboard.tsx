@@ -1,12 +1,4 @@
-/**
- * The sample body of the landing page's slate frame: what the agent's
- * dashboard looks like once it is open. Drawn in the page rather than served,
- * because the landing page's CSP is `frame-src 'none'`. The chrome around it
- * is the product's own preview header.
- *
- * The numbers are sample data and the frame says so. Charts rise and draw on
- * first paint; under `prefers-reduced-motion` they render settled.
- */
+/** Drawn in the page rather than served: the landing page's CSP is `frame-src 'none'`. */
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 
 const LABELS = [
@@ -44,8 +36,6 @@ function polyline(values: readonly number[]): string {
     .join(' ');
 }
 
-/** Counts from zero to `value` over `duration` ms, or shows `value` at once
- *  when the reader asked for reduced motion. */
 function Counter({ value, duration = 900 }: { value: number; duration?: number }): ReactElement {
   const reduced = useRef(window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const [shown, setShown] = useState(reduced.current ? value : 0);

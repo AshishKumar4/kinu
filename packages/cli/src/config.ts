@@ -894,8 +894,8 @@ export function resolveLLMConfig(opts?: {
   // Half an advanced override is a misconfiguration, not an absence: name it.
   if (baseURL && !auth) {
     throw new Error(
-      'No LLM auth configured.\n' +
-      '  Run kinu setup and configure a local provider, or pass --auth for an advanced override.'
+      'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
+      '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
     );
   }
 
@@ -917,11 +917,11 @@ export function requireLLMConfig(opts?: {
 
   if (config) return config;
   throw new Error(
-    'No LLM configured.\n' +
-    '  Run kinu auth to use your Cloudflare AI,\n' +
-    '  run kinu setup to configure a local provider,\n' +
+    'No model is set up.\n' +
+    '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
+    '  run kinu setup to pick a model provider,\n' +
     '  sign in to Claude Code and pass --model claude/<model>,\n' +
-    '  or pass --base-url for an advanced override.'
+    '  or pass --base-url and --auth to use your own endpoint.'
   );
 }
 

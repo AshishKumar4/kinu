@@ -1,10 +1,4 @@
-/**
- * The blueprint half of the share dialog: publish a committed version with
- * every binding unmapped, choosing which top-level paths ship, seeing the
- * credentialed set a forker must connect and the secret-shaped lines the scan
- * found, and naming users by email. Nothing of the owner's is reachable
- * afterwards; the live half is `LiveShareForm`.
- */
+/** The blueprint half of the share dialog; every binding ships unmapped. The live half is `LiveShareForm`. */
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import * as v from "valibot";
@@ -20,7 +14,6 @@ import { publishBlueprint, type Published } from "@/lib/shared-api";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })) });
 
-/** Reads an answered slate operation, or throws its refusal. */
 export function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
   if (!result.ok) throw new Error(`${result.reason}: ${result.error}`);
 
@@ -69,8 +62,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
     return () => { live = false; };
   }, [fixture, rpc, slate]);
 
-  // Every choice re-inspects: the credentialed set and the warning are about
-  // exactly the bytes that would ship.
+  // Every choice re-inspects: the warnings describe exactly the bytes that would ship.
   useEffect(() => {
     if (fixture !== undefined || version === null) return;
     let live = true;
@@ -187,7 +179,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, fix
           </label>
           <label className="flex items-center gap-2 p-text">
             <input type="checkbox" checked={listed} onChange={(event) => setListed(event.target.checked)} disabled={busy} />
-            List publicly <span className="p-text-3">— on the Shared page's public list, for anyone signed in to find</span>
+            <span>List publicly <span className="p-text-3">on the Shared page, where anyone signed in can find it</span></span>
           </label>
           {shares.length > 0 && (
             <div className="space-y-1">

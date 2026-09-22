@@ -1,18 +1,6 @@
 /**
- * The landing page's mount for one workspace frame. The frame itself is a
- * separate chunk (`LandingWorkspaceFrame`): it carries the product's chat,
- * Work and plan renderers, and the landing's first paint must not. React
- * requests the chunk when the mount first renders, which is page load, so the
- * frame is normally in place before the reader scrolls to it.
- *
- * Every frame wears the same window bar the terminal and CLI previews wear:
- * the mark, what the window is, and the one honest line about what it is not.
- * The bar is landing chrome beside the mock, not in it: the mock itself stays
- * exactly what the app renders.
- *
- * The plan frame carries the walkthrough movie, which plays once on scroll
- * into view and then holds its settled state. Its replay lives in the bar,
- * where a window's controls belong.
+ * The frame is a separate chunk (`LandingWorkspaceFrame`) so the landing's first paint does not
+ * carry the product's renderers. The window bar is landing chrome beside the mock, not in it.
  */
 import { lazy, Suspense, useState, type ReactElement } from 'react';
 
@@ -26,8 +14,7 @@ const WINDOW_TITLE = {
   slate: 'Kinu · Slate',
 } satisfies Record<LandingFrameKind, string>;
 
-/** The movie's deliberate-click replay. Hidden under `prefers-reduced-motion`,
- *  where the frame renders its settled state with no playback to restart. */
+/** Hidden under `prefers-reduced-motion`, where there is no playback to restart. */
 function LandingMovieReplay(): ReactElement | null {
   const [reduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 

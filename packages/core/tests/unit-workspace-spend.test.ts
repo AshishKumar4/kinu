@@ -1,20 +1,5 @@
-// What the workspace spent, and what it could not account for.
-//
-// The defect this suite exists for is not a wrong number, it is a number with an
-// undeclared scope: a panel that shows the orchestrator's own turns and reads as
-// the whole workspace. So much of what is asserted here is about the SHAPE OF
-// THE ADMISSION — that a silent producer is visible as unmeasured rather than
-// free, and that an unpriced call keeps the dollar figure a floor.
-//
-// The second defect is a CEILING on the answer: producer totals folded over a
-// bounded recent-rows read silently replace the total of a workspace whose log
-// outgrew the window with a floor. `a total is not bounded by any window' below
-// is that defect's regression test and it is the point of the suite: it seeds
-// more rows than any window this repo ever used.
-//
-// The production schema, via `createTestWorkspace`: `head_journal` is one of the
-// three stores this reads, and a harness that created fewer tables than a real
-// workspace would be testing a shape no workspace has.
+// Workspace spend: a silent producer shows as unmeasured, not free; an unpriced call keeps the
+// dollar figure a floor; totals are never bounded by a recent-rows window.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { RunEventRecorder } from '../src/events/recorder';
@@ -31,8 +16,7 @@ import { explorationActorKey } from '../src/index';
 import { createTestWorkspace } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
-/** Big enough for the run-list read below, and deliberately NOT a bound on any
- *  spend figure — nothing here passes a window to `workspaceSpend`. */
+/** Not a bound on any spend figure; nothing passes a window to `workspaceSpend`. */
 const RUN_LIST_LIMIT = 50;
 
 function rig() {
@@ -71,8 +55,7 @@ function headRig(subordinate = false) {
   return { ...fixture, head, journal, input, report, headEvents: new RunEventRecorder(fixture.ws.sql, head) };
 }
 
-/** One turn step, as the turn accumulator writes it. A step with no `usage` is a
- *  provider that said nothing, which is the case the totals must survive. */
+/** A step with no `usage` is a provider that said nothing; totals must survive it. */
 function step(events: RunEventRecorder, usage: Usage, usd?: number): void {
   events.emit('run-1', usd === undefined
     ? { type: 'step_finish', stepIndex: 0, usage }
@@ -162,8 +145,7 @@ describe('workspaceSpend', () => {
     expect(spend.producers).toEqual([]);
     expect(spend.total.usage).toEqual({});
     expect(spend.total.usd).toBeUndefined();
-    // Null, not 0: a workspace that has made no calls has no measured SHARE.
-    // Rendering that as 0% would claim every call went unreported.
+    // Null, not 0: no calls means no measured share.
     expect(spend.coverage.reported).toBeNull();
     expect(spend.coverage.calls).toBe(0);
   });
@@ -182,8 +164,6 @@ describe('workspaceSpend', () => {
     expect(spend.producers.map((p) => p.source)).toEqual(['agent', 'judge']);
     expect(bySource.agent?.usage).toEqual({ input: 2200, output: 190, cacheRead: 1900 });
     expect(bySource.agent?.usd).toBeCloseTo(0.022, 10);
-    // The judge's own numbers, never folded into the agent's — "where did $12
-    // go" is the question behind the owner's, and it is a group-by over this.
     expect(bySource.judge?.usage).toEqual({ input: 400, output: 20 });
     expect(spend.total.usage).toEqual({ input: 2600, output: 210, cacheRead: 1900 });
     expect(spend.coverage.reported).toBe(1);
@@ -193,7 +173,7 @@ describe('workspaceSpend', () => {
     const { ws, events, actor } = rig();
     step(events, { input: 1000, output: 100 }, 0.01);
 
-    // The Workers AI embedder: its response carries no usage field of any kind.
+    // Workers AI embedder: its response carries no usage field.
     for (let i = 0; i < 3; i++) {
       events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
     }
@@ -202,13 +182,11 @@ describe('workspaceSpend', () => {
     const platform = spend.producers.find((p) => p.source === 'platform');
 
     expect(platform).toMatchObject({ calls: 3, callsWithoutUsage: 3 });
-    // `{}` and not `{input: 0, output: 0}`: three calls of unknown cost, which
-    // is a different claim from three free calls.
+    // `{}`, not zeros: unknown cost differs from free.
     expect(platform?.usage).toEqual({});
     expect(platform?.usd).toBeUndefined();
     expect(spend.coverage).toMatchObject({ calls: 4, measured: 1, silent: ['platform'] });
     expect(spend.coverage.reported).toBe(0.25);
-    // The total still carries what WAS measured — a floor, not a refusal.
     expect(spend.total.usage).toEqual({ input: 1000, output: 100 });
   });
 
@@ -229,8 +207,7 @@ describe('workspaceSpend', () => {
   test('a measured call with no catalog rate keeps the dollar figure a floor', () => {
     const { ws, events, actor } = rig();
     step(events, { input: 1000, output: 100 }, 0.01);
-    // A judge runs cross-family on purpose, so the actor's catalog rate cannot
-    // price it — reported in tokens, absent in dollars.
+    // A cross-family judge cannot be priced at the actor's catalog rate: tokens only.
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'judge', usage: { input: 5000, output: 400 },
     });
@@ -239,7 +216,7 @@ describe('workspaceSpend', () => {
 
     expect(spend.total.usd).toBeCloseTo(0.01, 10);
     expect(spend.total.unpricedCalls).toBe(1);
-    // The tokens are NOT a floor — only the dollars are. Both facts, side by side.
+    // Only the dollars are a floor, not the tokens.
     expect(spend.total.usage).toEqual({ input: 6000, output: 500 });
     expect(spend.coverage.reported).toBe(1);
   });
@@ -289,8 +266,7 @@ describe('workspaceSpend', () => {
     const head = spend.producers.find((p) => p.source === 'head');
 
     expect(head).toMatchObject({ calls: 2, callsWithoutUsage: 1 });
-    // `neurons` is the one cost figure the PROVIDER reports, and it survives the
-    // store now. `cacheWrite`/`reasoning` stay absent because nobody said so.
+    // `neurons` is provider-reported; `cacheWrite`/`reasoning` stay absent because nobody said so.
     expect(head?.usage).toEqual({ input: 9000, output: 300, cacheRead: 8704, neurons: 1483.75 });
     expect(spend.coverage.partial).toEqual(['head']);
   });
@@ -298,18 +274,8 @@ describe('workspaceSpend', () => {
   test('a total is not bounded by any window, however long the log gets', () => {
     const { ws, events, actor } = rig();
 
-    // WHAT THIS DEFENDS, measured rather than reasoned about. The bounded-fold
-    // measurements are 2,001 of 8,000 agent steps with a 2,000-row window and
-    // 2,000 judge calls, roughly a 4× under-count on the row the owner reads
-    // first; the end-to-end 2,600-step case reports 4,080,000 tokens and $4.20
-    // against 5,304,000 and $5.46, omitting 20.8% of the tokens and 23% of the
-    // dollars. The measured unbounded aggregate costs 62 ms against 55 ms for the
-    // two windowed reads, so the regression checks complete totals rather than
-    // sampled floors.
-    //
-    // 450 steps here: past `readRecentByType`'s 200-row default, past the cloud
-    // eval arm's 400 and the deployed panel's ACTIVITY_STEP_WINDOW. Every one of
-    // those numbers turns this total into a floor if the read is folded over it.
+    // 450 steps: past `readRecentByType`'s 200-row default and ACTIVITY_STEP_WINDOW, so any windowed
+    // fold would make this total a floor.
     for (let i = 0; i < 450; i++) step(events, { input: 10, output: 1 }, 0.001);
 
     for (let i = 0; i < 300; i++) {
@@ -322,13 +288,7 @@ describe('workspaceSpend', () => {
     const agent = spend.producers.find((p) => p.source === 'agent');
     const judge = spend.producers.find((p) => p.source === 'judge');
 
-    // Every row, not the newest window of them. A windowed fold reads 200 agent
-    // calls and 200 judge calls at the default, or 50 and 50 at the bound this
-    // suite's own rig would impose.
-    //
-    // The assertions are on the AGENT row as much as the total: the failure was
-    // per-producer, and a total that happened to be right while one row was
-    // short would still be the defect.
+    // Assert the agent row as well as the total: the under-count was per-producer.
     expect(agent).toMatchObject({ calls: 450, unpricedCalls: 0 });
     expect(agent?.usage).toEqual({ input: 4_500, output: 450 });
     expect(agent?.usd).toBeCloseTo(0.45, 10);
@@ -341,8 +301,7 @@ describe('workspaceSpend', () => {
   test('one busy producer cannot crowd another out of the total', () => {
     const { ws, events, actor } = rig();
 
-    // The window's worst failure was not the size of the under-count, it was
-    // which producer disappeared: a rare judge call behind a busy turn loop.
+    // A windowed read drops the rare judge call behind a busy turn loop.
     for (let i = 0; i < 400; i++) step(events, { input: 10, output: 1 });
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: 'judge', usage: { input: 700, output: 70 },
@@ -365,15 +324,8 @@ describe('workspaceSpend', () => {
 
     step(events, every, 0.02);
 
-    // The aggregate reads the payload with `json_extract`, which cannot be
-    // typechecked against the writer. So the paths are pinned against a row the
-    // real writer wrote, and pinned by PARSING it rather than asserting a shape
-    // onto it: `usage` must be a flat object under the canonical field names,
-    // with `usd` as its sibling. `UsageSchema` is the same declaration the JSON
-    // paths mirror, and valibot returns only its declared keys — so the key set
-    // below is proof that each canonical name was literally at `$.usage.<name>`.
-    // Move either and this fails here rather than as a silently absent count on
-    // the owner's panel.
+    // `json_extract` paths cannot be typechecked, so they are pinned by parsing a real writer's row
+    // through `UsageSchema` (which returns only declared keys).
     const [row] = ws.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${actor.actorId} AND type = 'step_finish'`;
@@ -386,9 +338,7 @@ describe('workspaceSpend', () => {
     expect(Object.keys(payload.usage).sort()).toEqual([...USAGE_FIELDS].sort());
     expect(payload.usd).toBeCloseTo(0.02, 10);
 
-    // …and every one of those fields survives the sum. A column the SQL forgot
-    // would read as a field nobody reported, which is the absence this whole
-    // read model exists to keep honest.
+    // A column the SQL forgot would read as a field nobody reported.
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
     expect(spend.total.usage).toEqual(every);
     expect(USAGE_FIELDS.filter((f) => spend.total.usage[f] === undefined)).toEqual([]);
@@ -417,24 +367,17 @@ describe('workspaceSpend', () => {
 
     expect(workspaceSpend({ events, sql: ws.sql, actor }).total.usage)
       .toEqual({ input: 9800, output: 940 });
-    // …and the owner's run history does not grow a run the agent never had. The
-    // real run beside it is what makes this decidable: an empty list would read
-    // the same whether the exclusion held or the query failed.
+    // The real run beside it distinguishes "excluded" from "query failed".
     expect(events.listRunsBefore(null, RUN_LIST_LIMIT).map((r) => r.runId)).toEqual(['run-1']);
   });
 
   test('a 1h-retention write reaches the total as a FLOOR, and an exact call does not', () => {
     const { ws, events, actor } = rig();
-    // The rates models.dev publishes for this model, verbatim. There is only
-    // ONE cache-write rate to publish, so the 1h call below is charged at the
-    // 5m one and its dollars are short — which is the whole point of the count.
+    // models.dev rates, verbatim. One cache-write rate, so the 1h call is charged at 5m and is short.
     const pricing: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
     const SPEC = 'anthropic/claude-sonnet-4-5';
 
-    // Through the REAL producer, so this pins the whole chain: `priceCall`'s
-    // verdict, the row that carries it, the SQL that counts it, the fold that
-    // sums it. A test that emitted a hand-built row would pass with the
-    // producer dropping the marker on the floor.
+    // Through the real producer, so a dropped marker fails here.
     const call = (cacheWrite1h?: number) => buildModelCallEvent({
       source: 'judge',
       spec: SPEC,
@@ -448,20 +391,16 @@ describe('workspaceSpend', () => {
 
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
     const judge = spend.producers.find((p) => p.source === 'judge');
-    // BOTH calls were priced, so `unpricedCalls` says nothing about either and
-    // cannot be what makes this figure a floor.
     expect(judge?.unpricedCalls).toBe(0);
     expect(judge?.usd).toBeCloseTo(2 * (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
-    // Exactly ONE of them did. Any-call-estimated: a sum of floors is a floor,
-    // so one is enough to qualify the figure and the count says how many.
+    // One estimated call is enough to make the sum a floor; the count says how many.
     expect(judge?.floorPricedCalls).toBe(1);
     expect(spend.total.floorPricedCalls).toBe(1);
   });
 
   test('a workspace whose writes were all short-retention reports no floor at all', () => {
     const { ws, events, actor } = rig();
-    // The tier reported as an explicit ZERO, which is the case a truthy check
-    // on the token count would get right and a presence check could get wrong.
+    // Explicit zero: a presence check could get this wrong.
     step(events, { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024, cacheWrite1h: 0 }, 0.02);
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
     expect(spend.total.floorPricedCalls).toBe(0);
@@ -497,8 +436,7 @@ describe('workspaceSpend — the breakdown', () => {
     const { ws, events, actor } = rig();
     events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
 
-    // The producer is counted, so this is a workspace that spent something and
-    // measured none of it: 0% off-turn would read as "all of it was the agent".
+    // Spent something, measured none: 0% off-turn would misread as "all agent".
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
     expect(spend.coverage.calls).toBe(1);
     expect(spend.offTurnShare).toBeNull();
@@ -515,9 +453,7 @@ describe('workspaceSpend — the breakdown', () => {
 
     const spend = workspaceSpend({ events, sql: ws.sql, actor });
 
-    // The parent carries the child's debit as well as its own — the ledger rolls
-    // a debit up the whole chain, which is exactly why it is the one figure a
-    // per-mission surface may read.
+    // The ledger rolls a debit up the whole chain, so the parent carries the child's.
     expect(spend.missions.map((m) => [m.label, m.parent, m.spent.tokens, m.calls]))
       .toEqual([
         ['checkout-fixes', null, 4_100, 3],
@@ -525,9 +461,7 @@ describe('workspaceSpend — the breakdown', () => {
       ]);
     expect(spend.missions[1].remaining.tokens).toBe(1_000);
     expect(spend.missions[1].exhausted).toBe(false);
-    // The two axes are NOT the same sum, though both now cover the whole life of
-    // the workspace: a call sits in exactly one producer row and in every
-    // mission label above it, so adding them double-counts.
+    // Producer rows and mission labels overlap; adding them double-counts.
     expect(usageTotal(spend.total.usage)).toBe(800);
   });
 
@@ -535,8 +469,7 @@ describe('workspaceSpend — the breakdown', () => {
     const { ws, events, actor } = rig();
     step(events, { input: 700, output: 100 });
 
-    // No governor was ever built here, so `mission_budget` does not exist. An
-    // unbudgeted workspace is the common case and must not read as broken.
+    // No `mission_budget` table here; an unbudgeted workspace must not read as broken.
     expect(workspaceSpend({ events, sql: ws.sql, actor }).missions).toEqual([]);
   });
 });

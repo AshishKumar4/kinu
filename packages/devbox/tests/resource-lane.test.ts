@@ -1,13 +1,5 @@
-// KINU-034. Every agent in a workspace shares ONE container and each is a
-// separate Durable Object, so a queue built beside a client orders only that
-// client's calls. Two facets writing one path interleaved, an exposure raced its
-// own un-exposure, and a port token was minted beside the removal of the row it
-// belonged to. The claim therefore lives in the object all of them reach.
-//
-// These tests drive the OWNER'S lane from independent callers — the shape two
-// facets have — and they pin the two things a lane like this gets wrong: what
-// counts as the same resource (topology, not just an equal path string), and
-// when a claim is released (for a stream, not until the bytes are done).
+// Tests the container owner's resource lane, shared by every agent's Durable Object, from
+// independent callers: resource identity is topology, and a stream's claim ends at drain.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,27 +14,19 @@ import {
   scopesOverlap,
 } from '../src/lifecycle';
 
-/** Drain the microtask queue, with no clock involved: an operation that has not
- *  entered after this is one the lane is holding back, not one that was merely
- *  not scheduled yet. */
+/** Drains microtasks without a clock: an operation not entered after this is held by the lane,
+ *  not merely unscheduled. */
 async function drain(): Promise<void> {
   for (let turn = 0; turn < 50; turn += 1) await Promise.resolve();
 }
 
-/**
- * Two independent callers of one container, which is what two facets are.
- *
- * Each `client` is its own closure with its own operations and no knowledge of
- * the other; both hold the SAME lane, because the lane belongs to the object
- * they both address. A per-client lane would let every assertion below pass
- * while the bug survived, so the lane is constructed once here on purpose.
- */
+/** Two independent clients model two facets of one container; both must share ONE lane,
+ *  since a per-client lane would pass every assertion below while the bug survived. */
 function sharedOwner() {
   const lane = createResourceLane();
   const order: string[] = [];
 
   const client = (name: string) => ({
-    /** Run a named operation over `scopes`, recording entry and exit. */
     op: (label: string, scopes: readonly Parameters<typeof scopesOverlap>[0][number][]) => {
       const gate = Promise.withResolvers<void>();
       const entered = Promise.withResolvers<void>();
@@ -83,7 +67,7 @@ describe('what counts as the same resource', () => {
   });
 
   test('membership makes a listing conflict with a create inside it', () => {
-    // The pair exact-path keys miss entirely: `listFiles('/workspace/src')` and
+    // Exact-path keys miss this pair: `listFiles('/workspace/src')` and
     // `writeFile('/workspace/src/a.ts')` name different paths and the same fact.
     const listing = pathScopes({ path: '/workspace/src' });
     const create = pathScopes({ path: '/workspace/src/a.ts', membership: true });
@@ -163,16 +147,11 @@ describe('two independent callers of one container', () => {
     const held = owner.a.op('write', [...pathScopes({ path: '/workspace/one/a.txt', membership: true })]);
     await held.entered;
 
-    // A different directory and a different port, both while the first is held.
     const other = owner.b.op('write', [...pathScopes({ path: '/workspace/two/b.txt', membership: true })]);
     const port = owner.b.op('expose', [...portScope(3000)]);
 
-    // DRAINED AND ASSERTED, not awaited. A lane keyed by the container instead
-    // of the resource holds both of these behind `held`, and awaiting their
-    // entry reports that as a five-second suite timeout naming no expectation.
-    // After a drain, an operation that has not entered is one the lane is
-    // holding back — so the overlap is a statement about `order`, and the
-    // three-way concurrency this test is named for is what fails.
+    // Drained and asserted, not awaited: awaiting entry under a container-keyed lane times out
+    // naming no expectation; after a drain, an unentered operation is one the lane holds back.
     await drain();
     expect(owner.order).toEqual(['a/write:enter', 'b/write:enter', 'b/expose:enter']);
 
@@ -240,7 +219,6 @@ describe('two independent callers of one container', () => {
     await expect(owner.lane.run(scopes, () => Promise.reject(new Error('container refused'))))
       .rejects.toThrow('container refused');
 
-    // The next caller of the same resource runs, and runs promptly.
     const next = owner.b.op('write', scopes);
     await next.entered;
     next.release();
@@ -255,15 +233,13 @@ describe('two independent callers of one container', () => {
     const held = first.a.op('write', scopes);
     await held.entered;
 
-    // The same path on a DIFFERENT box must not wait: the claim is per
-    // container, and a lane that were shared across instances would serialize
-    // every workspace in the deployment against every other.
+    // The claim is per container: a lane shared across instances would serialize every
+    // workspace in the deployment against every other.
     const elsewhere = second.a.op('write', scopes);
     await drain();
 
-    // Each box's log carries its own single entry. A module-level lane — the
-    // one plausible way to build this wrong — leaves `second.order` empty here
-    // and says so, rather than hanging on an entry that never comes.
+    // Asserts `second.order` instead of awaiting entry, so a module-level lane fails here
+    // rather than hanging on an entry that never comes.
     expect(second.order).toEqual(['a/write:enter']);
     // The first claim is still held, so the second entry is a real overlap and
     // not a release that had already run.
@@ -293,7 +269,6 @@ describe('a claim that outlives its call', () => {
     const release = await owner.lane.hold(scopes);
     const stream = heldUntilDrained(source(['one', 'two']), release);
 
-    // A sibling write must wait while the reader is still pulling.
     const write = owner.b.op('write', scopes);
     await drain();
     expect(owner.order).not.toContain('b/write:enter');
@@ -324,12 +299,8 @@ describe('a claim that outlives its call', () => {
   });
 });
 
-// The read overrides are the one place the owner has to speak the SDK's own
-// result types, and the SDK exports none of them. Deriving them structurally from
-// the pinned declaration keeps ONE authority; copying their bodies would put a
-// silently drifting second copy in this tree. `tsc` proves the derivation
-// resolves — the override would not compile otherwise — and these two pin the
-// decision so nobody "simplifies" it back into a restatement.
+// The SDK exports none of the read result types; deriving them from the pinned declaration
+// keeps one authority, where a copied body would drift silently.
 describe('the read overrides derive their types instead of restating them', () => {
   const module = readFileSync(join(import.meta.dir, '../src/devbox.ts'), 'utf8');
 
@@ -348,10 +319,8 @@ describe('the read overrides derive their types instead of restating them', () =
   });
 
   test('the SDK still declares the two arms the match depends on', () => {
-    // `tsc` is the real proof that the derivation resolves: the override could
-    // not compile if either arm inferred `never`. This pins WHY it resolves, so a
-    // release that collapses the two overloads into one is read here rather than
-    // discovered by a stream that silently stopped being held.
+    // `tsc` proves the derivation resolves; this pins why, so an SDK release merging the two
+    // overloads fails here instead of silently leaving a stream unheld.
     const declaration = readFileSync(
       join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-BtaWcmmG.d.ts'),
       'utf8',

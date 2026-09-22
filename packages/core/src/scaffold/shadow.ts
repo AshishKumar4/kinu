@@ -1,46 +1,14 @@
 /**
- * Shadow-mode scaffold rollout.
+ * Shadow-mode scaffold rollout. A pending version is judged against the current
+ * one on sampled turns until `decidePromotion` is conclusive.
  *
- * When the EvolutionEngine writes a new scaffold version via modifyScaffold,
- * we don't immediately switch the agent's loop to it. Instead, the new
- * version enters SHADOW MODE: for the next N turns, both the current and
- * the pending scaffold run in parallel (the user only sees the current's
- * output; the pending runs silently). A judge LLM compares per-turn quality.
+ * Trials are expensive, so a turn only enqueues into `scaffold_trial_queue`; the
+ * cadence lane runs them (evolution/control.ts `runQueuedShadowTrials`). Queued
+ * trials stay out of `scaffold_evaluations` so they never count toward `trialsSoFar`.
  *
- * After enough trials (default N=5), we aggregate:
- *   - any decisive trial the pending LOSES beyond maxRegressions (default 1) →
- *     rollback (the hard regression veto — gates promotion regardless of win-rate)
- *   - else if ≥ minDecisiveTrials decisive trials and win-rate ≥ promoteThreshold
- *     (default 0.6) → promote
- *   - else (in between → keep observing, extend trial window)
- *
- * A trial is EXPENSIVE — a whole candidate turn plus two judge calls — so it
- * never runs on the turn that sampled it. The turn writes one row into
- * `scaffold_trial_queue` and returns; the cadence lane runs the queue later
- * (evolution/control.ts `runQueuedShadowTrials`). A queued trial is evidence
- * that does not exist yet: it is deliberately in its own table, because
- * counting it in `scaffold_evaluations` would inflate `trialsSoFar` and walk
- * the calibrated ladder below on trials nobody ran.
- *
- * Schema:
- *   scaffold_evaluations         — one row per EXECUTED trial
- *   scaffold_trial_queue         — one row per trial awaiting execution
- *   scaffold_versions.status     — 'current' | 'pending' | 'rolled_back' | 'historical'
- *
- * ACTOR-SCOPED. A shared host holds several issued actors in one database and
- * each evolves its own loop, so `scaffold_versions.status = 'current'` is a
- * PER-ACTOR pointer and a version number is allocated within the actor — two
- * actors both have a v1. Every statement below carries `actor_id`, and it sits
- * in the primary key of both tables this module owns: keyed on `id` alone one
- * actor's trial would satisfy another's `ON CONFLICT` idempotency, and a bare
- * `pending_version` predicate counts a stranger's trials into this actor's
- * promotion gate.
- *
- * Auto-promotion is ON by default at the agent level (actor_config
- * auto_promote_scaffold, config/store.ts): the misevolution gate + shadow
- * veto + archive are the safety net, and every promotion lands in the
- * Evolution Changelog where the operator can revert it. Set the key to
- * 'false' to require manual promotion via the RPC instead.
+ * Actor-scoped: `status = 'current'` is a per-actor pointer and `actor_id` is in
+ * both tables' primary keys, so one actor's trials never satisfy another's
+ * idempotency or promotion gate.
  */
 
 import { modelMessageSchema, type ModelMessage } from 'ai';
@@ -63,10 +31,7 @@ export type { ScaffoldArchiveEntry, ScaffoldStatus } from '../types/scaffold';
 
 export type ScaffoldDecisionEvents = Pick<RunEventRecorder, 'actorId' | 'emit'>;
 
-/** One turn's contribution of trial evidence. Kept after the queue row is
- *  consumed: `dropQueuedShadowTrial` deletes that row the moment the trial is
- *  scored, so `ON CONFLICT(actor_id, id) DO NOTHING` stops protecting anything
- *  and a replayed queueing would have the same turn scored twice. */
+/** Outlives the queue row, so a replayed queueing cannot score the same turn twice. */
 const TRIAL_SCOPE = 'shadow_trial';
 
 export interface ShadowEvaluationRow {
@@ -91,10 +56,7 @@ export interface PendingScaffold {
   ties: number;
 }
 
-/** One trial's verdict, in the current-vs-pending terms `decidePromotion` and
- *  `scaffold_evaluations` consume. How a judge arrives at it (single call,
- *  order-swapped double call — see scaffold/auto-judge.ts) is its own business;
- *  this is the contract the promotion rule is calibrated against. */
+/** One trial's verdict; the promotion rule is calibrated against this contract, not the judge protocol. */
 export interface ShadowTrialVerdict {
   winner: 'current' | 'pending' | 'tie';
   rationale: string;
@@ -103,98 +65,22 @@ export interface ShadowTrialVerdict {
 }
 
 export interface ShadowConfig {
-  /** Required trials before promotion decision. Default 5. */
   minTrials: number;
-  /** Win-rate fraction at which to promote pending. Default 0.6. */
   promoteThreshold: number;
-  /** Win-rate fraction at which to rollback pending. Default 0.4. */
   rollbackThreshold: number;
-  /** Hard ceiling on trials before forcing a decision. Default 20 — a budget
-   *  sized to the DECISIVE yield of the order-swapped judge, not to raw turns
-   *  (see DEFAULT_SHADOW_CONFIG). */
+  /** Forced-decision ceiling, sized to the order-swapped judge's decisive yield. */
   maxTrials: number;
-  /** Max decisive trials the pending may LOSE before it's rolled back.
-   *  0 = any regression rolls it back — Monte-Carlo-shown to reject most
-   *  genuinely-better variants under judge noise (see DEFAULT_SHADOW_CONFIG). */
+  /** Decisive losses tolerated before rollback; 0 rejects most better variants under judge noise. */
   maxRegressions: number;
-  /** Minimum decisive (non-tie) trials required before a promote — guards
-   *  against promoting on one lucky trial. Default 5. */
+  /** Decisive (non-tie) trials required before a promote. */
   minDecisiveTrials: number;
 }
 
 /**
- * Defaults settled by binomial Monte Carlo (scripts/shadow-veto-monte-carlo.ts,
- * 200k sims/cell over the REAL decidePromotion, sequential per-trial stopping
- * exactly as runAutoShadowEval applies it — rerun the script to reproduce).
- *
- * The bar: false-promotion of CLEARLY-worse variants (true win ≤ 0.30) under
- * 5% at tie rates ≤ 0.5, maximizing mean true-promotion. Worlds sweep win-rates
- * {.55,.6,.7,.8} × per-call tie-rates {.3,.5,.7}, "worse" = the 1-win mirror,
- * judged by the order-swapped double-win protocol at 10pp of residual bias.
- *
- * maxTrials — 12 → 20. This is a budget in trials, but only DECISIVE trials
- * carry information, and the order-swapped double-win judge (scaffold/
- * auto-judge.ts) roughly halves the decisive yield per turn: at the flagship
- * world the recorded tie rate goes 50% → 73%. A budget of 12 then runs out
- * while only two or three decisive trials are in, and the ceiling's forced
- * decision — which promotes on a bare >0.5 majority and does NOT consult
- * minDecisiveTrials — starts deciding most rollouts. That leak is not residual
- * and it is config-fixable: denominate the budget correctly. Sweeping it at
- * (maxReg 1, minDec 5):
- *
- *   maxTrials | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
- *          12 |        65.6%           |   7.9%   ← misses the bar
- *          16 |        63.7%           |   5.2%
- *          20 |        62.3%           |   3.2%   ← CHOSEN
- *          24 |        61.3%           |   2.1%
- *          40 |        59.0%           |   1.0%
- *
- * maxRegressions / minDecisiveTrials — unchanged at (1, 5), which the sweep
- * re-derives as the frontier at the rescaled budget. maxRegressions=0 ("one
- * loss = rollback") remains the statistically indefensible setting: a
- * genuinely-better scaffold almost always loses SOME decisive trial under
- * judge noise before accumulating a promotable record.
- *
- *   maxReg minDec | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
- *        0      3 |        44.2%           |   1.5%
- *        0      5 |        34.6%           |   0.8%
- *        1      3 |        75.6%           |  12.2%
- *        1      5 |        62.3%           |   3.2%   ← CHOSEN
- *        2      3 |        76.1%           |  12.5%
- *        2      5 |        76.6%           |   7.7%
- *
- * The resulting operating point strictly dominates the original calibration on
- * BOTH axes (which scored 50.9% / 4.9% for an unbiased single-call judge, and
- * 34.9% / 1.5% for the position-biased one production actually ran — the bias
- * was suppressing true and false promotion alike).
- *
- * promoteThreshold / rollbackThreshold — 0.6 / 0.4, and this is the one entry
- * here whose measurement postdates the rest. Every sweep above held the band
- * FIXED and the script printed it that way, so this docblock read as though all
- * four numbers had been calibrated together when two of them were assumptions the
- * other two were conditioned on. Section 6 sweeps it at the shipping operating
- * point, symmetric bands only (an asymmetric band prices a preference for the
- * incumbent, which this simulator cannot):
- *
- *   promote≥ rollback≤ | mean P(promote better) | worst P(promote worse≤0.3,tie≤0.5)
- *       0.55      0.45 |        62.3%           |   3.2%
- *       0.60      0.40 |        62.4%           |   3.2%   ← CHOSEN, and shipped
- *       0.65      0.35 |        62.3%           |   3.2%
- *       0.70      0.30 |        62.3%           |   3.2%
- *
- * FLAT — the band is very nearly inert at this operating point, and the honest
- * reading is that maxRegressions=1 and the ceiling's forced decision (a bare >0.5
- * majority that does not consult the band at all) are what actually decide a
- * rollout. The axis is wired, not dead: pushed to promote≥0.95/rollback≤0.05 the
- * mean drops 62.4% → 54.6%, so a band CAN move the numbers, just not anywhere
- * inside the plausible range. Which means 0.6/0.4 is measured-and-equivalent
- * rather than measured-and-optimal, and raising maxRegressions would make the
- * band load-bearing again and oblige a re-sweep.
- *
- * A strict <5% bar against ALL worse worlds (incl. the 45% near-coin-flip
- * mirror) stays unattainable in principle at any budget this side of hundreds
- * of decisive trials — and near-coin-flip promotions are low-harm and
- * revertable from the Evolution Changelog.
+ * Settled by binomial Monte Carlo over the real decidePromotion
+ * (scripts/shadow-veto-monte-carlo.ts; results in docs/EVOLUTION.md). The
+ * promote/rollback band is nearly inert at this operating point; raising
+ * maxRegressions would make it load-bearing and require a re-sweep.
  */
 export const DEFAULT_SHADOW_CONFIG: ShadowConfig = {
   minTrials: 5,
@@ -233,64 +119,30 @@ export function initShadowTables(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_trial_queue_pending ON scaffold_trial_queue(actor_id, pending_version)`);
-  // The queue row is deleted the moment its trial is scored, so the tombstone
-  // that outlives it is part of this queue's contract.
   initEffectTombstoneTable(execRaw);
 }
 
-// ── The trial queue: what a turn contributes, before anything runs ──────────
-
-/** A trial the turn sampled and nothing has executed yet. */
+/** A trial the turn sampled that has not executed yet. */
 export interface QueuedShadowTrial {
   readonly id: string;
   readonly pendingVersion: number;
-  /** The user's task, WHOLE — the candidate answers the same question the live
-   *  turn answered, and the evidence budget is applied once, at judging time. */
+  /** The whole task; the evidence budget applies once, at judging time. */
   readonly task: string;
-  /** What the live turn actually answered — the trial's comparand. */
   readonly currentOutput: string;
-  /** The conversation as the live turn's inference saw it, replayed as the
-   *  candidate's `host.defaultInference`. Without it a delegating candidate
-   *  answers a context-dependent task from the task text alone and loses trials
-   *  it should tie — the structural handicap the shadow-parity fix removed, and
-   *  the only part of the live turn an offline trial cannot re-derive. Empty
-   *  when the host held none; the surface's own default loop stands in. */
+  /** The live turn's context, replayed as the candidate's `host.defaultInference`; empty when the host held none. */
   readonly context: readonly ModelMessage[];
   readonly queuedAt: number;
 }
 
-/**
- * Queued trials one pending version may accumulate.
- *
- * The queue only buffers between cadence passes, so depth is normally 1-2. The
- * ceiling exists for the host that never drains — a one-shot `kinu exec`
- * process, which by the evolution exit contract starts no cadence work at all
- * — and is set at the trial ceiling itself: past `maxTrials` there is already
- * more queued work than the gate below can consume.
- */
+/** Queue depth cap for hosts that never drain (e.g. one-shot `kinu exec`); past `maxTrials` extra work is unusable. */
 export const MAX_QUEUED_SHADOW_TRIALS = DEFAULT_SHADOW_CONFIG.maxTrials;
 
-/**
- * Characters of serialized turn context one queued trial carries.
- *
- * A live replay held the whole prepared message list in memory; a queued one
- * has to store it, and a workspace can hold {@link MAX_QUEUED_SHADOW_TRIALS}
- * of them at once. The budget keeps the TAIL — a trial's own task is the last
- * message, and what a context-dependent task needs is what was said near it —
- * and is bounded well inside a single SQLite row.
- */
+/** Serialized context chars per queued trial; keeps the tail and stays well inside one SQLite row. */
 export const SHADOW_TRIAL_CONTEXT_CHARS = 64_000;
 
 /**
- * The tail of `messages` that fits the context budget, starting at a user
- * message. Trimming mid-exchange would leave a tool result whose call is gone,
- * which providers reject outright — a replay that 400s is worth less than a
- * shorter one.
- *
- * Exported because a caller that RECORDS this context owes the same bound at the
- * moment it records: a durable effect input is a SQLite row too, and one built
- * from a million-token turn fails its insert partway through a claimed sequence,
- * leaving a prefix that recovery reads as the whole roster.
+ * Tail of `messages` within the budget, starting at a user message so no tool
+ * result loses its call. Exported for callers recording durable context rows.
  */
 export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessage[] {
   const kept: ModelMessage[] = [];
@@ -299,10 +151,7 @@ export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessag
   for (let i = messages.length - 1; i >= 0; i--) {
     const size = JSON.stringify(messages[i]).length;
 
-    // A single message over the whole budget is DROPPED, not kept as the one
-    // exception. Keeping it was the reason this bound could still be exceeded:
-    // one pasted file in the last user turn made the row that carries this
-    // context fail its insert, part-way through a claimed sequence.
+    // A single message over budget is dropped, so the row insert cannot fail.
     if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS
       && (kept.length > 0 || size > SHADOW_TRIAL_CONTEXT_CHARS)) break;
 
@@ -315,14 +164,7 @@ export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessag
   return kept;
 }
 
-/**
- * Record one trial for later execution. Returns what happened, so the caller
- * can report an honest reason rather than a silent no-op.
- *
- * A keyed trial that has already been consumed reports `queued`: the caller's
- * obligation is discharged, because the trial it owes not only exists but has
- * been scored.
- */
+/** Record one trial for later execution. An already-consumed keyed trial reports `queued`. */
 export function queueShadowTrial(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -331,27 +173,18 @@ export function queueShadowTrial(
     task: string;
     currentOutput: string;
     context: readonly ModelMessage[];
-    /** The row identity, when the caller OWES this queueing and may run it
-     *  again. With it the queueing is idempotent for good: while the row lives
-     *  the insert conflicts on it, and once the runner has deleted it the
-     *  `shadow_trial` tombstone refuses the replay. Without the tombstone the
-     *  replay found no conflict and the same turn was scored a second time, in
-     *  a table the promotion gate counts. A caller whose queueing nothing can
-     *  replay passes none. */
+    /** Row identity for a queueing the caller may replay; the `shadow_trial` tombstone keeps it idempotent after deletion. */
     id?: string;
     now?: number;
   },
 ): 'queued' | 'queue_full' {
   actor.assertCurrent();
 
-  // Ahead of the depth check: a trial that has already run is not competing for
-  // a queue slot, and `queue_full` would be a false refusal.
+  // Before the depth check: an already-run trial does not compete for a slot.
   if (args.id !== undefined && effectAlreadyDone(sql, actor, TRIAL_SCOPE, args.id)) return 'queued';
 
   if (countQueuedShadowTrials(sql, actor, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
-  // DO NOTHING, not a replace: the row the first queueing wrote is the one the
-  // runner may already have taken, and overwriting it would re-open work that
-  // has moved on.
+  // DO NOTHING: the runner may already hold the first row.
   void sql`INSERT INTO scaffold_trial_queue (actor_id, id, pending_version, task, current_output, context, queued_at)
       VALUES (${actor.actorId}, ${args.id ?? `trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
               ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})
@@ -360,7 +193,6 @@ export function queueShadowTrial(
   return 'queued';
 }
 
-/** Trials awaiting execution for a version, oldest first. */
 export function listQueuedShadowTrials(
   sql: SqlExecutor, actor: ActorHandle, pendingVersion: number,
 ): QueuedShadowTrial[] {
@@ -387,20 +219,13 @@ export function listQueuedShadowTrials(
   }));
 }
 
-/** A context row whose messages no longer satisfy the provider vocabulary is a
- *  replay we no longer have, not a trial we should refuse to run: the candidate
- *  falls back to the surface's own default loop, exactly as it does for a host
- *  that held no context. JSON that will not parse at all is a different thing —
- *  the row is `queueShadowTrial`'s own write, so an unreadable one is a corrupt
- *  database and propagates instead of quietly becoming an empty replay. */
+/** Messages that fail the provider vocabulary fall back to the default loop; unparseable JSON is corruption and throws. */
 function parseTrialContext(raw: string): ModelMessage[] {
   const parsed = modelMessageSchema.array().safeParse(parseJsonValue(raw));
 
   return parsed.success ? parsed.data : [];
 }
 
-/** How many trials are queued but not yet run — the evidence a pending version
- *  is owed and does not have. */
 export function countQueuedShadowTrials(
   sql: SqlExecutor, actor: ActorHandle, pendingVersion: number,
 ): number {
@@ -413,21 +238,14 @@ export function countQueuedShadowTrials(
   return rows[0]?.n ?? 0;
 }
 
-/** Trial executed (or thrown away) — the queue row's job is done, and the
- *  tombstone written in the same pass is what stops a replayed queueing from
- *  putting it back. Recorded for every id, not only keyed ones: this function
- *  cannot tell which caller owed the queueing, and the wrong guess is a trial
- *  scored twice. */
+/** Delete the queue row and write the tombstone in the same pass, for every id. */
 export function dropQueuedShadowTrial(sql: SqlExecutor, actor: ActorHandle, id: string): void {
   actor.assertCurrent();
   recordEffectDone(sql, actor, { scope: TRIAL_SCOPE, key: id });
   void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId} AND id = ${id}`;
 }
 
-/** Discard every queued trial that is not for `keepVersion`. A trial is
- *  evidence about ONE candidate: once that candidate is promoted or rolled
- *  back, running it would score a version no longer under trial. Pass null to
- *  clear the queue entirely. */
+/** Discard queued trials not for `keepVersion`; null clears the queue. */
 export function purgeQueuedShadowTrials(
   sql: SqlExecutor, actor: ActorHandle, keepVersion: number | null,
 ): void {
@@ -441,11 +259,7 @@ export function purgeQueuedShadowTrials(
   }
 }
 
-/**
- * Look up the currently-pending scaffold version, or null if no rollout is
- * in flight. Pending is the version with status='pending' (we only allow
- * one in flight at a time).
- */
+/** The single status='pending' version, or null. */
 export function getPendingScaffold(sql: SqlExecutor, actor: ActorHandle): PendingScaffold | null {
   actor.assertCurrent();
 
@@ -482,12 +296,7 @@ export function getPendingScaffold(sql: SqlExecutor, actor: ActorHandle): Pendin
   };
 }
 
-/**
- * The LIVE scaffold version — the highest status='current' row. Derived from
- * status, never from arithmetic on the pending version: after rollback
- * cycles the numbering is non-contiguous (e.g. current=v2 while pending=v5),
- * so `pending - 1` points at a rolled_back/historical row.
- */
+/** Highest status='current' version. Never `pending - 1`: numbering is non-contiguous after rollbacks. */
 export function getCurrentScaffoldVersion(sql: SqlExecutor, actor: ActorHandle): number | null {
   actor.assertCurrent();
 
@@ -515,13 +324,7 @@ export interface ShadowVerdict {
   summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number };
 }
 
-/**
- * The per-trial shadow-eval verdict for a pending version — the data behind the
- * promote/rollback decision grid. Reads `scaffold_evaluations` (the table
- * shadow-mode actually populates), ordered regressions-first (current beat
- * pending → top) so the operator sees risk first. `winRate` is over decisive
- * (non-tie) trials. Returns an empty verdict when no pending version is given.
- */
+/** Per-trial verdicts for a pending version, regressions first; `winRate` is over decisive trials. */
 export function readShadowVerdict(
   sql: SqlExecutor, actor: ActorHandle, version: number | null,
 ): ShadowVerdict {
@@ -563,7 +366,6 @@ export function readShadowVerdict(
   };
 }
 
-/** Read immutable version storage, never the live alias used by activation. */
 export async function readVersionedScaffoldSource(rt: AgentRuntime, version: number): Promise<string | null> {
   const versioned = `${rt.identity.scaffold.path}.v${version}`;
   const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
@@ -573,54 +375,21 @@ export async function readVersionedScaffoldSource(rt: AgentRuntime, version: num
   return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
 }
 
-/** Read the scaffold code for a specific version.
- *
- * Prefers the versioned backup file `scaffold/agent.js.v{N}` because it's the
- * canonical per-version source — the live `scaffold/agent.js` is just an
- * alias for whatever version currently has status='current'. Falls back to
- * the live file only when no versioned backup exists (cold-start v0). This
- * ordering matters: after `modifyScaffold` writes a pending v{N+1}, the live
- * file still holds the current's content, so `readScaffoldVersion(rt, N+1)`
- * MUST read the versioned file to recover the pending code (used by
- * `applyPromotionDecision('promote')` to swap the live file).
- */
+/** Prefers the canonical `agent.js.v{N}` file; the live file holds the current version, not a pending one. */
 export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
   const versioned = await readVersionedScaffoldSource(rt, version);
 
   if (versioned !== null) return versioned;
 
-  // No versioned backup — happens for v0 (the bootstrap writes the live file
-  // but not a versioned backup). Fall back to live ONLY for the version the
-  // live file actually IS, which is the status='current' row. Asked (`exists`)
-  // rather than discovered by catching, because this function picks which of its
-  // own bodies the agent is about to run: a read that fails for any other reason
-  // must not come back as "there is no such version".
-  //
-  // The comparison is against `getCurrentScaffoldVersion` — the status='current'
-  // row — and NOT `rt.identity.scaffold.version()`, which is MAX(version) and
-  // therefore counts the PENDING row. Under MAX(version) a pending version whose
-  // backup file is missing compares equal, falls through, and comes back as the
-  // CURRENT code dressed as the pending candidate: shadow eval then judges
-  // current against current, can declare "pending" the winner on judge noise,
-  // and with autoApply promote a version whose source does not exist. That is
-  // the same defect modify.ts's gate 4 is written to avoid.
+  // No version file (v0): fall back to the live file only for the status='current' version,
+  // not `scaffold.version()` (MAX, which includes pending), or a missing pending file
+  // would be judged as the current code.
   if (version !== getCurrentScaffoldVersion(rt.storage.sql, rt.actor)) return null;
 
   return await rt.identity.scaffold.read();
 }
 
-/**
- * Record one shadow-mode trial. Called by the orchestrator after running
- * both the current and pending scaffold for a given turn.
- */
-/**
- * The score this queued trial ALREADY produced, or null.
- *
- * The guard in front of a re-run's rollout, and the input its remaining half
- * resumes from. The evaluation row carries the trial's own id, so its presence
- * is the record that the expensive, tool-touching part already ran — and its
- * contents are the verdict the promotion decision was owed.
- */
+/** The score this queued trial already produced, or null; guards a re-run's rollout. */
 export function scoredShadowTrial(
   sql: SqlExecutor, actor: ActorHandle, trialId: string,
 ): ShadowTrialVerdict | null {
@@ -656,10 +425,7 @@ export function recordShadowEvaluation(
     currentOutput: string;
     pendingOutput: string;
     judgeResult: ShadowTrialVerdict;
-    /** The queued trial this scores. Its identity, so a replay after an
-     * interruption between this insert and the queue delete writes the SAME row
-     * rather than a second score for one trial. A bare eval (no queue row behind
-     * it) has nothing to replay and keeps a fresh id. */
+    /** Queue identity, so a replay writes the same row; bare evals get a fresh id. */
     trialId?: string;
   },
 ): ShadowEvaluationRow {
@@ -690,25 +456,14 @@ export function recordShadowEvaluation(
   return row;
 }
 
-/**
- * Decide whether to promote or rollback a pending scaffold based on the
- * accumulated trial results. Returns:
- *   { decision: 'promote' | 'rollback' | 'continue', winRate: number }
- */
 export interface PromotionDecision {
   decision: 'promote' | 'rollback' | 'continue';
   winRate: number;
 }
 
 /**
- * The trial record a promotion decision reads, and all of it.
- *
- * Named separately from {@link PendingScaffold} because the rule below is
- * calibrated against this RECORD — 200k-sim binomial Monte Carlo over
- * win/loss/tie counts — and not against what produced them. An evolved prompt
- * section accumulates the same three counts (`prompting/section-store.ts`), and
- * the alternative to widening the parameter is a second set of thresholds for
- * one question, which is how two policies start.
+ * The trial record a promotion decision reads. Also used by evolved prompt
+ * sections (`prompting/section-store.ts`) so both share one calibrated rule.
  */
 export interface ShadowTrialRecord {
   readonly trialsSoFar: number;
@@ -723,19 +478,13 @@ export function decidePromotion(
   const decisiveTrials = pending.pendingWins + pending.currentWins;
 
   if (decisiveTrials === 0) {
-    // All ties so far carries no signal in either direction — keep observing,
-    // even past maxTrials. The ceiling below is NOT a guaranteed stopping
-    // point; a run of pure ties legitimately extends the window.
+    // All ties carries no signal: keep observing, even past maxTrials.
     return { decision: 'continue', winRate: 0.5 };
   }
 
   const winRate = pending.pendingWins / decisiveTrials;
 
-  // Regression veto (hard, checked first): if the pending has LOST more decisive
-  // trials than allowed, roll it back immediately. This gates promotion no
-  // matter how high the win-rate is. maxRegressions default is 1 — Monte-Carlo
-  // settled (see DEFAULT_SHADOW_CONFIG): 0 rejected most genuinely-better
-  // variants because judge noise makes some decisive loss near-certain.
+  // Regression veto first; gates promotion regardless of win rate.
   if (pending.currentWins > config.maxRegressions) {
     return { decision: 'rollback', winRate };
   }
@@ -747,11 +496,7 @@ export function decidePromotion(
   }
 
   if (pending.trialsSoFar >= config.maxTrials) {
-    // Hard ceiling. The regression veto already passed (currentWins ≤
-    // maxRegressions), so promote iff genuinely ahead, else rollback. This
-    // branch deliberately does NOT re-check minDecisiveTrials — it is the
-    // forced decision — which is why maxTrials is sized against the judge's
-    // decisive YIELD rather than raw turns (see DEFAULT_SHADOW_CONFIG).
+    // Forced decision: ignores minDecisiveTrials, which is why maxTrials is sized to decisive yield.
     return { decision: winRate > 0.5 ? 'promote' : 'rollback', winRate };
   }
 
@@ -759,16 +504,10 @@ export function decidePromotion(
 }
 
 /**
- * Apply a promotion decision. For 'promote': the current pointer moves to
- * the pending version in one atomic statement and the live view file is
- * refreshed after. For 'rollback': the pending is marked rolled_back; the
- * pointer and executed source stay on the incumbent version.
- *
- * Returns the new current version and the action ACTUALLY applied: a
- * 'promote' request is converted to 'rollback' (with `vetoReason` set) when
- * the on-disk pending code fails the fixed misevolution criteria — the
- * version file lives in the agent-writable VFS, so promotion must re-check
- * what acceptance checked. Callers must report `action`, not their request.
+ * Apply a promotion decision. 'promote' moves the pointer atomically and then
+ * refreshes the view; 'rollback' marks the pending rolled_back. A promote becomes
+ * a rollback (with `vetoReason`) when the on-disk pending fails misevolution
+ * criteria. Callers must report `action`, not their request.
  */
 export async function applyPromotionDecision(
   rt: AgentRuntime,
@@ -782,10 +521,7 @@ export async function applyPromotionDecision(
   const sql = rt.storage.sql;
 
   if (decision === 'promote') {
-    // The pending's canonical source is its version file, written before the
-    // pending row existed (modifyScaffold gate 4). Verify it, re-check the
-    // misevolution gate against the bytes that will actually run, then flip
-    // the pointer.
+    // Re-check misevolution against the version file bytes that will actually run.
     const pendingCode = await readScaffoldVersion(rt, pending.version);
 
     if (pendingCode == null) {
@@ -804,27 +540,18 @@ export async function applyPromotionDecision(
       return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
 
-    // One statement — the old-current retirement and the pending promotion
-    // are a single atomic write on every backend, so no crash window can
-    // leave zero or two current rows.
-    // Scoped to this actor: the pointer is per-actor, so an unscoped retirement
-    // would demote every OTHER actor's live version to 'historical' and leave
-    // them running a program nothing points at.
+    // One actor-scoped statement retires the old current and promotes the pending, so no crash leaves zero or two current rows.
     void sql`UPDATE scaffold_versions
         SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
         WHERE actor_id = ${rt.actor.actorId}
           AND (version = ${pending.version}
                OR (status = 'current' AND version != ${pending.version}))`;
-    // Pointer committed. The live file is the rebuildable view, refreshed
-    // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
     recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
 
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
 
-  // Rollback: the pointer never moved, so retiring the pending IS the whole
-  // state change. The view refresh afterwards only heals drift.
   void sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
   const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
@@ -840,15 +567,9 @@ export async function applyPromotionDecision(
 }
 
 /**
- * The decision, on the durable run-event log — the row the changelog dates a
- * promotion or rollback by, since the status flip itself leaves `written_at`
- * untouched. Recorded HERE, beside the pointer write, so every path that moves
- * the pointer records it: the owner's manual decision, the shadow gate's
- * automatic one, and the veto that turns a promote into a rollback. One backend
- * recorded only its manual RPC and the other recorded nothing, so the same
- * promotion was dated in the cloud and undated on a device.
- *
- * Filed under the reserved workspace run: a decision is not a turn's event.
+ * Record the decision on the run-event log (the status flip leaves `written_at`
+ * untouched), beside the pointer write so every path records it. Filed under the
+ * reserved workspace run.
  */
 function recordScaffoldDecision(
   events: ScaffoldDecisionEvents,

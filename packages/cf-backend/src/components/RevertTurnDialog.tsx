@@ -1,21 +1,4 @@
-/**
- * The walk-back, as the operator decides it.
- *
- * ONE action reaches this dialog — "revert to before this turn" — and the
- * dialog's job is to say what that action takes with it. The conversation is
- * always revertible: the durable head moves and the messages from the picked
- * one on leave the head's ancestry. Nothing else is. Workspace files and
- * sandbox files have no snapshot store at all, so a revert cannot touch them
- * and this must not imply otherwise.
- *
- * The second button exists only when the device checkpoint store ANSWERED that
- * it holds a checkpoint for this turn. That is the one thing a revert can
- * really restore, and the store is reachable only while a device is connected —
- * which is why an unreachable store is silence here rather than a notice. The
- * shipped behaviour before this was the reverse: every press of the affordance
- * on a workspace with no device reported `File history is unavailable`, so the
- * one revert the product could always perform looked impossible.
- */
+/** Only the conversation is always revertible; workspace and sandbox files have no snapshot store. File restore is offered only when the device checkpoint store answers. */
 import { startTransition, useCallback, useEffect, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
@@ -24,8 +7,6 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 
-/** The restore this turn's device checkpoints describe, once the operator has
- *  asked for the files too: what the page's own restore confirm renders. */
 export interface DeviceRestorePlan {
   entries: FileCheckpointEntry[];
   dirs: string[];
@@ -33,16 +14,11 @@ export interface DeviceRestorePlan {
 }
 
 export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }: {
-  /** The user message the walk-back returns to. The dialog is mounted per open. */
   messageId: string;
   rpc: Rpc;
   onClose: () => void;
-  /** The conversation moved: the transcript arrives over the socket, and a
-   *  surface paging older entries drops what it walked. */
   onReverted: () => void;
-  /** The conversation moved AND the operator asked for the device files. The
-   *  plan is handed over rather than applied here — overwriting files on a
-   *  real machine is its own confirm, with the paths on it. */
+  /** The plan is handed over, not applied: overwriting device files needs its own confirm. */
   onRestorePlan: (plan: DeviceRestorePlan) => void;
 }) {
   const [checkpoints, setCheckpoints] = useState<readonly FileCheckpointEntry[]>([]);
@@ -56,17 +32,11 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
 
     startTransition(async () => {
       try {
-        // Keyed on the turn IN THE STORE: retention is per working directory
-        // while the limit is global across them, so a window read and filtered
-        // here loses a still-restorable checkpoint once the operator has a few
-        // active directories.
+        // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
         const listing = await rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]);
 
         if (current) setCheckpoints(listing.availability.available ? listing.entries : []);
       } catch (cause) {
-        // The store is reachable or it is not, and a call that failed answers
-        // neither. Said on the option it governs — the conversation revert
-        // does not depend on it.
         if (current) setDeviceFailure(renderThrownChain({ cause }));
       } finally {
         if (current) setChecked(true);
@@ -76,7 +46,6 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
     return () => { current = false; };
   }, [messageId, rpc]);
 
-  /** The walk-back itself: resolves the failure to show, or null once the conversation moved. */
   const revert = useCallback(async (): Promise<string | null> => {
     setBusy(true);
 
@@ -113,8 +82,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
       onRestorePlan({ entries: [...checkpoints], dirs: plans.map((plan) => plan.dir), files: plans.flatMap((plan) => plan.files) });
       onClose();
     } catch (cause) {
-      // The conversation is already back: the dialog stays open saying what
-      // the files did, rather than closing on a half-done action.
+      // The conversation is already reverted: stay open reporting the file outcome.
       setFailure(renderThrownChain({ cause }));
     } finally {
       setBusy(false);

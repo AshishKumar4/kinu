@@ -346,7 +346,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         sessionAffinity: opts.sessionAffinity,
         menu,
         defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
-        unavailableReason: 'Connect Cloudflare in your Kinu user settings to use Workers AI.',
+        unavailableReason: 'Connect Cloudflare in Account settings in the Kinu app to use Workers AI.',
         fetch: opts.fetch,
       }));
     }
@@ -357,7 +357,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       cloud,
       sessionAffinity: opts.sessionAffinity,
       menu,
-      unavailableReason: 'Connect Cloudflare and select an AI Gateway in your Kinu user settings.',
+      unavailableReason: 'Connect Cloudflare and pick an AI Gateway in Account settings in the Kinu app.',
       fetch: opts.fetch,
     }));
   } else {
@@ -782,7 +782,7 @@ function createCloudProxyProvider(opts: {
 /** Honest placeholder when the user is not signed in: the providers stay
  *  visible in /model with the exact step that unlocks them. */
 function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
-  const reason = 'Sign in with `kinu auth` to use your Cloudflare AI for local agents.';
+  const reason = 'Sign in with `kinu auth` to use Workers AI in your Cloudflare account from local workspaces.';
 
   return {
     id,
@@ -801,10 +801,10 @@ function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): 
  *  sentence, because "run kinu auth" and the cloud's "reconnect Workers AI"
  *  name different remedies on different surfaces. */
 function noDefaultModelMessage(): string {
-  return 'No default model configured.'
-    + ' Run kinu auth to use your Cloudflare AI, run kinu setup to configure a local provider,'
-    + ' or name a model explicitly with --model'
-    + ' (for example --model claude/claude-sonnet-4-x after signing in to Claude Code).';
+  return 'No default model is set.'
+    + ' Run kinu auth to use Workers AI in your Cloudflare account, run kinu setup to pick a model provider,'
+    + ' or name a model with --model'
+    + ' (for example --model claude/claude-sonnet-4-x once you are signed in to Claude Code).';
 }
 
 /** The providers a configured local endpoint can stand for. Named so the

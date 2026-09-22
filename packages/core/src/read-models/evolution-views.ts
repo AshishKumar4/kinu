@@ -1,14 +1,4 @@
-/**
- * The self-evolution surfaces: what the agent changed about itself, the
- * near-tied answers it kept, and the tasks it proposes for itself next.
- *
- * Each is a read plus the one action the surface offers beside it (mark seen,
- * pick a take, propose). The reads fold ledgers core already owns; the actions
- * are policy — which is why they had drifted: the take pick reported a
- * continuation as queued on one backend without checking that it was, and the
- * curriculum proposer let the CHAT model grade its own next tasks on one
- * backend and used the cross-family judge on the other.
- */
+/** Self-evolution surfaces: changelog, near-tied takes, curriculum proposals, each with its one action. */
 
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -35,27 +25,19 @@ export interface EvolutionChangelogView {
   seenAt: number;
 }
 
-/** Entries in one changelog digest. Fifty is what the bare read already took. */
 const DEFAULT_CHANGELOG_LIMIT = 50;
 
-/**
- * The ceiling on one changelog digest. The run list's own ceiling: this digest
- * is RPC-reachable, and a negative limit reaches its slices unclosed.
- */
+/** The run list's ceiling: this digest is RPC-reachable. */
 const MAX_CHANGELOG_LIMIT = 200;
 
-/** The "what I changed about myself" digest, assembled on demand from the
- *  durable ledgers — no second event system. */
+/** Assembled on demand from the durable ledgers; no second event system. */
 export function getEvolutionChangelog(
   sql: SqlExecutor,
   actor: ActorHandle,
   limit = DEFAULT_CHANGELOG_LIMIT,
   changesOnly = false,
 ): EvolutionChangelogView {
-  // The seen marker is a key on this actor's own config store, so the handle is
-  // the only thing either read needs. Taking a separate `AgentConfigStore`
-  // beside the scoped `sql` let a caller pair one actor's marker with another
-  // actor's ledgers, and nothing in the types could catch it.
+  // The seen marker lives on this actor's own config, so the handle alone pairs marker and ledgers.
   const seenAt = actor.config.getChangelogSeenAt();
   const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
 
@@ -66,15 +48,12 @@ export function getEvolutionChangelog(
   };
 }
 
-/** The unseen window itself — the same digest the surface renders, cut to what
- *  the owner has not read yet. The needs-you queue's one row is built from it,
- *  so the queue and the journal below it can never disagree about what exists:
- *  they are the same entries, filtered by the same marker. */
+/** The needs-you queue row is built from this, so queue and journal filter the same entries by one marker. */
 export function getUnseenChangelog(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
   return listUnseenChangelog(sql, actor, actor.config.getChangelogSeenAt());
 }
 
-/** The operator viewed the changelog — zero the unseen badge. */
+/** Zeroes the unseen badge. */
 export function markChangelogSeen(config: AgentConfigStore) {
   const seenAt = Date.now();
   config.setChangelogSeenAt(seenAt);
@@ -84,22 +63,15 @@ export function markChangelogSeen(config: AgentConfigStore) {
 
 export interface TakePickDeps {
   readonly sql: SqlExecutor;
-  /** The actor whose scaffold lineage and take ledger this pick answers for. */
   readonly actor: ActorHandle;
-  /** The conversation the picked take's turn was answered in — where the
-   *  ledger row's request and response text is read from. */
+  /** Where the ledger row's request and response text is read from. */
   readonly history: SessionHistory;
   readonly engine: EvolutionEngine;
   readonly inbox: AgentInbox;
 }
 
-/**
- * Record the user's pick between explored takes — the explicit preference
- * signal (a `turn_outcomes` row with source 'take_pick', plus the convergence
- * repoint). A pick that differs from the answered take queues a gentle
- * programmatic continuation; riding the live turn's next step counts as
- * delivered, an undeliverable signal does not.
- */
+/** A `turn_outcomes` row (source 'take_pick') plus convergence repoint. A differing pick queues a
+ * continuation; riding the live turn's next step counts as delivered. */
 export async function pickAlternateTake(
   deps: TakePickDeps,
   takeId: string,
@@ -138,12 +110,7 @@ export async function pickAlternateTake(
   return { ...record, continuationQueued };
 }
 
-/**
- * Propose the agent's next curriculum tasks. The proposer grades its own
- * candidates for learnability, so it runs on the cross-family judge where one
- * is wired — the chat model scoring the tasks it will then be given is the
- * self-enhancement bias every other scorer here routes around.
- */
+/** Runs on the cross-family judge where wired: the chat model grading its own tasks is self-enhancement bias. */
 export function proposeCurriculumTasks(rt: AgentRuntime, count?: number): Promise<ProposedTask[]> {
   return proposeNextTasks({ rt, judge: rt.judgeModel ?? rt.llm, count });
 }

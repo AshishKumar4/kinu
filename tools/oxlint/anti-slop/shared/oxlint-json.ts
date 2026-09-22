@@ -27,12 +27,16 @@ const LintReportSchema = v.object({
 export type LintDiagnostic = v.InferOutput<typeof DiagnosticSchema>;
 export type LintReport = v.InferOutput<typeof LintReportSchema>;
 
+/** The report with how the process ended: an empty report means a clean tree
+ *  only beside a zero exit status. */
+export type LintRun = LintReport & { readonly status: number | null; readonly stderr: string };
+
 /**
  * Run `oxlint -f json <args>` from the repository root and parse the report.
  * Fails when oxlint printed nothing (the message carries stderr) or loaded no
  * rules, because a lint that ran no rule finds nothing and proves nothing.
  */
-export function lintJson(args: readonly string[]): LintReport {
+export function lintJson(args: readonly string[]): LintRun {
   const run = spawnSync("./node_modules/.bin/oxlint", ["-f", "json", ...args], {
     encoding: "utf8",
     maxBuffer: 256 * 1024 * 1024,
@@ -43,7 +47,7 @@ export function lintJson(args: readonly string[]): LintReport {
     report.number_of_rules > 0,
     `oxlint ran ${report.number_of_rules} rules for \`${args.join(" ")}\`; a lint with no rules loaded reports no findings`,
   );
-  return report;
+  return { ...report, status: run.status, stderr: run.stderr };
 }
 
 /** One diagnostic as a reader opens it: `file — code: message`. */

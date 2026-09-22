@@ -1,26 +1,6 @@
 /**
- * Work — what needs me, what is happening, what happened.
- *
- * Three time-facets of ONE question, not three old tabs stacked. Tasks (the
- * plan), Jobs (detached work) and the Evolution Changelog (what it changed
- * about itself) each answered a slice of "what is this thing working through",
- * and each had its own room: two of them photographed as three or four cards
- * floating in ~90% empty column, and the third was filed under the agent's own
- * description where nobody returning from a day away would look for it.
- *
- *   Needs you — the pending-action queue. Rendered only when non-empty. Every
- *               row deep-links to where the decision is actually made; nothing
- *               is decided twice. Host-owned: `listPendingActions` is
- *               deliberately not a data source a slate can read.
- *   Now       — the plan's open half and the jobs still running.
- *   Journal   — one reverse-chronological feed of everything settled: jobs,
- *               closed tasks, self-changes. The chips filter that one list;
- *               they are filters, not homes.
- *
- * What it does NOT absorb: chat cards stay chat cards. A job settling
- * mid-conversation still gets its transcript card — the journal is where it can
- * be acted on later, not a second narration. And the run's meters stay on the
- * gauge beside the strip, which was already the right home for them.
+ * Needs you, Now, Journal. Queue rows deep-link to where each decision is made, so nothing is
+ * decided twice; `listPendingActions` is host-owned and never a slate data source.
  */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
@@ -47,16 +27,7 @@ import { WorkPlans } from "./WorkPlans";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
-/** The chips over the journal. `All` holds every row the feed has. The queue
- *  above counts an unseen entry with the same unfiltered read this feed
- *  renders (`listUnseenChangelog`), and its row says to read them "in the
- *  journal below" — so a chip named for everything that dropped one of those
- *  entries sent the owner to a feed without it. Curation belongs to the read
- *  named for it (`buildChangelog`'s `changesOnly`), never to this chip: the
- *  journal half of 28e8206eb is reversed here. Plan history is not a chip:
- *  `WorkPlans` above owns the plan read model (`inspectSubordinate` over
- *  `plan_reviews`), so a second Plan here would be the duplicate B12 removed —
- *  closed tasks are the settled tail, not the home. */
+/** `All` holds every row the feed has: the queue counts unseen entries from the same unfiltered read and points here. Curation belongs to `buildChangelog`'s `changesOnly`. */
 type JournalFilter = "all" | "jobs" | "self";
 
 const FILTERS: Array<{ id: JournalFilter; label: string }> = [
@@ -65,28 +36,13 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
   { id: "self", label: "Self-changes" },
 ];
 
-/**
- * Where each kind of pending thing is actually decided, and the words that
- * send the reader there. The mapping lives here, not in the read model: core
- * has no business knowing tab names. `deferred_action` is absent because it is
- * the one kind with no elsewhere — the queue IS its home, so it is rendered
- * with its own approve/deny controls instead of a deep link.
- *
- * The verb is part of the mapping rather than a fixed "decide in", because it
- * is not always a decision. The unseen digest is a READ — several of its entry
- * kinds are measurements with no keep and no revert — and a row promising a
- * decision over a card that offers none is the same lie as pointing at the
- * wrong tab. That row is also the one with no cta of its own: what it says to
- * do and where to do it is the whole of its detail line, and printing the
- * destination twice on one card reads as a stutter.
- */
+/** Where each pending kind is decided; tab names stay out of core. `deferred_action` is absent: the queue is its home. */
 const PENDING_HOME = {
   release_approval: { surface: "Releases", cta: "decide in Releases" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   unseen_changes: { surface: null, cta: null },
   curriculum_task: { surface: null, cta: "decide in Supervise" },
-  // No surface to name: the row IS the deep link — it opens the review over
-  // the whole tab, and the review's Back is the way out.
+  // The row is the deep link: it opens the review over the whole tab.
   plan_review: { surface: null, cta: "open the review" },
 } satisfies Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }>;
 
@@ -103,25 +59,17 @@ export interface WorkTabProps {
   planRpc: Rpc;
   planOwner?: string;
   workspacePlanArrival?: WorkspacePlanArrival | null;
-  /** Open the named actor's own conversation — where a foreign pending plan's
-   *  review is actually decided. */
   onReviewActor?: (name: string) => void | Promise<void>;
   /** Polled by the hook so the tab badge and this queue are one read. */
   pendingActions: PendingAction[];
   backgroundJobs: BackgroundJob[];
   onRefreshJobs: () => void;
-  /** Deep-link a queue row to where its decision is made. */
   onOpenSurface: (surface: SurfaceKind) => void;
-  /** The changelog was seen — zero the badge upstream. */
   onChangelogSeen?: () => void;
-  /** Re-read the queue after a decision, so decided rows leave on the click
-   *  rather than on the next ambient poll. */
+  /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onRefreshQueue?: () => void;
-  /** A turn is in flight — the plan is rewritten while it is. */
   isStreaming: boolean;
   rpc: Rpc;
-  /** The workspace's saved memories — the same `getMemoryContent` read the
-   *  Agent surface's Memory view renders, already workspace-wide. */
   memory?: MemoryEntry[];
 }
 
@@ -130,27 +78,18 @@ export function WorkTab({
 }: WorkTabProps) {
   const [filter, setFilter] = useState<JournalFilter>("all");
   const [hasPlans, setHasPlans] = useState(plan !== null);
-  /** The plan whose review took the tab — a list row, an arrival, or a queue
-   *  row can all land it here, so the state lives at the tab, not the list.
-   *  Held as a REFERENCE into the shared read: the view resolves the row live
-   *  each render, so a decision it just made repaints the header instead of
-   *  hanging on the snapshot the click took. */
+  /** A reference into the shared read, resolved live each render, so a decision repaints the header instead of a stale snapshot. */
   const [review, setReview] = useState<{ owner: string; id: string; revision: number } | null>(null);
   const openReview = useCallback((item: OwnedPlan) => setReview({ owner: item.owner.name, id: item.plan.id, revision: item.plan.revision }), []);
   const onNewPlan = useCallback(() => onOpenSurface("Work"), [onOpenSurface]);
 
-  // The workspace's work is one read — plans with their linked tasks plus the
-  // unlinked half, every actor in the roster. The plan list above and the
-  // task ledger below share it, so the two halves can never disagree about
-  // which row belongs where.
+  // Plans and tasks share one read, so the two halves never disagree about which row belongs where.
   const loadWork = useCallback(
     () => rpc<WorkspaceWork>("listWorkspaceWork", []),
     [rpc],
   );
 
-  // The agent writes its plan mid-turn and the server never pushes it, so the
-  // tab revalidates while anything is still open and stands down once
-  // everything has settled.
+  // The server never pushes the plan, so the tab revalidates until everything has settled.
   const revalidate = useCallback((work: WorkspaceWork | null) => {
     if (isStreaming) return 4000;
 
@@ -168,9 +107,6 @@ export function WorkTab({
     resource: changelogResource, reload: reloadChangelog,
   } = useChangelog(rpc, onChangelogSeen);
 
-  // One flat task list for Now and the journal, owners attached — plan-linked
-  // or not, a task's owner is the actor whose list it came from, and a
-  // subordinate's open item is the workspace's open item.
   const taskRows = useMemo(() => {
     const rows = (groups: readonly { owner: { name: string }; tasks: AgentTaskTree[] }[]) =>
       groups.flatMap((owned) => owned.tasks.map((task) => ({ task, owner: owned.owner.name })));
@@ -188,10 +124,7 @@ export function WorkTab({
     [settledJobs, closedTasks, changelog],
   );
 
-  /** The open review's row, resolved out of the shared read each render — a
-   *  revision that left the page (superseded, or the read still out) closes
-   *  the view rather than deciding against a plan the workspace no longer
-   *  holds. */
+  /** A revision gone from the read closes the view rather than deciding against a plan the workspace no longer holds. */
   const reviewed = review === null ? undefined
     : (work?.plans ?? []).find((owned) =>
         owned.owner.name === review.owner && owned.plan.id === review.id && owned.plan.revision === review.revision);
@@ -200,23 +133,12 @@ export function WorkTab({
     if (review !== null && work !== null && reviewed === undefined) setReview(null);
   }, [review, reviewed, work]);
 
-  /** The revision the connection reports as this pane's own active review —
-   *  `plan_updated` and the workspace snapshot's `activePlan` carry it, and
-   *  the inspector column opens ON it. */
   const activeKey = plan === null ? null : `${plan.id}:${plan.revision}`;
 
-  /** The active revision whose review this tab has already opened. It lives
-   *  HERE rather than in the list: the list unmounts while a review is open,
-   *  so a latch held there would die on Back and reopen the review the reader
-   *  just left. */
+  /** Lives here, not in the list: the list unmounts while a review is open, and a latch there would reopen the review on Back. */
   const openedActive = useRef<string | null>(null);
 
-  // The plan the connection reports is the thing being decided, so its review
-  // is what the tab shows rather than a card that hides it behind one more
-  // click — once per revision, and only once the shared read confirms the row
-  // exists. It takes no surface: the plan was already there when the reader
-  // arrived, so it must not pull them off the tab they are on, which is what
-  // `onNewPlan` is for on a genuine arrival.
+  // Open the reported plan's review once per revision, after the shared read confirms the row; take no surface, unlike `onNewPlan`.
   useEffect(() => {
     if (plan === null || activeKey === null) {
       openedActive.current = null;
@@ -234,29 +156,18 @@ export function WorkTab({
     setReview({ owner: own.owner.name, id: own.plan.id, revision: own.plan.revision });
   }, [activeKey, plan, planOwner, work]);
 
-  // The shared read has no push of its own: `plan_updated` arrives on the
-  // connection while the last `listWorkspaceWork` answer sits unrefetched, so
-  // a plan written — or DECIDED — since that read is a row neither the latch,
-  // the list, nor the open review's status can see until SOMETHING re-reads.
-  // The arrival's own frames are the cue: `plan` is a fresh object on every
-  // push (a decision re-uses the revision, so a key would miss it), and an
-  // arrived reference names another actor's plan.
+  // The shared read has no push: re-read on each `plan_updated` frame. `plan` is a fresh object per push; a decision reuses the revision, so a key would miss it.
   useEffect(() => {
     if (plan !== null || workspacePlanArrival) reloadTasks();
   }, [plan, workspacePlanArrival, reloadTasks]);
 
-  // A review takes the whole tab — the plan is the thing being decided, and
-  // the rest of the column is everything else. Checked BEFORE the empty tab:
-  // an arrival that opens a review on a workspace with nothing else must land
-  // on the review, not flash "Nothing yet" for a frame.
+  // Checked before the empty tab so an arrival does not flash "Nothing yet" for a frame.
   if (review !== null && reviewed !== undefined) {
     return <WorkReview item={reviewed} owner={planOwner ?? "main"} rpc={rpc} planRpc={planRpc}
       onReviewActor={onReviewActor} resource={taskResource} onRetry={reloadTasks}
       onBack={() => setReview(null)} />;
   }
 
-  // Empty sections render nothing: the tab opens with one pending action and
-  // no in-flight work as "Needs you" alone, with no Now section beneath it.
   const nothingAtAll = work !== null && changelog !== null && !hasWorkspaceWork({
     work, pending: pendingActions, jobs: backgroundJobs,
     changes: changelog.entries, notes: memory,
@@ -279,24 +190,12 @@ export function WorkTab({
   );
 }
 
-/* ── the sections ────────────────────────────────────────────────── */
-
-/**
- * The plan-review takeover: the plan is the thing being decided, so it holds
- * the whole tab. The shared read's failure belongs on whichever surface is
- * open — behind a review, Now's retry line is unmounted, so the same read
- * owes its retry here instead.
- */
+/** Behind a review, Now's retry line is unmounted, so the shared read's retry is owed here. */
 function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry, onBack }: {
-  /** The open review's row, resolved live out of the shared read each render. */
   item: OwnedPlan;
-  /** The conversation's own actor name — 'main' at the root pane. */
   owner: string;
   rpc: Rpc;
-  /** The RPC a non-main owner's review is decided over. */
   planRpc: Rpc;
-  /** Open the owning actor's own conversation — where a foreign pending
-   *  plan's review is actually decided. */
   onReviewActor?: (name: string) => void | Promise<void>;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
@@ -311,8 +210,8 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
           className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs p-accent transition-colors hover:p-elevated">
           <ArrowLeftIcon size={12} /> Back to Work
         </button>
-        {!mine && <span className="p-meta p-text-3">Read-only — {item.owner.name}'s plan
-          {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name} conversation</button>}
+        {!mine && <span className="p-meta p-text-3">Read-only: {item.owner.name}'s plan
+          {onReviewActor && <button type="button" className="ml-2 p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</button>}
         </span>}
       </div>
       {resource.status === "error" && (
@@ -327,17 +226,10 @@ function WorkReview({ item, owner, rpc, planRpc, onReviewActor, resource, onRetr
   );
 }
 
-/**
- * The pending-action queue — rendered only while it holds something. Commands
- * the agent parked on the owner decide HERE — grouped so a night's worth is
- * one decision rather than N scattered rows. Everything else keeps its deep
- * link to where its decision is really made.
- */
 function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview }: {
   pendingActions: PendingAction[];
   rpc: Rpc;
-  /** Re-read the queue after a decision, so decided rows leave on the click
-   *  rather than on the next ambient poll. */
+  /** Re-read after a decision so decided rows leave on the click, not the next poll. */
   onDecided?: () => void;
   onOpenSurface: (surface: SurfaceKind) => void;
   onOpenReview: (ref: { owner: string; id: string; revision: number }) => void;
@@ -347,9 +239,6 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
   const elsewhere = pendingActions.filter(
     (a): a is DecidedElsewhere => a.kind !== "deferred_action");
 
-  /** A queue row naming a plan opens that plan's review in place — the row's
-   *  own `planRef`, no second lookup: the tab resolves the live row out of
-   *  the shared read anyway, so a reference is all this needs. */
   const openQueuedReview = useCallback((action: DecidedElsewhere) => {
     if (action.planRef !== undefined) onOpenReview(action.planRef);
   }, [onOpenReview]);
@@ -375,21 +264,12 @@ function NeedsYou({ pendingActions, rpc, onDecided, onOpenSurface, onOpenReview 
   );
 }
 
-/** One task with the actor whose ledger it came from — plan-linked or not, a
- *  task's owner is the actor whose list it came from, and a subordinate's
- *  open item is the workspace's open item. */
 interface WorkTaskRow {
   task: AgentTaskTree;
   owner: string;
 }
 
-/**
- * Now — the plan's open half and the jobs still running, drawn while either
- * holds something or the read that feeds the first owes a retry. The read's
- * tri-state covers the WORK half only — gating the whole section on it put a
- * running job behind the plan's spinner. And the last good read stays on
- * screen under the failure it owes, the way the plan history did.
- */
+/** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
 function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, onRefreshJobs, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
@@ -434,20 +314,11 @@ function WorkNow({ work, taskRows, openTasks, runningJobs, resource, onRetry, on
   );
 }
 
-/**
- * Journal — one reverse-chronological feed of everything settled, under the
- * chips that filter it. Drawn once it holds a row, or while the digest read
- * owes a retry: gated on rows alone, a broken digest read left the whole tab
- * blank. The spinner holds until the digest has loaded once, and the failure
- * shows on every read that breaks after — including a revalidation over a
- * snapshot still on screen, which would otherwise go stale in silence.
- */
+/** Drawn while the digest read owes a retry too, so a broken read never blanks the tab; revalidation failures also show. */
 function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resource, onReload, rpc, onRefreshJobs }: {
   journal: JournalRow[];
   filter: JournalFilter;
   onFilter: (filter: JournalFilter) => void;
-  /** The changelog read's bundle: `view` the last good digest, `resource` its
-   *  tri-state, `onReload` its retry. */
   view: ChangelogView | null;
   seenAt: number;
   seenError: string | null;
@@ -482,7 +353,7 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
         )}
         {seenError && (
           <div className="text-xs p-warning p-card rounded-lg px-3 py-1.5">
-            Couldn't mark the changelog as seen: {seenError}
+            Could not mark the changelog as seen: {seenError}
           </div>
         )}
 
@@ -507,9 +378,6 @@ function WorkJournal({ journal, filter, onFilter, view, seenAt, seenError, resou
   );
 }
 
-/** What the workspace remembered — the tail of the same MEMORY.md the Agent
- *  surface's Memory view renders whole. A row opens that view; the section
- *  itself draws only once there is a note to list. */
 function Learnings({ memory, onOpenSurface }: {
   memory: MemoryEntry[];
   onOpenSurface: (surface: SurfaceKind) => void;
@@ -533,70 +401,31 @@ function Learnings({ memory, onOpenSurface }: {
   );
 }
 
-/* ── the needs-you queue ───────────────────────────────────────── */
-
-/**
- * Commands the agent stopped on because the gate wanted an approval and nobody
- * was there to give it.
- *
- * Decided here and nowhere else, and decided in BULK: an unattended overnight
- * run parks a pile, and the failure this whole mechanism exists to remove is
- * the owner working through them one prompt at a time. Selection defaults to
- * everything, so the common case ("these are all fine") is one click.
- *
- * Nothing here has run. Approving does not run it either — the agent is woken
- * and re-issues the command itself, which is the only moment it executes. The
- * copy says so, because a button labelled "Approve" on a queue of commands is
- * otherwise easy to read as "Run".
- */
-/** What a bulk button says it will act on: nothing extra for a queue of one,
- *  "all" when the whole queue is selected, the count otherwise. */
+/** Nothing here has run, and approving does not run it: the agent is woken and re-issues the command. */
 function countLabel(chosen: number, total: number): string {
   if (total === 1) return "";
 
   return chosen === total ? "all" : String(chosen);
 }
 
-/**
- * `always` is the third answer the queue has always accepted and never
- * offered. It approves these commands AND records a standing grant for each
- * gate-tier check they tripped, on the environment they were asked about — so
- * the same question stops arriving. Nothing wider: the grant is one rule on
- * one machine, it widens no access, and a rule the gate refuses outright
- * cannot be granted at all. Settings → Standing approvals lists what is held
- * and is the only place to take one back.
- */
-/** The three answers the queue has always accepted. */
+/** `always` also records a standing grant per tripped gate-tier rule on that environment; it widens no access, and a refused rule cannot be granted. */
 export type ParkedDecision = "approved" | "denied" | "always";
 
 export interface ParkedDecisionDeps {
-  /** `decideDeferredApprovals` over the surface's RPC seam. */
   decide: (ids: string[], decision: ParkedDecision) => Promise<{ decided: string[] }>;
-  /** Re-read the queue — a decided row leaves the list on this click, not on
-   *  the next ambient poll. */
+  /** Re-read the queue so a decided row leaves on this click, not the next poll. */
   onDecided: () => void;
 }
 
 export interface ParkedQueueSnapshot {
-  /** What a bulk button would act on: null is the untouched default and means
-   *  EVERYTHING, so a command parked mid-review joins an "approve all" click
-   *  instead of being silently left out. After a decision it is the EMPTY set
-   *  — what was decided stays unticked; it is not re-selected. */
+  /** Null means everything, so an action parked mid-review joins "approve all"; after a decision it is the empty set. */
   readonly selected: ReadonlySet<string> | null;
   readonly busy: boolean;
   readonly error: string | null;
   readonly decided: ParkedDecision | null;
 }
 
-/**
- * The queue's decision half, and a plain object so every claim about it is
- * provable without a browser: nothing it records re-selects what was just
- * decided, and a recorded decision always re-reads the queue.
- *
- * The defect this locks: `decide` resetting the selection to null — and null
- * means everything — re-ticks every box the instant the call lands, and a
- * `decide` that does not re-read the queue leaves the decided rows on screen.
- */
+/** A decision never re-selects what was just decided, and always re-reads the queue. */
 export class ParkedDecisionFlow {
   #snapshot: ParkedQueueSnapshot = { selected: null, busy: false, error: null, decided: null };
   readonly #listeners = new Set<() => void>();
@@ -614,8 +443,6 @@ export class ParkedDecisionFlow {
 
   readonly snapshot = (): ParkedQueueSnapshot => this.#snapshot;
 
-  /** What a bulk button would act on — everything while untouched, exactly
-   *  what is ticked once anything is. */
   chosen(allIds: readonly string[]): ReadonlySet<string> {
     return this.#snapshot.selected ?? new Set(allIds);
   }
@@ -635,14 +462,11 @@ export class ParkedDecisionFlow {
 
     try {
       await this.#deps.decide([...ids], decision);
-      // The EMPTY set, never null: null selects everything, and what was
-      // just decided must leave, not re-tick.
+      // The empty set, never null: null selects everything.
       this.#set({ busy: false, selected: new Set(), error: null, decided: decision });
-      // Deciding records the answer; re-reading is what makes the rows leave.
       this.#deps.onDecided();
     } catch (cause) {
-      // The answer never landed, so the selection stands — the owner's intent
-      // is still the selection on screen.
+      // The answer never landed, so the selection stands.
       this.#set({ busy: false, error: `Could not record the decision: ${renderThrownChain({ cause })}` });
     }
   };
@@ -654,9 +478,7 @@ export class ParkedDecisionFlow {
   }
 }
 
-/** What a landed decision says. Permission is not an effect: the command still
- *  has not run, and the agent is the only thing that runs it. Saying "done"
- *  here would be the same lie the queued tool result is worded to avoid. */
+/** Permission is not an effect: the command still has not run, so never say "done". */
 const DECIDED_LINE: Record<ParkedDecision, string> = {
   denied: "Denied. The agent will be told, and nothing runs.",
   always: "Approved. Kinu will stop asking about these checks in this environment.",
@@ -672,9 +494,6 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
   const flow = injected ?? fresh;
   const state = useSyncExternalStore(flow.subscribe, flow.snapshot, flow.snapshot);
   const allIds = actions.map((a) => a.id);
-  // Null means "everything", so a newly-parked action arriving mid-review is
-  // included rather than silently left out of an "approve all" click. The
-  // rule lives in the flow, beside the untick that must never become it.
   const chosen = flow.chosen(allIds);
 
   const decidedLine = state.decided === null ? null : DECIDED_LINE[state.decided];
@@ -701,9 +520,6 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
               <code className="block p-t-code p-text break-all whitespace-pre-wrap">{action.detail}</code>
-              {/* Which machine, before you authorise it. The read model puts it
-                  in the title precisely because it is half the decision, so
-                  this card never drops the title on the floor. */}
               <span className="block p-meta p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>
@@ -732,16 +548,12 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
   );
 }
 
-/** A pending action whose decision is made on another surface — everything
- *  except a parked command, which is decided in the queue itself. */
 type DecidedElsewhere = PendingAction & { kind: Exclude<PendingActionKind, "deferred_action"> };
 
 function PendingRow(
   { action, onOpenSurface, onOpen }: {
     action: DecidedElsewhere;
     onOpenSurface: (surface: SurfaceKind) => void;
-    /** The row's own deep link where "the surface it is decided on" is not one
-     *  — a `plan_review` opens its review over this tab, not another surface. */
     onOpen?: () => void;
   },
 ) {
@@ -781,33 +593,13 @@ function PendingRow(
   );
 }
 
-/* ── the journal ───────────────────────────────────────────────── */
-
-/** A row and the chips it answers to. Membership is decided by the builder
- *  below, never by the renderer, so one place holds the rule and no chip can
- *  drift from the feed it filters. */
+/** Membership is decided by the builder, never the renderer, so no chip drifts from the feed. */
 type JournalRow =
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "job"; job: BackgroundJob }
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "task"; task: AgentTaskTree }
   | { key: string; at: number; chips: readonly JournalFilter[]; kind: "self"; entry: ChangelogEntry };
 
-/**
- * One reverse-chronological feed out of three ledgers.
- *
- * Exported for its test: the ordering IS the feature — three separate ledgers
- * have to read as one stream, or the merge has bought nothing but a longer
- * page. The chips each row answers to are here for the same reason. Closed
- * tasks ride the `self` filter: they are settled history, and the live plan
- * already has its home in `WorkPlans` above.
- *
- * EVERY ROW ANSWERS TO `All`, a self-review that changed nothing
- * ({@link ChangelogEntry.noChange}) included. The queue above counts that
- * entry as unseen — `listUnseenChangelog` reads the digest with no
- * `changesOnly` — and tells the owner to read it in the journal below, so a
- * chip named for everything that dropped it pointed at a feed without it.
- * That is the journal half of 28e8206eb reversed: the curation lives in the
- * read named for it, and the row reads as a no-op from its own summary.
- */
+/** Exported for its test: the ordering is the feature. Every row answers to `All`, a no-change self-review included, because the queue counts it as unseen. */
 export function buildJournal(
   jobs: readonly BackgroundJob[],
   tasks: readonly AgentTaskTree[],

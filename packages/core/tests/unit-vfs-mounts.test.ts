@@ -1,10 +1,5 @@
-// The workspace plane's mount table: /pc and /sandbox extend the one view.
-//
-// Red-first for the owner's ruling (#36/#142/#143): the device and the
-// container appear as mounts of the workspace filesystem, reached through the
-// same plane the `file` tool and `workspace.*` address — with an absent mount
-// stated as an absence, and every boundary the owning executor enforces
-// (device consent) still enforced on the mounted path.
+// The workspace mount table: /pc and /sandbox extend one view (#36/#142/#143); an absent mount
+// is stated as absent, and device consent is still enforced on mounted paths.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { VFS, VfsRevision } from '../src/types/primitives';
@@ -14,8 +9,7 @@ import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, 
 import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 
-/** A map-backed tree with honest directory semantics: readdir returns entry
- *  NAMES, stat distinguishes dirs, so walkRecursive crosses it for real. */
+/** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it. */
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
 	const dirs = new Set<string>();
@@ -188,7 +182,6 @@ describe('the workspace plane mount table', () => {
 		if (conditional === undefined) throw new Error('the mounted VFS must expose conditional writes');
 		await expect(conditional('/pc/x', new Uint8Array(), 1)).rejects.toMatchObject({ code: 'ENXIO' });
 
-		// Existence probes answer honestly rather than throwing.
 		expect(await mounted.stat('/pc')).toBeNull();
 		expect(await mounted.exists('/pc/x')).toBe(false);
 	});
@@ -257,16 +250,14 @@ describe('the workspace plane mount table', () => {
 
 		expect(await mounted.readdir('/')).toEqual(expect.arrayContaining(['notes.md', 'memory', 'pc']));
 		expect(await mounted.readdir('/')).not.toContain('sandbox');
-		// Snapshots start from the relative workspace root; index services and the
-		// real shell retain the base plane. None can enumerate a VFS-only mount.
+		// Snapshots, index services and the real shell use the base plane; none enumerate a VFS-only mount.
 		expect(await mounted.readdir('')).not.toContain('pc');
 		expect(await base.readdir('/')).not.toContain('pc');
 		expect(await base.stat('/pc')).toBeNull();
 
 		await mounted.writeFile('workspace-file.txt', 'canonical');
 		expect(await mounted.readFile('workspace-file.txt', { encoding: 'utf8' })).toBe('canonical');
-		// A host-shaped absolute path names nothing in the workspace: mounts are
-		// reserved names, not a rewrite of foreign paths into the tree.
+		// Mounts are reserved names, not a rewrite of host paths into the tree.
 		expect(await mounted.exists('/etc/secrets.key')).toBe(false);
 	});
 
@@ -325,12 +316,10 @@ describe('the workspace plane mount table', () => {
 
 		const mounted = withMountTable(fakeTree({}), mounts);
 
-		// A device tunnel is a presence: unavailable means absent even though a
-		// view object exists.
+		// A device tunnel is a presence: unavailable means absent.
 		await expect(mounted.readdir('/pc')).rejects.toMatchObject({ code: 'ENXIO' });
 		await expect(mounted.readdir('/pc')).rejects.toThrow('/pc — no device connected');
-		// A container is a binding: it provisions on first touch, so the mount
-		// stands whenever the binding does.
+		// A container is a binding: it provisions on first touch.
 		expect(await mounted.readFile('/sandbox/workspace/b.txt', { encoding: 'utf8' })).toBe('y');
 		expect(EXECUTOR_MOUNTS.device).toBe('/pc');
 		expect(EXECUTOR_MOUNTS.sandbox).toBe('/sandbox');
@@ -400,7 +389,6 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 		expect(error.code).toBe('EPERM');
 		expect(error.path).toBe('/src');
-		// Nothing was touched: no tree copy, no staged carry, no destination.
 		expect(await base.stat('/src')).toMatchObject({ isDir: true });
 		expect(await base.exists('/src/app.ts')).toBe(true);
 		expect(await base.exists('/moved')).toBe(false);
@@ -458,10 +446,8 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 		expect(error.code).toBe('EPERM');
-		// The refusal comes from the carry, so it names the path the PLANE knows:
-		// the mount prefix is the router's lens, not the plane's.
+		// The plane's path, not the router's mount-prefixed one.
 		expect(error.path).toBe('/home/dev/src');
-		// Refused BEFORE any write or delete: the source tree is exactly as it was.
 		expect(await device.stat('/home/dev/src')).toMatchObject({ isDir: true });
 		expect(await device.exists('/home/dev/src/app.ts')).toBe(true);
 		expect(await device.exists('/home/dev/moved')).toBe(false);
@@ -500,10 +486,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 	});
 
 	test('a mid-tree unlink failure stops the pass and reports both halves', async () => {
-		// KINU-013: the fallback removed entry by entry and a mid-tree failure
-		// left a half-removed directory reported as an opaque failure. The pass
-		// now stops at the first refusal and its result partitions the tree:
-		// what was removed, what remains.
+		// KINU-013: removal stops at the first refusal and partitions the tree into removed and remaining.
 		const base = fakeTree({
 			'/build/out.js': 'x',
 			'/build/deep/two.js': 'y',
@@ -526,8 +509,6 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		if (removal.ok) throw new Error('expected a partial removal, got a completed one');
 
-		// Deletion runs deepest-first: the leaf file and its directory went;
-		// the third unlink refused and the pass stopped there.
 		expect(removal.removed).toEqual(['/build/deep/two.js', '/build/deep']);
 		expect(removal.remaining).toEqual(['/build/out.js', '/build']);
 		expect(removal.failed.path).toBe('/build/out.js');
@@ -561,8 +542,6 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 
-		// The failing entry keeps its own code, and the refusal names the tree's
-		// two halves — what the pass removed and what is still present.
 		expect(error.code).toBe('EACCES');
 		expect(error.message).toContain('/home/dev/build/deep/two.js');
 		expect(error.message).toContain('/home/dev/build/out.js');
@@ -591,8 +570,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 describe('a live mount point is a directory of this plane', () => {
 	test('stat answers structurally even where the mounted tree cannot stat its own root', async () => {
 		const container = fakeTree({ '/workspace/build.log': 'ok' });
-		// The container's own stat('/') answers null — the real sandbox view
-		// derives stat from the parent listing, and '/' has no parent entry.
+		// The real sandbox view derives stat from the parent listing, so stat('/') is null.
 		const blindRoot = { ...container, stat: async (path: string) => path === '/' ? null : container.stat(path) };
 		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', blindRoot)]);
 

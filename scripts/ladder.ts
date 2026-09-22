@@ -234,7 +234,10 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 21.4 s solo
     // (test:anti-slop under node, then oxlint). Split out of `bun run check`
     // (37 s) so the lint's closure — the anti-slop tool tree and the corpus —
-    // is keyed apart from the typecheck's.
+    // is keyed apart from the typecheck's. 2026-09-22: the trailing plain
+    // `oxlint` is gone; `live-tree.gate.test.ts` lints the tree once and reads
+    // its exit status. Interleaved at load 64-170: 149/181 CPU-s before,
+    // 90/96 after. The 21.4 s stands until a quiet re-measure.
     seconds: 21.4,
     catches: `the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across every file, every line, and the `
       + 'rule suites that prove each rule red-to-green under node.',
@@ -935,7 +938,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -963,8 +966,9 @@ export const LADDER: readonly Gate[] = [
     // the reason `bun test scripts/ladder.test.ts` was red on main that day.
     // Measured solo on the 24-thread box: 0.09s wall, 34ms in-suite, 14 tests.
     // The row stays 24s for the reason stated above.
-    // `comment-only.test.ts` joins 2026-09-22: the red and green proof of the
-    // comment-edit checker. Measured solo: 0.45s, 9 tests. The row stays 24s.
+    // `comment-only.test.ts` and `bloat-budget.test.ts` join 2026-09-22: the red
+    // and green proofs of the comment-edit checker and of the comment budget.
+    // Measured solo: 0.45s for 9 tests, 0.13s for 3. The row stays 24s.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -1965,6 +1969,23 @@ export const LADDER: readonly Gate[] = [
       + 'TYPES entirely. The advertised JSON Schema is bound to the same map at compile time '
       + '(the property types are derived from it) and asserted under full deps in '
       + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
+    inputs: { kind: 'derived' },
+  },
+  {
+    run: 'bun run gate:bloat-budget',
+    label: 'Comment budget',
+    // Measured 2026-09-22 on the 24-thread box: 0.46/0.52/0.73s wall, 417 MB
+    // peak, over 1,081 files. It reads oxc's comment list only, never the AST.
+    tier: 'commit',
+    seconds: 0.6,
+    catches: 'comment growth in a package. The owner capped comments after the census measured '
+      + 'them at 41% of the non-whitespace characters in product source (4,906,181 at '
+      + 'ad61dea6c): each package holds one number, a package over it is red, a package the '
+      + 'lock never held has a budget of zero, and `--lock` only lowers a number. A cut is '
+      + 'green and printed as a stale row, so trimming comments never fails a commit.',
+    blind: 'prose moved into a string literal, a doc or a commit body; comments in tests, '
+      + 'scripts and tools; growth paid for by a cut elsewhere in the same package; whether a '
+      + 'kept comment earns its place. All are printed on the gate\'s green path.',
     inputs: { kind: 'derived' },
   },
   {

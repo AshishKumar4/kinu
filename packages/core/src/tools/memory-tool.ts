@@ -1,10 +1,4 @@
-/**
- * The durable memory surface: prose notes (save/search), keyed facts
- * (remember/recall/forget), and this agent's past conversation transcript.
- *
- * memory.* reaches this same implementation from eval. One
- * dispatcher serves both surfaces.
- */
+/** Durable memory surface: prose notes, keyed facts, and past transcript recall. Also backs `memory.*` in eval. */
 import type { Memory, MemorySearchResult, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 import type { VectorStore } from '../memory/vector-store';
@@ -27,27 +21,17 @@ const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 
 export interface MemoryToolDeps {
   memory: Memory;
-  /** null explicitly declares a backend without a semantic index. Search
-   *  reports lexical-only coverage when absent or unavailable. */
+  /** null: no semantic index; search reports lexical-only coverage. */
   vectorStore?: VectorStore | null;
-  /** Typed keyed world-model store. remember/recall/forget are only
-   *  reachable when this is wired. */
+  /** remember/recall/forget are reachable only when set. */
   facts?: FactsStore;
-  /** Backs the `conversations` action's zero-LLM transcript recall. */
   sql: SqlExecutor;
-  /** Whose transcript that recall reads. The conversation store is bound to
-   *  one actor, so a dispatcher built for this runtime can only ever read the
-   *  rows this runtime owns. */
+  /** Conversation store is bound to this actor, so recall reads only its rows. */
   readonly actor: ActorHandle;
-  /** Reader for one session's canonical transcript. Entry text is not a
-   *  column: recall materializes it through this, so the recalled words are
-   *  the ones the canonical message parts hold. */
+  /** Recall materializes entry text through this reader; text is not a column. */
   readonly transcriptFor: (sessionId: string) => SessionTranscriptReader;
 }
 
-/** The durable-state tool's one input shape. `key` names a fact, `content` /
- *  `query` address prose, and the rest scope a session read — which of them
- *  the call needs follows from its action. */
 export interface MemoryToolInput {
   action: MemoryToolAction;
   key?: string;
@@ -61,10 +45,6 @@ export interface MemoryToolInput {
   max_chars?: number;
 }
 
-/** Build a memory dispatcher over one runtime's stores. Constructed once.
- * ConversationSearchStore is bound to `deps.actor` and holds no other state, so
- * the dispatcher is reused by every call the returned function serves — a
- * runtime's actor does not change under it. */
 export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryToolInput) => Promise<JsonValue> {
   const { memory, vectorStore: vs, facts } = deps;
 
@@ -74,8 +54,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
         const results = await memory.search(q, k);
 
         return results.map((r) => ({
-          // Canonical chunk id (`path:start-end`) — matches the id the vector
-          // store returns, so RRF fuses the lexical and semantic hits.
+          // Canonical chunk id, matching the vector store's so RRF fuses both.
           id: `${r.path}:${r.startLine}-${r.endLine}`,
           path: r.path, startLine: r.startLine, endLine: r.endLine,
           score: r.score, snippet: r.snippet,
@@ -99,8 +78,6 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     const coverage = 'Lexical search only; semantic recall is unavailable.';
 
     if (!facts) {
-      // No second lexical source: the note page IS the answer, rendered
-      // unchanged.
       if (results.length === 0) return `${coverage}\nNo results found.`;
 
       return `${coverage}\n` + results
@@ -108,9 +85,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
         .join('\n\n');
     }
 
-    // Facts are the second lexical source, fused through the same RRF the
-    // hybrid path uses — one ordering policy, no separate ranking. A fact hit
-    // renders its key and score where a note hit shows its chunk address.
+    // Facts fuse through the same RRF as the hybrid path.
     const merged = reciprocalRankFusion<(MemorySearchResult & { id: string; kind: 'note' }) | (FactSearchHit & { kind: 'fact' })>(
       [
         results.map((r) => ({ ...r, id: `${r.path}:${r.startLine}-${r.endLine}`, kind: 'note' as const })),
@@ -129,9 +104,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     }).join('\n\n');
   };
 
-  // `conversations` action: zero-LLM FTS5 transcript recall over the canonical
-  // conversation store. Mode is inferred from the input:
-  // around_message_id -> scroll, query -> search, neither -> browse.
+  // Mode: around_message_id -> scroll, query -> search, neither -> browse.
   const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor, deps.transcriptFor);
 
   const runConversationsAction = async (args: MemoryToolInput): Promise<JsonValue> => {
@@ -177,10 +150,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       throw new KinuError('bad_input', 'key must be a non-empty string');
     }
 
-    // The store folds a key to one spelling on every call. The tool's own
-    // answers must name that same spelling — otherwise the model is told a
-    // fact is "every-tool probe" and reads it back as "every-tool_probe":
-    // two names for one row, and a caller checking its own echo misses.
+    // Answers must echo the store's normalized spelling of the key.
     const storedKey = normalizeFactKey(key.output);
 
     if (action === 'remember') {
@@ -215,12 +185,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   const ActionSchema = v.picklist(actions);
 
   return async (args: MemoryToolInput): Promise<JsonValue> => {
-    // The declared `MemoryToolAction` is a claim, not a fact: the AI SDK leaves
-    // `Schema.validate` undefined for a jsonSchema-declared tool input, so this
-    // is whatever the model emitted. Refused WITH the vocabulary — and with the
-    // gated half omitted when this runtime has no FactsStore, from the same
-    // `memoryActionsFor` the enum in the schema is built from, so the words in
-    // the refusal are exactly the words that work.
+    // AI SDK does not validate jsonSchema tool input; refuse with the vocabulary this runtime supports.
     const action = v.safeParse(ActionSchema, args.action);
 
     if (!action.success) {

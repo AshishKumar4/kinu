@@ -56,7 +56,7 @@ export async function chatCommand(
     const agents = listKnownAgents();
 
     if (agents.length === 0) {
-      printError('No workspaces found.', 'Run kinu in a terminal to create one from a mission.');
+      printError('No workspaces yet.', 'Create one with kinu create <name>, or run kinu in a terminal.');
       process.exit(1);
     }
 

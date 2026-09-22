@@ -1,14 +1,5 @@
-// What each executor DECLARES it can run, asserted through the surface that
-// makes it matter.
-//
-// The declared set is not documentation. It is rendered into the agent's own
-// execution block (`, runs: …`), so it is
-// where the model decides to send work: a capability declared but absent routes
-// work to a machine that cannot do it, and one present but undeclared means the
-// work never goes there at all. So every test below asserts the SENTENCE THE
-// MODEL READS, built by the real router from the real provider. A test that
-// asserted the literal array would only be a second copy of the source, and
-// would agree with it while it was wrong.
+// Each executor's declared capabilities, asserted through the `, runs: …` sentence the model reads,
+// built by the real router from the real provider.
 import { describe, expect, test } from 'bun:test';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
@@ -21,8 +12,7 @@ import {
 import { createTestRuntime } from '@kinu.run/test-utils';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
-/** The rows the real projection (`DefaultExecutionRouter.listExecutors`) hands
- *  the prompt for one real provider. */
+/** Rows `DefaultExecutionRouter.listExecutors` hands the prompt for one real provider. */
 function routerRows(provider: ExecutorProvider) {
   const router = new DefaultExecutionRouter();
   router.register(provider);
@@ -30,8 +20,7 @@ function routerRows(provider: ExecutorProvider) {
   return router.listExecutors();
 }
 
-/** The `, runs: …` line for one real provider, through that projection and the
- *  real renderer. */
+/** The `, runs: …` line for one real provider through the real renderer. */
 function runsLine(provider: ExecutorProvider): string {
   const block = renderDynamicContextBlock({ executors: routerRows(provider) });
   const line = block?.split('\n').find((row) => row.startsWith(`- ${provider.name}:`));
@@ -47,9 +36,7 @@ const connectedDevice: DeviceTransport = {
   rpc: async () => undefined,
 };
 
-/** A container binding that is present and never called: the row renders only
- *  for an executor the router reports as reachable, and `connected` is a
- *  function of the binding existing rather than of any reply. */
+/** A present, never-called container binding: `connected` follows from the binding existing. */
 const boundContainer: SandboxHandle = (() => {
   const unreachable = async (): Promise<never> => {
     throw new Error('the capability row must not depend on a container reply');
@@ -64,34 +51,26 @@ const boundContainer: SandboxHandle = (() => {
 })();
 
 describe('sandbox capability row', () => {
-  // Inventory of record: `executeInExecutor` against the deployed container
-  // reports node v22.23.2, bun, sh/bash, git, npm, jq and curl PRESENT
-  // (docs/EXECUTION-LAYER-SPEC.md, AGENTS.md's Container row).
+  // Inventory of record: docs/EXECUTION-LAYER-SPEC.md, AGENTS.md's Container row.
   test('tells the model the container runs TypeScript, not just a shell with npm in it', () => {
     const line = runsLine(createSandboxExecutor(boundContainer));
 
-    // `bun` runs a .ts file directly. `tsc` is absent from the image and does
-    // not bear on it — it type-checks, it is not what executes the code.
+    // `bun` runs .ts directly; `tsc` is absent and irrelevant.
     expect(line).toContain('typescript');
     expect(line).toContain('javascript');
-    // A real Linux container: the tools it ships ARE ELF binaries, so one
-    // fetched with `curl` runs the same way.
     expect(line).toContain('native_binary');
   });
 
   test('claims neither python nor docker — both probed absent at exit 127', () => {
     const line = runsLine(createSandboxExecutor(boundContainer));
 
-    // The workspace is the only place Python runs at all; routing Python here
-    // is the escalation the spec exists to refuse.
+    // Python runs only in the workspace; routing it here is the escalation the spec refuses.
     expect(line).not.toContain('python');
-    // `docker` was declared here once, before the image was probed.
     expect(line).not.toContain('docker');
   });
 });
 
-/** A machine that answered the toolchain question `secondsAgo` ago, having
- *  resolved exactly `binaries` on its own PATH. */
+/** A machine that resolved exactly `binaries` on its PATH `secondsAgo` ago. */
 function probedDevice(binaries: readonly string[], secondsAgo = 0): DeviceTransport {
   const status = {
     connected: true,
@@ -106,27 +85,20 @@ describe('tunneled device capability row', () => {
   test('an unprobed machine claims nothing, and denies nothing either', () => {
     const line = runsLine(createDeviceTunnelExecutor(connectedDevice));
 
-    // The device is the user's own hardware behind a consent grant they made.
-    // Nothing has asked it what it holds, so none of these may be CLAIMED — an
-    // over-claim sends work there and it fails on their machine.
+    // Nothing has probed the device, so nothing may be claimed: an over-claim fails on the user's machine.
     const [runs, notMeasured] = line.split(', not measured here: ');
 
     for (const unprobed of ['javascript', 'typescript', 'python', 'npm', 'git', 'docker', 'gpu']) {
       expect(runs).not.toContain(unprobed);
     }
 
-    // And none may be reported ABSENT either. The row that replaced this one
-    // simply omitted them, which reads to the model exactly like a denial: it
-    // would never try python on a machine that may well have python.
+    // Nor reported absent: omission reads to the model like a denial.
     expect(runs).toBe('- device: connected, files at /pc, runs: native_binary, shell, fs_owned, net_outbound, process_spawn');
     expect(notMeasured).toBe('javascript, typescript, python, npm, git, docker, gpu');
   });
 
   test('a probed machine offers the languages it actually has, and only those', () => {
-    // `node` runs .js but not .ts, and is not a package manager. So one answer
-    // produces all three states at once: javascript is evidenced, typescript /
-    // npm / git were looked for and not found, and docker / gpu were not looked
-    // for because nothing on a PATH could settle them.
+    // One answer, three states: javascript evidenced; typescript/npm/git absent; docker/gpu unknown (no PATH can settle them).
     const line = runsLine(createDeviceTunnelExecutor(probedDevice(['node', 'python3'])));
 
     expect(line).toBe(
@@ -136,9 +108,7 @@ describe('tunneled device capability row', () => {
   });
 
   test('a stale answer cannot masquerade as a fresh one', () => {
-    // The agent can install a toolchain onto that machine through `device.exec`,
-    // so an answer is evidence for a bounded time. Past it the row goes back to
-    // knowing nothing — it does not keep claiming, and it does not start denying.
+    // An answer is evidence for a bounded time (the agent can install toolchains); then the row knows nothing again.
     const stale = runsLine(createDeviceTunnelExecutor(
       probedDevice(['node', 'python3'], DEVICE_TOOLCHAIN_TTL_MS / 1_000 + 1),
     ));
@@ -159,8 +129,7 @@ describe('tunneled device capability row', () => {
     const provider = createDeviceTunnelExecutor(connectedDevice);
     const line = runsLine(provider);
 
-    // Nothing in the `device` namespace can keep a process alive between turns
-    // or signal one, so neither may be declared.
+    // Nothing in `device` can keep a process alive between turns or signal one.
     expect(Object.keys(provider.tools).sort())
       .toEqual(['exec', 'exists', 'readFile', 'readdir', 'writeFile']);
     expect(line).not.toContain('process_long');
@@ -170,17 +139,13 @@ describe('tunneled device capability row', () => {
   test('does not offer inbound ports its own exposePort refuses', async () => {
     const provider = createDeviceTunnelExecutor(connectedDevice);
 
-    // The device sits behind the user's NAT; this provider opens nothing back
-    // to it, and said so while declaring net_inbound anyway.
+    // The device is behind the user's NAT; this provider opens nothing back to it.
     expect(await provider.exposePort?.(8080)).toMatchObject({ supported: false });
     expect(runsLine(provider)).not.toContain('net_inbound');
   });
 
   test('is left out of the preview instructions it can never honour', () => {
-    // net_inbound is not prompt decoration: prompt.ts builds the "Showing a
-    // running app" recipe from exactly the executors that declare it, naming
-    // `<name>.exposePort(port)`. While device declared it, the model was told
-    // to call a method that answers `supported: false`.
+    // prompt.ts builds the "Showing a running app" recipe from executors declaring net_inbound.
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {

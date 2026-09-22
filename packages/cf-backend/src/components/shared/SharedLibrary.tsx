@@ -1,16 +1,4 @@
-/**
- * The shared library, drawn as one grid of previews: what I shared, what
- * others shared with me, what is public, and what the people I have exchanged
- * a share with have made public — one `kind:id`-deduped union under All, the
- * four lists beside it as segments. A row is either a live share — the
- * owner's slate running in the owner's workspace under the members they
- * granted, opened in a new tab — or a blueprint — a committed version with
- * every binding unmapped, forked into a workspace of mine.
- *
- * It is the body of the Drive's `/blueprints` folder (pages/DrivePage.tsx):
- * blueprints are the one user-level asset with no bytes of their own on the
- * tenant, so the folder shows the library rather than a file list.
- */
+/** Body of the Drive's `/blueprints` folder (pages/DrivePage.tsx). */
 import { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -27,8 +15,7 @@ function when(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-/** The five lists one library answers to, in strip order. All is the union,
- *  deduped by kind:id — a public row you were also named on shows once. */
+/** All is the union, deduped by kind:id. */
 type SegmentId = "all" | "mine" | "received" | "public" | "known";
 
 const SEGMENTS: readonly { id: SegmentId; label: string }[] = [
@@ -39,7 +26,6 @@ const SEGMENTS: readonly { id: SegmentId; label: string }[] = [
   { id: "known", label: "People I know" },
 ];
 
-/** What a list says when it holds nothing, per list. */
 const EMPTY_COPY: Record<SegmentId, string> = {
   all: "Nothing shared yet",
   mine: "Nothing shared yet",
@@ -72,8 +58,7 @@ const SORTS: readonly { id: Sort; label: string }[] = [
   { id: "used", label: "Most used" },
 ];
 
-/** A live row opens the running slate in a new tab; the URL is minted per
- *  open because a share that names people carries a short-lived ticket. */
+/** The URL is minted per open: a share naming people carries a short-lived ticket. */
 function OpenLive({ row }: { row: SharedRow }) {
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -104,8 +89,6 @@ function OpenLive({ row }: { row: SharedRow }) {
   );
 }
 
-/** What a live row adds about who it answers. A row that carries no visibility
- *  says nothing about reach. */
 const VISIBILITY_SUFFIX: Record<LiveShareVisibility, string> = {
   public: " · public",
   users: " · people",
@@ -138,10 +121,6 @@ interface TilePoint {
   readonly y: number;
 }
 
-/** The card's deterministic generative tile: 7–11 seeded nodes and each
- *  node's nearest neighbour, drawn in percent so the SVG stretches to the
- *  preview at pixel-true dot and line sizes. One node carries the accent —
- *  the card's only gold. */
 function ShareTile({ id }: { id: string }) {
   const points = useMemo<TilePoint[]>(() => {
     const random = seededRandom(shareSeed(id));
@@ -184,8 +163,6 @@ function ShareTile({ id }: { id: string }) {
   );
 }
 
-/** The preview's title mark: the leading letters of the first words, in the
- *  display face — a monogram, not an abbreviation. */
 function monogram(title: string): string {
   const letters = title.split(/\s+/).filter((word) => word !== "").slice(0, 2).map((word) => word.charAt(0)).join("").toUpperCase();
 
@@ -248,7 +225,6 @@ function ShareCard({ row, onFork }: { row: SharedRow; onFork: (row: SharedRow) =
 }
 
 export interface SharedLibraryProps {
-  /** Signed-out sample content for the gallery. */
   fixture?: SharedLibrary;
   workspaces?: readonly WorkspaceEntry[];
 }
@@ -315,7 +291,7 @@ export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = 
       {err && (
         <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
           <span className="min-w-0 truncate">{err}</span>
-          <button type="button" onClick={refresh} className="shrink-0 underline">retry</button>
+          <button type="button" onClick={refresh} className="shrink-0 underline">Retry</button>
         </div>
       )}
       {library === null && err === null ? (
@@ -323,7 +299,7 @@ export function SharedLibraryView({ fixture, workspaces }: SharedLibraryProps = 
       ) : library !== null && (
         shown.length === 0 ? (
           <p className="py-12 text-center p-text-3">
-            {needle === "" ? EMPTY_COPY[segment] : `Nothing matches “${query.trim()}”`}
+            {needle === "" ? EMPTY_COPY[segment] : `Nothing matches "${query.trim()}"`}
           </p>
         ) : (
           <ul data-share-grid className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

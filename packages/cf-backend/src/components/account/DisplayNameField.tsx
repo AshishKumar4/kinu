@@ -1,9 +1,4 @@
-/**
- * The one field that renames the owner, shared by the wizard's first step and
- * the Account settings Profile card. The input is controlled by its caller so
- * the caller decides when "changed" — the wizard saves on Next, the card on
- * its own Save.
- */
+/** Controlled by the caller, which decides when "changed" is saved. */
 import { DISPLAY_NAME_MAX } from "@kinu.run/core";
 import { Field, inputCls } from "@/components/ui/form";
 

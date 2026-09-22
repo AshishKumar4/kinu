@@ -1,25 +1,4 @@
-/**
- * Payload visibility — orthogonal to trust.
- *
- * Trust gates EXECUTION (what tools the receiving head can call).
- * Visibility gates DISPLAY + AUDIT STORAGE (what gets persisted and what
- * the LLM sees in its context).
- *
- *   full           — store and render as-is
- *   redact         — stored with secret-shaped fields and free-text values masked
- *   hash           — store sha256+size+content-type only
- *   hmac           — store hmac (proves identity without revealing content)
- *   opaque_handle  — store a pointer to a separate secret store
- *
- * Two operations:
- *
- *   `applyVisibilityForStorage(payload, policy, secret?)` — called once at
- *   ingress before INSERT. Determines what actually goes into agent_log.
- *
- *   `renderForLLM(event)` — called per LLM step when building context.
- *   Returns a string suitable for the synthetic `pending_events.poll` tool
- *   result, never raw JSON.
- */
+/** Payload visibility gates display and audit storage; trust (separately) gates execution. */
 
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
@@ -34,9 +13,7 @@ import {
   type JsonObject, type JsonValue,
 } from '../../utils/json';
 
-// ── Secret-shape heuristics for `redact` ─────────────────────────
-
-/** Field names that are always secrets, regardless of position. Lowercased match. */
+/** Lowercased match. */
 const SECRET_FIELD_PATTERNS: ReadonlyArray<RegExp> = [
   /^authorization$/i,
   /^cookie$/i,
@@ -45,10 +22,8 @@ const SECRET_FIELD_PATTERNS: ReadonlyArray<RegExp> = [
   /^x-api-key$/i,
 ];
 
-/** Secret suffix words, matched as the last `_`/`-`/camelCase-separated token.
- *  A bare `key$` substring would also mask `monkey`/`turkey`, so the boundary
- *  before the token is required. The split is case-sensitive (a camelCase
- *  boundary is a case transition); only the final comparison is lowercased. */
+/** Matched as the last separated token so `monkey`/`turkey` are not masked. The split is
+ *  case-sensitive (camelCase boundary); only the final comparison is lowercased. */
 const SECRET_SUFFIX_TOKENS = new Set(['token', 'key', 'secret', 'password']);
 
 function lastNameToken(name: string): string {
@@ -67,16 +42,7 @@ export function looksLikeSecretField(name: string): boolean {
   return SECRET_SUFFIX_TOKENS.has(lastNameToken(name));
 }
 
-/**
- * Recursively redact field values whose names look secret-shaped.
- *
- * Exported because a SECOND boundary needs this exact policy: the transcript's
- * generic tool preview renders tool input, output and errors as raw values, and
- * a tool payload carrying a bearer token is the same shape of accident as an
- * event payload carrying one. One list, two consumers — a near-duplicate
- * heuristic in the UI would drift from this one the first time either is
- * extended.
- */
+/** Also used by the transcript tool preview, so the two boundaries share one list. */
 export function redactPayload(value: JsonValue): JsonValue {
   if (v.is(v.string(), value)) return redactSecrets(value);
 
@@ -94,18 +60,8 @@ export function redactPayload(value: JsonValue): JsonValue {
   return redacted;
 }
 
-/**
- * Mask secret-shaped VALUES inside free text — the second half of the
- * redaction boundary, for strings whose field name cannot see them.
- *
- * The shape list is `SECRET_PATTERNS`, the one source the commit-tier scan
- * and the blueprint export already read, applied with the same semantics:
- * each line is adjudicated per pattern and a pattern's `benign` form
- * suppresses its own matches on that line only. What is masked is replaced by
- * `<redacted>`, the marker `redactErrorText` and the preview code blocks
- * already print, so one marker means "a value was here" across every free
- * text a payload can carry.
- */
+/** Applies `SECRET_PATTERNS` per line (a pattern's `benign` form suppresses it on that line) and
+ *  masks with `<redacted>`, the marker `redactErrorText` prints. */
 export function redactSecrets(text: string): string {
   return text.split('\n').map((line) => {
     let redacted = line;
@@ -120,12 +76,8 @@ export function redactSecrets(text: string): string {
   }).join('\n');
 }
 
-// ── Storage transform ────────────────────────────────────────────
-
 export interface StorageTransform {
-  /** What actually goes into the `payload` column. */
   stored: JsonValue;
-  /** Any opaque references created during the transform. */
   opaque_handles?: Array<{ handle: string; size: number; content_type?: string }>;
 }
 
@@ -165,7 +117,6 @@ export function applyVisibilityForStorage(
 
     case 'hmac': {
       if (!hmacSecret) {
-        // Without a secret, hmac collapses to hash. Log via the absence in stored.
         return applyVisibilityForStorage(payload, 'hash');
       }
 
@@ -183,8 +134,7 @@ export function applyVisibilityForStorage(
     }
 
     case 'opaque_handle': {
-      // Payload itself is replaced; caller is responsible for the side-store
-      // write (e.g. UserDO secret store) BEFORE calling publish.
+      // The caller writes the side store (e.g. UserDO secret store) before publish.
       const serialized = JSON.stringify(admittedPayload);
       const handle = `opaque:${createHash('sha256').update(serialized).digest('hex').slice(0, 16)}`;
 
@@ -212,48 +162,17 @@ function detectContentType(payload: JsonValue): string {
   return 'object';
 }
 
-// ── LLM rendering ────────────────────────────────────────────────
-
-/** Chat-scale brief budget for the variants whose payload IS the receiving
- *  turn's input (peer messages, subordinate assignments and reports) — not
- *  the 150-char telemetry brief. Content beyond it is only reachable through
- *  the spilled reference (`events/hub/content-spill.ts`). */
+/** Brief budget for variants whose payload is the turn's input; the rest is reachable only via
+ *  the spilled reference (`hub/content-spill.ts`). */
 export const EVENT_BRIEF_MAX_CHARS = 600;
 
-/**
- * One brief's body — bounded, and honest about it.
- *
- * Every variant whose payload IS the woken turn's input renders through this.
- * A head slice alone is the defect the spill path was built to close from the
- * other side: the agent is woken BY a message, shown its opening, and has no
- * way to tell that what it read was a fragment. `evidenceWindow` keeps both
- * ends and states the omitted count in-band, so the brief says it is partial
- * even in the case the spill could not write a path to the rest.
- */
+/** Keeps both ends and states the omitted count in-band, so a partial brief says so. */
 function briefWindow(text: string): string {
   return evidenceWindow(text, EVENT_BRIEF_MAX_CHARS);
 }
 
-/**
- * The structured handoff, rendered WHOLE, one entry per line under its own
- * field name.
- *
- * No window here, and that is the point of
- * {@link SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}: the dispatcher refuses a
- * handoff bigger than one brief window, so everything that reaches this
- * function fits and the parent reads all of it. A window here instead would
- * cut the concerns list off mid-item with no path to the rest — the handoff
- * has no spill file, only `content` does.
- *
- * The field NAME is the label, verbatim, because the parent and the child are
- * reading the same word: the child wrote `open_work` into the tool call and
- * the parent sees `open_work` in its turn.
- *
- * Two callers. The second is the task-lifetime lane
- * (`events/ingress/subordinate.ts`), where an `agents.ask` waiter is handed
- * ONE string and there is no structured slot to put these in — so the answer
- * carries them as trailing prose rather than dropping them.
- */
+/** Rendered whole: {@link SUBORDINATE_REPORT_HANDOFF_MAX_CHARS} guarantees it fits, and the
+ *  handoff has no spill file. */
 export function renderSubordinateHandoff(handoff: SubordinateReportHandoff): string {
   let rendered = '';
 
@@ -269,9 +188,7 @@ export function renderSubordinateHandoff(handoff: SubordinateReportHandoff): str
   return rendered;
 }
 
-/** Compact, human-readable representation of an event for injection into
- *  the LLM context. Never includes raw payload bytes for non-`full`
- *  visibility events. */
+/** Never includes raw payload bytes for non-`full` visibility. */
 export function renderForLLM(event: KinuEvent) {
   return {
     id: event.id,
@@ -319,7 +236,6 @@ function friendlySource(event: KinuEvent): string {
   }
 }
 
-/** The `size` a replaced payload stored, as text a brief can print. */
 function storedSize(payload: JsonObject): string {
   const stored = v.safeParse(v.number(), payload.size);
 
@@ -327,8 +243,6 @@ function storedSize(payload: JsonObject): string {
 }
 
 function briefForVariant(event: KinuEvent): string {
-  // Hash/HMAC/opaque policies replace the payload. Redaction preserves the
-  // domain shape and may continue through the variant renderer below.
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
     const parsed = v.safeParse(JsonObjectSchema, event.payload);
     const visibilityPayload = parsed.success ? parsed.output : {};
@@ -346,10 +260,7 @@ function briefForVariant(event: KinuEvent): string {
     }
 
     if (marker === 'opaque_handle') {
-      // The payload was replaced with a pointer into a side store the agent
-      // cannot reach (applyVisibilityForStorage). Say so — do not invent a
-      // read-back API. This line once instructed the model to call
-      // `read_external_payload(event_id)`, which existed nowhere.
+      // The side store is unreachable to the agent; do not invent a read-back API.
       const handle = v.is(v.string(), visibilityPayload.handle) ? visibilityPayload.handle : 'unknown';
 
       return `[opaque payload ${handle}: withheld by visibility policy; not readable from this agent]`;
@@ -362,10 +273,6 @@ function briefForVariant(event: KinuEvent): string {
     case 'chat':
       return event.payload.text.slice(0, 200);
     case 'webhook': {
-      // A webhook body IS the woken turn's input, so it gets the chat-scale
-      // budget and an address for the rest. The old 200-char head slice of
-      // stringified JSON handed the model syntactically invalid JSON with no
-      // marker, no count, and nothing to read back.
       const p = event.payload;
       const body = JSON.stringify(p.body) ?? 'undefined';
       const full = rest('body', p.body_path, p.body_unsaved);
@@ -388,8 +295,6 @@ function briefForVariant(event: KinuEvent): string {
     }
 
     case 'peer_agent': {
-      // Peer messages are delegated tasks/answers — the whole delivery, so an
-      // oversize body names where its full text was spilled.
       const p = event.payload;
       const full = rest('message', p.body_path, p.body_unsaved);
 
@@ -397,16 +302,7 @@ function briefForVariant(event: KinuEvent): string {
     }
 
     case 'subordinate_task': {
-      // Assignments are the subordinate's whole turn input — chat-scale
-      // budget, same as peer messages.
-      //
-      // NO `inherited_context` PREFIX. This rendering used to lead with the
-      // digest, and that prefix was the digest's only reader while the reactor
-      // still digested assignments. It does not any more (`wakesADrain`
-      // excludes the variant), and the birth context has ONE owner now —
-      // `subordinateBirthMessages`, which hands both kinds to the turn — so
-      // repeating it here would hand the model the same prose twice the day a
-      // reader for this brief comes back.
+      // No `inherited_context` prefix: `subordinateBirthMessages` owns the birth context.
       const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
 
@@ -424,7 +320,6 @@ function briefForVariant(event: KinuEvent): string {
     case 'file_changed':
       return `${event.payload.change} ${event.payload.path}`;
     case 'email': {
-      // Same treatment as a peer message: the mail IS the woken turn's input.
       const p = event.payload;
 
       const attachNote = p.attachments?.length > 0
@@ -447,8 +342,6 @@ function briefForVariant(event: KinuEvent): string {
   }
 }
 
-/** Where the rest of a windowed body lives, or why it lives nowhere. Empty when
- *  the body fit the brief. */
 function rest(what: string, path: string | undefined, unsaved: string | undefined): string {
   if (path) return ` — full ${what}: ${path}`;
 

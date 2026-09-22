@@ -1,14 +1,4 @@
-/**
- * Live-share rows: a share of the RUNNING slate under a grant, beside
- * `slate_shares` (blueprints) and never inside it — the two tables answer
- * different questions, and a live row's grant, handle and viewer requests
- * have no columns to borrow there.
- *
- * `slate_viewer_requests` is the audit trail: one row per request a viewer's
- * session opens, every binding call it made appended under `calls`, and the
- * outcome the host settles it with. The grant is what admits a call; this
- * table is what lets the owner read back what admission did.
- */
+/** Live-share rows, separate from `slate_shares` (blueprints). `slate_viewer_requests` is the audit trail of what admission did. */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { KinuError } from '../obs/error';
@@ -69,7 +59,7 @@ export class SlateLiveShareStore {
     return row === undefined ? undefined : this.record(v.parse(LiveShareRow, row), this.users([id]));
   }
 
-  /** The row a viewer may act on: present and unrevoked, re-read on this call. */
+  /** Present and unrevoked, re-read on this call. */
   live(id: string): LiveShareRecord {
     const share = this.get(id);
 
@@ -80,7 +70,7 @@ export class SlateLiveShareStore {
     return share;
   }
 
-  /** The live row an opener's handle names, or none — a revoked share has no address. */
+  /** A revoked share has no address. */
   byHandle(handle: string): LiveShareRecord | undefined {
     const row = this.db.exec('SELECT * FROM slate_live_shares WHERE handle = ? AND revoked_at IS NULL', handle).toArray()[0];
 
@@ -125,14 +115,12 @@ export class SlateLiveShareStore {
     return { ...share, users: this.users([id]).filter((row) => row.share_id === id).map((row) => row.email) };
   }
 
-  /** Whether the share names this account — the `users` visibility check. */
   hasUser(id: string, userId: string): boolean {
     return this.db.exec('SELECT user_id FROM slate_live_share_users WHERE share_id = ? AND user_id = ?', id, userId)
       .toArray().length > 0;
   }
 
-  /** Open an audit row for one viewer request; the row id it answers is the
-   *  request number later calls record against. */
+  /** The returned row id is the request number later calls record against. */
   openRequest(input: { share: string; viewer: string; slate: string; path: string }): number {
     const createdAt = this.now();
 
@@ -144,7 +132,6 @@ export class SlateLiveShareStore {
     return v.parse(v.object({ id: v.number() }), row).id;
   }
 
-  /** Append one admitted-or-refused call to the request's record. */
   recordCall(request: number, call: ViewerCall): void {
     const row = this.db.exec('SELECT calls FROM slate_viewer_requests WHERE id = ?', request).toArray()[0];
 

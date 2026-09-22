@@ -1,12 +1,4 @@
-/**
- * Nimbus executor adapter.
- *
- * Core stays dependency-clean: the composing backend builds the workspace box
- * and passes it here — on Cloudflare that is Nimbus held as a library over the
- * owning Durable Object's own SQLite (`cf-backend/src/workspace-host.ts`), or a
- * client onto that object for one of its facets. This adapter only maps the
- * box's stable shape into Kinu's ExecutorProvider contract.
- */
+/** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
@@ -25,14 +17,11 @@ import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } fr
 import type { JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
-/** The fallback's own constants: one environment value carries path and
- *  offsets as JSON, so no shell text ever quotes a path. */
+/** Shell-fallback constants: path and offsets travel as JSON in one env value, never quoted into shell text. */
 const NIMBUS_RANGE_ENV = 'KINU_NIMBUS_RANGE_REQUEST';
 
 const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(process.env.${NIMBUS_RANGE_ENV});if(!Number.isSafeInteger(r.offset)||r.offset<0||!Number.isSafeInteger(r.length)||r.length<=0)throw new Error('invalid range');const fd=fs.openSync(r.path,'r');try{const b=Buffer.allocUnsafe(r.length);const n=fs.readSync(fd,b,0,r.length,r.offset);process.stdout.write(b.subarray(0,n).toString('base64'));}finally{fs.closeSync(fd);}`;
 
-/** One ranged read against the origin session: the handle to read through, the
- *  file, the window inside it, and the identity the read runs as. */
 interface NimbusOriginRangeRead {
   readonly box: NimbusSandboxHandle;
   readonly files: NimbusSandboxFiles;
@@ -42,19 +31,8 @@ interface NimbusOriginRangeRead {
   readonly cred?: VfsCred;
 }
 
-/**
- * One window of one file's bytes, off the session's own filesystem.
- *
- * A file read must not require a shell. The box's file plane carries the native
- * ranged read; the shell reader below is the fallback for an SDK handle whose
- * file plane lacks the op. Reading through `node -e <one-line CJS reader>` over
- * the box's exec makes the `node` command compile its `-e` source with
- * `new Function` — which the Workers runtime forbids outright, so a ranged read
- * on a hosted workspace dies as EIO with "Code generation from strings
- * disallowed for this context" while every Node-run test stays green. No
- * hosted deployment is on such a handle (the box carries the op on both sides
- * of the RPC).
- */
+/** One window of a file's bytes. Prefers the box's native ranged read; the `node -e` shell reader is a fallback
+ *  only for handles lacking the op (Workers forbid `new Function`, so it would fail hosted). */
 async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8Array> {
   const { box, files, path, offset, length, cred } = read;
 
@@ -73,8 +51,6 @@ async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8
     return bytes;
   }
 
-  // Path and offsets travel as JSON in one environment value, never through
-  // shell text, for the handles that need the session's own Node.
   const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
     env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
     ...asCred(cred),
@@ -96,16 +72,8 @@ export interface NimbusExecOptions {
   env?: Record<string, string>;
   timeoutMs?: number;
   stdin?: string;
-  /**
-   * Who this command runs as, or absent for the session user.
-   *
-   * HOST-INJECTED, NEVER AGENT-SUPPLIED, and the distinction is the whole
-   * security property: a credential names a uid, so a surface that let an agent
-   * choose one would let it choose uid 0. {@link NimbusExecOptionsSchema}
-   * therefore omits this field deliberately — see the note there — and the only
-   * way a credential reaches `exec` is a host stamping it in, as
-   * {@link nimbusSessionShell} does.
-   */
+  /** Identity the command runs as; absent is the session user. Host-injected only: {@link NimbusExecOptionsSchema}
+   *  omits it so an agent cannot choose uid 0. */
   cred?: VfsCred;
 }
 
@@ -139,12 +107,7 @@ export interface NimbusPortInfo {
   capability?: string;
 }
 
-/**
- * What `startProcess` returns since SDK 0.2.0: a background process that is
- * STILL RUNNING when the call comes back — so there is no exit code and no
- * captured output here. Output and the eventual exit record are read through
- * `logs`; the process is stopped through `killProcess`.
- */
+/** `startProcess` result (SDK ≥0.2.0): the process is still running, so no exit code or output; read `logs`, stop via `killProcess`. */
 export interface NimbusStartResult {
   command: string;
   pid: number;
@@ -153,29 +116,19 @@ export interface NimbusStartResult {
   startedAt: number;
 }
 
-/**
- * The workspace's file plane as the handle carries it. `as(cred)` is the same
- * plane bound to one identity — the view `SqliteVFS.as(cred)` gives in
- * process and the session's pid-less file RPCs give over a wire — so an
- * agent whose home is its own uid reads and writes it through the file tools
- * exactly as its commands do. Absent on a handle that cannot bind one; the
- * credentialed plane then refuses rather than acting as the session user.
- */
+/** The handle's file plane. `as(cred)` binds it to one identity; when absent the credentialed plane refuses
+ *  rather than acting as the session user. */
 export interface NimbusSandboxFiles {
   as?(cred: VfsCred): NimbusSandboxFiles;
     read(path: string): Promise<string | null>;
-    /** Raw-byte read (SDK ≥0.1.4) — the binary-safe counterpart of `read`. */
+    /** Raw-byte read (SDK ≥0.1.4). */
     readBytes?(path: string): Promise<Uint8Array | null>;
-    /** Exactly this window of one file's bytes, without materializing the
-     *  file. Absent on an SDK handle that predates it; null when the path is
-     *  absent, the same answer `read` gives. */
+    /** Exactly this window of a file's bytes; absent on older SDK handles; null when the path is absent. */
     readRange?: (path: string, offset: number, length: number) => Promise<Uint8Array | null>;
-    /** Whole-file write. The SDK takes no precondition and answers nothing, so
-     *  a caller that needs compare-and-write cannot get it here. */
+    /** Whole-file write; no precondition, so no compare-and-write. */
     write(path: string, content: string | Uint8Array): Promise<void>;
     list(path?: string): Promise<Array<{ name: string; type?: string; isDir?: boolean; size?: number }>>;
-    /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent.
-     *  No revision: `NimbusFileStat` carries type, size, ctime, mtime and mode. */
+    /** Native stat (SDK ≥0.2.0). `mtime` is in milliseconds; null when absent. No revision field. */
     stat?(path: string): Promise<{ type: string; size: number; mtime: number } | null>;
     lstat?(path: string): Promise<{ type: string; size: number; mtime: number; mode?: number } | null>;
     rename?(from: string, to: string): Promise<void>;
@@ -204,9 +157,7 @@ export interface NimbusSandboxHandle {
   ports?: {
     expose?(port: number): Promise<{ port: number; url?: string; listening?: boolean; pid?: number | null; registeredAt?: number | null; capability?: string | null }>;
     unexpose?(port: number): Promise<JsonValue | undefined>;
-    /** `unavailable` says why an exposed port has no `url`, when the host
-     *  knows: a deployment with no preview host, or a workspace whose name a
-     *  hostname label cannot carry. Absent when there is a URL. */
+    /** Why an exposed port has no `url`, when known; absent when there is a URL. */
     list?(): Promise<Array<{ port: number; url?: string; unavailable?: string; pid?: number; registeredAt?: number; capability?: string }>>;
     url?(port: number): string | undefined;
   };
@@ -216,20 +167,9 @@ export interface NimbusExecutorOpts {
   box?: NimbusSandboxHandle;
   root?: string;
   namespace?: string;
-  /**
-   * Whether this host can publish the session's ports as reachable preview
-   * URLs. A handle with a port API is assumed reachable unless the composing
-   * backend disables it because its public preview origin is unconfigured.
-   */
+  /** Whether session ports can be published as preview URLs; false when the backend's preview origin is unconfigured. */
   inboundNetwork?: boolean;
-  /**
-   * Whether this deployment can actually install interpreter runtimes
-   * (python, ruby, clang) into the session — for the Cloudflare backend, that
-   * the `NIMBUS_RUNTIME_CACHE` R2 bucket is bound and published. `python` and
-   * `native_binary` are declared exactly when this is true: a capability row
-   * must say what runs, and a session without a runtime source answers
-   * `python -c` with an install error, not a Python.
-   */
+  /** Whether interpreter runtimes (python, ruby, clang) can be installed; gates declaring `python`/`native_binary`. */
   runtimeCatalog?: boolean;
 }
 
@@ -243,43 +183,17 @@ const NOT_CONFIGURED =
   'pass it here — `createHostedWorkspace(...).box(shellId)` on the Cloudflare ' +
   'backend, the embedded bundle on the CLI.';
 
-/**
- * `unavailable`, for the reason spelled out in `sandbox.ts`: the binding is
- * absent, so this deployment has no session at all, and it is the same fact the
- * `shell` tool already spells `unavailable` for an unregistered runtime. One fact,
- * one code, one part of the census.
- *
- * Its own bucket matters more here than anywhere else: Nimbus IS the workspace
- * (`createNimbusWorkspaceExecutor` registers it as `workspace`), so an absent box
- * touches every single call — and bare prose is what `isFailingResultText`
- * reads as a clean success.
- */
+/** `unavailable`: no session binding. Nimbus is the workspace, so this touches every call; bare prose would read as success. */
 const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
-/**
- * The session is live and the SDK handle this deployment holds has no such
- * surface — an older `@nimbus-sh/sdk`, or a host that composed a narrower handle.
- *
- * `unsupported`, never `unavailable`: retrying cannot grow a method onto a handle,
- * which is the exact line the two codes divide (obs/error.ts), and it is the same
- * call the `shell` tool makes for `runtime_does_not_support_exec`.
- */
+/** Live session, but the SDK handle lacks this surface: `unsupported`, since retrying cannot add a method (obs/error.ts). */
 function handleLacks(surface: string): string {
   return refusalText(new KinuError('unsupported', `Nimbus SDK handle does not expose ${surface}`));
 }
 
 /**
- * The workspace `node` shim compiles every program with `new Function`, which
- * the hosted runtime forbids at request time — and the loopback guard in
- * `vfs/workspace-runtimes.ts` refuses those programs naming the container.
- * Either text in a result means no node program started here, so the tools
- * answer with the reason rather than the compiler's complaint: the model
- * branches on `reason`, and `unsupported` says a retry cannot change that.
- *
- * The guard's own marker classifies whatever command carried it — only the
- * guard writes that line, and only when refusing a program. The raw V8 mark
- * classifies only a result whose command invoked `node`: the same string as
- * file bytes (a log being read, an error being quoted) is data, not a death.
+ * The workspace `node` shim compiles via `new Function` (forbidden hosted) and `vfs/workspace-runtimes.ts` loopback guard
+ * refuses container-naming programs. The guard marker classifies any command; the V8 mark only a command invoking `node`.
  */
 const CODEGEN_BLOCKED_MARK = 'Code generation from strings disallowed';
 
@@ -290,7 +204,6 @@ const WORKSPACE_NODE_REFUSAL =
   + `Run Node/Vite programs in an available capable executor, such as sandbox. `
   + `Worker slates compile separately; use the declared slate preview operation when available, without a node precheck.`;
 
-/** Whether `command` reaches the workspace `node` shim. */
 function invokesWorkspaceNode(command: string): boolean {
   return /(^|[;&|(\s])node(\s|$)/m.test(command);
 }
@@ -330,9 +243,7 @@ function workspacePortFailure(input: { port: number; cause: unknown }): KinuErro
   return nimbusFailure({ doing: `nimbus exposePort ${input.port}`, cause: input.cause });
 }
 
-/** Every failure out of the session's RPC. `io` is the seam's own answer for an
- *  unrecognised one — this is a transport to a Durable Object — while an abort, a
- *  timeout or the memory wall keeps the more precise code the classifier pinned. */
+/** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
 function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
 }
@@ -352,15 +263,7 @@ const StringSchema = v.string();
 
 const OptionalPathSchema = v.optional(v.string());
 
-/**
- * The agent-facing option schemas, and both OMIT `cred` on purpose.
- *
- * These parse tool arguments, which is to say model output. `v.object` is
- * non-strict, so a `cred` an agent invents is STRIPPED here rather than
- * refused — the escalation is dropped before it reaches the substrate, where
- * `isVfsCred` would otherwise fall through to the session user and say nothing.
- * Adding `cred` to either schema would hand every agent its own choice of uid.
- */
+/** Agent-facing option schemas; both omit `cred` so an invented one is stripped. Adding it would let agents choose their uid. */
 const NimbusExecOptionsSchema: v.GenericSchema<NimbusExecOptions> = v.object({
   cwd: v.optional(v.string()),
   env: v.optional(v.record(v.string(), v.string())),
@@ -404,14 +307,7 @@ function stringifyResult(input: { value: unknown }): string {
   try { return JSON.stringify(input.value, null, 2); } catch (error) { return `unserializable process result: ${renderThrownChain({ cause: error })}`; }
 }
 
-/**
- * Render a startProcess result the way the agent needs to read it: whether
- * the process is STILL RUNNING, and which calls observe or stop it. The old
- * exec-shaped rendering here was the transcript-measured failure mode — a
- * server printed its startup line, the one-shot runner reported `exited(0)`,
- * and the agent burned the rest of its calls discovering that nothing was
- * listening.
- */
+/** Render a startProcess result stating the process is still running and which calls observe or stop it. */
 function formatStartResult(result: NimbusStartResult, namespace: string): CommandResult {
   const running = result.process.state === 'running';
 
@@ -431,16 +327,7 @@ function formatStartResult(result: NimbusStartResult, namespace: string): Comman
   return commandResult({ stdout: lines.join('\n'), exitCode: running ? 0 : result.process.exitCode ?? 0 });
 }
 
-/**
- * The session's process, port and runtime control surface, as a namespace
- * declares it to the model.
- *
- * ONE list with two readers: `createNimbusExecutor` renders it into its own
- * namespace, and `createNimbusWorkspaceExecutor` appends it to the inline
- * `workspace` one. It was written out twice, so a tool the session gained could
- * be declared to one namespace and hidden from the other — and the tools
- * themselves are already shared, which is what made the divergence silent.
- */
+/** Process/port/runtime tool declarations shared by `createNimbusExecutor` and `createNimbusWorkspaceExecutor`. */
 const SESSION_CONTROL_TYPES =
   `  function startProcess(command: string, options?: { cwd?: string; timeoutMs?: number; env?: Record<string,string> }): Promise<${COMMAND_RESULT_TYPE}>;
   function killProcess(pid: number | { pid: number }): Promise<string>;
@@ -488,8 +375,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         const signal = readExecSignal({ context: args[1] });
 
         try {
-          // Nimbus exec exposes no kill for an in-flight command — abort
-          // stops the wait; the command may still finish in the sandbox.
+          // No kill for an in-flight exec: abort stops the wait; the command may still finish in the sandbox.
           return normalizeExec(await raceAbort(
             () => touch(() => box.exec(command)),
             signal,
@@ -608,9 +494,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         if (!box) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(StringSchema, { value: args[0] });
 
-        // `false` here was the same lie the catch below already refuses to tell:
-        // a boolean answer claims the path is absent, and a call that was never
-        // made has established nothing about the path.
+        // No boolean here: an unmade call establishes nothing about the path.
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'nimbus exists: path must be a string'));
         }
@@ -713,11 +597,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
         const processes = box.processes;
 
         if (!processes?.kill) return handleLacks('process control');
-        // Bound HERE, at the guard, for the reason every optional SDK surface
-        // below repeats: the call happens inside a closure, and TypeScript drops
-        // a property narrowing at that boundary — which is what the
-        // `box.processes!.kill!` assertions were standing in for. Binding keeps
-        // the receiver too, so the SDK method still reads its own `this`.
+        // Bound at the guard: TypeScript drops narrowing inside closures, and binding keeps `this`.
         const kill = processes.kill.bind(processes);
         const input = parseInput(ProcessInputSchema, { value: args[0] });
         const pid = v.is(v.number(), input) ? input : input?.pid;
@@ -815,9 +695,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       description: 'List Nimbus exposed ports.',
       execute: async (): Promise<string> => {
         if (!box) return NOT_CONFIGURED_REFUSAL;
-        // `'[]'` claimed this session has no exposed ports. It has no port API at
-        // all, which is a different fact — an empty read must stay
-        // distinguishable from a read that could not be made (AGENTS.md).
+        // No port API is not the same fact as no exposed ports (AGENTS.md).
         const ports = box.ports;
 
         if (!ports?.list) return handleLacks('ports');
@@ -880,18 +758,8 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
     files: box ? nimbusSessionFiles(box) : undefined,
     homeDir: async () => root,
     kind: 'nimbus',
-    // JavaScript/TypeScript, the shell, ~95 coreutils and `node` are the bare
-    // workspace's own; `npm` and `npx` are registered by
-    // `provisionWorkspaceRuntimes` (JavaScript reaching a registry over `fetch`);
-    // `git` is isomorphic-git over the same SqliteVFS, registered by the host.
-    // None needs an install, so all are declared unconditionally.
-    //
-    // Interpreter runtimes DO need one, and they need somewhere to RUN: a wasm
-    // guest requires a facet host, so `python`/`native_binary` are declared
-    // exactly when the composing backend says both halves are present
-    // (NimbusExecutorOpts.runtimeCatalog). The Cloudflare backend says false —
-    // workerd forbids the dynamic evaluation a local facet host performs — and
-    // the CLI supplies `localFacetHost()`.
+    // JS/TS, shell, coreutils, `node`, `npm`/`npx`, and `git` need no install. `python`/`native_binary` also need a facet
+    // host (NimbusExecutorOpts.runtimeCatalog); Cloudflare says false, the CLI supplies `localFacetHost()`.
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'shell', 'npm', 'git',
       'fs_owned', 'net_outbound',
@@ -900,8 +768,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweri
       ...(opts.runtimeCatalog ? (['python', 'native_binary'] as const) : []),
     ]),
     isAvailable: () => configured,
-    // A recorded failure outranks activity, and a handle with no binding
-    // reports why instead of a lifecycle it does not have.
+    // A recorded failure outranks activity; an unbound handle reports why.
     getStatus: () => {
       const seen = { configured, available: configured, active };
 
@@ -973,11 +840,7 @@ ${SESSION_CONTROL_TYPES}
       const unexpose = ports.unexpose.bind(ports);
       await touch(() => unexpose(port));
     },
-    // A port the host reports as exposed with no URL is NOT dropped here:
-    // dropping it shows nothing on the Ports surface for a workspace whose
-    // previews cannot be addressed, and never says why. The host's reason
-    // travels as a refusal: the surface renders it, and the code says a retry
-    // cannot help.
+    // Exposed ports without a URL are kept, carrying the host's reason as a refusal.
     async listExposedPorts() {
       const ports = box?.ports;
 
@@ -1000,11 +863,7 @@ ${SESSION_CONTROL_TYPES}
   };
 }
 
-/**
- * Compose Kinu's durable workspace tools with the process/runtime/port
- * surface of the same Nimbus session. Hosted runtimes register this provider
- * once as `workspace`; there is no second Nimbus namespace or filesystem.
- */
+/** Kinu's durable workspace tools plus the same Nimbus session's process/runtime/port surface, registered once as `workspace`. */
 export function createNimbusWorkspaceExecutor(opts: NimbusWorkspaceExecutorOpts): PortAnsweringExecutor {
   const inline = createInlineExecutor(opts.inline);
   const session = createNimbusExecutor({ ...opts, namespace: 'workspace' });
@@ -1041,25 +900,14 @@ ${SESSION_CONTROL_TYPES}`;
     disconnect: session.disconnect,
     tools: workspaceTools,
     types: (inline.types ?? '').replace(/\n}\s*$/, `${sessionTypes}\n}`),
-    // Straight through, no assertion: `createNimbusExecutor` answers for its
-    // ports by type, so all three are declared present. Nothing to bind either —
-    // each closes over the session handle rather than reading `this`.
     exposePort: session.exposePort,
     unexposePort: session.unexposePort,
     listExposedPorts: session.listExposedPorts,
   };
 }
 
-/**
- * The shell primitive over the exact bytes exposed by nimbusSessionFiles.
- *
- * `cred` binds this shell to one identity for its whole lifetime, which is what
- * makes a node's home mean anything at runtime: the boundary is uid/gid/mode on
- * real inodes, so it only bites if the commands actually run as the node. It is
- * a construction argument rather than a per-call one BECAUSE it must not be
- * chooseable per call — see {@link NimbusExecOptions.cred}. Absent is the
- * session user, i.e. exactly the origin's own behaviour.
- */
+/** Shell over the bytes nimbusSessionFiles exposes. `cred` is fixed at construction, never per call
+ *  (see {@link NimbusExecOptions.cred}); absent is the session user. */
 export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Shell {
   return {
     async exec(command, stdinOrOptions) {
@@ -1067,10 +915,7 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
         ? { stdin: stdinOrOptions }
         : stdinOrOptions;
 
-      // Assigned rather than spread conditionally: an absent option must be an
-      // ABSENT KEY, because the substrate reads `'cred' in options` to decide
-      // whether to inherit — a key holding `undefined` is a different fact from a
-      // key nobody set.
+      // Absent option must be an absent key: the substrate reads `'cred' in options` to decide whether to inherit.
       const stdin = options?.stdin;
       let execOptions: NimbusExecOptions | undefined;
 
@@ -1093,10 +938,7 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
 
       if (refusal !== null) return { ...outcome, refusal };
 
-      // A 127 the session answered with means the command is not in the box's
-      // catalog — the refusal helper names it and the two exits, deriving the
-      // install remedy from the box's own runtime list rather than a second
-      // table. No runtimes handle on this box → nothing is installable here.
+      // 127 means the command is not in the box's catalog; the install remedy derives from the box's runtime list.
       const runtimes = box.runtimes?.list?.bind(box.runtimes);
 
       return workspaceCommandNotFound(outcome, async (bin) => {
@@ -1111,23 +953,10 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
 }
 
 /**
- * A Nimbus session's files, in the session's own absolute paths.
- *
- * The cleanest of the raw handles — read/readBytes/write/list/stat/exists/
- * mkdir/delete, with `write` taking Uint8Array natively, so binary round-trips
- * exactly.
- *
- * `cred` names WHO the operations act as. Supplied, the plane is the handle's
- * credential-bound view (`files.as(cred)`, sdk 0.6), the same session and the
- * same bytes under the node's own uid/gid; a handle without that view is
- * refused as `unsupported` rather than served as the session user. Absent is
- * the ORIGIN, which is every caller that is not one agent acting for itself.
- * The three shell fallbacks below (`readRange`, `stat`, `mkdir`) exist for a
- * view that lacks the method and run as the same credential.
+ * A Nimbus session's files in its own absolute paths. With `cred`, the plane is `files.as(cred)`; a handle without
+ * that view is refused as `unsupported`. Absent is the origin. Shell fallbacks run as the same credential.
  */
-/** The exec option that binds a shell fallback to the plane's own credential.
- *  An absent credential is an ABSENT KEY: the substrate reads `'cred' in
- *  options` to decide whether to inherit the session user. */
+/** Binds a shell fallback to the plane's credential; absent must be an absent key (`'cred' in options`). */
 function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, never> {
   return cred === undefined ? {} : { cred };
 }
@@ -1164,18 +993,13 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
       return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
     },
-    /** The origin session's fixed Node reader reads exactly this prefix — the
-     *  SDK file methods cannot express a range and would materialize the file. */
+    /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
     async readRange(path, offset, length) {
       return readNimbusOriginRange({ box, files, path, offset, length, cred });
     },
     async writeFile(path, data) { await files.write(workspacePath(path), data); },
-    // NO `writeFileIfRevision`. The SDK's `files.write` takes no precondition
-    // and returns nothing, and its `stat` reports no revision, so this plane
-    // has neither half of a compare-and-write. Declaring the method would mean
-    // emulating it with read/compare/write, which cannot close the window it
-    // claims to close; `writeExecutorFileOp` answers `unsupported` instead and
-    // the editor stays read-only with that reason.
+    // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
+    // `writeExecutorFileOp` answers `unsupported`.
     async readdir(path) { return (await files.list(workspacePath(path))).map((e) => e.name); },
     async stat(path) {
       if (files.stat) {
@@ -1190,9 +1014,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
         };
       }
 
-      // The shell fallbacks run AS THE PLANE'S CREDENTIAL when one is bound:
-      // the boundary is uid/gid on real inodes, and a fallback that ran as
-      // the session user changed identity silently.
+      // Shell fallbacks run as the plane's credential; running as the session user would change identity silently.
       const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`, asCred(cred));
 
       if (!r.success || r.exitCode !== 0) return null;

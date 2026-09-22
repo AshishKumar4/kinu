@@ -1,24 +1,11 @@
 /**
- * Skill discovery — the VFS side of the skills store: scan `/workspace/skills/`
- * for `.md` files, read each file's front matter, merge with the built-ins. A
- * built-in's name is reserved and a file claiming one is refused, never merged
- * over (KINU-N028; see `builtins.ts`). Malformed files are reported and skipped
- * so one broken skill doesn't take the turn's whole catalogue with it.
+ * Skill discovery: scan `/workspace/skills/` and the shared Drive, parse front
+ * matter, merge with built-ins. A file claiming a built-in name is refused
+ * (KINU-N028); malformed files are reported and skipped.
  *
- * Discovery holds NO VFS body. The ambient index needs a name and a
- * description; only a skill that actually activates needs its instructions, and
- * only if the turn can pay for them (loader.ts). So each file yields a
- * `DiscoveredSkill`: the header, plus where the body is and what admitting it
- * would cost. `readSkillBody` fetches one, later, for the few that were
- * admitted.
- *
- * Front matter is read under the byte ceiling `admissionBytes` derives from
- * the turn's allocation — with `stat` the ceiling is consulted BEFORE the
- * read (a file whose size alone cannot fit is named, never opened); without
- * it the read itself is truncated to the same ceiling, so no file plane can
- * hand discovery an unbounded body. Discovery also ends: at most as many
- * files are opened as the prompt budget could list headers for, taken in the
- * sorted order — and the rest are counted in `omitted`, never read.
+ * Discovery holds no VFS body, reads under the `admissionBytes` ceiling (checked
+ * via `stat` before reading when available), and opens at most as many files as
+ * the budget could list; the rest are counted in `omitted`.
  */
 import { admissionBytes, estimateTokens } from '../llm';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -34,7 +21,6 @@ import {
   SKILLS_DIR, workspaceSkillIndexLine, type DiscoveredSkill, type ParsedSkill, type SkillBodyRef, type SkillSource,
 } from './types';
 
-/** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
   exists(path: string): Promise<boolean>;
   readFile(path: string, opts?: { encoding?: string }): Promise<string | Uint8Array>;
@@ -42,47 +28,32 @@ export interface SkillsVfs {
   writeFile(path: string, content: string | Uint8Array): Promise<void>;
   unlink?(path: string): Promise<void>;
   mkdir?(path: string, opts?: { recursive?: boolean }): Promise<void>;
-  /** Size before bytes. Optional because a file view may not offer it; without
-   *  it every `.md` file is opened, every turn. */
+  /** Optional; without it every `.md` file is opened every turn. */
   stat?(path: string): Promise<VfsEntryStat | null>;
 }
 
-/** A skill file discovery deliberately did not open: one body of that size
- *  cannot fit the turn's whole allocation. Named, never dropped. */
+/** A file whose size alone exceeds the turn's allocation; named, never opened. */
 export interface UnreadSkillFile {
   name: string;
   path: string;
-  /** What `stat` reported, in bytes. */
   bytes: number;
 }
 
-/** Everything under the skills dir, in one stable total order. */
 export interface SkillsDiscovery {
-  /** Skills whose front matter parsed, by name, code-unit ascending. */
   skills: DiscoveredSkill[];
-  /** Files too big to open, by name, code-unit ascending. */
   unread: UnreadSkillFile[];
-  /** Candidates discovery did not open because the header count bound was
-   *  already spent — they are neither skills nor unread, just beyond what the
-   *  turn's index could ever list. Counted, not read. Absent means zero for
-   *  hand-built fixtures. */
+  /** Candidates beyond the header count bound, counted but not read. Absent means zero. */
   omitted: number;
 }
 
 export interface DiscoverOpts {
-  /** The turn's whole skills allocation, in tokens (turn-surface.ts derives it
-   *  from the model window). A file whose size alone exceeds it is never
-   *  opened. */
+  /** The turn's skills allocation in tokens; a larger file is never opened. */
   admissionTokens: number;
   skillsDir?: string;
   onParseError?: (file: string, error: string) => void;
 }
 
-/** The one total order for skills: by name, code-unit ascending.
- *
- *  Not `localeCompare`: that answer depends on the host's locale and ICU build,
- *  and these names sit in a prompt prefix that must be byte-identical across
- *  every machine serving the same agent. */
+/** Name order by code unit, not `localeCompare`: the prompt prefix must be byte-identical across hosts. */
 export function compareSkillNames(a: string, b: string): number {
   if (a < b) return -1;
 
@@ -91,21 +62,16 @@ export function compareSkillNames(a: string, b: string): number {
   return 0;
 }
 
-/** Built-ins as discovery sees them: headers whose bodies are module constants
- *  already in memory, so admitting one costs no read. Also the floor a turn
- *  falls back to when the VFS walk fails. */
+/** Built-in headers; also the fallback when the VFS walk fails. */
 export const BUILTIN_SKILL_HEADERS: ReadonlyArray<DiscoveredSkill> = Object.freeze(
   BUILTIN_SKILLS.map((skill) => discovered(skill, { kind: 'builtin', text: skill.body })),
 );
 
-/** The reserved names. A built-in is shipped doctrine, so no file on a plane the
- *  agent can write may claim one (KINU-N028). */
+/** Reserved names: no agent-writable file may claim one (KINU-N028). */
 export const BUILTIN_SKILL_NAMES: Readonly<Record<string, true>> = Object.freeze(
   Object.fromEntries(BUILTIN_SKILLS.map((skill) => [skill.name, true] as const)),
 );
 
-/** Discover every valid skill — the built-ins, plus every workspace file that
- *  does not collide with one. */
 export async function discoverSkills(
   vfs: SkillsVfs,
   opts: DiscoverOpts,
@@ -123,47 +89,27 @@ export async function discoverSkills(
   for (const s of BUILTIN_SKILL_HEADERS) byName.set(s.name, s);
   const unread: UnreadSkillFile[] = [];
   let omitted = 0;
-  // The byte ceiling the whole allocation implies — `admissionBytes`, the one
-  // derivation agents-md also reads. With stat it is consulted before the
-  // read; without stat it is enforced on what the read returns, so a plane
-  // that cannot answer size cannot hand discovery an unbounded body either.
+  // Byte ceiling from `admissionBytes`; enforced on the read's result when stat is unavailable.
   const ceiling = admissionBytes(opts.admissionTokens);
 
-  // And the count bound: the index prices every header against the same
-  // allocation, so the most skills discovery may open is the number of the
-  // CHEAPEST workspace header line the budget could carry — priced off the
-  // same string the admission renders (render.ts), newline included, exactly
-  // as admitSkillsIndex charges it.
+  // Count bound: how many of the cheapest workspace header lines the budget could carry.
   let slots = Math.floor(
     opts.admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1),
   );
 
-  // Two directories, one order: the workspace's own skills first, then the
-  // owner's shared Drive. THE WORKSPACE WINS A NAME CLASH — a shared skill is
-  // the owner's default for every workspace, and a workspace that carries the
-  // same name has overridden it on purpose. The shared file is refused with
-  // that reason rather than silently skipped, so the author is told.
+  // Workspace skills win name clashes over the shared Drive; the shared file is refused with a reason.
   const directories: { dir: string; source: SkillSource }[] = [{ dir, source: 'vfs' }, { dir: SHARED_SKILLS_DIR, source: 'shared' }];
 
   for (const { dir: scanned, source } of directories) {
-    // Candidates in the one total order BEFORE any are opened: readdir order is
-    // filesystem-dependent, and the bound below decides which names are ever
-    // read at all.
+    // Sort before opening: readdir order is filesystem-dependent and the bound decides what is read.
     const candidates = (await listSkillCandidates(vfs, scanned)).sort((a, b) => compareSkillNames(a.stem, b.stem));
 
     for (const { stem, path } of candidates) {
-      // The filename stem (or the folder name) IS the skill's name (Anthropic's
-      // spec lets the directory name supply it), so an illegal stem is not a
-      // skill at all — and learning that costs no read.
+      // The stem is the skill's name, so an illegal stem is rejected without a read.
       const stemProblem = skillNameProblem(stem);
 
       if (stemProblem) { onErr(path, `filename stem ${stemProblem}`); continue; }
 
-      // A built-in name is RESERVED (KINU-N028). This directory is writable by
-      // the agent's own `file` tool and shell, so letting a file here take a
-      // built-in's name would let the agent replace shipped doctrine — including
-      // the `allowed_tools` a built-in declares — by choosing a filename. The
-      // file is refused rather than silently ignored, so the author is told why.
       if (Object.hasOwn(BUILTIN_SKILL_NAMES, stem)) {
         onErr(path, `"${stem}" is a built-in skill name and cannot be overridden by a workspace file`);
         continue;
@@ -186,9 +132,7 @@ export async function discoverSkills(
         }
 
         const text = await readTextFile(vfs, path, ceiling);
-        // The stem doubles as the fallback `name` so Claude-Code skills authored
-        // without a `name:` line still parse. If frontmatter DOES specify a name,
-        // we still require it to match the filename to avoid drift.
+        // The stem is the fallback `name`; an explicit `name:` must still match it.
         const parsed = parseSkillFile(text, source, stem);
 
         if (!parsed.ok) { onErr(path, parsed.error); slots -= 1; continue; }
@@ -219,22 +163,15 @@ export async function discoverSkills(
   };
 }
 
-/** The file a skill FOLDER carries its front matter and body in (Anthropic's layout). */
 export const SKILL_FOLDER_FILE = 'SKILL.md';
 
-/** The skill file that names `name` inside a skills directory, in folder form. */
 function skillFolderPath(name: string, skillsDir = SKILLS_DIR): string {
   return `${skillsDir.replace(/\/$/, '')}/${name}/${SKILL_FOLDER_FILE}`;
 }
 
 /**
- * Every candidate skill in one directory, unopened: the flat `<name>.md`
- * files Kinu has always read, and the `<name>/SKILL.md` folders the Drive
- * adds (a folder skill can carry scripts and references beside its
- * instructions). Both forms yield the same `stem`; the caller decides which
- * names are legal and how many are ever read. An absent directory — or an
- * absent MOUNT, which is how an unclaimed workspace's `/shared` answers — is
- * an empty list, never a failure.
+ * Unopened candidates in one directory: flat `<name>.md` files and
+ * `<name>/SKILL.md` folders. A missing directory or mount is an empty list.
  */
 async function listSkillCandidates(vfs: SkillsVfs, dir: string): Promise<{ stem: string; path: string }[]> {
   let entries: string[] = [];
@@ -265,17 +202,8 @@ async function listSkillCandidates(vfs: SkillsVfs, dir: string): Promise<{ stem:
 }
 
 /**
- * Read a skill's complete source file, under the byte ceiling the caller's
- * token allocation implies.
- *
- * The front matter is live policy (`allowed_tools`, activation, invocation and
- * unknown extension fields), not decoration. Any trust decision therefore
- * binds this complete raw value, while a caller that renders instructions may
- * parse the body from the same bytes afterwards. `admissionTokens` is the
- * budget this read is for (admission's remaining allocation, the owner
- * preview's full one); a body past `admissionBytes(admissionTokens)` is read
- * truncated to it, so the bytes a digest binds are the bytes the budget could
- * carry — never more.
+ * Read a skill's complete source, truncated to `admissionBytes(admissionTokens)`.
+ * Front matter is live policy, so trust decisions bind this whole raw value.
  */
 export async function readSkillFile(
   vfs: SkillsVfs,
@@ -287,8 +215,7 @@ export async function readSkillFile(
     : readTextFile(vfs, ref.path, admissionBytes(admissionTokens));
 }
 
-/** Fetch one admitted body. A built-in body is a module constant and a VFS body
- * is parsed from the bounded source file read. */
+/** Fetch one admitted body: a module constant or parsed from the bounded read. */
 export async function readSkillBody(
   vfs: SkillsVfs,
   ref: SkillBodyRef,
@@ -297,13 +224,11 @@ export async function readSkillBody(
   return parseMarkdownFrontmatter(await readSkillFile(vfs, ref, admissionTokens)).body;
 }
 
-/** Filename-safe path for a skill name. */
 export function skillPath(name: string, skillsDir = SKILLS_DIR): string {
   return `${skillsDir.replace(/\/$/, '')}/${name}.md`;
 }
 
-/** A discovered skill is a parsed file minus its body, plus where the body
- * lives. Admission derives every active policy field from its own raw snapshot. */
+/** Admission derives every active policy field from its own raw snapshot. */
 function discovered(skill: ParsedSkill, bodyRef: SkillBodyRef): DiscoveredSkill {
   const { body: _body, ...header } = skill;
 
@@ -314,6 +239,6 @@ async function readTextFile(vfs: SkillsVfs, path: string, ceiling: number): Prom
   const raw = await vfs.readFile(path, { encoding: 'utf8' });
   const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
 
-  // The plane has no ranged read, so the bound lands on what the read hands
+  // No ranged read exists, so the bound applies to what the read returns.
   return text.length <= ceiling ? text : text.slice(0, ceiling);
 }

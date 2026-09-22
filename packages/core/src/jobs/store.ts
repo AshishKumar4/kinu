@@ -1,31 +1,6 @@
-// Background-job registry — the correlation source of truth for work that a
-// tool call detaches to the background (think-heads, long eval/run).
-// A job is created when a call crosses the background threshold, settled when
-// the detached work resolves, and read back by the synthesis turn the reactor
-// wakes. `settle`/`fail` are guarded on status='running' so a duplicate
-// completion wake (at-least-once delivery) can't overwrite or double-apply.
-//
-// Lease-epoch fencing (agent-core SPEC §5.3 / §10.3): every job carries a
-// monotonic `epoch`. The executor that owns a detach captures the epoch and
-// stamps it on its terminal write; a DO eviction + recovery `reclaim`s the job,
-// bumping the epoch so a stale/zombie executor from the dead process can no
-// longer settle it — its write carries a stale epoch and is rejected. On a
-// platform with no fenced DO callback (Queues/alarms are at-least-once) this
-// epoch check IS the fence.
-//
-// OWNERSHIP IS SPLIT, AND THE INTERFACE SAYS WHICH HALF EVERY READ IS IN.
-// A job ROW belongs to the actor that detached it: its roster is carried into
-// that actor's model steps, `clearSettled` is that actor's history, and an id
-// alone is not authority to settle a sibling's work. But `runner.ts` states the
-// other half in source — "every detached job is a live process tree whichever
-// agent launched it" — so the concurrency cap and the wake instant are
-// questions about the MACHINE. Those four carry `InWorkspace` in their names:
-// narrowing the cap would let N actors each open MAX_CONCURRENT_DETACHED_JOBS
-// process trees, and widening a roster would render a sibling's jobs into this
-// actor's prompt. The recovery sweep {@link BackgroundJobStore.runningIds} is
-// the actor's, because a sweep can only act through the point operations above
-// it and those are the actor's: a foreign id would be swept, refused, and then
-// reported to the resume gate as work nothing will continue.
+// Background-job registry for detached tool work. `settle`/`fail` are guarded on status='running'
+// and on a lease `epoch` that `reclaim` bumps, which fences zombie executors (agent-core SPEC §5.3 / §10.3).
+// Rows are actor-owned; `*InWorkspace` reads are machine-wide (cap, wake instant) by contract.
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -45,11 +20,9 @@ export function backgroundJobNotice(job: BackgroundJob) {
   };
 }
 
-/** The result of claiming a job for an evict-recovery re-drive. */
 export interface JobClaim {
-  /** The new lease epoch every write from this attempt must carry. */
   epoch: number;
-  /** How many re-drives this job has now had (1 on the first recovery). */
+  /** Re-drives so far (1 on the first recovery). */
   attempts: number;
 }
 
@@ -72,25 +45,12 @@ function toJob(r: Row): BackgroundJob {
     epoch: r.epoch ?? 0,
     resumeAttempts: r.resume_attempts ?? 0,
     retriedBy: r.retried_by ?? null,
-    // `created_at` is the honest reading when no attempt start was recorded:
-    // its first attempt is the only one anything recorded.
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
-    // Null for every job that has never been interrupted: nothing is owed,
-    // so nothing is waited on.
     resumeAfter: r.resume_after ?? null,
   };
 }
 
-/** Serialize a job result for storage — never throws (a non-serializable value,
- *  e.g. a BigInt from eval, falls back to String()). Stored WHOLE:
- *  the wake message promises "read the full result with agent.jobResult", and
- *  a row truncated at storage time made that a lie with no recovery path —
- *  while the read-back already rides the eval clamp, which windows an
- *  oversize result and spills the full text with an address. Inputs must be
- *  whole for a different reason: driveResume JSON.parses them, and a marker
- *  appended to a clipped input turned every resumed fork into a corrupted
- *  string input. Both are model-authored payloads, bounded far below the row
- *  ceiling by the tool-result clamp and provider output limits. */
+/** Never throws. Stored whole: the wake promises the full result, and driveResume JSON.parses inputs. */
 export function serializeJobResult(input: { value: unknown }): string {
   try { return JSON.stringify(input.value ?? null); }
   catch (error) {
@@ -119,14 +79,10 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
     settled_at  INTEGER,
     PRIMARY KEY (actor_id, id)
   )`);
-  // Status alone still has to be answerable: the cap and the wake instant are
-  // workspace-wide questions, so the host half keeps a status-leading path
-  // while the actor half gets one that starts at the owner.
+  // Status-leading index serves workspace-wide reads; the actor index serves owned reads.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_actor_status ON background_jobs(actor_id, status, created_at DESC)`);
-  // The retry edge is one-per-source WITHIN an owner: a retry claims a job this
-  // actor owns, and a table-wide unique index would let one actor's retry of
-  // its own `job-1` block another actor's retry of its own.
+  // One retry per source within an owner; table-wide uniqueness would collide across actors' ids.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_background_jobs_retry_of
     ON background_jobs(actor_id, retry_of) WHERE retry_of IS NOT NULL`);
 }
@@ -134,10 +90,7 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
 export class BackgroundJobStore {
   private readonly actorId: string;
 
-  /** Bind the registry to ONE actor. `actorId` is captured from the handle once
-   *  and `assertCurrent()` runs before every statement, including the
-   *  workspace-wide reads: those answer a machine question, but only a live
-   *  actor is entitled to ask it. */
+  /** `assertCurrent()` runs before every statement, including workspace-wide reads. */
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }
@@ -148,9 +101,7 @@ export class BackgroundJobStore {
       VALUES (${this.actorId}, ${opts.id}, ${opts.kind}, ${opts.label ?? null}, ${opts.workMode}, 'running', ${opts.input ?? null}, 0, 0, ${opts.now}, ${opts.now})`;
   }
 
-  /** Create one replacement job and claim its settled source in the same SQL
-   *  statement. The unique `retry_of` edge prevents a reset or double click
-   *  from creating a second replacement. */
+  /** Create a replacement and claim its settled source in one statement; unique `retry_of` blocks a second. */
   createRetry(opts: {
     sourceId: string;
     id: string;
@@ -177,43 +128,29 @@ export class BackgroundJobStore {
       SELECT id FROM background_jobs WHERE actor_id=${this.actorId} AND id=${opts.id} LIMIT 1`.length === 1;
   }
 
-  /** Mark a running job completed. No-op if already settled (idempotent wake) or
-   *  if `epoch` is stale — i.e. a zombie executor from a dead process fenced by a
-   *  reclaim that already bumped the epoch (§5.3). */
+  /** No-op if already settled or `epoch` is stale (§5.3). */
   settle(id: string, epoch: number, result: string, now: number): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}`;
   }
 
-  /** Mark a running job failed. No-op if already settled or the epoch is stale. */
   fail(id: string, epoch: number, error: string, now: number): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE background_jobs SET status='failed', error=${error}, settled_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}`;
   }
 
-  /** Mark a running job cancelled (operator hard-cancel). No-op if settled or the
-   *  epoch is stale. */
   cancel(id: string, epoch: number, now: number): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE background_jobs SET status='cancelled', error='cancelled by operator', settled_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running' AND epoch=${epoch}`;
   }
 
-  /** Claim a still-running job for an evict-recovery re-drive: bump the lease
-   *  epoch (fencing any executor still holding the old one), the resume-attempt
-   *  counter and the attempt clock, atomically. Returns the new epoch + attempt
-   *  count, or null when the job is no longer running (already settled/cancelled,
-   *  or gone).
-   *
-   *  `attempt_started_at` moves with the epoch because they name the same event: a
-   *  new lease IS a new generation, and a generation with no start time is one
-   *  nothing can bound.
-   *
-   *  `resume_after` is CLEARED for the same reason it exists: it paced the attempt
-   *  this claim just started, and a wait that has been served is not still owed.
-   *  The claimer arms the next one through {@link deferResume}. */
+  /**
+   * Claim a running job for re-drive: atomically bump epoch, attempts and attempt clock, and clear the
+   * served `resume_after`. Null when no longer running.
+   */
   reclaim(id: string, now = Date.now()): JobClaim | null {
     this.actor.assertCurrent();
     void this.sql`UPDATE background_jobs
@@ -232,31 +169,14 @@ export class BackgroundJobStore {
     return { epoch: row.epoch, attempts: row.resume_attempts };
   }
 
-  /**
-   * Arm the instant before which this job's next attempt must not start.
-   *
-   * Only over a `running` row: a settled job is owed nothing, and a wait written
-   * onto one would be read by the next sweep as work still to come.
-   *
-   * The value is absolute rather than a duration, so it survives the process that
-   * wrote it. That is the whole point of the column — the isolate that would have
-   * counted a duration down is the one the eviction kills.
-   */
+  /** Earliest next-attempt instant; absolute so it survives eviction. Running rows only. */
   deferResume(id: string, at: number): void {
     this.actor.assertCurrent();
     void this.sql`UPDATE background_jobs SET resume_after=${at}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running'`;
   }
 
-  /**
-   * The soonest armed instant across every running job in the WORKSPACE that has
-   * one, or null when nothing is waiting. One indexed MIN, for a caller deciding
-   * whether a wake is owed at all before it sweeps the registry.
-   *
-   * Workspace-wide because the host arms ONE timer. Narrowed to this actor it
-   * would arm for this actor's soonest job and sleep through a sibling's earlier
-   * one, and the sibling has no timer of its own to fall back on.
-   */
+  /** Soonest armed instant across the workspace; the host arms one timer for every actor. */
   nextResumeAtInWorkspace(): number | null {
     this.actor.assertCurrent();
 
@@ -266,16 +186,7 @@ export class BackgroundJobStore {
     return rows[0]?.at ?? null;
   }
 
-  /**
-   * Every running job in the WORKSPACE whose next attempt is not yet due at
-   * `now` — the rows a reader must not assume are being worked on. Ids only: the
-   * caller pairs them with what it knows is live in memory, which no row can say.
-   *
-   * Workspace-wide because it is the subtrahend of
-   * {@link countRunningInWorkspace}: the cap counts every actor's live process
-   * trees, so the discount for the ones nothing is driving has to count over the
-   * same population or the difference is not a count of anything.
-   */
+  /** Workspace running jobs not yet due at `now`; same population as {@link countRunningInWorkspace}. */
   resumeOwedIdsInWorkspace(now: number): string[] {
     this.actor.assertCurrent();
 
@@ -284,9 +195,7 @@ export class BackgroundJobStore {
       .map((r) => r.id);
   }
 
-  /** The current lease epoch of a job — captured by an executor at detach so its
-   *  terminal write can carry it. Null when the job is absent, which is also the
-   *  answer for a job id another actor owns. */
+  /** Null when absent or owned by another actor. */
   epochOf(id: string): number | null {
     this.actor.assertCurrent();
 
@@ -296,47 +205,28 @@ export class BackgroundJobStore {
     return rows[0]?.epoch ?? null;
   }
 
-  /** Remove a settled job from the registry. No-op if still running. */
   dismiss(id: string): void {
     this.actor.assertCurrent();
     void this.sql`DELETE FROM background_jobs
       WHERE actor_id=${this.actorId} AND id=${id} AND status != 'running'`;
   }
 
-  /**
-   * Whether ANY job row in the WORKSPACE is still live — one LIMIT-1 read, for
-   * the activation-time arm decision that must not materialize the registry.
-   *
-   * Workspace-wide for the same reason as {@link nextResumeAtInWorkspace}: the
-   * decision it feeds is whether the HOST arms at all, and a host that skipped
-   * arming because this actor happened to be idle would strand every sibling's
-   * interrupted work until something else woke the workspace.
-   */
+  /** Any running job in the workspace with no `resume_after`; workspace-wide like {@link nextResumeAtInWorkspace}. */
   hasUntimedLiveJobsInWorkspace(): boolean {
-    // `assertCurrent` here checks that THIS BINDING is still live; it is not a
-    // claim that the statement below is actor-scoped. It deliberately is not —
-    // see the reason above — and the `InWorkspace` in the name is the contract.
-    // Stated because the opposite inference has already been drawn once: an
-    // actor-bound store whose method asserts its handle reads as scoped.
-    //
-    // UNTIMED: a running job with no resume instant is live in some process
-    // or orphaned by one that died, and either way names no time a wake could
-    // be armed at. A job waiting on `resume_after` is the timed half, read by
-    // {@link nextResumeAtInWorkspace}.
+    // `assertCurrent` validates the binding, not the scope; this read is workspace-wide.
     this.actor.assertCurrent();
 
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM background_jobs WHERE status = 'running' AND resume_after IS NULL LIMIT 1`.length > 0;
   }
 
-  /** Remove THIS actor's settled jobs. Running jobs are kept, and a sibling's
-   *  history is not this actor's to discard. */
+  /** Remove this actor's settled jobs only. */
   clearSettled(): void {
     this.actor.assertCurrent();
     void this.sql`DELETE FROM background_jobs WHERE actor_id=${this.actorId} AND status != 'running'`;
   }
 
-  /** The serialized tool input a job was created with — re-run source for retry. */
+  /** Serialized tool input, the re-run source for retry. */
   getInput(id: string): string | null {
     this.actor.assertCurrent();
 
@@ -375,19 +265,8 @@ export class BackgroundJobStore {
       ORDER BY job.created_at DESC LIMIT ${limit}`.map(toJob);
   }
 
-  /**
-   * How many jobs are still in flight ACROSS THE WORKSPACE — the input to the
-   * concurrent-detach cap. Counted in SQL rather than from {@link listRunning},
-   * whose limit would silently under-report exactly when the cap matters.
-   *
-   * NOT narrowed to this actor, and `runner.ts` says why in source: "every
-   * detached job is a live process tree whichever agent launched it". Per-actor,
-   * N actors would each open MAX_CONCURRENT_DETACHED_JOBS trees and the machine
-   * ceiling would be multiplied by the actor count.
-   */
+  /** Workspace-wide running count for the concurrent-detach cap; per-actor would multiply the machine ceiling. */
   countRunningInWorkspace(): number {
-    // Workspace-wide by contract, as the name says and the reason above
-    // explains; `assertCurrent` validates the binding, not the scope.
     this.actor.assertCurrent();
     const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
 
@@ -395,17 +274,8 @@ export class BackgroundJobStore {
   }
 
   /**
-   * THIS ACTOR's jobs still in flight, oldest first — the startup recovery
-   * sweep's input. Deliberately unbounded, unlike {@link listRunning}: a display
-   * limit that silently dropped rows would skip exactly the stuck jobs the sweep
-   * exists to settle. Ids only — the sweep re-reads each row under its own claim.
-   *
-   * ACTOR-SCOPED, unlike the cap beside it, because a sweep can only act through
-   * `reclaim`/`settle`/`get`, and those refuse an id this actor does not own. A
-   * workspace-wide list here would hand the sweep ids it cannot claim, and the
-   * resume gate reads absence from that sweep as "nothing will continue this" —
-   * so a sibling's live fork would be retired underneath it. Each actor's runner
-   * sweeps its own registry, which is exactly what a database per actor did.
+   * This actor's running ids, oldest first, for the recovery sweep. Unbounded so no stuck job is skipped;
+   * actor-scoped because the sweep can only claim owned ids.
    */
   runningIds(): string[] {
     this.actor.assertCurrent();
@@ -414,12 +284,7 @@ export class BackgroundJobStore {
       WHERE actor_id=${this.actorId} AND status='running' ORDER BY created_at ASC`.map((r) => r.id);
   }
 
-  /** Only THIS actor's jobs still in flight, newest first — the dynamic-context
-   *  roster. `limit` bounds the returned page; `total` is this actor's TRUE
-   *  running count, so a renderer can state its elision honestly even when the
-   *  page was cut. The workspace count is a different question and has a
-   *  different name ({@link countRunningInWorkspace}); rendering it here would
-   *  put a sibling's work in this actor's prompt. */
+  /** This actor's running jobs, newest first; `total` is the true count beyond `limit`. */
   listRunning(limit = 20): ActiveRoster<BackgroundJob> {
     this.actor.assertCurrent();
 

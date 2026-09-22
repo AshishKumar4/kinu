@@ -1,37 +1,6 @@
 /**
- * DeviceTunnelExecutor — the user's machines via the device-tunnel bridge.
- *
- * The user runs a small daemon on each machine that connects to the agent's
- * WebSocket endpoint through the user-level hub (UserDO). Commands are sent as
- * JSON-RPC over the WebSocket and results stream back.
- *
- * The account is a FLEET: the user may have several machines linked, and
- * several live at once. Two facts follow, and this file is where both land:
- *
- *   1. A command NAMES its machine. Every tool takes an optional `{ device }`
- *      option in the same trailing context that carries the abort signal.
- *      Exactly one live machine answers with no name; more than one refuses
- *      with the classified ask naming them. The hub refuses a call that
- *      crosses to a machine nobody named — the default "first live socket"
- *      is what let two machines take turns answering as one.
- *
- *   2. Files mount per machine. `deviceFleetFiles` is the composite plane:
- *      `/pc` is the roster, and every machine — a fleet of one included —
- *      appears under `/pc/<name>` by the name every surface renders, so a
- *      path stays valid when a second machine joins. A path that names no
- *      live machine refuses with the connected names — a stated absence,
- *      never an empty directory.
- *
- * When no tunnel is connected, all operations return a clear message
- * telling the user how to connect.
- *
- * Namespace: device.*
- *   device.exec("git status")
- *   device.exec("make", { device: "studio" })
- *   device.readFile("/Users/me/project/src/main.ts")
- *   device.writeFile("/tmp/output.json", data)
- *   device.readdir("/Users/me/project")
- *   device.exists("/Users/me/.config")
+ * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
+ * A fleet: with several live machines a call must name one (`{ device }`); files mount per machine under `/pc/<name>`.
  */
 
 import * as v from 'valibot';
@@ -68,90 +37,52 @@ const NOT_CONNECTED =
   'that walks them through linking a machine (Devices / Executors tab, or `kinu connect`). ' +
   'Nothing runs here until they do, so carry on with what does not need their machine.';
 
-/** True by construction rather than by probe — properties of this executor's
- *  own wiring, which no answer from the machine could confirm or deny. Read the
- *  provider below for what each one rests on. */
+/** True by construction of this executor's wiring; no answer from the machine could confirm or deny them. */
 const STRUCTURAL: readonly ExecutorCapability[] = [
   'native_binary', 'shell', 'fs_owned', 'net_outbound', 'process_spawn',
 ] as const;
 
-/** What this row can only learn from the machine: everything a PATH lookup
- *  settles, plus the two it cannot settle at all. Both belong here — a
- *  capability nobody can answer for is unmeasured on every row, forever, and
- *  dropping it silently would read as measured absent. */
+/** Only the machine can answer these, including two nobody can answer (always unmeasured, never silently absent). */
 const ASKED_OF_THE_MACHINE: readonly ExecutorCapability[] = [
   ...TOOLCHAIN_PROBED_CAPABILITIES,
   ...TOOLCHAIN_UNPROBEABLE.map(([capability]) => capability),
 ];
 
-/**
- * `unavailable` — the user has no machine attached right now, and connecting one
- * is exactly the retry that fixes it. The prose stays verbatim inside the
- * refusal: it names the two places the user connects from, and that instruction is
- * the whole value of the message.
- */
+/** No machine attached. The prose names where the user connects from; keep it verbatim in the refusal. */
 const NOT_CONNECTED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONNECTED));
 
-/** `io` is this seam's own answer for an unrecognised failure — the transport is a
- *  socket to the user's machine, held by the hub. A cause the classifier does
- *  recognise (an abort, a deadline, an errno the daemon reported) keeps the more
- *  precise code it already carries. */
+/** Fallback code for an unrecognised failure; a classified cause keeps its more precise code. */
 function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: 'io' });
 }
 
-/**
- * What an abort that reached this tool before the frame went out reads as.
- * Nothing was sent, so nothing is running — the one cancellation with no
- * process to account for.
- */
+/** Abort before the frame went out: nothing was sent, so nothing is running. */
 const EXEC_NOT_STARTED =
   'device exec stopped before the command was sent — nothing ran on the device';
 
-/** The kernel confirmed the daemon's owned process group is gone. A command
- *  can deliberately create a separate session (`setsid`); the daemon cannot
- *  claim authority over that independently escaped process. */
+/** The daemon's owned process group is gone; a `setsid`-escaped process is outside its authority. */
 const EXEC_TERMINATED =
   'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run';
 
-/** The daemon holds no active command control entry. A terminal shell can have
- *  left backgrounded work in its group, and a command can escape into another
- *  session, so this is availability rather than a claim every process is gone. */
+/** No active command entry on the daemon; backgrounded or escaped work may remain. */
 const EXEC_NOTHING_RUNNING =
   'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
 
-/** The machine answers device calls but has no cancellation method at all, so
- *  the command outlives the turn. The user has to update the daemon on that
- *  machine before a stop can reach it. */
+/** The daemon has no cancellation method; the user must update it. */
 const EXEC_CANCEL_UNSUPPORTED =
   'device exec aborted — this machine runs an older Kinu daemon that cannot stop a command, '
   + 'so the command may still be running. Ask the user to update the daemon on that machine.';
 
-/** The device left while the cancellation was in flight, so nothing confirmed
- *  the kill. The daemon terminates commands it can no longer answer to when its
- *  own socket closes, but this side did not see that happen and will not say it
- *  did. */
+/** The device left mid-cancellation, so nothing confirmed the kill. */
 const EXEC_CANCEL_UNCONFIRMED =
   'device exec aborted — the device disconnected before it confirmed the command stopped';
 
-/** Nothing about the command's fate came back: the kernel refused the kill, the
- *  device never answered inside the transport's deadline, or the answer that
- *  did come back was about some other command. Whatever the reason, this side
- *  cannot say the work ended, and it names why. */
+/** Kill refused, no answer within the deadline, or an answer about another command. */
 const execCancelFailed = (reason: string): string =>
   `device exec aborted — the device could not stop the command, which may still be running: ${reason}`;
 
-/**
- * Stop a command that is already running on the machine, and say what stopping
- * it achieved.
- *
- * This runs on the abort path, where the caller's wait is ending either way and
- * the only open question is whether the process is gone. So it answers instead
- * of throwing, and every branch is a claim the daemon actually supports: a kill
- * the kernel accepted, a request the daemon no longer holds, a daemon too old
- * to be asked, a device that left mid-cancellation, or no confirmed stop at
- * all. Only an answer that NAMES this request confirms anything about it.
- */
+/** Stops a running command and reports what that achieved; answers instead of throwing (abort path).
+ *  Only an answer naming this request confirms anything. */
 async function terminateDeviceExec(
   rpc: DeviceTransport['rpc'],
   requestId: string,
@@ -173,27 +104,8 @@ async function terminateDeviceExec(
 }
 
 /**
- * Per-call options for one device RPC.
- *
- * `timeoutMs: 0` means the call carries no work deadline — it ends when the
- * device answers, the caller aborts, or the device goes away.
- *
- * `requestId` is the identity to issue the call under, from
- * `nextDeviceRequestId`. A caller that may have to CANCEL the call passes one,
- * because that id is what the daemon registers the command's process group under
- * and the only handle a cancellation carries.
- *
- * `backgroundJobId` names the durable background job that owns the call at the
- * moment it is issued. It exists so a call made AFTER a detach is recorded as
- * that job's from the start, instead of being handed over afterwards by a
- * transfer that races the insert. It never crosses to the device.
- *
- * `deviceId` names the machine the call is FOR. The hub routes on it: a named
- * machine is the only one that answers, and a fleet with several live machines
- * refuses a call that named none — "first live socket" was the two-machines-
- * one-turn flap. The executor resolves the model's device NAME to this id
- * against the fleet snapshot, so the wire carries the stable id and the model
- * speaks the user's name.
+ * `timeoutMs: 0`: no work deadline. `requestId`: the id the daemon registers the process group under; needed to cancel.
+ * `backgroundJobId`: owning background job at issue time (never sent to the device). `deviceId`: the hub routes on it.
  */
 export interface DeviceExecOptions {
   timeoutMs?: number;
@@ -202,22 +114,12 @@ export interface DeviceExecOptions {
   deviceId?: string;
 }
 
-/**
- * Transport the device executor speaks through. The actual device sockets live
- * on the user-level hub (UserDO); the agent forwards each JSON-RPC call there,
- * so every connected device serves all of a user's agents. `status()` is a cheap
- * CACHED snapshot (the executor's isAvailable()/getStatus() are sync + hot)
- * that the transport refreshes from the hub out of band; `refreshStatus()` is
- * the authoritative awaited check backends run at turn start so the turn's
- * context reflects the CURRENT device state. Tool calls do NOT gate on either —
- * they go to the hub and let it answer authoritatively, so a device that
- * connected after this runtime was built works immediately.
- */
+/** Transport to the UserDO hub. `status()` is a cached snapshot; `refreshStatus()` is authoritative (turn start).
+ *  Tool calls gate on neither: the hub answers. */
 export interface DeviceTransport {
   rpc(method: string, params: JsonValue[], opts?: DeviceExecOptions): Promise<JsonValue | undefined>;
-  /** Cached snapshot — sync and cheap; may lag the hub by the cache TTL. */
+  /** Cached snapshot; may lag the hub by the cache TTL. */
   status(): DeviceStatus;
-  /** Authoritative hub check; resolves with the fresh snapshot. */
   refreshStatus(): Promise<DeviceStatus>;
 }
 
@@ -248,21 +150,13 @@ function parseInput<TSchema extends v.GenericSchema>(
   return result.success ? result.output : undefined;
 }
 
-/**
- * The `{ device }` option, from the same trailing context that carries the
- * abort signal (`readExecSignal` reads its sibling). The schema is a permissive
- * object, not a strict one: a caller that passes `{ signal }` must not have its
- * device option dropped by a shape mismatch on the other field.
- */
+/** Permissive object so a `{ signal }`-only caller does not drop the device option on a shape mismatch. */
 const DeviceSelectionSchema = v.union([
   v.string(),
   v.object({ device: v.optional(v.string()) }),
 ]);
 
-/** The machine the call names, or undefined when it names none — a plain
- *  string or an options object are both accepted, because codemode callers
- *  write `device.exec(cmd, 'studio')` and in-process callers write
- *  `execute(cmd, { device: 'studio', signal })`. */
+/** Accepts a string (`device.exec(cmd, 'studio')`) or an options object (`{ device, signal }`). */
 function readDeviceSelection(input: { context: unknown }): string | undefined {
   const parsed = v.safeParse(DeviceSelectionSchema, input.context);
 
@@ -270,15 +164,11 @@ function readDeviceSelection(input: { context: unknown }): string | undefined {
   const named = v.is(v.string(), parsed.output) ? parsed.output : parsed.output.device;
   const trimmed = named?.trim();
 
-  // A blank name is a call that named no machine, not a machine called ''.
   if (trimmed === undefined || trimmed === '') return undefined;
 
   return trimmed;
 }
 
-/** What one tool call resolved to: the machine it is for, or the refusal to
- *  answer with. A discriminated value, so the tools branch on the domain and
- *  never on the representation of a string. */
 type CallTarget =
   | { readonly kind: 'target'; readonly deviceId: string | undefined }
   | { readonly kind: 'refusal'; readonly refusal: Refusal };
@@ -287,25 +177,14 @@ type CallView =
   | { readonly kind: 'view'; readonly view: DeviceVFS }
   | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
-/**
- * Create the device (`device.*`) executor over a device transport. The transport
- * forwards to the user's device hub; this executor just shapes the tool surface.
- */
 export function createDeviceTunnelExecutor(
   transport: DeviceTransport,
-  /** Path-scope for the file view. Omitted leaves the view unscoped, which is
-   *  correct only where the caller has already scoped the transport. */
+  /** Path-scope for the file view; omit only where the transport is already scoped. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
 ): ExecutorProvider {
-  // One name every tool below reaches the machine through, typed by the
-  // transport itself so an option the seam gains cannot be dropped here.
   const rpc: DeviceTransport['rpc'] = (method, params, opts) => transport.rpc(method, params, opts);
 
-  // Three-state lifecycle from the hub snapshot: connected, registered-but-
-  // offline (the user can reconnect), or no registered device at all. The row
-  // carries the machine's own NAME and whether this agent already holds its
-  // grant, because "device" is an API namespace and no user ever called their
-  // computer that.
+  // Connected, registered-but-offline, or none. The row carries the machine's name and grant state.
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
     const live = (s.devices ?? []).filter((d) => d.connected);
@@ -313,26 +192,15 @@ export function createDeviceTunnelExecutor(
     const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
 
     if (named) identity.label = named.name;
-    // Reach for THE live machine, under the same "no the" rule the hub's own
-    // top-level field follows: a per-device answer is read only when exactly
-    // one machine is live, because a row that read the first of several would
-    // answer for a machine the label only half-names. The hub's top-level
-    // answer stays authoritative wherever it speaks — including an offline
-    // machine's remembered state — and says nothing for a caller with no
-    // workspace identity, which keeps the liveness reading it always had.
+    // Per-device answers are read only when exactly one machine is live; otherwise the hub's top-level answer stands.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;
 
     if (granted !== undefined) identity.granted = granted;
 
-    // The one row the model reads before it decides where to put work, so it
-    // carries what the machine will actually do with a command: the owner's
-    // switch, what the machine proved, and this workspace's own home on it.
     if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
 
-    // Reach, not liveness. A connected machine this workspace holds no grant
-    // on is not callable by the model: the first call raises the owner's card
-    // instead of running.
+    // Reach, not liveness: a connected machine without this workspace's grant raises the owner's card first.
     if (s.connected && granted === false) {
       return {
         configured: true, available: false, active: false, status: 'idle',
@@ -354,10 +222,7 @@ export function createDeviceTunnelExecutor(
     return { configured: false, available: false, active: false, status: 'not_configured', ...identity };
   };
 
-  // Derived per read, not frozen at construction: a device that connects — or
-  // installs a toolchain onto itself mid-session, which the agent can do through
-  // `exec` — must change this row without rebuilding the provider. Memoised on
-  // the very answer it was derived from, so repeated reads cost one subtraction.
+  // Derived per read (a device can install a toolchain mid-session), memoised on the answer it came from.
   let memo: {
     from: DeviceToolchain | null;
     capabilities: ReadonlySet<ExecutorCapability>;
@@ -368,10 +233,7 @@ export function createDeviceTunnelExecutor(
     const answer = freshDeviceToolchain(transport.status().toolchain, Date.now());
 
     if (memo?.from === answer) return memo;
-    // Anything the answer's own scope covers is measured — named in `present`,
-    // or absent because it was looked for and not found. Anything outside that
-    // scope was never measured, which includes every entry when there is no
-    // answer at all and `docker`/`gpu` even when there is one.
+    // Inside the answer's scope: measured (present or absent). Outside it, and `docker`/`gpu` always: unmeasured.
     const measured = answer?.asked ?? [];
     memo = {
       from: answer,
@@ -395,25 +257,17 @@ export function createDeviceTunnelExecutor(
         }
 
         const signal = readExecSignal({ context: args[1] });
-        // Which machine this call is FOR. Undefined lets the transport and hub
-        // answer the one-machine account exactly as before; a fleet with
-        // several live machines refuses there instead of picking one.
+        // Undefined lets the hub resolve a one-machine account; several live machines refuse there.
         const deviceName = readDeviceSelection({ context: args[1] });
         const device = resolveForCall(transport, deviceName);
 
         if (device.kind === 'refusal') return device.refusal;
         const deviceId = device.deviceId;
-        // The identity is minted HERE, before the frame goes out, because it is
-        // what a cancellation names: the daemon registers this command's
-        // process group under it, so an abort can reach the command AND
-        // everything it started rather than just ending the wait. The caller
-        // learns THIS call's identity, so a detach can hand over exactly this
-        // request rather than every device call the turn happens to hold.
+        // Minted before sending: the daemon registers the process group under this id, so a cancel or detach can name it.
         const requestId = nextDeviceRequestId();
         const ownership = readDeviceOwnershipContext({ context: args[1] });
         ownership.report?.(requestId);
-        // Read per call, never cached: a scope that has already detached owns
-        // this command from the insert, so no handover has to race it.
+        // Read per call: a detached scope owns this command from the insert, avoiding a handover race.
         const backgroundJobId = ownership.owner?.() ?? null;
         const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
 
@@ -423,11 +277,7 @@ export function createDeviceTunnelExecutor(
 
         try {
           const result = await raceAbort(
-            // No transport deadline: this is arbitrary user work — a build, a
-            // test suite, an install — and the transport is not the thing that
-            // knows how long it should take. The bounds that DO apply stay:
-            // the caller's abort signal below, the turn's own cancellation,
-            // and the tunnel's liveness probe if the device disappears.
+            // No transport deadline for arbitrary user work; abort signal, turn cancellation and tunnel liveness still bound it.
             () => rpc('exec', [command], execOpts),
             signal,
             EXEC_NOT_STARTED,
@@ -442,10 +292,7 @@ export function createDeviceTunnelExecutor(
 
           if (isDeviceNotConnectedError({ cause: err })) return refusalOf(new KinuError('unavailable', NOT_CONNECTED));
 
-          // The machine cannot run a command under the tier it was given. That
-          // is a REFUSAL with a named cause and a fix, not a transport fault,
-          // and the message already reads as one — prefixing it with the
-          // command would bury the sentence that says what to do about it.
+          // Tier refusal with a named fix, not a transport fault; not prefixed with the command.
           if (isSandboxUnavailableError({ cause: err })) {
             return refusalOf(new KinuError('denied', renderThrownChain({ cause: err })));
           }
@@ -541,10 +388,7 @@ export function createDeviceTunnelExecutor(
       execute: async (...args: unknown[]): Promise<boolean | string> => {
         const path = parseInput(StringSchema, { value: args[0] });
 
-        // NEITHER answer is `false`: `false` claims the path is absent on the
-        // user's machine. A call that was never made and one that could not
-        // reach the device establish nothing about the path, so each refuses
-        // rather than swallowing its error into a verdict.
+        // Never `false` here: that would claim the path is absent on the machine.
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'device exists: path must be a string'));
         }
@@ -568,9 +412,7 @@ export function createDeviceTunnelExecutor(
   const provider: ExecutorProvider = {
     name: 'device',
     files,
-    // The plane is always routed by segment, so where it OPENS is the roster
-    // (`/`, the machine list) — never one machine's home picked for the fleet.
-    // Named, it is that machine's own opening dir, asked of that machine.
+    // The fleet plane opens at the roster; a named machine opens at its own dir.
     homeDir: async (segment?: string) => {
       if (segment === undefined) return '/';
       const fleet = transport.status().devices;
@@ -581,33 +423,8 @@ export function createDeviceTunnelExecutor(
       return deviceFiles(transport, consent, named.id).homeDir();
     },
     kind: 'device',
-    // The set is rendered into the model's execution block ("— runs: …",
-    // prompting/volatile-context.ts), which is where work is routed: a
-    // declared-but-absent capability sends work to the user's hardware, behind
-    // a consent prompt they granted, and fails there, while a present-but-
-    // undeclared one means the work never goes there at all.
-    //
-    // STRUCTURAL is what the tunnel's existence and this provider's own tools
-    // establish, with no probe needed:
-    //
-    //   shell          `exec` runs the command under `bash -c` on the device.
-    //   native_binary  the daemon holding this tunnel open is one, on that
-    //                  machine.
-    //   fs_owned       the device's real files, behind the consent boundary.
-    //   net_outbound   the device dialled this hub to get here.
-    //   process_spawn  `exec` can start a child.
-    //
-    // `net_inbound`, `process_long` and `process_signal` are refuted by this
-    // file: `exposePort` below answers `supported: false` because the device is
-    // behind the user's NAT, and no tool in the `device` namespace can keep or
-    // signal a process — the surface is exec, readFile, writeFile, readdir,
-    // exists. Refuted, so they are absent rather than unmeasured.
-    //
-    // Everything else comes from the machine's own answer, carried on the hub
-    // snapshot (./device-status). Three states, and the third is load-bearing:
-    // an answer that names a capability is evidence FOR it, an answer whose
-    // scope covers it and does not name it is evidence AGAINST it, and no
-    // machine without python.
+    // Rendered into the execution block (prompting/volatile-context.ts), which routes work. Structural: shell,
+    // native_binary, fs_owned, net_outbound, process_spawn. Refuted: net_inbound, process_long, process_signal.
     get capabilities() {
       return derived().capabilities;
     },
@@ -617,12 +434,10 @@ export function createDeviceTunnelExecutor(
     isAvailable: () => transport.status().connected,
     getStatus,
     connect: async () => {
-      // Verify connectivity with a simple echo
       try {
         await rpc('exec', ['echo connected']);
       } catch (err) {
-        // Classified rather than a bare `Error`, so a caller that catches this
-        // lifecycle failure reads the same `unavailable` the tools return.
+        // Classified so callers read the same `unavailable` the tools return.
         if (isDeviceNotConnectedError({ cause: err })) throw new KinuError('unavailable', NOT_CONNECTED, { cause: err });
         throw err;
       }
@@ -651,9 +466,7 @@ declare namespace device {
   function exists(path: string, opts?: { device?: string }): Promise<boolean | string>;
 }`,
     positionalArgs: true,
-    // The user's PC is behind their NAT — we don't open inbound ports
-    // back to them. The user can already point their local browser at
-    // any URL their machine serves. Use `sandbox` for previewable URLs.
+    // The PC is behind the user's NAT; no inbound ports. Use `sandbox` for previewable URLs.
     async exposePort(port: number) {
       return {
         supported: false,
@@ -670,26 +483,9 @@ declare namespace device {
   return provider;
 }
 
-// ── Fleet plumbing ──────────────────────────────────────────────────────────
-//
-// These live below the factory so the reader meets the tool surface first and
-// the machinery after; both are exported because the transport-side tests and
-// the composite mount plane build on them.
-
 /**
- * The machine one tool call is FOR, resolved against the fleet snapshot.
- *
- * The snapshot decides two things only: which id a NAME means, and whether an
- * unnamed call is ambiguous. It never gates the call itself — a tool call goes
- * to the hub and lets it answer authoritatively, so a machine that connected
- * after this snapshot was taken works immediately, exactly as before the fleet.
- *
- *   - a named machine the fleet holds → its id;
- *   - a name the fleet does not hold → `unavailable`, naming the live machines;
- *   - no name and several live machines → `bad_input`, the classified ask;
- *   - no name otherwise → the sole live machine's id, or none when the fleet is
- *     unknown or empty here (the hub resolves a one-machine account and refuses
- *     the rest).
+ * Resolves the machine a call is for. Named and held → id; named but not held → `unavailable`; unnamed with several
+ * live → `bad_input`; otherwise the sole live id or none (hub resolves). The snapshot never gates the call itself.
  */
 function resolveForCall(
   transport: DeviceTransport,
@@ -718,11 +514,7 @@ function resolveForCall(
     `no connected machine is named "${named}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
 }
 
-/**
- * The per-machine file view one tool call reaches, keyed by the same
- * resolution {@link resolveForCall} performs. A refusal string comes back
- * as-is; the tools return it on the string channel.
- */
+/** Per-machine file view for one call; a refusal string is returned as-is. */
 function filesForCall(
   transport: DeviceTransport,
   consent: DeviceFileConsent,
@@ -736,33 +528,15 @@ function filesForCall(
 }
 
 /**
- * Scope of the device file view. The view exposes the device's REAL root — a
- * faithful window, not a lossy rewrite — but only the directory the owner
- * NAMED at `kinu connect` is reachable while the device's Sandbox switch is on.
- *
- * There is deliberately no fallback. Defaulting the scope to `$HOME` puts
- * `~/.kinu/config.json` (the owner's CLI bearer), `~/.ssh` and `~/.aws` inside
- * it — "inside its connected folder" would be the whole home, and reading one
- * file in it escalates what the agent can reach. A device that reported
- * no root has no scoped file access: the owner re-runs `kinu connect` in the
- * directory they mean, which is the only party that can answer that question.
- *
- * `unconfined` is the Sandbox switch, read from the hub. It is one question
- * with one answer for both enforcers: the kernel sandbox the shell runs under,
- * and this path scope. Two switches would let `readFile` and `bash` see
- * different machines, which is the drift the one view exists to prevent.
+ * Device file view scope: only the directory named at `kinu connect` while Sandbox is on. No `$HOME` fallback (it holds
+ * `~/.kinu/config.json`, `~/.ssh`). `unconfined` is the same switch the shell sandbox reads.
  */
 export interface DeviceFileConsent {
-  /** The directory the owner consented on the machine asked about, or null
-   *  when that device reported none. Async because the answer lives on the
-   *  device row, not in the isolate. `deviceId` names the machine; a
-   *  one-machine implementation may ignore it. */
+  /** Consented directory on the named machine, or null when it reported none. */
   consentedRoot(deviceId?: string): Promise<string | null>;
-  /** That machine's own home, as it reported on HELLO, or null. Where the
-   *  file view opens when no directory was consented — never a scope. */
+  /** That machine's HELLO-reported home, or null. Where the view opens without a consented dir; never a scope. */
   deviceHome(deviceId?: string): Promise<string | null>;
-  /** Whether the owner turned THAT device's Sandbox switch off, which lifts
-   *  the path scope for the same reason it lifts the shell's. */
+  /** Sandbox switch off on that device: lifts the path scope as it lifts the shell's. */
   unconfined(deviceId?: string): Promise<boolean>;
 }
 
@@ -772,29 +546,14 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
   unconfined: async () => true,
 };
 
-/** The device file view, plus the one thing only the device can answer. */
 export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
 /**
- * The user's machine, in the machine's own absolute paths.
- *
- * The daemon speaks every file operation natively. Each call carries the
- * consented root, which the daemon resolves together with the path before the
- * filesystem sink; this client guard rejects obvious lexical escapes first.
- * Every call still crosses the hub's per-(agent, device) action-consent
- * chokepoint, and this view adds the path-scope layer on top.
- *
- * `homeDir` is where the view opens: the consented root, or the machine's own
- * home under the full tier. Both arrive on `HELLO` and sit on the device row,
- * so this view never runs a command to learn a path. `exec`-ing
- * `printf %s "$HOME"` needs the FULL tier, which would stop a base-tier
- * workspace from listing a directory until it was pushed through a
- * full-filesystem consent card.
+ * The machine's filesystem in its own absolute paths. The daemon resolves root and path before the sink; this client
+ * guard only rejects lexical escapes. `homeDir` comes from HELLO, never an `exec` (which needs the full tier).
  */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent, deviceId?: string): DeviceVFS {
-  // Every call of this view is FOR one machine. The hub routes on the id; a
-  // view built with none (a one-machine account, or a fleet the snapshot has
-  // not described yet) sends no key and lets the hub resolve it.
+  // No id (one-machine account or undescribed fleet): send no key and let the hub resolve.
   const target: DeviceExecOptions | undefined = deviceId === undefined ? undefined : { deviceId };
   const trimmed = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
 
@@ -810,8 +569,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     );
   };
 
-  /** Where the view OPENS, which is not the same question as what it may
-   *  reach: the full tier has no root and still needs somewhere to start. */
+  /** Where the view opens, distinct from its reach: the full tier has no root. */
   const openingDir = async (): Promise<string> => {
     const root = await consent.consentedRoot(deviceId);
 
@@ -826,9 +584,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     if (await consent.unconfined(deviceId)) return null;
     const root = await effectiveRoot();
 
-    // No fallback: a device that named no directory throws above rather than
-    // widening to `/`. The daemon enforces the same view a second time, so
-    // this lexical check is the cheap first line, never the boundary.
+    // A device that named no directory threw above rather than widening to `/`.
     if (!(path === root || path.startsWith(`${root}/`))) {
       throw makeVfsError(
         'EACCES',
@@ -839,19 +595,12 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       );
     }
 
-    // The daemon resolves both root and path through realpath before the sink.
-    // That is the authoritative traversal/symlink check; this lexical check
-    // rejects obvious escapes before they cross the tunnel.
+    // The daemon's realpath check is authoritative; this lexical check is a cheap first line.
     return root;
   };
 
-  /** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride
-   *  the text protocol; anything else must go base64 or it corrupts.
-   *
-   *  The round trip IS the test, run rather than inferred from a thrown decode:
-   *  a non-fatal decode substitutes U+FFFD for every invalid sequence, and
-   *  U+FFFD re-encodes to three bytes that cannot match what produced it —
-   *  while a genuinely encoded U+FFFD round-trips and is correctly kept. */
+  /** Bytes that survive a utf-8 round-trip byte-exactly may use the text protocol; others go base64.
+   *  Tested by round trip because a non-fatal decode substitutes U+FFFD. */
   const asLosslessText = (bytes: Uint8Array): string | null => {
     const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
     const encoded = new TextEncoder().encode(text);
@@ -954,16 +703,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 }
 
-/**
- * The mount-key segment a device's files appear under inside the composite
- * plane: the machine's own name when it is one clean path segment and no other
- * live machine shares it, otherwise its id — the unique key the owner's
- * devices table mints, which no rename or sibling can displace.
- */
+/** Mount segment: the machine name when it is a clean, unshared segment, else its id. */
 export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[] | undefined): string {
   const name = device.name.trim();
-  // A reference root the table reserves (`vfs`, `sandbox`, `local`) is never
-  // a machine's segment, so the alias can never shadow a device.
+  // Reserved reference roots (`vfs`, `sandbox`, `local`) are never a machine's segment.
   const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..' && !RESERVED_REFERENCE_ROOTS.includes(name);
 
   if (!usable) return device.id;
@@ -972,8 +715,7 @@ export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly Dev
   return others.length === 0 ? name : device.id;
 }
 
-/** The stated absence for a path under no live machine: which machines ARE
- *  connected, so the reader has the exact segments to type. */
+/** Stated absence for a path under no live machine, listing the connected segments. */
 function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: string): Error {
   const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
 
@@ -984,27 +726,14 @@ function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: str
   return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
 }
 
-/** One route of the composite plane: the segment, and the machine it serves. */
 interface DeviceRoute {
   readonly segment: string;
   readonly view: DeviceVFS;
 }
 
 /**
- * The fleet's composite file plane.
- *
- * One segment per live machine: `/pc/<segment>/...` is that machine's own
- * `/...`, where the segment is the machine's name (its id when the name is
- * shared or not a usable path segment). A fleet of one is served the same
- * way, so a path a saved tool or a slate names never moves when a second
- * machine joins. The segment lives beside the name in every surface that
- * renders the fleet, so the model always has the exact bytes to type. The
- * plane's root is the roster. With no fleet snapshot at all there is no
- * segment vocabulary, and the unnamed view goes to the hub as it always did.
- *
- * A path whose first segment names no live machine refuses with the connected
- * names — the stated absence the mount law requires, never an empty listing
- * that could read as "this machine has no files".
+ * Fleet composite file plane: `/pc/<segment>/...` is that machine's `/...`, fleet of one included, so paths survive a
+ * second machine joining. Unknown segment refuses with the connected names, never an empty listing.
  */
 function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
   const routes = (): DeviceRoute[] => {
@@ -1029,13 +758,8 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
   };
 
 
-  /** One operation, dispatched by first segment: the mount is always
-   *  /pc/<name>, so a path that names no live machine refuses with the
-   *  connected names. The fleet's own root ("/") is the machine list,
-   *  handled by the callers that can answer it (readdir, stat, exists).
-   *  With no fleet snapshot here at all there is no segment vocabulary —
-   *  the unnamed view goes to the hub, which answers for a one-machine
-   *  account or refuses, exactly as the old single-machine bypass did. */
+  /** Dispatches by first segment. Root "/" is handled by readdir/stat/exists. Without a fleet snapshot the unnamed view
+   *  goes to the hub. */
   const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Promise<T>): Promise<T> => {
     if (connectedDevices(transport.status().devices).length === 0) {
       return op(deviceFiles(transport, consent, undefined), path);
@@ -1052,10 +776,7 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     (path.replace(/\/+$/, '') === '' || path.replace(/\/+$/, '') === '/');
 
   return {
-    // Where the plane OPENS: the machine list at the mount point itself.
-    // The provider's own homeDir keeps answering the machine's opening dir
-    // (consented root or reported home) — the mount root is a roster, not a
-    // directory, so it cannot be a working directory.
+    // The mount root is a roster, not a directory, so it cannot be a working directory.
     homeDir: async () => '/',
     async readFile(path, opts) {
       return dispatch(path, (view, native) => view.readFile(native, opts));
@@ -1080,9 +801,7 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
 
       const route = routeOf(path);
 
-      // A live machine's own root is an entry of the roster: a directory by
-      // construction, answered here so listing /pc never asks each machine
-      // to stat a `/` its consent boundary would refuse.
+      // Answered here so listing /pc never asks a machine to stat a `/` its consent boundary refuses.
       if (route?.rest === '/') return { size: 0, mtimeMs: 0, isDir: true };
 
       return route ? route.view.stat(route.rest) : null;

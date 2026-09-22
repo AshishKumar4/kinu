@@ -1,4 +1,4 @@
-// DeviceTunnel — JSON-RPC over the user-level device socket (P1 of the CLI work).
+// DeviceTunnel: JSON-RPC over the user-level device socket.
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -82,7 +82,6 @@ describe('DeviceTunnel', () => {
     const a = t.rpc('exec', ['1']);
     const b = t.rpc('exec', ['2']);
     const [idA, idB] = sock.sent.map((s) => s.id);
-    // Respond out of order.
     t.handleMessage(JSON.stringify({ id: idB, result: 'B' }));
     t.handleMessage(JSON.stringify({ id: idA, result: 'A' }));
     expect(await a).toBe('A');
@@ -93,9 +92,9 @@ describe('DeviceTunnel', () => {
     const sock = fakeSocket();
     const t = new DeviceTunnel(sock);
     const p = t.rpc('exec', ['x']);
-    t.handleMessage(JSON.stringify({ type: 'HELLO', os: 'darwin' })); // no id
+    t.handleMessage(JSON.stringify({ type: 'HELLO', os: 'darwin' }));
     t.handleMessage('not json');
-    t.handleMessage(JSON.stringify({ id: 'rpc-999', result: 'stale' })); // unknown id
+    t.handleMessage(JSON.stringify({ id: 'rpc-999', result: 'stale' }));
     t.handleMessage(JSON.stringify({ id: sock.sent[0].id, result: 'real' }));
     expect(await p).toBe('real');
   });
@@ -115,13 +114,11 @@ describe('DeviceTunnel', () => {
 
   test('rpc times out if no response arrives', async () => {
     const sock = fakeSocket();
-    const t = new DeviceTunnel(sock, 20); // 20ms timeout
+    const t = new DeviceTunnel(sock, 20);
     await expect(t.rpc('exec', ['slow'])).rejects.toThrow(/timeout/i);
   });
 
-  // Liveness and the work budget are separate deadlines, and these pin them
-  // apart. ONE 30s deadline on every call fails a device build or test suite as
-  // "device RPC timeout" — a message indistinguishable from a dead device.
+  // Liveness and the work budget are separate deadlines; one shared deadline reads a slow build as a dead device.
   describe('work budget vs liveness', () => {
     test('a call with no deadline outlives the control timeout', async () => {
       const sock = fakeSocket();
@@ -129,7 +126,6 @@ describe('DeviceTunnel', () => {
       const t = new DeviceTunnel(sock, 10, 1_000, timers);
       const p = t.rpc('exec', ['make -j8'], { timeoutMs: 0 });
       timers.advance(40);
-      // Well past the control deadline, and still waiting for the device.
       t.handleMessage(JSON.stringify({ id: sock.sent[0].id, result: { stdout: 'built', exitCode: 0 } }));
       expect(await p).toEqual({ stdout: 'built', exitCode: 0 });
     });
@@ -138,9 +134,6 @@ describe('DeviceTunnel', () => {
       const sock = fakeSocket();
       const t = new DeviceTunnel(sock, 10);
       const p = t.rpc('exec', ['sleep 600'], { timeoutMs: 0 });
-      // A socket close rejects in-flight calls through the tunnel's own
-      // teardown — the case where no close event ever fires is what the
-      // liveness probe covers, and both name the disconnect.
       sock.readyState = 3;
       t.dispose();
       await expect(p).rejects.toThrow(TUNNEL_DISCONNECTED);
@@ -162,8 +155,7 @@ describe('DeviceTunnel', () => {
       let settled = false;
       void p.then(() => { settled = true; }, () => { settled = true; });
 
-      // Several heartbeat periods of silence from the WORK, but the device is
-      // answering the probes — which is the only question liveness asks.
+      // Work is silent but probes answer, which is all liveness asks.
       for (let i = 0; i < 6; i++) {
         timers.advance(15);
         const probe = sock.sent.find((f) => f.method === 'ping');
@@ -179,15 +171,12 @@ describe('DeviceTunnel', () => {
     });
 
     test('a device that stops answering fails the call as unresponsive, not as a timeout', async () => {
-      // The half-open case: the socket still reads OPEN, so nothing closes and
-      // no work deadline applies — the heartbeat is the only thing that can
-      // tell the difference between slow work and a dead machine.
+      // Half-open: the socket reads OPEN, so only the heartbeat tells slow work from a dead machine.
       const sock = fakeSocket();
       const t = new DeviceTunnel(sock, 1_000, 10);
       const p = t.rpc('exec', ['make'], { timeoutMs: 0 });
       await expect(p).rejects.toThrow(DEVICE_UNRESPONSIVE);
-      // And it says what happened to the work rather than implying it was
-      // cancelled on the device.
+      // The message must not imply the work was cancelled on the device.
       await expect(p).rejects.toThrow(/may still be running on the device/);
     });
 
@@ -199,7 +188,6 @@ describe('DeviceTunnel', () => {
       t.handleMessage(JSON.stringify({ id: sock.sent[0].id, result: 'ok' }));
       expect(await p).toBe('ok');
       const after = sock.sent.length;
-      // Three probe periods, none of which is armed any more.
       timers.advance(35);
       expect(sock.sent.length).toBe(after);
     });
@@ -215,7 +203,7 @@ describe('DeviceTunnel', () => {
       const refused = new Error('socket refused the frame');
       sock.send = () => { throw refused; };
 
-      // One tick: the probe is the only frame that tick sends.
+      // One tick sends only the probe.
       timers.advance(10);
       await Promise.resolve();
 
@@ -224,22 +212,10 @@ describe('DeviceTunnel', () => {
     });
   });
 
-  /**
-   * Request identity, which is two things at once: what a response is paired
-   * with, and what a cancellation names.
-   *
-   * A bare instance counter cannot carry it. A hub evicted mid-command wakes
-   * with that counter back at zero while the command keeps running on the
-   * machine, so the machine's late answer pairs with whatever call now holds
-   * `rpc-1` — one workspace's result read as another's, on the same user's
-   * device. Hence the epoch.
-   */
+  /** Request identity pairs responses and names cancellations; the epoch keeps ids unique across a wake. */
   describe('request identity', () => {
     test('a rebuilt tunnel cannot reissue an id a previous one used', async () => {
-      // Two tunnels in one isolate stand in for before and after a wake: the
-      // counter starts over per instance, and only the epoch stops the ids
-      // from colliding. Both calls are ended through the tunnel that owns them,
-      // so each rejection is asserted rather than dropped.
+      // Two tunnels in one isolate stand in for before and after a wake; only the epoch keeps ids apart.
       const before = fakeSocket();
       const after = fakeSocket();
       const first = new DeviceTunnel(before);
@@ -260,8 +236,6 @@ describe('DeviceTunnel', () => {
       const first = new DeviceTunnel(before);
       const abandoned = first.rpc('exec', ['make'], { timeoutMs: 0 });
       const staleId = before.sent[0].id;
-      // The hub is evicted: the old tunnel's call ends here, and the command it
-      // issued keeps running on the machine.
       first.dispose();
       await expect(abandoned).rejects.toThrow(TUNNEL_DISCONNECTED);
 
@@ -271,7 +245,6 @@ describe('DeviceTunnel', () => {
       let settled = false;
       void live.then(() => { settled = true; }, () => { settled = true; });
 
-      // The device finally answers the command the OLD tunnel issued.
       second.handleMessage(JSON.stringify({ id: staleId, result: { stdout: 'STALE', exitCode: 0 } }));
       await Promise.resolve();
       expect(settled).toBe(false);
@@ -281,9 +254,7 @@ describe('DeviceTunnel', () => {
     });
 
     test('a caller that must be able to cancel issues the call under its own id', async () => {
-      // The id has to exist before the frame goes out: it is what the daemon
-      // registers the command's process group under, so a caller learning it
-      // from the answer could never stop the command.
+      // The id must exist before the frame goes out: the daemon registers the process group under it.
       const sock = fakeSocket();
       const t = new DeviceTunnel(sock);
       const requestId = nextDeviceRequestId();
@@ -302,24 +273,18 @@ describe('DeviceTunnel', () => {
 
       await expect(t.rpc('exec', ['make again'], { timeoutMs: 0, requestId }))
         .rejects.toThrow(DEVICE_DUPLICATE_REQUEST);
-      // The refusal costs the live call nothing: it is still the only claimant
-      // on that id, and it still gets its own answer.
       expect(sock.sent).toHaveLength(1);
       t.handleMessage(JSON.stringify({ id: requestId, result: { stdout: 'built', exitCode: 0 } }));
       expect(await first).toEqual({ stdout: 'built', exitCode: 0 });
     });
 
     test('a cancellation answer speaks only for the request it names', () => {
-      // The verb and the id are one claim, not two facts. Reading `terminated`
-      // without checking which command it is about is how a stopped-command
-      // report gets attached to processes that are still running.
+      // Verb and id are one claim: `terminated` about another command confirms nothing.
       const requestId = nextDeviceRequestId();
       const answer = { requestId, cancelled: 'terminated' } as const;
       expect(parseDeviceCancelAnswer(requestId, answer)).toEqual(answer);
       expect(() => parseDeviceCancelAnswer(nextDeviceRequestId(), answer))
         .toThrow(DEVICE_CANCEL_MISPAIRED);
-      // An answer that is not one of the two outcomes at all confirms nothing
-      // either — silence and gibberish are the same claim.
       expect(() => parseDeviceCancelAnswer(requestId, { requestId, cancelled: 'probably' }))
         .toThrow('Invalid type: Expected ("terminated" | "unknown") but received "probably"');
       expect(() => parseDeviceCancelAnswer(requestId, undefined))

@@ -1,39 +1,10 @@
 /**
- * The Nimbus workspace. There is only this one.
- *
- * Nimbus (`@nimbus-sh/core`) owns the bytes: a durable POSIX filesystem over a
- * host-supplied SQLite port, with a real shell over it — pipelines, loops,
- * variables, redirection, a working directory that persists across commands,
- * and ~95 coreutils. The host supplies `sql` and `transactions` and nothing
- * else — `ctx.storage.sql` and `ctx` in the Durable Object that owns a hosted
- * workspace, a `bun:sqlite` database in the local CLI. ONE workspace per host
- * database and no second Durable Object either way: the filesystem tables sit
- * beside the actor's own rows, so the bytes and the ledgers that index them
- * commit under one `transactionSync` and snapshot as one database.
- *
- * ONE FILESYSTEM, ONE SET OF PATHS
- *
- * `Storage.vfs` and `Shell` here are two views of the same Nimbus filesystem,
- * addressed identically: `vfs.readFile('/etc/passwd')` and `run "cat
- * /etc/passwd"` read the same bytes. Relative paths resolve against
- * {@link WORKSPACE_ROOT}, which is the shell's starting directory and the
- * agent's own home — so `memory/MEMORY.md` means the same file to the `file`
- * tool, to `workspace.readFile`, and to `grep`.
- *
- * There is deliberately no mount table. Other execution environments — the
- * sandbox container, the user's machine, a fork's parent
- * workspace — are EXECUTORS, reached through `run { runtime }` and their
- * codemode namespaces in their own native paths. Presenting them as
- * directories of this filesystem required a router above Nimbus and a second
- * shell that could walk it, which is exactly the split this module removes.
+ * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite,
+ * sharing its transactions. `vfs` and `shell` address the same paths; no mount table.
  */
 
-// TYPE-ONLY at module scope. The VALUE loads inside the boot closure: the
-// workspace module's static graph carries Nimbus's whole substrate (lifo
-// command registry, runtime runners, wasm assets), and evaluating that at
-// module eval would put a WebAssembly import into every consumer's collection
-// graph — the Worker pays it at cold start and the workerd test pool cannot
-// load it at all. The boot is already lazy; the import belongs to it.
+// Type-only: the value import stays inside the lazy boot so Nimbus's wasm graph is not
+// loaded at module eval (cold start; workerd test pool cannot load it).
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -64,18 +35,7 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
   signal: v.optional(v.instance(AbortSignal)),
 }));
 
-/**
- * The agent's home, the shell's initial working directory, and the base that
- * relative VFS paths resolve against.
- *
- * It is a real directory of a real filesystem rather than a synthetic root:
- * `/etc`, `/usr` and `/tmp` are reachable at their own names, and the agent's
- * durable work lives where a user's work lives. Surfaces that mean "the
- * agent's own files" (archive, backup, the file browser) walk this path;
- * nothing rewrites addresses to fake it.
- */
-/** ENOENT is how Nimbus reports a missing path; the core VFS contract stats it
- *  as `null` and answers `exists` with `false`. */
+/** Nimbus reports a missing path as ENOENT; the VFS contract maps it to `null`/`false`. */
 function isEnoent({ error }: { error: unknown }): boolean {
   if (isVfsError(error)) return error.code === 'ENOENT';
 
@@ -93,19 +53,10 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
   return options.success ? options.output : undefined;
 }
 
-/**
- * `Storage.vfs`, plus the two operations the file surfaces need that the seven
- * do not cover. Both are native here: Nimbus removes a tree in one bounded
- * statement and renames without reading the bytes, so `rm -r` and `mv` of a
- * directory are ordinary operations rather than the refusals a filesystem
- * without directory entries has to make.
- */
 export interface WorkspaceVFS extends VFS {
   removeRecursive(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
-  /** Exactly this window of one file's bytes, read out of the chunk rows that
-   *  cover it. A caller that must not hold a whole file — the fork wire — reads
-   *  through this rather than `readFile`. */
+  /** Reads only the chunk rows covering the window; for callers that must not hold a whole file. */
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
 }
 
@@ -134,10 +85,6 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
     async mkdir(path, opts) { await (await fs()).mkdir(workspacePath(path), opts); },
     async exists(path) { return (await fs()).exists(workspacePath(path)); },
 
-    // One native removal: the kernel's `rmdirRecursive` dispatches on the
-    // mount table (core 0.9), so a provider-backed tree is walked through its
-    // own provider rather than the in-memory nodes that once answered ENOENT
-    // for a directory that demonstrably existed.
     async removeRecursive(path) { await (await fs()).rm(workspacePath(path), { recursive: true }); },
 
     async rename(oldPath, newPath) {
@@ -152,12 +99,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
   return self;
 }
 
-/**
- * The Nimbus shell as a Kinu `Shell`.
- *
- * No `cwd` is passed per command on purpose: the shell owns its own working
- * directory, so `cd` persists across calls the way it does in a terminal.
- */
+/** No per-command `cwd`: the shell owns its working directory so `cd` persists. */
 function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
   return {
     async exec(command, stdinOrOptions) {
@@ -172,48 +114,27 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
 
       return workspaceCommandNotFound(
         { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
-        // The live registry IS the catalog: it holds the coreutils, the bins
-        // provisionWorkspaceRuntimes declared (npm, npx, the loopback re-wires
-        // and each supplied runtime's entrypoints) and whatever the host added
-        // (git) — read per call because installs re-register mid-session.
+        // Read per call: installs re-register bins mid-session.
         (bin) => workspace.registry.has(bin),
       );
     },
   };
 }
 
-/**
- * The same filesystem as ONE AGENT: the same rows, reached with the agent's own
- * credential on both planes.
- *
- * Two members and not one, because an agent reaches the tree two ways and a
- * boundary that held for only one is not a boundary. Its file tools go through
- * {@link vfs}; its commands go through {@link shell}, which starts in the
- * agent's home with `HOME` and `TMPDIR` already pointing at the agent's own
- * directories.
- */
+/** One agent's credentialed view of the same rows, on both the file and shell planes. */
 export interface WorkspaceAgentPlane {
   readonly vfs: WorkspaceVFS;
   readonly shell: Shell;
 }
 
-/** Who the agent is, and where its own directories are — as
- *  `vfs/agent-home.ts` provisioned them. */
+/** As provisioned by `vfs/agent-home.ts`. */
 export interface WorkspaceAgent {
   readonly cred: VfsCred;
   readonly home: string;
   readonly tmp: string;
 }
 
-/**
- * The agent's file plane: the SAME `SqliteVFS`, credentialed.
- *
- * Not the workspace's own `.fs`, which is pinned to the session user by
- * construction (`NimbusWorkspace`'s constructor) — that identity is the ORIGIN
- * and it is exactly what must not be reused here. The sync surface is adapted
- * rather than wrapped in another cache: one filesystem instance, one set of
- * rows, one content cache.
- */
+/** The same `SqliteVFS`, credentialed as the agent; never the workspace `.fs`, which is pinned to the session user. */
 function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
   const self: WorkspaceVFS = {
     async readFile(path, opts) {
@@ -244,174 +165,61 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
   return self;
 }
 
-/**
- * The privileged half of this filesystem: a uid-0 view of the same bytes, and
- * the principal registry that scopes `/tmp` per uid.
- *
- * Present wherever this filesystem is, which is wherever a workspace is: it is
- * built from the host's own SQLite, so uid 0 is reachable and `confinePrincipal`
- * is an ordinary method call rather than an RPC nobody exposes.
- */
+/** Uid-0 view of the same bytes plus the principal registry that scopes `/tmp` per uid. */
 export interface WorkspacePrivileged {
-  /** `SqliteVFS.as(CRED_KERNEL)`. Only uid 0 can `chown` a directory to a uid
-   *  that is not its own, which is the whole reason provisioning is host-side. */
+  /** Only uid 0 can `chown` to another uid, which is why provisioning is host-side. */
   readonly root: HomeRootVfs;
-  /** The `SqliteVFS` itself, narrowed to the two principal calls. */
   readonly confiner: TmpConfiner;
 }
 
-/**
- * What the workspace's dispatch answers. A host forwards it to the supervisor
- * entrypoint without looking inside: the entrypoint's own typed methods
- * narrow each answer, and this follows the library's declaration so a
- * narrower answer upstream narrows every host for free.
- */
 export type SupervisorOpResult = Awaited<ReturnType<NimbusWorkspace['supervisorOp']>>;
 
-/**
- * This workspace's own Nimbus primitives, as a host's process/port surface
- * binds to them.
- *
- * The opened workspace itself, for a host that composes Nimbus's hosted
- * runtime over it — the runtime reads its shell, kernel, registry, process
- * owner and runtime manager and starts it, and a second `NimbusWorkspace`
- * over the same database would be a second content cache. Beside it, the
- * members a host reads directly: the shell commands actually run on, the raw
- * credentialed filesystem, the registry, the process owner whose pids this
- * filesystem's append capabilities are keyed by, and the one dispatch a facet
- * reaches its host through.
- */
+/** This workspace's Nimbus primitives for a host's process/port surface; reuse them, never open a second workspace over the same database. */
 export interface WorkspaceSession {
   readonly workspace: NimbusWorkspace;
   readonly shell: NimbusWorkspace['shell'];
   readonly vfs: SqliteVFS;
   readonly registry: NimbusWorkspace['registry'];
-  /** The ONE process owner of this filesystem. A host that spawns through its
-   *  own would hand out pids at or below the revoked generation floor. */
+  /** The only process owner; a host spawning through its own would issue pids at or below the revoked generation floor. */
   readonly processes: SessionProcessSupervisor;
-  /**
-   * The one method a workspace host mounts for its facets.
-   *
-   * Every filesystem call a dynamic worker makes arrives here, credentialed
-   * to the process whose command started the work. A Durable Object that
-   * hosts this workspace forwards its own mounted method to this one — that
-   * forwarding is the whole host obligation, and without it `git clone` and
-   * `npm install` refuse before they spawn anything.
-   */
+  /** Hosts must forward their mounted facet method here, or `git clone`/`npm install` refuse. */
   readonly supervisorOp: (envelope: SupervisorOpEnvelope) => Promise<SupervisorOpResult>;
 }
 
 export interface WorkspaceBundle {
-  /** `Storage.vfs` — the workspace filesystem. */
   vfs: WorkspaceVFS;
-  /** The shell over those same bytes. */
   shell: Shell;
-  /** Files, directories and bytes this workspace occupies. */
   stats(): Promise<{ files: number; dirs: number; usedBytes: number }>;
-  /**
-   * The uid-0 view and the principal registry, for provisioning a per-agent
-   * home.
-   *
-   * A promise for the same reason every other member of this bundle returns
-   * one: the workspace boots late. Resolving it eagerly at construction would
-   * serialise a host's whole startup on a boot nothing has asked for yet.
-   */
   privileged(): Promise<WorkspacePrivileged>;
-  /**
-   * The same filesystem as one provisioned agent, on both planes.
-   *
-   * One plane per agent and cached by uid, because a shell HOLDS state — a
-   * working directory, exported variables — so an agent that got a fresh shell
-   * per command would lose its own `cd`. Idempotent for that reason too: the
-   * second call for a uid is the first plane again.
-   */
+  /** Cached per uid and idempotent: a shell holds state (`cd`, exports). */
   asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
-  /**
-   * The composed Nimbus primitives, for a host that has to build a surface
-   * this bundle deliberately does not: background processes, listening ports,
-   * an R2 runtime catalogue.
-   *
-   * Those belong to the HOST — a Durable Object holds `ctx.waitUntil` and a
-   * port registry a `bun` process has no use for — so they are composed over
-   * these three rather than reimplemented here. Handing over the workspace's
-   * OWN shell, filesystem and registry is the whole point: a host that opened
-   * its own would have a second content cache over one database, and a host
-   * that spawned from its own process table would issue pids this filesystem
-   * has already revoked.
-   */
   session(): Promise<WorkspaceSession>;
-  /** Observe file changes after boot, including a successful retry. */
   onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
-  /**
-   * Drop this workspace's tables, leaving the host's own rows alone.
-   *
-   * The deletion of a workspace, which on a shared database cannot be
-   * `deleteAll`: the actor's conversation, ledgers and identity live in the
-   * same SQLite and are dropped by the actor's own teardown.
-   */
+  /** Drops only the workspace tables; the host's own rows stay. */
   destroy(): Promise<void>;
 }
 
 export interface WorkspaceOptions {
-  /** The host's SQLite. In a Durable Object: `ctx.storage.sql`. */
+  /** In a Durable Object: `ctx.storage.sql`. */
   sql: SqlDatabase;
-  /** Carries `transactionSync`. In a Durable Object: `ctx`. Every atomic write
-   *  in the filesystem rests on this being a real transaction. */
+  /** Carries `transactionSync`; in a Durable Object, `ctx`. Must be a real transaction. */
   transactions: { readonly storage?: { readonly transactionSync: <T>(cb: () => T) => T } };
   /**
-   * Where the process-id generation is kept, which must never repeat for a
-   * given database: the workspace revokes every append capability at or below
-   * `generation * 1_000_000` before serving anything, so a repeating value
-   * hands a dead process live write authority. Fabric's own allocator
-   * (`adoptGeneration`) reads the persisted counter and bumps it once per
-   * incarnation; this is the storage it does that in. Use
-   * {@link workspaceGenerationStorage} for a host whose counter is a row.
+   * Process-id generation storage; must never repeat a value, since boot revokes append capabilities
+   * at or below `generation * 1_000_000`. See {@link workspaceGenerationStorage}.
    */
   generation: GenerationContext;
-  /**
-   * Language runtimes this host can install into the workspace, as the npm
-   * packages that hold them (`@nimbus-sh/runtime-bash`,
-   * `@nimbus-sh/runtime-cpython`).
-   *
-   * Supplied by the host rather than imported here because the packages read
-   * `node:fs` and weigh 40 MB: the deployed Worker has neither. Nothing is
-   * written until one of their commands is invoked — see
-   * vfs/workspace-runtimes.ts.
-   */
+  /** Runtime packages the host can install; supplied by the host because they read `node:fs`. */
   runtimes?: readonly RuntimePackage[];
-  /**
-   * Where a wasm interpreter runs. Absent on workerd, where nothing can:
-   * see `provisionWorkspaceRuntimes`' own `facets`, which this is.
-   */
+  /** Absent on workerd, where no wasm interpreter can run. */
   runtimeFacets?: FacetHost;
-  /**
-   * The embedder's fabric composition, for a host that can run dynamic
-   * workers. A Durable Object host passes its supervisor entrypoint, its own
-   * namespace binding and the method it mounts; the local CLI passes nothing
-   * and keeps the filesystem, the shell and the coreutils with no facet
-   * substrate to reach.
-   */
+  /** Embedder fabric for hosts that can run dynamic workers; the CLI passes none. */
   fabric?: FabricComposition;
-  /**
-   * A remote runtime catalog beyond the supplied packages — the R2 catalog a
-   * hosted workspace installs `python3` or `bash` from. A name the registry
-   * cannot answer is offered to it and, when it can satisfy the name, becomes
-   * a stub that installs on first invocation; the host's runners then bind
-   * the installed bins. The CLI passes none: its runtimes arrive as packages.
-   */
+  /** Remote runtime catalog (e.g. R2); names it can satisfy become install-on-first-use stubs. */
   runtimeSource?: RuntimeSource;
 }
 
-/**
- * Build the workspace filesystem and its shell over a host's SQLite.
- * Returns synchronously over a workspace that opens on its first operation.
- * Booting one is genuinely async — Nimbus sources `/etc/profile` — while
- * runtime construction and the Durable Object constructor behind it are not,
- * and every method of `VFS` and `Shell` already returns a promise. Opening
- * lazily means an unused bundle never starts unowned work; the first operation
- * owns and awaits the boot without anyone downstream learning that the
- * filesystem arrives late.
- */
+/** Returns synchronously; the workspace boots lazily on its first operation. */
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const fileListeners = new Set<(paths: readonly string[]) => void>();
   let booting: Promise<NimbusWorkspace> | undefined;
@@ -420,22 +228,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     booting ??= (async (): Promise<NimbusWorkspace> => {
       try {
         const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
-        // The pid base is THIS generation's floor, adopted before anything
-        // spawns: opening the filesystem revokes every append writer at or
-        // below `generation * PID_GEN_STRIDE`, so a supervisor left at zero
-        // would hand out pids whose write authority the boot has withdrawn.
-        // Fabric's allocator swallows a storage failure and stays on the
-        // previous value — a first boot at zero, a later one at the last
-        // incarnation's floor, which is the pid repeat the counter exists
-        // to prevent. So the counter is read BEFORE the adopt (the read
-        // also lets the storage's own error surface, which fabric would
-        // hide) and the adopted value must be the bump of it: fabric takes
-        // the bump only after its put resolved, so anything else is a bump
-        // that did not persist, and the open is refused whatever the
-        // previous value was.
-        // Fabric adopts once per isolate: a boot retried in the same
-        // isolate (the first open failed after the adopt) keeps the
-        // generation it already holds, and that is the expected value.
+        // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
+        // this generation. Fabric hides storage failures, so read before adopting and require the bump.
         const adopted = generation(opts.generation);
         const before = adopted !== 0 ? null : v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
         await adoptGeneration(opts.generation);
@@ -452,33 +246,17 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           generation: generationNow,
           cwd: WORKSPACE_ROOT,
           env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
-          // The one process owner of this filesystem: the shell, every
-          // agent plane and a host's background processes allocate from
-          // it, so no two of them are ever handed the same pid.
           processes,
-          // The embedder's fabric, stated once per isolate. A workspace
-          // whose host can run dynamic workers reaches them through this:
-          // the fabric mints every facet's `env.SUPERVISOR` binding from
-          // the composed entrypoint, and `ctx.exports` is adopted off
-          // `transactions` (in a Durable Object that IS `ctx`). Absent —
-          // the local CLI passes none — the workspace stays the
-          // filesystem, the shell and the coreutils, and anything needing
-          // a dynamic worker refuses before it spawns. First-write-wins
-          // per isolate, so passing it on every create is idempotent.
           fabric: opts.fabric,
         };
 
-        // A remote catalog makes every name it can satisfy an install-on-
-        // first-use stub; the supplied packages stay this module's own.
         if (opts.runtimeSource !== undefined) {
           creation = { ...creation, runtimeSource: opts.runtimeSource, runtimeInstall: 'on-demand' };
         }
 
         const workspace = await NimbusWorkspace.create(creation);
 
-        // Before the first command, and after the substrate's own
-        // registrations so a coreutil is never shadowed by a runtime bin of
-        // the same name.
+        // After substrate registrations so a runtime bin never shadows a coreutil.
         const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
           workspace,
           runtimes: opts.runtimes ?? [],
@@ -490,7 +268,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         const main = agentIdentity(opts.sql, MAIN_AGENT);
         provisionAgentHome(root, MAIN_AGENT, main);
         confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
-        // Rebuild each live facet's temporary-path mapping after a reset.
         restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
         workspace.vfs.events.on((batch) => {
           if (fileListeners.size === 0) return;
@@ -501,13 +278,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
         return workspace;
       } catch (cause) {
-        // Clear the cache BEFORE rethrowing: this bundle lives for the whole
-        // actor isolate, and a cached rejection is poison with no expiry —
-        // every later read, exec, fork frame and archive walk re-awaits the
-        // same failure, and each user retry resets the eviction timer, so
-        // the retry defeats the only recovery path there was. A
-        // deterministic failure simply re-fails on the next open, which is
-        // the correct answer; a transient one gets its retry.
+        // Clear the cache before rethrowing: a cached rejection would poison the whole isolate.
         booting = undefined;
         diagnostics.failure(
           'workspace.boot_failed',
@@ -520,12 +291,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     return await booting;
   };
 
-  // The workspace's process owner, here because a credentialed shell needs a
-  // REAL pid: `ShellCommandIdentity` carries one, append capabilities are keyed
-  // by it, and a number invented locally would collide with a live writer. One
-  // supervisor for this filesystem, so two agents — or an agent and a host's
-  // background process — can never be handed the same pid. Its pid base is
-  // set by `open`, which every spawn awaits first.
+  // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
   const processes = new SessionProcessSupervisor();
   const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
 
@@ -552,9 +318,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         vfs: workspace.vfs,
         registry: workspace.registry,
         processes,
-        // Bound to the origin workspace: the dispatch table is built over
-        // its filesystem at create, and a facet's writes must land there
-        // rather than in an agent plane's shell-only second compose.
+        // Bound to the origin workspace, where the dispatch table was built.
         supervisorOp: (envelope: SupervisorOpEnvelope) => workspace.supervisorOp(envelope),
       };
     },
@@ -568,12 +332,8 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         try {
           const origin = await open();
           const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
-          // A SECOND SHELL over the SAME `SqliteVFS` — never a second filesystem.
-          // `vfs` is handed over rather than reopened for exactly that reason: a
-          // second instance over one database is a second content cache, and one
-          // of the two would serve a stale read. `runAs` is the origin shell's,
-          // or this shell loses the identity-transition path `sudo` and `su`
-          // dispatch on.
+          // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
+          // `runAs` is the origin's so `sudo`/`su` keep working.
           const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
 
           const asAgent = await NimbusWorkspace.create({
@@ -588,7 +348,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
               setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
               runAs: origin.shell.getRunAsHost(),
             },
-            // The origin create already stated it; this re-states nothing new.
             fabric: opts.fabric,
           });
 
@@ -597,8 +356,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             shell: workspaceShell(() => Promise.resolve(asAgent)),
           };
         } catch (cause) {
-          // Same rule as `booting`: a cached rejection would pin this agent's
-          // plane to one transient failure for the life of the isolate.
+          // Same rule as `booting`: never cache a rejection.
           planes.delete(agent.cred.uid);
           throw cause;
         }
@@ -613,13 +371,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
-/**
- * The generation counter as a row, for a host whose durable state is its
- * SQLite: the storage fabric's allocator persists the counter in. One row,
- * whatever key the allocator names — the table is the counter, so a Durable
- * Object evicted and re-created and a CLI restarted both continue the count
- * rather than restart it.
- */
+/** The generation counter as a single SQLite row, so it survives eviction and restarts. */
 export function workspaceGenerationStorage(sql: SqlDatabase): GenerationContext {
   sql.exec(`CREATE TABLE IF NOT EXISTS ${GENERATION_TABLE} (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)`);
 

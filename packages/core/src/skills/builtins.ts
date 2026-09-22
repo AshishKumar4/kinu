@@ -1,23 +1,10 @@
 /**
- * Built-in skills shipped with Kinu core. Discovered automatically and merged
- * with the workspace skills under `/workspace/skills/`.
- *
- * These names are RESERVED (KINU-N028): that directory is writable by the
- * agent's own file tool and shell, so a file there may not take a built-in's
- * name. Shadowing would replace shipped doctrine — including the
- * `allowed_tools` a built-in declares — by choosing a filename, and no owner
- * approval could make that the right answer, because the built-in would simply
- * be gone. `discoverSkills` refuses such a file and says why.
- *
- * Adding a built-in skill: write the SKILL.md inline as a template
- * string, parse it through `parseSkillFile(..., 'builtin')`, push the
- * result into `BUILTIN_SKILLS`. No magic, no decorators — just an array.
+ * Built-in skills, merged with `/workspace/skills/`. Their names are reserved
+ * (KINU-N028): an agent-writable file must not shadow shipped doctrine.
  */
 
 import { parseSkillFile } from './parse';
 import type { ParsedSkill } from './types';
-
-// ── audit-implementation ─────────────────────────────────────────
 
 const AUDIT_IMPLEMENTATION_SRC = `---
 name: audit-implementation
@@ -77,8 +64,6 @@ Reply with the synthesised report. Do not produce additional prose
 beyond the findings + verdict + fix-list. The user wants the audit, not
 a recap of what you implemented.
 `;
-
-// ── slates ────────────────────────────────────────────────────
 
 const SLATES_SRC = `---
 name: slates
@@ -212,8 +197,6 @@ Seed the options with \`workspace.slate({ op: "call", id, method: "seed", args: 
 - Make the UI usable on a phone: one column, large touch targets. Never \`alert()\` or \`confirm()\`; the sandbox blocks them.
 - Do not import \`RpcTarget\`; pass functions, not classes.
 `;
-
-// ── Catalogue ────────────────────────────────────────────────────
 
 function parseBuiltin(src: string): ParsedSkill {
   const r = parseSkillFile(src, 'builtin');

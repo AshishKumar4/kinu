@@ -1,15 +1,4 @@
-/**
- * The `/shared` mount: one tenant per owner, isolated by TENANT.
- *
- * The failure this suite exists to catch is the one that matters for a shared
- * Drive: two users' workspaces reaching one another's files. Isolation is not
- * a path rule — both owners address the very same `/shared/...` string — it is
- * which tenant the mount resolves for the workspace's owner, live, at every
- * call. So the cross-read is asserted through the REAL composite plane
- * (`withMountTable` + `sharedDriveMount` + `mossaicVfs`) over a fake Mossaic
- * whose only job is to keep tenants apart, and the second half pins the
- * adapter's boundary: Mossaic's error union arriving as Kinu's closed codes.
- */
+/** The `/shared` mount isolates by tenant resolved live from the owner, not by path. */
 import { describe, expect, test } from 'bun:test';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { withMountTable } from '../src/vfs/mounts';
@@ -20,7 +9,6 @@ import { FakeMossaicError, fakeMossaic, type FakeMossaic } from '@kinu.run/test-
 
 const SHARED_ROOT = '/shared';
 
-/** A workspace plane whose owner is read live, as the hosted runtime reads it. */
 function workspacePlane(mossaic: FakeMossaic, owner: () => string | null) {
   const base = createMemoryVfs().vfs;
 
@@ -43,16 +31,13 @@ describe('the /shared mount', () => {
 
     await alice.writeFile(`${SHARED_ROOT}/notes.txt`, 'alice only');
 
-    // The same owner's OTHER workspace mounts the same tenant: one Drive per user.
     expect(await aliceSecond.readFile(`${SHARED_ROOT}/notes.txt`, { encoding: 'utf8' })).toBe('alice only');
     expect(await aliceSecond.readdir(SHARED_ROOT)).toEqual(['notes.txt']);
 
-    // Bob addresses the identical string and reaches his own, empty tenant.
     expect(await bob.exists(`${SHARED_ROOT}/notes.txt`)).toBe(false);
     expect(await bob.stat(`${SHARED_ROOT}/notes.txt`)).toBeNull();
     await expect(bob.readFile(`${SHARED_ROOT}/notes.txt`)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    // And nothing leaked into the other direction either.
     await bob.writeFile(`${SHARED_ROOT}/notes.txt`, 'bob only');
     expect(await alice.readFile(`${SHARED_ROOT}/notes.txt`, { encoding: 'utf8' })).toBe('alice only');
     expect(mossaic.stores.get('user-bob')?.size).toBe(1);
@@ -65,7 +50,6 @@ describe('the /shared mount', () => {
 
     await expect(plane.readdir(SHARED_ROOT)).rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining(SHARED_DRIVE_UNCLAIMED) });
 
-    // The claim lands later and the same plane, unrebuilt, now mounts the tenant.
     owner = 'user-late';
     expect(await plane.readdir(SHARED_ROOT)).toEqual([]);
   });
@@ -86,7 +70,6 @@ describe('the /shared mount', () => {
 });
 
 describe('the Mossaic adapter boundary', () => {
-  /** A client whose every call throws one Mossaic code. */
   function throwing(code: string): MossaicClient {
     const fail = (path: string): never => { throw new FakeMossaicError(code, path); };
 

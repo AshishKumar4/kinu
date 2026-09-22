@@ -1,100 +1,40 @@
 /**
- * Workers Analytics Engine's own limits, as named constants rather than numbers
- * spelled at the call sites that must respect them.
- *
- * Every value here is quoted from
- * https://developers.cloudflare.com/analytics/analytics-engine/limits/
- * (retrieved 2026-08-24, page last updated 2026-04-23). They are PLATFORM
- * facts, not choices, which is why they live apart from the schemas: a schema
- * may be redesigned, these may only be re-measured.
- *
- * WHAT HAPPENS WHEN ONE IS EXCEEDED is the reason to enforce them here at all.
- * `writeDataPoint` returns `void` and reports nothing — the docs say to look in
- * tail logs — so an oversized point is dropped SILENTLY. A dataset that reads
- * empty and a dataset that reads short are indistinguishable to whoever queries
- * it later, which makes the platform's own enforcement useless as a signal. Ours
- * is checked where it can still be reported.
+ * Workers Analytics Engine limits, quoted from
+ * https://developers.cloudflare.com/analytics/analytics-engine/limits/ (retrieved 2026-08-24).
+ * `writeDataPoint` drops an oversized point silently, so they are enforced here where a violation
+ * can still be reported.
  */
 
-/**
- * Four of the five limits below are PRIVATE, and `assertWithinPlatformLimits` is
- * what a caller reaches instead.
- *
- * A schema does not choose them, and a reader who wants to know whether a dataset
- * fits asks the guard rather than doing the arithmetic again. Two are exported,
- * each because something outside a dataset check needs the NUMBER itself:
- * `MAX_WRITES_PER_INVOCATION`, because a window is state rather than a check and
- * `writer.ts` has to size one; and `MAX_BLOB_BYTES`, because the browser
- * render-failure endpoint bounds its request body by it (see
- * `client-error/contract.ts` for the derivation) and a second `16 * 1024` spelled
- * there would be one platform fact recorded in two places.
- */
-
-/** Blobs accepted per data point. "Analytics Engine will accept up to twenty
- *  blobs, twenty doubles, and one index per call to `writeDataPoint`." */
+/** "Analytics Engine will accept up to twenty blobs, twenty doubles, and one index per call to
+ *  `writeDataPoint`." */
 const MAX_BLOBS = 20;
 
-/** Doubles accepted per data point, same sentence. */
 const MAX_DOUBLES = 20;
 
-/** Indexes accepted per data point, same sentence. AE's sampling key. */
 const MAX_INDEXES = 1;
 
 /**
- * "The total size of all blobs in a request must not exceed 16 KB. The 16 KB
- * size limit for the blobs field applies to each individual data point."
- *
- * KiB rather than KB: the platform writes "16 KB" and the enforcement is on
- * bytes, so the smaller reading of the two is the safe one to build to.
- *
- * Also the ceiling on one browser render-failure report, because `diagnostics`
- * fans out to `console` AND to Analytics Engine: a record too large to fit one
- * data point is one the sink cannot carry whole, and AE drops an oversized point
- * silently.
+ * "The total size of all blobs in a request must not exceed 16 KB", per data point. Read as KiB,
+ * the safer of the two readings. Also bounds one browser render-failure report body.
  */
 export const MAX_BLOB_BYTES = 16 * 1024;
 
 /** "Each index must not be more than 96 bytes." */
 const MAX_INDEX_BYTES = 96;
 
-/**
- * "You can write a maximum of 250 data points per Worker invocation (client
- * HTTP request). Each call to `writeDataPoint` counts towards this limit."
- *
- * The one limit here that is about a WINDOW rather than a value, and therefore
- * the one that cannot be enforced by a static schema check — see
- * `writer.ts`'s budget for how far our window can be made to match the
- * platform's, and where it deliberately stops trying.
- */
+/** "You can write a maximum of 250 data points per Worker invocation." A window, not a value:
+ *  enforced by the writer's budget, not by the schema check. */
 export const MAX_WRITES_PER_INVOCATION = 250;
 
-/**
- * The slot census one dataset declares, as the primitives every limit above is
- * stated over.
- *
- * PRIMITIVES RATHER THAN THE SCHEMA TYPE, so enforcement can live beside the
- * numbers it enforces without this module importing the module that imports it.
- * `dataset` is carried only to name the offender: a refusal that does not say
- * which dataset is wrong makes the reader open all three.
- */
+/** Primitives, so this module need not import the schemas that import it. */
 export interface SlotCensus {
   readonly dataset: string;
-  /** Each blob slot's byte budget, in declaration order. */
   readonly blobBytes: readonly number[];
-  /** How many double slots the dataset declares. */
   readonly doubles: number;
-  /** The indexed slots, which the platform caps at one. */
   readonly indexes: readonly { readonly name: string; readonly maxBytes: number }[];
 }
 
-/**
- * Refuse a dataset the platform would silently truncate or drop.
- *
- * HERE rather than at the declaration, because this file is where the numbers are
- * quoted and "ours is checked where it can still be reported" is the whole reason
- * they are named. A schema is checked once at module load, so a violation is a
- * startup failure carrying a message rather than a dataset that reads short.
- */
+/** Refuse, at module load, a dataset the platform would silently truncate or drop. */
 export function assertWithinPlatformLimits(census: SlotCensus): void {
   const { dataset } = census;
 
@@ -119,10 +59,7 @@ export function assertWithinPlatformLimits(census: SlotCensus): void {
     }
   }
 
-  // The platform takes ONE index per data point, and a schema holds exactly one —
-  // so this is the assertion that the shape and the platform's count agree,
-  // checked rather than assumed. A future second slot would be silently dropped
-  // on the wire while every writer believed it was projecting.
+  // A second index slot would be silently dropped on the wire.
   if (census.indexes.length !== MAX_INDEXES) {
     throw new RangeError(
       `${dataset}: ${census.indexes.length} index slots, but the platform takes ${MAX_INDEXES}`,
@@ -141,15 +78,7 @@ export function assertWithinPlatformLimits(census: SlotCensus): void {
   }
 }
 
-/**
- * The domain of a quantile level. `quantileExactWeighted(level)` takes a
- * FRACTION, and the mistake it invites is a percentage: `95` passes every type
- * this repository has and returns a column of nulls rather than an error, so the
- * reader gets a p95 panel that is empty and looks correct.
- *
- * A platform fact like the counts above — the aggregate function's own domain,
- * not a choice of ours — which is why it is refused here and not at the panel.
- */
+/** `quantileExactWeighted` takes a fraction; `95` returns a column of nulls, not an error. */
 export function assertQuantileLevel(level: number): void {
   if (!(level > 0 && level < 1)) {
     throw new RangeError(`a quantile must be strictly between 0 and 1, not ${level}`);

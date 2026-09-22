@@ -1,23 +1,5 @@
-/**
- * The MCP tool surface both backends admit — ONE policy, not two.
- *
- * A tool definition is not message traffic: it rides EVERY request of every
- * step of the turn, and for MCP a third party writes it. So a remote catalog
- * is spent out of the allocation the step pipeline already divides — core's
- * `stepContextLimit`, the resolved model's window minus the output allowance
- * it has to leave room for — less what the agent's OWN tool definitions
- * already spend of it. The actor's own tools come first; the third party gets
- * the remainder. Nothing here is a number somebody picked.
- *
- * The two backends reach this policy from opposite sides of their transports
- * and that is the only thing that differs about them: cf reads serialized
- * descriptors over RPC and caches the admitted build per turn
- * (`McpToolSurfaceCache`, cf-backend), while the CLI discovers over stdio at
- * session open and admits once against the session's resolved figures
- * (cli-backend). Both price with {@link toolSurfaceTokens} and admit with
- * {@link admitMcpDescriptors}, so a catalog divides identically wherever the
- * agent runs.
- */
+/** MCP tool surface both backends admit. A remote catalog is spent out of `stepContextLimit`
+ *  minus the actor's own tool definitions; cf and CLI both price with {@link toolSurfaceTokens}. */
 
 import * as v from 'valibot';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
@@ -29,31 +11,19 @@ import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey } from './mcp-naming';
 
-/** What an MCP tool looks like once it has crossed the RPC seam. Mirrors the
- *  fields of `@modelcontextprotocol/sdk/types.js#Tool` that the orchestrator
- *  needs, plus the namespacing context (`serverId`, `name`) so the dispatch
- *  closure can route the eventual `callMcpTool` correctly. */
+/** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
 export interface SerializableToolDescriptor {
-  /** Registration id — how `userMcp_callTool` routes the call. Never part of
-   *  the tool key: it is a random per-registration nanoid, so keying on it
-   *  gave the same MCP tool a different name for every user. */
+  /** Registration id for `userMcp_callTool` routing. Never part of the tool key: it is a random per-registration nanoid. */
   serverId: string;
   serverName: string;
-  /** Bare MCP tool name (no namespace prefix). */
   name: string;
-  /** Final tool key the AI SDK / LLM sees — core's `mcpToolKey(serverName,
-   *  name)`, the same rule on both backends, so a prompt or skill that
-   *  names an MCP tool resolves identically wherever the agent runs.
-   *  Computed once when the descriptor is built so the orchestrator and the
-   *  model agree byte-for-byte. */
+  /** Tool key the LLM sees: core's `mcpToolKey(serverName, name)`, same rule on both backends. */
   toolKey: string;
   description?: string;
   title?: string;
-  /** JSON Schema (not a Zod schema) — survives RPC serialization. The
-   *  orchestrator passes this straight to `tool({ inputSchema: jsonSchema(...) })`. */
+  /** JSON Schema (not Zod) so it survives RPC serialization. */
   inputSchema?: JsonObject;
   outputSchema?: JsonObject;
-  /** The server's `readOnlyHint` annotation, present exactly when it said so. */
   readOnly?: true;
 }
 
@@ -69,16 +39,12 @@ export const SerializableToolDescriptorSchema = v.object({
   readOnly: v.optional(v.literal(true)),
 });
 
-/** The whole descriptor surface `userMcp_toolDescriptors` serializes. */
 export const McpToolSurfaceSchema = v.object({
   descriptors: v.array(SerializableToolDescriptorSchema),
   unavailable: v.array(v.object({ server: v.string(), reason: v.string() })),
 });
 
-/** The part of `@modelcontextprotocol/sdk/types.js#Tool` this seam reads.
- *  Structural on purpose: what crosses RPC is a plain JSON descriptor, so the
- *  seam depends on the FIELDS it forwards rather than on a nominal SDK type
- *  that a version bump can re-shape underneath it. */
+/** Structural subset of the SDK `Tool`, so a version bump cannot re-shape it underneath. */
 export interface RemoteMcpTool {
   name: string;
   description?: string;
@@ -88,16 +54,8 @@ export interface RemoteMcpTool {
   outputSchema?: unknown;
 }
 
-/**
- * One remote tool, as the descriptor that crosses the RPC seam.
- *
- * BLANK OPTIONAL PROSE IS OMITTED, not forwarded. `description: ""` is a
- * server saying nothing, and forwarding it as an empty string says something
- * different: the orchestrator's `d.description ?? "<server>/<tool>"` fallback
- * is nullish-guarded, so an empty string reached the model as a tool with NO
- * description at all instead of the synthesized one. `title` is the same
- * shape, and an empty `title` must not shadow a real `annotations.title`.
- */
+/** Blank optional prose is omitted: an empty `description` would defeat the orchestrator's `??` fallback,
+ *  and an empty `title` must not shadow `annotations.title`. */
 export function describeMcpTool(
   server: { id: string; name: string },
   remote: RemoteMcpTool,
@@ -130,18 +88,12 @@ function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== '' ? value : undefined;
 }
 
-/** The prompt's own directive shapes, at the start of a line: the `## `
- *  headings that bound system-prompt sections (prompting/sections.ts splits on
- *  exactly that) and the `<word>` blocks that wrap live context
- *  (`<directives>`, `<workspace_instructions>`, `<dynamic_context>`). Prose
- *  mid-line is content; prose at a line start is what a reader can mistake
- *  for structure the host wrote. */
+/** Line-start `## ` headings (prompting/sections.ts splits on them) and `<word>` blocks. */
 const HEADING_LINE = /^#{1,6}[ \t]+/gm;
 
 const TAG_LINE = /^<(?=\/?[a-zA-Z])/gm;
 
-/** C0 except \t and \n, then DEL and the C1 range — a loop rather than a
- *  character-class regex, which lint forbids for control bytes. */
+/** C0 except \t and \n, then DEL and C1; a loop because lint forbids control bytes in regex classes. */
 function dropControlChars(text: string): string {
   let out = '';
 
@@ -155,25 +107,8 @@ function dropControlChars(text: string): string {
   return out;
 }
 
-/**
- * The boundary between a remote server's words and this agent's instructions.
- *
- * A description or title is a third party's prose riding the tool channel,
- * which is part of every request the turn makes. Before the budget clamps it,
- * three normalizations keep that channel a carrier of FACTS, not of structure:
- *
- *   - control characters are dropped (except newline and tab, which carry
- *     ordinary prose layout);
- *   - whitespace runs collapse, so no amount of padding re-shapes the text;
- *   - directive SHAPES at a line start are neutralized: an ATX heading loses
- *     its marks and an XML-ish tag gets the `&lt;` escape `sealDelimiters`
- *     already uses, so either still reads as the server's words and neither
- *     reads as a section or block the host wrote.
- *
- * This is not a prompt-injection filter — it touches only the structural
- * markers this prompt's own conventions make meaningful. The sentence "you
- * must comply" survives untouched; `## System` at a line start does not.
- */
+/** Normalizes third-party prose: drops control chars, collapses whitespace, neutralizes line-start
+ *  directive shapes. Not a prompt-injection filter. */
 function sanitizeRemoteProse(text: string | undefined): string | undefined {
   if (text === undefined) return undefined;
 
@@ -186,19 +121,7 @@ function sanitizeRemoteProse(text: string | undefined): string | undefined {
     .replace(TAG_LINE, '&lt;');
 }
 
-/**
- * The arguments a call forwards, with one omission allowed.
- *
- * A form-shaped client that never touched an optional field still sends it as
- * `""`, and a strict server then validates that empty string — it is not a
- * URI, a date, or an enum member, it is the absence of an answer. The tool's
- * OWN admitted `inputSchema` says which keys may be absent: a key that is
- * declared in `properties` and absent from `required` may be dropped when its
- * value is exactly `""`. Everything else is the caller's real input and passes
- * through untouched — a required key's `""` included, since dropping a
- * required field would only trade the server's own validation error for a
- * different one.
- */
+/** Drops `""` only for keys that the admitted `inputSchema` declares optional; required keys pass through. */
 export function omitEmptyOptionalArgs(
   args: JsonObject,
   inputSchema: JsonObject | undefined,
@@ -221,47 +144,22 @@ export function omitEmptyOptionalArgs(
   return out;
 }
 
-/**
- * What a remote MCP catalog is admitted against.
- *
- * THERE IS NO MCP NUMBER AT ALL. A tool definition is not message traffic: it
- * rides EVERY request of every step of the turn, and for MCP a third party
- * writes it. So the catalog is spent out of the allocation the step pipeline
- * already divides — core's `stepContextLimit`, the resolved model's window minus
- * the output allowance it has to leave room for — and what is left of that limit
- * for MCP is the limit minus the tool surface the actor was going to send
- * anyway. The actor's own tools come first; the third party gets the remainder.
- * Nothing here is a number somebody picked.
- */
+/** Budget a remote MCP catalog is admitted against: `stepContextLimit` minus the actor's own tool surface. */
 export interface McpSurfaceBudget {
-  /** The resolved model's context window, in tokens — the same figure the
-   *  compaction trigger and the step-prune pass read. */
   contextWindow: number;
-  /** The resolved model's output allowance, which the request has to leave room
-   *  for, or null when nothing reported one. Read off the SAME
-   *  `ModelCatalogSession` as the window, never a second source. */
+  /** Null when nothing reported one. Read from the same `ModelCatalogSession` as the window. */
   modelOutputLimit: number | null;
-  /** What the actor's OWN tool definitions cost this turn, measured by
-   *  {@link toolSurfaceTokens}. */
   nativeToolTokens: number;
 }
 
-/** The estimated cost of a serialized tool surface — ONE measure, so the
- *  actor's tools and an admitted descriptor are priced on the same scale. A
- *  budget whose two sides are counted differently is not a budget. `execute`
- *  closures and schema validators are functions and drop out of
- *  `JSON.stringify`, which leaves the description and the JSON Schema: what the
- *  request actually carries. */
-/** What can be priced on the tool-surface scale: an actor's whole tool set, one
- *  remote descriptor, or a list of them. */
+/** Estimated cost of a serialized tool surface; one scale for actor tools and descriptors. */
 type ToolSurfacePriceable = ToolSet | SerializableToolDescriptor | readonly SerializableToolDescriptor[];
 
 export function toolSurfaceTokens(surface: ToolSurfacePriceable): number {
   return estimateTokens(JSON.stringify(surface).length);
 }
 
-/** Deterministic catalog order: server name, then tool name. Two turns reading
- *  the same rows admit the same set, so the surface's content hash holds still. */
+/** Deterministic order (server, then tool) keeps the surface's content hash stable. */
 function byServerThenTool(a: SerializableToolDescriptor, b: SerializableToolDescriptor): number {
   if (a.serverName !== b.serverName) return a.serverName < b.serverName ? -1 : 1;
 
@@ -271,33 +169,12 @@ function byServerThenTool(a: SerializableToolDescriptor, b: SerializableToolDesc
 }
 
 export interface McpDescriptorAdmission {
-  /** In deterministic order, with prose bounded, inside the budget. */
   admitted: SerializableToolDescriptor[];
-  /** One entry per server that lost tools to the budget, in the same order. */
   deferred: { server: string; reason: string }[];
 }
 
-/**
- * Admit as much of a remote catalog as this turn's remaining tool budget can
- * carry.
- *
- * ORDER IS BY (server, tool) NAME, not by connection iteration order: the
- * admitted set has to be the same on two turns that read the same rows, both so
- * the decision is reproducible and so the surface's content hash stops moving
- * for reasons nobody changed.
- *
- * PROSE GETS EQUAL SHARES of what remains, re-divided at every descriptor: the
- * first tool of a twenty-tool catalog may spend a twentieth of the budget on its
- * description, and whatever it leaves unspent returns to the rest. That is what
- * stops one server's essay from crowding out every other server, and it needs no
- * per-description percentage to tune.
- *
- * SCHEMAS ARE NEVER TRUNCATED — a clipped JSON Schema is a lie about what the
- * tool accepts, so a descriptor whose schema alone will not fit is deferred
- * whole. Deferral is REPORTED (the caller feeds `deferred` into the same
- * missing-capability channel a disconnected server uses), because a capability
- * silently absent is one the model plans without.
- */
+/** Admits as much of a remote catalog as the remaining budget carries. Prose gets equal shares of what
+ *  remains; schemas are never truncated, so an unfitting descriptor is deferred whole and reported. */
 export function admitMcpDescriptors(
   descriptors: readonly SerializableToolDescriptor[],
   budget: McpSurfaceBudget,
@@ -338,20 +215,11 @@ export function admitMcpDescriptors(
   return { admitted, deferred };
 }
 
-/** The descriptor with its remote prose inside `share`.
- *
- *  The schema is atomic, so it is priced FIRST and the prose gets what the share
- *  has left — zero when the schema alone already fills it, which is how a fat
- *  tool loses its essay before it loses its contract. Description then title,
- *  each against what the previous one left, so the two together cannot spend the
- *  share twice. Clipped text is marked so a reader can tell a clamp from the
- *  server's own words. */
+/** Schema priced first; description then title get what the share has left. Clipped text is marked. */
 function withProseInside(
   descriptor: SerializableToolDescriptor,
   share: number,
 ): SerializableToolDescriptor {
-  // A descriptor with no prose has nothing to bound, and a large catalog is
-  // mostly these — no reason to serialize it twice to learn that.
   if (descriptor.description === undefined && descriptor.title === undefined) return descriptor;
   const bare = { ...descriptor };
   delete bare.description;
@@ -372,10 +240,7 @@ function withProseInside(
   return bounded;
 }
 
-/** Text within `tokens`, or nothing at all when the budget cannot carry any:
- *  a lone ellipsis says less than the synthesized `<server>/<tool>` description
- *  the orchestrator falls back to. Sliced in proportion to the measured cost, so
- *  the estimator stays the only scale in play. */
+/** Empty when the budget cannot carry any text: a lone ellipsis says less than the orchestrator's fallback. */
 function clampProse(text: string | undefined, tokens: number): string | undefined {
   if (text === undefined) return undefined;
 
@@ -387,32 +252,15 @@ function clampProse(text: string | undefined, tokens: number): string | undefine
   return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}…`;
 }
 
-/**
- * The admitted MCP catalog as a callable surface — the part BOTH backends
- * built by hand before, which is how the replay claim ended up on neither.
- * `call` is the one backend-owned piece: cf's closure RPCs into the owning
- * UserDO and turns a protocol failure into `McpToolError`; the CLI's reaches
- * its stdio client. Everything around it is policy this module owns:
- *
- *   readOnly: true on the descriptor (the server's `readOnlyHint` annotation)
- *   is the only admission a remote tool gets — `permitInPlan` for the plan
- *   mode and, through `withEffectClaims`' `safe` set, exemption from the
- *   claim. An absent annotation is CLAIMED, never presumed read-only.
- *
- *   The clamp rides INSIDE the claim, so the result a replay returns is the
- *   value the first attempt actually published — a stored raw output would
- *   hand a replay bytes the budget had already refused to spend.
- */
+/** Admitted MCP catalog as a callable surface; `call` is backend-owned. Only `readOnly: true` exempts a tool
+ *  from the effect claim, and the clamp runs inside the claim so a replay returns the published value. */
 export interface McpToolBuild {
-  /** Dispatch one call to the server, under the descriptor's own identity. */
   readonly call: (
     descriptor: SerializableToolDescriptor,
     args: JsonObject,
     options: ToolExecutionOptions,
   ) => Promise<JsonValue>;
-  /** The same deps the turn's native tools claim under. */
   readonly effectClaims: EffectClaimDeps;
-  /** The per-result clamp the builtins already run under. */
   readonly clamp: ClampToolResultOptions;
 }
 
@@ -434,9 +282,7 @@ export function buildMcpToolSet(
     tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
   }
 
-  // An MCP server is a bulk producer like any other. Same result clamp and
-  // spill path as built-in tools, then the claim outermost — the order the
-  // native surface composes them in (`buildActorTools`).
+  // Same clamp and spill as built-in tools, claim outermost (as in `buildActorTools`).
   return withEffectClaims(
     withClampedToolResults(tools, build.clamp),
     build.effectClaims,

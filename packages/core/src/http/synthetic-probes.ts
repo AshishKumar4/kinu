@@ -1,26 +1,6 @@
 /**
- * Synthetic probes — the deploy's own smoke gate, re-run on a schedule against
- * the live site.
- *
- * These exist because of a real outage: a deploy that skipped `scripts/deploy.sh`
- * shipped a `dist/client` with no `downloads/`, and the SPA fallback answered
- * every missing asset with `200 index.html`. `curl install.sh | bash` and
- * `kinu update` died on a checksum mismatch for days, and the way we found
- * out was by running the install ourselves. Each probe below is one thing a
- * user does that was broken then and would be broken again:
- *
- *   health    — the API answers, and says WHICH build is live (cross-checked
- *               against the build the download assets advertise, so a
- *               half-shipped deploy is one probe away, not one user report).
- *   downloads — every published CLI artifact and its `.sha256` are the real
- *               files and agree with each other. This is the exact check the
- *               installer makes before it will install anything.
- *   login     — the sign-in page renders with at least one working provider
- *               link. An OAuth config that fell out locks everyone out.
- *
- * Probe details are written to be STABLE for a given failure: the incident
- * ledger dedupes on the probe, and a detail that changed every tick would make
- * a re-read of an open incident look like news.
+ * Synthetic probes: the deploy smoke gate (health, downloads, login) re-run on a schedule against the live site.
+ * Details must be stable per failure: the incident ledger dedupes on them.
  */
 
 import { CLI_DIST_PATHS } from './deployed-assets';
@@ -41,19 +21,16 @@ const BuildStampSchema = v.looseObject({
 const HealthBodySchema = v.looseObject({ ok: v.literal(true) });
 
 export interface ProbeOutcome {
-  /** Stable id — the incident ledger's key. */
+  /** Stable id; the incident ledger's key. */
   probe: string;
   ok: boolean;
-  /** One line, stable per failure mode, written for whoever gets the email. */
+  /** One line, stable per failure mode. */
   detail: string;
 }
 
 export interface ProbeDeps {
   origin: string;
-  /** Injected so the probes are testable without a network. Structural rather
-   *  than `typeof fetch`: this module sends a URL and reads a Response, and
-   *  the global it is bound to differs between the worker runtime and the
-   *  test runner. */
+  /** Structural rather than `typeof fetch`: the bound global differs between worker runtime and tests. */
   fetch(input: string, init?: RequestInit): Promise<Response>;
 }
 
@@ -71,16 +48,13 @@ export async function runSyntheticProbes(deps: ProbeDeps): Promise<ProbeOutcome[
 
 async function get(deps: ProbeDeps, path: string): Promise<Response> {
   return deps.fetch(`${deps.origin.replace(/\/+$/, '')}${path}`, {
-    // A cached answer would tell us how the site looked, not how it is.
     cache: 'no-store',
     headers: { 'user-agent': 'kinu-synthetic-monitor' },
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 }
 
-/** The build a JSON body claims. Written tolerantly on purpose: the health
- *  endpoint's stamp is another module's shape, and a monitor that hard-codes
- *  one spelling turns a rename into a false alarm. */
+/** Tolerant of spelling: the health stamp is another module's shape. */
 function buildStamp(input: { body: unknown }): string | null {
   const parsed = v.safeParse(BuildStampSchema, input.body);
 
@@ -145,9 +119,7 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
   return { probe: 'health', ok: true, detail: `build ${live}` };
 }
 
-/** The build the shipped assets advertise. Throws when the manifest is absent,
- *  is the SPA shell, or names no build: that is the half-shipped deploy this
- *  file exists for, and no other probe reads this manifest. */
+/** Throws when the manifest is absent, is the SPA shell, or names no build. */
 async function shippedBuild(deps: ProbeDeps): Promise<string> {
   const response = await get(deps, VERSION_MANIFEST);
 
@@ -159,10 +131,7 @@ async function shippedBuild(deps: ProbeDeps): Promise<string> {
   return stamp;
 }
 
-/** Every artifact an install downloads, checked the way the launcher checks
- *  them. One platform's artifact going missing bricks that platform alone, and
- *  a probe that only read one of them would call that green. They are read one
- *  at a time: hashing holds the whole body, and four at once is four bodies. */
+/** Checked sequentially: hashing holds the whole body in memory. */
 async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {
   const fail = (detail: string): ProbeOutcome => ({ probe: 'downloads', ok: false, detail });
 

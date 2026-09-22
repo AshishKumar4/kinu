@@ -1,8 +1,4 @@
-/**
- * The refinement lane as a host drives it: the owner's `/refine`, the owner's
- * view of the lane, and one cadence pass. The same three calls on both
- * backends; the lane itself is refinement-lane.ts.
- */
+/** Host-facing refinement calls, shared by both backends; the lane is refinement-lane.ts. */
 
 import {
   advanceRefinementLane, refinementDebt, refinementDebtRequest, requestRefinement,
@@ -13,8 +9,7 @@ import {
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
 } from './refinement';
 
-/** The owner's `/refine`: an explicit request over the named turns (by default
- *  the unresolved outcomes), at workspace scope unless the owner names one. */
+/** Explicit request; defaults to the unresolved outcomes at workspace scope. */
 export function requestOwnerRefinement(
   deps: RefinementDeps,
   opts: { readonly turnIds?: readonly string[]; readonly scope?: RefinementScope } = {},
@@ -24,8 +19,7 @@ export function requestOwnerRefinement(
   return requestRefinement(deps, opts.turnIds === undefined ? request : { ...request, turnIds: opts.turnIds });
 }
 
-/** The owner's view of the lane: the newest requests, and the debt that would
- *  open the next one. */
+/** Newest requests plus the debt that would open the next one. */
 export function listRefinements(deps: RefinementDeps, limit = 20) {
   return {
     requests: createRefinementStore(deps.control.sql, deps.control.rt.actor).list(limit).map(refinementRequestView),
@@ -33,11 +27,7 @@ export function listRefinements(deps: RefinementDeps, limit = 20) {
   };
 }
 
-/**
- * One pass of the lane: what the debt owes is opened first, so a workspace
- * that has just crossed the threshold is looked at on this pass rather than a
- * whole cadence later; then one request advances.
- */
+/** Open owed debt first so a newly crossed threshold is handled this pass. */
 export async function refinementPass(deps: RefinementDeps): Promise<RefinementLaneStep> {
   await refinementDebtRequest(deps);
 

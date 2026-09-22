@@ -4,13 +4,7 @@ import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 
 import { useCopy, type CopyStatus } from '@/hooks/use-copy';
 
-/**
- * The one way a section opens: a rule label, the heading, and the one lead
- * paragraph under it. Every section on the page reads through this, so the
- * distance from label to heading to lead is the same distance everywhere.
- * `tight` is for a head that shares its row with something else and needs
- * the lead's margin, not the section's.
- */
+/** `tight` is for a head sharing its row, taking the lead's margin rather than the section's. */
 export function SectionHead({ label, lead, tight = false, children }: {
   label?: string;
   lead: ReactNode;
@@ -27,10 +21,7 @@ export function SectionHead({ label, lead, tight = false, children }: {
 }
 
 function TuiPreview(): ReactElement {
-  // Every row here has a counterpart in the real shell (packages/cli/src/tui):
-  // the status bar's segments, NavigatorRow's marks, the transcript's tool
-  // group and the composer box. Compared against a real pty grid at 160 and
-  // 80 columns; a row the terminal does not draw is not drawn here.
+  // Every row mirrors the real shell (packages/cli/src/tui); a row the terminal does not draw is not drawn here.
   const agents = {
     audit: {
       label: 'audit',
@@ -72,7 +63,6 @@ function TuiPreview(): ReactElement {
   const [drawerFilter, setDrawerFilter] = useState('');
   const drawerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const agent = agents[agentId];
-  // The open agent's section never renders collapsed.
   const cloudExpanded = cloudOpen || agentId === 'jarvis';
   const checkoutExpanded = checkoutOpen || agentId !== 'jarvis';
 
@@ -92,8 +82,7 @@ function TuiPreview(): ReactElement {
     `${agents[id].label} ${agents[id].location}`.toLowerCase().includes(filter)
   );
 
-  // NavigatorRow: the selected row carries the `›` marker on the raised ground;
-  // the dot says running (accent) or idle (muted), never selection.
+  // The dot says running or idle, never selection.
   const agentRows = (ids: readonly AgentId[], onChoose: (id: AgentId) => void, filtered: boolean): ReactElement[] => (
     ids.filter((id) => !filtered || drawerMatches(id)).map((id) => (
       <div key={id}>
@@ -133,7 +122,6 @@ function TuiPreview(): ReactElement {
         <span className="uppercase tracking-[.14em]">kinu tui · {agent.label}</span>
         <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
       </div>
-      {/* status-bar.tsx: name, location, then the model with its key, context and effort. */}
       <div className="flex min-h-8 items-center justify-between gap-4 whitespace-pre px-2 p-text-2">
         <div className="min-w-0 truncate">kinu <span className="p-accent">{TUI_MARKS.prompt}</span> <strong className="font-semibold p-text">{agent.label}</strong> <span className="p-text-4">{agent.location}</span></div>
         <div className="flex items-center gap-3">
@@ -209,8 +197,7 @@ function TuiPreview(): ReactElement {
   );
 }
 
-/** The command button's own words. A failure here asks for the click again
- *  rather than reporting itself, because the command is on screen either way. */
+/** A failure asks for the click again rather than reporting itself: the command is on screen either way. */
 const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 function CliPreview(): ReactElement {

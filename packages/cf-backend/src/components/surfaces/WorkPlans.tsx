@@ -9,36 +9,14 @@ import { PlanProgress, TaskTree } from './work-tasks';
 
 const keyOf = ({ owner, plan }: OwnedPlan) => `${owner.name}:${plan.id}:${plan.revision}`;
 
-/** The actor name a `workspacePlanArrival` path resolves to: the path's last
- *  hop is the actor's own name, and the empty path is the root's. */
 const arrivalOwner = (path: readonly string[]) => path.at(-1) ?? 'main';
 
-/**
- * The workspace's plans as one list, newest first — the workspace-wide work
- * read, so a subordinate's plan and its tasks render beside the root's with
- * the actor that owns them named on both. A row opens the review over the
- * whole tab; the open state lives in WorkTab because the queue's
- * `plan_review` rows open the same view.
- *
- * "This pane's own plan" is the one auto-open rule: the review belongs to
- * whoever's conversation this is, so a foreign actor's new pending plan shows
- * in the list (and in the needs-you queue) without hijacking the tab.
- *
- * The list draws nothing until the read has answered once: the plans read and
- * the Now tasks read are the same `listWorkspaceWork`, so its spinner and its
- * retry already have a home there — a second one here would photograph the
- * same failure twice.
- */
+/** Only this pane's own new pending plan auto-opens. Draws nothing until the shared `listWorkspaceWork` read answers. */
 export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan, onOpenReview }: {
-  /** The workspace-wide read's plans — shared with the tab's task list, so
-   *  one `listWorkspaceWork` feeds both. Null while it is still out. */
   work: WorkspaceWork | null;
-  /** The conversation's own actor name — 'main' at the root pane. */
   owner?: string;
   arrival?: WorkspacePlanArrival | null;
-  /** Whether the list holds anything — the empty tab's "Nothing yet" reads it. */
   onPresence: (present: boolean) => void;
-  /** A fresh pending plan of this pane's own actor just auto-opened. */
   onNewPlan: () => void;
   onOpenReview: (item: OwnedPlan) => void;
 }) {
@@ -46,8 +24,6 @@ export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan
   const known = useRef<Set<string> | null>(null);
   const focus = arrival?.reference ?? null;
 
-  // First read seeds what was already there; after it, a PENDING plan owned by
-  // this pane's actor that the read had never seen is fresh and takes the tab.
   useEffect(() => {
     if (work === null) return;
 
@@ -64,15 +40,8 @@ export function WorkPlans({ work, owner = 'main', arrival, onPresence, onNewPlan
     if (fresh) { onOpenReview(fresh); onNewPlan(); }
   }, [work, plans, owner, onNewPlan, onOpenReview]);
 
-  // An arrival names the plan it points at — by id and revision, both unique
-  // inside an actor's stream — and the read is the authority that it exists.
-  // The claim is the connection's, not this pane's: a pane remounts on every
-  // conversation switch, and a claim held here would replay the honoured hint
-  // on the fresh mount.
-  // A hint that lands while a review is open never claims: this list is
-  // unmounted then, by design — an arrival does not open a review over the
-  // reader's head. It claims on the next mount (Back), which is what this
-  // effect already does for a fresh reference.
+  // The claim is the connection's: a pane remounts per conversation switch and would replay the hint.
+  // A hint landing while a review is open claims on the next mount.
   useEffect(() => {
     if (!arrival || !focus || work === null) return;
 

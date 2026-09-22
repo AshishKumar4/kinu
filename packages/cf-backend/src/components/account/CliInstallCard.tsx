@@ -1,8 +1,3 @@
-/**
- * The one command that installs the CLI. Account settings shows it as the
- * `cli` section; the setup card and the onboarding wizard mount it in a modal.
- * Its read lives here with the card rather than on whichever page hosts it.
- */
 import { useEffect, useState } from "react";
 import { TerminalIcon } from "@phosphor-icons/react";
 import { getCliSetup, type CliSetup } from "@/lib/user-api";
@@ -12,8 +7,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 export function CliInstallCard() {
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
 
-  // The install command is derivable from the origin, so its read failing
-  // costs nothing and claims nothing.
+  // Derivable from the origin, so a failed read costs nothing.
   useEffect(() => { getCliSetup().then(setCliSetup, () => setCliSetup(null)); }, []);
 
   return (
@@ -23,8 +17,6 @@ export function CliInstallCard() {
   );
 }
 
-/** A command to run elsewhere, in the block the connect panel hands its
- *  command over in: the well, the selectable text, and the copy action. */
 function CommandCopy({ command }: { command: string }) {
   return (
     <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">

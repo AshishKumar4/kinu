@@ -1,21 +1,6 @@
 /**
- * One workspace, as an operator sees it, plus the controls that act on it.
- *
- * EVERY CONTROL HERE IS A PROXY. The button sends a named action to
- * `POST /api/control/actions`, which calls the `@callable` the workspace's own
- * Durable Object already implements. No control computes a change, which is why
- * the admin path and the owner's own path cannot drift.
- *
- * EVERY CONTROL ASKS FIRST. Not ceremony: this panel is reached from a list where
- * the row above belongs to a different account, so the confirmation names the
- * account, the workspace and the exact thing about to happen. The destructive
- * one — removing a workspace — additionally asks for the name to be retyped,
- * because it tears down the Durable Object, its SQLite and its sandbox.
- *
- * EVERY CONTROL IS BOUND TO THE OWNER THE READ RESOLVED. `detail.userId` is what
- * the server proved when it answered, never the address bar: a workspace name is
- * unique inside one account and `OrchestratorAgent` is addressed globally, so the
- * pair is the address and the name alone is a guess.
+ * One workspace for operators. Every control proxies a named action to the DO's own `@callable`,
+ * confirms first, and binds to the owner the server resolved (`detail.userId`), never the URL.
  */
 import { useCallback, useState, type ReactNode } from 'react';
 import { Button } from '@cloudflare/kumo';
@@ -30,8 +15,7 @@ import {
 } from '../../lib/control-api';
 import { Notice, Panel, SectionHeader, useControlRead, when } from './panels';
 
-/** A settled panel's rows, or the reason there are none. Every panel of the
- *  drilldown arrives in this shape so one down surface never blanks the page. */
+/** Every panel arrives in this shape so one down surface never blanks the page. */
 function PanelBlock(
   { title, panel, children }: { title: string; panel: PanelValue; children?: ReactNode },
 ): ReactNode {
@@ -50,16 +34,7 @@ function PanelBlock(
   );
 }
 
-/**
- * A panel's value, as a count plus its JSON.
- *
- * Deliberately generic over the payload: re-implementing the seven renderers the
- * workspace page already has would be a second view of the same data that drifts
- * from the first. `JsonValue` is the parsed domain type for "whatever that RPC
- * returned", so the count is honest about not knowing what the rows mean. The
- * two panels an operator ACTS on are the exception below — a button needs a row
- * id, and a `<pre>` does not have one.
- */
+/** Generic count + JSON: re-implementing the workspace page's renderers would drift. */
 function Rows({ value }: { value: JsonValue }): ReactNode {
   const count = Array.isArray(value) ? value.length : null;
 
@@ -75,7 +50,6 @@ function Rows({ value }: { value: JsonValue }): ReactNode {
   );
 }
 
-/** The workspace-wide controls: one button each, same shape, different words. */
 const WORKSPACE_CONTROLS = [
   {
     action: 'jobs.clear',
@@ -89,7 +63,6 @@ const WORKSPACE_CONTROLS = [
   },
 ] as const;
 
-/** The three answers an operator can give one job row, in button order. */
 const JOB_CONTROLS = [
   {
     action: 'job.cancel',
@@ -101,7 +74,7 @@ const JOB_CONTROLS = [
     action: 'job.retry',
     label: 'Retry',
     title: 'Retry this job',
-    body: (job: BackgroundJobRow, workspace: string) => `Re-drive ${job.kind} (${job.id}) in ${workspace} as a new job. Kinu refuses to retry a job that succeeded.`,
+    body: (job: BackgroundJobRow, workspace: string) => `Run ${job.kind} (${job.id}) in ${workspace} again as a new job. Kinu refuses to retry a job that succeeded.`,
   },
   {
     action: 'job.dismiss',
@@ -118,8 +91,7 @@ const JOB_STATUS_TONE: Record<BackgroundJobRow['status'], string> = {
   cancelled: 'p-danger p-t-status',
 };
 
-/** A control an operator has picked but not yet confirmed. Held as the ACTION
- *  itself, so the modal cannot describe one thing and send another. */
+/** Holds the action itself, so the modal cannot describe one thing and send another. */
 interface PendingControl {
   action: ControlAction;
   title: string;
@@ -130,9 +102,7 @@ interface PendingControl {
 export function WorkspaceDrilldown(
   { workspace, ownerUserId, onChanged }: {
     workspace: string;
-    /** The account that owns this workspace, as the list row named it. The read
-     *  itself is resolved through this pair and echoes back the owner it proved,
-     *  which is what the controls bind to. */
+    /** The read echoes back the owner it proved; controls bind to that. */
     ownerUserId: string;
     onChanged?: () => void;
   },
@@ -166,8 +136,7 @@ export function WorkspaceDrilldown(
     setResult({
       tone: answer.status === 'stale-auth' ? 'warn' : 'danger',
       text: answer.status === 'stale-auth'
-        // The step-up window is five minutes, so an operator with a tab open
-        // will hit this. It is an expected path, not an error.
+        // The step-up window is five minutes; hitting it is expected, not an error.
         ? `${answer.reason} Sign in again, then retry.`
         : answer.reason,
     });
@@ -187,8 +156,7 @@ export function WorkspaceDrilldown(
     if (ok) setPending(null);
   }, [act, pending]);
 
-  // The one action that needs more than a click: the typed name must equal the
-  // workspace name exactly. A prefix is not the name.
+  // The typed name must equal the workspace name exactly.
   const retypeRequired = pending?.action.action === 'workspace.remove';
   const confirmBlocked = busy || (retypeRequired && typedName !== workspace);
   const confirmWord = pending?.danger === true ? 'Remove' : 'Confirm';
@@ -209,8 +177,7 @@ export function WorkspaceDrilldown(
 
       <Panel load={load}>
         {(detail) => {
-          // The owner the SERVER resolved, not the one this component was asked
-          // for. They agree today; binding to the proven one keeps them agreeing.
+          // Bind to the owner the server resolved, not the requested one.
           const userId = detail.userId;
           const jobs = panelRows(detail.jobs, BackgroundJobRowSchema);
           const approvals = panelRows(detail.approvals, DeferredApprovalRowSchema);
@@ -315,13 +282,7 @@ export function WorkspaceDrilldown(
   );
 }
 
-/**
- * Background jobs, as rows an operator can act on.
- *
- * `null` rows means the panel is down or answered in a shape this page does not
- * know; the panel above it already says which, and inventing an empty table here
- * would report "no jobs" about a list that failed to load.
- */
+/** `null` rows: panel down or unknown shape; never render that as an empty table. */
 function JobRows(
   { rows, busy, userId, workspace, onPick }: {
     rows: BackgroundJobRow[] | null;
@@ -348,9 +309,6 @@ function JobRows(
             </span>
             <span className="p-meta p-text-3">{when(job.createdAt)}</span>
             {(job.resumeAttempts ?? 0) > 0 && (
-              // An operator looking at a job that has been running a long time
-              // needs the one fact the row could never show: whether it is stuck
-              // or whether the platform keeps interrupting it.
               <span className="p-t-status p-warning">
                 interrupted {job.resumeAttempts}x
                 {job.resumeAfter != null && job.resumeAfter > Date.now()
@@ -382,9 +340,7 @@ function JobRows(
   );
 }
 
-/** Deferred approvals, as rows an operator can decide. Each answer is its own
- *  button because `always` is a standing grant rather than a flag on `approved`,
- *  and an operator must be able to see which of the three they are giving. */
+/** `always` is a standing grant, so each answer is its own button. */
 function ApprovalRows(
   { rows, busy, userId, workspace, onPick }: {
     rows: DeferredApprovalRow[] | null;
@@ -398,7 +354,7 @@ function ApprovalRows(
     return <div className="text-xs p-text-3">This approval list could not be read.</div>;
   }
 
-  if (rows.length === 0) return <div className="text-xs p-text-3">Nothing is parked on the owner.</div>;
+  if (rows.length === 0) return <div className="text-xs p-text-3">No command is waiting on the owner.</div>;
 
   return (
     <ul className="space-y-2">
@@ -437,9 +393,7 @@ function ApprovalRows(
   );
 }
 
-/** The three answers `DeferredApprovalStore.decide` accepts, with what each one
- *  actually does. `always` is the one worth spelling out: it outlives the
- *  command it was asked for. */
+/** `always` outlives the command it was asked for. */
 const APPROVAL_ANSWERS = [
   { decision: 'approved', label: 'Approve', body: 'Let this one command run:' },
   { decision: 'denied', label: 'Deny', body: 'Refuse this command:' },

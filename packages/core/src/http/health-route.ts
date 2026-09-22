@@ -1,13 +1,5 @@
-// GET /api/health — build-info JSON. Useful for confirming a deploy went out:
-// hit the URL, see which build is live plus the feature list + endpoint map.
-// Public — no auth required.
-//
-// `build` is read from the deployed asset bundle's build stamp, so one GET
-// answers both "which commit is live?" and "did the asset half of the deploy
-// land?". A deploy that skipped the CLI archive step has no stamp — its
-// download endpoints are broken — so `ok` is false there rather than
-// cheerfully true. (A `vite dev` server has no stamp either, correctly: it
-// cannot serve the CLI downloads.)
+// GET /api/health: public build-info JSON. `ok` is false without a build stamp
+// (the CLI download endpoints are then broken).
 
 import { BUILTIN_TOOLS } from '../tools/registry';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../types/swarm';
@@ -29,11 +21,7 @@ export async function handleHealthRequest(
   return Response.json({
     ok: build !== null,
     build,
-    // Counted, not declared: each figure is read out of a registry the
-    // compiler already holds to its own declaration (BUILTIN_TOOLS cannot name
-    // a tool the reach table does not call native), so a deleted feature
-    // cannot remain advertised. The concrete drift case is a hand-maintained
-    // list advertising D1 for one day beyond its removal.
+    // Counted from registries so a removed feature cannot stay advertised.
     features: {
       builtinTools: BUILTIN_TOOLS.length,
       swarmPresets: SWARM_PRESETS.length,

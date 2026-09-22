@@ -24,8 +24,7 @@ export function inWorkMode<Result>(mode: WorkMode, operation: () => Result): Res
   return invocationMode.run(currentWorkMode() === 'plan' ? 'plan' : mode, operation);
 }
 
-/** A trusted queue, durable job record, or admitted turn starts independent work.
- * Unlike nested tool calls, its authority is not inherited from the callback that delivered it. */
+/** Trusted queue, durable job, or admitted turn starts independent work; authority is not inherited. */
 export function runWorkModeInvocation<Result>(mode: WorkMode, operation: () => Result): Result {
   return invocationMode.run(mode, operation);
 }

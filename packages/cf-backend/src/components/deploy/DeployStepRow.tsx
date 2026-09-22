@@ -1,10 +1,4 @@
-/**
- * One row of a deploy ledger, as both doors draw it.
- *
- * Shared because the guided page and the Updates page render the SAME rows:
- * they are one plan run in two places, and a second copy of this component
- * would be two ways of showing one ledger.
- */
+/** One deploy ledger row, shared by the guided page and the Updates page. */
 import { Loader } from "@cloudflare/kumo";
 import {
   ArrowClockwiseIcon, CheckCircleIcon, CircleIcon, WarningCircleIcon,
@@ -14,8 +8,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 
 export function StepRow({ row, onRetry }: {
   row: DeployStepRow;
-  /** Absent where a retry has nowhere to go — the Updates page watches a run
-   *  it started and offers the whole run again, not one step of it. */
+  /** Absent on the Updates page, which retries the whole run, not one step. */
   onRetry?: (id: string) => void;
 }) {
   const note = row.notes.at(-1) ?? "";

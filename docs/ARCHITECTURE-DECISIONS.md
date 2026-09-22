@@ -1,7 +1,7 @@
 # Architecture decisions
 
-The decision log for Kinu's shared core. One entry per decision: what was
-decided, the evidence that settled it, the date, the commit. A decision
+The decision log for Kinu's shared core. Each entry records one decision: what
+was decided, the evidence that settled it, the date and the commit. A decision
 without a measurement is written as a hypothesis. A change that reverses an
 entry names it and re-runs its measurement. Subsystems with their own log:
 `docs/DEVBOX-DECISIONS.md`.
@@ -9,137 +9,140 @@ entry names it and re-runs its measurement. Subsystems with their own log:
 ## Context and caching
 
 C1. Runtime and environment facts ride a tail block after the immutable
-conversation. The system prompt is byte-stable across steps; the conversation
-is durable; per-step facts (executor state and pending work) are rendered into
-a dynamic-context ledger whose blocks are frozen at birth and appended, later
-updates superseding the named facts. Decided
-2026-09-03 (staged-context cutover); reviewed 2026-09-13 against
+conversation. The system prompt is byte-stable across steps and the
+conversation is durable. Per-step facts (executor state and pending work) are
+rendered into a dynamic-context ledger: each block is frozen when written,
+new blocks are appended, and a later update supersedes the facts it names.
+Decided 2026-09-03 (staged-context cutover); reviewed 2026-09-13 against
 `prompting/volatile-context.ts` and `orchestrator/turn-context.ts`; pinned by
 `unit-volatile-context.test.ts`. On 2026-09-13, current mode and submission
 availability moved here; their conditional policy stays in the original
 Markdown/GEPA `guidance/operating` section. The reader receives the profile
 already bound to inference, not an ambient fallback. Build→Plan keeps the
-same system bytes; actual file-write pins retain Plan refusal and Build use.
-Same-guard lead duplication funds the static policy: the 26-case matrix is
-229,207 bytes under its unchanged 229,498-byte ceiling. The representative
-Operating guidance ceiling was deliberately re-pinned from 460 to its exact
-878 characters; an 880-character mutant fails it. The 4,800-byte GEPA cap and
-all 18 section IDs stay unchanged.
+same system bytes; the file-write pins still show Plan refusing and Build
+writing. Duplicating the lead under the same guard pays for the static
+policy: the 26-case matrix is 229,207 bytes under its unchanged 229,498-byte
+ceiling. The representative Operating guidance ceiling was re-pinned on
+purpose from 460 to its exact 878 characters; an 880-character mutant fails
+it. The 4,800-byte GEPA cap and all 18 section IDs are unchanged.
 The first nonempty activation/reset snapshot is full; later changes, including
 across turns and to empty state, append deltas. Executor differences use
 structured snapshots keyed by name. A missing crafted-callable reader declares
-none; supplied readers describe the actual installed sandbox resolver, not the
+none; supplied readers describe the installed sandbox resolver, not the
 workspace store. Compaction renders the one stored state and cannot revive
-cleared facts. The original fixed two-change
-file-read control saved 340 and 177 bytes per append (706→366, 570→393),
-including the full/delta tag and explanatory header; this is a byte
-measurement, not a provider-token estimate.
+cleared facts. The original fixed two-change file-read control saved 340 and
+177 bytes per append (706→366, 570→393), including the full/delta tag and
+explanatory header. This is a byte measurement, not a provider-token estimate.
 
-C2. The provider cache is addressed per provider, markers placed last. Anthropic
-gets four breakpoints (one after tools, one at the end of the system prompt,
-two rolling on the tail); OpenAI-family routes by a per-conversation prompt
-cache key; Workers AI pins a replica through a session-affinity header; every
-other provider gets nothing. Marking is the last stage of the shared step
-pipeline (`prompting/prepare-step.ts`) so pruning, weaving and steering cannot
-bust one backend's prefix. Two mutations land before the breakpoints by
-design: old tool-result bytes are pruned in quarter-window quanta, and a
-staged-context landing rewrites the base. Reviewed 2026-09-13; pinned by
-`unit-cache-breakpoints.test.ts` and `contract-cache-markers.test.ts`.
+C2. The provider cache is addressed per provider, with markers placed last.
+Anthropic gets four breakpoints (one after tools, one at the end of the system
+prompt, two rolling on the tail); OpenAI-family providers route by a
+per-conversation prompt cache key; Workers AI pins a replica through a
+session-affinity header; every other provider gets nothing. Marking is the
+last stage of the shared step pipeline (`prompting/prepare-step.ts`), so
+pruning, weaving and steering cannot bust one backend's prefix. Two mutations
+land before the breakpoints by design: old tool-result bytes are pruned in
+quarter-window quanta, and a staged-context landing rewrites the base.
+Reviewed 2026-09-13; pinned by `unit-cache-breakpoints.test.ts` and
+`contract-cache-markers.test.ts`.
 Unmeasured: no test pins a nonzero cache read; the telemetry exists
 (`cacheRead` per `step_finish`) and a hit-ratio gate does not. Open: O1.
+Later note: `contract-cache-hit.test.ts` (240edaf8c) pins a nonzero
+`cacheRead` per caching provider against a mocked provider cache; no
+live-provider read is pinned.
 
-C3. External events reach a running turn at its next step, as one spliced user
-message at the step tail, re-applied at the same index on every later step
-and gone at turn end; a queued event becomes its own durable programmatic
-turn. Which path an event takes is decided by delivery (live turn versus idle
-actor), not by event kind. Reviewed 2026-09-13 against
+C3. External events reach a running turn at its next step as one spliced user
+message at the step tail. The message is re-applied at the same index on every
+later step and is gone at turn end. A queued event becomes its own durable
+programmatic turn. Delivery decides which path an event takes (live turn
+versus idle actor); event kind does not. Reviewed 2026-09-13 against
 `orchestrator/inbox.ts` and `prompting/step-injections.ts`; pinned by
 `unit-step-injections.test.ts` and `unit-signals.test.ts`.
 
 C4. Events carry 26-character ULIDs that the agent does not see. The only id
 the agent can name back is a peer ask's `event_id` reply route. Reviewed
-2026-09-13. A short display id per drain is the narrow form if quoting or
-replying ever becomes load-bearing; not scheduled.
+2026-09-13. If quoting or replying to an event ever starts to matter, the
+narrow form is a short display id per drain. Not scheduled.
 
 C5. Do not implement model-retractable events. The owner proposed an
-`[!IGNORE:<id>]` marker that removes an event and possibly its following
-assistant step. The owner accepted the decision against it on 2026-09-13.
+`[!IGNORE:<id>]` marker that removes an event and possibly the assistant step
+after it. The owner accepted the decision against it on 2026-09-13.
 
 Dropping irrelevant context can save input tokens, including within a turn.
 It changes cache matching from the deletion point; the earlier prefix can
 still be reused. Deleting a step cannot undo its tool effects. Hidden removal
-also needs an audit and recovery policy. These trade-offs, rather than a
-claim that deletion has no benefit, are why the proposed protocol is absent.
+also needs an audit and recovery policy. The protocol is absent because of
+these trade-offs, not because deletion has no benefit.
 
 Primary-source checks on 2026-09-13:
 
 - [OpenClaw system events](https://docs.openclaw.ai/cli/system) are queued for
-  a heartbeat, with an immediate-wake option. They are ephemeral across
-  restarts. This surface does not provide model-directed retraction.
+  a heartbeat, with an immediate-wake option. They do not survive restarts.
+  This surface does not provide model-directed retraction.
 - [Hermes steering](https://github.com/NousResearch/hermes-agent/blob/b9271bcb34e1a8b8fe0eeaef0ef4a6e1f93ba543/agent/agent_runtime_helpers.py#L3167)
   appends a separate user message after the tool batch and persists it. Its
   source explains why modifying an already-persisted tool result made replay
   diverge from live requests. The earlier claim that Hermes still modifies
   that tool result was stale.
 
-Neither inspected path implements the proposed marker. This is a finding
-about those paths, not proof that every part of either project lacks a
+Neither inspected path implements the proposed marker. This finding covers
+those paths only; it does not prove that neither project has any
 context-removal mechanism.
 
 C6. An idle prompt-cache prefix is kept warm by re-sending the last request
-with `max_tokens: 0`, and only where the vendor documents that shape:
-eligibility is the direct Anthropic Messages provider (`provider ===
-'anthropic'`, which `providers/anthropic.ts` builds against the official base
-URL with no redirect), the SHORT five-minute retention, and a last answer that
-read the cache and wrote nothing. The refresh fires at five minutes minus
-fifteen seconds counted from the REQUEST's send instant, at most three times
-per idle stretch, and a real provider request re-arms the chain from zero.
-Decided 2026-09-18.
+with `max_tokens: 0`, and only where the vendor documents that shape. Three
+conditions make a request eligible: the direct Anthropic Messages provider
+(`provider === 'anthropic'`, which `providers/anthropic.ts` builds against the
+official base URL with no redirect), the short five-minute retention, and a
+last answer that read the cache and wrote nothing. The refresh fires at five
+minutes minus fifteen seconds, counted from the instant the request was sent,
+at most three times per idle stretch. A real provider request re-arms the
+chain from zero. Decided 2026-09-18.
 
 The owner's rule was "the cache warming thing should only work for now for
 expensive models like fable or astra". The lane's first design read a
-model-class gate off the catalog's per-1M rates; the decision taken instead is
-that no model list or price threshold is consulted, because the provider rule
-already excludes everything the vendor's mechanism does not cover, and a price
-threshold would be a number nobody measured. `warmingPlan` reads no pricing.
+model-class gate off the catalog's per-1M rates. The decision taken instead
+consults no model list or price threshold: the provider rule already excludes
+everything the vendor's mechanism does not cover, and a price threshold would
+be a number nobody measured. `warmingPlan` reads no pricing.
 
-The measurement this rests on is the vendor's, not ours: keeping the 5-minute
-entry warm cost 13% to 20% less per session than buying the 1-hour entry
-whenever pauses ran for minutes, and only near 45-minute pauses did the 1-hour
-entry win, by about 12 cents a session
+The measurement is the vendor's, not ours: keeping the 5-minute entry warm
+cost 13% to 20% less per session than buying the 1-hour entry whenever pauses
+ran for minutes, and only near 45-minute pauses did the 1-hour entry win, by
+about 12 cents a session
 (docs/research/harness/anthropic-sources.md §2, read 2026-09-13). The same
-source states the mechanics this implements verbatim — "send the previous
+source states the mechanics this implements verbatim: "send the previous
 request again with `max_tokens` set to 0 … Count from the request's start, not
 its response's end … Do not change a byte of the prefix, and do not use
-`max_tokens: 1`" — which is why the replay is the provider body ai v6 already
-sent (`StepResult.request.body`) with two keys changed (`max_tokens` to 0,
-`stream` dropped) rather than a second assembly of the same prompt.
+`max_tokens: 1`". So the replay is the provider body ai v6 already sent
+(`StepResult.request.body`) with two keys changed (`max_tokens` to 0,
+`stream` dropped), not a second assembly of the same prompt.
 
 The cadence and the eligibility mirror oh-my-pi's shipped loop
 (`packages/ai/src/stream.ts:1209-1211, 1292-1299, 1435, 1458-1473`, read
-2026-09-17) with ONE declared divergence: oh-my-pi ARMS on `cacheRead +
-cacheWrite > 0` (:1462) and only CONTINUES on read-and-no-write (:1393), so
-its first refresh can follow a turn that merely wrote the entry. Here one
-predicate governs both, so a workspace whose prefix is still being rewritten
-every turn never starts a chain it would only pay cache writes for.
+2026-09-17) with one declared divergence. oh-my-pi arms on `cacheRead +
+cacheWrite > 0` (:1462) and only continues on read-and-no-write (:1393), so
+its first refresh can follow a turn that only wrote the entry. Here one
+predicate governs both, so a workspace whose prefix is still rewritten every
+turn never starts a chain that would only pay for cache writes.
 
-Scheduling is the DURABLE wake, never a timer: a Durable Object hibernates
-within seconds of going idle, which is the whole interval a warm waits out, so
+Scheduling uses the durable wake, never a timer. A Durable Object hibernates
+within seconds of going idle, well inside the interval a warm waits out, so
 the obligation is a row in `cache_warm` folded into `nextWakeAt` beside the
 trigger, peer-outbox, email-outbox and event-log sources, with its own
 `alarm.cache_warm` phase on the tick. A warm fires only while the actor's
 durable request counter still matches the value stored at arm time, and the
-fold asks that same question — a fold that answered "owed" while the fire
+fold asks the same question. A fold that answered "owed" while the fire
 refused would arm a wake at `now` on every tick and never take the work. The
-CLI's `Schedule.after` ignored its delay (`setTimeout(fn, 0)`) and now honours
-it, unreferenced so a one-shot command still exits.
+CLI's `Schedule.after` ignored its delay (`setTimeout(fn, 0)`); it now honours
+the delay, with the timer unreferenced so a one-shot command still exits.
 
-A warm's spend is its own producer (`SpendSource 'warming'`), and it is
-deliberately absent from the conversation's cache-hit distribution: a refresh
-reads the whole prefix and writes nothing, so its own hit rate is ~100% and
-folding it into the EMA, mean, p95 or p99 would report a cache health the turns
-never had. `summarizeSteps` takes the warm rows only to count them, and the
-Activity panel shows that count beside the EMA.
+A warm's spend is its own producer (`SpendSource 'warming'`) and is kept out
+of the conversation's cache-hit distribution on purpose. A refresh reads the
+whole prefix and writes nothing, so its own hit rate is ~100%; folding it into
+the EMA, mean, p95 or p99 would report cache health the turns never had.
+`summarizeSteps` takes the warm rows only to count them, and the Activity
+panel shows that count beside the EMA.
 
 Proof: `packages/core/tests/unit-cache-warming.test.ts` (the policy, every
 refusal, the replay shape, the three-refresh cap) and
@@ -153,8 +156,8 @@ in every direction they claim: logs under
 M1. Agent code runs in Cloudflare's codemode sandbox on the hosted backend
 (a `DynamicWorkerExecutor` in a loader Worker) and on Node in-process on the
 CLI, with one prelude. Every native tool is a binding `tools.<name>(input)`
-with the native input shape; files are `workspace.*` over the same VFS and
-ledger as the `file` tool; crafted tools are `tools.<name>` re-read from the
+with the native input shape. Files are `workspace.*` over the same VFS and
+ledger as the `file` tool. Crafted tools are `tools.<name>`, re-read from the
 store per call, and code defines new ones through `workspace.createTool`.
 `eval` itself is not nested. Reviewed 2026-09-13 against
 `tools/sandbox-contract.ts`, `cf-backend/src/codemode-sandbox.ts`,
@@ -166,23 +169,23 @@ using the native `ToolOutcome` discriminant and reason vocabulary. Successful
 payloads are unchanged. Both backends use the core dispatcher: host rejections
 and returned refusals take the same value channel. A program that recovers
 returns normally; returning or throwing its refusal propagates through the SDK
-error channel. Inner failures survive recovery in `ToolOutcome.failures` and
-the census attributes them to their binding, not `eval`. Malformed
+error channel. Inner failures survive recovery in `ToolOutcome.failures`, and
+the census attributes them to their binding, not to `eval`. Malformed
 programs still throw, with the native-name correction. Decided 2026-09-13,
 commit `526f618d7`.
 Measured: `unit-sandbox-errors` rejected the host-disconnect regression before
 the fix; the scoped codemode suites and harness-wiring's durable-census case
 pass after it. O2 closed.
 
-M3. A slate declares its bindings in `package.json`. In addition to namespace,
-rpc, mcp and app, `{kind:'tool',name}` exposes `env.NAME.call(input)` for a
-native or crafted tool; memory, tasks and web expose their codemode projection
-members. The host uses the same core dispatcher and CF codemode factory,
-re-reading crafted source and caller reach for each call. Tool and projection
-failures use M2's value shape. Role reach, Plan permissions, egress and approval
-gates are the caller's; a slate cannot add authority. RPC read models remain
-root-only. Neither agent nor agents is exposed, including through a crafted
-tool's sandbox: live apps must not hire or steer their caller.
+M3. A slate declares its bindings in `package.json`. Besides namespace, rpc,
+mcp and app, `{kind:'tool',name}` exposes `env.NAME.call(input)` for a native
+or crafted tool; memory, tasks and web expose their codemode projection
+members. The host uses the same core dispatcher and CF codemode factory and
+re-reads crafted source and caller reach for each call. Tool and projection
+failures use M2's value shape. Role reach, Plan permissions, egress and
+approval gates are the caller's; a slate cannot add authority. RPC read models
+remain root-only. Neither agent nor agents is exposed, including through a
+crafted tool's sandbox: live apps must not hire or steer their caller.
 Decided 2026-09-13, commit `feat(slates): a slate binds what its caller can call`.
 Measured by `unit-slate-composition` (immediate scribe-role revocation, actor
 memory, root-only RPC and the shared approval ladder), `unit-slate-project`,
@@ -195,97 +198,98 @@ a hibernation. Decided 2026-09-15 with Nimbus worker 0.7 (`composeFacetManager`,
 `spawnWorker`). Reversed: the hosted workspace's rule that "an object that
 is never asked never boots anything" (a resident was re-driven only on the
 next request for its URL, `workspace-host.ts` at `92c769b6b`). The launch
-journal recovers on the first pump of an incarnation, which the hosted
-workspace runs from `waitUntil` when it composes the manager, because its one
-alarm slot is the SDK scheduler's. The recipe carries digests, port and cwd
-and never a launch's inputs; a slate's bindings are minted per caller and its
-modules compiled from the tree as it is now, so the embedder's
+journal recovers on the first pump of an incarnation. The hosted workspace
+runs that pump from `waitUntil` when it composes the manager, because its one
+alarm slot belongs to the SDK scheduler. The recipe carries digests, port and
+cwd, never a launch's inputs. A slate's bindings are minted per caller and its
+modules compiled from the current tree, so the embedder's
 `resolveWorkerLaunch` answers null and brings the slate back through the
 slate host's own boot, which also replaces a process whose source changed.
 Measured 2026-09-15 by `unit-workspace-locality`'s "a launch a hibernation
 interrupted is re-driven through the slate host on the next wake": a
 `resident-launch` row below the wake's pid floor drives one `ensureSlate` of
-its owner and is released; red with the hook answering null alone. The
-URL-on-request path stays and is pinned by workerd `slate-durability`.
+its owner and is released; the test is red with the hook answering null alone.
+The URL-on-request path stays and is pinned by workerd `slate-durability`.
 
 ## Workspace
 
-W1. The workspace's process generation is allocated by fabric's own
-`adoptGeneration`, over a storage the host supplies; Kinu keeps no allocator.
+W1. Fabric's own `adoptGeneration` allocates the workspace's process
+generation, over a storage the host supplies; Kinu keeps no allocator.
 Decided 2026-09-15 with Nimbus fabric 0.5. Reversed: `nextWorkspaceGeneration`
 (`core/src/vfs/nimbus-workspace.ts` at `92c769b6b`), a SQL upsert that bumped
-`kinu_workspace_generation` once per `createWorkspace`. The row stays: on both
+`kinu_workspace_generation` once per `createWorkspace`. The row stays. On both
 backends the storage is `workspaceGenerationStorage(sql)`, one row in that
-same table, so the counter continues rather than restarts and the pid floor
+same table, so the counter continues rather than restarts, and the pid floor
 (`generation * 1_000_000`, below which every append writer is revoked at open)
 never repeats across the switch. The adopt is async, so the supervisor's pid
-base is set inside the first open, which every spawn awaits; a counter read
+base is set inside the first open, which every spawn awaits. A counter read
 that fails surfaces the storage's own error (fabric's adopt would swallow it),
 and a bump that did not persist refuses the open rather than serving pids at
 floor zero. Measured 2026-09-15 by `unit-nimbus-workspace-executor`'s "each
 open of the same database adopts the next generation": two opens over one
-`bun:sqlite` file hand out pids a million apart and leave the row at 2; the
+`bun:sqlite` file hand out pids a million apart and leave the row at 2. The
 revocation invariant is pinned by workerd `slate-durability` and the
 workspace-reset case of `unit-node-home-wiring`. Amended 2026-09-16: the
 guard read `generation === 0`, which refused only a first boot whose put
-failed — a later boot whose put failed ran on the previous incarnation's
-floor, fabric having kept `prev`. The guard is now the counter read before
-the adopt against the value after it (`before + 1`, which fabric takes only
-once its put resolved); measured by "a bump that did not persist refuses the
-open, on a boot that is not the first" in the same suite.
+failed. A later boot whose put failed ran on the previous incarnation's
+floor, because fabric kept `prev`. The guard now compares the counter read
+before the adopt with the value after it (`before + 1`, which fabric takes
+only once its put resolved); measured by "a bump that did not persist refuses
+the open, on a boot that is not the first" in the same suite.
 
 ## Chat loop
 
-C1. The stored assistant row holds the turn's ANSWER, selected once by the
-runner (`chat.ts` `answerFromSteps`: the final step's text, joined back over
+C1. The stored assistant row holds the turn's answer. The runner selects it
+once (`chat.ts` `answerFromSteps`: the final step's text, joined back over
 output-limit cuts; null for an interrupted turn, whose streamed text stands),
-and every consumer reads the `done` it is handed. Narration — the text a step
-emits before its tool calls — is on that step's own `step_finish` row and on
-whoever watched live; it is not in the row. So the live view and the reloaded
-view differ by design: live shows narration then answer, reload shows the
-answer. On cf the row keeps the streamed message's non-text parts in order
-and carries the answer as its one text part, placed last; a turn that ended
-on tool calls with no final text stores the streamed narration as that part.
+and every consumer reads the `done` it is handed. Narration (the text a step
+emits before its tool calls) is on that step's own `step_finish` row and on
+the screen of whoever watched live; it is not in the row. So the live view
+and the reloaded view differ by design: live shows narration then answer,
+reload shows the answer. On cf the row keeps the streamed message's non-text
+parts in order and carries the answer as its one text part, placed last; a
+turn that ended on tool calls with no final text stores the streamed
+narration as that part.
 Decided 2026-09-16, commit 21dd9f226. Measured on build cba44dcb9: the
 `public-failure-recovery` episode's "reply with only PASS or FAIL" row held
 three narration lines with FAIL run onto the end. A continuation joins the
-cut step's text to the answer only when the resumed step IS the answer (no
+cut step's text to the answer only when the resumed step is the answer (no
 tool call issued, finished in one step); a cut inside a narration step
 leaves that text on the step, not in front of the answer. Amended 2026-09-16:
 the owner's live turn wrote a sentence then made a tool call, and the reload
-rendered the tool card first with the sentence after it — the answer had been
-moved last regardless of where it streamed. The one text part now stays where
-the last streamed text part stood: a turn answered after its calls keeps it
-last, one that ended on its calls keeps its narration first; pinned by
-`unit-chat-transcript`.
+rendered the tool card first with the sentence after it, because the answer
+had been moved last regardless of where it streamed. The one text part now
+stays where the last streamed text part stood: a turn answered after its
+calls keeps it last, and one that ended on its calls keeps its narration
+first; pinned by `unit-chat-transcript`.
 
 C2. A Stop is the operator's act, not a failure of the turn. The transport
-sends the model stream's `abort` chunk and closes the request; it sends no
-`error: true` frame for `INTERRUPTED_TURN` (the SDK's client surfaces that
-frame as the stream's error and the hook painted an error card on every
-Stop). A turn cut before it streamed anything — no token, no call — writes
-no assistant row; the operator's row stands alone, as it did before the
-Think switch, on both backends. Decided 2026-09-16, pinned by
-`unit-chat-transport` and `turn-answer-row`. Both changes were hidden by the
-parity re-record at a49c1edfa.
+sends the model stream's `abort` chunk and closes the request. It sends no
+`error: true` frame for `INTERRUPTED_TURN`: the SDK's client surfaces that
+frame as the stream's error, and the hook painted an error card on every
+Stop. A turn cut before it streamed anything (no token, no call) writes no
+assistant row; the operator's row stands alone on both backends, as it did
+before the Think switch. Decided 2026-09-16, pinned by
+`unit-chat-transport` and `turn-answer-row`. The parity re-record at
+a49c1edfa hid both changes.
 
 C3. The deployed product carries one eval-only surface that ends a workspace
-object's activation: `POST /api/workspaces/<name>/eval/abort`, answered only
-for the eval-service identity (`DEV_USER_EMAIL` + `DEV_IDENTITY_SECRET`,
-`provider: 'dev'` after `authenticateRequest`) and 404 for every other
-caller; it calls `OrchestratorAgent.evalAbortActivation`, which is
+object's activation: `POST /api/workspaces/<name>/eval/abort`. It answers only
+the eval-service identity (`DEV_USER_EMAIL` + `DEV_IDENTITY_SECRET`,
+`provider: 'dev'` after `authenticateRequest`) and returns 404 to every other
+caller. It calls `OrchestratorAgent.evalAbortActivation`, which is
 `ctx.abort` and nothing else, sealed in `rpc-surface.ts` as stub-reachable
-from the Worker and never `@callable`. It exists because the continuation of
-a multi-step turn across activations is a property of the deployed build
-that nothing else can force: every callable, the control plane and the CLI
-gate cancel a turn or delete a workspace, `abortAllDurableObjects` is the
-test runtime's, and the platform's idle eviction is neither forcible nor
-repeatable. The first-run `background-wake` row is its one caller. Measured
+from the Worker and never `@callable`. It exists because continuing a
+multi-step turn across activations is a property of the deployed build that
+nothing else can force: every callable, the control plane and the CLI gate
+cancel a turn or delete a workspace, `abortAllDurableObjects` belongs to the
+test runtime, and the platform's idle eviction can be neither forced nor
+repeated. The first-run `background-wake` row is its one caller. Measured
 2026-09-16 under workerd (`two-turn` "the eval-only abort ends the
 activation"): the stub call rejects with the abort reason and a fresh stub
-finds the object alive over the same storage. Decided 2026-09-16; the owner
-may veto it, in which case the row is retired with it and the property is
-held by the workerd wake case alone.
+finds the object alive over the same storage. Decided 2026-09-16. The owner
+may veto it; the row is then retired with it and the workerd wake case alone
+holds the property.
 
 ## Delegation
 
@@ -294,13 +298,15 @@ D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
 swarm node may inherit the parent's conversation
 (`config.context:'inherit'`). Decided 2026-09-03. Being extended 2026-09-13:
 `hire` gains the same `context` field so a subordinate can be forked when the
-work is contextual (`feat/hire-fork`).
+work depends on the conversation (`feat/hire-fork`). Later note: `feat/hire-fork`
+merged as 5e061cc60.
 
 D2. The root actor delegates across roles in the fusion pattern from the
 owner's oh-my-pi fork: dedicated streams to a durable specialist hire,
-research to a researcher task hire, general work to a task hire; coupled,
+research to a researcher task hire, general work to a task hire. Coupled,
 dependent or single-context work stays with the root. Subordinates keep their
-role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`.
+role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`. Later
+note: merged as 59dc3d79d.
 
 D3. An assignment is not an external event, so no reactor drains one. A
 `subordinate_task` row is the whole turn input of the subordinate it names, and
@@ -310,72 +316,73 @@ one runner owns it: core `drainAssignments`
 (`drainAssignedWork`). `wakesADrain` states the exclusion once, for the batch,
 the wake fold and the runner. Decided 2026-09-17, commit 53c341be7. Measured
 the same day in the workerd pool (`tests/workerd/hire.test.ts`, "one brief
-produces exactly one child turn"): before, one hire brief produced 242
-`subordinate_task` rows with bodies nesting 253 -> 850 characters, because the
-reactor digested the row into "1 event arrived while you were idle …" and the
-hosted turn admission re-published that digest as a new assignment while the
-durable sweep ran the raw brief beside it; after, 1 row whose body is the
+produces exactly one child turn"). Before: one hire brief produced 242
+`subordinate_task` rows with bodies nesting 253 -> 850 characters. The
+reactor digested the row into "1 event arrived while you were idle …", the
+hosted turn admission re-published that digest as a new assignment, and the
+durable sweep ran the raw brief beside it. After: 1 row whose body is the
 brief. Re-measured 2026-09-17 on 4e7da0360, one hire alone: exactly 1 row, body
-253 characters, `consumed_at` still set because the child retires itself inside
-the turn that answers and the runner's lease close is then refused by its dead
-handle. Amended 2026-09-17: the cloud arm named the wrong chain. This actor
-carries TWO wake chains and only one of them reaches the sweep —
+253 characters. `consumed_at` is still set because the child retires itself
+inside the turn that answers, and its dead handle then refuses the runner's
+lease close.
+Amended 2026-09-17: the cloud arm named the wrong chain. This actor carries
+two wake chains and only one of them reaches the sweep.
 `drainAdmittedDelegations` runs from `maintenanceWork`, whose only caller is
-`_kinuTerminalRetryTick`, while `nextWakeAt` feeds `armTimer`, whose
+`_kinuTerminalRetryTick`. `nextWakeAt` feeds `armTimer`, whose
 `_kinuTimerTick` fires due triggers, the peer outbox and the email reconcile
 and reads no `subordinate_task` row. So `admitHostedTask`'s arm woke a frame
 that could not take the row and re-armed itself from the same fold, and the
 assignment waited for whatever unrelated obligation next put a row on the retry
 chain. `armWake` now arms that chain (`armDelegationWake`) and the fold is out
-of `nextWakeAt`; the predicate was already in the right place, since
-`owedUntimedWork` counts an admitted delegation. Measured the same day, the
-hire file's own rows with only the arm changed: under the fold, cases 1-4 took
-60,722 / 67,002 / 61,003 / 60,988 ms — one per unrelated 60-second recovery row
-— and case 6's two `subordinate_task` rows stood `turn_id NULL, consumed_at
-NULL` for the 45 s a probe sampled with the child opening no run; under the arm
-the same four take 640 / 6,995 / 1,006 / 983 ms, the child opens both runs, and
-all six rows pass in 31 s. The local host arms nothing and re-drives on every
-pass and on open.
+of `nextWakeAt`. The predicate was already in the right place, since
+`owedUntimedWork` counts an admitted delegation. Measured the same day on the
+hire file's own rows, with only the arm changed. Under the fold, cases 1-4 took
+60,722 / 67,002 / 61,003 / 60,988 ms (one per unrelated 60-second recovery
+row), and case 6's two `subordinate_task` rows stood `turn_id NULL, consumed_at
+NULL` for the 45 s a probe sampled, with the child opening no run. Under the
+arm the same four take 640 / 6,995 / 1,006 / 983 ms, the child opens both
+runs, and all six rows pass in 31 s. The local host arms nothing and
+re-drives on every pass and on open.
 
 D4. A delegated turn brackets its run in the durable ledger, like every other
-turn. The local host already did, because an assignment is admitted there as
-the child's own chat turn and `ChatSession.processTurn` calls `openTurnRun`
-(`caused_by: subordinate_task`); the cloud runner drives `runHeadInference`
-directly, which never enters that queue, so it wrote none. Decided 2026-09-17:
-the stricter side wins and `runHostedTask` opens and closes the run with the
-same cause and the same input text. Measured the same day in the workerd pool:
-before, a hired child's ledger held `step_finish` alone — one run id, no
-`run_start`, no `run_end` — so `getRunSummaries` answered `causedBy: null,
-userMessage: null, status: null` for it, which is exactly what
+turn. The local host already did this: an assignment is admitted there as
+the child's own chat turn, and `ChatSession.processTurn` calls `openTurnRun`
+(`caused_by: subordinate_task`). The cloud runner drives `runHeadInference`
+directly, which never enters that queue, so it wrote no bracket. Decided
+2026-09-17: the stricter side wins, and `runHostedTask` opens and closes the
+run with the same cause and the same input text. Measured the same day in the
+workerd pool. Before, a hired child's ledger held `step_finish` alone (one run
+id, no `run_start`, no `run_end`), so `getRunSummaries` answered
+`causedBy: null, userMessage: null, status: null` for it, which is what
 `subordinateInspection`'s `runs` view shows a reader of a hired child.
 
 D5. There is one inherited-context kind, `fork`. The `digest` kind rendered the
-parent's recent conversation as prose for a fresh hire, and its only reader was
+parent's recent conversation as prose for a fresh hire. Its only reader was
 the reactor's rendering of the assignment row, which D3 removed: both turn
 runners read the messages and answered `[]` for a digest, so from e6e24f547 it
-reached nobody. Deleted end to end 2026-09-17 — schema arm, both producers, the
-`renderSubordinateInheritedContext` renderer and the visibility prefix — rather
-than spliced into the turn, because the product's own pin refuses it:
+reached nobody. Deleted end to end 2026-09-17 (schema arm, both producers, the
+`renderSubordinateInheritedContext` renderer and the visibility prefix)
+rather than spliced into the turn, because the product's own pin refuses it:
 `cf-backend/tests/unit-hire-fork.test.ts`, "a cf hire context=fresh starts from
-its birth-time conversation", requires a fresh hire's first message to BE its
+its birth-time conversation", requires a fresh hire's first message to be its
 mission and no parent message in its conversation. Measured the same day:
 splicing the digest as a birth message turned both non-inherit rows of that
 test red; deleting the kind left 3316 of 3316 cf tests green.
 
-D6. A source folded into a wake's fold owes a PHASE in that wake's frame. This
-actor carries two wake chains (D3) and the reactor's pending-drain fold sat in
-the wrong half of that rule: `nextPendingDrainAt` was folded into `nextWakeAt`,
-which arms `KINU_TIMER_CALLBACK`, while `_kinuTimerTick` fired due triggers,
-pushed the peer and email outboxes and re-armed — and called
-`scheduleDrain()` only when a trigger had fired. So an external event that
-reached an IDLE object (webhook, inbound email, peer message) armed a wake that
-could not take it, and the row's only remaining hope was the 250 ms in-memory
-debounce the same ingress started, which dies with the isolate. Decided
-2026-09-17: the tick drains when the fold says a drain is due, one call under
-the fold's own reader with the tick's own clock, and the `fired > 0` branch is
-gone — a trigger firing is one way a row becomes drainable and every other
-ingress is another. The delegation queue is NOT folded here, for the mirror
-reason D3 gives, and no third chain exists.
+D6. A source folded into a wake's fold owes a phase in that wake's frame. This
+actor carries two wake chains (D3), and the reactor's pending-drain fold broke
+that rule. `nextPendingDrainAt` was folded into `nextWakeAt`, which arms
+`KINU_TIMER_CALLBACK`, while `_kinuTimerTick` fired due triggers, pushed the
+peer and email outboxes and re-armed, and called `scheduleDrain()` only when a
+trigger had fired. So an external event that reached an idle object (webhook,
+inbound email, peer message) armed a wake that could not take it. The row's
+only remaining hope was the 250 ms in-memory debounce the same ingress
+started, which dies with the isolate. Decided 2026-09-17: the tick drains
+when the fold says a drain is due, one call under the fold's own reader with
+the tick's own clock, and the `fired > 0` branch is gone. A trigger firing is
+one way a row becomes drainable; every other ingress is another. The
+delegation queue is not folded here, for the mirror of the reason D3 gives,
+and no third chain exists.
 
 Measured the same day in the workerd pool, `cf-backend/tests/workerd/two-turn.test.ts`,
 "drains an external event that reached an idle object, on the wake its arrival
@@ -389,31 +396,31 @@ so the probe never picks the chain.
 | the fold alone (6f000def4) | `_kinuTimerTick` | row `turn_id NULL, consumed_at NULL`; `_kinuTimerTick` re-armed for the same row |
 | with the drain phase | `_kinuTimerTick` | row `turn_id evt-…`, lease closed, `run_start caused_by event_drain`, event text on the model wire |
 
-The re-arm is the second half of the cost: `armWakeRow` clamps a due target to
+The re-arm is the second half of the cost. `armWakeRow` clamps a due target to
 `nowSec + 1`, so under the fold alone the object woke every second, drained
-nothing and re-armed from the same fold — not a lost wake, a one-second loop
-that never converges. The row's own wall time reads 91 ms under the fold alone
-and 166 ms with the drain turn in it, which is the test's time and not the
+nothing and re-armed from the same fold: a one-second loop that never
+converges, not a lost wake. The row's own wall time reads 91 ms under the fold
+alone and 166 ms with the drain turn in it. That is the test's time, not the
 frame's; the frame is not separately instrumented.
 
-The CLI host needs nothing: it folds only trigger times into its process timer
+The CLI host needs nothing. It folds only trigger times into its process timer
 (`local-session.ts:nextScheduledTriggerAt`) and offers no
-`reconcileDurableWake`, so its next wake is its own next start and the drain
-debounce lives as long as the process that owns the workspace. Two mechanisms,
-one rule each; nothing to reconcile.
+`reconcileDurableWake`, so its next wake is its own next start, and the drain
+debounce lives as long as the process that owns the workspace. Two
+mechanisms, one rule each; nothing to reconcile.
 
 
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
 heavy gate declares the threads it occupies at peak (`GATE_WEIGHTS`, held
-equal to deploy.sh's table by `deploy.test.ts`) and a gate launches only while
+equal to deploy.sh's table by `deploy.test.ts`), and a gate launches only while
 the running weight fits `nproc`. Decided 2026-09-15, commit 19f9c6666.
-REVERSED by L6 on 2026-09-17: the declaration is gone and the cost is
+Reversed by L6 on 2026-09-17: the declaration is gone and the cost is
 measured, in two dimensions.
 Measured: under a six-gate width the eleven-suite UI row failed every deploy
-on a puppeteer wall beside two `--parallel=4` rows and passed alone in 361 s;
-process-tree sampling read one Chrome suite at 4.3 threads peak and a
+on a puppeteer wall beside two `--parallel=4` rows and passed alone in 361 s.
+Process-tree sampling read one Chrome suite at 4.3 threads peak and a
 `--parallel=4` row at 10.5. Under the budget the pre-publish tier ran 66/66
 green with the UI row inside it, twice (390 s on 19f9c6666, 602 s including
 the account gate on 1c82aee60).
@@ -421,10 +428,10 @@ the account gate on 1c82aee60).
 L2. A green gate is skipped only on a content-hash proof of its input closure.
 The closure is derived from the module graph (`scripts/import-graph.ts`, the
 walker `client-graph` already used) plus declared `reads` and `env`, the
-preload, configs on the path, `bun.lock` and `patches/`, and the toolchain;
-a graph that reads the environment whole, imports by a computed specifier,
+preload, configs on the path, `bun.lock` and `patches/`, and the toolchain.
+A graph that reads the environment whole, imports by a computed specifier,
 reaches an untracked file, or opens the tree by an undeclared path is never
-cached, and a `live` row never is. Decided 2026-09-15, commits 99bbb74ca,
+cached, and neither is a `live` row. Decided 2026-09-15, commits 99bbb74ca,
 c54800545, 8a151ec0d. Measured on the push tier at 8a151ec0d, 24-thread
 workstation, load 0.6 at start:
 
@@ -433,7 +440,7 @@ workstation, load 0.6 at start:
 | cold (store emptied) | 0 | 32 | 15 | 429.6 s |
 | warm (same tree) | 32 | 0 | 15 | 301.3 s |
 
-The 15 never-cached rows held the tier's heaviest work and each named one
+The 15 never-cached rows held the tier's heaviest work, and each named one
 cause. Commits 2804d8e54 (computed imports declare what they load),
 97009f393 and d1aa2e0d6 (a child a test spawns gets the environment by
 name), and b73710162 (`check` split into lint, drift and typecheck; `test`
@@ -460,10 +467,10 @@ The 6 left: preflight and commit-message (live); `typecheck`, whose
 environment whole by design; the gate self-tests row through
 `commit-hygiene.ts`; `packages/test-utils/` through `ambient-env.test.ts`,
 which tests the strip itself; and the cf-backend suite through
-`unit-install-script.test.ts`, which says it must inherit python's own
-environment. `--audit-closure` ran every derivable push-tier gate under
-strace on 2026-09-15: 32 audited, 0 undeclared reads, after its first pass
-caught `gate:scanner-bundle` reading two files off its graph.
+`unit-install-script.test.ts`, which must inherit python's own environment.
+`--audit-closure` ran every derivable push-tier gate under strace on
+2026-09-15: 32 audited, 0 undeclared reads, after its first pass caught
+`gate:scanner-bundle` reading two files off its graph.
 
 L3. A deploy wave stops launching at its first red and lets running gates
 finish; `--all` audits the whole wave. Decided 2026-09-15, commit a924a3fb2,
@@ -471,66 +478,66 @@ proved at budget 1 in both directions.
 
 L4. The connectome's cost pins are ratios against an in-process calibration
 unit measured in the same cheapest-of-N loop, never absolute CPU time. Decided
-2026-09-15, commit e965315d0. Measured quiet: canvas 0.75 units, mesh 5.2;
-under twelve busy threads the absolute mesh frame doubled (0.61 to 1.13 ms,
+2026-09-15, commit e965315d0. Measured quiet: canvas 0.75 units, mesh 5.2.
+Under twelve busy threads the absolute mesh frame doubled (0.61 to 1.13 ms,
 the wave's red) while the ratio read 3.9 to 5.2. Proved red at ten steps per
 frame. A wall-clock pin is a latency contract and stays wall-clock. The red
 proof's own wall (bun's 5 s default) went red under the deploy wave on
-368b8d694 at 5.96 s: measured in three contention shapes the ten-step ratio
+368b8d694 at 5.96 s. Measured in three contention shapes, the ten-step ratio
 reads 3.5 to 5.0 and 21.5 to 31 against floors of 1.5 and 12.5, so commit
 8a5b9eee5 runs a third of the batches (under a second quiet) with a stated
 20 s budget.
 
 L5. The runner consumes the ladder; nothing is written twice. deploy.sh
 loads `bun scripts/ladder.ts --plan` (phase, label, threads, resident MiB,
-deadline, command per row — `weight` until L6) and schedules each phase as
-one wave; a row carries its own `label`, `phase`/`alone` and `deadline`; the UI row claims the
-`*-ux` family by glob; the resolver is proved over a fixture tree. Decided
-2026-09-15, commits 5aac4b263, 45f6c3786, 7482c90c1, f6ec56c8f. Removed:
-deploy.sh's run lines, GATE_WEIGHT, GATE_DEADLINES, GATE_GROUP tables;
+deadline and command per row; `weight` until L6) and schedules each phase as
+one wave. A row carries its own `label`, `phase`/`alone` and `deadline`; the UI
+row claims the `*-ux` family by glob; the resolver is proved over a fixture
+tree. Decided 2026-09-15, commits 5aac4b263, 45f6c3786, 7482c90c1, f6ec56c8f.
+Removed: deploy.sh's run lines, GATE_WEIGHT, GATE_DEADLINES, GATE_GROUP tables;
 ladder.ts's GATE_WEIGHTS, GATE_DEADLINES, SERIAL_GATES, EXCLUSION_GROUPS and
 the four deploy.sh parsers; deploy.test.ts's REQUIRED_GATES, POST_DEPLOY_GATES
 and BENCH_GATE_FILES lists; ladder.test.ts's bench list and rig-row spelling
 (the last edited by hand on f6d08d72d, the case that prompted this). Measured
-at f6ec56c8f with `--gates-only` at thread budget 12, the box under other
-lanes' hooks (load 9 to 21): run 1, 68/68 source gates green and the hammer
-green in 815.9 s wall with only the account gate red on a missing
-KINU_ACCESS_API_TOKEN in the measuring process; run 2, 67/68 in 528.8 s with
+at f6ec56c8f with `--gates-only` at thread budget 12, with other lanes' hooks
+running on the box (load 9 to 21). Run 1: 68/68 source gates green and the
+hammer green in 815.9 s wall, with only the account gate red on a missing
+KINU_ACCESS_API_TOKEN in the measuring process. Run 2: 67/68 in 528.8 s with
 `bun run test:workerd` past its 480 s deadline. That gate was the finding:
 solo it ran 160 s and 398 s on the same tree against a declared 12.7 s, with
-51 `models_dev.catalog_fallback` events per run — the two-turn probe's
+51 `models_dev.catalog_fallback` events per run. The two-turn probe's
 outbound refused `https://models.dev/api.json`, which the worker saw as
 HTTP 500, and every provider fell back on each listing sweep. The seam is the
 probe's outbound: it now answers the catalog from a fixture (the shape the
-core unit tests already use), the drive records zero fallbacks and the
+core unit tests already use), the drive records zero fallbacks, and the
 two-turn suite pins that at zero, proved red by refusing the route again
 (3 fallbacks per drive). Re-measured with zero fallbacks: 439 s and 399 s
 solo, 36 files serial by design with 139 to 159 s of module import. So the
-network was a dependency, not the wall; the row now declares 420 s and the
+network was a dependency, not the wall. The row now declares 420 s, and the
 480 s deadline stands with 60 s of margin, which is thin and recorded as
 O2. Budget 24 on a quiet box stays unmeasured.
 
-L6. The wave admits rows on MEASURED cost in two dimensions — threads and
-resident set — under caps the box answers for. No row declares a cost.
-Decided 2026-09-17. This REVERSES L1's declared thread figure and keeps its
+L6. The wave admits rows on measured cost in two dimensions, threads and
+resident set, under caps the box answers for. No row declares a cost.
+Decided 2026-09-17. This reverses L1's declared thread figure and keeps its
 premise: a count of gates is not a measure of load, and neither is a number a
 row wrote about itself. The deadline is unchanged and stays the hang detector.
 
 What L1 missed. Five rows died on their per-row deadline across the two
-deploys of 2026-09-16 — dead code (124), the gate self-tests (137), both
-workerd rows (124), the UI self-tests (124) — and each passes alone. Measured
+deploys of 2026-09-16: dead code (124), the gate self-tests (137), both
+workerd rows (124), the UI self-tests (124). Each passes alone. Measured
 on this box 2026-09-17: coreutils `timeout --signal=TERM --kill-after=5s`
 reports 124 when the child respects the TERM, 137 when anything SIGKILLs it,
-143 when a TERM it did not send does. So the 137 was a KILL, which no thread
-budget can predict, and the cause is the dimension L1 did not have. The three
-workerd rows declared one thread each; `gate:dead-code` declared one and holds
-17.0 GiB; the gate self-tests row declared one and holds 24.7 GiB.
+and 143 when a TERM it did not send does. So the 137 was a KILL, which no
+thread budget can predict, and the cause is the dimension L1 did not have. The
+three workerd rows declared one thread each; `gate:dead-code` declared one and
+holds 17.0 GiB; the gate self-tests row declared one and holds 24.7 GiB.
 
-The figures (`scripts/gate-cost.json`, written by
-`bun scripts/gate-cost-measure.ts`; each row alone under the wave's own
-`timeout` wrapper, its whole process tree sampled (L7) — summed `rss` for memory, tasks
-in state R for parallel demand, getrusage for CPU seconds). Heaviest first,
-24-thread workstation, 2026-09-17:
+The figures come from `scripts/gate-cost.json`, written by
+`bun scripts/gate-cost-measure.ts`. Each row runs alone under the wave's own
+`timeout` wrapper with its whole process tree sampled (L7): summed `rss` for
+memory, tasks in state R for parallel demand, getrusage for CPU seconds.
+Heaviest first, 24-thread workstation, 2026-09-17:
 
 | row | thr | peak RSS | cpu s | declared thr |
 | --- | --- | --- | --- | --- |
@@ -550,49 +557,50 @@ in state R for parallel demand, getrusage for CPU seconds). Heaviest first,
 
 Summed over the 67 source rows measured so far: 158 threads and 129 GiB if
 every row ran at once, against 24 threads and 64 GiB of RAM. The old rule
-admitted against declared threads alone, so nothing in it could see the
-second figure at all.
+admitted against declared threads alone, so it could not see the second
+figure.
 
-A row's cost. Threads are CPU WORK OVER ELAPSED TIME, capped by the tasks the
-row was observed to have runnable at once — not the pool width. `bun run lint`
+A row's cost. Threads are CPU work over elapsed time, capped by the tasks the
+row was observed to have runnable at once, not by the pool width. `bun run lint`
 peaks at 25 runnable tasks and burns 106.0 CPU seconds over a 21.4 s wall:
 five threads of work, not twenty-five. Charging the width would run that row
-alone on a 24-thread box for nothing. The division takes the SMALLER of the
-measured and declared walls, because a wall inflated by contention and a
-declared wall gone stale-high (`bun run layergate` declares 25 s and ran in
-0.6 s) both divide the work down and admit the row too cheaply, which is the
-error that brings the kills back. Both inputs are load-independent: CPU
-seconds are work done rather than time taken, and a task denied a CPU stays
-in state R and is still counted — validated against synthetic load on a box
-at load 25, where four and eight busy 250 MiB workers read exactly 4 and 8
-runnable tasks and 1,110 and 2,211 MiB.
+alone on a 24-thread box for nothing. The division takes the smaller of the
+measured and declared walls. A wall inflated by contention and a declared
+wall gone stale-high (`bun run layergate` declares 25 s and ran in 0.6 s)
+both divide the work down and admit the row too cheaply, and that error
+brings the kills back. Both inputs are load-independent: CPU seconds are work
+done rather than time taken, and a task denied a CPU stays in state R and is
+still counted. Validated against synthetic load on a box at load 25, where
+four and eight busy 250 MiB workers read exactly 4 and 8 runnable tasks and
+1,110 and 2,211 MiB.
 
 The cap formula, in `scripts/deploy.sh`, re-read at the start of every phase:
 
     thread_cap = KINU_DEPLOY_THREADS or nproc
     rss_cap    = KINU_DEPLOY_RSS_MB or MemAvailable_MiB * 75 / 100
 
-A row launches while `load + threads <= thread_cap` AND
-`held + rss <= rss_cap`; with nothing running the first row launches
+A row launches while `load + threads <= thread_cap` and
+`held + rss <= rss_cap`. With nothing running, the first row launches
 regardless, so a row heavier than the whole cap runs alone rather than never.
-MemAvailable and not MemTotal: MemTotal counts memory nothing can have, and a
-cap taken from it admits rows onto swap. It is read at run time rather than
-recorded, so another lane's suite — or the two orphan `workerd serve`
-processes found reparented to systemd on 2026-09-17, 28 minutes old and
-holding memory — shows up as less headroom rather than being charged to a row.
+The cap uses MemAvailable, not MemTotal: MemTotal counts memory nothing can
+have, and a cap taken from it admits rows onto swap. The figure is read at run
+time rather than recorded, so another lane's suite, or the two orphan
+`workerd serve` processes found reparented to systemd on 2026-09-17 (28
+minutes old and holding memory), shows up as less headroom rather than being
+charged to a row.
 
 Reported, not fixed. The UI self-tests row reached its 480 s deadline with
-nothing else of the wave beside it (exit 124) while its row declares 420 s;
-O2 already records the thin margin on the workerd row and this is the same
-shape on a second row. Raising either deadline is refused here. Rows whose
+nothing else of the wave beside it (exit 124) while its row declares 420 s.
+O2 already records the thin margin on the workerd row, and this is the same
+shape on a second row. This entry does not raise either deadline. Rows whose
 figures come from a run that exited non-zero (the gate self-tests row among
 them, red on main through `test-clocks`) are floors, not costs, and the table
 records each exit status so a reader can see which.
 
-L7. A row's cost is sampled over its PROCESS TREE — the row's session plus
-every descendant by ppid — not over its session alone. Decided 2026-09-17.
-This reverses the sampling half of L6, which held the sampler and deploy.sh's
-kill to one blind spot on purpose; killability and cost are different
+L7. A row's cost is sampled over its process tree (the row's session plus
+every descendant by ppid), not over its session alone. Decided 2026-09-17.
+This reverses the sampling half of L6, which gave the sampler and deploy.sh's
+kill the same blind spot on purpose. Killability and cost are different
 questions, and memory a detached child holds is memory the box does not have.
 
 What L6 missed. A child that calls `setsid` leaves the row's session, and the
@@ -623,56 +631,57 @@ figures stand on either basis: re-measured twice under the new sampler,
 inside sampling jitter, and those two runs were reverted.
 
 The sampler now costs more on a browser row: it walks Chrome's ~110
-processes for their runnable tasks, and the live-app row's wall moved 53.0 s
-to 59.1 s across the change. The row declares the 53.0 s solo wall, which is
-the smaller divisor and charges the row more threads, not fewer.
+processes for their runnable tasks, and the live-app row's wall moved from
+53.0 s to 59.1 s across the change. The row declares the 53.0 s solo wall,
+the smaller divisor, which charges the row more threads, not fewer.
 
 Reported, not fixed. Summed over the 72 source rows, the wave's peak resident
-set is now 157.3 GiB against a cap of 30.7 GiB — 75% of the 41.0 GiB
-MemAvailable read on this box, 2026-09-17 — where the same sum read 129 GiB
+set is now 157.3 GiB against a cap of 30.7 GiB (75% of the 41.0 GiB
+MemAvailable read on this box, 2026-09-17); the same sum read 129 GiB
 while every browser row was 2 GiB short. The wave already serialises on that
 cap and now serialises on the true figures. The cap is untouched.
 
-L8. The memory figure a tree sums is each member's PROPORTIONAL SET (Pss,
-`/proc/<pid>/smaps_rollup`), not its resident set. Decided 2026-09-17. This
-reverses the summation half of L7 only — the tree basis stands: membership is
-still the row's session plus every descendant by ppid.
+L8. The memory figure summed over a tree is each member's proportional set
+(Pss, `/proc/<pid>/smaps_rollup`), not its resident set. Decided 2026-09-17.
+This reverses only the summation half of L7. The tree basis stands:
+membership is still the row's session plus every descendant by ppid.
 
 What L7's basis missed. RSS counts one shared page once per process that
 maps it, and a browser row is ~110 processes over the same mapped binary,
-page cache and copy-on-write heap — the table's 157.3 GiB total against a
+page cache and copy-on-write heap. The table's 157.3 GiB total against a
 64 GB box, and the 25 GiB gate self-tests row, were mostly the same pages
 counted a hundredfold. Pss splits each shared page across its holders, so the
-sum over a tree is the footprint the box actually pays. Measured here: a
-Chrome helper reads 700 MB RSS over 108 MB Pss; a warmed bun process reads
-628 MB RSS over 605 MB Pss — mostly private either way, which is the control
-that says only the double counting moved (`bun scripts/preflight.ts`, a lone
-row: 95-96 MiB summed RSS vs 74-75 MiB summed Pss, the shared loader/libc
-tail split out).
+sum over a tree is the footprint the box pays. Measured here: a Chrome
+helper reads 700 MB RSS over 108 MB Pss; a warmed bun process reads 628 MB
+RSS over 605 MB Pss. The bun process is mostly private either way, which is
+the control that shows only the double counting moved (`bun scripts/preflight.ts`,
+a lone row: 95-96 MiB summed RSS vs 74-75 MiB summed Pss, the shared
+loader/libc tail split out).
 
-The read is `/proc/<pid>/smaps_rollup`'s `Pss:` field, kernel-verified on this
-host, and it stays per-member for the same reason the task listing does: the
-box holds ~700 processes and most of them are somebody else's — a pid that
+The read is the `Pss:` field of `/proc/<pid>/smaps_rollup`, kernel-verified on
+this host. It stays per-member for the same reason the task listing does: the
+box holds ~700 processes and most of them belong to someone else. A pid that
 died between the listing and the read contributes zero, exactly as a dead pid
 contributes nothing to `stat`.
 
-L9. The wave admits at most ONE row holding the browser lane at a time, beside
-the measured-cost caps. Decided 2026-09-18. This AMENDS L6 (the measured-cost
+L9. The wave admits at most one row holding the browser lane at a time, beside
+the measured-cost caps. Decided 2026-09-18. This amends L6 (the measured-cost
 admission, owner bug B9, fixed @10ba05d74) and reverses nothing in it: both
-caps still decide every other row, and no row declares a cost. Which rows hold
-the lane is derived, never listed — the closure of tracked modules that reach
-puppeteer (`browserModules` in `scripts/ladder.ts`), intersected with the files
-each row claims. Nine rows hold it today: the two UI self-test rows, Public
-pages render, Live app in a browser, React runtime identity, Swarm-tree
-geometry, Chat infinite scroll, Root end-to-end lifecycle suites and the
-secrets/corpus/preflight self-tests. The plan carries it as a column and
-`scripts/deploy.sh` holds one holder in flight; `scripts/deploy.test.ts` pins
-that two holders never overlap in the run's span log while the unshared rows
-still do — red on the pre-mutex scheduler with twelve overlapping pairs.
+caps still decide every other row, and no row declares a cost. The rows that
+hold the lane are derived, never listed: the closure of tracked modules that
+reach puppeteer (`browserModules` in `scripts/ladder.ts`), intersected with
+the files each row claims. Nine rows hold it today: the two UI self-test rows,
+Public pages render, Live app in a browser, React runtime identity,
+Swarm-tree geometry, Chat infinite scroll, Root end-to-end lifecycle suites
+and the secrets/corpus/preflight self-tests. The plan carries the lane as a
+column, and `scripts/deploy.sh` keeps one holder in flight.
+`scripts/deploy.test.ts` pins that two holders never overlap in the run's
+span log while the unshared rows still do; it is red on the pre-mutex
+scheduler with twelve overlapping pairs.
 
-What is measured, and what is a hypothesis. Measured on the 24-thread
+What is measured and what is a hypothesis. Measured on the 24-thread
 workstation, 2026-09-18, quiet box (load 1.04 concurrent / 0.45 serial,
-41,197 MiB MemAvailable), the three rows that reddened the c80cb4141 wave, run
+41,197 MiB MemAvailable): the three rows that reddened the c80cb4141 wave, run
 exactly as the wave launches them (`timeout --signal=TERM --kill-after=5s 480`
 per row):
 
@@ -682,39 +691,39 @@ per row):
 | Public pages render | 480.1 s, exit 124 | 480.2 s, exit 124 | 1 thr, 2,458 MiB |
 | Live app in a browser | 152.8 s, exit 1 | 149.7 s, exit 1 | 3 thr, 6,446 MiB |
 
-So the overlap is NOT the cause of that wave's three reds: every one of them is
-red alone on a quiet box. The lane is enforced on the measured fact that no cap
-can express it — 11.4 GiB and 5 threads of admitted cost against 24 threads and
-30.7 GiB, so those three rows fit beside each other at every cap value this box
-can carry — and the claim that overlapping browser rows harm each other stays a
-HYPOTHESIS until a wave is measured green under one shape and red under the
+So the overlap did not cause that wave's three reds: each row is red alone on
+a quiet box. The lane rests on the measured fact that no cap can express it:
+the three rows' admitted cost is 11.4 GiB and 5 threads against 24 threads
+and 30.7 GiB, so they fit beside each other at every cap value this box can
+carry. The claim that overlapping browser rows harm each other stays a
+hypothesis until a wave is measured green under one shape and red under the
 other.
 
-What the three reds actually are, one defect. The plan-review surface never
-mounts. `scripts/plan-review-ux.test.ts` alone hangs past 240 s (exit 124,
-2026-09-18), its first test waiting on `[data-plan-review-root]`; the live-app
+The three reds are one defect: the plan-review surface never mounts.
+`scripts/plan-review-ux.test.ts` alone hangs past 240 s (exit 124,
+2026-09-18), its first test waiting on `[data-plan-review-root]`. The live-app
 row reports `the turn beat never landed … #inspector [data-plan-status]` with
-the plan submitted in the transcript; and Public pages render hangs in
+the plan submitted in the transcript. Public pages render hangs in
 `public-pages.test.ts` at `waitForSelector('[data-landing-frame="plan"]
 [data-plan-decisions]')` with the landing movie parked at t=6400 ms
-(`planReady` + 200), because `LandingWorkspaceFrame`'s `seek` polls a BOUNDED
+(`planReady` + 200), because `LandingWorkspaceFrame`'s `seek` polls a bounded
 90 animation frames for the lazy plan chunk and then returns. Read off the hung
-Chrome over its own DevTools port: the `workspacepage` frame stops at "Loading
+Chrome over its own DevTools port, the `workspacepage` frame stops at "Loading
 this conversation… / Tools could not be refreshed. / Cannot read properties of
-undefined (reading 'map')" — `mapToolDescriptions` reading `r.builtIn.map`
-over the gallery's blanket `stubRpc` answer for `getToolDescriptions`, which
-returns `[]` for any `get*` method while that read is record-shaped. That is
-the fourth member of the class `scripts/../gallery.tsx` already documents for
+undefined (reading 'map')". That is `mapToolDescriptions` reading
+`r.builtIn.map` over the gallery's blanket `stubRpc` answer for
+`getToolDescriptions`, which returns `[]` for any `get*` method while that
+read is record-shaped. It is the fourth member of the class
+`packages/cf-backend/src/gallery.tsx` already documents for
 `getExposedPorts`, `getExecutorDiff` and `listWorkspaceWork`. Unfixed here and
 recorded as O3.
-
-
-
 
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
-per provider that supports caching.
+per provider that supports caching. Later note: `contract-cache-hit.test.ts`
+(240edaf8c) pins this against a mocked provider cache; a live-provider read
+is still unpinned.
 
 O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
 budget other than `nproc` is chosen; and `bun run test:workerd`'s 399 to
@@ -738,12 +747,15 @@ The graph is that wide because `tests/workerd/worker.ts` re-exports fifteen
 probe Durable Objects, each importing the real product, and the installed
 `@cloudflare/vitest-pool-workers` 0.22 evaluates the worker once per test
 file with no shared-worker or isolated-storage option in its own code. No
-single lever cuts 60 s without a redesign: the lever is splitting the main
-test worker so a file boots only the probe family it drives, which is a
+single change cuts 60 s without a redesign. The one lever is splitting the
+main test worker so a file boots only the probe family it drives, which is a
 harness change across 36 files and stays open.
 
 O3. The plan-review surface does not mount in the gallery's `workspacepage`
 frame or in the live app: measured 2026-09-18 at c80cb4141, three deploy rows
 red alone on it (L9). The named seam is the gallery's blanket `[]` answer for
 the record-shaped `getToolDescriptions` read, plus `LandingWorkspaceFrame`'s
-bounded 90-frame poll for the lazy plan chunk. Unfixed.
+bounded 90-frame poll for the lazy plan chunk. Unfixed. Later note: f62b0c7c9
+(2026-09-18) gives the gallery a record-shaped `getToolDescriptions` answer
+and makes the landing drive await the plan chunk instead of 90 frames; the
+three rows have not been re-measured in this log.

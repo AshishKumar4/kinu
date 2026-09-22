@@ -1,16 +1,4 @@
-/**
- * The MCP server panel — the roster, its add form and its live statuses,
- * shared between the /user/settings/mcp page and the setup modal.
- *
- * Add flow:
- *   1. POST /api/user/mcp/servers — UserDO inserts row + opens connection
- *   2. If OAuth required, response carries an `authUrl`; we open it in a tab
- *   3. IdP redirects to /api/user/mcp/callback → UserDO completes the dance
- *   4. We land back here with `?mcp_auth=ok&server_id=...`
- *
- * Live status: polled every 5s; if a tab returns from the OAuth flow with
- * `mcp_auth=ok`, we refresh immediately.
- */
+/** MCP server panel. OAuth adds open `authUrl` in a tab; the callback returns here with `?mcp_auth=ok&server_id=...`. */
 import { startTransition, useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -30,7 +18,6 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 const POLL_MS = 5000;
 
-/** The one spelling of a server's reachability. */
 function statusBadge(status: McpServerSummary['status']) {
   switch (status) {
     case 'ready':
@@ -57,12 +44,7 @@ export function McpServersPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // The mount effect, poll, OAuth return and mutation callbacks all invoke this
-  // synchronous reader. React owns its transition and the visible error remains
-  // the one place every refresh failure is recorded. The preset availability
-  // read rides the same poll: a deploy that rotates an app credential in or out
-  // re-cards itself without a page reload, and a presets failure leaves the
-  // last answer on screen rather than taking the server list down with it.
+  // Presets ride the same poll so a rotated app credential re-cards without a reload.
   const refresh = useCallback((): void => {
     setErr(null);
     startTransition(async () => {
@@ -75,8 +57,7 @@ export function McpServersPanel() {
         setLoading(false);
       }
 
-      // The presets read must not take the server list down with it — a
-      // failure only means the cards keep their last answer.
+      // A presets failure keeps the cards' last answer and never takes the server list down.
       try { setPresets(await listMcpPresets()); }
       catch (cause) { console.warn('mcp preset availability read failed:', renderThrownChain({ cause })); }
     });
@@ -89,8 +70,7 @@ export function McpServersPanel() {
     return () => { if (pollRef.current !== null) clearInterval(pollRef.current); };
   }, [refresh]);
 
-  // Returning from OAuth — surface result, then strip query params so reloads
-  // don't show stale state.
+  // Strip OAuth-return params so a reload doesn't show stale state.
   const authResult = searchParams.get('mcp_auth');
   const authError = searchParams.get('error');
   useEffect(() => {
@@ -207,8 +187,6 @@ export function McpServersPanel() {
   );
 }
 
-// ── Add Server card ─────────────────────────────────────────────────
-
 export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: () => void }) {
   const [name, setName] = useState('');
   const [serverUrl, setServerUrl] = useState('');
@@ -228,7 +206,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
       if (headersText.trim()) {
         try {
           headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
-        } catch (e) { throw new Error(`Bad headers JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
+        } catch (e) { throw new Error(`Headers are not valid JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
       }
 
       const tools = allowedTools.trim()
@@ -277,9 +255,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
         <label className="text-xs p-text-3">
           Static headers for private servers (optional JSON)
         </label>
-        {/* A credential region, not a hint: what a person types here is
-            `{"Authorization": "Bearer …"}`, and a textarea cannot be a password
-            field. The marker is what keeps it out of a feedback screenshot. */}
+        {/* Credential region: the marker keeps the typed value out of feedback screenshots. */}
         <textarea {...SECRET_REGION} value={headersText}
           onChange={(e) => setHeadersText(e.target.value)}
           rows={2} className={inputCls + ' font-mono'}

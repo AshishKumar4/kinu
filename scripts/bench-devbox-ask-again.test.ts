@@ -1,10 +1,5 @@
-// A box in its boot window answers every operation route with the refusal
-// `isRearmableStartupRefusal` reads, and nothing ran. Run `20260914234711`
-// recorded eight decisive segments, one witness setup exec and one fault-cut
-// witness write as failures on exactly that reply. The rule that asks again
-// lives in one place, `askWhileStarting`, and both `execInBox` and
-// `writeFileInBox` go through it; this fixture is red on a tree where either
-// route returns the first refusal as the operation's outcome.
+// A box in its boot window refuses every operation route with the reply `isRearmableStartupRefusal`
+// reads; `execInBox` and `writeFileInBox` must both ask again through `askWhileStarting`.
 import { afterAll, describe, expect, test } from 'bun:test';
 import { askWhileStarting, execInBox, writeFileInBox, type Fixture } from './bench-devbox-strategies';
 
@@ -12,7 +7,6 @@ const ASK_AGAIN = 'this devbox is not ready: no restoration has run for this con
 
 const TERMINAL = 'this devbox has no attached work directory: overlay refused. That recovery class is terminal: call attachNow() to attempt the attach again.';
 
-/** A fixture Worker whose box refuses the first `refusals` asks per route. */
 function bootWindowBox(refusals: number, refusal = ASK_AGAIN) {
   const asks: Record<string, number> = {};
 

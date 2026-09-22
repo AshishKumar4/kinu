@@ -1,28 +1,6 @@
 /**
- * Environment surface — WHERE the agent can act, for the OWNER's questions:
- * is it up, what is it, do files survive there, and what can I do about it.
- * One card per environment (status · name · durability · one line of what it
- * is · actions), with the selected environment's terminal below.
- *
- * What is deliberately NOT here: capability doctrine. "Runs JavaScript / Not
- * here: Runs Python" is the agent's own routing vocabulary — it stays in the
- * model-facing execution-status block (core/src/prompting/volatile-context.ts)
- * and never renders in user UI again.
- *
- * Browsing files moved to the Files tab, which walks the ONE composite plane
- * (workspace tree + /pc + /sandbox mounts). A card's Files action jumps there
- * at that environment's own root, so "where do this machine's files live" has
- * exactly one answer.
- *
- * Liveness renders here ONCE: each card's dot fuses the polled executor
- * status (exec plane) with the row's own live flag (file plane).
- *
- * Device registration/consent are settings, not work surfaces: the roster, the
- * revocations and the per-agent file-access tier live in Account settings and
- * in Workspace settings. Linking a machine is neither — it is a thing the
- * owner wants DONE, from here, without losing the surface they are on, so the
- * offline PC card opens the shared connect panel in place
- * (`components/ConnectDevicePanel`) rather than navigating to settings.
+ * Environment: one card per environment with the selected terminal below. Capability
+ * doctrine stays model-facing (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -47,15 +25,12 @@ export interface EnvironmentSurfaceProps {
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
-  /** Jump to the Files tab at this composite-plane root ('/', '/pc', '/sandbox'). */
   onOpenFiles: (root: string) => void;
-  /** Open the connect panel over this surface. Owned by the work surface, so
-   *  the Files drive's offline row opens the same one. */
+  /** Owned by the work surface, so the Files drive's offline row opens the same panel. */
   onConnectDevice: () => void;
 }
 
-/** Where this environment's files live on the composite plane, or null for an
- *  environment the drive does not mount (a fork's parent). */
+/** Null for an environment the drive does not mount (a fork's parent). */
 function filesRootFor(name: string): string | null {
   if (name === "workspace") return "/";
   const prefixes: Record<string, string | undefined> = EXECUTOR_MOUNTS;
@@ -66,10 +41,8 @@ function filesRootFor(name: string): string | null {
 type StatusReading = { word: string; dotClass: string };
 
 export function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): StatusReading {
-  // Reach before liveness, but only for a row that is live: `granted` is
-  // answered only while the machine is connected, so a pairing with a
-  // not-live mount is a stale row and the honest word stays offline.
-  // Scoped to the device, because `granted` is its field.
+  // Reach before liveness, but only for a live row: `granted` is answered only while
+  // the machine is connected, so a not-live mount stays offline.
   if (mount.live && mount.name === "device" && exec?.granted === false) {
     return { word: "needs approval", dotClass: "p-info" };
   }
@@ -87,20 +60,17 @@ export function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): Stat
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice } = props;
-  const [selected, setSelected] = useState<string | null>(null); // mount name
-  // The workspace this surface's `rpc` is bound to — the terminal socket is
-  // addressed by name, and it is the same workspace the route params name.
+  const [selected, setSelected] = useState<string | null>(null);
+  // The terminal socket is addressed by workspace name.
   const workspaceName = useParams().agentId ?? "";
 
   const load = useCallback(() => rpc<MountInfo[]>("listMounts"), [rpc]);
   const { resource, reload } = useAsyncResource(load);
-  // The card grid needs to know whether it is empty or merely unread —
-  // `length === 0` conflated the two.
+  // Empty and unread must stay distinct.
   const loaded = lastValue(resource);
   const mounts = loaded ?? [];
 
-  // Executor availability is polled live; when it flips (PC connects, sandbox
-  // wakes) the environment rows' live flags are stale — refetch them.
+  // When executor availability flips, the rows' live flags are stale; refetch.
   const availabilitySignature = executors.map((e) => `${e.name}:${e.available}:${e.status ?? ""}`).join("|");
   const lastSignature = useRef(availabilitySignature);
   useEffect(() => {
@@ -111,7 +81,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
 
-  // Default selection: the environment the agent last actually worked in.
+  // Default selection: the environment the agent last worked in.
   const defaultMount = useMemo(() => {
     const preferred = pickDefaultExecutor(executors, lastActiveExecutor);
     const match = mounts.find((m) => m.name === preferred);
@@ -152,7 +122,6 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         </section>
       </div>
 
-      {/* Selected environment's terminal. */}
       <SelectedEnvironmentPane
         mount={selectedMount}
         exec={selectedExec}
@@ -165,8 +134,6 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   );
 }
 
-/** Under the cards: the selected environment's terminal, or the one reason it
- *  has none. */
 function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onExecute, onConnectDevice }: {
   mount: MountInfo | null;
   exec: ExecutorInfo | undefined;
@@ -218,8 +185,6 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
   );
 }
 
-/* ── One environment, as a user reads it ─────────────────────────── */
-
 function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnectDevice }: {
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
@@ -231,8 +196,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
   const executor = mount.name;
   const status = statusOf(mount, exec);
   const filesRoot = filesRootFor(executor);
-  // The row is named by the machine: the device's own label where one is
-  // bound, the executor kind elsewhere. Each bound device is its own row.
+  // Named by the device's label where bound, else the executor kind.
   const title = exec?.label ?? executorLabel(executor);
   const kindTag = exec?.label ? executorLabel(executor) : null;
 
@@ -288,15 +252,12 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
   );
 }
 
-/* ── Unavailable environments ────────────────────────────────────── */
-
 function UnavailableMount({ mount, exec, onConnectDevice }: {
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
   onConnectDevice: () => void;
 }) {
-  // `device`, not `pc`: rows are named by their EXECUTOR now, and the old
-  // mount name left this branch — the whole connect call-to-action — dead.
+  // Rows are named by executor (`device`), not the mount name (`pc`).
   if (mount.name === "device") return <PcConnectCta onConnectDevice={onConnectDevice} />;
 
   const docs = mount.name === "sandbox"
@@ -317,12 +278,7 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
   );
 }
 
-/* ── Connected, but not to this workspace yet ────────────────────── */
-
-/** A machine the owner can see is online but this workspace has not been given
- *  access to. The honest pane: the machine is there, the agent has asked, and
- *  the one thing standing between them is an approval only the owner can give —
- *  from the card the agent's next command raises. */
+/** Online machine without workspace access; only the owner can approve it. */
 function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   const name = exec.label ?? executorLabel(exec.name);
 
@@ -340,7 +296,6 @@ function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   );
 }
 
-/** The device executor's connect call-to-action: one button. */
 function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
   return (
     <div className="h-full flex items-center justify-center overflow-y-auto p-6">
@@ -349,7 +304,7 @@ function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
         onClick={onConnectDevice}
         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
         <PlugIcon size={13} />
-        Connect a computer
+        Connect a machine
       </button>
     </div>
   );

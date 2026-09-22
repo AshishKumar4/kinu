@@ -1,13 +1,5 @@
-/**
- * Fixture state for the landing page's workspace frames. The frames mount the
- * product's own components (WorkspaceBar, SubordinateTabs, MessageView,
- * Composer, WorkSurface) and feed them this state the way `gallery.tsx` feeds
- * its frames: transcripts as `UIMessage`s, the Work tab through an in-memory
- * `Rpc`, and a plan review as a `PlanReview` row.
- *
- * Nothing here is served. The install command is the only string on the
- * landing page that comes from the deployment.
- */
+/** Fixture state for the landing page's frames, which mount the product's own components.
+ *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type JsonValue, type Page, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary, type TabPresence } from '@kinu.run/core';
@@ -17,9 +9,7 @@ import type { ModelMenuEntry, UserProfile, WorkspaceEntry } from '@/lib/user-api
 
 const NOW = Date.now();
 
-/** What a fixture answers with: JSON, plus the product types the frames are
- *  handed whole. A declared interface never satisfies `JsonValue`'s index
- *  signature however JSON-shaped its fields are, so each one is named. */
+/** A declared interface never satisfies `JsonValue`'s index signature, so product types are named. */
 type FixtureReply =
   | JsonValue
   | undefined
@@ -29,16 +19,13 @@ type FixtureReply =
   | readonly FixtureReply[]
   | { readonly [field: string]: FixtureReply };
 
-/** A fixture's answer, through the round trip a real RPC makes: serialized,
- *  read back as JSON, and handed over as the shape the caller asked for. */
+/** Round-trips through JSON as a real RPC would. */
 function answer<T>(value: FixtureReply): Promise<T> {
   return new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
 }
 
-/** `retryBackgroundJob(id)` and `dismissBackgroundJob(id)`, as the Work tab calls them. */
 const JobIdArgsSchema = v.tuple([v.string()]);
 
-/** `decidePlanReview(planId, revision, decision, feedback?)`, as the plan review calls it. */
 const DecideArgsSchema = v.tuple([v.string(), v.number(), v.picklist(['request_changes', 'approve']), v.optional(v.string())]);
 
 export const LANDING_MODEL = 'anthropic/claude-opus-4';
@@ -50,9 +37,7 @@ export const LANDING_MODELS: ModelMenuEntry[] = [
 
 export const LANDING_WORKSPACE = 'checkout-fixes';
 
-/** What the sample workspace has content for. It has no release lane and no
- *  exploration runs, so `surfaceHasContent` leaves Releases and Swarms off the
- *  strip — the same read the product answers per workspace. Work is live. */
+/** No release lane and no exploration runs, so `surfaceHasContent` hides Releases and Swarms. */
 export const LANDING_TAB_PRESENCE: TabPresence = { releases: false, explorations: false, work: true };
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
@@ -60,12 +45,7 @@ export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
   { name: 'migration-review', actorId: 'actor-migration-review', displayName: 'Migration review', role: 'Reviewer', createdBy: 'orchestrator', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
 ];
 
-/**
- * The rail's roster, answered the way `gallery.tsx` answers it: the same
- * entries the app lists, with the frame's workspace first so the rail marks
- * the open one. Served by the `landing.tsx` fetch shim, read through the
- * real `listWorkspaces` transport and `WorkspaceRosterProvider`.
- */
+/** Served by the `landing.tsx` fetch shim; the frame's workspace is first so the rail marks it open. */
 export const LANDING_ROSTER = {
   entries: [
     { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
@@ -75,8 +55,7 @@ export const LANDING_ROSTER = {
   total: 3,
 } satisfies { entries: WorkspaceEntry[]; total: number };
 
-/** The rail's user row, served by the same shim and read through `getProfile`.
- *  Its workspaceCount is the roster's total — the gate reads both. */
+/** workspaceCount must equal the roster's total: the gate reads both. */
 export const LANDING_PROFILE: UserProfile = {
   email: 'ashish@example.com',
   displayName: 'Ashish',
@@ -86,9 +65,6 @@ export const LANDING_PROFILE: UserProfile = {
   workspaceCount: LANDING_ROSTER.total,
 };
 
-/* ── The checkout workspace: a Build turn, mid-fix ─────────────────────── */
-
-// The frame's one honest line about what it is not.
 export const CHECKOUT_FRAME_CAPTION = 'Sample workspace';
 
 export const CHECKOUT_MESSAGES: UIMessage[] = [
@@ -128,8 +104,6 @@ const CHECKOUT_TASKS = [
   { id: 't4', parentId: null, title: 'Add a regression test for the percentage case', status: 'done', createdAt: NOW - 52e5, updatedAt: NOW - 4e5, note: null, subtasks: [] },
 ];
 
-/** The actor every fixture row belongs to: the landing sample is one
- *  workspace's root, so `listWorkspaceWork` reports one owner. */
 const LANDING_OWNER = { actorId: 'actor-main', name: 'main', retired: false };
 
 const CHECKOUT_CHANGELOG = {
@@ -146,16 +120,10 @@ const CHECKOUT_JOBS: BackgroundJob[] = [
   { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
 ];
 
-// The queue holds what only the owner can decide: the mission said "deploy
-// when green", and the fix is green. The failed run above stays in the jobs
-// journal with its Retry, where the product keeps one; the queue never files
-// it, exactly as the product's own queue never does.
 const CHECKOUT_PENDING: PendingAction[] = [
   { id: 'rel-coupon-kind', kind: 'release_approval', at: NOW - 3e5, title: 'Approve: deploy to production', detail: 'Fix the SAVE20 coupon 500 — migration 0042 patched, 14 tests green' },
 ];
 
-/** The Work tab's state, held in memory so its controls do what they do in the
- *  product: a failed job's Retry records a retry, a decision leaves the queue. */
 export interface WorkFixture {
   readonly rpc: Rpc;
   readonly jobs: () => BackgroundJob[];
@@ -175,8 +143,6 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: [] } });
     }
 
-    // The Work tab's one read: this sample has no plan under review, so every
-    // task is the root's unlinked work.
     if (method === 'listWorkspaceWork') return answer({ plans: [], tasks: [{ owner: LANDING_OWNER, plan: null, tasks: CHECKOUT_TASKS }] });
 
     if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
@@ -210,8 +176,6 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
 
   return { rpc, jobs: () => jobs, pending: () => pending };
 }
-
-/* ── The Supervise altitude: automations, run history, evolution ───────────── */
 
 const SUPERVISE_RUNS: RunSummary[] = [
   { runId: 'run_9c1', startedAt: NOW - 45 * 60e3, causedBy: 'chat', userMessage: 'Why does the percentage coupon drop off at checkout?', status: 'completed', eventCount: 62, turnsWithoutUsage: 0, usage: { input: 184_320, output: 9_140, cacheRead: 121_400 } },
@@ -271,8 +235,6 @@ export const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): P
   return answer({ ok: true });
 };
 
-/* ── A Plan turn: the agent submits a plan, the owner annotates it ──────── */
-
 const PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
 
 The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
@@ -318,13 +280,8 @@ export const PLAN_FIXTURE: PlanReview = {
   decidedAt: null,
 };
 
-/** The plan's decisions, answered the way the product answers them: a saved
- *  annotation stays, a decision records and the next turn is queued. `base` is
- *  the plan under review — the static frame's annotated one by default, the
- *  movie's CURRENT one when the walkthrough drives it, and `null` while the
- *  story has not submitted one yet: the Plans read answers empty, and an
- *  annotation or decision addressed to a plan that does not exist refuses
- *  rather than claim a success the pane would display. */
+/** `base` null means no plan submitted yet: the Plans read answers empty and annotations or
+ *  decisions refuse rather than report a success. */
 export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview | null = PLAN_FIXTURE): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
@@ -337,9 +294,7 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' && base !== null ? [base] : [] } });
     }
 
-    // The Work tab's one read, over the SAME plan: the story's current one, so
-    // the pane and the read cannot disagree about whether a plan exists. A
-    // workspace that has not submitted one answers no plans at all.
+    // Same plan as the pane, so the two cannot disagree about whether a plan exists.
     if (method === 'listWorkspaceWork') {
       return answer({
         plans: base === null ? [] : [{ owner: LANDING_OWNER, plan: base, tasks: [] }],
@@ -382,12 +337,9 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview |
   };
 }
 
-/* ── A slate: the agent writes a dashboard over an MCP source ──────────── */
-
 export const SLATE_SUMMARY: SlateSummary = { id: 'support-queue', title: 'Support queue', bindings: ['ISSUES'] };
 
-/** The shape a preview hostname takes in production: `<port>-<sandbox>-<token>`
- *  under the app's zone. This one is a sample and serves nothing. */
+/** Production preview hostname shape: `<port>-<sandbox>-<token>` under the app's zone. */
 export const SLATE_PREVIEW_URL = 'https://8789-support-queue-sample.kinu.run/';
 
 export const SLATE_MESSAGES: UIMessage[] = [

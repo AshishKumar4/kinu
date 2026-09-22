@@ -1,32 +1,13 @@
 /**
- * A scroll container fed by a cursored read.
- *
- * One hook rather than several, because every behaviour here writes the same
- * element's `scrollTop` and they have to agree about who moved it last: a
- * bottom-pin that ran after a prepend would throw the reader to the newest
- * message the instant older history arrived.
- *
- * `grows` is which end the fetched pages land at, which is the only thing that
- * differs between the two shapes of infinite scroll we actually have:
- *
- *   "up"   — a chat. Presents oldest-first, walks backwards, so a page lands
- *            ABOVE the viewport and the view must be held on the content the
- *            reader is looking at. Also pins to the bottom, because new turns
- *            arrive at the end while they read.
- *   "down" — a newest-first feed. A page lands BELOW the viewport, which
- *            shifts nothing, so there is no anchoring to do and no bottom to
- *            pin to — pinning would fight the load-more trigger for the same
- *            edge.
+ * One hook because every behaviour writes the same `scrollTop`. `grows: "up"` (chat) anchors
+ * prepends and pins to the bottom; `"down"` (newest-first feed) needs neither.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { ConversationScroll } from "./use-conversation-ui-state";
 
-/** Distance (px) from the bottom within which the view counts as pinned. */
 const PIN_THRESHOLD = 40;
 
-/** Distance (px) from the growing edge at which the next page is requested.
- *  Deliberately larger than PIN_THRESHOLD: the page has to arrive and render
- *  before the reader gets there, or "infinite" scroll is a series of stalls. */
+/** Larger than PIN_THRESHOLD so the page renders before the reader reaches the edge. */
 const PREFETCH_THRESHOLD = 400;
 
 type PendingScrollRestore =
@@ -44,8 +25,7 @@ interface GrowingScrollHost {
   removeEventListener(type: 'scroll', listener: () => void): void;
 }
 
-/** Decide whether the loaded pages can represent a saved absolute offset.
- * Clamping is terminal only when the store says there are no older pages. */
+/** Clamping is terminal only when the store says there are no older pages. */
 function resolvePendingScrollRestore(input: {
   readonly target: number;
   readonly maxScrollTop: number;
@@ -57,31 +37,19 @@ function resolvePendingScrollRestore(input: {
 }
 
 export interface GrowingScrollOptions {
-  /** Which end fetched pages land at. */
   grows: "up" | "down";
-  /** Identity changes when the container's content changed at all. */
   content: unknown;
-  /** Identity changes when a fetched page was added. Distinct from `content`
-   *  because only this kind of growth needs the viewport held in place. */
+  /** Only fetched growth needs the viewport held in place. */
   fetched: unknown;
-  /** The page request that produced `fetched` is still settling. Used only to
-   *  stop its loading-state commit from bottom-pinning over the prepend. */
+  /** Stops the loading-state commit from bottom-pinning over the prepend. */
   loading?: boolean | undefined;
-  /** Called while the reader is near the growing edge. Must be safe to call
-   *  again before a previous call has settled — this fires on every scroll
-   *  tick and again after each page lands. */
+  /** Must tolerate repeat calls before the previous one settles. */
   onReachEdge?: (() => void) | undefined;
   /** The backing walk has no older page. A restore larger than the final
    * content settles only after this becomes true. */
   exhausted?: boolean | undefined;
-  /** Where this reader last was, for an "up" scroller that is remounted per
-   *  conversation. A pixel offset is applied once the content is tall enough
-   *  to hold it; 'pinned' (or absence) keeps the newest-edge default, because
-   *  a reader who left at the live edge wants the live edge back — new turns
-   *  arrived while they were away and yesterday's offset sits above them. */
+  /** 'pinned' or absence keeps the newest edge; a pixel offset applies once content is tall enough. */
   initialScroll?: ConversationScroll | undefined;
-  /** Observes the reader's position ('pinned' at the live edge) so a surface
-   *  can restore it when this conversation is next opened. */
   onScrollPosition?: ((position: ConversationScroll) => void) | undefined;
 }
 
@@ -91,9 +59,7 @@ export function useGrowingScroll({
 }: GrowingScrollOptions) {
   const el = useRef<GrowingScrollHost | null>(null);
   const pinned = useRef(grows === "up");
-  // Last committed scrollHeight. The "before" measurement for a prepend has to
-  // come from the previous commit: a layout effect runs after the DOM has
-  // already grown, so by then there is nothing left to measure against.
+  // Measured at the previous commit: a layout effect runs after the DOM has grown.
   const lastHeight = useRef(0);
   const lastFetched = useRef(fetched);
   const settlingPrepend = useRef(false);
@@ -106,11 +72,7 @@ export function useGrowingScroll({
   latestInitialScroll.current = initialScroll;
   const latestExhausted = useRef(exhausted);
   latestExhausted.current = exhausted;
-  // A saved offset waits here until the transcript is tall enough to hold it —
-  // the container mounts before its content arrives, and restoring into an
-  // empty scroller clamps to 0 and calls that done. Re-armed on every attach:
-  // the container unmounts when another conversation opens, and coming back
-  // must restore the LATEST remembered position, not the first mount's.
+  // Restoring into an empty scroller clamps to 0, so wait for content. Re-armed on every attach.
   const pendingRestore = useRef<number | null>(null);
 
   const tryRestore = useCallback((node: GrowingScrollHost) => {
@@ -152,8 +114,7 @@ export function useGrowingScroll({
     pinned.current = grows === "up"
       && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
 
-    // Every programmatic move lands here too, so a restore still waiting would
-    // otherwise be overwritten by the mount's own bottom-jump before it ran.
+    // A pending restore must not be overwritten by the mount's own bottom-jump.
     if (pendingRestore.current === null) {
       reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
     }
@@ -161,31 +122,18 @@ export function useGrowingScroll({
     maybeLoadMore(node);
   }, [grows, maybeLoadMore]);
 
-  // Callback ref so the listener survives conditional (re)mounts of the
-  // container; an up-growing view starts at the bottom, a down-growing one at
-  // the top, which is where each one's newest content already is.
+  // Callback ref so the listener survives conditional remounts.
   const containerRef = useCallback((node: GrowingScrollHost | null) => {
     el.current?.removeEventListener("scroll", onScroll);
     el.current = node;
 
     if (!node) return;
-    // Chrome and Firefox anchor a scroller against content inserted above the
-    // viewport all by themselves, and they do it BEFORE this hook's layout
-    // effect runs — measured: a prepend moved scrollTop 250 -> 1440 before the
-    // effect saw the node, and the effect's own correction on top of that
-    // double-counted and clamped the reader to the bottom of the transcript.
-    //
-    // Turned off rather than relied on. The browser's version is a heuristic
-    // that picks its own anchor node and gives up in cases it cannot resolve,
-    // Safari does not implement it at all, and the correction here is exact
-    // because the hook knows precisely how much was inserted. One mechanism,
-    // the same on every engine.
+    // Chrome and Firefox anchor before this layout effect runs, Safari not at all;
+    // native anchoring would double-count the exact correction applied here.
     node.style.overflowAnchor = "none";
     pinned.current = grows === "up";
     node.scrollTop = grows === "up" ? node.scrollHeight : 0;
     const saved = latestInitialScroll.current;
-    // Branch on the domain value: 'pinned' (and absence) keep the newest-edge
-    // default; only a remembered pixel offset arms a restore.
     pendingRestore.current = grows === "up" && saved !== undefined && saved !== "pinned" ? saved : null;
     tryRestore(node);
     lastHeight.current = node.scrollHeight;
@@ -193,9 +141,8 @@ export function useGrowingScroll({
     maybeLoadMore(node);
   }, [grows, onScroll, maybeLoadMore, tryRestore]);
 
-  // Font loading changes scrollHeight without a React commit. If the first
-  // history page is already in flight, a baseline captured in the fallback
-  // face over-corrects by the exact font reflow when that page lands.
+  // Font loading changes scrollHeight without a React commit; rebaseline so a
+  // prepend landing after the font swap does not over-correct.
   useEffect(() => {
     const syncHeight = () => {
       if (settlingPrepend.current) return;
@@ -222,15 +169,9 @@ export function useGrowingScroll({
     if (fetchedChanged) {
       lastFetched.current = fetched;
 
-      // Push the viewport down by exactly what was inserted above it, so the
-      // message the reader was looking at does not move a pixel. Growth at the
-      // other end moves nothing and needs no correction. A still-pending
-      // restore owns the position instead — its target already names where the
-      // reader was in the assembled transcript.
+      // Hold the reader's message in place; a pending restore owns the position instead.
       if (grows === "up" && grew > 0 && pendingRestore.current === null) node.scrollTop += grew;
-      // React can commit other content derived from the page separately. Keep
-      // the prepend authoritative through the next paint; the passive effect
-      // below then restores live-message pinning from the actual position.
+      // Keep the prepend authoritative through the next paint; React may commit derived content separately.
       settlingPrepend.current = true;
     }
 
@@ -242,10 +183,7 @@ export function useGrowingScroll({
 
     lastHeight.current = node.scrollHeight;
 
-    // A reader who kept scrolling while the page was in flight can already be
-    // back at the edge with the request they triggered now settled. Without
-    // this re-check the next page only starts on their next scroll EVENT, and
-    // a flick that ends at the edge produces no more events at all.
+    // A flick ending at the edge fires no more scroll events, so re-check after each page settles.
     if (fetchedChanged || !loadingChanged) maybeLoadMore(node);
   }, [grows, content, exhausted, fetched, loading, maybeLoadMore, tryRestore]);
 

@@ -1,16 +1,3 @@
-/**
- * Kinu EventsHub — barrel export.
- *
- * Public surface for the @kinu.run/core consumer (cf-backend or future
- * adapters). The hub is composed of two layers:
- *
- *   data:        types, schema, ulid, dedupe, trust, visibility
- *   storage:     log (EventLog), reply-channel, triggers
- *
- * Spec: docs/ARCHITECTURE.md — "Events and ingress"
- */
-
-// Data
 export * from './types';
 
 export * from './ulid';
@@ -29,7 +16,6 @@ export * from './cron';
 
 export { initEventsHubTables } from './schema';
 
-// Storage
 export {
   EventLog,
   boundEventQuery,

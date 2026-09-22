@@ -1,8 +1,4 @@
-/**
- * Alternate Takes — near-tie capture at convergence, the turn claim, and the
- * pick that writes the explicit preference into the R3 outcome ledger
- * (turn_outcomes, source 'take_pick') and re-points the convergence record.
- */
+/** Alternate Takes: near-tie capture, the turn claim, and the pick written to turn_outcomes ('take_pick'). */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
 import { SessionHistory } from '../src/session/history';
@@ -20,15 +16,11 @@ import {
   listTurnOutcomes, realOutcomeScaffoldRates,
 } from '../src/evolution/outcomes';
 
-/** The PRODUCTION schema plus this module's own table: the eval split the pick
- *  feeds reconstructs process evidence from the message and run-event ledgers,
- *  so a hand-picked subset here would test a workspace shape that never ships. */
+/** Production schema: the eval split reconstructs evidence from the message and run-event ledgers. */
 function setup() {
   const { db, sql, execRaw, vfs } = createTestWorkspace();
   initAlternateTakesTable(execRaw);
-  // A real directory row, not a bare handle: the pick reads the turn pair out
-  // of the actor-scoped conversation store, so the fixture needs the actor the
-  // production readers would resolve for this workspace.
+  // A real directory row: the pick reads through the actor-scoped conversation store.
   const actor = createTestActor(sql, execRaw, 'ws-takes', 'takes');
 
   const history = new SessionHistory({
@@ -39,9 +31,7 @@ function setup() {
   return { db, sql, execRaw, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** `search_nodes` is keyed `(actor_id, id)` now, so the owning actor is part of
- *  the row rather than of the reader's WHERE clause alone. A seed that omitted
- *  it would write rows no production reader can see. */
+/** `search_nodes` is keyed `(actor_id, id)`; omitting the actor hides the row from readers. */
 function insertNode(
   sql: ReturnType<typeof makeSql>,
   actor: ActorHandle,
@@ -111,7 +101,6 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
-    // A later turn with no new capture claims nothing (no re-claim).
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
     expect(present(latestAlternateTakeSet(sql, actor), 'the latest take set').turnId).toBe('msg-1');
   });
@@ -120,9 +109,8 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     const { sql, actor } = setup();
     insertNode(sql, actor, { id: 'w1', value: 0.9, text: 'a' });
     insertNode(sql, actor, { id: 'r1', value: 0.88, text: 'b' });
-    // Captured at t=1000 during a turn that aborted before claiming.
     captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the doomed task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
-    // The NEXT completed turn started later — it must purge, not adopt.
+    // The next completed turn started later: it must purge, not adopt.
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 2_000 })).toBe(0);
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
@@ -135,8 +123,6 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
 
     if (!id) throw new Error('expected captureAlternateTakes to produce a take set');
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
-    // A replay names the already-claimed set; a missing id names nothing —
-    // neither moves a row, so both count zero and the first claim stands.
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 500, takeIds: [id] })).toBe(0);
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-2', sessionId: 'default', startedAt: 500, takeIds: ['take-nope'] })).toBe(0);
     expect(latestAlternateTakeSet(sql, actor)).toMatchObject({ turnId: 'msg-1', sessionId: 'default' });
@@ -165,8 +151,6 @@ async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle, 
   insertNode(sql, actor, { id: 'alt', value: 0.85, text: 'alternative approach' });
   captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
   claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
-  // The pair the pick attributes from: `recordTakePick` resolves it through the
-  // canonical transcript, so the fixture writes it with the canonical writer.
   await history.record(CHAT_SESSION_ID, { id: 'u-9', parentId: null, origin: 'input',
     message: { role: 'user', content: 'please solve it' } });
   await history.record(CHAT_SESSION_ID, { id: 'msg-9', parentId: 'u-9', origin: 'output',
@@ -203,7 +187,7 @@ describe('recordTakePick — the preference signal', () => {
 
     const row = listTurnOutcomes(sql, actor)[0];
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', confidence: 1 });
-    // The chosen take IS the correction follow-up — GEPA's optimization target.
+    // The chosen take is the correction follow-up GEPA optimizes toward.
     expect(row.followup).toBe('alternative approach');
 
     const win = sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0];

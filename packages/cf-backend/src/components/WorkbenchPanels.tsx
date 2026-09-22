@@ -1,21 +1,5 @@
-/**
- * The workbench's two columns: the conversation on the left, the inspector on
- * the right, with the separator between them and the reopen handle on the
- * shell's own edge. One mount owns the column policy — `useInspectorLayout`
- * over core's `decideInspector` — so every surface that shows the workbench
- * inherits it instead of restating it: the page at `/workspace/:agentId`, and
- * the landing page's sample frames.
- *
- * What the inspector exists to show is decided HERE, from what the workspace
- * holds. A caller that computed its own `worthShowing` would be a second
- * policy that could disagree with this one on the state that matters most —
- * the first visit, where the column is shut until the workspace has something
- * to put in it.
- *
- * Below `md` the two columns become one pane with a switch, because a phone
- * cannot show both; the group is re-keyed on that change so the library lays
- * out the new arrangement from its defaults rather than rescaling the old one.
- */
+/** Owns the inspector policy (`useInspectorLayout` over core's `decideInspector`). Below `md` the group is
+ *  re-keyed so the library lays out from defaults rather than rescaling. */
 import { useEffect, useState, type ReactNode } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
@@ -23,16 +7,9 @@ import type { PendingAction, PendingConsent, PinnedPreviewPort, PlanReview, Slat
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
 
-/**
- * What the workspace holds right now, as far as the inspector is concerned.
- *
- * Produced outputs are deliberately absent: every command run would otherwise
- * open the pane on a fresh workspace.
- */
+/** Produced outputs are absent: every command run would otherwise open the pane. */
 export interface WorkbenchContents {
-  /** Decisions waiting on the owner. Also the count on the mobile switch. */
   readonly pendingActions: readonly PendingAction[];
-  /** A device asking this workspace for consent. */
   readonly pendingConsents: readonly PendingConsent[];
   readonly slates: readonly SlateSummary[];
   readonly previewFocus: string | null;
@@ -41,27 +18,14 @@ export interface WorkbenchContents {
 }
 
 export interface WorkbenchPanelsProps {
-  /**
-   * Keys the persisted width and open/closed choice. `undefined` for a sample
-   * workbench, whose layout is nobody's preference: the policy then decides it
-   * on every mount, which is what a sample must show.
-   */
+  /** `undefined` for a sample workbench: the policy decides on every mount. */
   readonly workspace: string | undefined;
-  /**
-   * Distinguishes this group's panel element ids from another workbench's in
-   * the same document. The app mounts one; the landing page mounts three.
-   */
   readonly scope?: string;
   readonly contents: WorkbenchContents;
-  /** The conversation column's body, under its own tab strip. Handed the
-   *  inspector's one control (absent on a phone pane, where the switch above
-   *  the panes is the control) so its strip can carry the toggle. */
   readonly chat: (inspector: InspectorControl | null) => ReactNode;
-  /** The inspector column's body. */
   readonly inspector: ReactNode;
 }
 
-/** Show or hide the inspector column: one control, in the chat's own strip. */
 export interface InspectorControl {
   readonly collapsed: boolean;
   readonly toggle: () => void;
@@ -100,9 +64,6 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
     return () => media.removeEventListener("change", sync);
   }, []);
 
-  // What the inspector exists to show. Decided here, so no caller can hold a
-  // second opinion about the first visit — the one state where the difference
-  // between shut and open is the whole policy.
   const worthShowing = contents.pendingActions.length > 0
     || contents.pendingConsents.length > 0
     || contents.slates.length > 0
@@ -129,8 +90,6 @@ export function WorkbenchPanels({ workspace, scope, contents, chat, inspector }:
           className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs ${mobilePane === "workspace" ? "p-accent-subtle p-accent" : "p-text-3"}`}>
           Workspace
           {waiting > 0 && (
-            /* The count is a badge on the tab — a number on its own ground —
-               not a `· N` suffix mid-word. */
             <span className="flex min-w-4 px-1 h-4 items-center justify-center rounded-full bg-[var(--c-accent)] text-[10px] font-semibold leading-none text-[var(--c-accent-on)]">{waiting}</span>
           )}
         </button>

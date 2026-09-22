@@ -1,8 +1,5 @@
-// The heartbeat decides to quiesce on the lease as it stood; the final
-// checkpoint then runs for as long as the tree needs, and a caller admitted
-// meanwhile is running on the container the stop is about to kill. Run
-// `20260914234711` lost sqlite/1/1 and git/2/4 that way: `ensureReady` admitted
-// each command three seconds before `OperationInterruptedError`.
+// Quiesce decides on the lease as it stood; a caller admitted during the final checkpoint
+// runs on the container the stop would kill, so the stop must re-check callers (D18).
 import { describe, expect, test } from 'bun:test';
 
 import { chainBox } from './support/chain-box';
@@ -19,10 +16,8 @@ async function attachedWithWork() {
 describe('a caller arriving during the final checkpoint holds the stop', () => {
   test('the checkpoint stays committed, the stop is refused and the container keeps running', async () => {
     const { box, container } = await attachedWithWork();
-    // The caller's command is admitted and then PARKED inside the container,
-    // so it is still executing through the whole final checkpoint; a fake
-    // that answered in the same tick would have the caller done before the
-    // decision, which is the idle case below.
+    // The command is parked inside the container so it is still executing through the final
+    // checkpoint; an immediate answer would make this the idle case below.
     const parked = gate();
     container.execGate = parked;
     const command = box.exec('true');
@@ -45,9 +40,7 @@ describe('a caller arriving during the final checkpoint holds the stop', () => {
 
     expect(outcome.kind).toBe('committed');
     expect(container.running.running).toBe(false);
-    // THE BOX'S OWN STORAGE WORK IS NOT A CALLER. The final checkpoint once
-    // counted its upper through the public `listFiles`, whose readiness gate
-    // stamps the lease, and refused its own stop as a caller's arrival.
+    // The box's own storage work is not a caller: its final checkpoint must not stamp the lease.
     expect((await box.devboxState()).lastInteractionAt).toBe(stampedBefore);
   });
 });

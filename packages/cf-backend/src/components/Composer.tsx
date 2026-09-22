@@ -1,34 +1,6 @@
 /**
- * The composer — the one place a user acts on a conversation.
- *
- * One component for all three chat surfaces (workspace chat, subordinate chat,
- * and the design gallery). Hand-copied blocks drift in the way that matters
- * most: a gallery copy missing the mode control, the attachments and the
- * status row photographs a composer that does not exist, and the gallery is
- * the surface the product is screenshotted from.
- *
- * Layout follows the arrangement the owner uses in his own agent workspace
- * (OpenSeal's session composer): the draft on top, then ONE toolbar inside the
- * same card, with the controls that describe HOW the turn runs on the left
- * (mode, model) and the actions that START or STOP it on the right. No divider
- * between draft and toolbar — the card is one object, not two stacked strips.
- *
- * The model selector belongs here rather than in the workspace bar because it is
- * a property of the turn you are about to send. It already sat beside the
- * subordinate composer, so the bar was the outlier, not this.
- *
- * While a turn runs the right-hand group is THREE actions, not one: Stop
- * abandons the turn, Branch answers the draft beside it, and Steer hands the
- * draft to the turn already running. Enter is never a no-op mid-stream: a send
- * that early-returns while streaming leaves someone typing at a working agent
- * with nothing happening and nothing said about it.
- *
- * WHICH of those the composer offers comes from one value — `turnLiveness`,
- * folded over the durable claim and the socket — and the transcript's live
- * tail reads the same one. Two readings of "a turn is live" is how a Stop
- * button came to sit over a thread with no indicator in it. A claim nobody is
- * executing (`stranded`) offers recovery instead: Stop would be sent to an
- * isolate that is gone.
+ * One composer for every chat surface. While a turn runs it offers Stop, Branch and Steer; which ones
+ * show comes from `turnLiveness`, the same fold the transcript's live tail reads.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
@@ -43,35 +15,24 @@ import type { WorkspaceNotice } from "@/hooks/use-kinu";
 
 const CHAT_MODES = ["build", "plan"] as const;
 
-/** The recovery button, in the two states the press moves it through. */
 const RECOVER_LABEL = { idle: "Recover", busy: "Recovering…" } as const;
 
 export type ChatMode = (typeof CHAT_MODES)[number];
 
-/** Tones a status row can take. `progress` is `neutral` plus a spinner — it is
- *  a state, not a colour, so it gets no tint of its own. */
+/** `progress` is `neutral` plus a spinner, with no tint of its own. */
 export type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" | "progress";
 
-/**
- * One inline status. This is the composer's answer to "no spam, but no
- * silence": something that failed or changed stays on screen, in the tone that
- * says which it was, carrying the action that resolves it — rather than raw
- * coloured text, or a toast that has already gone.
- */
 export interface ComposerNotice {
   id: string;
   tone: NoticeTone;
-  /** The emphasized lead line; the notice may carry a title with no body. */
   title?: string;
   text?: string;
   /** Raw technical string, shown only inside the "Technical details" disclosure. */
   detail?: string;
-  /** The way out. A notice reporting a failure should almost always have one. */
   action?: { label: string; icon?: ReactNode; onClick: () => void };
   onDismiss?: () => void;
 }
 
-/** Tone → the tint class and the glyph naming what kind of status it is. */
 const NOTICE_TONE = {
   danger:   { cls: "p-notice-danger",  icon: <WarningCircleIcon size={13} className="shrink-0" /> },
   warning:  { cls: "p-notice-warning", icon: <WarningCircleIcon size={13} className="shrink-0" /> },
@@ -81,15 +42,11 @@ const NOTICE_TONE = {
   progress: { cls: "p-notice-neutral", icon: <Loader size="sm" /> },
 } satisfies Record<NoticeTone, { cls: string; icon: ReactNode }>;
 
-/** A status row: what happened, and the way out of it. */
 function Notice({ notice }: { notice: ComposerNotice }) {
   const { tone, title, text, detail, action, onDismiss } = notice;
   const { cls, icon } = NOTICE_TONE[tone];
   const [expanded, setExpanded] = useState(false);
-  // SSR has no layout, so the first guess is by length (two lines ≈ 2×60
-  // chars) and the client corrects it: a fixed count lies in a resizable
-  // chat column, where the same text overflows at one width and fits at
-  // another. Either way the clamp never silently stands alone.
+  // SSR has no layout: guess by length, then measure on the client.
   const [overflows, setOverflows] = useState(() => (text?.length ?? 0) > 2 * 60);
   const textRef = useRef<HTMLSpanElement>(null);
 
@@ -103,9 +60,6 @@ function Notice({ notice }: { notice: ComposerNotice }) {
     <div className={`flex items-start gap-2 px-2.5 py-1.5 p-meta ${cls}`}
       role={tone === "danger" ? "alert" : "status"}>
       <span className="mt-px shrink-0">{icon}</span>
-      {/* Two lines rather than one: in a narrow chat column a single-line
-          clamp cut "Couldn't refresh live data for MCTS." down to "Co…",
-          which is a silence wearing the costume of a status. */}
       <span className="min-w-0 flex-1">
         {title && <span className="block font-medium">{title}</span>}
         {text && <span ref={textRef} className={`block ${expanded ? "" : "line-clamp-2"}`} title={text}>{text}</span>}
@@ -138,14 +92,7 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   );
 }
 
-/**
- * The workspace load failure as the composer's status row.
- *
- * A blocking notice (the essential read failed) renders `danger`; a partial
- * one (an optional read failed) renders `warning`. Neither disables the
- * composer — that decision belongs to the socket, not to a stale tool list —
- * so this mapping carries no `disabled` of its own.
- */
+/** Neither tone disables the composer; that belongs to the socket. */
 export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void): ComposerNotice {
   const mapped: ComposerNotice = {
     id: "load",
@@ -162,8 +109,6 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
   return mapped;
 }
 
-/** Why the mode button is what it is: the lock that holds it, or what the mode
- *  itself does. */
 function modeTitle(mode: ChatMode, locked: boolean): string {
   if (mode !== "build") return "Plan. Review a plan before anything changes.";
 
@@ -173,17 +118,8 @@ function modeTitle(mode: ChatMode, locked: boolean): string {
 }
 
 /**
- * Auto ⇄ Plan. Kept as a two-item segment rather than the single toggle the
- * owner's own composer uses, because Plan here is a mechanical trust boundary
- * (`submit_plan` exists only on a Plan turn) rather than a label: a lone chip
- * reading "Plan" cannot say whether that is the current mode or the one you
- * would switch to, and getting that wrong picks the wrong tool surface. With a
- * plan awaiting a decision the segment locks to Plan and says why, instead of
- * silently refusing the click.
- *
- * The unrestricted mode is shown as "Auto" while the wire value stays `build`
- * (`WorkMode = 'plan' | 'build'` in core): the label is what the system calls
- * this to a person, and it must not disagree with the rest of the product.
+ * Plan is a trust boundary (`submit_plan` exists only on Plan turns), so it is a two-item segment,
+ * not an ambiguous toggle. The wire value for Auto stays `build`.
  */
 function ModeSegment({ value, onChange, locked, disabled }: {
   value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean; disabled: boolean;
@@ -217,13 +153,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
   );
 }
 
-/** The clipboard's files, deduplicated only by repeated item/File identity.
- *
- * A clipboard source can expose the SAME File through repeated item flavors, and
- * attaching it twice claims the user pasted two. File metadata is NOT identity:
- * two receipts can share a name, byte length, MIME type and timestamp while
- * holding different bytes, so a metadata key silently drops one.
- */
+/** Dedupe by item/File identity only: files with identical metadata can hold different bytes. */
 function pastedFiles(data: DataTransfer): FileList {
   const { files, items } = data;
 
@@ -242,16 +172,14 @@ function pastedFiles(data: DataTransfer): FileList {
     unique.items.add(file);
   }
 
-  // DataTransfer.files is authoritative when a browser supplies no matching
-  // items. Keep it intact rather than guessing file identity from metadata.
+  // DataTransfer.files is authoritative when items supply no matching files.
   return unique.files.length === 0 || unique.files.length === files.length ? files : unique.files;
 }
 
-/** Clipboard text alongside files, if any. Presence is decided by the
- * clipboard's string flavors, never by inspecting their content: a path or
- * filename can be exactly what the user meant to paste. A textarea cannot keep
- * HTML formatting, so an HTML-only flavor contributes its rendered text and
- * falls back to the raw string when the markup has no text node. */
+/**
+ * Presence comes from string flavors, never content. An HTML-only flavor contributes its rendered
+ * text, falling back to the raw string.
+ */
 function pastedText(data: DataTransfer): string {
   const plain = data.getData("text/plain");
 
@@ -269,40 +197,24 @@ export interface ComposerProps {
   onValueChange: (value: string) => void;
   onSend: () => void;
   placeholder: string;
-  /** The socket is not usable — every control goes inert. */
   disabled: boolean;
-  /** Whether a turn is running, and how — the one fold both this and the
-   *  transcript's live tail read. */
   liveness: TurnLiveness;
   onStop: () => void;
-  /** Settle a claim nobody is executing. Offered only for a stranded turn;
-   *  a surface with no recovery route omits it and the strand is then stated
-   *  without an action. Rejects on RPC failure — this owns the line that says
-   *  so, for the reason the feedback toggle does: the press must not report
-   *  success the server did not give. */
-  /** Resolves the failure reason, or null once the turn is settled. */
+  /** Offered only for a stranded turn. Resolves the failure reason, or null once settled; rejects on RPC failure. */
   onRecover?: () => Promise<string | null>;
-  /** Statuses above the draft, oldest first. Empty renders nothing. */
   notices?: readonly ComposerNotice[];
-  /** Turn mode. Every agent conversation passes its own; omitted only on
-   *  static gallery frames that photograph the composer without one. */
   mode?: { value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean };
-  /** Attachments. Omitted where the surface cannot take files. */
   attachments?: {
     parts: readonly FileUIPart[];
     onAdd: (files: FileList | null | undefined) => void;
     onRemove: (index: number) => void;
-    /** Names of uploads that failed to read. They stay listed as failed —
-     *  dropping them would send a message missing what the user attached —
-     *  and Send stays disabled until each is removed. */
+    /** Send stays disabled until each failed upload is removed. */
     failed?: readonly string[];
     onRemoveFailed?: (index: number) => void;
   };
-  /** The model selector, passed in because it is a connected component and this
-   *  one has to stay renderable without a socket. */
+  /** Passed in so the composer stays renderable without a socket. */
   modelPicker?: ReactNode;
-  /** Run the draft as a parallel take instead of steering or interrupting.
-   *  Only offered mid-stream, and never in Plan mode. */
+  /** Offered only mid-stream, never in Plan mode. */
   onBranch?: () => void;
   textareaRef?: React.Ref<HTMLTextAreaElement>;
 }
@@ -320,21 +232,14 @@ export function Composer({
   const [stopping, setStopping] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
-  // The runtime sends no stopped event, so the streaming flag going false is
-  // the only confirmation a stop landed.
+  // The runtime sends no stopped event; `streaming` going false confirms the stop.
   useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
   useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
-  // One submit whatever the agent is doing: while a turn runs it is the words
-  // handed to that turn, and the button says so. Enter reaches the same thing
-  // the button does — an Enter that silently does nothing is the defect this
-  // replaces, and the composer was in exactly that state whenever the agent
-  // was working.
+  // Enter while a turn runs steers it; it is never a no-op.
   const submit = onSend;
 
   return (
-    // @container: the action row labels itself when there is room and falls back
-    // to icons in a dragged-narrow chat column, without depending on which
-    // surface mounted it.
+    // @container: the action row collapses to icons in a narrow chat column.
     <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-4 py-3.5 sm:px-5"
       onPaste={(e) => {
         if (!attachments) return;
@@ -344,18 +249,15 @@ export function Composer({
         attachments.onAdd(files);
         const text = pastedText(e.clipboardData);
 
-        // File-only means the clipboard carries no string flavor. Never infer
-        // that from the string's content: a filename can be the intended text.
+        // Never infer file-only from string content: a filename can be the intended text.
         if (text === "") {
           e.preventDefault();
 
           return;
         }
 
-        // Mixed content. When a plain flavor exists, the browser's insertion
-        // preserves it at the caret and in the undo stack, so only the files
-        // need our handling. An HTML-only flavor needs plain-text insertion
-        // because a textarea cannot accept rich content.
+        // A plain flavor inserts natively (caret, undo stack). HTML-only needs
+        // plain-text insertion because a textarea cannot take rich content.
         if (e.clipboardData.getData("text/plain") !== "") return;
         e.preventDefault();
 
@@ -378,7 +280,7 @@ export function Composer({
             {(attachments.failed ?? []).map((name, i) => (
               <span key={`failed-${name}-${i}`}
                 className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2"
-                title={`Couldn't attach ${name}`}>
+                title={`Could not attach ${name}`}>
                 <FileIcon size={13} className="shrink-0 p-text-3" />
                 <span className="truncate font-mono">{name}</span>
                 <span className="shrink-0 font-medium p-warning">failed</span>
@@ -397,16 +299,13 @@ export function Composer({
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
 
-            // An Enter that commits IME composition belongs to the IME, not the
-            // composer: submitting on it sends a half-composed draft. keyCode
-            // 229 is the same fact on engines that fire a trailing keydown
-            // after compositionend.
+            // Enter that commits IME composition belongs to the IME; keyCode 229
+            // covers engines that fire keydown after compositionend.
             if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
 
             if (e.shiftKey) {
-              // Kumo's controlled InputArea does not supply the textarea's
-              // native line break. Insert at the selection and restore its
-              // caret after React commits the controlled value.
+              // Kumo's controlled InputArea drops the native line break; insert it
+              // and restore the caret after React commits.
               e.preventDefault();
               const input = e.currentTarget;
               const start = input.selectionStart;
@@ -423,11 +322,6 @@ export function Composer({
           placeholder={placeholder} disabled={disabled} rows={1}
           className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-4 pt-3 pb-1 !bg-transparent !shadow-none !outline-none !ring-0 focus:!ring-0" />
 
-        {/* One toolbar: how the turn runs on the left, what starts it on the
-            right. It WRAPS, because a chat column can be dragged to ~190px and
-            an unwrapped row pushed the send button off the card entirely. When
-            it wraps, the model picker and the actions take the second line and
-            `ml-auto` keeps send on the right. */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 pt-2 pb-3">
           {attachments && (
             <>
@@ -447,22 +341,12 @@ export function Composer({
               disabled={disabled || streaming} />
           )}
 
-          {/* The model and the thinking level read as ONE quiet row. A fill or
-              a rule on either trigger turned the pair into a label over a
-              pill, so both stay plain text and take their raise on hover and
-              on focus; a chat column too narrow for the two side by side is
-              the only place they stack. */}
           {modelPicker && (
             <div className="flex min-w-0 flex-1 basis-32 max-w-44 flex-col items-start gap-y-0.5 @[30rem]:max-w-[17.5rem] @[30rem]:flex-row @[30rem]:items-center @[30rem]:gap-x-3 [&>*]:min-w-0 [&_input]:!p-text-2 [&_input]:!bg-transparent [&_input]:!shadow-none [&_input]:!ring-0 [&_input]:transition-colors [&_input]:hover:!bg-[var(--c-elevated)] [&_input]:focus:!bg-[var(--c-elevated)]">
               {modelPicker}
             </div>
           )}
 
-          {/* Three actions, one model, while the agent works: Stop abandons the
-              turn, Branch answers the draft beside it, Steer hands the draft to
-              the turn already running. They are named rather than tooltipped —
-              the moment a user needs to tell them apart is the moment they are
-              deciding, and a hover title is not available then. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {streaming && (
               <button type="button" onClick={() => { setStopping(true); onStop(); }}

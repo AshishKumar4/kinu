@@ -1,35 +1,6 @@
 /**
- * Tool-effect claims — the once-only boundary in front of a tool whose effects
- * leave this process.
- *
- * THE WINDOW THIS CLOSES. A turn's durable record of a tool call is written
- * after the fact: the `tool_call_end` run event and the assistant message that
- * carries the call both land once the call is over. So a reset between the
- * effect and that record — an eviction, a code update, a crash — leaves NO
- * trace that the call was ever attempted, and recovery replays the provider
- * response that asked for it. A payment, a deploy, an email, a `git push`
- * happens twice, and nothing in the workspace can tell that it did.
- *
- * WHAT THIS IS. One row, written BEFORE the effect and completed after it,
- * keyed by the identity a reset preserves: the run, the provider's id for the
- * call, and a digest of what was called with what. Three answers, from one
- * read:
- *
- *   claimed        nobody has run this call. Run it.
- *   settled        it ran, and its output is the row. Hand that back and run
- *                  nothing.
- *   indeterminate  it started and never finished. The effect may or may not
- *                  have landed, and no third party can be asked, so the one
- *                  answer that is never wrong is to say exactly that.
- *
- * WHAT THIS IS NOT. Not a log — `tool_call_end` is still the only completion
- * event, and nothing here is emitted. Not a queue — nothing sweeps these rows,
- * nothing re-drives them, and a row is never the reason work runs. Not a
- * status table — a row's whole state is whether its result is there yet.
- *
- * Which tools go through it is declared once, per capability, in
- * tools/registry.ts (`replay`). A name that table does not declare resolves to
- * `claimed`, so nothing is opted out by omission.
+ * Tool-effect claims: a once-only row written before an externally visible effect and settled after it,
+ * so a reset between effect and `tool_call_end` never replays the effect. Per-tool policy: tools/registry.ts (`replay`).
  */
 
 import type { ToolSet } from 'ai';
@@ -40,19 +11,8 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
 import { replayPolicyFor } from './registry';
 
-/**
- * The identity of one tool call, as it survives a reset.
- *
- * `turnId` is the DURABLE turn identity — the id of the message the turn opened
- * on — and not the run id, which is minted per attempt (`run-${nanoid()}` in
- * both backends' turn entry). A recovery re-drives the turn under a NEW run id,
- * so a run-scoped key could never match the attempt it exists to catch, and the
- * table would close no window at all. The durable turn id is the same on both
- * attempts, and so is the provider's id for the call, because the assistant
- * message carrying it is what gets replayed.
- */
+/** `turnId` is the durable turn id (the opening message), not the per-attempt run id, so a recovery matches. */
 export interface ToolEffectKey {
-  /** The durable id of the message the calling turn opened on. */
   readonly turnId: string;
   /** The provider's id for this call, normalized by the caller. */
   readonly callId: string;
@@ -60,8 +20,7 @@ export interface ToolEffectKey {
   readonly digest: string;
 }
 
-/** What a claim read establishes about a call. `result` is the output the
- *  settled attempt produced, which is what a replay must return. */
+/** `result` is the settled attempt's output, which a replay must return. */
 export type ToolEffectClaim =
   | { readonly kind: 'claimed' }
   | { readonly kind: 'indeterminate' }
@@ -78,17 +37,8 @@ export function initToolEffectClaimTable(execRaw: RawSqlExec): void {
   )`);
 }
 
-/**
- * Claim one call's effect, or report what a previous attempt already did with
- * it.
- *
- * The read comes FIRST and that order is the mechanism: an insert cannot
- * distinguish "I just claimed this" from "somebody claimed it and never
- * settled" — both leave one row with no result. The prior read is the only
- * observation that separates them, and the pair is one event-loop tick with no
- * await in it, which is what makes it atomic on both backends (a Durable
- * Object serializes storage access; a local workspace holds the driver lease).
- */
+/** Read first, then insert, with no await between: only the prior read separates "just claimed" from
+ *  "claimed and never settled"; one tick is atomic on both backends. */
 export function claimToolEffect(
   sql: SqlExecutor, actor: ActorHandle, key: ToolEffectKey,
 ): ToolEffectClaim {
@@ -114,8 +64,7 @@ export function claimToolEffect(
   return { kind: 'claimed' };
 }
 
-/** Record what the claimed call produced. Guarded on the result still being
- *  absent, so a duplicate settle cannot overwrite the first outcome. */
+/** Guarded on the result still being absent, so a duplicate settle cannot overwrite the first outcome. */
 export function settleToolEffect(
   sql: SqlExecutor, actor: ActorHandle, key: ToolEffectKey, result: string,
 ): void {
@@ -126,9 +75,7 @@ export function settleToolEffect(
       AND result_json IS NULL`;
 }
 
-/** Drop one turn's claims. Called only once that turn's answer is durably
- *  persisted: until then the claims are the only thing standing between a
- *  recovery and a repeated effect. */
+/** Call only once the turn's answer is durably persisted. */
 export function releaseTurnEffectClaims(
   sql: SqlExecutor, actor: ActorHandle, turnId: string,
 ): void {
@@ -139,37 +86,19 @@ export function releaseTurnEffectClaims(
 
 export interface EffectClaimDeps {
   readonly sql: SqlExecutor;
-  /** The actor whose turn is making the call. A turn id is minted per actor and
-   *  a provider call id is the provider's, so two actors of one workspace
-   *  present colliding claim keys — and a claim read that crossed actors would
-   *  hand one actor another's recorded output, or refuse its call as
-   *  indeterminate on the strength of a sibling's abandoned row. */
+  /** Claim keys collide across actors of one workspace, so reads are scoped to this actor. */
   readonly actor: ActorHandle;
-  /** The durable id of the message the live turn opened on, read at CALL time:
-   *  a toolset is built once and used across many turns. */
+  /** Read at call time: a toolset is built once and used across many turns. */
   readonly turnId: () => string;
 }
 
-/**
- * Put every `claimed` tool of a set behind its claim. `safe` tools are handed
- * back untouched — no wrapper, no row, no cost.
- *
- * `options.safe` is the caller's own replay-safety evidence: a name the
- * registry does not know defaults to `claimed`, and a remote tool that
- * declared itself read-only is the one case the builder of an MCP surface can
- * prove safe itself. Everything not proven safe — by the registry or by the
- * caller — is claimed, so a missing annotation can never open the window.
- */
+/** Wraps every `claimed` tool; `safe` tools pass through untouched. Anything not proven safe is claimed. */
 export function withEffectClaims(
   tools: ToolSet,
   deps: EffectClaimDeps,
   options?: { readonly safe?: ReadonlySet<string> },
 ): ToolSet {
-  // Built by assignment rather than `Object.fromEntries(...) as ToolSet`.
-  // `fromEntries` erases the value type, so the cast that followed it was
-  // load-bearing and unchecked — it would have accepted a wrapper that had
-  // stopped being a tool. Assigning into a declared ToolSet makes the compiler
-  // check every entry against the surface it is going into.
+  // Built by assignment so the compiler checks every entry; `fromEntries` would need an unchecked cast.
   const claimed: ToolSet = {};
 
   for (const [name, entry] of Object.entries(tools)) {
@@ -201,8 +130,7 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
 
       if (claim.kind === 'indeterminate') throw indeterminateEffect(name, key);
       const output = await execute(input, options);
-      // Durable before published: the caller reads this value only after the
-      // row that makes a replay return it instead of running the tool again.
+      // Durable before published: the row must exist before the caller reads this value.
       settleToolEffect(
         deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
       );
@@ -212,9 +140,7 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
   };
 }
 
-/** `denied`, not `io` or `unavailable`: nothing broke and nothing is waiting to
- *  become available. This is a decision — the harness established that running
- *  the call again could repeat an effect, and declined. */
+/** `denied`: a replay could repeat an effect, so the harness declined. */
 function indeterminateEffect(name: string, key: ToolEffectKey): KinuError {
   return new KinuError(
     'denied',

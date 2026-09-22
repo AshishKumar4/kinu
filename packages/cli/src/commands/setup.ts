@@ -87,10 +87,10 @@ async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' 
   if (ctx.opts.accountOnly) {
     if (ctx.cloudReady) {
       console.log(`${OK('✓')} Kinu account ready.`);
-      console.log(DIM('Cloud workspaces can use Workers AI through your Cloudflare account, if you granted AI permissions at sign-in.'));
-      console.log(DIM('Run kinu provider connect codex for local workspaces that should use your ChatGPT Codex subscription.'));
+      console.log(DIM('Cloud workspaces run on Workers AI in your Cloudflare account, if you granted AI permissions at sign-in.'));
+      console.log(DIM('To use your ChatGPT Codex subscription in local workspaces, run kinu provider connect codex.'));
     } else {
-      console.log(`${WARN('!')} Kinu account was not connected.`);
+      console.log(`${WARN('!')} Not signed in to Kinu.`);
       console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
     }
 
@@ -102,11 +102,11 @@ async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' 
       console.log(`${OK('✓')} Kinu account ready.`);
       console.log(DIM('Workers AI uses the Cloudflare account you signed in with.'));
     } else {
-      console.log(`${WARN('!')} Kinu account was not connected (no interactive terminal).`);
+      console.log(`${WARN('!')} Not signed in to Kinu: signing in needs an interactive terminal.`);
       console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
     }
 
-    console.log(DIM('Run kinu provider connect <provider> to configure local workspace model access.'));
+    console.log(DIM('To pick a model provider for local workspaces, run kinu provider connect <provider>.'));
 
     return 'handled';
   }
@@ -127,7 +127,7 @@ export async function setupCommand(opts: {
 }): Promise<void> {
   console.log('');
   console.log(ACCENT('Kinu setup'));
-  console.log(DIM('Connect your account, Cloudflare Workers AI billing, and optional local providers.'));
+  console.log(DIM('Sign in to Kinu, then pick a model provider for local workspaces.'));
   console.log('');
 
   const config = loadConfigFile();
@@ -135,14 +135,14 @@ export async function setupCommand(opts: {
 
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
-    console.log(DIM('While you are signed in, new local workspaces run on your Cloudflare account via Workers AI. No API key on this machine.'));
+    console.log(DIM('While you are signed in, new local workspaces run on Workers AI in your Cloudflare account, with no API key on this machine.'));
   }
 
   if (!opts.skipCloud && !config.accessToken) {
     // Without a terminal there is nothing to ask — fall through to the
     // honest instruction paths below instead of letting readline hang on
     // a pipe (the `curl | bash` installer freeze).
-    const shouldLogin = opts.yes === true || (canPrompt() && await confirm('Sign in and attach Cloudflare Workers AI permissions now?', true));
+    const shouldLogin = opts.yes === true || (canPrompt() && await confirm('Sign in now and grant Workers AI permissions?', true));
 
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });
@@ -155,10 +155,10 @@ export async function setupCommand(opts: {
   const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'workers-ai' : await chooseProvider(cloudReady)));
 
   if (provider === 'skip') {
-    console.log(`${WARN('!')} Skipped local model setup.`);
+    console.log(`${WARN('!')} Skipped choosing a model provider.`);
     console.log(DIM(cloudReady
-      ? 'Cloud workspaces remain ready. Run kinu provider connect <provider> later for local workspaces.'
-      : 'Run kinu setup later before creating workspaces.'));
+      ? 'Cloud workspaces are ready. For local workspaces, run kinu provider connect <provider> later.'
+      : 'Run kinu setup again before you create a workspace.'));
 
     return;
   }
@@ -195,14 +195,14 @@ export async function setupCommand(opts: {
 }
 
 async function chooseProvider(cloudReady: boolean): Promise<string> {
-  console.log(DIM('Local model provider:'));
+  console.log(DIM('Model provider for local workspaces:'));
   console.log(`  ${ACCENT('1')} Cloudflare Workers AI through your Kinu account ${DIM('(recommended)')}`);
   console.log(`  ${ACCENT('2')} ChatGPT Codex subscription`);
   console.log(`  ${ACCENT('3')} OpenAI API key`);
   console.log(`  ${ACCENT('4')} OpenRouter`);
   console.log(`  ${ACCENT('5')} Anthropic`);
   console.log(`  ${ACCENT('6')} OpenAI-compatible`);
-  console.log(`  ${ACCENT('7')} OpenCode (share your opencode auth & models)`);
+  console.log(`  ${ACCENT('7')} OpenCode (uses your opencode sign-in and models)`);
   console.log(`  ${ACCENT('8')} Skip`);
 
   if (!cloudReady) console.log(DIM('  Option 1 needs a signed-in account. Run kinu auth first.'));
@@ -211,7 +211,7 @@ async function chooseProvider(cloudReady: boolean): Promise<string> {
   // here (the binary owns its own login), so mention it inline rather than as a
   // step — only when it is actually usable on this machine.
   if ((await checkClaudeAvailability()).loggedIn) {
-    console.log(DIM('  Claude Code detected. Or use --model claude/claude-opus-4-x for your subscription.'));
+    console.log(DIM('  Claude Code is signed in here. To use your Claude subscription, pass --model claude/claude-opus-4-x.'));
   }
 
   const value = await ask('Choice', '1');

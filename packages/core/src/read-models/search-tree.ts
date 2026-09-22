@@ -1,18 +1,5 @@
-/**
- * The MCTS tree a surface shows — the LATEST search, not the pile.
- *
- * Every search leaves its settled tree in `search_nodes` (failed and converged
- * runs are retired in place, never deleted), so the table holds one tree per
- * search the workspace ever ran. The engine's own reads have been scoped by
- * `root_id` since the search-isolation fix; the UI read never was, and a
- * client that flattens the whole table renders whichever root it happens to
- * pick — in practice the workspace's FIRST search, forever. This is the one
- * scoped projection both backends serve to the MCTS views.
- *
- * "Latest" is the tree most recently written to (its newest node insert), so
- * a resumed search that is still growing outranks a newer one that died at
- * its root.
- */
+/** The MCTS tree a surface shows, scoped to one search root: `search_nodes` keeps every search's
+ * settled tree. "Latest" is the tree with the newest node insert. */
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -32,24 +19,8 @@ export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): Sear
     ORDER BY depth, created_at`;
 }
 
-/**
- * One named search's tree — the ONE scoped projection every tree view is built
- * from, whether it shows a single search or a canvas of them.
- *
- * The unified fork list can select a competed run that is not the latest, and
- * "latest" is then the wrong tree to show — it would render another search's
- * branches under the selected run's heading. Same projection, same ordering,
- * scoped by the root the caller asked for.
- *
- * A canvas showing several searches composes this per root
- * ({@link readExplorationCanvas}) rather than flattening the table, and the
- * roots are the caller's page. A multi-root read choosing its own roots by
- * recency INDEPENDENTLY of the run list beside it — by `MAX(created_at)` where
- * the run list orders by first write — would disagree with that list about
- * which searches exist, and the canvas would draw a listed fork with no tree
- * under it. Taking the page from the caller leaves that disagreement nowhere
- * to live.
- */
+/** One named search's tree. Canvases compose this per root from the caller's page; choosing roots by
+ * recency here would disagree with the run list. */
 export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): SearchNode[] {
   actor.assertCurrent();
 
@@ -60,7 +31,6 @@ export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: str
     ORDER BY depth, created_at`;
 }
 
-/** One node as a LIST shows it — the shape a path entry and a child row share. */
 export interface SearchNodeSummary {
   id: string;
   parentId: string | null;
@@ -72,8 +42,6 @@ export interface SearchNodeSummary {
   createdAt: number;
 }
 
-/** One node in full, with the ancestry that reached it and the children it
- *  opened. */
 export interface SearchNodeDetail extends SearchNodeSummary {
   task: string;
   observation: string;
@@ -86,8 +54,6 @@ export interface SearchNodeDetail extends SearchNodeSummary {
   children: SearchNodeSummary[];
 }
 
-/** Exactly the columns the detail view renders — a projection, not the whole
- *  `SearchNode`. */
 interface DetailRow {
   id: string;
   parent_id: string | null;
@@ -115,23 +81,8 @@ const summarize = (node: DetailRow): SearchNodeSummary => ({
   createdAt: node.created_at,
 });
 
-/**
- * One node, its ancestry and its children — what `kinu inspect mcts <id>`
- * and the tree view's node pane both show.
- *
- * This existed twice, once per backend, under two names and over two SQL
- * dialects: `OrchestratorAgent.getMctsNodeDetail` (a `@callable` over DO
- * SQLite) and `getLocalMctsNode` (over bun:sqlite). Same parent walk, same
- * cycle guard, same child ordering, same field projection — and the SAME CLI
- * command formatted whichever of the two answered, so a change to either was a
- * change to one half of one command. `gate:duplication` could not see it: the
- * SQL literal text differs, and that gate keeps literal text on purpose, which
- * its own header records as the near-copy it therefore misses.
- *
- * The ancestry walk is guarded against a cycle rather than trusting the tree to
- * be one: `parent_id` is a plain column, and a walk that trusted it would hang
- * the request instead of returning a wrong answer.
- */
+/** One node, its ancestry and children (`kinu inspect mcts <id>` and the tree view's node pane).
+ * The ancestry walk guards against cycles: `parent_id` is a plain column. */
 export function readSearchNodeDetail(
   sql: SqlExecutor, actor: ActorHandle, nodeId: string,
 ): SearchNodeDetail | null {

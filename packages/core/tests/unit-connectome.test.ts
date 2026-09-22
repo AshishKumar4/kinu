@@ -1,26 +1,16 @@
-// The connectome behind the signed-in shell, as a simulation: what the tissue
-// claims — deterministic, fixed, grown from the rim inward, answering the
-// roster — must hold in the numbers before any renderer draws them.
 import { describe, expect, test } from 'bun:test';
 
 import { type ArtFrame, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_BRIGHT } from '../src/web/art';
 import { CANVAS_SEGMENTS, Connectome, MESH_SEGMENTS } from '../src/web/connectome';
 
-/** CPU milliseconds this process spent since `since`: the picture's own cost,
- *  which a wall clock confuses with whatever else the machine was doing (the
- *  deploy tier runs every suite at once, and measured 612 ms of wall time on
- *  2026-09-14 for work that costs under 400 ms of CPU). */
+/** CPU ms since `since`; wall time is skewed by parallel suites. */
 function cpuMillisSince(since: NodeJS.CpuUsage): number {
   const spent = process.cpuUsage(since);
 
   return (spent.user + spent.system) / 1000;
 }
 
-/** A fixed unit of arithmetic, run in the same loop as the picture so the two
- *  are measured under the same contention. Its size is chosen so one unit
- *  costs about one canvas frame on the reference box; the value is never a
- *  pin, only a yardstick. `Math.fround` and the seed keep the loop from being
- *  folded away. */
+/** Fixed arithmetic yardstick (~one canvas frame); `Math.fround` and the seed stop folding. */
 function calibrationUnit(seed: number): number {
   let acc = Math.fround(seed);
 
@@ -31,20 +21,8 @@ function calibrationUnit(seed: number): number {
   return acc;
 }
 
-/** The picture's cost per frame AS A RATIO of one calibration unit, each read
- *  off the CHEAPEST of `batches` interleaved runs.
- *
- *  Why a ratio, measured 2026-09-15 on the 24-thread deploy box. An absolute
- *  CPU-time pin is not contention-invariant here: a sibling thread on the same
- *  physical core, a cold cache, or a lower turbo bin all inflate CPU time, and
- *  the cheapest of twelve batches read 1.60 ms against a 1.5 ms pin under one
- *  deploy wave and passed alone. The same contention inflates a pure
- *  arithmetic loop in the same process by the same factor, so the ratio of
- *  the two holds where the absolute did not; 3,600 frames in one run had
- *  already read 610 ms against a 600 ms budget under seven parallel suites.
- *  Interleaved batch by batch so a load spike hits both halves alike. A
- *  picture that got slower raises the ratio just the same, and the red
- *  direction is proved below by running ten times the frames. */
+/** Frame cost as a ratio of one calibration unit, cheapest of `batches` interleaved runs;
+ *  contention inflates both halves alike, so the ratio holds where absolute CPU time did not. */
 function cheapestFrameRatio(connectome: Connectome, batches: number, frames: number, stepsPerFrame = 1): number {
   let cheapestFrame = Number.POSITIVE_INFINITY;
   let cheapestUnit = Number.POSITIVE_INFINITY;
@@ -81,8 +59,6 @@ function stepSeconds(connectome: Connectome, seconds: number): Connectome {
   return connectome;
 }
 
-/** The canvas budget is the fallback renderer's; the GPU half's mesh budget
- *  only matters where the test is about density or the mesh's own cost. */
 function run(seed: number, seconds: number, connectome = new Connectome({ seed, aspect: ASPECT, segments: CANVAS_SEGMENTS })): Connectome {
   return stepSeconds(connectome, seconds);
 }
@@ -111,8 +87,7 @@ function snapshotOf(connectome: Connectome): Snapshot {
   };
 }
 
-/** The activity sequence the determinism claim is measured over: a quiet
- *  spell, work, then a decision arriving mid-work. */
+/** Quiet spell, work, then a decision arriving mid-work. */
 function script(connectome: Connectome): Snapshot[] {
   stepSeconds(connectome, 6);
   const resting = snapshotOf(connectome);
@@ -131,7 +106,6 @@ interface Point {
   readonly y: number;
 }
 
-/** The points a frame's strokes actually draw to: unique stroke endpoints. */
 function strokePoints(count: number, strokes: Float32Array<ArrayBuffer>): Point[] {
   const seen = new Set<string>();
   const points: Point[] = [];
@@ -151,13 +125,10 @@ function strokePoints(count: number, strokes: Float32Array<ArrayBuffer>): Point[
   return points;
 }
 
-/** A point's gap to the nearest edge of the view, in view widths. */
 function rimGap(x: number, y: number): number {
   return Math.max(0, Math.min(x, 1 - x, y * ASPECT, (1 - y) * ASPECT));
 }
 
-/** The corner quadrant a stroke's midpoint reads as: right = x > 0.5,
- *  bottom = y > 0.5. */
 function strokeCorner(strokes: Float32Array<ArrayBuffer>, index: number): number {
   const at = index * STROKE_STRIDE;
   const mx = ((strokes[at] ?? 0) + (strokes[at + 4] ?? 0)) / 2;
@@ -166,7 +137,6 @@ function strokeCorner(strokes: Float32Array<ArrayBuffer>, index: number): number
   return (mx > 0.5 ? 1 : 0) + (my > 0.5 ? 2 : 0);
 }
 
-/** Mean stroke glow per corner quadrant. */
 function cornerGlows(frame: ArtFrame): number[] {
   const sums = [0, 0, 0, 0];
   const counts = [0, 0, 0, 0];
@@ -180,9 +150,6 @@ function cornerGlows(frame: ArtFrame): number[] {
   return sums.map((total, corner) => total / (counts[corner] ?? 1));
 }
 
-/** Mean stroke glow over the strokes whose midpoint sits within `radius`
- *  view-widths of (`x`, `y`) — the pointer's reach, measured the way the
- *  radius reads it. */
 interface NearGlow {
   readonly mean: number;
   readonly count: number;
@@ -287,10 +254,8 @@ describe('the tissue is dense at the rim and absent in the middle', () => {
         expect(densities[ring], `seed ${seed} ring ${ring}`).toBeLessThanOrEqual(densities[ring - 1] ?? 0);
       }
 
-      // The rim out-densities the ring a third of the way in by an order.
       expect(densities[0] ?? 0, `seed ${seed} rim vs [0.15,0.20)`).toBeGreaterThanOrEqual((densities[3] ?? 0) * 20);
 
-      // The centre holds nothing at all: the innermost rings and beyond are empty.
       expect(densities[5] ?? -1, `seed ${seed} innermost ring`).toBe(0);
       expect(densities[6] ?? -1, `seed ${seed} beyond innermost`).toBe(0);
       expect(points.filter(({ x, y }) => rimGap(x, y) >= half)).toHaveLength(0);
@@ -309,8 +274,7 @@ describe('the tissue answers the roster', () => {
     connectome.setActivity({ working: false, decisions: 0 });
     expect(connectome.mode()).toBe('idle');
 
-    // The flash reads from the first frame it paints, not inside the call
-    // itself: at age 0 its envelope is still 0, so step once before asking.
+    // At age 0 the flash envelope is still 0, so step once before asking.
     connectome.setActivity({ working: false, decisions: 1 });
     stepSeconds(connectome, DT);
     expect(connectome.mode()).toBe('attention');
@@ -318,7 +282,6 @@ describe('the tissue answers the roster', () => {
     stepSeconds(connectome, 2);
     expect(connectome.mode()).toBe('idle');
 
-    // The same count arriving again is old news: no second flash.
     connectome.setActivity({ working: false, decisions: 1 });
     stepSeconds(connectome, 2);
     connectome.setActivity({ working: false, decisions: 1 });
@@ -334,8 +297,6 @@ describe('the tissue answers the roster', () => {
     stepSeconds(connectome, DT);
     expect(connectome.mode()).toBe('idle');
 
-    // Decisions the constructor already knew about earn no flash; the next
-    // rise still does.
     const informed = new Connectome({ seed: 1729, aspect: ASPECT, segments: CANVAS_SEGMENTS, activity: { working: false, decisions: 3 } });
     expect(informed.mode()).toBe('idle');
     stepSeconds(informed, 2);
@@ -348,8 +309,7 @@ describe('the tissue answers the roster', () => {
 
 describe('information moves along the tissue', () => {
   test('working carries more traffic than idle, under one budget-scaled cap', () => {
-    // The full mat: at the sparser Canvas2D budget the cap itself clips the
-    // working traffic (measured 98 of a cap of 101), so the ratio is read at MESH.
+    // At the Canvas2D budget the cap clips traffic (98 of 101), so read the ratio at MESH.
     const cap = Math.round(MESH_SEGMENTS / 24) + 1;
     const idle = run(1729, 0, new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS }));
     let idleMean = 0;
@@ -433,13 +393,11 @@ describe('information moves along the tissue', () => {
       expect(tail).not.toBe(head);
       expect(frame.pulses[at + 10]).toBe(TONE_BRIGHT);
       expect(frame.pulses[at + 11]).toBeGreaterThan(0);
-      // Alpha is capped at 0.85; in the f32 buffer that cap reads back as
-      // the nearest float, a hair above the decimal.
+      // The 0.85 alpha cap reads back from f32 as a hair above the decimal.
       expect(frame.pulses[at + 11]).toBeLessThanOrEqual(Math.fround(0.85));
       const drawn = curves.get([...frame.pulses.subarray(at, at + 6)].join(','));
       expect(drawn).toBeDefined();
       expect(head).toBeLessThanOrEqual(drawn?.drawn ?? 0);
-      // A pulse's layer is the edge's generation, which fork it grew from.
       expect(frame.pulses[at + 13]).toBe(drawn?.generation ?? -1);
     }
   });
@@ -493,7 +451,6 @@ describe('the tissue keeps out of the copy', () => {
 });
 
 describe('the tissue answers the pointer', () => {
-  /** A scripted pointer path: still, a burst across the middle, then gone. */
   function drive(connectome: Connectome): Snapshot[] {
     const shots: Snapshot[] = [];
 
@@ -501,7 +458,6 @@ describe('the tissue answers the pointer', () => {
     stepSeconds(connectome, 2);
     shots.push(snapshotOf(connectome));
 
-    // A burst: 0.6 view widths inside a second.
     for (let index = 0; index < 60; index += 1) {
       connectome.setPointer(0.2 + index * 0.01, 0.8);
       connectome.step(DT);
@@ -523,7 +479,6 @@ describe('the tissue answers the pointer', () => {
   });
 
   test('a pointer brightens the strokes it touches and clears when it leaves', () => {
-    // The mat is dense at the rim and empty in the middle: probe (0.9, 0.15).
     const held = run(1729, 0);
     held.setPointer(0.9, 0.15);
     stepSeconds(held, 2);
@@ -537,8 +492,6 @@ describe('the tissue answers the pointer', () => {
     expect(near.count).toBeGreaterThan(0);
     expect(near.mean).toBeGreaterThan(nearBare.mean + 0.03);
 
-    // Clearing lets the hold decay back (600 ms spec) until no held stroke
-    // reads bright anymore; the glow that remains is the tissue's own.
     held.clearPointer();
     stepSeconds(held, 2);
     const cleared = held.frame();
@@ -558,8 +511,6 @@ describe('the tissue answers the pointer', () => {
   });
 
   test('a fast sweep fires a grain from the nearest root, at most once per 250 ms', () => {
-    // Deterministic by seed: the same scripted burst launches the same
-   // count of grains twice, and a second immediate sweep stays rate-limited.
     function sweep(): number {
       const connectome = run(1729, 0);
       stepSeconds(connectome, 4);
@@ -602,21 +553,11 @@ describe('the tissue answers the pointer', () => {
 
 
 describe('the picture stays cheap', () => {
-  // THE PINS ARE RATIOS, NOT MILLISECONDS. Measured 2026-09-15 on the 24-thread
-  // deploy box, quiet (load 0.6): a canvas frame is 0.75 of a calibration unit
-  // (0.089 ms against 0.118 ms) and a mesh frame 5.2 units (0.61 ms), three
-  // reads each within 3%. Under twelve busy-loop threads the same run read
-  // the mesh frame at 1.13 ms — the absolute pin of 1.5 ms it replaced went
-  // red under one deploy wave on this figure — while the ratio read 3.9 to
-  // 5.2, and the canvas ratio 0.51 to 0.77. The budgets keep the headroom the
-  // millisecond pins had: 2x for the canvas (0.167 ms over 0.089), 2.4x for
-  // the mesh (1.5 ms over 0.61).
+  // Pins are ratios to the calibration unit (canvas ~0.75, mesh ~5.2 quiet), with 2x/2.4x headroom.
   test('an hour of canvas frames costs less than a blink', () => {
     const connectome = run(1729, 0);
     connectome.setActivity({ working: true, decisions: 0 });
 
-    // An hour is 3,600 frames and the budget a blink, 600 ms: a sixth of a
-    // millisecond per frame, which is 1.5 calibration units on the reference box.
     expect(cheapestFrameRatio(connectome, 12, 300)).toBeLessThan(1.5);
   });
 
@@ -627,19 +568,8 @@ describe('the picture stays cheap', () => {
     expect(cheapestFrameRatio(connectome, 6, 100)).toBeLessThan(12.5);
   });
 
-  // THE RED DIRECTION: ten steps per frame is what a picture ten times as
-  // expensive costs, measured by the same loop against the same yardstick.
-  //
-  // Measured 2026-09-15 on the 24-thread box: ten steps cost 4.7x a canvas
-  // frame and 5.0x a mesh frame (`frame()` is a fixed part the steps do not
-  // scale), reading 3.5 and 26 quiet, 3.5 and 28 under twelve busy-loop
-  // threads, 4.1 and 31 under twelve memory-streaming threads — the ratio
-  // RISES under contention, so the proof holds in every shape measured. What
-  // did fail, under the deploy wave on 368b8d694, was the CLOCK: the full
-  // batch counts at ten steps are 3.2 s of CPU quiet and ran 5.96 s under the
-  // wave, past bun's 5 s default. The red direction needs margin, not
-  // precision, so it runs a third of the batches — under a second quiet —
-  // and the test states its own wall budget rather than inheriting one.
+  // Red direction: ten steps per frame must exceed the budget. Runs a third of the batches
+  // with its own wall budget, since full batches can pass bun's 5 s default under load.
   test('the ratio pins go red on a picture that costs ten times as much', () => {
     const canvas = run(1729, 0);
     canvas.setActivity({ working: true, decisions: 0 });

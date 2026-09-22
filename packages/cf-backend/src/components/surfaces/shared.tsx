@@ -1,8 +1,3 @@
-/**
- * Shared presentational primitives used by both the chat column and the work
- * surfaces — kept in one place so there is a single source of truth (DRY) for
- * markdown rendering, code blocks, and empty states.
- */
 import { memo, useContext, useCallback, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
@@ -21,13 +16,7 @@ const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   ctx: { tone: "p-text-3 px-3", mark: " " },
 };
 
-/** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
- *  scaffold-version diff (Self) and the workspace change-set (Output).
- *  `truncated` marks a bounded body, so a partial hunk never reads as the whole
- *  file. Two shapes reach here: a body clipped at {@link MAX_LINES_PER_FILE},
- *  and an EMPTY body for a file too long to align at all — they must not say
- *  the same thing, because "truncated at 1000 lines" over nothing reads as a
- *  rendering bug. */
+/** An empty truncated body (file too long to align) must read differently from one clipped at {@link MAX_LINES_PER_FILE}. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
     <pre className="p-t-code overflow-x-auto max-h-[360px] overflow-y-auto m-0">
@@ -52,8 +41,6 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
 }
 
 
-/** One code well for fences, tool inputs and source viewers. Unknown grammars
- * stay readable as plain text. One cached highlighter loads grammars on demand. */
 export function CodeBlock({ children, className }: { children: string; className?: string }) {
   const { status, copy } = useCopy();
   const code = children.replace(/\n$/, "");
@@ -86,16 +73,7 @@ export function CodeBlock({ children, className }: { children: string; className
   );
 }
 
-/**
- * A Markdown image, with failure told rather than shown as a broken glyph.
- *
- * A resource that fails to load throws nothing, so the chat's error boundary
- * never hears about it — the reader got a browser-drawn broken-image mark with
- * no name and no way to the source. On failure (or an image with no source at
- * all) this renders a quiet diagnostic instead: what failed, named by the
- * author's alt text when there is one, and the raw link — a browser tab says
- * WHY it failed (403, 404, mixed content) better than an img box ever can.
- */
+/** A failed image load throws nothing, so the error boundary never sees it; render a diagnostic with the raw link instead. */
 function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
   const [failed, setFailed] = useState(false);
 
@@ -107,8 +85,9 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
           {alt ? `Image failed to load: ${alt}` : "Image failed to load"}
           {src && (
             <>
-              {" — "}
+              {" ("}
               <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline break-all">{src}</a>
+              {")"}
             </>
           )}
         </span>
@@ -122,9 +101,6 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
-/** One `slate://<id>` link in markdown. Inside the chat column (the context
- *  the workspace page installs) it mounts the live card; anywhere else the
- *  address is the whole story, so it renders as the code it would read as. */
 function SlateLink({ id }: { id: string }) {
   const inline = useContext(SlateInlineContext);
 
@@ -134,14 +110,8 @@ function SlateLink({ id }: { id: string }) {
   return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
 }
 
-/** remark pass: a bare `slate://<id>` written as TEXT becomes a link node, so
- *  the `a` renderer — and nothing else — decides how it renders. Walks the
- *  mdast directly; a link or code node is left alone, and only ids that pass
- *  `slateLinkId` count. */
 function remarkSlateLinks() {
-  // The slice of mdast this pass reads and writes, declared locally: pulling
-  // `mdast` types in for one plugin is heavier than the plugin itself. A link
-  // node carries its address in `url`; a text node in `value`.
+  // Local mdast slice: importing `mdast` types for one plugin is heavier than the plugin.
   interface MdNode {
     readonly type: string;
     readonly value?: string;
@@ -208,17 +178,11 @@ function remarkSlateLinks() {
   return (tree: MdNode) => { walk(tree); };
 }
 
-// Memoized on the content string — the react-markdown re-parse is the
-// dominant render cost, so unchanged messages must skip it entirely.
+// Memoized on content: the react-markdown re-parse dominates render cost.
 export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown remarkPlugins={[remarkGfm, remarkSlateLinks]} urlTransform={(url) => url.startsWith('slate://') ? url : defaultUrlTransform(url)} components={{
-      // A fence with no language gets no className, which is also what real
-      // inline code gets — so className alone renders a ``` block as an inline
-      // pill wrapping across lines. The block/inline question is answered by the
-      // node's position (react-markdown puts a fence inside a <pre>), which
-      // `pre` below unwraps, so the check here is on the content itself: a
-      // fence is the thing that spans lines.
+      // An unlabelled fence has no className, same as inline code, so a fence is detected by spanning lines.
       code({ node, className, children, ...props }) {
         const source = (node?.children ?? []).map((child) => (child.type === "text" ? child.value : "")).join("");
 
@@ -235,22 +199,16 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
 
         return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>;
       },
-      // Keyed on the source so a re-render that swaps the image also resets
-      // the failure state — the new source deserves its own attempt.
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
       table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="w-full text-xs border-collapse">{children}</table></div>; },
       th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
       td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
-      // The fence's own <pre> is dropped: CodeBlock supplies one, and nesting
-      // them would put a scroll container inside a scroll container.
+      // Drop the fence's own <pre>: CodeBlock supplies one, and nesting would nest scroll containers.
       pre({ children }) { return <>{children}</>; },
     }}>{content}</Markdown>
   );
 });
 
-/** The register an absence is announced in: the mark where no icon carries a
- *  more specific meaning, and the title as a mono annotation — the banner's
- *  own caption grammar, instead of the bare grey icon-and-sentence this was. */
 export function EmptyState({ icon, title, hint, children }: {
   icon?: ReactNode; title: string; hint?: ReactNode; children?: ReactNode;
 }) {
@@ -265,9 +223,6 @@ export function EmptyState({ icon, title, hint, children }: {
     </div>
   );
 }
-
-/* ── small readouts shared by the fork tree's inspector and the evolution
-      panels — one copy, so a metric tile means the same thing everywhere ── */
 
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -287,7 +242,6 @@ export function DetailSection({ title, children }: { title: string; children: Re
   );
 }
 
-/** The product's danger→warning→success bands, as a text token. */
 export function scoreColor(value: number): string {
   if (value >= 0.7) return "p-success";
 
@@ -300,18 +254,7 @@ export function formatScore(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
-/**
- * A titled, collapsible section — the one header grammar the work surfaces
- * use, so the six that hand-rolled `<section><div flex gap-2>…` stay aligned.
- *
- * The Self surface stacks identity, changelog, scaffold lineage, tools,
- * memory and the world model into one scroll; being able to fold the ones you
- * are not reading is what makes it usable at length. Which sections a person
- * keeps folded is a property of that person's workspace, not of the agent, so
- * it lives in localStorage beside the theme choice rather than in agent state.
- *
- * `id` is that persistence key and must be stable across renames of `title`.
- */
+/** `id` is the localStorage persistence key and must stay stable across renames of `title`. */
 export function Section({ id, title, icon, badge, defaultOpen = true, children }: {
   id: string;
   title: string;
@@ -322,9 +265,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
 }) {
   const key = `kinu.section.${id}`;
 
-  // Read once on mount and write only on toggle: an effect that mirrored state
-  // would stamp every default into storage on first paint, which then looks
-  // like a choice the user made and freezes the defaults forever.
+  // Read once on mount, write only on toggle: mirroring state would persist defaults as if chosen.
   const [open, setOpen] = useState(() => {
     const stored = localStorage.getItem(key);
 
@@ -396,19 +337,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
   return null;
 }
 
-/**
- * The top of the transcript: what is above the oldest message on screen.
- *
- * Four distinct answers, never collapsed into silence. "Failed" in particular
- * has to be its own state — rendering nothing there would tell the reader they
- * had reached the beginning of a conversation the pane simply could not fetch.
- *
- * All four are the same height, including the idle one. This row sits directly
- * above the prepend, so a row that changes size as it changes state moves the
- * transcript under the reader by the difference — measured at 15px per page
- * before it was pinned, which is small, constant, and accumulates once per
- * page for as long as someone keeps scrolling.
- */
+/** All four states share one height: this row sits above the prepend, so a size change shifts the transcript. */
 export function HistoryBoundary(props: HistoryBoundaryProps) {
   return (
     <div className="flex h-7 items-center justify-center gap-2 text-xs">
@@ -417,14 +346,7 @@ export function HistoryBoundary(props: HistoryBoundaryProps) {
   );
 }
 
-/**
- * The authority gate before a thread has any renderable entries.
- *
- * A delivered `status: "end"` page is the only fact that permits an empty
- * claim. A failed first page keeps its Retry, and every unresolved state keeps
- * the loading surface. Both chat columns and the gallery use this component so
- * the product state and its browser proof cannot drift apart.
- */
+/** Only a delivered `status: "end"` page permits an empty claim. */
 export function ConversationStartBoundary({
   hasEntries, streaming, error, exhausted, onRetry, pending, empty,
 }: {
@@ -445,7 +367,6 @@ export function ConversationStartBoundary({
   return exhausted && !streaming ? empty : pending;
 }
 
-/** A crafted tool's live row, as `getToolDescriptions` reports it. */
 export interface CraftedToolDetail {
   name: string;
   description: string;
@@ -453,14 +374,10 @@ export interface CraftedToolDetail {
   usageCount: number;
 }
 
-/** A digest entry with its tool row joined in. Absent on facts, on unknown
- *  tools, and when the list failed to load — the card then shows what the
- *  entry row itself holds, never a guess. */
 export interface ChangelogEntryView extends ChangelogEntry {
   toolDetail?: CraftedToolDetail;
 }
 
-/** A tool entry's name, from its `tool:<name>:<at>` id. */
 export function changelogToolName(entry: ChangelogEntry): string | null {
   if (entry.kind !== 'tool') return null;
   const rest = entry.id.startsWith('tool:') ? entry.id.slice('tool:'.length) : entry.id;
@@ -470,7 +387,6 @@ export function changelogToolName(entry: ChangelogEntry): string | null {
   return name === '' ? null : name;
 }
 
-/** A fact entry's key, from its `fact:<key>` id. */
 export function changelogFactKey(entry: ChangelogEntry): string | null {
   if (entry.kind !== 'fact' || !entry.id.startsWith('fact:')) return null;
   const key = entry.id.slice('fact:'.length);
@@ -478,8 +394,6 @@ export function changelogFactKey(entry: ChangelogEntry): string | null {
   return key === '' ? null : key;
 }
 
-/** Join tool entries to the live tool list by name. Facts pass through:
- *  their row already carries everything the card shows. */
 export function withToolDetails(
   entries: readonly ChangelogEntry[],
   tools: readonly CraftedToolDetail[],

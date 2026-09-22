@@ -1,20 +1,4 @@
-/**
- * SandboxExecutor — @cloudflare/sandbox-backed executor.
- *
- * Each agent gets its own Linux container via a Sandbox DO. The orchestrator
- * passes a SandboxHandle (duck-typed here so core stays dep-free) obtained
- * from `getSandbox(env.SANDBOX, agentId)`.
- *
- * Namespace inside codemode sandbox: `sandbox.*`
- *   sandbox.exec("npm test")
- *   sandbox.readFile("/workspace/app.ts")
- *   sandbox.writeFile("/workspace/util.ts", code)
- *   sandbox.listFiles("/workspace")
- *   sandbox.deleteFile("/workspace/tmp.txt")
- *   sandbox.exposePort(3000, { name: "dev" })
- *   sandbox.unexposePort(3000)
- *   sandbox.listPorts()
- */
+/** SandboxExecutor: @cloudflare/sandbox-backed executor, one container per agent, exposed as `sandbox.*`. */
 
 import * as v from 'valibot';
 import { isAbortError } from '@kinu.run/agent-utils';
@@ -30,21 +14,16 @@ import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { JsonValue } from '../utils/json';
 
-/** The container's working directory, and the executor's default cwd. Declared
- *  here rather than imported from the durability machinery in @kinu.run/devbox:
- *  core must not depend on a host package. */
+/** The container's working directory and default cwd; declared here because core must not depend on @kinu.run/devbox. */
 export const WORKSPACE_BACKUP_DIR = '/workspace';
 
-/** Shell probe deciding whether anything listens on a container port. Any HTTP
- *  answer counts, even 4xx/5xx; curl exit 7 is a refused connection. */
+/** Any HTTP answer counts, even 4xx/5xx; curl exit 7 is a refused connection. */
 function healthProbeCommand(port: number): string {
   return `curl -sS -o /dev/null -m 3 -w '%{http_code}|%{exitcode}' --connect-timeout 2 `
     + `--head http://127.0.0.1:${port}/ 2>&1 || true`;
 }
 
-/** True when the probe says nothing is listening — or says nothing at all. An
- *  unparsable answer is not evidence of a listener, and exposing a port on that
- *  guess hands back a URL that 502s. */
+/** An unparsable answer is not evidence of a listener; exposing on that guess yields a URL that 502s. */
 function healthProbeSilent(output: string): boolean {
   const [codeStr, exitStr] = output.trim().split('|');
 
@@ -57,31 +36,11 @@ function healthProbeSilent(output: string): boolean {
 interface SandboxExposeOptions {
   hostname: string;
   name?: string;
-  /** The token the preview URL is built on. Supplied, never left to the SDK:
-   *  see {@link SandboxHandle.portToken}. */
+  /** Supplied, never left to the SDK: see {@link SandboxHandle.portToken}. */
   token?: string;
 }
 
-/**
- * Duck-typed handle — matches the subset of @cloudflare/sandbox's getSandbox()
- * return value we consume. Core accepts `unknown`-typed handles and narrows
- * here, so cf-backend can supply the real thing without core having a
- * package dependency.
- *
- * The SDK's `exposePort` enables in-container port forwarding, stores a secret
- * token in DO storage, and returns the preview URL it serves that port on:
- * `https://<port>-<sandbox>-<token>.<previewHostSuffix>`. Kinu hands that
- * URL straight through — the Worker routes it back with the SDK's own
- * `proxyToSandbox` (packages/cf-backend/src/preview-proxy.ts).
- */
-/**
- * What a caller may ask of {@link SandboxHandle.exec}.
- *
- * Named because BOTH ends build it: core assembles one here and every adapter
- * reads it, so an anonymous restatement at either end is a second copy of the
- * same contract. See `SandboxHandle.exec` for what each field means and what an
- * adapter owes it.
- */
+/** Shared by core and every adapter; field semantics on `SandboxHandle.exec`. */
 export interface SandboxExecOptions {
   cwd?: string;
   timeout?: number;
@@ -89,74 +48,35 @@ export interface SandboxExecOptions {
 }
 
 export interface SandboxHandle {
-  /** Resolve once this container generation's post-start restoration has
-   *  settled (processes restarted, ports re-exposed). Every operation here
-   *  awaits it first so an agent never observes a half-restored workspace. */
+  /** Every operation awaits this first so an agent never observes a half-restored workspace. */
   ensureReady(): Promise<void>;
   /**
-   * Run a command and resolve with what it produced.
-   *
-   * `timeout` ABSENT means the call carries NO WORK DEADLINE, and an adapter
-   * must honour that by choosing a transport that has none. For the Cloudflare
-   * SDK that is NOT its plain `exec`, which is bounded twice over — a command
-   * deadline the container enforces, and the SDK's non-streaming request
-   * ceiling, `sandbox.exec.request_ceiling_ms` in the platform catalog — so
-   * "no deadline" is the process lane rather than a bigger number. See
-   * `adaptCloudflareSandbox` in the cf runtime.
-   *
-   * `timeout` PRESENT means a caller asked for a deadline and wants the kill.
-   * Nothing in this module ever sets one. A detach window bounds a WAIT; a lane
-   * deadline silently outranks every window larger than itself, which is how a
-   * 30s detach turns into a 60s kill on the 300s one-shot surface.
-   *
-   * `signal` CANCELS THE REMOTE WORK, not the wait. An adapter that takes it
-   * must reach the process it started and kill it, and must not settle until
-   * that process is definitively gone — killed, exited, or absent from the
-   * container's own process table. Settling earlier reports `cancelled` over a
-   * command that is still writing to the workspace — racing the signal against
-   * the wait, abandoning the wait, and telling the agent the command "may still
-   * finish inside the container". An adapter whose transport has no kill must
-   * not accept a signal, so the gap stays visible in the type rather than in a
-   * sentence.
+   * `timeout` absent means no work deadline: pick a transport with none (catalog: sandbox.exec.request_ceiling_ms).
+   * `signal` cancels the remote work: settle only once the process is gone; a transport with no kill must not accept one.
    */
   exec(command: string, opts?: SandboxExecOptions):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
-  /** The SDK auto-detects binary files and returns their content base64-
-   *  encoded with `encoding: 'base64'`; text comes back as plain utf-8. */
+  /** The SDK returns binary files base64-encoded with `encoding: 'base64'`; text as utf-8. */
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
-  /** Pass `encoding: 'base64'` to write binary content byte-exactly. */
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
   deleteFile(path: string): Promise<JsonValue | void>;
-  /** Expose a port; `hostname` is the suffix the returned preview URL is built
-   *  on, and `token` is the durable one from {@link SandboxHandle.portToken}. */
+  /** `hostname` is the preview URL suffix; `token` comes from {@link SandboxHandle.portToken}. */
   exposePort(port: number, opts: { hostname: string; name?: string; token?: string }):
     Promise<{ url: string; port: number; name?: string }>;
   unexposePort(port: number): Promise<JsonValue | void>;
-  /** SDK method is `getExposedPorts(hostname)`; `hostname` builds each row's `url`. */
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
-  /** Start a SUPERVISED background process and record its restart spec — the
-   *  only kind of background process that survives container sleep. */
+  /** The only kind of background process that survives container sleep. */
   startSupervisedProcess(command: string, opts?: { cwd?: string }):
     Promise<{ processId: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   listSupervisedProcesses(): Promise<Array<{
     processId: string; pid?: number; status: string; command: string; restartable: boolean;
   }>>;
-  /**
-   * The durable token this port's preview URL is built on, minted on first ask.
-   *
-   * ASKED BEFORE THE EXPOSURE, not recorded after it. The restart path
-   * re-exposes each port with its stored token, which is the whole reason a
-   * preview URL survives a container recycle byte for byte — so the FIRST
-   * exposure has to use that same token. Recording a freshly-minted one
-   * afterwards left the caller holding a URL built on the SDK's own token and
-   * the manifest holding a different one, and the URL died on the first
-   * recycle.
-   */
+  /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
   notePortRemoved(port: number): Promise<void>;
 }
@@ -170,19 +90,9 @@ const PREVIEWS_NOT_CONFIGURED =
   'hostnames on. Turning them on takes a proxied wildcard DNS record and a matching route on a zone; ' +
   'the PREVIEW_HOST_SUFFIX note in wrangler.jsonc has both steps. Exec and files still work.';
 
-/**
- * Substring markers (lower-cased) for transient sandbox/RPC errors that the
- * SDK either auto-retries via 503 or does NOT retry at all (mid-request 500
- * with body 'Container suddenly disconnected, try again' — see
- * @cloudflare/containers/dist/lib/container.js:947-948). Cross-DO RPC drops
- * surface as 'Network connection lost.' before the SDK ever runs. We retry
- * any of these once with exponential-ish backoff. (STABILITY-AUDIT §B2/§B3.)
- */
+/** Lower-cased markers for transient sandbox/RPC errors, retried with backoff (STABILITY-AUDIT §B2/§B3). */
 const TRANSIENT_MARKERS = [
-  // MEASURED on a real container (scripts/sandbox-durability-probe.ts, P2): the
-  // first call after a stop/eviction can land while the RPC session is tearing
-  // down. The container is coming back; surfacing this to the agent would make
-  // an ordinary restart look like a tool failure.
+  // First call after a stop/eviction can land while the RPC session tears down (scripts/sandbox-durability-probe.ts).
   'while the runtime connection was closing',
   'stopped while the operation was pending',
   'network connection lost',
@@ -190,18 +100,10 @@ const TRANSIENT_MARKERS = [
   'container is starting',
   'no container instance',
   'internal error in durable object storage caused object to be reset',
-  // 0.8.11 SDK started classifying this as transient; cover us either way:
   'http error! status: 500',
-  // The per-second container START rate limit, returned as 429 by
-  // `containerFetch` (@cloudflare/containers/dist/lib/container.js:9 defines the
-  // text, :58 the predicate, :870 the response). A rate limit is transient by
-  // definition, and it was the one admission refusal NOT listed here — so a
-  // burst of parallel escalations surfaced it to the model as a hard failure
-  // while the concurrency ceiling beside it ('no container instance', 503) was
-  // retried. Both are admission control, so both belong here.
+  // Container start-rate limit (429): admission control, like 'no container instance' (503).
   'too many containers per second',
 ];
-
 
 function parseInput<TSchema extends v.GenericSchema>(
   schema: TSchema,
@@ -214,11 +116,7 @@ function parseInput<TSchema extends v.GenericSchema>(
 
 const StringSchema = v.string();
 
-/** Every path-taking member speaks the same path: a NON-EMPTY string. The SDK
- *  answers `ValidationFailedError` for `''` — a platform refusal worded like a
- *  tool defect — so the empty path is resolved in core instead: members that
- *  take a path refuse it here, and the optional ones mean the executor's own
- *  working directory (below). */
+/** The SDK refuses `''` with a defect-worded error, so the empty path is resolved in core. */
 const PathSchema = v.pipe(v.string(), v.minLength(1));
 
 const OptionalStringSchema = v.optional(v.string());
@@ -231,44 +129,15 @@ export function isSandboxTransientError(error: Error | string): boolean {
   return TRANSIENT_MARKERS.some(m => msg.includes(m));
 }
 
-/**
- * The binding is absent from wrangler.jsonc, so this deployment has no container
- * at all. The stub is still registered (cf-backend/src/runtime.ts:509,512) so the
- * UI can name it, which means every tool here is reachable and has to answer.
- *
- * `unavailable`, and deliberately not `unsupported`: it is the same fact the
- * `shell` tool already spells `unavailable` when a runtime is not registered
- * (tools/builtins.ts, `runtime_not_provisioned`), and one fact given two codes
- * splits one platform gap across two parts of the census. It lands in
- * `runtimeMissing`, whose definition is exactly this — an environment Kinu
- * never provisioned, neither a defect in the tool nor the work failing.
- *
- * The CODE is what makes it land: prose beginning `Sandbox executor not
- * configured` is not a failure to `isFailingResultText`, so an escalation into
- * an unconfigured sandbox would be recorded as a clean `ok` call.
- */
+/** No container binding. `unavailable` (not `unsupported`) matches the shell tool's code for an unprovisioned runtime;
+ *  the code, not the prose, is what `isFailingResultText` counts. */
 const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONFIGURED));
 
-/** `unsupported`, not `unavailable`: the container IS here and its exec and file
- *  surfaces work in full — what is missing is a zone to mint preview hostnames
- *  on. No retry reaches a `PREVIEW_HOST_SUFFIX` that was never set, and that
- *  permanence is the whole distinction between the two codes. */
+/** `unsupported`: the container works; no `PREVIEW_HOST_SUFFIX` means no retry can succeed. */
 const PREVIEWS_REFUSAL = refusalText(new KinuError('unsupported', PREVIEWS_NOT_CONFIGURED));
 
-/**
- * Classify a failure raised by the container's own RPC.
- *
- * `TRANSIENT_MARKERS` is ADMISSION CONTROL, not a broken tool: 503 at the ten-
- * instance concurrency ceiling, 429 on the container start-rate burst, and the
- * eviction disconnect window. `withSandboxRetry` has already spent its three
- * attempts before anything reaches here, so what is left is a container Kinu
- * could not get — `unavailable`, the same code an unprovisioned runtime gets, in
- * the platform part of the census. Calling it `io` would count the platform's own
- * capacity ceiling as a candidate defect in this tool.
- *
- * A cause the classifier recognises keeps its own code: an abort, a timeout or the
- * memory wall is more precise than either answer here.
- */
+/** Transient markers left after retries are platform admission control, so `unavailable`, not `io`.
+ *  A recognised cause keeps its own, more precise code. */
 function sandboxFailure(input: { doing: string; cause: unknown }): KinuError {
   const transient = isSandboxTransientError(
     input.cause instanceof Error ? input.cause : String(input.cause),
@@ -277,13 +146,7 @@ function sandboxFailure(input: { doing: string; cause: unknown }): KinuError {
   return toKinuError({ ...input, otherwise: transient ? 'unavailable' : 'io' });
 }
 
-/**
- * Run `fn` with up to `attempts` total tries, retrying only on transient
- * errors. Backoff: 500ms, 1000ms (i.e. 500ms × 2^attempt). Non-transient
- * errors throw immediately. Used to swallow the brief disconnect window
- * during container/DO eviction without forcing the agent to error-handle.
- * Exported for other consumers of the same raw handle (release exec).
- */
+/** Retries only transient errors, with exponential backoff; non-transient errors throw immediately. */
 export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown;
 
@@ -293,11 +156,7 @@ export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): P
     } catch (err) {
       lastErr = err;
 
-      // A caller-side classified refusal is the VERDICT, not a transport
-      // symptom: `unavailable` says the environment is still coming, and its
-      // reason is free to carry the platform's own transient text — a marker
-      // string cannot promote it back into the retry loop, or a minutes-long
-      // restore would be asked three times and filed once, invisibly.
+      // A classified `unavailable` is a verdict: marker text in its reason must not re-enter the retry loop.
       if (err instanceof KinuError && err.code === 'unavailable') throw err;
 
       if (!isSandboxTransientError(err instanceof Error ? err : String(err)) || i === attempts - 1) {
@@ -315,9 +174,7 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
   return commandResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
 }
 
-/** The caller gave up before this attempt reached the container, so there is no
- *  remote process to cancel and nothing to wait for. Distinct wording from the
- *  adapter's own cancellation, which names the process it killed. */
+/** Worded distinctly from the adapter's own cancellation, which names the process it killed. */
 function notDispatched(): Error {
   return new DOMException(
     'sandbox exec cancelled before dispatch — no container process was started',
@@ -325,18 +182,7 @@ function notDispatched(): Error {
   );
 }
 
-/**
- * Build an ExecutorProvider from a live SandboxHandle.
- * Pass `undefined` to get a "not configured" stub that appears in the UI's
- * Not-configured footer without breaking the router.
- *
- * @param handle             SDK `getSandbox()` result.
- * @param previewHostSuffix  `env.PREVIEW_HOST_SUFFIX` — the zone previews are
- *                           served under; the SDK builds every preview URL on
- *                           it. Optional: without it exec/files work in full
- *                           and only the port-exposure surface refuses, with
- *                           the preview-specific reason.
- */
+/** Pass `undefined` for a "not configured" stub. Without `previewHostSuffix` only port exposure refuses. */
 export function createSandboxExecutor(
   handle?: SandboxHandle,
   previewHostSuffix?: string,
@@ -351,17 +197,7 @@ export function createSandboxExecutor(
     return fn();
   };
 
-  /**
-   * Does anything answer on `port` inside the container?
-   *
-   * `unprobeable` is not evidence either way, and what to do about it is left
-   * to the caller because the two surfaces below genuinely differ: the codemode
-   * tool records a probe glitch and lets the SDK call report its own failure,
-   * while the generic provider method refuses — the shell swallows curl's own
-   * failure with `|| true`, so all that is left is "this container cannot
-   * execute a command", and exposing a port on such a container has nothing
-   * left to mean.
-   */
+  /** `unprobeable` is not evidence either way; each caller decides what it means. */
   const probeListener = async (
     box: SandboxHandle, port: number,
   ): Promise<{ listening: boolean } | { unprobeable: unknown }> => {
@@ -377,14 +213,7 @@ export function createSandboxExecutor(
     }
   };
 
-  /**
-   * The public URL `port` becomes reachable at, with THE DURABLE TOKEN MINTED
-   * FIRST — so the URL handed back is the URL the restart path rebuilds.
-   * Minting it afterwards published one token and stored another, and the
-   * caller's link died on the first recycle. One implementation, because the
-   * codemode tool and the generic provider method must not disagree about that
-   * order.
-   */
+  /** Mints the durable token before exposing, so the returned URL is the one restarts rebuild. */
   const exposeWithDurableToken = async (
     box: SandboxHandle, suffix: string, port: number, name?: string,
   ): Promise<string> => {
@@ -416,28 +245,11 @@ export function createSandboxExecutor(
         const signal = readExecSignal({ context: args[1] });
 
         try {
-          // NO WORK DEADLINE — see SandboxHandle.exec. Sending
-          // `timeout: 60_000` makes the container echo that number back as
-          // `Command timeout after 60000ms`, which is why the string appears
-          // nowhere in this repository. A 60s lane ceiling outranks every
-          // detach window above it, so a long command on the 300s one-shot
-          // surface is killed where it should have detached.
-          //
-          // THE SIGNAL GOES TO THE CONTAINER, and nothing here races it. The
-          // adapter owns the process id, so it is the only layer that can kill
-          // the command an abort is about; racing the wait here instead lets the
-          // turn move on while that command keeps writing to /workspace. What
-          // the signal still does locally is refuse to DISPATCH — once before
-          // the first attempt and again before each retry, because a transient
-          // failure must not start a second process for a caller that has
-          // already given up.
+          // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only
+          // refuses to dispatch, before the first attempt and before each retry.
           const res = await withSandboxRetry(() => touch(() => {
             if (signal?.aborted) throw notDispatched();
-            // /workspace is the REAL default cwd — stated in the doctrine below
-            // and passed explicitly so the container cannot outvote it. The
-            // signal is added only when a caller gave one, so an adapter can
-            // still tell "no cancellation asked for" from "cancellation asked
-            // for and already fired".
+            // The signal is added only when given, so an adapter can tell "none" from "already fired".
             const opts: SandboxExecOptions = { cwd: '/workspace' };
 
             if (signal !== undefined) opts.signal = signal;
@@ -467,9 +279,7 @@ export function createSandboxExecutor(
         try {
           const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
 
-          // The SDK reports a failed read as an exit code and nothing else, so
-          // `io` is all the evidence supports: `missing` would claim the path is
-          // absent when a permission or a decode failure exits the same way.
+          // A failed read is only an exit code, so `io`: `missing` would over-claim.
           if (r.exitCode && r.exitCode !== 0) {
             return refusalText(new KinuError('io', `sandbox readFile ${path}: exit ${r.exitCode}`));
           }
@@ -515,9 +325,7 @@ export function createSandboxExecutor(
           return refusalText(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
         }
 
-        // One rule for an absent path, applied before the SDK can refuse `''`:
-        // the executor's working directory — what `'.'` means inside the
-        // container, and what the `/sandbox/workspace` mount root lists.
+        // Absent path means the executor's working directory.
         const dir = path === undefined || path === '' ? WORKSPACE_BACKUP_DIR : path;
 
         try {
@@ -541,9 +349,6 @@ export function createSandboxExecutor(
     readdir: {
       planAllowed: true,
       description: 'Alias for listFiles — list entries in a directory.',
-      // Straight through — `listFiles` already answers with the rendered
-      // listing or its own refusal, and re-validating it here could only
-      // throw over its own return type.
       execute: async (...args: unknown[]) => tools.listFiles.execute(args[0]),
     },
     deleteFile: {
@@ -572,10 +377,7 @@ export function createSandboxExecutor(
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(PathSchema, { value: args[0] });
 
-        // `'false'` is what this answered, and it is a claim the path is absent
-        // — the one thing a caller that could not be asked must never say
-        // (AGENTS.md: an empty read is distinguishable from a failed read). An
-        // empty path is the same refusal every other member gives it.
+        // Answering 'false' would claim absence when the container could not be asked.
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'sandbox exists: path must be a non-empty string'));
         }
@@ -608,18 +410,11 @@ export function createSandboxExecutor(
           return refusalText(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
         }
 
-        // Pre-flight: verify a server is listening on the port inside the
-        // container. Without this we hand back a preview URL that 502s
-        // because nothing answers — the failure mode the agent (and user)
-        // actually hit. Any HTTP status, even 4xx/5xx, means a server is up;
-        // connection refused means no listener.
+        // Pre-flight: without a listener the preview URL 502s.
         const probe = await probeListener(handle, p);
 
         if ('unprobeable' in probe) {
-          // The probe failed for a non-listener reason (sandbox exec errored).
-          // Recorded, then stepped over — the SDK exposePort call below will
-          // surface its own error if exposure cannot be set up, and the happy
-          // path is not gated on a probe glitch.
+          // Probe glitch: recorded and stepped over; exposePort reports its own error.
           diagnostics.failure(
             'sandbox.port_probe_failed',
             toKinuError({
@@ -630,13 +425,7 @@ export function createSandboxExecutor(
             { port: p },
           );
         } else if (!probe.listening) {
-          // `bad_input`, and it is the honest one of three near misses. Nothing
-          // was tried, and what must change is the caller's own request — start
-          // the server, then ask again. `unavailable` would file a container
-          // that is up and healthy under the platform gap that means Kinu
-          // never provisioned one, and `missing` is not a refusal at all, so it
-          // would land a correct decline in the candidate-defect part of the
-          // census (read-models/tool-failures.ts).
+          // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
           return refusalText(new KinuError('bad_input',
             `nothing is listening on port ${p} inside the sandbox. `
             + `Start your server FIRST with a SUPERVISED process, then call `
@@ -684,8 +473,7 @@ export function createSandboxExecutor(
         if (!previewHostSuffix) return PREVIEWS_REFUSAL;
 
         try {
-          // The SDK method is getExposedPorts; the tool is listPorts because that
-          // is the one verb both executors declare (nimbus's own API is ports.list).
+          // The tool is listPorts, the verb both executors declare.
           const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
 
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
@@ -719,14 +507,7 @@ export function createSandboxExecutor(
         ) ?? WORKSPACE_BACKUP_DIR;
 
         try {
-          // Readiness is retried; the START is not. Creating a supervised
-          // process and recording its durable spec are two steps inside the
-          // container, so a failure between them leaves a live process with no
-          // spec — and a retry, which can only look for a spec, starts a second
-          // one. Two processes then fight over one port and the unrecorded one
-          // cannot be listed, stopped or restored. Waking the container creates
-          // nothing, so the transient window the retry exists for is still
-          // covered, and one call now makes at most one process.
+          // Readiness is retried; the start is not: a retry after a partial start would spawn a second process.
           const started = await touch(async () => {
             await withSandboxRetry(() => handle.ensureReady());
 
@@ -832,33 +613,8 @@ declare namespace sandbox {
 }
 `.trim();
 
-  // What the container image actually holds, probed inside the deployed one
-  // rather than read off the SDK's declaration: `executeInExecutor` against the
-  // deployed container reports `git` 2.34.1, `npm` 10.9.8, `node` v22.23.2,
-  // `bun`, `sh`/`bash`, `jq` and `curl` PRESENT, and `python3`, `python`,
-  // `ruby`, `clang`, `gcc`, `make`, `tsc` and `docker` ABSENT at exit 127
-  // (docs/EXECUTION-LAYER-SPEC.md; the row in AGENTS.md). A capability the model
-  // reads in its execution block ("— runs: …", prompting/volatile-context.ts) is
-  // a routing instruction, so an aspirational entry sends work somewhere it
-  // cannot be done — and the language rows are the ones it reads. Per entry:
-  //
-  //   javascript     `node` v22.23.2, and `bun`.
-  //   typescript     `bun`, which executes a `.ts` file directly. `tsc` is
-  //                  absent and does not bear on it: `tsc` type-checks, it is
-  //                  not what runs the code.
-  //   native_binary  a real Linux container, and `git`/`node`/`bun`/`jq`/`curl`
-  //                  are themselves ELF binaries — one fetched with `curl` runs
-  //                  the same way. RUNS them: `gcc`, `clang` and `make` are
-  //                  absent, so nothing is COMPILED here.
-  //   shell          `sh` and `bash`.
-  //   npm, git       both present, and NOT a reason to come HERE: the Nimbus
-  //                  workspace serves them too (execution/nimbus.ts,
-  //                  vfs/workspace-runtimes.ts) — what is exclusive to the
-  //                  container is in the spec above.
-  //
-  // NOT `python`: `python3` and `python` both exit 127, so the workspace is the
-  // only place Python runs at all. NOT `docker`: `docker` and `dockerd` both
-  // exit 127 too.
+  // Probed in the deployed image (docs/EXECUTION-LAYER-SPEC.md); these are routing instructions for the model,
+  // so only list what runs. python and docker are absent (exit 127).
   const capabilities: ExecutorCapability[] = [
     'javascript', 'typescript', 'native_binary',
     'shell', 'npm', 'git', 'fs_owned',
@@ -877,8 +633,6 @@ declare namespace sandbox {
 
       if (!connected) return { ...seen, status: 'not_configured', reason: NOT_CONFIGURED };
 
-      // An available sandbox with previews off carries the preview reason so
-      // surfaces that hand out preview URLs can say so before anyone tries.
       if (!previews) return { ...seen, status: active ? 'active' : 'idle', reason: PREVIEWS_NOT_CONFIGURED };
 
       return { ...seen, status: active ? 'active' : 'idle' };
@@ -893,11 +647,7 @@ declare namespace sandbox {
     types,
     positionalArgs: true,
 
-    // ── Generic ExecutorProvider port surface ────────────────────
-    //
-    // Mirrors the namespaced `sandbox.exposePort` codemode tool, but at
-    // the ExecutorProvider abstraction so any caller can ask any executor
-    // to expose a port without knowing it's "sandbox" specifically.
+    // Generic ExecutorProvider port surface, mirroring the codemode `sandbox.exposePort` tool.
     async exposePort(port, opts) {
       if (!handle) return { supported: false, reason: NOT_CONFIGURED };
 
@@ -907,11 +657,7 @@ declare namespace sandbox {
         return { supported: false, reason: `invalid port ${port}` };
       }
 
-      // Pre-flight: verify a server is responsive on the port. Without this the
-      // caller gets a preview URL that 502s — and a probe that cannot RUN is
-      // reported, not stepped over: the shell swallows curl's own failure with
-      // `|| true`, leaving only "this container cannot execute a command", and
-      // exposing a port on such a container has nothing left to mean.
+      // A probe that cannot run is reported, not stepped over: the container cannot execute commands.
       const probe = await probeListener(handle, Number(port));
 
       if ('unprobeable' in probe) {
@@ -935,7 +681,6 @@ declare namespace sandbox {
           url: await exposeWithDurableToken(handle, previewHostSuffix, port, opts?.name),
           port,
           name: opts?.name,
-          // Reached only past the probe above, which is the verification.
           verified_listening: true,
         };
       } catch (err) {
@@ -945,10 +690,7 @@ declare namespace sandbox {
 
     async unexposePort(port) {
       if (!handle) return;
-      // No catch: the SDK deletes the port token only if it is there, so
-      // unexposing an unexposed port already succeeds. What the old
-      // `catch { /* idempotent */ }` actually absorbed was an invalid port and
-      // a failed storage write — a port left forwardable, reported as removed.
+      // No catch: unexposing an unexposed port already succeeds; other errors must surface.
       await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
     },
 
@@ -966,20 +708,8 @@ declare namespace sandbox {
   };
 }
 
-/**
- * The container's files, in the container's own absolute paths.
- *
- * Over the raw SDK handle, which has no stat and no mkdir: stat is synthesized
- * from a listing of the parent (size + type; the SDK reports no mtime, so mtime
- * is 0, never invented), and mkdir/exists go through the container's shell.
- * Binary content rides the SDK's base64 encoding both ways — the SDK flags a
- * binary read itself — so bytes round-trip exactly.
- *
- * `readdirStats` exists because that synthesis makes a per-child stat cost a
- * FULL RELISTING of the same directory: a browser listing an N-child folder ran
- * one listing plus N more identical ones. One listing already carries every
- * field the synthesized stat can report, so this hands them back together.
- */
+/** Container files at absolute paths. stat is synthesized from the parent listing (mtime 0);
+ *  `readdirStats` avoids one relisting per child. */
 export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 'readdirStats' | 'readRange'> {
   const isDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
     f.isDirectory ?? (f.type === 'directory' || f.type === 'dir');
@@ -990,20 +720,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     return p.slice(p.lastIndexOf('/') + 1);
   };
 
-  /**
-   * The SDK's file errors, into this plane's closed taxonomy.
-   *
-   * The container reports every file failure as a TYPED throw — `code` is the
-   * container's own word (`FILE_NOT_FOUND`, `IS_DIRECTORY`), never an exit
-   * code — and a miss used to escape this view as an unclassified error. That
-   * is the defect a create through the mount hit on the deployed build
-   * (b4d2c6001, public-failure-recovery): the file tool's write reads first,
-   * an ENOENT miss means "create", and the untranslated FileNotFoundError was
-   * refused as `io`.
-   *
-   * The wire keeps `name` and `errorResponse` as own properties and drops the
-   * prototype, so `code` — a getter — never survives; the response object does.
-   */
+  /** SDK file errors into this plane's taxonomy. `code` is a getter lost over the wire; `errorResponse` survives. */
   const SDK_ERRNO = new Map<string, VfsErrorCode>([
     ['FILE_NOT_FOUND', 'ENOENT'],
     ['FILE_EXISTS', 'EEXIST'],
@@ -1034,9 +751,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
 
     if (response !== undefined) return 'EIO';
 
-    // Nothing but a name crossed the wire: still an SDK file error when the
-    // name is one, and every named one is a filesystem verdict — EIO covers
-    // the codes the taxonomy has no word for.
+    // Only the name crossed the wire; EIO covers codes the taxonomy has no word for.
     return SDK_ERRNO_BY_NAME.get(cause.name) ?? null;
   };
 
@@ -1051,8 +766,6 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       if (code === null) throw cause;
 
       const error = makeVfsError(code, `${cause.message} (on '${path}')`, path);
-      // The SDK error stays the cause: it carries the container's code and
-      // context, which the chain renderer and any rethrown diagnosis need.
       error.cause = cause;
 
       throw error;
@@ -1078,13 +791,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
     },
 
-    /**
-     * A bounded byte window, through the container's own streamed process
-     * surface. The SDK's `readFile` has no offset/length and materializes the
-     * file; `dd` reads only this range and base64 is the same binary boundary
-     * this adapter's whole-file read already uses. Path is shell-quoted, and
-     * numeric bounds are validated before becoming command syntax.
-     */
+    /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
     async readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
         throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
@@ -1121,9 +828,6 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
         .filter(({ name }) => name.length > 0)
         .map(({ name, entry }) => ({
           name,
-          // Every field the synthesized `stat` below can report, off the listing
-          // it would have re-run to get them. No mtime here for the same reason
-          // there is none there: the SDK reports none, and 0 says so.
           stat: { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) },
         }));
     },
@@ -1135,9 +839,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
 
       const name = clean.slice(clean.lastIndexOf('/') + 1);
 
-      // Same listing `readdir` above runs uncaught: null is reserved for "the
-      // parent has no such entry", so a parent that cannot be listed propagates
-      // rather than being reported as a file that simply is not there.
+      // null is reserved for "no such entry"; an unlistable parent propagates.
       const files = (await serving(clean, () =>
         handle.listFiles(vfsDirname(clean), { recursive: false }))).files ?? [];
 

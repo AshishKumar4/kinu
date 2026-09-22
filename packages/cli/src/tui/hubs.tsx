@@ -186,7 +186,7 @@ function AgentHubRows({ data, newAgentHint }: {
   const hint = newAgentHint !== undefined && (
     <text>
       <span fg={colors.intent.accent}>{newAgentHint}</span>
-      <span fg={colors.text.muted}> new agent — one click, no form; it names itself from your first message</span>
+      <span fg={colors.text.muted}> new agent. It names itself from your first message</span>
     </text>
   );
 

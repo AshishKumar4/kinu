@@ -1646,7 +1646,7 @@ export class LocalAgentSession implements BackendHost {
         .filter((d) => d.status === 'failed')
         .map((d) => ({
           source: `MCP server "${d.server}"`,
-          reason: d.reason ?? 'failed to start — its tools are absent from this turn',
+          reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
         })),
       ...admission.deferred.map((d) => ({
         source: `MCP server "${d.server}"`,
@@ -1811,7 +1811,7 @@ export class LocalAgentSession implements BackendHost {
     if (this.backgroundFibers.size === 0) return true;
     this.emit({
       type: 'background', event: 'bg_jobs_settling',
-      message: `${this.backgroundFibers.size} background job(s) still running — waiting for their results`,
+      message: `${this.backgroundFibers.size} background job(s) still running. Waiting for their results.`,
     });
 
     while (this.backgroundFibers.size > 0) {
@@ -1851,8 +1851,8 @@ export class LocalAgentSession implements BackendHost {
 
     const message =
       `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
-      'exit. They are checkpointed, so this workspace resumes them the next time it starts — including ' +
-      'unattended, under the local scheduler daemon — and a resumed job runs commands and writes files on ' +
+      'exit. They are checkpointed, so this workspace resumes them the next time it starts, including ' +
+      'unattended under the local scheduler daemon. A resumed job runs commands and writes files on ' +
       `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
       (roster ? ` Interrupted: ${roster}.` : '');
 
@@ -3279,7 +3279,7 @@ export class LocalAgentSession implements BackendHost {
     this.emit({
       type: 'evolution',
       event: 'refinement',
-      message: `Refinement ${step.request.id} is ${step.request.stage} — ${step.request.detail}`,
+      message: `Refinement ${step.request.id} is ${step.request.stage}: ${step.request.detail}`,
     });
   }
 

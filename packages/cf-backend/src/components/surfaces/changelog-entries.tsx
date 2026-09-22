@@ -1,18 +1,3 @@
-/**
- * Self-changes — the "what I changed about myself" entries, with their evidence
- * and their per-line actions: ✓ keep (default, no-op) · ✕ revert (the REAL
- * rollback paths) · diff (scaffold entries, reusing DiffLines).
- *
- * This is the transparency surface behind the autonomy-ON defaults, and it now
- * renders as entries in the Work surface's journal rather than as a block
- * inside the agent's own description: a self-change is something that HAPPENED,
- * on the same time axis as a settled job or a closed task, and "what happened
- * while I was away" is not a question anybody opens a CV to answer.
- *
- * The load and the seen-marking are a hook so the journal can interleave these
- * with the rest of the feed by timestamp; each card owns its own kept / busy /
- * diff state, which is per-entry anyway.
- */
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
@@ -60,37 +45,17 @@ const KIND_ICON = {
   refinement: ArrowsClockwiseIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
-/**
- * How often the digest re-reads while the surface showing it is open.
- *
- * It is the surface-wide cadence deliberately, not a number of its own. The
- * needs-you queue polls the SAME ledger through `listPendingActions` at that
- * rate; reading the entries any slower means the queue can announce a
- * self-change the journal beneath it has not fetched yet, and "1 self-change
- * you have not seen" sits above "Nothing has settled yet" until something else
- * remounts the tab. Loading once at mount — which is what this did — made that
- * window permanent for anyone who left Work open, i.e. everyone: Work is the
- * surface a workspace opens on.
- */
+/** The needs-you queue polls the same ledger at this cadence; a slower read lets it announce a self-change the journal has not fetched. */
 export const CHANGELOG_REVALIDATE_MS = LIVE_DATA_REFRESH_MS;
 
-/** Never stand down: unlike a plan or a fork run, a digest has no settled
- *  state to infer from what loaded — a scaffold promotion, a crafted tool or a
- *  graded turn can land on an idle workspace at any time. Exported for the
- *  other surfaces reading the same ledgers at the same cadence. */
+/** A digest has no settled state: a self-change can land on an idle workspace at any time. */
 export const changelogRevalidate = (): number => CHANGELOG_REVALIDATE_MS;
 
-/**
- * The changelog for the surface that shows it, marked seen by the act of
- * showing it — seeing the digest IS the acknowledgement, never a blocking
- * modal. `onSeen` zeroes the tab badge upstream.
- */
+/** Showing the digest marks it seen; `onSeen` zeroes the tab badge upstream. */
 export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   const load = useCallback(async (): Promise<ChangelogView> => {
     const view = await rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]);
-    // Enrichment, not the load: a tool list that fails or misshapes leaves
-    // the entries as their rows hold them. That absence is a value — the
-    // digest already arrived — not a fault to fail the journal over.
+    // Enrichment only: a failed or misshapen tool list leaves the entries as their rows hold them.
     let tools: CraftedToolDetail[] = [];
 
     try {
@@ -116,11 +81,7 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   const { resource, reload } = useAsyncResource(load, changelogRevalidate);
   const view = lastValue(resource);
 
-  // Freshness is judged against the marker as it stood when this surface
-  // opened, pinned on the first read. Showing the digest marks it seen, so
-  // every later read answers with a marker newer than every entry — and
-  // rendering against THAT would blank the new-entry dots seconds after the
-  // reader arrived, on the surface whose whole job is showing what is new.
+  // Freshness is judged against the marker pinned on first read; later reads return a marker newer than every entry.
   const openedSeenAt = useRef<number | null>(null);
 
   if (openedSeenAt.current === null && view !== null) openedSeenAt.current = view.seenAt;
@@ -143,8 +104,7 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   return { view, seenAt: openedSeenAt.current ?? 0, resource, reload, seenError };
 }
 
-/** The failure state, so a broken read is never indistinguishable from a build
- *  that never had a changelog — on the very surface that justifies autonomy. */
+/** A broken read must never look like a build that never had a changelog. */
 export function ChangelogFailure(
   { resource, reload }: { resource: AsyncResource<ChangelogView>; reload: () => void },
 ) {
@@ -158,8 +118,6 @@ export function ChangelogFailure(
   </div>;
 }
 
-/** One labelled field of a retained memory or tool: the label column is fixed
- *  so the values align down the card. */
 function EntryField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 text-[11px] leading-relaxed">
@@ -169,22 +127,14 @@ function EntryField({ label, children }: { label: string; children: ReactNode })
   );
 }
 
-/**
- * What a retained memory or tool IS, from its row. A fact's row holds its
- * key, its stored record, and a revert while it is in effect; a tool's row
- * holds its name and its stamped evidence, joined to the live tool list for
- * purpose and score. No Edit or Remove: no UI RPC exposes either, so none is
- * offered (the revert path is the entry's own `revert`, rendered by the card).
- */
+/** No Edit or Remove: no UI RPC exposes either. */
 function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
   const when = new Date(entry.at);
   const whenText = isNaN(when.getTime()) ? null : when.toLocaleString();
 
   if (entry.kind === 'fact') {
     const key = changelogFactKey(entry);
-    // A fact row in the digest is live: the builder lists agent_facts, and a
-    // forgotten fact is gone rather than marked. `revert` present therefore
-    // reads applied; a staged decision reads proposed.
+    // Forgotten facts are gone from the digest, so a present `revert` reads applied; a staged decision reads proposed.
     let status: string | null = null;
 
     if (entry.decision) status = 'proposed';
@@ -225,8 +175,6 @@ function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
   return null;
 }
 
-/** The revert control an entry carries, on the card and on a grouped member
- *  alike: the RPC, what it reported, and the wait while it runs. */
 function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
@@ -250,15 +198,11 @@ function useEntryRevert(entryId: string, rpc: Rpc, onReverted: () => void) {
   return { busy, notice, revert };
 }
 
-/** Whether a card has anything to expand: evidence, grouped members, or a kind
- *  whose facts render in the details region. */
 function entryHasDetails(entry: ChangelogEntryView): boolean {
   return Boolean(entry.evidence) || (entry.items?.length ?? 0) > 0
     || entry.kind === 'fact' || entry.kind === 'tool';
 }
 
-/** The scaffold diff a card opens: its summary and lines once loaded, the
- *  failure when the read did not land, the wait while it runs. */
 function EntryScaffoldDiff({ diff, onRetry }: {
   diff: AsyncResource<ScaffoldDiff> | null;
   onRetry: () => void;
@@ -285,9 +229,7 @@ function EntryScaffoldDiff({ diff, onRetry }: {
 
 export interface ChangelogEntryCardProps {
   entry: ChangelogEntryView;
-  /** Render inside the journal's shared grouped-row container. */
   grouped?: boolean;
-  /** Entries newer than this were unseen when the surface opened. */
   seenAt: number;
   rpc: Rpc;
   onReverted: () => void;
@@ -313,7 +255,6 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       const d = await rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]);
       setDiff(loadSucceeded(d));
     } catch (cause) {
-      // Collapsing the panel made the click look like it did nothing.
       setDiff(loadFailed({ status: "loading" }, { cause }));
     }
   }, [rpc, entry.scaffoldVersion, diff]);
@@ -412,14 +353,8 @@ interface StagedSkillView {
 type StagedSkillResult = { ok: true; view: StagedSkillView } | { ok: false; error: string };
 
 /**
- * READ THE BYTES, THEN DECIDE.
- *
- * A staged skill is instructions, and the only thing that can grant instructions
- * is the owner. So this opens the WHOLE file — never an excerpt, because a
- * truncated approval surface asks for a decision about bytes the decider could
- * not see — and sends back the digest it displayed. The backend refuses any
- * other digest, so a proposal that changed between the reading and the clicking
- * cannot be approved by accident.
+ * Opens the whole file, never an excerpt, and sends back the digest it displayed; the backend
+ * refuses any other digest, so a proposal changed after reading cannot be approved.
  */
 function StagedSkillDecision(
   { decision, rpc, onDecided }: {
@@ -497,7 +432,6 @@ function StagedSkillDecision(
               These bytes differ from the refinement's record. Re-run the refinement before approving.
             </div>
           )}
-          {/* The WHOLE file. No clamp, deliberately: see the note above. */}
           <div className="max-h-96 overflow-auto px-3"><CodeBlock className={`language-${staged.value.target.split('.').at(-1) ?? ''}`}>{staged.value.source}</CodeBlock></div>
           <div className="flex items-center gap-2 px-3 py-2 border-t p-border">
             <Button size="sm" disabled={busy || !staged.value.intact}
@@ -519,7 +453,6 @@ function StagedSkillDecision(
   );
 }
 
-/** A grouped entry's members — same actions, no icon or diff of their own. */
 function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: Rpc; onReverted: () => void }) {
   const [kept, setKept] = useState(false);
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
@@ -562,7 +495,6 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: 
   );
 }
 
-/** The members of a grouped entry, wherever they hang. */
 function SubEntryList({ items, className, rpc, onReverted }: {
   items: readonly ChangelogEntryView[];
   className: string;

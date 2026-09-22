@@ -1,27 +1,6 @@
 /**
- * The exact-match file editor — the text surgery behind the `file` tool's
- * `edit` and `read` actions, with no I/O of its own so it is testable as pure
- * string math and reusable over any VFS.
- *
- * The one property this exists for: an edit that cannot be placed EXACTLY once
- * fails, naming the problem, without touching the file. `sed -i`, an inline
- * `python3 -c` and a heredoc — the three shapes the model actually reaches for
- * today — will all happily write the wrong thing and report success.
- *
- * Deliberately NOT ported from pi's edit-diff.ts: its fuzzy fallback. When pi's
- * exact match misses it re-matches in a normalized space (NFKC, smart quotes,
- * dashes, per-line trimEnd) and then writes the whole file back FROM that
- * normalized space — so one tolerated smart quote in the anchor silently
- * rewrites every unrelated line of the file. That is the corruption class this
- * primitive exists to remove. A non-destructive variant would need an index map
- * back through non-length-preserving normalizations, which is real machinery for
- * a benefit nothing here has measured. A miss instead fails loudly and the model
- * re-reads: one round trip, honest.
- *
- * Line endings and a BOM ARE round-tripped, because that is faithfulness rather
- * than tolerance — matching happens on LF text without the BOM (the model never
- * types an invisible BOM into old_text), and the file is written back in its own
- * ending with its BOM restored.
+ * Exact-match file editor behind the `file` tool's `edit`/`read`: an edit that cannot be placed exactly once
+ * fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
 import { KinuError } from '../obs/error';
 import { headEnd, lineCount } from '../utils/text';
@@ -33,24 +12,20 @@ export {
   FILE_REFUSAL_REASONS, type FileEditFailure,
 } from '../types/file-edits';
 
-/** One replacement. Every edit in a call matches the file as it was READ, never
- *  the result of a sibling edit. */
+/** One replacement. Every edit matches the file as read, never a sibling edit's result. */
 export interface FileEdit {
   oldText: string;
   newText: string;
 }
 
-/** A native file invocation refused with the file plane's exact verdict. */
 export class FileRefusalError extends KinuError {
   constructor(readonly verdict: (typeof FILE_REFUSAL_REASONS)[number], message: string) {
     super('bad_input', message);
   }
 }
 
-/** Where one applied edit landed, so the caller can report the change without
- *  echoing a diff back into the context. */
 export interface AppliedEdit {
-  /** 1-indexed line the match started on, in the file as it was read. */
+  /** 1-indexed line in the file as read. */
   line: number;
   removedLines: number;
   addedLines: number;
@@ -60,8 +35,6 @@ export type FileEditOutcome =
   | { ok: true; content: string; applied: AppliedEdit[] }
   | { ok: false; reason: FileEditFailure; message: string };
 
-/** The byte-order mark. Invisible, so the model never types it into an anchor
- *  and never should be shown one. */
 export const BOM = '﻿';
 
 function detectLineEnding(content: string): '\r\n' | '\n' {
@@ -76,16 +49,8 @@ function toLF(text: string): string {
   return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
-/**
- * LF-normalized text, plus the index in the ORIGINAL of every position in it.
- *
- * Matching happens on LF text — the model never types a `\r` into old_text —
- * but the splice happens on the original, at these indices. That is what keeps
- * a file with mixed endings byte-identical outside the replaced spans; the
- * normalize-edit-and-rewrite shape would quietly convert every unrelated line.
- * `\r\n` is the only place the two diverge: it costs two characters and yields
- * one, so a lone `\r` (same length) needs no special case.
- */
+/** LF-normalized text plus each position's index in the original; splicing the original keeps
+ *  mixed-ending files byte-identical outside replaced spans. */
 function normalizeWithOrigin(original: string) {
   const chars: string[] = [];
   const origin: number[] = [];
@@ -111,9 +76,7 @@ function normalizeWithOrigin(original: string) {
   return { text: chars.join(''), origin };
 }
 
-/** Occurrences counted at EVERY position, overlapping ones included: `aa` sits
- *  in `aaa` twice, and which one the caller meant is exactly the ambiguity this
- *  count exists to refuse. */
+/** Counts overlapping occurrences too: `aa` sits in `aaa` twice. */
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
 
@@ -130,22 +93,12 @@ function lineOf(content: string, index: number): number {
   return line;
 }
 
-/** Lines a span of text covers. A trailing newline ENDS the last line rather
- *  than starting a phantom one, so `'a\nb\n'` covers two. */
-/** Where an edit index is named in a message: silent for a single edit, indexed
- *  when the call carried several, so the model knows WHICH one to fix. */
+/** A trailing newline ends the last line: `'a\nb\n'` covers two. */
 function at(index: number, total: number): string {
   return total === 1 ? 'old_text' : `edits[${index}].old_text`;
 }
 
-/**
- * Apply every edit to `original`, or none of them.
- *
- * All anchors are matched against the file as read; replacements are then
- * applied back-to-front so earlier offsets stay valid. Any anchor that is
- * missing, ambiguous, or overlapping a sibling fails the whole call before a
- * single byte is written.
- */
+/** Apply every edit to `original`, or none: a missing, ambiguous, or overlapping anchor fails before any write. */
 export function applyFileEdits(original: string, edits: readonly FileEdit[], path: string): FileEditOutcome {
   const hasBom = original.startsWith(BOM);
   const ending = detectLineEnding(original);
@@ -210,9 +163,8 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     }
   }
 
-  // Spliced into the ORIGINAL, back to front, so every byte outside a replaced
-  // span survives exactly as it was. Only the inserted text takes the file's
-  // line ending.
+  // Spliced into the original back to front so bytes outside replaced spans survive; only
+  // inserted text takes the file's line ending.
   let content = body;
 
   for (let i = ordered.length - 1; i >= 0; i--) {
@@ -238,67 +190,37 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   return { ok: true, content: (hasBom ? BOM : '') + content, applied };
 }
 
-// ── read ────────────────────────────────────────────────────────────────────
-
 export interface FileSlice {
-  /** The text to hand the model, truncation marker included. */
   output: string;
-  /** Characters of the requested range withheld — 0 when the whole range fit. */
+  /** Characters of the requested range withheld; 0 when the whole range fit. */
   omitted: number;
-  /** The 1-indexed line range this output actually showed, and the file's line
-   *  count, so the caller can record how much of the file the model has seen.
-   *  `last` is `first - 1` when the range showed nothing. */
+  /** 1-indexed line range shown plus the file's line count; `last` is `first - 1` when nothing showed. */
   first: number;
   last: number;
   total: number;
 }
 
 /**
- * One read's worth of a file, as the scan saw it: the retained head of the
- * requested range plus the counts the range had BEFORE any budget touched it.
- *
- * It exists so a read that never materializes the whole file — a chunked
- * native range scan — renders through exactly the formatter a whole-string
- * read renders through, instead of growing a second set of markers that say
- * the same thing in different words.
- *
- * `lines` is the retained head, so it may be shorter than `requestedLines`,
- * and its first entry may be a prefix of one oversize line; the counts never
- * come from it.
+ * One read of a file: the retained head of the range plus the range's pre-budget counts.
+ * `lines` may be shorter than `requestedLines` and its first entry a prefix; counts never come from it.
  */
 export interface SliceWindow {
-  /** 1-indexed first line of the requested range, already normalized. */
   readonly first: number;
-  /** Lines in the whole file. 0 means the file has no displayable text. */
+  /** Lines in the whole file; 0 means no displayable text. */
   readonly total: number;
-  /** The file's last line ends with a newline. */
   readonly trailingNewline: boolean;
-  /** The retained head of the requested range — whole lines, except that a
-   *  first line larger than the budget arrives as its prefix and alone. */
+  /** Whole lines, except a first line over budget arrives alone as its prefix. */
   readonly lines: readonly string[];
-  /** Lines the range asked for, before any budget dropped one. */
   readonly requestedLines: number;
-  /** Chars the range asked for, newline joins included. */
+  /** Includes newline joins. */
   readonly requestedChars: number;
-  /** The range's first line at full length — `lines[0]` may be a prefix. */
+  /** The range's first line at full length; `lines[0]` may be a prefix. */
   readonly firstLineChars: number;
 }
 
 /**
- * Render one window, capped at `maxChars` and honest about it: a capped read
- * always names the offset that continues it, and a single line too large to
- * show at all names the way to slice it. Nothing is ever clipped silently, and
- * no output is ever a bare empty string.
- *
- * The cap covers the WHOLE returned string, marker included. A marker charged
- * on top of a full budget is a result over budget by the length of its own
- * explanation, so the marker's length is reserved before the lines are chosen.
- * The one exception is a cap smaller than the marker itself: the recovery
- * instruction is never the part that gets truncated.
- *
- * Lines are NOT numbered. The model builds `old_text` by copying from what this
- * returns, and a line-number gutter is the most reliable way to make it copy
- * something that is not in the file.
+ * Render one window capped at `maxChars`, marker included; a capped read always names the continuing offset.
+ * Lines are not numbered: the model copies `old_text` from this output.
  */
 export function formatFileSlice(
   range: SliceWindow,
@@ -306,14 +228,7 @@ export function formatFileSlice(
 ): FileSlice {
   const { first, total, requestedLines, requestedChars } = range;
 
-  /**
-   * The marker the cap can afford: the one that names the file wherever it
-   * fits, and a path-free one where the path alone would crowd out the read
-   * it is describing. A deep enough path is longer than the whole budget, and
-   * a marker that overran the cap to spell it would break the one promise the
-   * cap makes. The caller knows which file it asked for; what it cannot
-   * reconstruct is the offset to continue from, so that is what never goes.
-   */
+  /** Marker that fits the cap: names the file when it fits, else path-free; the continue offset is never dropped. */
   const affordable = (named: string, plain: string): string =>
     named.length <= opts.maxChars ? named : plain;
 
@@ -333,8 +248,7 @@ export function formatFileSlice(
   }
 
   const requestedLast = first + requestedLines - 1;
-  // Reaching the end costs the file's own trailing newline, so a whole read is
-  // byte-identical to the file.
+  // A whole read includes the trailing newline, so it is byte-identical to the file.
   const ending = requestedLast === total && range.trailingNewline ? '\n' : '';
 
   if (requestedLines === range.lines.length && requestedLast === total
@@ -342,10 +256,7 @@ export function formatFileSlice(
     return { output: range.lines.join('\n') + ending, omitted: 0, first, last: requestedLast, total };
   }
 
-  // Past here the output carries a marker, so the marker is part of the
-  // budget. Its length is reserved at its worst case — the furthest line the
-  // range could reach, and the longer of the two reasons — because the
-  // reservation is what decides how far it actually reaches.
+  // Past here the output carries a marker; reserve its worst-case length before choosing lines.
   const continuation = (last: number, reason: string): string => {
     const tail = `${reason} stopped it; continue with action=read offset=${last + 1}]`;
 
@@ -355,8 +266,7 @@ export function formatFileSlice(
   };
 
   const capReason = `the ${opts.maxChars}-char cap`;
-  // A limit is a count of lines, so anything under one line is one line. Left
-  // as given it would name an empty range, which has no honest rendering.
+  // A limit under one line is one line; an empty range has no honest rendering.
   const limitReason = opts.limit == null ? capReason : `limit=${Math.max(1, Math.floor(opts.limit))}`;
 
   const reserve = Math.max(
@@ -368,9 +278,7 @@ export function formatFileSlice(
   let chars = 0;
 
   for (const line of range.lines) {
-    // The joining newline costs a character for every line after the first —
-    // keyed on the line COUNT, not on the running total, so a leading blank
-    // line does not make the next one look free.
+    // Newline joins cost a char per line after the first, keyed on line count.
     const cost = kept === 0 ? line.length : line.length + 1;
 
     if (chars + cost > opts.maxChars - reserve) break;
@@ -379,9 +287,7 @@ export function formatFileSlice(
   }
 
   if (kept === 0) {
-    // One line, on its own, larger than the whole budget. Show its head and
-    // name the way to get the rest: the same workspace.readFile-inside-
-    // eval recipe every other oversize payload in Kinu uses.
+    // A single line larger than the whole budget: show its head and name the readFile-in-eval recipe.
     const line = range.lines[0] ?? '';
 
     const tail =

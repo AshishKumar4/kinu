@@ -1,12 +1,4 @@
-/**
- * The one copy-to-clipboard affordance.
- *
- * navigator.clipboard.writeText rejects on a denied permission, an insecure
- * origin, or a document that isn't focused — and every hand-rolled copy button
- * here either flipped to "Copied!" before finding out or gave no feedback at
- * all. One of them copies a secret that is shown exactly once, where a
- * silently-empty clipboard is unrecoverable. This owns the three outcomes.
- */
+/** writeText rejects on denied permission, insecure origin, or an unfocused document; feedback waits for the outcome. */
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type CopyStatus = "idle" | "copied" | "failed";
@@ -35,11 +27,10 @@ export function useCopy(resetMs = 1500): CopyControl {
   return { status, copy };
 }
 
-/** The label a copy button shows for each outcome. */
 export function copyLabel(status: CopyStatus, idle = "Copy"): string {
-  if (status === "copied") return "Copied!";
+  if (status === "copied") return "Copied";
 
-  if (status === "failed") return "Copy failed";
+  if (status === "failed") return "Could not copy";
 
   return idle;
 }

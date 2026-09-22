@@ -1,15 +1,6 @@
 /**
- * Failure modes a caller may legitimately tolerate, and the one place their signatures are pinned.
- *
- * The pattern is ~/Nimbus's `oom-classify.ts`: without a classifier, every site stringify-matches
- * its own error text, and the match drifts per site. Here the signature is pinned once, named, and
- * reused — so `tolerate(() => read(), 'enoent')` says in code which failure is a domain value, and
- * every other failure propagates instead of becoming an empty result nobody can tell from success.
- *
- * Every pattern below was measured against the engines that raise it, not copied from memory:
- * SQLite via `bun:sqlite` (the same SQLite that backs Durable Object storage) and Node's `code`
- * property. The transcript is in the suite beside this file, which re-provokes each error rather
- * than asserting against a hardcoded string.
+ * Failure modes a caller may tolerate, with signatures pinned once. The suite re-provokes each
+ * error against its engine (`bun:sqlite`, Node `code`) rather than asserting hardcoded strings.
  */
 
 import * as v from 'valibot';
@@ -24,64 +15,35 @@ export type ExpectedFailure =
   | 'esrch'
   | 'malformed-input';
 
-/**
- * `no such table: X`. SQLite raises this for a read *and* for `ALTER TABLE` against an absent
- * table, so it cannot distinguish "not created yet" from "the wrong database" — which is why
- * tolerating it is almost always the wrong answer and creating the table is the right one.
- */
+/** `no such table: X`, raised for reads and `ALTER TABLE`; usually create the table, not tolerate. */
 const SQLITE_MISSING_TABLE = /\bno such table\b/u;
 
-/** `duplicate column name: X` — the one genuinely idempotent-by-exception schema case. */
 const SQLITE_DUPLICATE_COLUMN = /\bduplicate column name\b/u;
 
-/** `there is already another table or index with this name: X`, raised by `RENAME TO`. */
+/** Raised by `RENAME TO`. */
 const SQLITE_TABLE_EXISTS = /\bthere is already another table or index with this name\b/u;
 
-/** `"x" cannot be parsed as a URL.` — WHATWG URL's TypeError, which carries no `code` in browsers. */
+/** WHATWG URL's TypeError carries no `code` in browsers. */
 const UNPARSEABLE_URL = /cannot be parsed as a URL/u;
 
-/** A caught value's words. Only a scalar has any: `String()` on anything else
- *  is `[object Object]`, which reads as a rendered message and is not one —
- *  the same boundary `log.ts` draws for a log field's value. */
+/** Only a scalar has words: `String()` on an object yields `[object Object]`. */
 const ScalarSchema = v.union([v.string(), v.number(), v.boolean()]);
 
-/**
- * What a caught value says for itself, or null when it says nothing. The
- * scalar union rather than a string is load-bearing: a DOMException's `code`
- * is a legacy NUMBER, and an aborted wait's reason is whatever the canceller
- * passed.
- *
- * Exported for `error.ts`, whose chain renderer ends on a non-`Error` cause.
- * Not re-exported from `obs/index.ts`: inside this module, not part of the seam.
- */
+/** What a caught value says for itself, or null. Scalar, not string: a DOMException `code` is a number. */
 export function scalarText(input: { value: unknown }): string | null {
   const scalar = v.safeParse(ScalarSchema, input.value);
 
   return scalar.success ? String(scalar.output) : null;
 }
 
-/**
- * The one reader of a caught error's `code` property. Exported for `error.ts`,
- * which classifies a wider errno set than this module tolerates — a second
- * reader of the same property would be a second answer to "does this error even
- * have a code", and reading it as a scalar rather than narrowing to a string is
- * load-bearing: a DOMException's `code` is a legacy NUMBER, and its name is
- * what identifies it.
- *
- * Not re-exported from `obs/index.ts`: inside this module, not part of the seam.
- */
+/** The one reader of a caught error's `code` property, shared with `error.ts`. */
 export function errnoCode(error: Error): string | null {
   if (!('code' in error)) return null;
 
   return scalarText({ value: error.code });
 }
 
-/**
- * Names the failure a caught value represents, or null when it is not one this module recognises.
- *
- * Public because classification is not only for tolerating: a retry policy or an OOM detector needs
- * the same pinned signatures, and a second copy of them would drift from this one.
- */
+/** Names the failure a caught value represents, or null when unrecognised. */
 export function classify(options: { cause: unknown }): ExpectedFailure | null {
   const caught = options.cause;
 
@@ -92,8 +54,7 @@ export function classify(options: { cause: unknown }): ExpectedFailure | null {
 
   if (code === 'ENOENT') return 'enoent';
 
-  // `EEXIST` is the idempotent-creation failure: both engines that raise it —
-  // node's fs and the workspace file plane's VfsError — carry it on `code`.
+  // Raised by both node fs and the workspace VfsError.
   if (code === 'EEXIST') return 'eexist';
 
   if (code === 'ESRCH') return 'esrch';
@@ -114,13 +75,8 @@ export function classify(options: { cause: unknown }): ExpectedFailure | null {
 }
 
 /**
- * Runs `operation`, returning `undefined` only for the failure the caller named. Anything else
- * propagates unchanged.
- *
- * This is the whole difference from `try { … } catch { return undefined }`: the tolerance is
- * declared, narrow, and enforced at runtime, so a genuine failure on the same line still reaches
- * the caller. Note the caught value is rethrown as-is rather than wrapped — wrapping here would
- * insert this helper into every stack trace and hide the frame that actually failed.
+ * Runs `operation`, returning `undefined` only for the named failure; anything else is rethrown
+ * as-is, unwrapped, to keep the failing frame on top.
  */
 export function tolerate<T>(operation: () => T, expected: ExpectedFailure): T | undefined {
   try {

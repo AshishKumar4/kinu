@@ -1,15 +1,4 @@
-/**
- * Every page a signed-out visitor can see, as text.
- *
- * The pages live together and away from their routes for two reasons. All the
- * public copy is in one file, which is the only way a writing standard is
- * enforceable by reading. And a page is a pure function of its inputs, so the
- * gallery mounts the real document in a real browser, and the unit tests read
- * the real copy, instead of either of them photographing a second landing page
- * written for them.
- *
- * Chrome, tokens and type come from `public-shell.ts`.
- */
+/** Every signed-out page, kept together so copy is reviewable and pages are pure for tests. */
 
 import { escapeHtml } from './http';
 import {
@@ -17,15 +6,12 @@ import {
 } from './public-shell';
 
 
-/* ── Sign-in, and the pages the OAuth flow can fail to ───────────────── */
-
 export interface LoginProvider {
-  /** Where "Continue with …" goes, already escaped for an attribute. */
+  /** Already escaped for an attribute. */
   readonly href: string;
   readonly label: string;
 }
 
-/** Sign-in is one decision: choose a configured provider. */
 export function loginDocument(providers: readonly LoginProvider[]): string {
   const body = providers.length === 0
     ? '<p class="lede">Sign-in is unavailable.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
@@ -36,7 +22,6 @@ export function loginDocument(providers: readonly LoginProvider[]): string {
   return authDocument('Sign in to Kinu.run', body);
 }
 
-/** Sign-in, and its two failures, on one card. */
 export function authDocument(title: string, body: string): string {
   return publicPage({
     title: title.includes('Kinu') ? title : `${title} — Kinu.run`,
@@ -50,12 +35,7 @@ export function authDocument(title: string, body: string): string {
   });
 }
 
-/**
- * The device-approval pages: the consent screen, its result, and its failures.
- *
- * No header bar and no footer. A terminal opens these, they are read once, and
- * they are closed, so anything that invites the reader elsewhere is in the way.
- */
+/** Device-approval pages: deliberately no header or footer (opened from a terminal, read once). */
 export function approvalDocument(title: string, body: string): string {
   return publicPage({
     title: `${title} — Kinu.run`,
@@ -111,8 +91,6 @@ button[type="submit"]:hover{background:color-mix(in oklab,var(--c-accent) 90%,va
 .card h1{font-size:28px}
 }
 `;
-
-/* ── Install ─────────────────────────────────────────────────────────── */
 
 const INSTALLER_SETS_UP: ReadonlyArray<readonly [title: string, body: string]> = [
   [

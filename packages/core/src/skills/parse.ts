@@ -1,21 +1,8 @@
 /**
- * Skill-file parser. Thin layer over the shared
- * `core/src/utils/markdown-frontmatter.ts` — maps the canonical front-matter
- * shape onto our typed `ParsedSkill` and validates Anthropic's published
- * SKILL.md constraints.
- *
- * Aliases / compat:
- *   - `allowed-tools` ⟷ `allowed_tools`         (Claude Code uses hyphen; Hermes uses snake)
- *   - `auto_activate` ⟷ `autoActivate`           (Kinu extension)
- *   - `disable-model-invocation` ⟷ `disable_model_invocation` (Anthropic uses hyphen)
- *   - `user-invocable` ⟷ `user_invocable`       (Anthropic uses hyphen)
- *
- * Anthropic-spec constraints we enforce:
- *   - name: ≤ 64 chars, kebab-case, no reserved words (`anthropic`, `claude`)
- *   - description: ≤ 1024 chars, non-empty, no XML tags
- *   - name in frontmatter is OPTIONAL — falls back to the caller-supplied
- *     `fallbackName` (directory name in Anthropic's spec; filename stem here).
- *     Round-trip authored-by-Claude-Code skills without a `name:` line.
+ * SKILL.md parser over `utils/markdown-frontmatter.ts`. Accepts hyphen and snake
+ * spellings of each field and enforces Anthropic's constraints (name ≤ 64 chars,
+ * kebab-case, no reserved words; description ≤ 1024 chars, no XML tags). A missing
+ * `name:` falls back to the filename stem.
  */
 
 import {
@@ -34,16 +21,10 @@ const NAME_MAX_LEN = 64;
 
 const DESCRIPTION_MAX_LEN = 1024;
 
-/** Names containing these substrings are rejected by Anthropic's spec.
- *  Whole-substring match — `claudette` would NOT match because the spec
- *  defines whole-token reservation; we approximate with substring since
- *  the spec doesn't carve out compound names. */
+/** Reserved by Anthropic's spec; matched as substrings. */
 const RESERVED_WORDS = ['anthropic', 'claude'];
 
-/** Parse a SKILL.md source string → ParsedSkill (or error).
- *
- * @param fallbackName Used when frontmatter omits `name:`. Pass the file/
- *   directory stem; if both source and fallback are missing we error. */
+/** @param fallbackName File/directory stem used when frontmatter omits `name:`. */
 export function parseSkillFile(
   src: string,
   source: SkillSource = 'vfs',
@@ -66,7 +47,6 @@ export function parseSkillFile(
 
   const fm = doc.frontmatter;
 
-  // name — optional, falls back to provided file/dir stem.
   let name = asString(fm.name).trim();
 
   if (!name && fallbackName) name = fallbackName.trim();
@@ -79,7 +59,6 @@ export function parseSkillFile(
 
   if (nameProblem) return { ok: false, error: `front-matter \`name\` ${nameProblem}` };
 
-  // description — required, ≤1024 chars, no XML tags.
   const description = asString(fm.description).trim();
 
   if (!description) return { ok: false, error: 'front-matter `description` is required' };
@@ -92,25 +71,16 @@ export function parseSkillFile(
     return { ok: false, error: 'front-matter `description` must not contain XML tags' };
   }
 
-  // Optional with defaults. Accept hyphen + snake variants for cross-tool compat.
   const allowed_tools = asStringArray(fm['allowed-tools'] ?? fm.allowed_tools ?? []);
   const keywords = asStringArray(fm.keywords ?? []).map(k => k.toLowerCase());
 
-  // Behavioral gates — Anthropic-spec fields that Kinu now honors.
-  // `disable-model-invocation: true` forces `auto_activate` off regardless of
-  // frontmatter (the LLM cannot trigger this skill via description match or
-  // keyword fire). Explicit user invocation still works (subject to
-  // user_invocable).
-  // Only a real boolean opts in or out. A quoted "false" is a non-empty
-  // string, so Boolean() reads it as true.
+  // Only a real boolean opts in or out: a quoted "false" is truthy.
   const disable_model_invocation =
     (fm['disable-model-invocation'] ?? fm.disable_model_invocation ?? false) === true;
 
   const user_invocable = userInvocable(fm);
 
-  // auto_activate is the Kinu-only keyword-fire flag. We force it false
-  // when the author asked us not to model-invoke — the two contradict
-  // otherwise.
+  // `disable_model_invocation` forces `auto_activate` off.
   const auto_activate_raw = (fm.auto_activate ?? fm.autoActivate ?? false) === true;
   const auto_activate = disable_model_invocation ? false : auto_activate_raw;
 
@@ -135,7 +105,6 @@ export function parseSkillFile(
   };
 }
 
-/** Serialize a ParsedSkill back to a SKILL.md string. Round-trippable. */
 export function stringifySkillFile(skill: ParsedSkill): string {
   const fm: JsonObject = {
     name: skill.name,
@@ -157,12 +126,7 @@ export function stringifySkillFile(skill: ParsedSkill): string {
   return stringifyMarkdownFrontmatter({ frontmatter: fm, body: skill.body });
 }
 
-/** Why `name` is not a legal skill name, or null when it is.
- *
- *  The one authority for the Anthropic-spec name rules: the parser and
- *  discovery — which reads a name off a filename stem before it will spend
- *  anything on that file — both ask this, so a name cannot be legal to one
- *  and illegal to the other. */
+/** Why `name` is not a legal skill name, or null. Shared by the parser and discovery. */
 export function skillNameProblem(name: string): string | null {
   if (name.length === 0) return 'must be a non-empty string';
 
@@ -183,11 +147,6 @@ export function skillNameProblem(name: string): string | null {
   return null;
 }
 
-// ── helpers ──────────────────────────────────────────────────────
-
-/** `user-invocable: false` blocks `/skill-name` from the user's message; the
- *  snake spelling is the same field, and an absent one leaves the skill
- *  user-invocable (Anthropic spec default). */
 function userInvocable(fm: JsonObject): boolean {
   if (fm['user-invocable'] !== undefined) return fm['user-invocable'] !== false;
 
@@ -196,10 +155,7 @@ function userInvocable(fm: JsonObject): boolean {
   return true;
 }
 
-/** A frontmatter scalar as the text it states. A mapping or a list states no
- *  text, so it reads as ABSENT rather than as `[object Object]`: the author
- *  gets "`description` is required" instead of a skill described by a type
- *  name. */
+/** A mapping or list states no text, so it reads as absent rather than `[object Object]`. */
 function asString(value: JsonValue | undefined): string {
   const text = v.safeParse(v.string(), value);
 
@@ -209,16 +165,7 @@ function asString(value: JsonValue | undefined): string {
   return scalar.success ? String(scalar.output) : '';
 }
 
-/**
- * Our own skills (and Hermes's) write `allowed-tools`/`keywords` as a YAML
- * list. The Agent Skills spec (agentskills.io) writes `allowed-tools` as ONE
- * space-separated scalar string — `Bash(git:*) Read` is two tools, not one.
- * Treating the whole string as a single pattern (the bug this replaces)
- * produces a pattern that matches nothing, so a spec-conformant skill that
- * restricts the surface at all collapses it to nothing: every real tool name
- * fails to match the one bogus giant pattern. Splitting on whitespace handles
- * both dialects with one rule, since our own values never contain spaces.
- */
+/** Accepts a YAML list or the Agent Skills spec's space-separated string (`Bash(git:*) Read`). */
 function asStringArray(value: JsonValue): string[] {
   if (Array.isArray(value)) return value.map((item) => asString(item).trim()).filter(Boolean);
   const parsed = v.safeParse(v.string(), value);

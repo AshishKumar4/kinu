@@ -23,8 +23,7 @@ const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
 const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
 
-/** The setup button's own words. A failure here asks for the click again
- *  rather than reporting itself, because the commands are on screen either way. */
+/** A failure asks for the click again: the commands are on screen either way. */
 const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
 function Accent({ children }: { children: ReactNode }): ReactElement {
@@ -73,9 +72,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
             <div><dt className="inline font-mono text-xs p-text-2">kinu run workshop "task"</dt><dd className="mt-1">One task, streamed to your terminal.</dd></div>
             <div><dt className="inline font-mono text-xs p-text-2">kinu acp workshop</dt><dd className="mt-1">Connect from editors such as Zed over ACP.</dd></div>
           </dl>
-          {/* mt-auto, as the cloud card's CTA does: the two articles share one
-              stretched grid row, so a fixed margin here left 148px of dead
-              space under the shorter column at 1280 (measured 2026-09-10). */}
+          {/* mt-auto: the two articles share one stretched grid row. */}
           <a href={REPOSITORY + '/blob/main/QUICKSTART.md'} target="_blank" rel="noreferrer" className="mt-auto pt-6 text-sm font-semibold p-accent">Setup and provider configuration →</a>
         </article>
       </div>

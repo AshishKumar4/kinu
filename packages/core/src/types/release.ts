@@ -62,8 +62,7 @@ export interface ReleaseApproval {
   decision: 'pending' | 'approved' | 'rejected';
   approvedBy: string | null;
   note: string | null;
-  /** SHA-256 binding the reviewable deploy identity (patch + declared command)
-   *  this approval authorizes — verified at deploy time (SPEC §7.3). */
+  /** SHA-256 of the deploy identity (patch + declared command), verified at deploy (SPEC §7.3). */
   argumentDigest: string;
   createdAt: number;
   decidedAt: number | null;
@@ -79,7 +78,6 @@ export interface ReleaseDeployment {
   deployedAt: number;
 }
 
-/** Full ledger view of one change — what the execution engine reads. */
 export interface ReleaseDetail {
   change: ReleaseChange;
   binding: ReleaseSource | null;

@@ -1,46 +1,16 @@
 /**
- * The durable record of device commands that are still running on a user's
- * computer, and the precedence protocol over it.
- *
- * A command's row is inserted before its frame leaves the UserDO and removed
- * only once the daemon has acknowledged a terminal answer, so the row IS the
- * state: present and unsettled means live work on someone's machine. Several
- * authorities can reach for the same row at once — the turn's Stop, a detached
- * background job's Stop, the tool aborting its own exec, and device revocation —
- * and every one of them can be interrupted by an activation ending mid-flight.
- *
- * This module owns the table and every statement over it, which is what makes
- * the precedence rules a single decision each rather than a convention repeated
- * at four call sites:
- *
- *   A CLAIM is exclusive. Taking one hides the row from every other authority,
- *   so a transfer cannot move it out from under an in-flight sweep and two
- *   sweeps cannot cancel one command twice.
- *
- *   Claims are ACTIVATION-SCOPED. The sweep holding one lives in an isolate's
- *   memory, so a claim found in storage when an activation begins was abandoned
- *   by the activation that died: the activation boundary is the expiry, with no
- *   lease clock and no elapsed guess.
- *
- *   The FIRST stored answer wins, and every write that follows it is guarded by
- *   the claim it was taken under. A later authority reports the stored answer
- *   instead of killing a command that is already dead.
- *
- * What is NOT here: who may cancel what, which frames go to the device, and how
- * an unconfirmed stop is reported to the owner. That policy lives in UserDO,
- * which holds the sockets and the consent boundary.
+ * Durable record of device commands still running on a user's computer, and the precedence protocol over it.
+ * A row is inserted before its frame leaves the UserDO and removed only after the daemon acknowledges a terminal answer.
+ * Claims are exclusive and activation-scoped (a fresh activation releases all); the first stored answer wins.
  */
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
 import { nextDeviceRequestId } from './device-tunnel';
 
-/** A terminal cancellation answer: the kernel confirmed the daemon's owned
- *  process group died, or the daemon held no active control entry. Either way
- *  nothing runs under the request any more. */
+/** Terminal cancellation answer; either way nothing runs under the request any more. */
 export type DeviceCancelOutcome = 'terminated' | 'unknown';
 
-/** One device request a sweep holds the cancellation claim on. `settled` is the
- *  stored terminal answer, present only when nothing runs under it any more. */
+/** A request a sweep holds the cancellation claim on; `settled` is the stored terminal answer. */
 export interface ClaimedDeviceRequest {
   requestId: string;
   deviceId: string;
@@ -48,14 +18,12 @@ export interface ClaimedDeviceRequest {
   settled: DeviceCancelOutcome | null;
 }
 
-/** One request as revocation sees it: revocation takes every claim at once and
- *  never releases them, so the claim token is not part of what it reads back. */
+/** A request as revocation sees it; revocation never releases claims, so no token. */
 export interface SweptDeviceRequest {
   requestId: string;
   settled: DeviceCancelOutcome | null;
 }
 
-/** Whether one live request now belongs to the named background job. */
 export interface DeviceTransferOutcome {
   readonly transferred: boolean;
 }
@@ -76,9 +44,7 @@ const SweptRowSchema = v.object({
 
 const OutcomeRowSchema = v.object({ cancel_outcome: StoredOutcomeSchema });
 
-/** The answer a settle statement just made authoritative. NOT nullable: the
- *  write COALESCEs one in, so a NULL back would mean the row lost its answer,
- *  which is a broken invariant rather than an absence to tolerate. */
+/** Not nullable: the settle write COALESCEs an answer in, so NULL is a broken invariant. */
 const SettledOutcomeRowSchema = v.object({
   cancel_outcome: v.picklist(['terminated', 'unknown'] as const),
 });
@@ -92,13 +58,7 @@ const OwnershipRowSchema = v.object({
   live_device: v.number(),
 });
 
-/**
- * The table, created where every statement over it lives.
- *
- * `turn_id` is the actor's existing durable turn identity — the same key
- * `tool_effect_claims` uses — so this table links a socket-owned command to its
- * turn without copying the actor's effect ledger into UserDO.
- */
+/** `turn_id` is the same durable turn key `tool_effect_claims` uses. */
 export function initDeviceInflightTable(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS device_inflight_requests (
@@ -138,26 +98,14 @@ export function initDeviceInflightTable(sql: SqlExec): void {
 export class DeviceRequestLedger {
   constructor(private readonly sql: SqlExec) {}
 
-  /**
-   * Release every claim in storage. Run once per activation, because a claim
-   * found here was taken by an activation that no longer exists — see the
-   * activation-scoped rule in this module's header.
-   */
+  /** Run once per activation: any stored claim belongs to a dead activation. */
   releaseAbandonedClaims(): void {
     this.sql.exec(
       `UPDATE device_inflight_requests SET cancel_claim = NULL WHERE cancel_claim IS NOT NULL`,
     );
   }
 
-  /**
-   * Record a command as live work. Called BEFORE its frame leaves the UserDO:
-   * an insert afterwards would leave a window in which a command is running on
-   * the machine with nothing durable naming it.
-   *
-   * A command issued inside an already-detached scope carries its job from the
-   * insert, so there is no window in which the row belongs to a turn that no
-   * longer owns it.
-   */
+  /** Call before the frame leaves the UserDO, so no running command lacks a durable row. */
   insert(input: {
     requestId: string;
     deviceId: string;
@@ -175,10 +123,7 @@ export class DeviceRequestLedger {
     );
   }
 
-  /** Store the answer a cancellation this UserDO merely forwarded came back
-   *  with. First answer wins: it is the one that actually ended the process
-   *  group, and a later sweep then reports it instead of killing a dead
-   *  command again. */
+  /** Store the answer of a forwarded (unclaimed) cancellation; first answer wins. */
   settleUnclaimed(requestId: string, outcome: DeviceCancelOutcome): void {
     this.sql.exec(
       `UPDATE device_inflight_requests SET cancel_outcome = ?
@@ -187,24 +132,16 @@ export class DeviceRequestLedger {
     );
   }
 
-  /** Take exclusive cancellation ownership of one turn's live requests. Rows a
-   *  detach already moved to a background job are not the turn's. */
+  /** Claim one turn's live requests, excluding rows already detached to a background job. */
   claimTurnRequests(workspace: string, turnId: string): ClaimedDeviceRequest[] {
     return this.claim(`turn_id = ? AND background_job_id IS NULL`, workspace, turnId);
   }
 
-  /** Take exclusive cancellation ownership of one background job's requests. */
   claimBackgroundJobRequests(workspace: string, jobId: string): ClaimedDeviceRequest[] {
     return this.claim(`background_job_id = ?`, workspace, jobId);
   }
 
-  /**
-   * Take the claim on every request of one device, whoever held it.
-   *
-   * Revocation is the terminal device authority, so it TAKES rather than
-   * competes: a displaced sweep keeps reporting the outcome it observed, and its
-   * guarded cleanup simply finds the row already gone.
-   */
+  /** Revocation takes every claim of a device, whoever held it; displaced sweeps find rows gone. */
   claimEveryRequestOf(deviceId: string): SweptDeviceRequest[] {
     return this.sql.exec(
       `UPDATE device_inflight_requests SET cancel_claim = ?
@@ -217,12 +154,7 @@ export class DeviceRequestLedger {
     });
   }
 
-  /**
-   * The row as it stands right now, but only while THIS claim still holds it.
-   * `null` means another authority took or dropped it, so the caller neither
-   * sends a frame for it nor reports it. Read before every frame, because both
-   * facts change under the awaits of earlier rows.
-   */
+  /** The row while this claim still holds it, else `null`. Re-read before every frame. */
   held(requestId: string, claim: string): { settled: DeviceCancelOutcome | null } | null {
     const row = this.sql.exec(
       `SELECT cancel_outcome FROM device_inflight_requests
@@ -234,19 +166,8 @@ export class DeviceRequestLedger {
   }
 
   /**
-   * Store a terminal answer under the claim it was obtained with, and report
-   * the answer that now STANDS for the request. `null` means the terminal
-   * authority took the claim mid-flight, and IT — not this caller — answers.
-   *
-   * `COALESCE` is what makes "the first stored answer wins" hold across the
-   * device await this caller just returned from: a tool aborting its own exec
-   * stores `terminated` through `settleUnclaimed` while the sweep is still
-   * waiting, and the sweep's own later answer is `unknown` because the daemon
-   * no longer holds a control entry for a command that is already dead. Writing
-   * unconditionally would replace a confirmed kill with a guess, telling the
-   * owner a dead command only "may have" stopped. Returning the stored answer
-   * rather than the caller's keeps one statement authoritative for both the
-   * write and what gets reported.
+   * Store a terminal answer under its claim and return the answer that stands; `null` if revocation took the claim.
+   * `COALESCE` keeps a confirmed `terminated` from being overwritten by a later `unknown`.
    */
   settleHeld(requestId: string, claim: string, outcome: DeviceCancelOutcome): DeviceCancelOutcome | null {
     const row = this.sql.exec(
@@ -258,8 +179,7 @@ export class DeviceRequestLedger {
     return row === undefined ? null : v.parse(SettledOutcomeRowSchema, row).cancel_outcome;
   }
 
-  /** Store an answer for a request revocation swept. Unguarded by design:
-   *  revocation already took every claim and drops every row afterwards. */
+  /** Unguarded by design: revocation holds every claim and drops every row afterwards. */
   settleRevoked(requestId: string, outcome: DeviceCancelOutcome): void {
     this.sql.exec(
       `UPDATE device_inflight_requests SET cancel_outcome = ? WHERE request_id = ?`,
@@ -267,7 +187,7 @@ export class DeviceRequestLedger {
     );
   }
 
-  /** Hand the row back for a retry. Returns whether THIS claim still held it. */
+  /** Hand the row back for a retry; returns whether this claim still held it. */
   releaseClaim(requestId: string, claim: string): boolean {
     return this.sql.exec(
       `UPDATE device_inflight_requests SET cancel_claim = NULL
@@ -276,7 +196,6 @@ export class DeviceRequestLedger {
     ).toArray().length === 1;
   }
 
-  /** Drop a settled row, but only the one this claim holds. */
   deleteHeld(requestId: string, claim: string): void {
     this.sql.exec(
       `DELETE FROM device_inflight_requests WHERE request_id = ? AND cancel_claim = ?`,
@@ -284,14 +203,11 @@ export class DeviceRequestLedger {
     );
   }
 
-  /** Every row of a device, dropped: revocation's last step. */
   deleteEveryRequestOf(deviceId: string): void {
     this.sql.exec(`DELETE FROM device_inflight_requests WHERE device_id = ?`, deviceId);
   }
 
-  /** Whether any request row of a device remains — the guard on retiring a
-   *  revocation incident, because a sweep still holding rows has not finished
-   *  deciding what the owner would be acknowledging. */
+  /** Guards retiring a revocation incident: remaining rows mean a sweep is unfinished. */
   hasRequestsFor(deviceId: string): boolean {
     return this.sql.exec(
       `SELECT 1 AS present FROM device_inflight_requests WHERE device_id = ? LIMIT 1`,
@@ -299,12 +215,7 @@ export class DeviceRequestLedger {
     ).toArray().length === 1;
   }
 
-  /**
-   * The device a workspace's request is running on, while the request is still
-   * this workspace's to acknowledge. A CLAIMED row belongs to an in-flight
-   * cancellation, which owns the terminal outcome and sends its own
-   * acknowledgement, so completion racing cancellation settles once.
-   */
+  /** Device of an unclaimed request; a claimed row's cancellation sends its own acknowledgement. */
   acknowledgeable(requestId: string, workspace: string): { deviceId: string } | null {
     const row = this.sql.exec(
       `SELECT device_id FROM device_inflight_requests
@@ -315,13 +226,7 @@ export class DeviceRequestLedger {
     return row === undefined ? null : { deviceId: v.parse(DeviceRowSchema, row).device_id };
   }
 
-  /**
-   * Drop the row an acknowledgement was obtained for.
-   *
-   * Compare-delete against the row the caller SELECTED: a caller-supplied id
-   * can be re-inserted while the acknowledgement is in flight, and deleting on
-   * the id alone would remove a replacement command's live row.
-   */
+  /** Compare-delete against the selected row: the id may have been re-inserted mid-acknowledgement. */
   deleteAcknowledged(input: { requestId: string; workspace: string; deviceId: string }): void {
     this.sql.exec(
       `DELETE FROM device_inflight_requests
@@ -331,15 +236,8 @@ export class DeviceRequestLedger {
   }
 
   /**
-   * Move ONE live request to the background job that now owns it.
-   *
-   * Only LIVE work changes hands, and only on a device that can still be told
-   * to stop: a claimed row is mid-sweep, a settled row is not work at all, and
-   * a REVOKED device can never reconnect, so its unresolved commands belong to
-   * revocation's incident rather than to a job that could not cancel them.
-   *
-   * Every condition the write required is read back the same way, so the answer
-   * describes the row as it now IS rather than as the write hoped.
+   * Move one live request (unclaimed, unsettled, on an unrevoked device) to a background job.
+   * The result re-reads every condition, so it describes the row as it now is.
    */
   transferToBackgroundJob(
     input: { requestId: string; workspace: string; jobId: string },

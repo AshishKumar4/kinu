@@ -1,27 +1,6 @@
 /**
- * The `parent` executor — a fork's window onto the workspace it forked.
- *
- * WHY AN EXECUTOR AND NOT A MOUNT
- *
- * A head (and a subordinate) works in actor-scoped storage that siblings
- * cannot see — private scratch by construction. The parent's durable files
- * live outside that scope and are reachable only through an async handle,
- * which is asynchronous by nature.
- *
- * That makes the parent workspace exactly what the sandbox container and the
- * user's machine are: another environment, reached over an async channel, in
- * ITS OWN native paths. So it is registered the same way they are — as an
- * `ExecutorProvider` with a `parent.*` codemode namespace and a `run { runtime:
- * 'parent' }` target — rather than being folded into this agent's filesystem as
- * a `/parent` directory. Folding it in would require a router above Nimbus and
- * a second, emulated shell that could walk that router.
- *
- * The fork gains capability this way, not loses it. A per-file RPC projection
- * would require a filesystem router and an emulated shell; a shell limited to
- * a dozen-and-a-half builtins also exposes fewer commands. `parent.exec` runs
- * the parent's real shell, with its approximately 95 coreutils and pipes, so
- * `grep -rn X .` searches the parent's tree in one round trip instead of
- * reading each file across the wire.
+ * The `parent` executor: a fork's window onto the workspace it forked, in the parent's own paths.
+ * An executor rather than a mount, like the sandbox and device: `parent.exec` runs the parent's real shell.
  */
 
 import * as v from 'valibot';
@@ -36,12 +15,10 @@ import { KinuError, refusalOf } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
 
-/** A failure crossing the RPC boundary. `code` survives so the caller can raise
- *  the same errno the parent's filesystem raised. */
+/** A failure crossing the RPC boundary; `code` keeps the parent's errno. */
 export interface ParentRpcError {
   code: VfsErrorCode;
-  /** Original Error.message. It may already carry the conventional `<code>: `
-   *  prefix; the view canonicalizes it when rehydrating. */
+  /** Original Error.message, possibly `<code>: `-prefixed; the view canonicalizes it. */
   message: string;
   path: string;
 }
@@ -50,8 +27,7 @@ export type ParentRpcResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: ParentRpcError };
 
-/** `write` is a closed command union so the RPC surface implements both a file
- *  write and a mkdir without a second mutation method. */
+/** `write` is a closed command union covering file write and mkdir. */
 export type ParentRpcWrite =
   | { kind: 'file'; path: string; data: string | Uint8Array }
   | { kind: 'directory'; path: string; recursive: boolean };
@@ -62,12 +38,7 @@ export interface ParentExecResult {
   exitCode: number;
 }
 
-/**
- * The parent workspace as a fork can reach it — worker-side Durable Object RPC,
- * implemented by the parent agent. Keeping the shape here rather than in a
- * backend keeps the executor backend-agnostic: the CLI's in-process fork
- * satisfies the same interface without any RPC at all.
- */
+/** The parent workspace as a fork reaches it (DO RPC, or in-process in the CLI). */
 export interface ParentWorkspaceHandle {
   read(path: string): Promise<ParentRpcResult<Uint8Array>>;
   write(input: ParentRpcWrite): Promise<ParentRpcResult<null>>;
@@ -78,17 +49,7 @@ export interface ParentWorkspaceHandle {
   exec(command: string): Promise<ParentRpcResult<ParentExecResult>>;
 }
 
-/**
- * The failure a refused RPC becomes.
- *
- * This executor writes no reason of its own, and that is the finding rather than
- * an omission: `makeVfsError` puts the parent's `code` on the error, and
- * `classifyErrorCode` reads errnos — so `ENOENT` already arrives as `missing` at
- * whichever seam catches it, and everything the backends collapse into `EIO`
- * arrives as that seam's `otherwise`, which is `io` for every caller this has.
- * Wrapping it in a second classification here would add a code whose value never
- * varies while discarding the one distinction the errno still carries.
- */
+/** The failure a refused RPC becomes; the errno `code` is preserved, not reclassified. */
 function detail(error: ParentRpcError): string {
   const prefix = `${error.code}:`;
 
@@ -111,14 +72,7 @@ function parseInput<TSchema extends v.GenericSchema>(
   return result.success ? result.output : undefined;
 }
 
-/**
- * A `VFS` over the parent workspace, in the PARENT's own paths.
- *
- * Not this agent's `Storage.vfs` and never merged into it — it is handed to the
- * `parent.*` tools, to the file browser's parent pane, and to a head's change
- * recorder (wrapped in `observeWrites`). One environment, one file view, the
- * same way the sandbox and the device have theirs.
- */
+/** A `VFS` over the parent workspace in the parent's own paths; never merged into this agent's `Storage.vfs`. */
 export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
   return {
     async readFile(path, opts) {
@@ -151,13 +105,7 @@ const TYPES = `declare namespace parent {
   function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
 }`;
 
-/**
- * Register the parent workspace as an executor.
- *
- * `vfs` is passed in rather than derived so the caller can wrap it first — a
- * head hands in an `observeWrites` view, which is how its writes to the parent
- * get attributed to it and no sibling.
- */
+/** Register the parent workspace as an executor. `vfs` may be pre-wrapped (e.g. `observeWrites`) for attribution. */
 export function createParentExecutor(deps: {
   handle: ParentWorkspaceHandle;
   /** The file view the tools address. Defaults to an unobserved one. */
@@ -178,8 +126,7 @@ export function createParentExecutor(deps: {
   return {
     name: 'parent',
     kind: 'parent',
-    // The parent is a Kinu workspace, so its shell starts where every
-    // workspace shell starts.
+    // The parent is a Kinu workspace; its shell starts at the workspace root.
     homeDir: async () => WORKSPACE_ROOT,
     capabilities: new Set<ExecutorCapability>(['shell', 'fs_shared']),
     isAvailable: () => true,
@@ -250,17 +197,8 @@ export function createParentExecutor(deps: {
           "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
         execute: async (...args: unknown[]) => {
-          // The comment this replaces claimed an aborted caller stops waiting.
-          // It did not: the signal was parsed and dropped, so `parent.exec` was
-          // the one executor whose exec could never end as `cancelled` — the
-          // whole class was unreachable here while the other four raced it.
-          // A Durable Object RPC still exposes no kill, so the parent's command
-          // runs on; what changes is that WE stop waiting, and the AbortError
-          // that ends the wait is what `classifyErrorCode` reads as `cancelled`.
-          // No catch, deliberately: an abort is already `cancelled` by NAME and a
-          // refused RPC is already an errno-carrying `VfsError`. Both classify at
-          // the seam that catches them, and re-wrapping either here would blur the
-          // code it arrived with.
+          // DO RPC exposes no kill: the parent's command runs on, but the caller stops waiting.
+          // The AbortError classifies as `cancelled`; not rewrapped so its code survives.
           const command = parseInput(StringSchema, { value: args[0] });
 
           if (command === undefined) {

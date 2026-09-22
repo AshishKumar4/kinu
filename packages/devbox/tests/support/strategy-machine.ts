@@ -1,28 +1,5 @@
-/**
- * One machine, one strategy, every point a container can die.
- *
- * WHY THIS EXISTS. `snapshot-chain.test.ts` models the store as key-to-SIZE, so
- * no byte ever travels through it, and a fake like that cannot ask the question
- * the deployed benchmarks answered by accident: does the strategy hand back the
- * bytes it was given, across a container replacement, at every point a
- * container can die?
- *
- * So this module is a MACHINE rather than a second fake of a store: a durable
- * object store that outlives container generations, one container disk that a
- * replacement blanks, and the real `DevboxStorage` adapter wired to both
- * through its own production ports. Nothing here decides anything the strategy
- * decides. Where its byte work happens container-side — the archiver — this
- * module runs against in-memory bytes and simulates only what genuinely cannot
- * run here: mksquashfs and fuse-overlayfs.
- *
- * THE FAULT SEAM IS THE PORTS, and it was already there. The strategy takes its
- * whole world as an injected port set, so a container death at a commit
- * sub-step is a port that throws at that instant — inside the shipped code,
- * between the two durable effects the sub-step separates. Nothing is
- * monkey-patched and no production file grew a test hook: {@link ContainerDied}
- * is raised by this module's adapters at seams NAMED FROM THE STRATEGY'S OWN
- * KEY LAYOUT, so a seam cannot drift from the thing it interrupts.
- */
+/** Test machine: durable object store outliving containers, a disk a replacement blanks, and
+ *  real `DevboxStorage`; `ContainerDied` is thrown by ports at seams named from the key layout. */
 
 import { createHash } from 'node:crypto';
 
@@ -59,32 +36,18 @@ import {
   type DevboxStrategyName,
 } from '../../src/storage';
 
-/** The box this machine stands for, and the chain root its keys live under.
- *  DERIVED through the strategy's own exported helper, never spelled here, so
- *  there is no second copy of the layout to drift from. */
+/** Derived through the strategy's exported helper, never spelled here, so there is no
+ *  second copy of the layout to drift from. */
 const STORE_ROOT = chainStoreRoot('boxes/conformance-box');
 
-/** Where the chain mounts one generation's delta layer, restated from
- *  `lowerDeltaRoot` in `src/snapshot-chain.ts`: the strategy keeps that path
- *  to itself, and this machine has to serve an evicted delta where the
- *  strategy's own `deltaLayerServed` looks for it. Drift is loud: a layer
- *  mounted anywhere else is not seen as served, the next commit archives an
- *  empty upper, and the chain cells read the tree back short. */
+/** Must equal `lowerDeltaRoot` in `src/snapshot-chain.ts`, where `deltaLayerServed` looks;
+ *  a layer mounted elsewhere is not seen as served and the next commit archives an empty upper. */
 const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
 
 const deltaLayerMountPoint = (chainId: string): string => `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`;
 
-// ── deaths ──────────────────────────────────────────────────────────────────
-
-/**
- * The container went away at a named commit sub-step.
- *
- * NOT a failure the strategy can classify and stamp: it is the spot container
- * being replaced mid-operation, which is the third of the four defect classes
- * the deployed benchmarks found. Everything the abandoned operation would have
- * done next also fails, because the disk it was writing to no longer exists —
- * see {@link ContainerDisk.dead}.
- */
+/** The spot container was replaced mid-commit; not a failure the strategy can classify.
+ *  Every later step of the abandoned operation fails too: its disk is gone (`ContainerDisk.dead`). */
 export class ContainerDied extends Error {
   constructor(readonly seam: string) {
     super(`the container was replaced at ${seam}`);
@@ -92,7 +55,7 @@ export class ContainerDied extends Error {
   }
 }
 
-/** The container is stopped. What the SDK raises for any call against one. */
+/** What the SDK raises for any call against a stopped container. */
 export class ContainerStopped extends Error {
   constructor(what: string) {
     super(`the container is not running, so ${what} cannot run`);
@@ -109,16 +72,8 @@ export class IsolateReset extends Error {
   }
 }
 
-/**
- * One operation crossed the same durable sub-step more times than it may.
- *
- * THE BOUNDED-WORK FENCE, and it exists because an unbounded retry loop is not
- * a hang to be waited out: a checkpoint loop that compared an operation kind
- * against a checkpoint kind published a fresh generation FOREVER on every
- * quiesce. A budget turns that into a NAMED failure at the second publication
- * instead of a test timeout, so the suite reports the defect rather than the
- * symptom.
- */
+/** Bounds how often one operation may cross a durable sub-step, so a runaway retry loop
+ *  fails by name at the excess visit instead of as a test timeout. */
 export class SeamBudgetExceeded extends Error {
   constructor(readonly seam: string, readonly visits: number) {
     super(`one operation reached ${seam} ${visits} times, which is more than it may`);
@@ -126,19 +81,12 @@ export class SeamBudgetExceeded extends Error {
   }
 }
 
-/**
- * One armed death, and the seams a run actually reached.
- *
- * `reached` is what keeps an injection honest: a seam nothing reaches would
- * make a crash test pass by never crashing, so the battery asserts the seam it
- * armed was visited.
- */
+/** `reached` keeps an injection honest: an unreached seam passes a crash test by never
+ *  crashing, so the battery asserts the armed seam was visited. */
 export class DeathWatch {
   #armed: string | null = null;
   readonly reached: string[] = [];
-  /** How many times one seam may be reached before the run is refused. */
   readonly #budgets = new Map<string, number>();
-  /** The spent budget, once one is spent. Latched: see {@link DeathWatch.at}. */
   #exhausted: SeamBudgetExceeded | null = null;
 
   arm(seam: string): void {
@@ -154,12 +102,10 @@ export class DeathWatch {
     this.#budgets.set(seam, visits);
   }
 
-  /** How many times `seam` has been reached. */
   visits(seam: string): number {
     return this.reached.filter(step => step === seam).length;
   }
 
-  /** Reached one seam. Throws when this is the armed one, exactly once. */
   at(seam: string): void {
     this.#record(seam);
 
@@ -168,12 +114,8 @@ export class DeathWatch {
     throw new ContainerDied(seam);
   }
 
-  /**
-   * Reached one durable write whose effect is already on the container: the
-   * ISOLATE goes here, not the container. {@link IsolateReset} is what a
-   * Durable Object reset looks like to code in flight — the call never
-   * returns, the object comes back, and the container is where it was.
-   */
+  /** Models a Durable Object reset after a durable write reached the container: the call
+   *  never returns, the object comes back, and the container keeps its state (P1). */
   reset(seam: string): void {
     this.#record(seam);
 
@@ -189,14 +131,8 @@ export class DeathWatch {
     this.#exhausted = null;
   }
 
-  /**
-   * LATCHED, and it has to be. A publication loop is allowed to treat one
-   * failed completion mark as retryable — that is the design — so a budget
-   * that threw once and then let the run continue would be swallowed and the
-   * loop would spin anyway. Once a budget is spent, every later sub-step
-   * refuses with the same error, so the next operation cannot begin and the
-   * caller gets a NAMED refusal instead of a test timeout.
-   */
+  /** Latched: a publication loop retries a failed completion mark, so a one-shot throw would spin.
+   *  Once spent, every later sub-step refuses with the same named error, not a test timeout. */
   #record(seam: string): void {
     if (this.#exhausted !== null) throw this.#exhausted;
     this.reached.push(seam);
@@ -211,34 +147,21 @@ export class DeathWatch {
   }
 }
 
-// ── the durable store ───────────────────────────────────────────────────────
-
 interface StoredObject {
   readonly bytes: Uint8Array;
-  /** The store's own name for the upload that wrote this object. R2 mints one
-   *  per upload and reports it from `head` forever after, which is the identity
-   *  a same-length replacement cannot copy. */
+  /** R2 mints one per upload and reports it from `head` forever after; a same-length
+   *  replacement cannot copy it. */
   readonly version: string;
-  /** User metadata stored beside the body, as R2's `customMetadata` and the
-   *  `x-amz-meta-*` headers s3fs keeps a file's mode, owner and times in. */
+  /** Models R2 `customMetadata`, the `x-amz-meta-*` headers where s3fs keeps a file's mode,
+   *  owner and times. */
   readonly meta: Readonly<Record<string, string>>;
 }
 
-/**
- * The object store, as the one thing that outlives a container.
- *
- * Modelled at the level every strategy actually uses: whole objects under a
- * key, a per-upload version, and a listing by prefix. `corrupt` is the
- * fault-injection this level owns — bit rot and truncation are store events,
- * not strategy events.
- */
-/** What one prefix of the durable store holds: the count and the bytes. */
 interface StoreInventory {
   objects: number;
   bytes: number;
 }
 
-/** One remote operation against the store, as the work rows count them. */
 export interface RemoteOp {
   readonly op: 'get' | 'put' | 'head' | 'list' | 'delete';
   readonly key: string;
@@ -251,13 +174,8 @@ export class DurableStore {
   /** Every mutation, in order. A crash-ordering assertion needs the order, not
    *  the end state. */
   readonly writes: string[] = [];
-  /**
-   * EVERY remote operation, reads included, in order. The counted-work rows
-   * (`RestoreWork`, `PublishWork`) are windows over this log: a wake's remote
-   * ops are the entries between the attach's start and its return, whatever
-   * port the arm reached them through. Counting here rather than in each arm
-   * is what makes one arm's row comparable with another's.
-   */
+  /** Every remote op, reads included, in order; `RestoreWork`/`PublishWork` rows are windows here.
+   *  Counting in the store, not in each arm, keeps one arm's row comparable with another's. */
   readonly ops: RemoteOp[] = [];
   #uploads = 0;
 
@@ -278,7 +196,6 @@ export class DurableStore {
     return held?.bytes ?? null;
   }
 
-  /** The metadata stored beside `key`, or null for an absent object. */
   meta(key: string): Readonly<Record<string, string>> | null {
     return this.objects.get(key)?.meta ?? null;
   }
@@ -329,13 +246,8 @@ export class DurableStore {
     return { objects, bytes };
   }
 
-  /**
-   * Damage one stored object WITHOUT re-uploading it.
-   *
-   * The version is retained on purpose: bit rot and a lifecycle-truncated
-   * object are not new uploads, so a check that only compares upload versions
-   * must not be able to pass by accident.
-   */
+  /** Keeps the upload version: bit rot and lifecycle truncation are not new uploads, so a
+   *  check comparing only upload versions must not pass by accident. */
   corrupt(key: string, how: 'truncate' | 'flip'): void {
     const held = this.objects.get(key);
 
@@ -357,15 +269,12 @@ export class DurableStore {
     });
   }
 
-  /** Keys under `prefix`, sorted, WITHOUT recording a remote op: the arms'
-   *  own bookkeeping reads (`inventory`, a control-plane listing) are not
+  /** Records no remote op: bookkeeping reads (`inventory`, a control-plane listing) are not
    *  the work a wake or a publish pays for. */
   #keysUnder(prefix: string): string[] {
     return [...this.objects.keys()].filter(key => key.startsWith(prefix)).sort();
   }
 }
-
-// ── the container disk ──────────────────────────────────────────────────────
 
 interface MountRow {
   readonly source: string;
@@ -378,20 +287,8 @@ interface OverlayRow {
   readonly upper: string;
 }
 
-/**
- * One archive, as a schema.
- *
- * The stand-in for a squashfs superblock: bytes that came back out of the
- * store are parsed rather than trusted, so a truncated or flipped archive
- * REFUSES here exactly as squashfuse refuses a damaged image — which is what
- * makes a corrupt layer a refusal instead of a silently short tree.
- *
- * WHAT A LAYER CARRIES is what squashfs carries: mode, uid, gid, ONE time
- * (squashfs stores mtime and nothing else), xattrs, symlink targets, hardlinks
- * (one inode, several names) and sparse geometry (holes are not stored). An
- * archive that carried more than the real format would let the chain pass a
- * fidelity cell the deployed chain cannot pass.
- */
+/** Models a squashfs image: parsed bytes refuse on corruption like squashfuse does, and entries
+ *  carry only what squashfs stores (one mtime), so fidelity cannot exceed the deployed chain. */
 const ArchiveMetadataSchema = v.strictObject({
   uid: v.number(),
   gid: v.number(),
@@ -416,7 +313,6 @@ const ArchiveSchema = v.strictObject({
   entries: v.array(ArchiveEntrySchema),
 });
 
-/** The disk refused a write for want of room: `ENOSPC`, as `write(2)` says it. */
 export class DiskFull extends Error {
   constructor(readonly path: string, readonly needed: number, readonly free: number) {
     super(`ENOSPC: ${path} needs ${needed} bytes and the disk has ${free} free`);
@@ -424,22 +320,8 @@ export class DiskFull extends Error {
   }
 }
 
-/**
- * One container's disk, and the mounts on it.
- *
- * Two kinds of thing live here. PLAIN FILES (`files`) are bytes at a path:
- * archives, stages, runner replies. TREES (`trees`) are full-fidelity
- * filesystem trees at a directory — the layers squashfuse serves, an
- * overlay's upper, the journal daemon's backing root — held as
- * {@link LiveTree}s so a hardlink, a hole or an xattr survives the way it
- * would on a real disk. Both are charged to one QUOTA: a write past it is
- * refused with {@link DiskFull} before any effect lands, which is the
- * `intent-before-effect` rule the ENOSPC cell asserts.
- *
- * `dead` is what a replacement leaves behind: the strategy's in-flight
- * operation keeps holding this object, and every call on it fails the way a
- * call against a container that no longer exists fails.
- */
+/** One container's disk: plain files and full-fidelity trees share one quota; an over-quota
+ *  write throws `DiskFull` before any effect lands. `dead` fails every call after replacement. */
 export class ContainerDisk {
   readonly files = new Map<string, Uint8Array>();
   readonly dirs = new Set<string>([DEVBOX_WORKDIR, DEVBOX_RUNTIME_DIR]);
@@ -451,7 +333,6 @@ export class ContainerDisk {
   readonly processFaultsReached: string[] = [];
   /** Plain files a mount serves on demand: present, readable, never charged. */
   readonly mountServed = new Set<string>();
-  /** Paths an overlay's upper has deleted from a lower: the whiteouts. */
   readonly whiteouts = new Map<string, Set<string>>();
   /** Every `mount` call this disk ever took, replacements included. */
   mountCalls = 0;
@@ -469,12 +350,8 @@ export class ContainerDisk {
     if (this.stopped) throw new ContainerStopped(what);
   }
 
-  /** Successful termination loses every container-local byte: files, trees,
-   *  mounts, overlays and the whiteouts between them. Recorded call history
-   *  and configured faults stay — they are the test's memory, not the
-   *  container's — and so do the lifecycle flags: a stopped disk is gone,
-   *  not alive-again. The disk object itself survives so references the
-   *  caller already holds observe the loss rather than a swap. */
+  /** Models P1: termination drops local bytes; call history, faults and lifecycle flags stay.
+   *  The disk object survives so held references observe the loss rather than a swap. */
   discardLocalState(): void {
     this.files.clear();
     this.dirs.clear();
@@ -488,12 +365,9 @@ export class ContainerDisk {
     this.usedBytes = 0;
   }
 
-  /** Charge `delta` bytes against the quota; refuse, effect-free, past it. */
   charge(delta: number, path = '(tree)'): void {
-    // tmpfs lives in memory rather than on the container disk, and layer
-    // mounts read through the store rather than occupying local disk, so
-    // neither costs disk quota. Asked here rather than at each call site, so
-    // no writer needs to know which paths are disk and which are not.
+    // tmpfs lives in memory and layer mounts read through the store, so neither costs disk quota;
+    // decided here so no writer needs to know which paths are disk.
     if (path.startsWith('/dev/shm/') || path === '/dev/shm') return;
 
     if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`) || path.startsWith('/var/tmp/devbox/lower-empty') || path === '/var/tmp/devbox/block-lower') return;
@@ -505,7 +379,6 @@ export class ContainerDisk {
     this.usedBytes += delta;
   }
 
-  /** The tree at `dir`, created empty on first use and charged to this disk. */
   tree(dir: string): LiveTree {
     let held = this.trees.get(dir);
 
@@ -585,11 +458,8 @@ export class ContainerDisk {
     this.files.set(path, bytes.slice());
   }
 
-  /**
-   * A store object as an s3fs mount shows it: a file the container can read
-   * that occupies NO local disk, because the mount fetches on demand. Never
-   * charged to the quota, and never refunded on unmount.
-   */
+  /** An s3fs mount fetches on demand, so a mount-served file occupies no local disk:
+   *  never charged to the quota, never refunded on unmount. */
   serveFromMount(path: string, bytes: Uint8Array): void {
     this.#alive(`serve ${path}`);
     const held = this.files.get(path);
@@ -644,10 +514,8 @@ export class ContainerDisk {
     return this.#treeAt(path)?.node;
   }
 
-  /** Where a write to `path` lands and its name there: an overlay's upper for
-   *  a merged path (the name is unmasked, as a create through the overlay
-   *  unmasks it), else the deepest tree directory above it. Undefined for a
-   *  path no tree serves: those are plain files. */
+  /** A write through an overlay lands in its upper and unmasks the name, as a real create does;
+   *  else the deepest tree directory above holds it. Unserved paths are plain files. */
   writable(path: string): { readonly tree: LiveTree; readonly relative: string } | undefined {
     this.#alive(`write ${path}`);
     const owner = this.#overlayOwner(path);
@@ -663,18 +531,12 @@ export class ContainerDisk {
     return holder === undefined ? undefined : { tree: holder.tree, relative: path.slice(holder.dir.length + 1) };
   }
 
-  /** Every file under `dir`, as paths relative to it, through any overlay. */
   entries(dir: string): string[] {
     this.#alive(`list ${dir}`);
 
     return this.snapshot(dir).filter((entry) => entry.kind === 'file').map((entry) => entry.path);
   }
 
-  /**
-   * The tree served at `dir`, as capture entries: an overlay mount point
-   * answers the merged view (upper wins, whiteouts hide), a tree directory
-   * answers its own tree, anything else answers the plain files below it.
-   */
   snapshot(dir: string): NodeEntry[] {
     this.#alive(`walk ${dir}`);
     const overlay = this.overlays.get(dir);
@@ -684,11 +546,8 @@ export class ContainerDisk {
       const masked = this.whiteouts.get(dir) ?? new Set<string>();
       let inoBase = 0;
 
-      // Lowers first, oldest last in the list, so a newer layer's row replaces
-      // an older one's. Inode ids are made disjoint across layers by offset,
-      // and stay shared within a layer. A whiteout hides a lower's name and
-      // everything beneath it; the upper then replaces every lower, and its
-      // own names are never masked.
+      // Lowers merge oldest first so a newer layer's row wins; inode ids are offset per layer.
+      // Whiteouts mask lowers only, before the upper merges, so the upper's names are never hidden.
       for (const layer of [...overlay.lowers].reverse()) {
         inoBase = this.#mergeLayer(merged, layer, inoBase);
       }
@@ -733,21 +592,13 @@ export class ContainerDisk {
     return rows;
   }
 
-  /** `cp -a from/. to/`: the tree at `from` planted into the tree at `to`. */
   copyTree(from: string, to: string): void {
     this.#alive(`cp -a ${from} ${to}`);
     this.tree(to).plant(this.snapshot(from));
   }
 
-  /**
-   * Serialize a directory into one archive object.
-   *
-   * The stand-in for mksquashfs, and deliberately a format that FAILS TO PARSE
-   * when a byte of it is lost: a truncated squashfs does not mount either, and
-   * a fake whose archive tolerated damage would let a corrupt layer be served.
-   * Sparse files are written as their data runs: mksquashfs does not store a
-   * hole, and neither does this.
-   */
+  /** Stands in for mksquashfs: a lost byte must fail the parse, as a truncated squashfs won't mount.
+   *  Sparse files are stored as data runs only; mksquashfs does not store a hole either. */
   pack(dir: string): Uint8Array {
     const entries = this.snapshot(dir).map((entry): v.InferOutput<typeof ArchiveEntrySchema> => {
       const { metadata } = entry;
@@ -778,9 +629,8 @@ export class ContainerDisk {
   }
 
   unpack(bytes: Uint8Array, dir: string): void {
-    // These bytes came out of the store, so they are untrusted input even
-    // though this module wrote them: a truncated archive must fail to parse
-    // exactly as a truncated squashfs fails to mount.
+    // Stored bytes are untrusted even though this module wrote them: a truncated archive
+    // must fail to parse exactly as a truncated squashfs fails to mount.
     let archive: v.InferOutput<typeof ArchiveSchema>;
 
     try {
@@ -857,7 +707,6 @@ export class ContainerDisk {
     this.tree(overlay.upper);
   }
 
-  /** Plant one layer's rows over `merged`; answers the next layer's inode offset. */
   #mergeLayer(merged: Map<string, NodeEntry>, layer: string, inoBase: number): number {
     let highest = 0;
     const rows = this.snapshot(layer);
@@ -903,8 +752,7 @@ export class ContainerDisk {
     masked.add(owner.relative);
   }
 
-  /** The deepest tree directory above `path` with the tree it holds, so a
-   *  layer mounted inside another tree's directory answers for its own names. */
+  /** Deepest match wins so a layer mounted inside another tree's directory answers for its names. */
   #treeAbove(path: string): { dir: string; tree: LiveTree } | undefined {
     let deepest: { dir: string; tree: LiveTree } | undefined;
 
@@ -915,7 +763,6 @@ export class ContainerDisk {
     return deepest;
   }
 
-  /** The node a path names through an overlay or a tree directory. */
   #treeAt(path: string): { node: LiveInode } | undefined {
     const owner = this.#overlayOwner(path);
 
@@ -972,7 +819,6 @@ function ancestors(path: string): string[] {
   return steps;
 }
 
-/** Whether a whiteout set hides `path`: the name itself or an ancestor. */
 function isMasked(masked: ReadonlySet<string>, path: string): boolean {
   if (masked.has(path)) return true;
 
@@ -1010,44 +856,26 @@ const encoder = new TextEncoder();
 
 const decoder = new TextDecoder();
 
-// ── the uniform arm ─────────────────────────────────────────────────────────
-
-/**
- * What a caller does to the work directory, whatever serves it.
- *
- * ASYNC BY CONTRACT, not by every arm's implementation: a strategy that keeps
- * everything resident answers from memory, wrapped in an already-resolved
- * promise, and a lazy one pages in on first touch. The signature carries the
- * one true fact about a real workspace — that a read can fault — so a battery
- * cell exercising a lazy arm and one exercising an eager arm write the same
- * line of code.
- */
+/** Async by contract: an eager arm answers from memory, a lazy one pages in on first touch,
+ *  so a read can fault and cells for lazy and eager arms share the same code. */
 export interface Workspace {
   write(path: string, text: string): Promise<void>;
   read(path: string): Promise<string | undefined>;
   remove(path: string): Promise<void>;
-  /** File paths only, sorted: the listing a text fixture compares against.
-   *  Lists structure only — every directory, no file's bytes — so pairing it
-   *  with `read` per path pays for exactly the files a caller names. */
+  /** Sorted file paths for text fixtures; lists structure only, reading no file's bytes,
+   *  so pairing it with `read` per path pays for exactly the files a caller names. */
   paths(): Promise<readonly string[]>;
-  /**
-   * Plant a complete tree at full fidelity: directories, files, symlinks,
-   * hardlinks (entries that share an `ino` share one inode), sparse content
-   * as runs, and every metadata field. Existing paths are replaced.
-   */
+  /** Plants at full fidelity: entries sharing an `ino` share one inode, sparse content as runs.
+   *  Existing paths are replaced. */
   plant(entries: readonly NodeEntry[]): Promise<void>;
-  /** The tree the workspace serves, as capture entries, at the fidelity the
-   *  arm serves it, every byte resident. Inode ids share exactly where the
-   *  served inodes share. A lazy arm pages in everything to answer this. */
+  /** The served tree at the arm's fidelity, every byte resident; inode ids share where served
+   *  inodes share. A lazy arm pages in everything to answer this. */
   snapshot(): Promise<readonly NodeEntry[]>;
-  /** `pwrite(2)`: overwrite bytes in place at an offset. The sqlite pattern.
-   *  A lazy arm pages the target in first: the bytes outside the write are
-   *  still the head's, and a fence that staged a placeholder's zeros would
-   *  publish them as content. */
+  /** A lazy arm pages the target in first: bytes outside the write stay the head's, and a
+   *  fence that staged a placeholder's zeros would publish them as content. */
   pwrite(path: string, offset: number, bytes: Uint8Array): Promise<void>;
 }
 
-/** One object a strategy's own record DECLARES a size and identity for. */
 export interface DeclaredObject {
   readonly key: string;
   readonly byteLength: number;
@@ -1056,33 +884,21 @@ export interface DeclaredObject {
   readonly names: readonly string[];
 }
 
-/** Where a strategy keeps metadata, and what the container owns. */
 export interface ControlPlacement {
   /** Object keys that carry control metadata: envelopes, cursors, heads. */
   readonly objectKeys: readonly string[];
   /** Control the Durable Object holds outside the store entirely. */
   readonly rows: readonly string[];
-  /** The head this control plane currently names, or null. */
   readonly head: string | null;
 }
 
-// ── counted work ────────────────────────────────────────────────────────────
-//
-// The rows below carry the field names the durability contract declares for
-// them (`SealWork`, `PublishWork`, `RestoreWork` in `src/durability/contracts.ts`;
-// the first two land with the contracts lane, `RestoreWork` is shipped). The
-// machine derives every row from things it can OBSERVE — the durable store's
-// op log, the disk's mount count, the shipped builders' own statistics, the
-// bytes the fence handed over — never from a number an arm reports about
-// itself, so a counter cannot flatter the arm that emits it.
+// Every work row is derived from what the machine observes (op log, mount count, builder
+// stats, fenced bytes), never from an arm's self-report, so no counter flatters its arm.
 
-/** What one seal (fence plus build) cost. */
 export interface SealWork {
-  /** Bytes the fence copied into the stage: the whole tree today. */
+  /** Bytes the fence copied into the stage: the whole tree. */
   readonly bytesStaged: number;
-  /** Bytes the chunker consumed. */
   readonly bytesChunked: number;
-  /** Chunk digests computed. */
   readonly chunksHashed: number;
   /** Tree nodes serialized and hashed. */
   readonly nodesRewritten: number;
@@ -1090,20 +906,15 @@ export interface SealWork {
   readonly wholeFiles: number;
 }
 
-/** What one publish cost against the store and the control plane. */
 export interface PublishWork {
   readonly objectsPut: number;
   readonly bytesPut: number;
-  /** Head compare-and-swap transactions attempted. */
   readonly casAttempts: number;
 }
 
-/** What one wake cost. The shipped `RestoreWork` row, field for field. */
 export interface RestoreWork {
-  /** Remote ops on the critical path. The store here answers synchronously
-   *  and every shipped restore awaits one op before issuing the next, so this
-   *  equals `totalRemoteOps`; it stays a separate field so a concurrent
-   *  restore reports the difference. */
+  /** Equals `totalRemoteOps` while the store answers synchronously and restores await each op;
+   *  kept separate so a concurrent restore reports the difference. */
   readonly serialRemoteOps: number;
   readonly totalRemoteOps: number;
   /** Bytes read from keys outside every payload prefix the arm names. */
@@ -1118,15 +929,11 @@ export interface RestoreWork {
 }
 
 export interface WorkRows {
-  /** The last checkpoint's seal. */
   readonly seal: SealWork;
-  /** The last checkpoint's publish. */
   readonly publish: PublishWork;
-  /** The last attach's restore. */
   readonly restore: RestoreWork;
 }
 
-/** A cell, or a tree property, the arm refuses by name and says why. */
 export interface Refusal {
   readonly reason: string;
 }
@@ -1155,54 +962,33 @@ export interface JournalFacts {
 export interface ArmBoot {
   storage(): DevboxStorage;
   readonly workspace: Workspace;
-  /** Every failure the strategy recorded durably through its port. */
   readonly failures: readonly string[];
-  /**
-   * Hold the boot's next commit at the DO-side finalize: the runner has
-   * staged (uploaded) and the draft is about to reach the control plane.
-   * `entered` settles when it is held; `release` resumes the old commit.
-   */
+  /** Holds the next commit at the DO-side finalize: staged and uploaded, draft not yet published.
+   *  `entered` settles once held; `release` resumes that held commit. */
   holdFinalize(): HeldFinalize;
   /** A blank disk, the same durable store, and the same durable rows. */
   replaceContainer(): void;
 }
 
-/**
- * One strategy, driven through exactly the operations the contract names.
- *
- * Everything a case needs is here and nothing is strategy-specific: a case that
- * reads a key, a prefix or a mount path takes it from the arm, which takes it
- * from the strategy's OWN layout API. That is the whole point — the envelope
- * defect was a placement bug, and a test carrying its own copy of the layout
- * cannot see one.
- */
+/** Cases take keys, prefixes and mount paths from the strategy's own layout API via the arm;
+ *  a test carrying its own copy of the layout cannot see a placement bug. */
 export interface ConformanceArm extends ArmBoot {
   readonly name: DevboxStrategyName;
   readonly durable: DurableStore;
   readonly deaths: DeathWatch;
   /** The container stops where it stands: no teardown, no replacement. */
   stopContainer(): void;
-  /**
-   * The isolate goes and comes back: a NEW strategy instance over the SAME
-   * container, disk intact, daemon and mounts where they were. The opposite
-   * of a replacement, and what a Durable Object reset really is.
-   */
+  /** A new strategy instance over the SAME container: disk, daemon and mounts intact (P1).
+   *  The opposite of a replacement; this is what a real isolate reset does (D6). */
   resetIsolate(): void;
   /** A second live container on this box, beside the current one. */
   secondBoot(): ArmBoot;
-  /** The current container's disk: quota, usage, mounts. */
   disk(): ContainerDisk;
   /** The commit sub-steps this strategy exposes, in the order it performs
    *  them. Derived from its own key layout, never invented here. */
   readonly commitSeams: readonly string[];
-  /**
-   * The sub-step at which ONE commit promotes its work, exactly once.
-   *
-   * A commit is bounded work: one payload publication per call. Naming the step
-   * that marks it is what lets a battery say "and no more than one", which is
-   * how a retry loop that publishes forever is caught as a defect instead of as
-   * a timeout.
-   */
+  /** The sub-step where one commit promotes its work, exactly once per call; naming it lets a
+   *  battery catch a retry loop that publishes forever as a defect, not a timeout. */
   readonly publishSeam: string;
   /** The attach sub-steps an isolate reset can land after, in order. Each
    *  is a port whose effect is on the container when the reset lands. */
@@ -1212,34 +998,26 @@ export interface ConformanceArm extends ArmBoot {
   payloadPrefixes(): readonly string[];
   controlPlane(): Promise<ControlPlacement>;
   declaredPayload(): Promise<readonly DeclaredObject[]>;
-  /** Every committed head the ledger names. Exactly one is the invariant. */
+  /** Every committed head the ledger names; the invariant is exactly one. */
   committedHeads(): Promise<readonly string[]>;
   /** The counted-work rows for the last checkpoint and the last attach. */
   work(): WorkRows;
   /** Container-side starts that survive a Durable Object isolate reset. */
   lifecycleCounts?(): LifecycleCounts;
-  /** Evict clean local bytes, as the design's disk-pressure escape requires.
-   *  Returns how many clean bytes it found to free. An arm without an
-   *  eviction hook reports that fact: it can only refuse when full. */
+  /** Evicts clean local bytes (the disk-pressure escape); returns the clean bytes it found.
+   *  An arm without this hook can only refuse when full. */
   evictCleanBytes?(): number;
-  /** The write-ahead journal records a container still holds, in order: one
-   *  line per workload effect, 'W <path>' for a write that landed. Empty for
-   *  arms whose write path keeps no journal. */
+  /** Journal lines a container still holds, in order: one per workload effect, 'W <path>' per
+   *  landed write. Empty for arms whose write path keeps no journal. */
   journalFacts?(): JournalFacts;
-  /** Tree properties the arm's format does not carry, by name. */
   readonly refusedProperties: Readonly<Partial<Record<TreeProperty, Refusal>>>;
-  /** Cells the arm refuses outright, by cell id. */
   readonly refusedCells: Readonly<Record<string, Refusal>>;
 }
 
-// ── work accounting shared by every arm ─────────────────────────────────────
-
-/** A window over the durable op log, opened at one moment and read later. */
 interface OpWindow {
   readonly from: number;
 }
 
-/** The publish row for the ops since `window` opened. */
 function publishWorkSince(durable: DurableStore, window: OpWindow, casAttempts: number): PublishWork {
   let objectsPut = 0;
   let bytesPut = 0;
@@ -1253,7 +1031,6 @@ function publishWorkSince(durable: DurableStore, window: OpWindow, casAttempts: 
   return { objectsPut, bytesPut, casAttempts };
 }
 
-/** The restore row for the ops since `window` opened. */
 function restoreWorkSince(
   durable: DurableStore,
   window: OpWindow,
@@ -1284,8 +1061,6 @@ function restoreWorkSince(
 }
 
 
-/** The optional members of a storage, carried over a metered wrapper in
- *  statements: an absent `detach` stays absent, a present one is delegated. */
 function withOptionalMembers(raw: DevboxStorage, metered: Pick<DevboxStorage, 'attach' | 'checkpoint' | 'discard'>): DevboxStorage {
   const storage: DevboxStorage = { ...metered };
   const detach = raw.detach;
@@ -1304,18 +1079,8 @@ const NO_RESTORE: RestoreWork = {
 };
 
 
-/**
- * The seal row for what the archiver packed. The fence hands the builder
- * every file, so staged bytes and chunked bytes are the packed tree's.
- * `chunksHashed` is the count of `chunkBytes`-sized windows over the data
- * (holes excluded), which is what a fixed-size chunker hashes; a
- * content-defined chunker's own count replaces it where the builder reports
- * one. `nodesRewritten` is every node the publication wrote FOR THIS CHANGE:
- * for a chunked sidecar that is the manifest, the carried files and
- * directories and the chunks, not the envelope — the manifest's own
- * directory and the directories beside it — which every publication writes
- * identically.
- */
+/** `chunksHashed` counts `chunkBytes` windows over data, holes excluded (fixed-size chunker).
+ *  `nodesRewritten` excludes the manifest's envelope dirs, which every publication writes. */
 function wholeTreeSeal(entries: readonly NodeEntry[], chunkBytes: number): SealWork {
   let bytesStaged = 0;
   let chunksHashed = 0;
@@ -1344,8 +1109,6 @@ function wholeTreeSeal(entries: readonly NodeEntry[], chunkBytes: number): SealW
   return { bytesStaged, bytesChunked: bytesStaged, chunksHashed, nodesRewritten: entries.length - envelope, wholeFiles };
 }
 
-/** The one cell this machine cannot host for any arm: it lives on the
- *  devbox-harness with the real class. Named so the matrix says where. */
 export const HARNESS_OWNED_CELLS = {
   '6.19': { reason: 'owned by the devbox-harness suites: stop then wake on the same instance needs the Devbox class and the platform stand-in' },
 } satisfies Readonly<Record<string, Refusal>>;
@@ -1395,30 +1158,17 @@ export class ArmRefused extends Error {
     this.name = 'ArmRefused';
   }
 }
-// ── snapshot-chain ──────────────────────────────────────────────────────────
 
-/**
- * The archiver, the overlay and the layer mounts, as commands.
- *
- * The strategy owns its shell, so this is where the battery meets it: each arm
- * recognises exactly one command the strategy really issues and does what the
- * container would do WITH REAL BYTES — mksquashfs writes an archive of the
- * directory it was pointed at, squashfuse unpacks one, `cp -a` copies a tree,
- * and `dd` publishes a staged archive into the store through the writable
- * mount. That is what makes "the exact bytes came back" an assertion about the
- * chain rather than about a stub.
- */
+/** Each arm handles one command the strategy really issues and acts on real bytes, so
+ *  "the exact bytes came back" asserts the chain rather than a stub. */
 type ShellReply = DeltaShellReply;
 
 const shellOk = (stdout = ''): ShellReply => ({ stdout, stderr: '', exitCode: 0 });
 
 const shellFail = (stderr: string): ShellReply => ({ stdout: '', stderr, exitCode: 1 });
 
-/**
- * The chain checkpoint's own three commands — pack, publish, space gate —
- * answered as the real commands answer them: `<exit> <bytes>` on stdout,
- * their own words on stderr. Undefined when the command is none of the three.
- */
+/** Answers pack, publish and space gate as the real commands do: `<exit> <bytes>` on stdout,
+ *  their own words on stderr. Undefined for any other command. */
 function checkpointCommand(
   command: string,
   disk: ContainerDisk,
@@ -1433,33 +1183,26 @@ function checkpointCommand(
     try {
       disk.writeFile(squash.archive, archive);
     } catch (error) {
-      // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
-      // stderr, exactly as the real command reports it.
+      // Full disk: mksquashfs reports a non-zero rc on stdout and its own words on stderr,
+      // as the real command does.
       if (!(error instanceof DiskFull)) throw error;
 
       return { stdout: '1 0', stderr: `FATAL ERROR: Failed to write to output filesystem: ${error.message}`, exitCode: 0 };
     }
 
-    // `<exit> <bytes>`, the one command that builds and measures.
     return shellOk(`0 ${archive.byteLength}`);
   }
 
-  // THE PUBLICATION, and the whole reason this arm has no payload port. The
-  // container reads its own staged archive and writes it onto the store
-  // mount; `conv=fsync` is the flush, so the upload's success is this
-  // command's exit code. Nothing is handed to the isolate.
-  // The copy, whatever precedes it: the publication creates the generation's
-  // directory on the mount in the same command, because s3fs shows no parent
-  // for a key nothing lives under yet.
+  // The container copies its staged archive onto the store mount; `conv=fsync` makes the exit code
+  // the upload's success, and the same command creates the generation directory for s3fs.
   const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
     .exec(command)?.groups;
 
   if (published !== undefined) {
     const landed = publish(published.archive, published.mounted);
 
-    // `<exit> <bytes>` on stdout either way, exactly as the real command
-    // reports it: dd's own failure is a non-zero code there, not a thrown
-    // shell error.
+    // Mirrors the real command: `<exit> <bytes>` on stdout either way; dd's failure is a
+    // non-zero code there, not a thrown shell error.
     if (landed === undefined) {
       return {
         stdout: '1 0',
@@ -1471,11 +1214,8 @@ function checkpointCommand(
     return shellOk(`0 ${landed}`);
   }
 
-  // THE EGRESS PUBLICATION: `bun '<runtime>/devbox-publish.mjs' <archive>
-  // <object-url> <partBytes>` writes the staged archive to the mount's
-  // credential-less egress host — one PUT under the part size, and this fake
-  // answers it the way the publisher's own wrapper reports: `<rc> <bytes>
-  // <etag>` on stdout, the store's words on stderr.
+  // Answers the egress PUT (D15) the way the publisher's wrapper reports it:
+  // `<rc> <bytes> <etag>` on stdout, the store's words on stderr.
   const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
     .exec(command)?.groups;
 
@@ -1498,9 +1238,8 @@ function checkpointCommand(
   }
 
   if (command.includes('df -Pk')) {
-    // `<need> <free>`, both honest: the archive of the source directory
-    // needs about its data bytes, and the disk has what its quota leaves.
-    // Without a quota the disk never fills and the gate never refuses.
+    // The disk-space reply is honest: need is the source directory's data bytes, free is what
+    // the quota leaves; without a quota the disk never fills and the gate never refuses.
     const source = /find '(?<source>[^']+)'/.exec(command)?.groups?.source;
 
     const need = source === undefined ? 1 : Math.max(1, disk.snapshot(source).reduce(
@@ -1515,16 +1254,11 @@ function checkpointCommand(
   return undefined;
 }
 
-/** The container's mounts and releases: the live mount table read, a layer
- *  mounted, an overlay composed, a mount point or every delta layer released.
- *  Undefined for any other command. */
 function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
   if (command === 'cat /proc/mounts') return shellOk(disk.procMounts());
 
-  // Releasing every delta layer this container serves, whichever generation
-  // mounted it.
   if (command.includes('awk -v r=')) {
     const root = unquote(/awk -v r='(?<root>[^']+)'/.exec(command)?.groups?.root ?? '');
 
@@ -1535,8 +1269,6 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
     return shellOk();
   }
 
-  // The BOUNDED release: the loop is the strategy's, the unmount is this
-  // container's, and the path is still the one the command names.
   const released = /\/usr\/bin\/fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
 
   if (released !== undefined) {
@@ -1559,7 +1291,7 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
     }
 
     disk.mount(layer.point, { source: layer.archive, fstype: 'fuse.squashfuse', options: 'ro' });
-    // The layer is mounted on the container when the isolate may go.
+    // Isolate reset fires after the mount lands: the layer stays mounted on the container disk (P1).
     deaths.reset('attach:after-layer-mount');
 
     return shellOk();
@@ -1581,10 +1313,6 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
   return undefined;
 }
 
-/** The container's process fault policy, in one place: a fault only fires on
- *  a live container (a dead or stopped one answers nothing it scripted), the
- *  first match wins, the command is recorded as reached, and the reply is the
- *  fault's own stderr and exit code — never the shell's. */
 function processFaultReply(disk: ContainerDisk, command: string): ShellReply | undefined {
   const fault = disk.dead || disk.stopped ? undefined : disk.processFaults.find((entry) => entry.match.test(command));
 
@@ -1601,9 +1329,8 @@ function chainExec(
   /** Publish a staged archive through the s3fs mount and answer what landed,
    *  or undefined when the source is not there for `dd` to read. */
   publish: (archivePath: string, mountedPath: string) => number | undefined,
-  /** Publish a staged archive through the mount's egress host and answer
-   *  what landed: the byte count, the refusal's stderr words, or undefined
-   *  when the archive is absent. */
+  /** Publishes a staged archive via the mount's egress host; answers the byte count, the
+   *  refusal's stderr words, or undefined when the archive is absent. */
   publishEgress: (archivePath: string, objectUrl: string) => { landed: number } | { refused: string } | undefined,
 ) {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
@@ -1620,8 +1347,6 @@ function chainExec(
     if (fault !== undefined) return fault;
 
     const ok = shellOk;
-    // The chunked delta's own shell, answered with real bytes. See
-    // `delta-shell.ts`.
     const delta = deltaCommand(command, disk);
 
     if (delta !== undefined) return delta;
@@ -1630,25 +1355,8 @@ function chainExec(
 
     if (exists !== undefined) return ok(disk.exists(exists) ? 'yes' : 'no');
 
-    // The BOUNDED visibility probe: one command that asks the store mount for a
-    // layer and, when it never appears, reports what the subtree holds.
-    //
-    // WHICH SUBTREE IS OBSERVED, NOT RESTATED. This arm used to carry the
-    // strategy's private mount point — `const CHAIN_STORE_MOUNT = '/backups'`
-    // — so the fake and the strategy agreed by construction, and a strategy
-    // that moved its mount would have been served from the old path forever.
-    // The probe command itself lists the subtree it is waiting on, so the path
-    // is read off the command the container really received.
-    //
-    // AND THE MISSING BRANCH IS NOT COVERED HERE, which the deleted comment
-    // claimed for itself and could not deliver:
-    // measured 2026-09-02 by throwing inside it, no case in
-    // `strategy-conformance.test.ts` reaches it,
-    // because every layer this battery mounts materialises. The refusal that
-    // report becomes is asserted in `snapshot-chain.test.ts` — "a store subtree
-    // that never exposes the base refuses by count, naming what it holds" —
-    // against that suite's own container, and that is where its red direction
-    // is proven.
+    // Bounded visibility probe: the listed subtree is read off the command, not a copied
+    // constant, so a strategy that moves its mount is served from the path it really asks for.
     if (command.includes('printf ready')) {
       const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
 
@@ -1675,9 +1383,8 @@ function chainExec(
     if (checkpoint !== undefined) return checkpoint;
 
     if (command.includes('sha256sum') && command.includes('sort -z')) {
-      // The walk the real command makes: inode, type, mode, size, mtime,
-      // ctime, link target, path — metadata only, never content, so a hole is
-      // never read and a 1 GiB sparse file costs one row.
+      // Mirrors the real walk: metadata only, never content, so holes are never read
+      // and a large sparse file costs one row.
       const upper = `${DEVBOX_RUNTIME_DIR}/upper`;
 
       const rows = disk.snapshot(upper).map((entry) => [
@@ -1698,9 +1405,8 @@ function chainExec(
       return ok(bytes === undefined ? '' : String(bytes.byteLength));
     }
 
-    // The chain's own directories, emptied and re-created as TREES: the
-    // upper is filled before its overlay is mounted, and a layer is mounted
-    // inside a root that was reset the same way.
+    // Reset paths are re-created as trees: an upper is filled before its overlay mounts,
+    // and a layer mounts inside a root reset the same way.
     const reset = /^rm -rf (?<paths>.+?) && mkdir -p /.exec(command)?.groups?.paths;
 
     if (reset !== undefined) {
@@ -1715,8 +1421,7 @@ function chainExec(
     const removed = /^rm -rf '(?<path>[^']+)'$/.exec(command)?.groups?.path;
 
     if (removed !== undefined) {
-      // The staging directory is dropped after a commit is durable: the last
-      // sub-step, and the one a death must not be able to un-commit.
+      // Staging is dropped only after the commit is durable; a death here must not un-commit it.
       if (removed === `${DEVBOX_RUNTIME_DIR}/stage`) deaths.at('before-cleanup');
       disk.rmrf(removed);
 
@@ -1760,9 +1465,8 @@ function snapshotChainArm(): ConformanceArm {
     #publishing: { readonly at: string; readonly prefix: string } | undefined;
     #finalizeGate = new OneShotGate();
     #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
-    /** What the last checkpoint's archiver actually packed, read off the
-     *  mksquashfs command the product issued as it ran. The seal row counts
-     *  what that source held, never the merged workspace beside it. */
+    /** What the last checkpoint's archiver packed, read off the product's mksquashfs command.
+     *  The seal row counts what that source held, never the merged workspace beside it. */
     #packed: readonly NodeEntry[] | undefined;
 
     constructor() {
@@ -1795,9 +1499,8 @@ function snapshotChainArm(): ConformanceArm {
           const upper = this.disk.tree(overlay.upper);
 
           if (!upper.has(path)) {
-            // fuse-overlayfs copy-up: the WHOLE lower file is copied before one
-            // page is changed. This is the reason the sqlite cell rejects the
-            // chain, and a quota can refuse this copy before the write lands.
+            // fuse-overlayfs copy-up copies the WHOLE lower file before one page changes;
+            // a quota can refuse this copy before the write lands.
             const merged = this.disk.snapshot(DEVBOX_WORKDIR);
             const names = new Set([...ancestorsOf(path), path]);
             upper.plant(merged.filter((entry) => names.has(entry.path)));
@@ -1822,11 +1525,8 @@ function snapshotChainArm(): ConformanceArm {
       this.#storage = this.#build();
     }
 
-    /** A stopped container loses everything that lived on its own disk —
-     *  every byte, every mount, the boot-local stamp and whatever a commit
-     *  had staged — while the durable store, the DO's row, the recorded
-     *  calls and the configured faults carry on. Replacement clears the
-     *  same set; a stopped boot just keeps its flags on the same disk. */
+    /** Models P1: a stop loses disk bytes, mounts, boot-local stamp and staged commit; the durable
+     *  store, DO row, recorded calls and faults survive. Replacement clears the same set (D6). */
     #loseContainerLocalState(): void {
       this.disk.discardLocalState();
       this.#seedStamp = undefined;
@@ -1852,18 +1552,8 @@ function snapshotChainArm(): ConformanceArm {
       return this.#rows;
     }
 
-    /** Drop clean upper bytes the last checkpoint published, serving them from
-     *  the delta layer instead. The upper after a delta commit IS the delta
-     *  just published, so replacing it with its own layer frees disk while the
-     *  merged view stays exact. Called only when the upper is clean (a
-     *  checkpoint then no writes, as 6.18 drives it); a dirty upper holds
-     *  bytes no layer names, and clearing it would lose them.
-     *
-     *  A legacy full delta becomes the newest lower whole. A chunked delta is
-     *  a sidecar: only its `tree/` holds files as the upper holds them, so
-     *  that directory becomes the lower and the upper drops exactly the files
-     *  it serves; a chunked file is base plus overrides, held nowhere whole,
-     *  and stays. Answers the bytes released. */
+    /** Call only on a clean upper: a dirty upper holds bytes no layer names and clearing loses them.
+     *  A chunked file is base plus overrides held nowhere whole, so it stays in the upper. */
     evictCleanBytes(): number {
       if (row?.delta === undefined) return 0;
       const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
@@ -1891,8 +1581,8 @@ function snapshotChainArm(): ConformanceArm {
         return held;
       }
 
-      // WHERE THE SIDECAR KEEPS ITS WHOLE FILES IS OBSERVED, not restated: the
-      // directory under which the first whole file's path is found.
+      // The sidecar's whole-file directory is observed, not restated: it is the directory
+      // under which the first whole file's path is found.
       const whole = manifest.output.files.filter((file) => file.kind === 'whole');
       const rows = this.disk.snapshot(mountPoint);
       const first = whole[0] === undefined ? undefined : rows.find((served) => served.kind === 'file' && served.path.endsWith(`/${whole[0].p}`));
@@ -1934,10 +1624,8 @@ function snapshotChainArm(): ConformanceArm {
           this.#packed = undefined;
           const outcome = await raw.checkpoint(kind);
 
-          // WHAT THE ARCHIVER PACKED, not the workspace beside it: the upper
-          // for a legacy delta, a staged sidecar for a chunked one, the merged
-          // view for a fresh base. The mksquashfs command recorded which, and
-          // the snapshot taken as it ran is what it saw.
+          // Seal what the archiver packed (upper, staged sidecar, or merged view), not the workspace;
+          // `#packed` is the snapshot taken as the recorded mksquashfs command ran.
           const seal = outcome.kind === 'committed'
             ? wholeTreeSeal(this.#packed ?? workspaceBefore, 128 * 1024)
             : NO_SEAL;
@@ -1974,11 +1662,8 @@ function snapshotChainArm(): ConformanceArm {
         put: (key: string, bytes: Uint8Array) => durable.put(key, bytes),
       };
 
-      /** One archive, moved by the container into the store. The s3fs shape:
-       *  THREE durable puts per publication — `mkdir` PUTs the generation's
-       *  directory marker and `create` PUTs an empty object before the flush
-       *  lands the payload — which is the measured floor that made the egress
-       *  shape necessary (the three `put` attempts of `b20260914045438`). */
+      /** Models the s3fs shape: three durable puts per publication (`mkdir` marker, `create`'s
+       *  empty object, then the flushed payload), the floor that makes the egress path necessary. */
       const publish = (archivePath: string, mountedPath: string): number | undefined => {
         deaths.at('before-payload');
         const mount = this.#publishing;
@@ -2004,9 +1689,8 @@ function snapshotChainArm(): ConformanceArm {
         return bytes.byteLength;
       };
 
-      /** The same archive through the mount's own egress host: ONE put. The
-       *  mount's registration is what routes the URL, so an unmounted box
-       *  refuses exactly as the handler's 403 would. */
+      /** One PUT through the mount's egress host (D15); the mount's registration routes the URL,
+       *  so an unmounted box refuses exactly as the handler's 403 would. */
       const publishEgress = (archivePath: string, objectUrl: string): { landed: number } | { refused: string } | undefined => {
         deaths.at('before-payload');
         const mount = this.#publishing;
@@ -2024,8 +1708,7 @@ function snapshotChainArm(): ConformanceArm {
         const bytes = this.disk.readFile(archivePath);
 
         if (bytes === undefined) return undefined;
-        // The handler prepends the mount's prefix, so the object lands at
-        // `${prefix}${key}` — the same place the s3fs path would have put it.
+        // The egress handler prepends the mount's prefix, so the object lands at `${prefix}${key}`.
         this.disk.serveFromMount(`${mount.at}/${relative}`, bytes);
         mounted.put(`${mount.prefix}${relative}`, bytes);
         deaths.at('after-payload');
@@ -2182,17 +1865,9 @@ function snapshotChainArm(): ConformanceArm {
     },
   };
 }
-// ── shared plumbing ────────────────────────────────────────────────────────
 
 
-/**
- * The shipped strategy, as one contract.
- *
- * KEYED BY `DevboxStrategyName` ON PURPOSE: a second strategy added to that
- * union makes this record incomplete, and an incomplete record does not
- * compile. A strategy nobody conforms is therefore not a strategy anybody can
- * add — which is the only version of this list that stays true.
- */
+/** Keyed by `DevboxStrategyName` so a new strategy without a conformance arm fails to compile. */
 export const CONFORMANCE_ARMS = {
   'snapshot-chain': snapshotChainArm,
 } satisfies Record<DevboxStrategyName, () => ConformanceArm>;

@@ -1,12 +1,6 @@
-/** Web-Crypto primitives shared by every path that mints or checks a secret —
- *  core's webhook ingress, and the session, capability and preview edges on
- *  either backend. */
+/** Web-Crypto primitives shared by every path that mints or checks a secret. */
 
-/** URL-safe base64 of arbitrary bytes, padding trimmed. The one spelling: the
- *  run key, the run id and the PKCE verifier and challenge are all this
- *  encoding, and RFC 7636 makes it load-bearing — the authorization server
- *  compares the challenge as a STRING, so a second encoder that differed by a
- *  character would fail only against the live Cloudflare. */
+/** URL-safe base64, padding trimmed. The only encoder: PKCE (RFC 7636) compares the challenge as a string. */
 export function base64Url(bytes: Uint8Array): string {
   let bin = '';
 
@@ -15,17 +9,13 @@ export function base64Url(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-/** URL-safe base64 token from `bytes` of CSPRNG output. */
 export function randomToken(bytes: number): string {
   return base64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
-/** Lowercase-hex HMAC-SHA256 is below; SHA-256 digests live in
- *  `safety/argument-digest.ts` (`sha256Hex`), sync over node:crypto, shared by
- *  every backend under `nodejs_compat`. */
+/** SHA-256 digests live in `safety/argument-digest.ts` (`sha256Hex`). */
 
-/** Constant-time string comparison — guards secret checks against
- *  timing-side-channel enumeration. */
+/** Constant-time string comparison. */
 export function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -35,9 +25,7 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Lowercase-hex HMAC-SHA256 of `message` under `secret`. Derives values that
- *  must be unforgeable without the secret: webhook signatures, the owner
- *  capability, a credential envelope's key id. */
+/** Lowercase-hex HMAC-SHA256 of `message` under `secret`. */
 export async function hmacSha256Hex(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',

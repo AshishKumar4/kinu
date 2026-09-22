@@ -79,9 +79,9 @@ describe('TUI transcript rendering', () => {
           />
         </box>,
       );
-      const frame = await renderSettled(renderOnce, captureCharFrame, ['before status', 'Workspace Status', 'after status']);
-      expect(lineContaining(frame, 'before status')).toBeLessThan(lineContaining(frame, 'Workspace Status'));
-      expect(lineContaining(frame, 'Workspace Status')).toBeLessThan(lineContaining(frame, 'after status'));
+      const frame = await renderSettled(renderOnce, captureCharFrame, ['before status', 'Workspace status', 'after status']);
+      expect(lineContaining(frame, 'before status')).toBeLessThan(lineContaining(frame, 'Workspace status'));
+      expect(lineContaining(frame, 'Workspace status')).toBeLessThan(lineContaining(frame, 'after status'));
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();

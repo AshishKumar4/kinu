@@ -1,28 +1,12 @@
-// Devbox is independent of the product that first needed it.
-//
-// The whole point of extracting this package is that it is a general SDK: a
-// Cloudflare container presented as a persistent machine, usable by anything.
-// The moment it imports the product's own core it stops being that, and the
-// coupling would arrive one convenient import at a time rather than as a
-// decision anyone reviewed.
-//
-// So the rule is mechanical and it reads the files on disk. A test that asserted
-// this by importing something would prove only that one import path works; this
-// asserts the absence of every path, which is what the rule actually says.
-//
-// The second boundary below is the same rule pointed at the runtime: the
-// deployed Worker is a Workers isolate and a container-side runner is a bun
-// process, so what the Worker's module graph may contain is not what the
-// runner's may. That one is answered by BUILDING the graph, because the
-// specifier that breaks a deploy is the one reached through four files of
-// re-exports, which is exactly the one a source scan misses.
+// Devbox must not import the product's core; asserted by scanning files on disk for every path.
+// Worker graph is checked by building it: re-exported specifiers escape a source scan.
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 
-/** Only the manifest fields this test reads. Parsed rather than asserted: a
- *  manifest is a file on disk, so it is input. */
+/** Only the manifest fields this test reads, parsed rather than asserted: a manifest on disk
+ *  is input. */
 const ManifestSchema = v.object({
   name: v.optional(v.string()),
   dependencies: v.optional(v.record(v.string(), v.string())),
@@ -39,10 +23,8 @@ function manifest(path: string): v.InferOutput<typeof ManifestSchema> {
 
 const PACKAGE_DIR = join(import.meta.dir, '..');
 
-/** The scope this package must not reach into. Read from the sibling manifests
- *  rather than written down, so a rename cannot leave this test checking a name
- *  nothing uses — a guard that checks the wrong name passes, which is the exact
- *  failure it exists to make loud. */
+/** Read from the sibling manifest, not hardcoded: after a rename, a guard checking a stale
+ *  name passes silently. */
 function forbiddenScope(): string {
   const name = manifest(join(PACKAGE_DIR, '..', 'core', 'package.json')).name;
 
@@ -103,15 +85,14 @@ describe('package independence', () => {
     ];
 
     expect(declared.filter(name => name.startsWith(`${scope.split('/')[0]}/`))).toEqual([]);
-    // And nothing reached in by workspace protocol under another name either.
+    // Catches a workspace package aliased under another name, which the scope check misses.
     const ranges = Object.values({ ...own.dependencies, ...own.devDependencies });
     expect(ranges.filter(range => range.startsWith('workspace:'))).toEqual([]);
   });
 
   test('the guard itself can fail, proved against a known-bad specifier', () => {
-    // A test that only ever sees green cannot distinguish "no violations" from
-    // "the check does not work". This exercises the same predicate the test
-    // above uses, against text that must be caught.
+    // An always-green guard cannot tell "no violations" from "check broken"; this runs
+    // the same predicate as the test above against text it must catch.
     const bad = `import { thing } from '${scope}/obs';`;
     expect(bad.includes(`'${scope}`)).toBe(true);
     const good = "import { Sandbox } from '@cloudflare/sandbox';";
@@ -119,13 +100,8 @@ describe('package independence', () => {
   });
 });
 
-/**
- * Every bare specifier the bundler pulls in for one entrypoint.
- *
- * Package specifiers resolve as external, so the walk stays inside this
- * package's own sources — which is where this boundary lives — while still
- * recording every name crossing out of them.
- */
+/** Package specifiers resolve as external, so the walk stays inside this package's sources
+ *  while still recording every name crossing out of them. */
 async function bundledSpecifiers(entrypoint: string): Promise<readonly string[]> {
   const reached = new Set<string>();
 
@@ -151,17 +127,14 @@ async function bundledSpecifiers(entrypoint: string): Promise<readonly string[]>
 
 describe('the Worker admits nothing the Workers runtime cannot load', () => {
   test('the deployed Worker reaches no bun: builtin', async () => {
-    // `bun:ffi` is the one that matters: a module that opens a native helper
-    // would carry it into a runtime that has no such module — a deploy-time
-    // failure for code nothing in the Worker calls.
+    // `bun:ffi` matters most: a module opening a native helper carries it into a runtime
+    // without it, failing the deploy for code nothing in the Worker calls.
     const reached = await bundledSpecifiers(join(PACKAGE_DIR, 'bench', 'worker.ts'));
     expect(reached.filter(name => name.startsWith('bun:'))).toEqual([]);
   });
 
   test('the builder resolves what a module really imports, so the check above is not vacuous',
     async () => {
-      // If this came back empty, the assertion above would be reading a build
-      // that resolved nothing at all.
       const entry = join(PACKAGE_DIR, 'bench', 'worker.ts');
       expect(await bundledSpecifiers(entry)).toContain('valibot');
     });

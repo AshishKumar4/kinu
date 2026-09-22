@@ -1,48 +1,8 @@
 /**
- * Deferred approval — what a gated action does when the owner is asleep.
- *
- * The failure this exists for: an agent left running overnight reaches one
- * `sudo` on step 40, the approval channel has nobody behind it, and the whole
- * run stops there. Five minutes later the prompt expires and the gate answers
- * `deny` — so the run has not only stalled, it has been told a refusal that
- * nobody made.
- *
- * Cloudflare's own answer is for the gatekeeper to report success so the agent
- * keeps queueing work, and to let the human approve the pile later. That is
- * fast and it is a lie: the agent then plans on top of an effect that has not
- * happened. This module implements the other answer — the action is parked on
- * the owner and the agent is TOLD it is parked:
- *
- *   • the tool result says queued, names the id, and states plainly that
- *     nothing ran — in one line, because the doctrine around it (that a
- *     decision wakes you, that you may carry on or stop, that re-issuing
- *     returns the same answer) is a standing fact about the tool surface and
- *     belongs in the system prompt ONCE, not in every parked result;
- *   • the owner decides later, in bulk, from the needs-you queue;
- *   • the decision wakes the agent through the ONE inbox every other
- *     asynchronous producer uses (orchestrator/inbox.ts) — the same
- *     wake-on-settle path a background job takes.
- *
- * THE HONESTY INVARIANT, structurally:
- *
- *   1. A queued action returns through `denyResult` — the same return path a
- *      refusal takes, in the wrapped function's own failure shape (a `Shell`
- *      gets `exitCode: 1`). `execute` is simply never called, so there is no
- *      code path that can produce a success-shaped result for an action that
- *      did not run. It is not a convention; the success shape is unreachable.
- *   2. The status vocabulary has no "ran" in it. 'approved' means the owner
- *      said yes and the command STILL has not executed — permission is not an
- *      effect. The grant is consumed by the agent re-issuing the command,
- *      which is when the command actually runs, with the agent watching.
- *   3. Every action still parked is re-stated in the per-step dynamic-context
- *      block ({@link DeferredApprovalQueue.approvals}), so a turn that later
- *      depends on the effect reads, on every single step, that it has not
- *      happened.
- *
- * Durable because the whole point is a night: the Durable Object is evicted
- * many times between the ask and the answer, so the queue is SQL, not a map of
- * parked promises (which is what device consent correctly is — that one waits
- * minutes, in memory, with the caller blocked).
+ * Deferred approval: a gated action parks on the owner instead of blocking or being auto-denied, and
+ * the agent is told it is parked. Honesty invariant: a queued action returns through `denyResult`, so a
+ * success-shaped result for an action that did not run is unreachable; 'approved' is permission, not an
+ * effect; parked actions are re-stated every step. The queue is SQL because it must survive eviction.
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
@@ -59,57 +19,26 @@ import {
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, toKinuError } from '../obs/index';
 
-/** The `kinuEvent` kind a decision wakes the agent under — its own name,
- *  not `background_job`'s: the card the owner sees, and the provenance stamped
- *  on the woken turn, must say what actually happened. The MECHANISM is the
- *  background-job wake verbatim (Inbox.send → next step, or a turn
- *  of its own when the agent is idle). */
+/** The `kinuEvent` kind a decision wakes the agent under; same mechanism as the background-job wake. */
 export const DEFERRED_APPROVAL_SIGNAL = 'deferred_approval';
 
-/**
- * Where a parked action is.
- *
- * There is deliberately no terminal "executed" state: this queue records
- * PERMISSION, and permission is granted here while the effect happens
- * somewhere else (the agent re-issuing the command through the gate). A state
- * meaning "done" would be a state this module cannot honestly write.
- */
+/** Where a parked action is. No "executed" state: this queue records permission, not effects. */
 export type DeferredApprovalStatus =
   /** Parked on the owner. Nobody has decided. */
   | 'queued'
   /** The owner said yes. The command has not run; the grant is unspent. */
   | 'approved'
-  /** The owner said no. Stands for {@link DENIAL_STANDING_MS}, then the row
-   *  is swept and the queue asks again. */
+  /** The owner said no. Stands for {@link DENIAL_STANDING_MS}, then is swept. */
   | 'denied'
-  /** The grant has been handed to a command that is running RIGHT NOW, and no
-   *  longer answers `standing()`. Not a resting state: the gate closes every
-   *  spend it makes, either by deleting the row (the command reached its
-   *  machine) or by putting it back to 'approved' (it provably did not). A row
-   *  left here is a process that died mid-command, and the grant it held is
-   *  lost — which is the safe direction and the reason the spend comes first.
-   *  The `approval_consumed` run event is the durable audit either way. */
+  /** The grant is out with a running command and answers nobody. The gate deletes the row or restores
+   *  'approved'; a row left here means a process died mid-command, and the grant is lost (safe direction). */
   | 'spent';
 
-/** What the owner can pick. `queued` is a state the queue reaches on its own.
- *  `always` is `approved` plus a standing grant for the rules this command
- *  tripped on the executor it was bound for — the same ask-once-then-remember
- *  shape device consent uses for a device. */
+/** What the owner can pick. `always` is `approved` plus a standing grant for the tripped rules on that executor. */
 export type DeferredApprovalAnswer = Extract<DeferredApprovalStatus, 'approved' | 'denied'> | 'always';
 
-/**
- * How long the owner's "no" answers for a command before the queue will ask
- * again.
- *
- * A denial answers the re-issue an agent makes minutes after the refusal,
- * which is the noise device consent's doctrine names. It is not a standing
- * policy: `deny_all` and the rule grants are, and they live in actor_config.
- * So a denied row expires, for two reasons. A refusal from last week must not
- * answer for a command the owner would decide differently today, and a row
- * per refused command must not accumulate for the life of the workspace,
- * because nothing else ever moves a denied row. A day covers the night this
- * queue exists for and every retry the same run makes.
- */
+/** How long a denial answers before the queue asks again. Denied rows expire so old refusals
+ *  don't govern today and don't accumulate; standing policy lives in actor_config. */
 export const DENIAL_STANDING_MS = 24 * 60 * 60 * 1000;
 
 /** One action parked on the owner. */
@@ -117,9 +46,7 @@ export interface DeferredApproval {
   readonly id: string;
   /** The exact command the agent asked to run. */
   readonly command: string;
-  /** The machine it was bound for. Half the question: the same string on the
-   *  owner's device and in the agent's own workspace are different asks, and a
-   *  grant given for one must not answer for the other. */
+  /** The machine it was bound for; a grant for one executor never answers for another. */
   readonly executor: string;
   /** Why the gate stopped it — `formatApproval` of the review that fired. */
   readonly reason: string;
@@ -129,15 +56,8 @@ export interface DeferredApproval {
   readonly decidedAt: number | null;
 }
 
-/**
- * What the gate learns when it consults the queue about a command.
- *
- * `shell` is the ONLY verdict that lets execution proceed, and reaching it has
- * already spent the grant — so a second attempt at the same command parks
- * again rather than riding one approval twice. It names the spend it made,
- * because the gate has to close that spend once it knows whether the command
- * reached its machine.
- */
+/** What the gate learns about a command. `shell` is the only verdict that proceeds, and reaching it
+ *  has already spent the grant; it names the spend so the gate can close it. */
 export type DeferredApprovalVerdict =
   | { readonly outcome: 'run'; readonly action: DeferredApproval; readonly spend: ApprovalSpend }
   | { readonly outcome: 'denied'; readonly action: DeferredApproval }
@@ -165,9 +85,7 @@ function toAction(r: Row): DeferredApproval {
   };
 }
 
-/** How many times this grant has gone out with a command. A settle names the
- *  spend it closes, so a replayed or late settle cannot reopen a grant a
- *  later attempt already holds. */
+/** Spend counter; a settle names its spend so a late or replayed settle cannot reopen a later grant. */
 export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
     actor_id     TEXT NOT NULL,
@@ -187,38 +105,17 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
     ON deferred_approvals(actor_id, command, executor, requested_at DESC)`);
 }
 
-/**
- * The durable rows. Pure storage — what the words say and who gets woken is
- * {@link DeferredApprovalQueue}'s.
- */
+/** The durable rows; pure storage. */
 export class DeferredApprovalStore {
   private readonly actorId: string;
 
-  /** Bind the parked-action table to ONE actor. The owner answers a specific
-   *  agent's ask: a standing 'always' for `rm -rf` given to the root is not a
-   *  grant a hired subordinate may spend, and a denial parked against one actor
-   *  must not answer for another. */
+  /** Bind the table to one actor: grants and denials never cross actors. */
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
   }
 
-  /** The live row for this exact command ON THIS EXECUTOR, if there is one.
-   *  'queued' (waiting) and 'approved' (grant unspent) are the two live
-   *  states; 'denied' is the owner's answer for {@link DENIAL_STANDING_MS}
-   *  after it was given and is also read back here, so a refusal is reported
-   *  rather than re-asked. A grant that is out with a running command is
-   *  'spent' and is deliberately NOT here: while it is out it answers for
-   *  nobody. The executor is part of the key because an approval for the
-   *  agent's own workspace is not an approval for the owner's device.
-   *
-   *  A DECISION outranks a pending ask, and only then does the newest win. One
-   *  key can hold both once a refund puts a grant back while a second re-issue
-   *  has already parked a fresh row beside it — two consumers of one approval
-   *  is the shape this whole mechanism exists for. Answering the newer QUEUED
-   *  row there would ask the owner for something they have already answered,
-   *  which is the complaint, not the fix. Between two decisions the newest
-   *  still wins, so the owner's latest word governs.
-   */
+  /** The live row for this command on this executor: 'queued', 'approved', or a still-standing 'denied'.
+   *  'spent' is excluded. A decision outranks a pending ask; among decisions the newest wins. */
   standing(command: string, executor: string, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
 
@@ -234,9 +131,7 @@ export class DeferredApprovalStore {
     return rows[0] ? toAction(rows[0]) : null;
   }
 
-  /** Delete every denial that has stopped answering. Run on the queue's write
-   *  paths, so the table holds at most a day of refusals plus whatever is
-   *  still live; reports how many rows went. */
+  /** Delete expired denials (run on write paths); returns the count deleted. */
   sweepDenials(now: number): number {
     this.actor.assertCurrent();
 
@@ -257,21 +152,13 @@ export class DeferredApprovalStore {
     return { ...action, status: 'queued', decidedAt: null };
   }
 
-  /**
-   * Record the owner's answer, and report the row only if THIS call is what
-   * changed it — so a second click, or a bulk action overlapping a single one,
-   * decides nothing twice and wakes the agent about nothing twice.
-   *
-   * The read and the write are one call with no await between them, which on
-   * the single-threaded SQLite both backends run is the whole transaction;
-   * the `status='queued'` guard on the write is the belt to that's braces.
-   */
+  /** Record the owner's answer; reports the row only if this call changed it. Read and write have no
+   *  await between them, which is atomic on single-threaded SQLite. */
   decide(id: string, answer: DeferredApprovalAnswer, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
 
     if (this.get(id)?.status !== 'queued') return null;
-    // 'always' is 'approved' plus a grant the QUEUE records; the row only ever
-    // holds a status this module can honestly write about this one command.
+    // The row only holds statuses about this one command; 'always' grants are recorded by the queue.
     const status = answer === 'always' ? 'approved' : answer;
     void this.sql`UPDATE deferred_approvals SET status=${status}, decided_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='queued'`;
@@ -279,20 +166,8 @@ export class DeferredApprovalStore {
     return this.get(id);
   }
 
-  /**
-   * Hand an approved grant to a command that is about to run.
-   *
-   * The grant leaves `standing()` HERE, before the command runs, so a crash
-   * between the two costs an approval rather than granting one twice. It is a
-   * transition on the row and not a deletion, because the row's identity is
-   * what a refund needs: {@link settle} either finishes the spend by deleting
-   * the row or puts THAT SAME row back to the state the owner approved. There
-   * is no path in this store that creates an approved row, so a grant can
-   * never be minted by giving one back.
-   *
-   * Returns the action and which spend of it this is, or null when another
-   * call got there first.
-   */
+  /** Hand an approved grant to a command about to run. It leaves `standing()` before the command runs,
+   *  so a crash loses an approval rather than granting twice. Returns null if another call won. */
   spend(id: string): { readonly action: DeferredApproval; readonly spend: ApprovalSpend } | null {
     this.actor.assertCurrent();
 
@@ -311,18 +186,8 @@ export class DeferredApprovalStore {
     };
   }
 
-  /**
-   * Close out a spend: consume the grant for good, or give it back.
-   *
-   * Guarded on the spend counter as well as the id, which is what makes this
-   * idempotent and replay-safe. A settle of a spend that is already closed
-   * matches no row and does nothing — so settling twice changes nothing, and a
-   * stale settle arriving after a LATER attempt took the grant cannot reach it.
-   *
-   * Reports whether this call is what moved the row, for the same reason
-   * {@link decide} does: a caller that announces an outcome must announce it
-   * once.
-   */
+  /** Close a spend: consume the grant or give it back. Guarded on the spend counter, so it is
+   *  idempotent and a stale settle cannot reach a later attempt. Reports whether this call moved the row. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     this.actor.assertCurrent();
 
@@ -351,8 +216,7 @@ export class DeferredApprovalStore {
     return rows[0] ? toAction(rows[0]) : null;
   }
 
-  /** Everything still parked on the owner, oldest first — the one that has
-   *  been blocked longest matters most. */
+  /** Everything still parked on the owner, oldest first. */
   listQueued(limit = 100): DeferredApproval[] {
     this.actor.assertCurrent();
 
@@ -363,60 +227,39 @@ export class DeferredApprovalStore {
   }
 }
 
-/** How much of a command the roster lines quote. Long enough to recognise a
- *  command, short enough that ten parked actions do not crowd out the turn's
- *  own context. The full text is always in the queued result the agent already
- *  read, and in the owner's UI. */
+/** How much of a command the roster lines quote. */
 const COMMAND_ECHO_MAX_CHARS = 160;
 
 function clip(text: string): string {
   return text.length <= COMMAND_ECHO_MAX_CHARS ? text : `${text.slice(0, COMMAND_ECHO_MAX_CHARS)}…`;
 }
 
-/**
- * The words the agent reads when its action is parked.
- *
- * One line. It carries only what this call site knows and the prompt cannot:
- * that nothing ran, which rule stopped it, on which machine, and the id the
- * decision will arrive under. Everything else the agent needs to know about
- * parked actions — that a decision wakes it, that it may carry on or stop,
- * that re-issuing returns the same answer — is true of every parked action on
- * every turn, so it is stated once in the system prompt instead of ~280
- * tokens per call. The honesty invariant is unchanged: this still returns
- * through `denyResult`, so the success shape stays unreachable.
- */
+/** The one-line result for a parked action: nothing ran, which rule, which machine, and the id.
+ *  Standing doctrine lives in the system prompt. Still returned through `denyResult`. */
 export function queuedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — queued for owner approval (${action.id}): ${ruleNames(action)} on ${action.executor}. `
     + 'A decision will wake you.';
 }
 
-/** The words on a re-issue of a command the owner has already refused. Mirrors
- *  device consent's doctrine (safety/device-consent.ts): a denial is an answer,
- *  and asking again immediately is noise. */
+/** Result for re-issuing a refused command; mirrors safety/device-consent.ts. */
 export function deniedActionMessage(action: DeferredApproval): string {
   return `NOT RUN — the owner refused this (${action.id}). Not a timeout; find another way.`;
 }
 
-/** The rules the review named, for a one-line result. The full prose is in
- *  `action.reason`, which is what the owner's queue renders — the model does
- *  not need the explanations, it needs to know which of its own habits tripped
- *  the gate. */
+/** The rules the review named, for a one-line result; full prose is in `action.reason`. */
 function ruleNames(action: DeferredApproval): string {
   const names = [...action.reason.matchAll(/^• ([\w-]+) \(/gm)].map((m) => m[1]);
 
   return names.length > 0 ? names.join(', ') : 'needs approval';
 }
 
-/** The words on the turn a decision wakes. One message for the whole batch,
- *  because the owner decides a night's worth in one sitting and N wakes for
- *  one sitting is N turns' worth of noise for one piece of news. */
+/** The message on the turn a decision wakes: one for the whole batch. */
 export function decisionWakeMessage(decided: readonly DeferredApproval[]): string {
   const lines: string[] = [];
   const approved = decided.filter((a) => a.status === 'approved');
   const denied = decided.filter((a) => a.status === 'denied');
 
-  // "Still not run" is the one thing worth repeating here: it is the exact
-  // mistake an agent makes on waking, and the prompt cannot say it per-id.
+  // Repeat "still not run": the exact mistake an agent makes on waking.
   if (approved.length > 0) {
     lines.push('APPROVED, still not run — re-issue once:',
       ...approved.map((a) => `  ${a.id} — ${clip(a.command)}`));
@@ -432,28 +275,16 @@ export function decisionWakeMessage(decided: readonly DeferredApproval[]): strin
 
 export interface DeferredApprovalQueueDeps {
   readonly store: DeferredApprovalStore;
-  /** The ONE way anything asynchronous reaches the agent. A decision is
-   *  delivered exactly as a settled background job is: spliced into the live
-   *  turn's next step, or started as its own turn when the agent is idle. */
+  /** The one way anything asynchronous reaches the agent, same as a settled background job. */
   readonly inbox: AgentInbox;
-  /** Record a standing grant the owner just gave by answering 'always'. The
-   *  host owns where that lives (actor_config, alongside the approval mode),
-   *  so the queue only says WHAT was granted. Required, not optional: an
-   *  'always' button whose grant went nowhere is the worst of both. */
+  /** Record a standing grant from an 'always' answer; the host owns storage (actor_config). */
   remember(grants: readonly ApprovalGrant[]): void;
-  /** The durable audit for a CONSUMED grant — where the `approval_consumed`
-   *  run event is written. A host records it into the run-event log of the
-   *  turn that spent the approval, which is the read model that replaces the
-   *  deleted row. Optional only so a gate can run unrecorded in tests; a
-   *  production host wires it, because without it a spent grant leaves no
-   *  trace at all. */
+  /** Durable audit sink for `approval_consumed`. Optional only for tests; production must wire it. */
   audit?(record: ApprovalConsumedRecord): void;
-  /** Mint a request id. Injected so a host keeps its own id vocabulary and
-   *  tests stay deterministic. */
+  /** Mint a request id; injected for host id vocabulary and deterministic tests. */
   newId?: () => string;
   now?: () => number;
-  /** Told when an action is parked and when a batch is decided — the host's
-   *  activity line and client fan-out. Never throws into the gate. */
+  /** Told when actions park and batches are decided. Never throws into the gate. */
   announce?(event: DeferredApprovalNotice): void;
 }
 
@@ -462,10 +293,6 @@ export type DeferredApprovalNotice =
   | { readonly kind: 'queued'; readonly action: DeferredApproval }
   | { readonly kind: 'decided'; readonly actions: readonly DeferredApproval[] };
 
-/**
- * The parked-action queue: the gate's channel, the owner's decision surface,
- * and the wake that joins them.
- */
 export class DeferredApprovalQueue {
   private readonly now: () => number;
   private readonly newId: () => string;
@@ -475,10 +302,7 @@ export class DeferredApprovalQueue {
     this.newId = deps.newId ?? (() => `defer-${nanoid(10)}`);
   }
 
-  /** The gate's view of this queue: run, or the words to hand the model
-   *  instead, plus the way back for a spend that bought nothing. The gate
-   *  learns nothing else — see approval-gate.ts's
-   *  {@link DeferredApprovalChannel}. */
+  /** The gate's view: run, or the words to hand the model, plus the way back for an unused spend. */
   get channel(): DeferredApprovalChannel {
     return {
       park: (req) => {
@@ -499,27 +323,18 @@ export class DeferredApprovalQueue {
     };
   }
 
-  /**
-   * Park an action, or answer with the owner's standing decision.
-   *
-   * Re-asking an already-parked command returns the SAME row — same id, same
-   * words — rather than minting a second one: it is one decision, and an
-   * identical answer is what makes the turn's own repeat detector see a loop
-   * (orchestrator/turn-steering.ts) instead of a queue filling with duplicates.
-   */
+  /** Park an action, or answer with the owner's standing decision. Re-asking returns the same row
+   *  so the turn's repeat detector (orchestrator/turn-steering.ts) sees a loop. */
   park(req: ShellApprovalRequest): DeferredApprovalVerdict {
     const now = this.now();
-    // Housekeeping on the agent's own write path: a refusal that has stopped
-    // answering is deleted here rather than left for a sweep nobody schedules.
+    // Delete expired denials on the write path; nothing else sweeps them.
     this.deps.store.sweepDenials(now);
     const standing = this.deps.store.standing(req.command, req.executor, now);
 
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
 
     if (standing?.status === 'approved') {
-      // The grant leaves `standing()` HERE, before the command runs, so a crash
-      // between the two costs an approval rather than granting one twice. The
-      // row survives the spend so {@link settle} can close it either way.
+      // Spend before running so a crash loses an approval rather than granting twice.
       const spent = this.deps.store.spend(standing.id);
 
       if (spent) return { outcome: 'run', action: spent.action, spend: spent.spend };
@@ -541,24 +356,8 @@ export class DeferredApprovalQueue {
     return { outcome: 'queued', action };
   }
 
-  /**
-   * Close a spend {@link park} made, once the gate knows what became of the
-   * command.
-   *
-   * 'spent' consumes the grant for good and writes the `approval_consumed`
-   * audit. 'did-not-run' puts the SAME row back to the state the owner
-   * approved it in and writes nothing, because nothing was consumed — an audit
-   * for a grant that is still sitting there unspent would be a false entry in a
-   * permanent log.
-   *
-   * The audit is written HERE rather than at the spend for that reason. A
-   * process that dies between the spend and this call leaves no event and a row
-   * stuck at 'spent' — the grant is lost, which is the safe direction, and the
-   * stranded row is the evidence that it was taken.
-   *
-   * Reports whether this call is what closed the spend, so a replay is visibly
-   * a no-op rather than a silent one.
-   */
+  /** Close a spend {@link park} made. 'spent' consumes the grant and writes the `approval_consumed`
+   *  audit; 'did-not-run' restores the row and writes nothing. Reports whether this call closed it. */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     const action = this.deps.store.get(spent.approvalId);
 
@@ -579,24 +378,14 @@ export class DeferredApprovalQueue {
     return true;
   }
 
-  /**
-   * The owner decided — one action or a night's worth in one click.
-   *
-   * `always` additionally remembers the rules this command tripped, on the
-   * executor it was bound for, so the next command of that kind in that place
-   * does not come back here. It is not a wider permission than `approved` —
-   * same gate, same rules, same executor; only the asking stops.
-   *
-   * Rows are written before the wake, so the decision is durable even if the
-   * agent cannot be reached, and ONE signal carries the whole batch.
-   */
+  /** The owner decided, for one or many actions. `always` also remembers the tripped rules on that
+   *  executor. Rows are written before the one wake signal. */
   async decide(ids: readonly string[], answer: DeferredApprovalAnswer): Promise<DeferredApproval[]> {
     const now = this.now();
     this.deps.store.sweepDenials(now);
     const decided: DeferredApproval[] = [];
 
-    // Deduped: a UI that sends an id twice must not report it twice, or the
-    // wake would name one command as two decisions.
+    // Deduped so one command is not reported as two decisions.
     for (const id of new Set(ids)) {
       const action = this.deps.store.decide(id, answer, now);
 
@@ -606,9 +395,7 @@ export class DeferredApprovalQueue {
     if (decided.length === 0) return decided;
 
     if (answer === 'always') {
-      // Recomputed from the command and its executor rather than stored: the
-      // rule table is the one source of truth for what a command trips, and
-      // reading it now is what keeps a grant honest about today's rules.
+      // Recomputed, not stored: the rule table is the source of truth.
       this.deps.remember(decided.flatMap(
         (a) => gatedGrants(reviewCommand(a.command, a.executor), a.executor)));
     }
@@ -628,10 +415,7 @@ export class DeferredApprovalQueue {
     return this.deps.store.listQueued();
   }
 
-  /** The parked actions as the per-step dynamic-context block names them —
-   *  the structural half of the honesty invariant: a turn that queued an
-   *  action is re-told, on every step until it is decided, that the action has
-   *  not run. */
+  /** Parked actions for the per-step dynamic-context block, re-telling the turn they have not run. */
   approvals(): DynamicApproval[] {
     return this.list().map((action) => ({
       id: action.id,

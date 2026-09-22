@@ -411,7 +411,7 @@ describe('ChatApp terminal interaction', () => {
       screen.frame().includes('Finish or stop the active workspace action'));
     expect(screen.frame()).not.toContain('Filter workspaces');
     pending.resolve({ name: 'alpha', purpose: 'alpha', model: null, reasoningEffort: null });
-    await screen.waitFor('the completed status action', () => screen.frame().includes('Workspace Status'));
+    await screen.waitFor('the completed status action', () => screen.frame().includes('Workspace status'));
   });
   test('Alt+W switches workspaces without retaining the previous status', async () => {
     const alpha = fakeClient({ name: 'alpha' });

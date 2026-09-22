@@ -1,21 +1,11 @@
 /**
- * The copy on the ground: every run of text in the shell that has no opaque
- * surface between it and the page's background — a heading on the page, a
- * label beside a card, a rail row over the veil — as the boxes the living
- * background keeps its tissue out of. Text on a card, in an input or on a
- * filled button is covered by that surface and needs no box.
- *
- * "Opaque" is read off the computed background colour of each ancestor: an
- * alpha at or above OPAQUE covers what is under it, the rail's veil (0.8)
- * does not. Ancestors are cached for the life of one measurement so a page
- * of a few hundred elements costs one style read per element, not one per
- * text node per ancestor.
+ * Text in the shell with no opaque surface between it and the page background, as keep-out boxes for the
+ * living background. Ancestor opacity is cached per measurement: one style read per element.
  */
 
 const OPAQUE = 0.9;
 
-/** The alpha of a computed colour: `rgb(…)` is 1, `rgba(… , a)` is a,
- *  `color(srgb r g b / a)` is a, `transparent` is 0. */
+/** Alpha of a computed colour (`rgb`, `rgba`, `color(... / a)`, `transparent`). */
 function alphaOf(color: string): number {
   if (color === 'transparent' || color === '') return 0;
   const slash = /\/\s*([\d.]+%?)\s*\)$/u.exec(color);
@@ -28,7 +18,6 @@ function alphaOf(color: string): number {
   return channels.length >= 4 ? Number(channels[3]) : 1;
 }
 
-/** Whether an opaque ancestor between `element` and `root` covers it. */
 function covered(element: Element, root: Element, opaque: Map<Element, boolean>): boolean {
   for (let ancestor: Element | null = element; ancestor !== null && ancestor !== root; ancestor = ancestor.parentElement) {
     let known = opaque.get(ancestor);
@@ -44,8 +33,7 @@ function covered(element: Element, root: Element, opaque: Map<Element, boolean>)
   return false;
 }
 
-/** The elements under `root` that hold text on the ground: one per element,
- *  in document order, skipping `except` and everything inside it. */
+/** One element per text-holding element on the ground, in document order, excluding `except`'s subtree. */
 export function groundTextElements(root: Element, except: Element | null): Element[] {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const opaque = new Map<Element, boolean>();

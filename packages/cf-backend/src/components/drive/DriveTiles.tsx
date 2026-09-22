@@ -1,15 +1,4 @@
-/**
- * The Drive's tiles: one grid per section — the slates and blueprints the
- * owner holds, and the shares in both directions.
- *
- * A tile is a preview area, the name, and one meta line. Nothing here fetches:
- * the page owns the reads and the refusals, and hands each tile the actions it
- * can offer, so an action that no HTTP call can serve is simply absent rather
- * than shown and broken.
- *
- * The preview is a glyph on the raised surface. A slate's picture would be its
- * screenshot, and this product makes none.
- */
+/** Nothing here fetches: the page passes each tile only the actions it can serve. */
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { AppWindowIcon, BroadcastIcon, DotsThreeIcon, GitBranchIcon } from "@phosphor-icons/react";
@@ -17,10 +6,8 @@ import type { LiveShareVisibility } from "@kinu.run/core";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
-/** What a tile stands for, which is also its glyph. */
 type TileKind = "slate" | "blueprint" | "live";
 
-/** One entry of a tile's menu: a route, a page action, or text to copy. */
 export type TileAction =
   | { readonly label: string; readonly icon: ReactNode; readonly to: string }
   | { readonly label: string; readonly icon: ReactNode; readonly onSelect: () => void }
@@ -31,10 +18,8 @@ export interface DriveTile {
   readonly key: string;
   readonly kind: TileKind;
   readonly name: string;
-  /** The meta line's parts, joined with a middle dot. */
   readonly meta: readonly string[];
   readonly visibility?: LiveShareVisibility;
-  /** Where the name goes, when it goes anywhere in this app. */
   readonly to?: string;
   readonly actions: readonly TileAction[];
 }
@@ -43,8 +28,7 @@ const VISIBILITY_LABEL: Record<LiveShareVisibility, string> = { public: "public"
 
 const MENU_ITEM = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm p-card-hover";
 
-/** Sized in percent, not pixels: the preview is 16:10 of whatever column the
- *  grid gives it, and a fixed glyph is lost in the wide one. */
+/** Percent sizing: the preview is 16:10 of whatever column the grid gives it. */
 const GLYPH = "h-[26%] w-[26%] p-text-4";
 
 function TileGlyph({ kind }: { kind: TileKind }) {
@@ -55,8 +39,7 @@ function TileGlyph({ kind }: { kind: TileKind }) {
   return <GitBranchIcon className={GLYPH} />;
 }
 
-/** The trailing menu. A copy item keeps the menu open, because its answer —
- *  copied, or refused by the browser — is the label it then reads. */
+/** A copy item keeps the menu open; its result becomes the label. */
 function TileMenu({ name, actions }: { name: string; actions: readonly TileAction[] }) {
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
@@ -130,8 +113,6 @@ function TileCard({ tile }: { tile: DriveTile }) {
   );
 }
 
-/** One section: its heading, then the grid — or one quiet line when the
- *  owner has nothing of that kind yet. */
 export function DriveTileSection({ title, empty, tiles }: { title: string; empty: string; tiles: readonly DriveTile[] }) {
   return (
     <section data-drive-section={title} aria-label={title}>

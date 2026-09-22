@@ -607,7 +607,7 @@ export class LocalAgentHost {
     const ref = this.opts.roster().find((candidate) => candidate.name === name);
 
     if (!ref) {
-      throw new Error(`agent "${name}" has no local ref — nothing records which`
+      throw new Error(`agent "${name}" has no local ref: nothing records which`
         + ' directory or virtual workspace it belongs to, so it cannot be bound.');
     }
 
@@ -1694,7 +1694,7 @@ export class LocalAgentHost {
     const llm = parent.ws.openConfig.llm;
 
     if (!llm) {
-      throw new Error('No provider configured for this host — subordinate creation needs a connected provider.');
+      throw new Error('No model provider is connected, so this workspace cannot create agents. Connect one: kinu provider connect <provider>.');
     }
 
     const tree = parent.tree;

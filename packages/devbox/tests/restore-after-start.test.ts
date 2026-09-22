@@ -8,9 +8,8 @@ import {
   scheduleTableOf, type Harness,
 } from './support/devbox-harness';
 
-/** Test-length probes. The listener proof is one container command whose loop
- *  the container itself bounds, so a short window here is a short command
- *  rather than a short timer. */
+/** The listener proof is one container command whose loop the container bounds,
+ *  so a short `portWaitMs` shortens that command rather than a timer. */
 const TEST_POLICY: DevboxPolicy = {
   ...DEFAULT_DEVBOX_POLICY,
   portWaitMs: 4,
@@ -45,8 +44,7 @@ const stamps = (container: FakeSandbox): number =>
 const armed = (container: FakeSandbox): number =>
   container.scheduleRows.filter((row) => row.callback === 'devboxStartup').length;
 
-/** One box with a service to restore, its container stopped so the next start
- *  really runs the container-start hook. */
+/** The container is stopped so the next start really runs the container-start hook. */
 async function stoppedBoxWithService(): Promise<Harness<TestBox>> {
   const harnessed: Harness<TestBox> = harness(TestBox);
   proc(harnessed.rows, 'p1');
@@ -57,8 +55,8 @@ async function stoppedBoxWithService(): Promise<Harness<TestBox>> {
   return harnessed;
 }
 
-/** One box with a service to restore on a RUNNING container: the replacement
- *  the heartbeat spotted, or the wake the platform delivered. */
+/** A box with a service to restore on a RUNNING container: a heartbeat-spotted replacement
+ *  or a platform-delivered wake. */
 function runningBoxWithService(): Harness<TestBox> {
   const harnessed: Harness<TestBox> = harness(TestBox);
   proc(harnessed.rows, 'p1');
@@ -68,24 +66,20 @@ function runningBoxWithService(): Harness<TestBox> {
   return harnessed;
 }
 
-/** A box activated the way the platform activates one over a running
- *  container it already holds rows for, with the activation's own promise so
- *  a test can wait on it rather than on a clock. */
 interface Activated {
   readonly box: TestBox;
   readonly container: FakeSandbox;
   readonly activation: Promise<unknown>;
 }
 
-/** Storage first with the rows already in it, then `new`, no `start()`. */
 function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
   const storage = fakeStorage();
 
   for (const [key, value] of rows) storage.rows.set(key, value);
   let activation: Promise<unknown> = Promise.resolve();
 
-  // The critical section hands the gate's closure back, so the test can wait
-  // on the activation itself.
+  // The fake `blockConcurrencyWhile` captures the closure's promise so the test can await
+  // the activation itself.
   const state = boxState({
     storage: storage.handle,
     id: TEST_BOX_ID,
@@ -482,25 +476,18 @@ describe('the start hook owns restoration', () => {
   });
 
   test('a schedule row naming a callback this class cannot call is dropped at activation', async () => {
-    // MEASURED IN PRODUCTION LOGS (build 6d19d50e7): `Callback
-    // snapshotWorkspaceIfDue not found or is not a function`, twice a second
-    // per sandbox object, with the alarm re-arming for ever. The sweep runs in
-    // the constructor's activation gate, which settles before the runtime
-    // delivers any event, alarm included; the test activates the way the
-    // platform does: storage first with the rows already in it, then `new`,
-    // then no `start()` at all.
+    // The sweep runs in the constructor's activation gate, before any event (alarm included);
+    // activate as the platform does: storage with rows first, then `new`, no `start()`.
     const storage = fakeStorage();
-    // Overdue: the shape that re-arms the physical alarm at once and spins the
-    // twice-a-second loop.
+    // Overdue rows are the shape that re-arms the physical alarm at once.
     const overdue = Date.now() / 1000 - 1;
     scheduleTableOf(storage.handle).push(
       { callback: 'snapshotWorkspaceIfDue', time: overdue },
       { callback: 'devboxIncidents', time: overdue },
     );
 
-    // Built the way `harness` builds it — the same members the class reads at
-    // construction — but with the dead row already present, which is what an
-    // activation wakes into.
+    // Mirrors `harness` construction but with the dead row already stored, as an activation
+    // wakes into it.
     const state = boxState({
       storage: storage.handle,
       id: TEST_BOX_ID,
@@ -508,16 +495,14 @@ describe('the start hook owns restoration', () => {
     });
 
     new TestBox(state, {});
-    // No waiting: this stub runs the gate closure inline inside `new`, and the
-    // sweep body is synchronous storage I/O, so the rows are gone before `new`
-    // returns. An `await` added inside the sweep must update this test.
+    // No waiting: the stub runs the gate closure inline and the sweep is synchronous storage I/O,
+    // so rows are gone before `new` returns; an `await` inside the sweep must update this test.
 
     // The probe is membership on `this`, so a callback the class carries —
     // inherited or its own — survives, or the sweep would break a live chain.
     const remaining = scheduleTableOf(storage.handle).map((row) => row.callback);
     expect(remaining).not.toContain('snapshotWorkspaceIfDue');
     expect(remaining).toContain('devboxIncidents');
-    // And the box never left activation: nothing armed, nothing ran.
     expect(FakeSandbox.last?.schedules).toEqual([]);
     expect(FakeSandbox.last?.execs).toEqual([]);
   });
@@ -544,11 +529,8 @@ describe('every ending is a named state, and no ending rejects into the platform
   });
 
   test('a failure outside the restore is classified on the frame, never a rejection into the platform', async () => {
-    // The attempt's own storage failing is the one failure the restore does
-    // not classify itself. The frame leaves the box refusing WITH A REASON
-    // and a successor armed, and the cause travels to whoever asked — never
-    // a phase left `restoring` for ever, never an activation dying into a
-    // reset with the reason held only in a rejection nobody reads.
+    // The restore does not classify its own storage failing; the frame must, or the phase stays
+    // `restoring` or the activation resets with the reason lost in an unread rejection.
     const { box, container, storage } = await stoppedBoxWithService();
     storage.faultOn('devbox:attach-recovery', new Error('durable storage unreachable'));
 
@@ -569,8 +551,7 @@ describe('every ending is a named state, and no ending rejects into the platform
     await expect(box.exec('echo hello')).rejects.toMatchObject(
       { message: expect.stringContaining('not ready') });
 
-    // The data contract beside the strict gate: the same refusal as a VALUE,
-    // the shape that survives a Durable Object RPC boundary intact.
+    // The same refusal as a value, the shape that survives a Durable Object RPC boundary intact.
     expect(await box.resolveReadiness()).toEqual({
       kind: 'pending',
       reason: expect.stringContaining('not ready'),

@@ -27,9 +27,7 @@ export interface TurnOutput {
   readonly parts: readonly MessagePartReference[];
 }
 
-/** One `context_edit` run event waiting to be written: which proposal moved the
- *  context where, and the recorder it belongs on. A null `turnId` or `events`
- *  means there is no run to file it against, so nothing is written. */
+/** Null `turnId` or `events`: no run to file against, nothing written. */
 interface ContextEditAudit {
   readonly proposalId: string;
   readonly selection: ContextSelection;
@@ -66,12 +64,7 @@ export class SessionHistory {
     this.requests = new SessionRequests(sql, actor, this.messages, payloads);
   }
 
-  /** Open messages no live stream owns: their request's turn claim is settled,
-   *  or a later admission of that turn superseded its epoch. Nothing extends
-   *  such a message again, so its accumulated parts are its content, and a
-   *  model-facing one joins the working context as the cut answer it is. A
-   *  message whose claim is admitted at its epoch is a live stream and is
-   *  never touched, whichever admission asks. */
+  /** Seals orphaned open messages (claim settled or epoch superseded); live streams are never touched. */
   async sealAbandoned(): Promise<void> {
     this.dependencies.actor.assertCurrent();
     const actorId = this.dependencies.actor.actorId;
@@ -141,10 +134,7 @@ export class SessionHistory {
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
       transcript.setHead(entry.parentId);
-      // The one deliberate way the head moves BACKWARDS. Recorded because a
-      // conversation that reads shorter than it was is otherwise
-      // indistinguishable from one that lost rows, and the owner's report was
-      // exactly that ambiguity.
+      // The only backwards head move; recorded so it is distinguishable from lost rows.
       diagnostics.event('session.transcript_head_moved', { session: sessionId, from: entryId, to: entry.parentId ?? '' });
 
       return target;
@@ -154,11 +144,8 @@ export class SessionHistory {
   async materialize(): Promise<{ selection: ContextSelection; entries: readonly ContextEntry[]; messages: ModelMessage[] }> {
     const selection = this.context.selected() ?? this.context.initialize();
     const entries = this.context.entries(selection);
-    const messages: ModelMessage[] = [];
 
-    for (const reference of entries) messages.push(await this.messages.materialize(reference));
-
-    return { selection, entries, messages };
+    return { selection, entries, messages: await this.messages.materializeAll(entries) };
   }
 
   stagePrepared(proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[], assertOwner: () => void, events: ContextEventRecorder | null = null): void {
@@ -241,9 +228,7 @@ export class SessionHistory {
       return { messages: current.messages, changed: false };
     }
 
-    const messages: ModelMessage[] = [];
-
-    for (const entry of candidate) messages.push(await this.messages.materialize(entry));
+    const messages = await this.messages.materializeAll(candidate);
     const before = toolPairingGaps(current.messages);
     const after = toolPairingGaps(messages);
     const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;

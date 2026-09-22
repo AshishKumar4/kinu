@@ -465,7 +465,7 @@ describe('the workspace banner', () => {
     // is one surface with one reason — not the workspace plus each thing in it.
     expect(notice).toEqual({
       severity: 'blocking',
-      title: "Couldn't refresh this workspace.",
+      title: "Could not refresh this workspace.",
       scope: 'Showing last known data.',
       detail: CONNECTION_LOST,
       retry: 'Retry',
@@ -478,7 +478,7 @@ describe('the workspace banner', () => {
       true,
     )).toEqual({
       severity: 'blocking',
-      title: "Couldn't refresh this workspace and memory content.",
+      title: "Could not refresh this workspace and memory content.",
       scope: 'Showing last known data.',
       detail: 'Network connection lost. MEMORY.md is unreadable',
       retry: 'Retry',
@@ -492,7 +492,7 @@ describe('the workspace banner', () => {
 
     expect(notice).toEqual({
       severity: 'blocking',
-      title: "Couldn't open this workspace",
+      title: "Could not open this workspace",
       scope: 'Nothing has loaded yet.',
       detail: CONNECTION_LOST,
       retry: 'Retry',
@@ -503,23 +503,23 @@ describe('the workspace banner', () => {
   test('an initial failure and a refresh failure are different claims about the same reason', () => {
     const errors = { snapshot: 'the workspace is asleep' };
     expect(formatWorkspaceError(errors, false)).toMatchObject({
-      severity: 'blocking', title: "Couldn't open this workspace", detail: 'the workspace is asleep',
+      severity: 'blocking', title: "Could not open this workspace", detail: 'the workspace is asleep',
     });
     expect(formatWorkspaceError(errors, true)).toMatchObject({
-      severity: 'blocking', title: "Couldn't refresh this workspace.", detail: 'the workspace is asleep',
+      severity: 'blocking', title: "Could not refresh this workspace.", detail: 'the workspace is asleep',
     });
   });
 
   test('a failed action the user asked for keeps its own sentence', () => {
-    expect(formatWorkspaceError({ model: "Couldn't switch model: rejected" }, true))
+    expect(formatWorkspaceError({ model: "Could not switch model: rejected" }, true))
       .toEqual({
-        severity: 'partial', title: "Couldn't switch model: rejected",
+        severity: 'partial', title: "Could not switch model: rejected",
         scope: '', detail: '', retry: null,
       });
-    expect(formatWorkspaceError({ model: "Couldn't switch model: rejected", jobs: 'offline' }, true))
+    expect(formatWorkspaceError({ model: "Could not switch model: rejected", jobs: 'offline' }, true))
       .toEqual({
         severity: 'partial',
-        title: "Couldn't switch model: rejected Background jobs could not be refreshed.",
+        title: "Could not switch model: rejected Background jobs could not be refreshed.",
         scope: 'The conversation is available. Showing last known data.',
         detail: 'offline',
         retry: 'Retry loading background jobs',
@@ -535,7 +535,7 @@ describe('resource-scoped workspace notices', () => {
   test('a failed essential read blocks with the open sentence and a retry', () => {
     expect(formatWorkspaceError({ snapshot: CONNECTION_LOST }, false)).toEqual({
       severity: 'blocking',
-      title: "Couldn't open this workspace",
+      title: "Could not open this workspace",
       scope: 'Nothing has loaded yet.',
       detail: CONNECTION_LOST,
       retry: 'Retry',
@@ -553,7 +553,7 @@ describe('resource-scoped workspace notices', () => {
   test('the essential read wins when both fail', () => {
     const notice = formatWorkspaceError({ snapshot: CONNECTION_LOST, tools: 'catalog offline' }, false);
     expect(notice?.severity).toBe('blocking');
-    expect(notice?.title).toBe("Couldn't open this workspace");
+    expect(notice?.title).toBe("Could not open this workspace");
     expect(notice?.retry).toBe('Retry');
   });
 

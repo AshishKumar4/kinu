@@ -1,27 +1,8 @@
-/**
- * `release.json` — what one build of this repository IS, as data.
- *
- * The self-deploy flow never reads the repository (docs/SELF-DEPLOY.md). It
- * reads this manifest: the bindings a deployment needs, the resource behind
- * each one, the Durable Object classes and their migrations, the secrets a
- * person has to supply, the vars that are ours and the vars that are theirs,
- * and the sha256 of every file in the artifact. `scripts/release-manifest.ts`
- * generates it from `packages/cf-backend/wrangler.jsonc`, so a self-hosted
- * deployment cannot be shaped differently from kinu.run's own.
- *
- * WHY THE VARS ARE CLASSIFIED RATHER THAN COPIED. kinu.run's `vars` block
- * carries kinu.run's identity: the eval bypass address, the owner's alert
- * mailbox, the control-plane Access audience, an account id. Copying that
- * block into somebody else's Worker hands them our eval identity and points
- * their admin plane at our Zero Trust organisation. So every var is one of
- * three things — carried as-is, computed for this deployment, or ours alone —
- * and `scripts/release-manifest.test.ts` fails on a var that is none of them.
- */
+// `release.json`, generated from `wrangler.jsonc` by `scripts/release-manifest.ts`; the
+// self-deploy flow reads only this (docs/SELF-DEPLOY.md). Vars are classified, never copied:
+// kinu.run's vars carry its own identity.
 import * as v from 'valibot';
 
-/** The binding kinds `wrangler.jsonc` can declare. A binding whose kind is
- *  absent here cannot be provisioned by the flow, which is why the generator
- *  refuses to emit one rather than describing it as something else. */
 const BINDING_KINDS = [
   'kv', 'r2', 'vectorize', 'durable-object', 'analytics-engine', 'ai', 'assets',
   'version-metadata', 'send-email', 'worker-loader', 'container',
@@ -32,19 +13,13 @@ export type BindingKind = (typeof BINDING_KINDS)[number];
 export interface ReleaseBinding {
   readonly binding: string;
   readonly kind: BindingKind;
-  /** The account-level resource this binding needs by name — a KV title, a
-   *  bucket, an index, a Durable Object class. Empty where the platform
-   *  supplies it (`ai`, `assets`, `version-metadata`, `worker-loader`). */
+  /** Empty where the platform supplies it (`ai`, `assets`, `version-metadata`, `worker-loader`). */
   readonly resource: string;
-  /** False where `env.d.ts` marks the binding optional: the deployment boots
-   *  without it and loses one capability, so a failure to create it is worth
-   *  reporting but not worth refusing the deployment over. */
+  /** False where `env.d.ts` marks it optional; creation failure is reported, not fatal. */
   readonly required: boolean;
 }
 
-/** A Vectorize index binds fine at the wrong width and then rejects every
- *  insert, so the geometry travels with the release rather than being a
- *  number somebody retypes at create time. */
+/** A wrong-width index binds fine and rejects every insert, so geometry ships with the release. */
 export interface ReleaseVectorIndex {
   readonly name: string;
   readonly dimensions: number;
@@ -62,8 +37,7 @@ export interface ReleaseSecret {
   readonly name: string;
   readonly handling: SecretHandling;
   readonly required: boolean;
-  /** What the flow shows a person when it asks. Generated from `SUPPLY` in
-   *  `scripts/infra-manifest.ts`, the one place that classifies a secret. */
+  /** Generated from `SUPPLY` in `scripts/infra-manifest.ts`. */
   readonly prompt: string;
 }
 
@@ -72,8 +46,7 @@ export type VarPolicy = 'carried' | 'derived' | 'ours';
 export interface ReleaseVar {
   readonly name: string;
   readonly policy: VarPolicy;
-  /** Present only for `carried`: the value every deployment gets. A `derived`
-   *  var is computed per deployment and an `ours` var is never sent. */
+  /** Only for `carried`; `ours` vars are never sent. */
   readonly value?: string;
 }
 
@@ -81,12 +54,7 @@ export interface ReleaseFile {
   readonly path: string;
   readonly sha256: string;
   readonly size: number;
-  /** Cloudflare's asset digest for a file under the assets directory:
-   *  `sha256(base64(bytes) + extension)` truncated to 32 hex characters
-   *  (workers/static-assets/direct-upload, read 2026-09-17). Precomputed at
-   *  build so the upload step reads only the files Cloudflare asks for
-   *  instead of every file in the bundle to learn their digests. Null for a
-   *  Worker module, which is uploaded as a part and never hashed. */
+  /** Cloudflare asset digest, `sha256(base64(bytes) + extension)` truncated to 32 hex; null for modules. */
   readonly assetHash: string | null;
 }
 
@@ -95,21 +63,15 @@ export interface ReleaseWorker {
   readonly mainModule: string;
   readonly compatibilityDate: string;
   readonly compatibilityFlags: readonly string[];
-  /** Module names as the upload's parts are keyed, main module first. A name
-   *  is relative to `modulesPath` inside the artifact, because `main_module`
-   *  in the upload metadata must equal a part's name. */
+  /** Main module first, relative to `modulesPath`: `main_module` must equal a part name. */
   readonly modules: readonly string[];
-  /** Directory inside the artifact holding the Worker's modules. */
   readonly modulesPath: string;
-  /** Directory inside the artifact holding the static assets. */
   readonly assets: string;
   readonly assetsBinding: string;
   readonly crons: readonly string[];
 }
 
-/** The toolchain blobs `NIMBUS_RUNTIME_CACHE` is seeded with, referenced by
- *  digest because they are published once per Nimbus release and shared by
- *  every deployment that runs that release. */
+/** `NIMBUS_RUNTIME_CACHE` seed, shared by every deployment of a release. */
 export interface ReleaseSeed {
   readonly bucket: string;
   readonly url: string;
@@ -120,8 +82,6 @@ export interface ReleaseManifest {
   readonly version: string;
   readonly sha: string;
   readonly builtAt: string;
-  /** Where a deployment pulls its next version from. Updates are pulled by
-   *  the deployment; kinu.run never pushes into anyone's account. */
   readonly channelOrigin: string;
   readonly worker: ReleaseWorker;
   readonly bindings: readonly ReleaseBinding[];
@@ -135,24 +95,10 @@ export interface ReleaseManifest {
 
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u));
 
-/**
- * A version as a release names it, and the one character class it may use.
- *
- * The same class `RELEASE_ARTIFACT_ROUTE` serves the artifact on, because the
- * version is pasted into that path — and into `releases/<version>/` on the
- * local door's disk, where a version carrying `/` or `..` would write outside
- * the release it names.
- */
+// Matches `RELEASE_ARTIFACT_ROUTE`; also a local directory name, so no `/` or `..`.
 const RELEASE_VERSION = /^[A-Za-z0-9._+-]+$/u;
 
-/**
- * A path inside a release, and what makes it inside.
- *
- * The local door writes these to disk (`join(releaseDir(version), path)`), so a
- * path a channel chose is a host file write: an absolute path, a `..` segment
- * or a Windows separator escapes the release directory. Refused here, at the
- * one place a manifest becomes data, rather than at each writer.
- */
+// The local door writes these to disk, so escaping paths are refused here, once.
 const ReleaseFilePathSchema = v.pipe(
   v.string(),
   v.minLength(1),
@@ -220,25 +166,13 @@ export const ReleaseManifestSchema: v.GenericSchema<ReleaseManifest> = v.object(
 });
 
 
-/**
- * Where a release artifact is published, and the pattern the Worker serves it
- * on. One spelling: the artifact is an R2 object rather than a static asset
- * (it is larger than the per-file limit `scripts/deploy.test.ts` measures), so
- * the path exists twice by construction — in the manifest a deployment reads, and in the route
- * that streams the bytes — and two spellings of it would be a 404 nobody sees
- * until somebody's install.
- */
+/** Must match `workerArtifactPath`; the artifact is an R2 object, too large for a static asset. */
 export const RELEASE_ARTIFACT_ROUTE = /^\/downloads\/(kinu-worker-[A-Za-z0-9._+-]+\.tar\.gz)$/u;
 
-/** The published manifest, parsed. A manifest that does not parse is not a
- *  release the flow may act on: every later step reads a field of it, and a
- *  half-read manifest deploys a Worker with a binding missing. */
 export function parseReleaseManifest(text: string): ReleaseManifest {
   return v.parse(ReleaseManifestSchema, JSON.parse(text));
 }
 
-/** Where the small publishable half of a release sits: the manifest is a static
- *  asset, the artifact it names is an R2 object. */
 export const RELEASE_MANIFEST_PATH = '/downloads/release.json';
 
 export function workerArtifactPath(version: string): string {

@@ -42,34 +42,34 @@ interface SlashCommand extends SlashCommandInfo {
 }
 
 const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { name: '/help', description: 'Show command help', run: helpCommand },
-  { name: '/status', description: 'Show agent state and stats', run: statusCommand },
-  { name: '/tools', description: 'List available tools', run: toolsCommand },
+  { name: '/help', description: 'List commands and keys', run: helpCommand },
+  { name: '/status', description: 'Show this agent\'s mission, model and counts', run: statusCommand },
+  { name: '/tools', description: 'List the tools this agent can use', run: toolsCommand },
   { name: '/model', description: 'Show or set the default model', usage: '/model [spec]', run: modelCommand },
-  { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [level]', run: effortCommand },
-  { name: '/role', description: 'Show or select this agent role', usage: '/role [id]', run: roleCommand },
-  { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename', run: renameCommand },
+  { name: '/effort', description: 'Show or set the default tier\'s reasoning effort', usage: '/effort [level]', run: effortCommand },
+  { name: '/role', description: 'Show or choose this agent\'s role', usage: '/role [id]', run: roleCommand },
+  { name: '/rename', description: 'Rename this agent. Kinu never renames over a name you chose', usage: '/rename <name>', requires: 'rename', run: renameCommand },
   { name: '/settings', description: 'Open interactive settings', run: settingsCommand },
-  { name: '/theme', description: 'Choose the TUI theme; light by default', run: themeCommand },
+  { name: '/theme', description: 'Choose the TUI theme', run: themeCommand },
   { name: '/models', description: 'List configured model providers', requires: 'localControls', run: modelsCommand },
-  { name: '/memory', description: 'Show memory', run: memoryCommand },
-  { name: '/changelog', description: 'Review self-changes; revert by index', usage: '/changelog [revert <n>]', run: changelogCommand },
-  { name: '/refine', description: 'Review corrected turns and rule on each staged fix', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
-  { name: '/takes', description: 'Compare the last alternate takes; pick by number', usage: '/takes [n]', run: takesCommand },
-  { name: '/tree', description: 'Show MCTS search tree', aliases: ['/mcts'], run: treeCommand },
+  { name: '/memory', description: 'Show the agent\'s memory', run: memoryCommand },
+  { name: '/changelog', description: 'Review what the agent changed about itself; revert one by number', usage: '/changelog [revert <n>]', run: changelogCommand },
+  { name: '/refine', description: 'Review fixes staged from corrected turns; approve or reject each', usage: '/refine [now|show <n> <edit>|approve <n> <edit> <digest>|reject <n> <edit> <digest>]', run: refineCommand },
+  { name: '/takes', description: 'Compare the latest alternate takes; pick one by number', usage: '/takes [n]', run: takesCommand },
+  { name: '/tree', description: 'Show the MCTS search tree', aliases: ['/mcts'], run: treeCommand },
   { name: '/jobs', description: 'List background jobs', run: jobsCommand },
-  { name: '/connect', description: 'Connect this PC for agent device access', requires: 'consents', run: connectCommand },
-  { name: '/stop', description: 'Stop the active turn', run: stopCommand },
-  { name: '/queue', description: 'Queue a message to send after the current turn', usage: '/queue <text>', run: queueCommand },
-  { name: '/branch', description: 'Run a redirect as a parallel branch of the running turn', usage: '/branch <text>', run: branchCommand },
-  { name: '/plan', description: 'Work in Plan mode: draft a plan for review, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans', run: planCommand },
-  { name: '/fork', description: 'Fork the conversation before an earlier message to walk back', usage: '/fork [number]', run: forkCommand },
-  { name: '/undo', description: 'Restore files to before a turn (n = turns back), then offer walk-back', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
-  { name: '/approval', description: 'Show or set shell approval mode', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
+  { name: '/connect', description: 'Connect this computer so the agent can run commands on it', requires: 'consents', run: connectCommand },
+  { name: '/stop', description: 'Stop the running turn', run: stopCommand },
+  { name: '/queue', description: 'Send a message after the running turn ends', usage: '/queue <text>', run: queueCommand },
+  { name: '/branch', description: 'Try another direction alongside the running turn', usage: '/branch <text>', run: branchCommand },
+  { name: '/plan', description: 'Have the agent draft a plan, then approve it or send it back', usage: '/plan [<text>|show|approve [notes]|changes <feedback>]', requires: 'plans', run: planCommand },
+  { name: '/fork', description: 'Walk back: restart the conversation just before an earlier message', usage: '/fork [number]', run: forkCommand },
+  { name: '/undo', description: 'Restore files to how they were n turns back, then offer to walk back the chat', usage: '/undo [n]', requires: 'checkpoints', run: undoCommand },
+  { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
-  { name: '/always', description: 'Manage always-active skills', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
-  { name: '/advisor', description: 'Show or set the advisor. It is off by default. Turning it on adds one model call per turn.', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
-  { name: '/exit', description: 'Exit chat', aliases: ['/quit'], run: exitCommand },
+  { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
+  { name: '/advisor', description: 'Turn the advisor on or off, or set what it reports. On, it adds one model call per turn', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
+  { name: '/exit', description: 'Leave the chat', aliases: ['/quit'], run: exitCommand },
   { name: '/cancel', description: 'Close the open overlay', hidden: true, run: cancelCommand },
 ];
 
@@ -221,10 +221,10 @@ async function statusCommand({ client }: SlashContext): Promise<SlashOutcome> {
 
 async function toolsCommand({ client }: SlashContext): Promise<SlashOutcome> {
   const tools = await client.describeTools();
-  const lines = ['Built-in:', ...tools.builtIn.map(({ name, description }) => `  ${name} — ${description}`)];
+  const lines = ['Built-in:', ...tools.builtIn.map(({ name, description }) => `  ${name}: ${description}`)];
 
   if (tools.crafted.length > 0) {
-    lines.push('', 'Crafted:', ...tools.crafted.map(({ name, description }) => `  ${name} — ${description.slice(0, 50)}`));
+    lines.push('', 'Crafted:', ...tools.crafted.map(({ name, description }) => `  ${name}: ${description.slice(0, 50)}`));
   }
 
   return { kind: 'text', text: lines.join('\n') };
@@ -277,7 +277,7 @@ async function modelsCommand({ client, command }: SlashContext): Promise<SlashOu
   const lines = ['Providers:'];
 
   for (const provider of providers) {
-    lines.push(`  ${provider.id} — ${provider.available ? 'available' : provider.unavailableReason ?? 'unavailable'}`);
+    lines.push(`  ${provider.id}: ${provider.available ? 'available' : provider.unavailableReason ?? 'unavailable'}`);
   }
 
   const menu = await client.listModels();
@@ -285,7 +285,7 @@ async function modelsCommand({ client, command }: SlashContext): Promise<SlashOu
   if (menu.models.length > 0) {
     lines.push('', 'Models:');
 
-    for (const model of menu.models.slice(0, 40)) lines.push(`  ${model.spec} — ${model.label}`);
+    for (const model of menu.models.slice(0, 40)) lines.push(`  ${model.spec}  ${model.label}`);
 
     if (menu.models.length > 40) lines.push(`  … ${menu.models.length - 40} more`);
   }
@@ -570,7 +570,7 @@ async function instructionsCommand({ client, command, rest }: SlashContext): Pro
           const state = instructionState(row);
           const kind = row.kind === 'skill' ? 'skill' : 'AGENTS.md';
 
-          return `  ${String(index + 1)}. [${state}] ${row.path} (${kind}, ${String(row.bytes)} bytes) — ${actionUsage(pageId, index + 1, row.path)}`;
+          return `  ${String(index + 1)}. [${state}] ${row.path} (${kind}, ${String(row.bytes)} bytes): ${actionUsage(pageId, index + 1, row.path)}`;
         }),
         ...(page.status === 'more'
           ? [`More: /instructions page ${tokenFor(page.next.after)}`]
@@ -837,7 +837,7 @@ export async function performUndo(client: Pick<AgentClient, 'checkpoints'>, ref?
   const n = ref ? Number.parseInt(ref, 10) : 1;
 
   if (!Number.isInteger(n) || n < 1 || n > turns.length) {
-    const lines = [`Usage: /undo [n], where n is turns back (1–${turns.length} available):`];
+    const lines = [`Usage: /undo [n], where n is turns back (1 to ${turns.length}):`];
 
     for (const [i, group] of turns.slice(0, 10).entries()) {
       const at = new Date(group[0].at).toLocaleString();
@@ -996,7 +996,7 @@ function renderRefinementRoute(route: RefinementRoute, index: number): string {
 /** What one request became, for the surface that just opened it. */
 function renderRefinementRequest(request: RefinementRequestView): string {
   const lines = [
-    `Refinement ${request.id} — ${request.stage} (${request.scope} scope, ${request.trigger})`,
+    `Refinement ${request.id}: ${request.stage} (${request.scope} scope, ${request.trigger})`,
     `  reviewed ${request.turnIds.length} graded turn${request.turnIds.length === 1 ? '' : 's'}`
       + (request.detail === '' ? '' : `\n  ${request.detail}`),
   ];
@@ -1049,14 +1049,14 @@ export function renderPlanReview(plan: PlanReview | null): string {
   if (!plan) return 'No plan yet. /plan <what to plan> drafts one for review.';
 
   const states: Record<PlanReview['status'], string> = {
-    pending: 'waiting for you — /plan approve [notes] or /plan changes <feedback>',
+    pending: 'waiting for you: /plan approve [notes] or /plan changes <feedback>',
     changes_requested: 'sent back for changes; the agent is revising it',
     approved: 'approved',
     superseded: 'superseded by a newer revision',
   };
 
   return [
-    `${planTitle(plan.content)} — ${plan.id} revision ${String(plan.revision)} (${states[plan.status]})`,
+    `${planTitle(plan.content)}: ${plan.id} revision ${String(plan.revision)} (${states[plan.status]})`,
     '',
     formatPlanWithLineNumbers(plan.content),
   ].join('\n');
@@ -1069,9 +1069,9 @@ export function describeBranchStatus(event: BranchStatusEvent): string {
 
   switch (event.status) {
     case 'running':
-      return `⎇ branching: running "${task}" in parallel (the live turn continues)`;
+      return `⎇ branch started: "${task}". The running turn carries on.`;
     case 'settled':
-      return '⎇ branch settled into alternate takes. /takes to compare and pick';
+      return '⎇ branch finished. /takes compares the answers so you can pick one.';
     case 'error':
       return `⎇ branch discarded: ${event.message}`;
   }

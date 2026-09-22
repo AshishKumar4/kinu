@@ -1,37 +1,6 @@
 /**
- * Workspace capability tokens — the UserDO's caller boundary.
- *
- * Every secret a Kinu user owns (provider credentials, MCP servers, the
- * physical-machine tunnel, the release ledger) lives in their UserDO,
- * and until now any holder of a UserDO stub reached all of it. This module is
- * the attenuation primitive: a workspace Durable Object proves WHICH workspace
- * it is with a per-workspace secret, and the UserDO admits what that identity
- * may reach.
- *
- * The token is identity, not authority. The raw token is returned once to the
- * workspace DO and never stored here. Secrets are hashed at rest exactly like
- * `user_cli_tokens` / `user_devices`.
- *
- * Trust boundary, stated honestly. Cloudflare gives a Durable Object no way to
- * learn which stub-holder is calling it, so no caller kind here is an
- * attestation of WHO is calling — both kinds are secrets, and the boundary is
- * exactly "does the caller hold this secret".
- *
- *   - A workspace token is held only by that workspace's Durable Object, so it
- *     genuinely names one workspace. It reaches every capability except the
- *     account authorities the matrix marks `owner_only`.
- *   - The owner capability is derived from a Worker secret, so it cannot be
- *     typed, guessed, or reached by code running without the bindings — the
- *     Loader-sandboxed crafted tools, the sandbox container, the CLI, the
- *     browser. It is NOT a defence against other Durable Objects in this same
- *     Worker script, which share `env` and can derive it too; that is not
- *     expressible on this platform, and pretending otherwise would be worse
- *     than saying so.
- *
- * What the boundary buys is unchanged and still the point: the *tool surface* —
- * the part of Kinu an injected prompt can steer — reaches the UserDO only
- * through code that presents a workspace token, and is therefore attenuated
- * no matter which tool gate someone forgets.
+ * Workspace capability tokens: the UserDO's caller boundary. A Durable Object cannot learn which stub-holder
+ * calls it, so both caller kinds are secrets; the owner capability does not defend against other DOs in this Worker.
  */
 
 import * as v from 'valibot';
@@ -41,168 +10,86 @@ import { hmacSha256Hex, timingSafeEqual } from '../utils/crypto';
 import { nanoid } from '../utils/nanoid';
 import { sha256Hex } from './argument-digest';
 
-/** What a capability requires of its caller.
- *
- *  `workspace` admits the signed-in owner and any workspace holding a
- *  registered capability token. `owner_only` admits no workspace at all: the
- *  capability IS an account authority, and a workspace capability token is
- *  never one. Device registration and device consent are the two — a
- *  workspace that could register a device would mint a device token and dial
- *  its own daemon, and one that could write consent would grant itself the
- *  owner's shell.
- *
- *  This is capability-level. A capability a workspace legitimately uses may
- *  still hold an owner-only METHOD (the profile catalog inside `config`), and
- *  that stays a check in the method. */
+/** `workspace` admits the owner and any registered workspace token; `owner_only` admits no workspace
+ *  (account authorities). Owner-only methods inside a workspace capability stay checked in the method. */
 export type CapabilityFloor = 'workspace' | 'owner_only';
 
-/**
- * The attenuation matrix, as data. Every privileged UserDO method names one of
- * these; the floor here is the whole policy.
- *
- * `workspace` is the default for anything a workspace legitimately reaches.
- * `owner_only` marks the account authorities no workspace token ever carries:
- * device registration and device consent.
- */
+/** The attenuation matrix; every privileged UserDO method names one entry. */
 const WORKSPACE_CAPABILITY_TIERS = {
-  /** Provider credentials used for model inference (+ the model picker's view
-   *  of them). Kept: the agent must still be able to think. */
+  /** Provider credentials for model inference and the model picker's view of them. */
   'credentials.model': 'workspace',
-  /** Everything else in the credential store (`github`, future admin keys) and
-   *  every write to it. A steered agent holding the owner's GitHub PAT is
-   *  repo takeover. */
+  /** The rest of the credential store (`github`, admin keys) and every write to it. */
   'credentials.other': 'workspace',
-  /** The egress secret vault: add, rotate, revoke, and list bindings. Binding
-   *  the owner's secret to a host is the same class of act as storing a
-   *  credential, so it sits beside `credentials.other`. */
+  /** Egress secret vault: add, rotate, revoke, list bindings. */
   'egress_secrets.manage': 'workspace',
-  /** Turning a placeholder in an intercepted request back into the real
-   *  secret. The destination and grant check happens here — the placeholder
-   *  the container holds is not the authority, this call is. */
+  /** Resolving an intercepted placeholder to the real secret; the destination and grant check happens here. */
   'egress_secrets.inject': 'workspace',
-  /** Cloudflare AI Gateway discovery/selection — account administration, not
-   *  inference. */
+  /** AI Gateway discovery/selection: account administration, not inference. */
   'ai_gateway.admin': 'workspace',
-  /** MCP tool descriptors + dispatch. MCP tools act with the owner's
-   *  credentials against the owner's accounts. */
+  /** MCP tool descriptors and dispatch (acts with the owner's credentials). */
   'mcp.tools': 'workspace',
-  /** MCP server registry (add/remove/update/list/OAuth callback). */
   'mcp.manage': 'workspace',
-  /** JSON-RPC onto the owner's physical machine. */
   'device.rpc': 'workspace',
-  /** WRITING the per-(agent, device) consent policy, and reading the whole
-   *  account's roster of grants. Owner-only: a workspace that can write this
-   *  table grants itself `full_filesystem` on the owner's machine and skips the
-   *  card entirely, which is the confused-deputy trap the ask-flow exists to
-   *  prevent. Every caller is an owner-authenticated settings route. */
+  /** Writing per-(agent, device) consent and reading all grants. Owner-only: a workspace writing this grants itself
+   *  `full_filesystem` and skips the ask card. */
   'device.consent': 'owner_only',
-  /** Asking whether THE CALLING workspace holds the full-filesystem tier on
-   *  the connected device. The device file view narrows itself with the
-   *  answer, so refusing it would widen the path scope rather than close it;
-   *  the answer is about the caller's own grant and grants nothing. */
+  /** Whether the calling workspace holds the full-filesystem tier; refusing would widen the file view, not close it. */
   'device.consent.read_self': 'workspace',
-  /** Device registry and the daemon's own token/ticket exchange. Owner-only:
-   *  `registerDevice` mints a device token, and a token is a daemon slot the
-   *  owner's commands can be routed to. */
+  /** Device registry and daemon token/ticket exchange. Owner-only: `registerDevice` mints a device token. */
   'device.manage': 'owner_only',
-  /** The owner's workspace roster — the peer roster is this list. Reading it
-   *  leaks the owner's other workspace names. */
+  /** The owner's workspace roster (leaks other workspace names). */
   'workspaces.read': 'workspace',
-  /** Registry writes: create (the escape hatch out of confinement), delete,
-   *  visit tracking. */
+  /** Registry writes: create (the escape hatch out of confinement), delete, visit tracking. */
   'workspaces.write': 'workspace',
-  /** Renaming the CALLING workspace. Workspace-scoped; callers may never
-   *  rename a different workspace. */
+  /** Renaming the calling workspace only. */
   'workspaces.rename_self': 'workspace',
-  /** Cross-owner peer admission grants. */
   'peers.grants': 'workspace',
-  /** Reading the owner's experience library — the crafts, lessons, facts and
-   *  agent loops the owner's OTHER workspaces published. */
+  /** Reading the owner's experience library published by other workspaces. */
   'experience.read': 'workspace',
-  /** Publishing into that library. */
   'experience.write': 'workspace',
-  /** The release ledger. Deploy governance is owner-level by
-   *  definition. */
   'release': 'workspace',
-  /** The owner's profile — their verified email is what outbound notifications
-   *  and inbound email trust are keyed on. */
+  /** The owner's profile; notification and inbound email trust key on its verified email. */
   'profile': 'workspace',
-  /** The account itself — marking onboarding done, renaming the owner,
-   *  deleting everything. Owner-only because a workspace that could reset
-   *  the account could erase every sibling workspace. */
+  /** The account itself. Owner-only: resetting it could erase every sibling workspace. */
   'account': 'owner_only',
-  /** Account role/tier catalog needed to resolve this workspace's next turn. */
   'profile.resolve': 'workspace',
-  /** User-level defaults (default model, strategy, gateway selection). */
   'config': 'workspace',
-  /** CLI bearer tokens, CI access tokens, agent websocket tickets. Minting one
-   *  of these is account takeover. */
+  /** CLI bearer tokens, CI access tokens, websocket tickets. Minting one is account takeover. */
   'auth_tokens': 'workspace',
-  /** Asking whether a bearer that authenticated a websocket ON THIS WORKSPACE
-   *  may still act. The answer is a yes/no about a socket the workspace is
-   *  already holding, it names no token and mints nothing, and the only thing
-   *  a caller can do with it is CLOSE that socket. */
+  /** Whether a bearer that authenticated a socket on this workspace may still act; names no token, mints nothing. */
   'auth_tokens.socket': 'workspace',
-  /** The Codex OAuth device flow. */
   'codex_auth': 'workspace',
-  /** The shared library: blueprints other accounts named this owner on. Owner-
-   *  only: what was shared with the owner is the owner's to read, and a
-   *  workspace forking a blueprint is the owner's browser asking, never the
-   *  workspace itself. */
+  /** Blueprints other accounts shared with this owner. Owner-only: forking is the owner's browser asking. */
   'shares': 'owner_only',
-  /** The owner's Drive as the web UI manages it: listing, uploads, renames,
-   *  deletes, and what is a skill. Owner-only: every workspace already reaches
-   *  the same tenant through its own `/shared` mount as the agent's file plane,
-   *  so a workspace token here would only be a second door onto the same
-   *  bytes, and the agent's door is the one whose reach the prompt declares. */
+  /** The owner's Drive as the web UI manages it. Owner-only: workspaces already reach it via their `/shared` mount. */
   'drive': 'owner_only',
 } as const satisfies Record<string, CapabilityFloor>;
 
 export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;
 
-/** Who is invoking a privileged UserDO method.
- *
- *  `{ ownerToken }` — Worker code acting for the owner, whose identity the edge
- *  already verified (session cookie, CLI bearer), or the DO's own internal use
- *  of a sibling method. Obtained from `ownerCaller(env)`; see the trust-boundary
- *  note at the top of this file for exactly what it proves.
- *
- *  `{ workspaceToken }` — a workspace Durable Object presenting the secret the
- *  owner's UserDO minted for it. */
+/** `{ ownerToken }`: Worker code acting for an edge-verified owner, from `ownerCaller(env)`.
+ *  `{ workspaceToken }`: a workspace DO presenting its minted secret. */
 export type UserCaller = { readonly ownerToken: string } | { readonly workspaceToken: string };
 
 export type ResolvedCaller =
   | { readonly kind: 'owner_session' }
   | { readonly kind: 'workspace'; readonly workspace: string };
 
-/** The bindings the owner capability is derived from. Deliberately the same
- *  secret that seals the credential store: both are the Worker's root trust
- *  material for the user plane, so there is one thing to provision, one thing
- *  to rotate, and no second key whose absence is a silent downgrade. The two
- *  uses are domain-separated by the label below, so neither value can stand in
- *  for the other. */
+/** Same root secret that seals the credential store, domain-separated by the label below. */
 export interface OwnerCapabilityEnv {
   CREDENTIAL_ENCRYPTION_KEY?: string;
 }
 
 const OWNER_CAPABILITY_LABEL = 'kinu.owner-capability.v1';
 
-/** Derived tokens, cached per secret — the derivation is deterministic, so the
- *  cache holds nothing the process was not already holding. */
 const ownerTokens = new Map<string, Promise<string>>();
 
-/**
- * The caller a Worker route presents when it is acting for the signed-in
- * owner. Async and env-bound on purpose: owner authority is a secret this
- * deployment holds, not a string any module can type.
- */
+/** Caller for Worker routes acting for the signed-in owner; env-bound because owner authority is a deployment secret. */
 export async function ownerCaller(env: OwnerCapabilityEnv): Promise<UserCaller> {
   return { ownerToken: await ownerToken(env) };
 }
 
-/** Thrown when the deployment holds no root secret. Its own class because the
- *  whole signed-in surface depends on it, and both the browser and CLI planes
- *  turn it into one deliberate answer instead of an opaque 500. */
+/** The deployment holds no root secret; browser and CLI planes map it to a deliberate answer, not a 500. */
 export class OwnerCapabilityUnavailableError extends Error {
   constructor() {
     super(
@@ -227,10 +114,7 @@ function ownerToken(env: OwnerCapabilityEnv): Promise<string> {
   return pending;
 }
 
-/** Thrown by `requireTier`. Crosses the Worker→DO RPC boundary as its message,
- *  which is written to be honest to both a human and an LLM reading a tool
- *  error: agents behave better when limits are declared than when calls
- *  mysteriously fail. */
+/** Thrown by `requireTier`; crosses the Worker→DO RPC boundary as its message. */
 export class CapabilityDeniedError extends Error {
   constructor(message: string) {
     super(message);
@@ -238,11 +122,7 @@ export class CapabilityDeniedError extends Error {
   }
 }
 
-/**
- * Why a call was refused, as a closed word. The MESSAGE is written for whoever
- * reads the error and names the workspace; the reason is written for whoever
- * counts the denials and must not, which is why there are two of them.
- */
+/** Closed denial reason for counting; the message names the workspace and is not a telemetry field. */
 export type CapabilityDenialReason =
   | 'no_caller_identity'
   | 'unrecognized_owner'
@@ -250,24 +130,8 @@ export type CapabilityDenialReason =
   | 'unrecognized_workspace'
   | 'owner_only';
 
-/**
- * Refuse a privileged call, and count it.
- *
- * Every denial in this file goes through here rather than constructing the error
- * directly. That is the whole reason it exists: five separate `throw` sites are
- * five chances for the next one to be added without telemetry, and an
- * authorization surface with no denial rate is one whose misconfiguration is
- * invisible until a person complains. The return type is `never`, so a call site
- * reads as the refusal it is.
- *
- * NEITHER THE TOKEN NOR THE MESSAGE IS A FIELD. The message names the workspace,
- * and a workspace name here is mission-derived user text; the reason and the
- * capability are our own vocabulary and are what a rate is grouped by.
- *
- * `outcome` is stated rather than left to default. The analytics sink reads a
- * plain `diagnostics.event` as a success, so without it every refusal this
- * authorization surface produces was counted as one that went through.
- */
+/** Refuses and counts a privileged call; every denial goes through here. `outcome` is explicit because the sink
+ *  reads a plain `diagnostics.event` as success. Neither token nor message is logged. */
 function denyCapability(
   reason: CapabilityDenialReason,
   capability: WorkspaceCapability,
@@ -280,9 +144,7 @@ function denyCapability(
 }
 
 export function initWorkspaceCapabilityTables(sql: SqlExec): void {
-  // One row per workspace that has ever claimed an owner. `token_hash` is the
-  // workspace's proof of identity; the raw token lives only in that workspace's
-  // own Durable Object.
+  // `token_hash` is the workspace's identity proof; the raw token lives only in that workspace's DO.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_capability_tokens (
       workspace_name TEXT PRIMARY KEY,
@@ -293,13 +155,8 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_capability_token_hash
               ON workspace_capability_tokens (token_hash)`);
 
-  // A rotation whose subtree push did not reach every replica. `token_hash` is
-  // the hash the registry already committed, so the row is not a second
-  // authority — it is the fact that the ROOT holds that token while some
-  // descendant still presents the previous one. Written when a root install
-  // reports a missed push and cleared when a full push reports none; every
-  // reconcile between the two retries the push, because the hash comparison
-  // alone reads "both sides agree" from a root that is the only one agreeing.
+  // A rotation whose subtree push missed a replica; not a second authority. Every reconcile retries the push until a full
+  // push clears it, because the hash comparison alone passes when only the root agrees.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS workspace_capability_reconcile (
       workspace_name TEXT PRIMARY KEY,
@@ -311,14 +168,9 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
   `);
 }
 
-/** The two tables keyed by workspace name that hold a `token_hash`: the
- *  registry of issued identities, and the reconcile intent for a rotation
- *  whose subtree push missed a replica. */
 type CapabilityHashTable = 'workspace_capability_tokens' | 'workspace_capability_reconcile';
 
-/** The hash one of those tables holds for a workspace, or null when it holds
- *  no row for it. The table name is a literal of the pair above, never caller
- *  text. */
+/** Table name is a literal of the pair above, never caller text. */
 function registeredTokenHash(sql: SqlExec, table: CapabilityHashTable, workspaceName: string): string | null {
   const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
     `SELECT token_hash FROM ${table} WHERE workspace_name = ? LIMIT 1`, workspaceName,
@@ -327,13 +179,11 @@ function registeredTokenHash(sql: SqlExec, table: CapabilityHashTable, workspace
   return row.success ? row.output.token_hash : null;
 }
 
-/** Whether a workspace has a rotation whose subtree push missed a replica. */
 export function pendingCapabilityReconcile(sql: SqlExec, workspaceName: string): string | null {
   return registeredTokenHash(sql, 'workspace_capability_reconcile', workspaceName);
 }
 
-/** Record or re-arm a missed subtree push. `attempts` rises on every retry so
- *  a stuck replica is visible as a growing count rather than as silence. */
+/** `attempts` rises on every retry so a stuck replica shows as a growing count. */
 export function armCapabilityReconcile(sql: SqlExec, workspaceName: string, tokenHash: string): void {
   const now = Date.now();
   sql.exec(
@@ -345,41 +195,25 @@ export function armCapabilityReconcile(sql: SqlExec, workspaceName: string, toke
   );
 }
 
-/** Clear the intent once every replica holds the token the registry expects. */
 export function clearCapabilityReconcile(sql: SqlExec, workspaceName: string): void {
   sql.exec(`DELETE FROM workspace_capability_reconcile WHERE workspace_name = ?`, workspaceName);
 }
 
-/** The hash currently registered for a workspace, or null when it has never
- *  been issued an identity. Comparing this against the hash the workspace
- *  itself reports is what makes provisioning self-healing: any disagreement,
- *  however it arose, is repaired by re-minting. */
+/** Null when never issued. Any mismatch with the workspace's reported hash is repaired by re-minting. */
 export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): string | null {
   return registeredTokenHash(sql, 'workspace_capability_tokens', workspaceName);
 }
 
-/** A fresh capability secret and its hash, written NOWHERE.
- *
- *  Hashing is asynchronous, and a Durable Object serializes nothing across an
- *  await: a mint that hashed and wrote in one call had a delete land between the
- *  two, and the write then revived the identity of a workspace whose teardown
- *  had already revoked it. Splitting the async half out is what lets the caller
- *  re-check its admission and write in ONE synchronous turn — see
- *  {@link commitWorkspaceCapability}. */
+/** A fresh secret and hash, written nowhere: a DO interleaves across awaits, so the caller re-checks admission and
+ *  writes in one synchronous turn via {@link commitWorkspaceCapability}. */
 export async function freshWorkspaceCapability(): Promise<{ token: string; tokenHash: string }> {
   const token = `pwc_${nanoid(44)}`;
 
   return { token, tokenHash: await sha256Hex(token) };
 }
 
-/** Register (or re-register) a freshly minted capability hash for
- *  `workspaceName`. Re-minting replaces the previous secret, which is how a
- *  workspace whose Durable Object storage was reset recovers.
- *
- *  SYNCHRONOUS, and it must stay that way: the caller's admission check and
- *  this write are one uninterruptible turn, which is what makes a revoked
- *  workspace impossible to re-mint from a reconcile already in flight.
- */
+/** Registers a freshly minted hash. Must stay synchronous: admission check and write form one turn,
+ *  so a revoked workspace cannot be re-minted by an in-flight reconcile. */
 export function commitWorkspaceCapability(sql: SqlExec, workspaceName: string, tokenHash: string): void {
   const now = Date.now();
   sql.exec(
@@ -390,15 +224,12 @@ export function commitWorkspaceCapability(sql: SqlExec, workspaceName: string, t
   );
 }
 
-/** Drop a workspace's identity — called when the workspace itself is
- *  deleted, so a later same-name recreate starts from a fresh secret. */
+/** Called on workspace deletion so a same-name recreate gets a fresh secret. */
 export function revokeWorkspaceCapability(sql: SqlExec, workspaceName: string): void {
   sql.exec(`DELETE FROM workspace_capability_tokens WHERE workspace_name = ?`, workspaceName);
 }
 
-/** Resolve a caller to a principal. Fails closed at every step: an
- *  unrecognized shape, an unknown token, or a token whose workspace has no
- *  registry row is denied rather than defaulted. */
+/** Fails closed: unknown shape, unknown token, or a token with no registry row is denied. */
 const UserCallerSchema = v.union([
   v.object({ ownerToken: v.string() }),
   v.object({ workspaceToken: v.string() }),
@@ -446,9 +277,7 @@ async function resolveCaller(
   return { kind: 'workspace', workspace };
 }
 
-/** The gate. Called first thing in every privileged UserDO method; returns the
- *  resolved principal so a method can additionally scope itself (e.g. renaming
- *  only the calling workspace). */
+/** Called first in every privileged UserDO method; returns the principal for further scoping. */
 export async function requireTier(
   sql: SqlExec,
   env: OwnerCapabilityEnv,

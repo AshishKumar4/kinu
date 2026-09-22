@@ -1,21 +1,7 @@
 /**
- * DeviceSocketHub — hibernation-aware ownership of device-daemon WebSockets,
- * and the toolchain answer that belongs to each one.
- *
- * The UserDO accepts each daemon socket as a HIBERNATABLE WebSocket tagged
- * `device:<deviceId>` so an idle hub can sleep between calls. That makes
- * `ctx.getWebSockets()` the source of truth for liveness: the in-memory
- * DeviceTunnel map is only a cache of JSON-RPC correlators, rebuilt from the
- * surviving sockets whenever the DO instance wakes. This module owns that
- * policy (tagging, attachment marking, replace-on-reconnect, rebuild) in a
- * unit-testable home — the UserDO just wires tickets, SQL, and consent.
- *
- * It owns the toolchain probe for the same reason it owns liveness: the answer
- * describes ONE machine over ONE connection, and the socket attachment is the
- * only store with exactly that lifetime. Kept out of SQL deliberately — a
- * `user_devices` column would outlive the machine it described, so a different
- * device reconnecting under the same device row would inherit its predecessor's
- * capabilities, and a stale answer would read as a fresh one.
+ * Hibernation-aware ownership of device-daemon WebSockets tagged `device:<deviceId>`; `ctx.getWebSockets()`
+ * is the liveness truth and tunnels are a rebuilt cache. The toolchain probe lives on the socket attachment,
+ * not SQL, so it never outlives the connection it describes.
  */
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
@@ -27,45 +13,26 @@ import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
 import * as v from 'valibot';
 
-/** WebSocket.OPEN is 1 across every implementation. Shared with the terminal
- *  hub, which reads the same sockets. */
+/** WebSocket.OPEN; shared with the terminal hub. */
 export const WS_OPEN = 1;
 
-/** The daemon's keepalive, verbatim. It pings with a bare text frame 30s after
- *  open and closes the socket when no `pong` text frame returns within 10s —
- *  so an unanswered one means every device link drops once a minute. These
- *  are the wire's own words: the daemon (packages/pc-agent) keeps its own
- *  literals because it is shipped source. NOT a hibernation auto-response —
- *  `setWebSocketAutoResponse` answers EVERY socket this object holds, and a
- *  pasted "ping" on a terminal pane is keystrokes for a shell, not a probe. */
+/** The daemon's keepalive words, verbatim (packages/pc-agent keeps its own literals). Not a hibernation
+ *  auto-response: that answers every socket, including terminal panes. */
 export const DEVICE_KEEPALIVE_PING = 'ping';
 
 export const DEVICE_KEEPALIVE_PONG = 'pong';
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
-/** The close reason a replaced daemon socket receives. The daemon reads it
- *  verbatim (`SOCKET_REPLACED_REASON` in packages/pc-agent): after starting
- *  its successor, this close is the successor connecting and its cue to exit.
- *  Shipped source keeps its own literal, as the keepalive words do. */
+/** Close reason for a replaced daemon socket; read verbatim as `SOCKET_REPLACED_REASON` in packages/pc-agent. */
 const DEVICE_SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
-/**
- * Deadline for the probe round-trip. Short on purpose: it runs on the path that
- * assembles a turn's device status, so a machine that is connected but too busy
- * to answer must cost that turn a moment, not its patience. Missing the deadline
- * leaves the row unmeasured and the next turn asks again.
- */
+/** Probe round-trip deadline; short because it runs on turn assembly. A miss leaves the row unmeasured. */
 const PROBE_TIMEOUT_MS = 3_000;
 
 const WhichResultSchema = v.object({ present: v.array(v.string()) });
 
-/** The socket surface the hub needs — satisfied by the platform WebSocket.
- *
- *  `send` widens core's text-only `TunnelSocket`, because one of these sockets
- *  carries a terminal's output and that is BYTES: decoding a screen repaint as
- *  text would corrupt every escape sequence in it. The device protocol itself
- *  stays JSON, so the tunnel keeps the narrower view. */
+/** Platform WebSocket surface. `send` accepts bytes because terminal output is binary. */
 export interface DeviceSocket extends TunnelSocket {
   send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
@@ -73,36 +40,25 @@ export interface DeviceSocket extends TunnelSocket {
   deserializeAttachment(): JsonValue | undefined;
 }
 
-/**
- * The toolchain answer as it rides the socket attachment. Narrowed to declared
- * capability ids on the way back in: an attachment is JSON we wrote, but it
- * survives a code deploy, so what a previous version wrote is untrusted input.
- */
+/** Toolchain answer on the attachment; re-narrowed on read because attachments survive deploys. */
 const DeviceToolchainSchema = v.object({
   present: v.array(v.picklist(EXECUTOR_CAPABILITIES)),
   asked: v.array(v.picklist(EXECUTOR_CAPABILITIES)),
   probedAt: v.number(),
 });
 
-/** The daemon was asked and has no `which` method — an install too old to
- *  answer. Recorded so the hub stops asking a socket that cannot reply, and
- *  kept distinct from an answer of "nothing found": this machine may well have
- *  python, and nobody knows. */
+/** The daemon has no `which` method; distinct from an answer of "nothing found". */
 const PROBE_UNANSWERABLE = 'unanswerable';
 
 const DeviceProbeSchema = v.union([DeviceToolchainSchema, v.literal(PROBE_UNANSWERABLE)]);
 
-/** What one connection has told us. `probe` absent means never asked. */
 const DeviceAttachmentSchema = v.object({
   device: v.string(),
   probe: v.optional(DeviceProbeSchema),
 });
 
-/** What one connection has told us, in the domain's own type — the schema above
- *  only narrows what comes back OUT of an attachment. */
 type DeviceProbe = DeviceToolchain | typeof PROBE_UNANSWERABLE;
 
-/** The DurableObjectState subset the hub needs. */
 export interface DeviceSocketCtx {
   acceptWebSocket(ws: DeviceSocket, tags: string[]): void;
   getWebSockets(tag?: string): DeviceSocket[];
@@ -112,8 +68,7 @@ function deviceTag(deviceId: string): string {
   return `${DEVICE_WS_TAG_PREFIX}${deviceId}`;
 }
 
-/** The deviceId a hibernatable socket was accepted for, or null for sockets
- *  owned by the agents SDK (their attachments carry `__pk`, not `device`). */
+/** Device id of a hibernatable socket, or null for agents-SDK sockets (attachments carry `__pk`). */
 export function deviceIdFromSocket(ws: DeviceSocket): string | null {
   const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
 
@@ -130,15 +85,7 @@ export class DeviceSocketHub {
 
   constructor(private readonly ctx: DeviceSocketCtx) {}
 
-  /**
-   * Accept a daemon socket for a device, replacing any previous connection.
-   *
-   * A replacement is REPORTED, never silent: one device id with two live
-   * claimants is either a redialling daemon or somebody holding a copy of that
-   * machine's `device.json`, and the second case is invisible unless this says
-   * so. The UserDO stamps `replaced_at` on the row for the same reason — a
-   * diagnostic the owner never opens is not a notification.
-   */
+  /** Accept a daemon socket, replacing any previous one. A replacement is reported, never silent. */
   accept(deviceId: string, server: DeviceSocket): void {
     this.dropTunnel(deviceId);
 
@@ -152,7 +99,6 @@ export class DeviceSocketHub {
     server.serializeAttachment({ device: deviceId });
   }
 
-  /** The open hibernatable socket for a device, if any. */
   liveSocket(deviceId: string): DeviceSocket | null {
     for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (ws.readyState === WS_OPEN) return ws;
@@ -161,15 +107,7 @@ export class DeviceSocketHub {
     return null;
   }
 
-  /**
-   * The attached machine's toolchain answer, when there is a fresh one.
-   *
-   * Null covers three different situations and says so to nobody: never asked,
-   * asked and unable to answer, and answered too long ago to still be evidence.
-   * They are the same to a reader — "this machine has not told us" — and none of
-   * them is "this machine has no python", which is exactly the claim a two-state
-   * capability row would have made.
-   */
+  /** The fresh toolchain answer, or null: never asked, unable to answer, or stale. Null never means "has none". */
   toolchain(deviceId: string, now: number): DeviceToolchain | null {
     const probe = this.probeRecord(deviceId);
 
@@ -179,23 +117,12 @@ export class DeviceSocketHub {
   }
 
   /**
-   * Ask the machine which of the probe's binaries it has, and record the answer
-   * against its current socket. Answers whatever is now known, so a caller can
-   * use the result directly.
-   *
-   * Consent is deliberately not consulted, and this is the one call on the
-   * device plane where that is the right answer. `deviceRpc` gates every call
-   * that carries an agent name because the agent is acting on the owner's
-   * machine; this is the hub's own bookkeeping, like `checkpointStatus`, and the
-   * question is closed by construction — the daemon is handed a fixed list of
-   * bare binary names from core's table and answers which of THOSE exist. There
-   * is no path from it to enumerating the machine, reading a file, or running a
-   * command, so it grants no reach that the capability row does not need.
-   */
+ * Ask the machine which probe binaries it has and record the answer. Consent is not consulted: the query is
+ * a fixed list of bare binary names and grants no reach beyond the capability row.
+ */
   async probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
     const existing = this.probeRecord(deviceId);
 
-    // An install with no `which` will not grow one while this socket is open.
     if (existing === PROBE_UNANSWERABLE) return null;
     const fresh = existing === null ? null : freshDeviceToolchain(existing, now);
 
@@ -216,10 +143,7 @@ export class DeviceSocketHub {
       if (!parsed.success) throw new KinuError('io', 'device answered `which` with an unreadable payload');
       present = parsed.output.present;
     } catch (err) {
-      // A daemon too old to know the method says so in its error frame, and that
-      // is a durable property of this connection — record it and stop asking.
-      // Every other failure (a timeout, a dropped socket, a payload we could not
-      // read) is transient: leave the record untouched so the next turn re-asks.
+      // A method-missing error is durable for this connection; other failures are transient and re-asked next turn.
       const failure = toKinuError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
 
       if (isDeviceUnknownMethodError({ cause: err })) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
@@ -248,9 +172,7 @@ export class DeviceSocketHub {
 
     if (!ws) return;
 
-    // Written out field by field rather than spread: this is a wire shape that
-    // outlives the code that wrote it, and `DeviceAttachmentSchema` above is the
-    // only thing that will ever read it back.
+    // Field by field: this wire shape outlives its writer and is read back only by `DeviceAttachmentSchema`.
     const stored: JsonValue = probe === PROBE_UNANSWERABLE
       ? probe
       : { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt };
@@ -262,8 +184,7 @@ export class DeviceSocketHub {
     return this.liveSocket(deviceId) != null;
   }
 
-  /** Every device with a live socket right now, in socket order. The order is
-   *  the platform's, not a ranking: nothing here may read it as one. */
+  /** Every device with a live socket, in platform order; the order is not a ranking. */
   connectedDeviceIds(): string[] {
     const ids: string[] = [];
 
@@ -276,19 +197,7 @@ export class DeviceSocketHub {
     return ids;
   }
 
-  /**
-   * The id of THE connected device: the requested one when it is live, or —
-   * with no request — the only live one. Null when several are live and none
-   * was named.
-   *
-   * Answering the unnamed case with the FIRST live socket in
-   * `ctx.getWebSockets()` iteration order is not an answer. With two machines
-   * connected that order is the platform's, and a redial or a wake can change
-   * it between two calls in one turn, so the "connected device" — its name, its
-   * toolchain, its sandbox, the machine a command ran on — takes turns being
-   * either one. A fleet of several has no "the"; a caller that needs one names
-   * it.
-   */
+  /** The requested device when live, else the only live one; null when several are live and none was named. */
   connectedDeviceId(deviceId?: string): string | null {
     if (deviceId) return this.isConnected(deviceId) ? deviceId : null;
     const live = this.connectedDeviceIds();
@@ -296,8 +205,7 @@ export class DeviceSocketHub {
     return live.length === 1 ? live[0] : null;
   }
 
-  /** The DeviceTunnel for a connected device — rebuilt from the hibernatable
-   *  socket when this DO instance woke after the socket was accepted. */
+  /** The device's tunnel, rebuilt from the hibernatable socket after a wake. */
   tunnel(deviceId: string): DeviceTunnel | null {
     const cached = this.tunnels.get(deviceId);
 
@@ -311,15 +219,11 @@ export class DeviceSocketHub {
     return tunnel;
   }
 
-  /** Feed an incoming RPC-response frame to the device's tunnel. */
   handleMessage(deviceId: string, data: string): void {
     this.tunnel(deviceId)?.handleMessage(data);
   }
 
-  /** A device socket closed. Rejects its tunnel's in-flight calls — but only
-   *  when the closing socket is the tunnel's own (a replaced socket's close
-   *  event arrives AFTER its replacement was accepted and must not tear down
-   *  the new tunnel). */
+  /** A device socket closed. Rejects in-flight calls only when it is the tunnel's own socket, not a replaced one. */
   handleClose(deviceId: string, ws: DeviceSocket): void {
     const cached = this.tunnels.get(deviceId);
 
@@ -327,13 +231,11 @@ export class DeviceSocketHub {
     this.dropTunnel(deviceId);
   }
 
-  /** Forget the device's tunnel; in-flight calls reject. */
   private dropTunnel(deviceId: string): void {
     this.tunnels.get(deviceId)?.tunnel.dispose();
     this.tunnels.delete(deviceId);
   }
 
-  /** Close every socket for a device (revocation). */
   close(deviceId: string, reason: string): void {
     this.dropTunnel(deviceId);
 

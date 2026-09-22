@@ -719,7 +719,7 @@ function deviceConsentLayout(
   const commandText = `Command: ${consent.command || '(command)'}`;
 
   const commandRows = commandText.split('\n')
-    .reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / commandColumns)), 0);
+    .reduce((rows, line) => rows + Math.max(1, Math.ceil(Array.from(line).length / commandColumns)), 0);
 
   const preferredHeight = commandRows + 7;
   const maxHeight = Math.max(3, terminal.height - 2);
@@ -751,13 +751,13 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
 
   return (
     <PaletteFrame
-      title="Use your PC?"
+      title="Use your computer?"
       width={layout.paletteWidth}
       height={layout.paletteHeight}
       left={position.left}
       top={position.top}
     >
-      <PaletteLine text={`Agent wants to use ${consent.deviceLabel} for a local action.`} width={layout.innerWidth} color={colors.text.primary} />
+      <PaletteLine text={`The agent wants to use ${consent.deviceLabel}.`} width={layout.innerWidth} color={colors.text.primary} />
       <PaletteLine text={`Method: ${consent.method}`} width={layout.innerWidth} color={colors.text.muted} />
       <box style={{ width: '100%', height: commandHeight }}>
         <text wrapMode="word"><span fg={colors.text.strong}>Command: {consent.command || '(command)'}</span></text>
@@ -765,7 +765,7 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
       <PaletteLine
         text={layout.canApprove
           ? `${keybindings.hint('consent.once')} approve once · ${keybindings.hint('consent.always')} always allow · ${keybindings.hint('consent.deny')} deny`
-          : `Resize to inspect the full command · ${keybindings.hint('consent.deny')} deny`}
+          : `Enlarge the terminal to read it all · ${keybindings.hint('consent.deny')} deny`}
         width={layout.innerWidth}
         color={layout.canApprove ? colors.intent.accentStrong : colors.intent.danger}
       />
@@ -800,7 +800,7 @@ export function ShellApprovalOverlay({ request, terminal }: { request: ShellAppr
       </box>
       <PaletteLine text={layout.canApprove
         ? `${keybindings.hint('consent.once')} approve once · ${keybindings.hint('consent.always')} remember grant · ${keybindings.hint('consent.deny')} deny`
-        : `Resize to inspect the full command · ${keybindings.hint('consent.deny')} deny`}
+        : `Enlarge the terminal to read it all · ${keybindings.hint('consent.deny')} deny`}
         width={layout.innerWidth} color={layout.canApprove ? colors.intent.accentStrong : colors.intent.danger} />
       <PaletteLine text="Remember grants these rules on this executor only." width={layout.innerWidth} color={colors.text.muted} />
     </PaletteFrame>
@@ -857,7 +857,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
 
   return (
     <PaletteFrame
-      title="Let this agent use this PC?"
+      title="Let this agent use this computer?"
       width={paletteWidth}
       height={paletteHeight}
       left={position.left}
@@ -868,7 +868,7 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
           <WrappedPaletteLine text={prompt.statusLine} width={innerWidth} color={colors.text.primary} />
           <WrappedPaletteLine text={linking} width={innerWidth} color={colors.text.muted} />
           <WrappedPaletteLine text={consequence} width={innerWidth} color={colors.text.muted} />
-          <PaletteLine text={`${keybindings.hint('device.connect')} connect and keep connected`} width={innerWidth} color={colors.intent.accentStrong} />
+          <PaletteLine text={`${keybindings.hint('device.connect')} connect and stay connected`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.ssh')} use this session only`} width={innerWidth} color={colors.intent.accentStrong} />
           <PaletteLine text={`${keybindings.hint('device.dismiss')} don't ask again · ${keybindings.hint('device.not-now')} not now`} width={innerWidth} color={colors.text.muted} />
         </>
@@ -876,12 +876,12 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
       {prompt.phase === 'connecting' && (
         <>
           <PaletteLine
-            text={prompt.session ? 'Connecting this PC for this session…' : 'Connecting this PC…'}
+            text={prompt.session ? 'Connecting this computer for this session…' : 'Connecting this computer…'}
             width={innerWidth}
             color={colors.text.primary}
           />
           <PaletteLine
-            text={`Waiting for this PC to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
+            text={`Waiting for this computer to answer${'.'.repeat(1 + (prompt.ticks % 3))}`}
             width={innerWidth}
             color={colors.intent.accent}
           />
@@ -906,11 +906,11 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
 function emptyModelListText(modelCount: number, failureCount: number, compact: boolean, filter: string): string {
   if (modelCount > 0) return `No models match "${filter}".`;
 
-  if (failureCount === 0) return 'No connected model providers. Run kinu provider connect.';
+  if (failureCount === 0) return 'No model provider is connected. Run kinu provider connect <provider>.';
 
   if (compact) return `${String(failureCount)} provider${failureCount === 1 ? '' : 's'} unavailable. Resize for details.`;
 
-  return 'Every connected provider failed to list. See below.';
+  return 'No connected provider could list its models. The reasons are below.';
 }
 
 interface ThemePickerProps {

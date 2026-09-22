@@ -1,7 +1,4 @@
-// BackgroundJobRunner — the backend-agnostic >30s-detach lifecycle (re-arch P4).
-// Verifies the durable-fiber detach → settle/fail → programmatic-turn wake, the
-// operator hard-cancel, and the evict-mid-flight recovery — over a fake fiber +
-// the real signal-delivery seam on a fake BackendHost, with no DO.
+// BackgroundJobRunner lifecycle over a fake fiber and fake BackendHost, no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -24,8 +21,7 @@ import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
 
-/** A fiber that runs the body inline + captures each ctx.stash + exposes the
- *  in-flight body promises so a test can await detach completion. */
+/** Runs the body inline; exposes in-flight bodies so a test can await detach completion. */
 function fakeFiber() {
   const stashes: JsonValue[] = [];
   const runs: Promise<unknown>[] = [];
@@ -66,9 +62,7 @@ function fakeHost() {
   };
 }
 
-/** One process's view of the lifecycle. `db` is threaded when a test needs a
- *  SECOND process over the same durable rows — a restart, which is the only
- *  place orphan recovery can happen. */
+/** `db` lets a second process (a restart) open the same durable rows. */
 function setup(opts: {
   resume?: JobResumer; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
   onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
@@ -77,19 +71,10 @@ function setup(opts: {
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
-  // The registry behind a switchable fault, so a test can reproduce the one
-  // failure the in-process settlement path cannot survive: teardown closing the
-  // database out from under a fiber that is still running ("Cannot use a closed
-  // database"), and then a LATER process opening the same durable rows.
+  // Switchable fault: teardown closing the database under a live fiber.
   const realSql = makeSql(db);
   const storeFault = { closed: false };
-  // The actor is issued over the UNDERLYING handle, never the fault wrapper.
-  // The fault stands in for the registry's database dying under a live fiber,
-  // and only the registry write is that fiber's own — an actor's membership
-  // read is the harness establishing WHO is writing. Bound through the wrapper,
-  // every fault case would fail inside `assertCurrent()` and stop reaching the
-  // settlement path it exists to exercise. Idempotent when `opts.db` is
-  // threaded, so the second process reopens the SAME actor's rows.
+  // Actor bound to the underlying handle, not the fault wrapper, so fault cases reach settlement.
   const actors = createTestActors(realSql, makeExecRaw(db));
   const actor = actors.main;
 
@@ -144,7 +129,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
     const job = store.get(id);
     expect(job?.status).toBe('completed');
-    expect(job?.result).toBe('"the answer"');               // serializeJobResult
+    expect(job?.result).toBe('"the answer"');
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].text).toContain(id);
     expect(enqueued[0].text).toContain('completed');
@@ -154,7 +139,6 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
       { phase: 'running', jobId: id, kind: 'think' },
       { phase: 'settled', jobId: id, kind: 'think' },
     ]);
-    // The notification seam fired once, with the settled job.
     expect(notified).toEqual([{ id, status: 'completed' }]);
     expect(eventLog.pending()).toEqual([]);
   });
@@ -198,9 +182,6 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(notified).toEqual([{ id, status: 'failed' }]);
   });
 
-  // The observability audit (2026-08-12): a 12-hour job showed "running" with
-  // no way to tell whether it was hung or working. Start/refuse/cancel/resume
-  // already reached logActivity; settle/fail — the terminal answer — did not.
   test('both settle and fail reach logActivity, not just start/cancel/resume', async () => {
     const { runner, settled, logs } = setup();
     const ok = runner.create('think', {}, 'build', new AbortController());
@@ -222,7 +203,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     runner.detach(id, 'think', Promise.resolve('ok'));
     await settled();
 
-    expect(store.get(id)?.status).toBe('completed');        // result retained
+    expect(store.get(id)?.status).toBe('completed');
     expect(logs.find((l) => l.e === 'bg_job_wake_skipped')).toBeTruthy();
     const pending = eventLog.pending();
     expect(pending).toHaveLength(1);
@@ -271,8 +252,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const id = runner.create('think', {}, 'build', new AbortController());
 
     runner.detach(id, 'think', Promise.resolve('the answer'));
-    // Both fiber implementations DELETE their recovery row in a `finally`, so a
-    // rejected body is never handed to onFiberRecovered — it must not reject.
+    // Fibers delete their recovery row in `finally`, so a rejected body never reaches onFiberRecovered.
     await settled();
 
     expect(store.get(id)?.status).toBe('completed');
@@ -288,7 +268,6 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     runner.detach(id, 'think', Promise.resolve('the answer'));
     await settled();
 
-    // Recorded as failed rather than left running forever with no fiber alive.
     expect(store.get(id)?.status).toBe('failed');
     expect(store.get(id)?.error).toBe('storage unavailable');
     expect(notified).toEqual([{ id, status: 'failed' }]);
@@ -297,9 +276,6 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 });
 
 describe('BackgroundJobRunner.create — descriptive labels', () => {
-  // `BackgroundJob.label` existed but the real runtime never populated it —
-  // every running job showed as a bare "agents running" with no clue what it
-  // was actually doing. Same audit as the logActivity fix above.
   test('a backgrounded search labels the task it is running', () => {
     const { runner, store } = setup();
     const id = runner.create('agents', { action: 'swarm', task: 'investigate the flaky test' }, 'build', new AbortController());
@@ -336,18 +312,16 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     expect(await runner.cancel(id)).toBe(true);
     expect(store.get(id)?.status).toBe('cancelled');
     expect(controller.signal.aborted).toBe(true);
-    expect(await runner.cancel(id)).toBe(false);             // already settled → no-op
+    expect(await runner.cancel(id)).toBe(false);
 
-    // The agent was told once, and told the truth: cancelled, no result to
-    // collect. Without this the agent goes on believing the job is in flight.
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]?.text).toContain('CANCELLED by the operator');
     expect(enqueued[0]?.text).toContain('no result to collect');
 
-    work.reject(new Error('aborted'));                       // the work unwinds on its abort
+    work.reject(new Error('aborted'));
     await settled();
-    expect(store.get(id)?.status).toBe('cancelled');        // NOT relabelled failed
-    expect(enqueued).toHaveLength(1);                        // and not woken a second time
+    expect(store.get(id)?.status).toBe('cancelled');
+    expect(enqueued).toHaveLength(1);
   });
 
   test('cancelling one detached job cancels only its transferred external work', async () => {
@@ -391,11 +365,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     await settled();
   });
 
-  // Blocker 2. The external cancel must be confirmed BEFORE the job is marked
-  // terminal (the test above is why), and the job's own work can finish inside
-  // that await. Without a fence the settle path recorded `completed` over a
-  // cancel in progress, so the operator's cancel then landed on an
-  // already-terminal job and the device work it named was never stopped.
+  // Settle during the external-cancel await must not record `completed` over the cancel.
   test('work that RESOLVES while the external cancel is confirming does not settle over it', async () => {
     const confirm = Promise.withResolvers<void>();
     const { runner, store, settled, enqueued } = setup({ onCancelled: () => confirm.promise });
@@ -406,13 +376,11 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     const cancelling = runner.cancel(id);
     work.resolve('the command finished anyway');
     await settled();
-    // The fiber has run to its end and recorded NOTHING: the cancel owns the row.
     expect(store.get(id)?.status).toBe('running');
 
     confirm.resolve();
     expect(await cancelling).toBe(true);
     expect(store.get(id)?.status).toBe('cancelled');
-    // One wake, and it is the cancel's — not a completion the operator stopped.
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]?.text).toContain('no result to collect');
   });
@@ -452,8 +420,6 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     runner.detach(id, 'shell', work.promise);
 
     const first = runner.cancel(id);
-    // The operator clicking Stop twice: the row still says running, so only the
-    // fence can tell this apart from a fresh cancel.
     expect(await runner.cancel(id)).toBe(false);
     expect(externalCancels).toBe(1);
 
@@ -466,10 +432,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   });
 
   test('a REFUSED cancel hands back the outcome its work reached while refusing', async () => {
-    // The other side of the fence. The refusal leaves the job running by its own
-    // rule, so the work that finished under it is still the job's real story —
-    // holding that outcome back forever would strand a `running` row with no
-    // executor and no result.
+    // A refused cancel leaves the job running, so its real outcome must still settle.
     const confirm = Promise.withResolvers<void>();
 
     const { runner, store, settled, enqueued } = setup({
@@ -510,9 +473,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   });
 });
 
-// Recovery always runs against rows a DEAD executor left behind, so these
-// start from the durable row alone — an evicted runner's in-memory cancel
-// handles went with the process that held them.
+// Recovery starts from durable rows only; in-memory cancel handles died with the process.
 describe('BackgroundJobRunner.recover — evict mid-flight', () => {
   const orphanRow = (store: BackgroundJobStore, id: string): string => {
     store.create({ id, kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
@@ -578,14 +539,13 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     };
 
     const { runner, store, enqueued, settled, notified, logs } = setup({ resume });
-    // A job created with its tool input, then interrupted mid-flight (stashed running).
     store.create({ id: 'jr', kind: 'think', workMode: 'plan', input: '{"strategy":"mcts","task":"t"}', now: Date.now() });
 
     await runner.recover({ jobId: 'jr', phase: 'running' });
-    await settled(); // let the re-drive fiber finish
+    await settled();
 
     const job = store.get('jr');
-    expect(job?.epoch).toBe(1);                         // reclaimed → dead executor fenced
+    expect(job?.epoch).toBe(1);
     expect(job?.resumeAttempts).toBe(1);
     expect(job?.status).toBe('completed');
     expect(job?.result).toBe('{"text":"resumed answer"}');
@@ -612,23 +572,12 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(enqueued[0].metadata?.status).toBe('failed');
   });
 
-  // REPLACES 'a job that evicts on every activation is failed after the
-  // resume-attempt cap' (MAX_RESUME_ATTEMPTS = 5, deleted 2026-09-04). That test
-  // pinned the give-up itself: five platform interruptions turned into a terminal
-  // failure of work that had never failed, over a count `reclaim` bumps whatever
-  // the cause. What replaces it is the same scenario driven twice as far, and the
-  // opposite assertion — the bound is now PACE, and pace is proven separately
-  // below. The owner's own words are the acceptance: "it was re-driven 5 times
-  // without finishing, so it gave up" must not be sayable of anything.
   test('twelve interrupted activations leave the job running — an eviction is not a failure', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ evicted again
+    const resume: JobResumer = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jc', kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
 
-    // One activation per recovery — a re-drive lives in the activation that
-    // started it, and the next eviction brings up a new one. Each activation
-    // first finds the wait its predecessor armed already elapsed, which is the
-    // one thing a test cannot do by waiting: the instants reach 60s.
+    // One activation per recovery; each finds the prior wait elapsed.
     let last = first;
 
     for (let activation = 0; activation < 12; activation++) {
@@ -642,7 +591,6 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(job?.resumeAttempts).toBe(12);
     expect(job?.error).toBeNull();
     expect(first.store.runningIds()).toEqual(['jc']);
-    // Nothing announced a terminal outcome, and nothing said the words.
     expect(last.enqueued).toHaveLength(0);
     expect(last.logs.map((l) => `${l.e} ${l.d ?? ''}`).join('\n')).not.toContain('gave up');
   });
@@ -652,8 +600,6 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     const first = setup({ resume });
     first.store.create({ id: 'jp', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
-    // Each activation reads the wait off the ROW, so the delay it arms is
-    // measurable against the attempt clock the same claim wrote.
     const waits: number[] = [];
 
     for (let activation = 0; activation < 9; activation++) {
@@ -665,18 +611,17 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
       waits.push(job.resumeAfter - job.attemptStartedAt);
     }
 
-    // One second, doubling, to a sixty-second ceiling that STAYS the ceiling.
+    // One second, doubling, capped at sixty seconds.
     expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000]);
 
-    // The durability half: a brand-new runner over the same database — a new
-    // isolate, which wrote none of this — respects a wait it never made.
+    // A fresh runner over the same database respects a wait it never armed.
     const armed = Date.now() + 60_000;
     first.store.deferResume('jp', armed);
     const fresh = setup({ resume, db: first.db });
     await fresh.runner.recover({ jobId: 'jp', phase: 'running' });
 
-    expect(first.store.get('jp')?.resumeAttempts).toBe(9); // not re-driven early
-    expect(first.store.get('jp')?.resumeAfter).toBe(armed); // and the instant stands
+    expect(first.store.get('jp')?.resumeAttempts).toBe(9);
+    expect(first.store.get('jp')?.resumeAfter).toBe(armed);
   });
 
   test('a deferred attempt arms the durable wake, and the runner without one is not broken by it', async () => {
@@ -692,17 +637,14 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(armedFor).toEqual([first.store.get('jw')?.resumeAfter ?? -1]);
     expect(waker.logs.some((l) => l.e === 'bg_job_resume_deferred')).toBe(true);
 
-    // A swarm node passes no `scheduleResume` (and no `resume`): the branch is
-    // unreachable there, and a runner that DOES resume without a wake must still
-    // leave the job alone rather than throw or re-drive early.
+    // A swarm node has no `scheduleResume`/`resume`: the job must be left alone, no throw.
     const nowake = setup({ resume, db: first.db });
     await nowake.runner.recover({ jobId: 'jw', phase: 'running' });
     expect(first.store.get('jw')?.resumeAttempts).toBe(1);
   });
 
   test('a job this runner is already driving is never re-driven out from under itself', async () => {
-    // A resume leaves a fiber row of its own, so one cold start can hand the
-    // SAME job to recover() twice — and the registry sweep names it as well.
+    // A resume leaves its own fiber row, so recover() can see the same job twice.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
     store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
@@ -716,13 +658,8 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   });
 });
 
-// The field failure this sweep exists for: a one-shot CLI run detached a job,
-// gave up waiting on it, and closed its database — after which the fiber's
-// settle write AND its last-resort force-fail both failed against the same dead
-// handle ("background-job settlement failed" / "force-fail failed", verbatim).
-// The row stayed 'running' with no fiber row left pointing at it, so a
-// fiber-keyed recovery never looked at it again: never resumed to a result,
-// never failed, and permanently holding one of the detach slots.
+// A closed database defeated both the settle write and the force-fail, stranding the row
+// 'running' with no fiber row; only the registry sweep can reach it.
 describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forever', () => {
   test('a settlement whose store closed under it strands the row — and the next start settles it', async () => {
     const { runner, store, storeFault, settled, enqueued, db } = setup();
@@ -731,41 +668,27 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
     runner.detach(id, 'shell', new Promise<string>((resolve) => { finish = () => resolve('done'); }));
 
-    // Teardown: the process gave up on the fiber and closed the database.
     storeFault.closed = true;
     finish();
     await settled();
 
-    // Reproduction: neither the outcome nor the force-fail could be written.
     storeFault.closed = false;
     expect(store.get(id)?.status).toBe('running');
 
-    // A later process over the same rows: nothing in memory owns this job, and
-    // no fiber row survived to announce it — the registry sweep is the only
-    // thing that can still reach it.
     const next = setup({ db });
     await next.runner.recoverOrphans();
 
     expect(next.store.get(id)?.status).toBe('failed');
     expect(next.store.get(id)?.error).toContain('eviction');
     expect(next.enqueued.at(-1)?.metadata?.status).toBe('failed');
-    expect(enqueued).toHaveLength(0); // the stranded process woke nobody
+    expect(enqueued).toHaveLength(0);
   });
 
-  // REPLACES 'resuming is bounded: repeated restarts end in a terminal status,
-  // not another re-drive' (2026-09-04). "Bounded" there meant the resume-attempt
-  // cap, and the cap is gone: repeated restarts are repeated PLATFORM events, and
-  // ending the user's work on a count of them is the defect. What the sweep must
-  // still guarantee is the part that made the cap look safe — that the job never
-  // becomes invisible — so this asserts the successor contract: every restart
-  // leaves the job in the sweep's IN-FLIGHT set, whether it re-drove the job or
-  // left it waiting.
   test('repeated restarts keep the job alive, and the sweep keeps naming it in flight', async () => {
-    const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ orphaned again
+    const resume: JobResumer = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jz', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
-    // Six restarts, each finding the previous wait elapsed: six re-drives.
     for (let start = 0; start < 6; start++) {
       first.store.deferResume('jz', Date.now() - 1);
       const inFlight = await setup({ resume, db: first.db }).runner.recoverOrphans();
@@ -774,9 +697,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
 
     expect(first.store.get('jz')?.resumeAttempts).toBe(6);
 
-    // And a seventh that arrives DURING the wait. It re-drives nothing, and the
-    // job is still in flight — the half `jobRedriveResumeGate` reads to decide
-    // whether a fork run is still alive.
+    // A restart during the wait re-drives nothing but still counts the job in flight.
     first.store.deferResume('jz', Date.now() + 60_000);
     const waiting = await setup({ resume, db: first.db }).runner.recoverOrphans();
     expect(waiting.map((j) => j.id)).toEqual(['jz']);
@@ -801,10 +722,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(store.get(id)?.result).toBe('"real result"');
   });
 
-  // The coupling the give-up's removal depends on, driven through the REAL gate
-  // rather than asserted about the set: `jobRedriveResumeGate` retires the fork
-  // run of every job absent from this sweep's result, and waiting for a next
-  // attempt is now the ordinary state of interrupted work.
+  // `jobRedriveResumeGate` retires the fork run of every job absent from the sweep result.
   test('a job waiting for its next attempt keeps its fork run — and an absent one loses it', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {});
     const task = 'measure the three candidates';
@@ -812,7 +730,6 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     first.store.create({
       id: 'jf', kind: 'agents', workMode: 'build', input: JSON.stringify({ task }), now: Date.now(),
     });
-    // One interruption, so the next activation finds it WAITING rather than due.
     await setup({ resume, db: first.db }).runner.recoverOrphans();
     expect(first.store.get('jf')?.resumeAfter).toBeGreaterThan(Date.now());
 
@@ -824,13 +741,8 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       rootsForTask: (t) => (t === task ? ['root-live'] : []),
     })(['root-live']);
 
-    // Claimed, so `reconcileInterruptedForks` continues the run instead of
-    // retiring it — over a job that this activation deliberately did not re-drive.
     expect(claimed).toEqual(['root-live']);
 
-    // The red direction, stated as the mechanism: a sweep that does NOT name the
-    // job retires the very same root. That is what a deferred job absent from the
-    // in-flight set would do to a live search.
     const retired = await jobRedriveResumeGate({
       recoverOrphans: async () => [],
       inputOf: (jobId) => next.store.getInput(jobId),
@@ -840,39 +752,24 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(retired).toEqual([]);
   });
 
-  // What both backends' wakes actually call. The tick that fires it runs on a
-  // live process where almost every pass has nothing to do, so "nothing is owed"
-  // and "something came due" have to be different observable outcomes.
   test('the wake re-drives only when an attempt has come due, and is a no-op otherwise', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {});
     const first = setup({ resume });
     first.store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
-    // Nothing deferred at all: the wake must not sweep, so an untouched job is
-    // not re-driven by a tick that had no business waking for it.
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
     expect(first.store.get('jd')?.resumeAttempts).toBe(0);
 
-    // Deferred into the future: still not due.
     first.store.deferResume('jd', Date.now() + 60_000);
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
     expect(first.store.get('jd')?.resumeAttempts).toBe(0);
 
-    // Due: re-driven, and the wait it just served is cleared by the claim.
     first.store.deferResume('jd', Date.now() - 1);
     await setup({ resume, db: first.db }).runner.recoverDueResumes();
     expect(first.store.get('jd')?.resumeAttempts).toBe(1);
   });
 
-  // The leak the durability review found (2026-09-04). `driveResume` registered
-  // the job's controller and then read its stored input, so a read that threw
-  // left the entry behind. Every later look in that activation declined the job
-  // as already driving while counting it in flight. The throw itself left the
-  // sweep through the resume gate as a gate failure, which protected every fork
-  // run and recovered no job behind the poisoned one, on each activation for as
-  // long as the input stayed unreadable. The read is now the attempt's own first
-  // step, so an unreadable input fails its own job the way a throwing resumer
-  // does, and holds no slot afterwards.
+  // An unreadable stored input must fail its own job without holding a slot or failing the gate.
   test('an unreadable stored input fails its own job; the sweep still answers and the rest recover', async () => {
     const resumed: JsonValue[] = [];
     let release: () => void = () => {};
@@ -905,23 +802,18 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       rootsForTask: (t) => (t === task ? ['root-live'] : []),
     })(['root-live']);
 
-    // The gate answered, and the job swept AFTER the poisoned one was re-driven
-    // and is still running. The poisoned job holds no slot beside it.
     expect(claimed).toEqual(['root-live']);
     expect(resumed).toEqual([{ task }]);
     expect(next.runner.inFlight).toBe(1);
 
     release();
     await next.settled();
-    // The poisoned job is terminal, says why, and woke the agent.
     expect(next.store.get('jp')?.status).toBe('failed');
     expect(next.store.get('jp')?.error).toContain('disk I/O error');
     expect(next.enqueued.some((turn) => turn.text.includes('jp') && turn.metadata?.status === 'failed')).toBe(true);
     expect(next.runner.inFlight).toBe(0);
     expect(next.store.runningIds()).toEqual([]);
 
-    // A later activation over the same rows sweeps clean: nothing declined,
-    // nothing counted in flight, and the failed row still readable.
     const later = setup({ resume, db: first.db });
     expect(await later.runner.recoverOrphans()).toEqual([]);
     expect(later.runner.inFlight).toBe(0);
@@ -950,9 +842,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(oneShot.runner.thresholdDeps({}, 'build', new AbortController()).thresholdMs)
       .toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
 
-    // Resolved per read, not captured once: a backend whose surface is a
-    // property of the TURN (the cloud DO serves a watched chat turn and an
-    // unwatched drain from one agent) switches policy between calls.
+    // Resolved per read: a backend's surface can change between turns.
     let surface: InvocationSurface = 'interactive';
 
     const perTurn = new BackgroundJobRunner({
@@ -962,9 +852,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
     surface = 'one-shot';
     expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
-    // A one-shot run has no human waiting on a fast turn, and a detach there
-    // costs a truncated turn plus a synthesis turn — so ordinary long work runs
-    // to completion inline instead.
+    // One-shot runs have no waiting human, so long work stays inline.
     expect(BACKGROUND_POLICY['one-shot'].detachAfterMs)
       .toBeGreaterThan(BACKGROUND_POLICY.interactive.detachAfterMs);
   });
@@ -987,7 +875,6 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(outcome.detached).toBe(false);
 
     if (outcome.detached) throw new Error('expected the full cap to refuse detach');
-    // No ninth job: the cap stays hard, while this call keeps its foreground owner.
     expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
     expect(controller.signal.aborted).toBe(false);
     expect(outcome.reason).toBe('too many jobs already running');
@@ -998,13 +885,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   });
 
   test("a SIBLING actor's detached jobs fill the cap too — the ceiling is the machine, not the actor", async () => {
-    // The cap's own reason, in the only shape that can tell it apart from an
-    // actor-scoped count: all eight live process trees belong to a subordinate,
-    // and this actor's registry is empty. Narrowed to the owner, each of N
-    // actors would open MAX_CONCURRENT_DETACHED_JOBS trees and the machine
-    // ceiling would be multiplied by the actor count — while every
-    // single-actor case in this file, where the two counts coincide, would go
-    // on passing.
+    // All eight live trees belong to another actor: the cap is workspace-wide, not per actor.
     const { runner, store, actors, db } = setup();
     const sibling = new BackgroundJobStore(makeSql(db), actors.sibling('other'));
 
@@ -1012,9 +893,6 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       sibling.create({ id: `busy-${i}`, kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
     }
 
-    // The owner sees none of them — its roster and its history are the actor's
-    // half. That absence is what makes the refusal below attributable to the
-    // workspace count rather than to anything this actor can read.
     expect(store.listRunning()).toEqual({ items: [], total: 0 });
     expect(store.list()).toEqual([]);
     expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
@@ -1057,11 +935,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   });
 
   test('eight jobs merely WAITING for their next attempt do not refuse a new detach', async () => {
-    // The ceiling's own reason decides this: "every detached job is a live
-    // process tree". A job whose isolate died and whose next attempt is not yet
-    // due has no process tree at all, so counting it would let eight interrupted
-    // jobs block every new detach for as long as the platform kept interrupting
-    // them — the give-up, coming back through the admission door.
+    // A job waiting for its next attempt has no live process tree, so it does not count.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
 
@@ -1080,9 +954,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   });
 
   test('eight jobs actually DRIVING still refuse it — the ceiling did not move', async () => {
-    // The other arm, and the one that would silently disappear if "owed" were
-    // read off the row alone: a job being re-driven right now also carries an
-    // armed instant, because the pause is written FORWARD at claim time.
+    // A job being re-driven also has a future `resume_after` (written at claim), yet is live.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
 
@@ -1090,8 +962,6 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       store.create({ id: `live-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     }
 
-    // This runner re-drives all eight, so all eight are live here AND all eight
-    // have a future `resume_after`.
     await runner.recoverOrphans();
     expect(runner.inFlight).toBe(MAX_CONCURRENT_DETACHED_JOBS);
     expect(store.resumeOwedIdsInWorkspace(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
@@ -1103,12 +973,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   });
 
   test('the detach transfers what the call had issued, and OWNS what it issues next', async () => {
-    // Blocker 1. The claim lands BEFORE the transfer is awaited, so a request
-    // issued from that moment on is registered under the job at its own INSERT.
-    // A handover that is only a snapshot taken at the crossing leaves a request
-    // the tool issues afterwards — an `eval` script still launching
-    // device commands minutes later — belonging to nobody: the turn is over and
-    // the transfer has already named its set.
+    // Requests issued after the claim, before the transfer resolves, must belong to the job.
     const ownership = new DeviceRequestOwnership();
     ownership.report('req-1');
     ownership.report('req-2');
@@ -1118,7 +983,6 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const { runner } = setup({
       onDetached: async (_jobId, requestIds) => {
         received.push([...requestIds]);
-        // A device exec that starts while the handover is still in flight.
         ownersDuringTransfer.push(ownership.owningJobId);
         ownership.report('req-late');
       },
@@ -1132,7 +996,6 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(received).toEqual([['req-1', 'req-2']]);
     expect(ownersDuringTransfer).toEqual([jobId]);
     expect(ownership.owningJobId).toBe(jobId);
-    // `req-late` was never queued for a second transfer — it is the job's.
     expect(ownership.drain(jobId ?? '')).toEqual([]);
   });
 
@@ -1160,8 +1023,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(store.get(jobId)?.status).toBe('running');
     expect(controller.signal.aborted).toBe(false);
     expect(runner.inFlight).toBe(1);
-    // A per-request transfer may already have moved a prefix, so the job remains
-    // the only truthful owner for the live promise and later device requests.
+    // A partial transfer leaves the job as the owner of the live promise and later requests.
     expect(ownership.owningJobId).toBe(jobId);
     ownership.report('req-late');
     expect(logs.some((l) => l.e === 'bg_job_transfer_failed' && l.d?.includes(jobId))).toBe(true);
@@ -1175,38 +1037,12 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 });
 
 /**
- * A JOB'S LIFETIME IS BOUNDED AND TRUTHFUL ACROSS RE-ENTRY.
- *
- * Measured on the owner's live workspace: `bgjob-5irynqgciwkrmk4m77yo5`, kind
- * `agents`, `running` 28 minutes later at `epoch=4 resumeAttempts=4` — one reclaim
- * short of the cap — while the search it wrapped had TWO completed candidates with
- * real content. Every re-entry kept the job open, so the settle wake never arrived,
- * and the owner asked in these words: "Why isn't it giving up it's turn?"
- *
- * Two things were wrong and each has its own arm below. The job could not be made to
- * stop, because the attempt cap bounds GENERATIONS and nothing bounded TIME. And when
- * it did stop it would have settled with an eviction string, discarding candidates it
- * had really measured.
- *
- * THE DESIGN DECISION, since the ticket asked for one either way: ONE DURABLE JOB
- * CONTINUES across re-entries so its caller has one handle on the whole search,
- * rather than fragments spread across job rows. Re-entry has unbounded attempts
- * with bounded backoff pace, the generation count is disclosed, and terminal
- * settlement carries the available work.
- *
- * Neither bound is exercised at its real value here, for the reason the stall
- * watchdog's suite gives about `STALL_TIMEOUT_MS`: a bound of fifty minutes cannot
- * be reached by a test that has to finish, and a generation count restated here
- * would only be this file comparing a number with itself. What is under test is the
- * RELATIONSHIP — a bound exists, it settles rather than hangs, and it carries the
- * partial — and the derivation of each number lives on its constant.
+ * Re-entry: one durable job continues with unbounded attempts at bounded backoff pace,
+ * discloses its generation count, and settles carrying available partial work.
  */
 describe('a background job gives up its turn, and hands over what it has', () => {
 
   test('the attempt clock is a column, and a reclaim starts a new generation on it', () => {
-    // The reading nothing could do before: `createdAt` says when the work was first
-    // asked for and `settledAt` is null while it runs, so "how long has THIS
-    // generation been going" had no answer and nothing could bound it.
     const { store } = setup();
     store.create({ id: 'j1', kind: 'agents', workMode: 'build', input: '{}', now: 1_000 });
     expect(store.get('j1')?.attemptStartedAt).toBe(1_000);
@@ -1218,32 +1054,14 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('a never-settling detached job is NOT killed by a clock — the ruling bound', async () => {
-    // The former per-attempt wall clock (generations x the deleted turn envelope)
-    // is gone by owner ruling, 2026-08-21: no wall clock over a turn-shaped piece
-    // of work; the sanctioned bounds are one LLM call's silence window plus its
-    // retries, and those run INSIDE every re-driven turn. A detached job runs
-    // until its own bounds end it or an operator cancels it. This pin fails if
-    // anyone grows a compensating timer back into this seam.
+    // No wall clock over a detached job (owner ruling, 2026-08-21); fails if a timer returns here.
     const { runner, store } = setup();
-    // Production mints the row through `create` before any detach can name it;
-    // a fixed id here follows the bgjob-unresumable test below.
     store.create({ id: 'bgjob-immortal', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     runner.detach('bgjob-immortal', 'agents', new Promise(() => { /* never */ }));
-    // The detach's own bookkeeping has settled once the microtasks it queued
-    // have run; a compensating timer would be a structural addition this
-    // seam's source gate (no-elapsed-work-deadline) refuses, not a duration
-    // this test could wait out.
     await Promise.resolve();
     expect(store.get('bgjob-immortal')?.status).toBe('running');
   });
 
-  // REPLACES 'past the resume cap it also settles with the partial, instead of an
-  // eviction string' (2026-09-04). The CAP is gone, but the intent it carried —
-  // a job that will never be driven again settles with the work it really did,
-  // not with an empty failure over it — is untouched and now belongs to the path
-  // that actually reaches it: a kind the resumer refuses. The incident's job held
-  // two completed candidates while its row reported nothing, and that must stay
-  // impossible whichever terminal it arrives at.
   test('a kind that cannot be re-driven settles with the partial, instead of an eviction string', async () => {
     const { runner, store, settled } = setup({
       resume: async (kind) => { throw new JobNotResumable(kind); },
@@ -1252,9 +1070,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
 
     store.create({ id: 'bgjob-unresumable', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
-    // Interrupted repeatedly first: the generation count rides the partial, and
-    // reaching this terminal on attempt 51 must read no differently from
-    // reaching it on attempt 1 — there is no count that decides anything now.
+    // The attempt count rides the partial but decides nothing.
     for (let i = 0; i < 50; i++) store.reclaim('bgjob-unresumable');
 
     await runner.recoverOrphans();
@@ -1268,9 +1084,6 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('a kind that cannot be re-driven with NOTHING to hand back fails, naming that', async () => {
-    // The other arm of the same terminal, and the one the owner was handed: no
-    // partial exists, so the job fails — but it says which, rather than implying
-    // the work produced nothing when nobody looked.
     const { runner, store, settled } = setup({
       resume: async (kind) => { throw new JobNotResumable(kind); },
       harvest: async () => null,
@@ -1288,8 +1101,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('a resumer that THROWS fails the job with its own error — a real failure is terminal', async () => {
-    // The boundary the unbounded-attempts rule rests on. Only an unobserved
-    // interruption earns another attempt; work that failed says so, once.
+    // Only an unobserved interruption earns another attempt.
     const { runner, store, settled } = setup({
       resume: async () => { throw new Error('the branch budget was rejected'); },
       harvest: async () => ({ rootId: 'root-3' }),
@@ -1307,13 +1119,9 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('with nothing to hand over it fails — and says the bound, not just "evicted"', async () => {
-    // The other direction. A bound reached over work that produced nothing is a
-    // failure, and it must not pretend to be a partial success.
     const { runner, store } = setup({ harvest: async () => null });
     store.create({ id: 'bgjob-empty', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
-    // The executor was lost and no resumer exists for the kind, so recovery owns
-    // the settlement — nothing bounds live work by time to do it instead.
     await runner.recoverOrphans();
 
     const job = store.get('bgjob-empty');
@@ -1323,9 +1131,6 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('a harvester that throws leaves the job settling, never hanging', async () => {
-    // The seam is on the recovery settle path, so a failing harvester must
-    // degrade to the behaviour of having none rather than strand the job as a
-    // hanging `running` row.
     const { runner, store } = setup({
       harvest: async () => { throw new Error('the ledger is unreadable'); },
     });
@@ -1337,8 +1142,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
   });
 
   test('a job within its bound is still re-driven, so the bound cannot stop honest work', async () => {
-    // The guard. Without this arm a change that bounds everything passes the tests
-    // above, and every resume in the product stops working.
+    // Guard: a change that bounds everything would otherwise pass the tests above.
     let resumeCalls = 0;
 
     const { runner, store, settled } = setup({
@@ -1372,7 +1176,6 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     await runner.recoverOrphans();
     await settled();
 
-    // Three generations: two prior reclaims plus the one recovery just took.
     expect(store.get('bgjob-gen')?.resumeAttempts).toBe(3);
     expect(enqueued[0]?.text ?? '').toContain('generation 4');
   });

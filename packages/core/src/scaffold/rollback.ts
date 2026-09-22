@@ -1,10 +1,5 @@
 /**
- * Scaffold rollback — restore a prior version.
- *
- * Pointer-first: one atomic statement makes the target the current pointer
- * and retires the incumbent, then the rebuildable live view is refreshed
- * from the target's canonical `.vN` source. Execution reads the pointer's
- * version file either way.
+ * Scaffold rollback: repoint current to the target in one statement, then refresh the live view.
  *
  * Formal spec: Evolution/Scaffold.lean — rollback_nonexistent_is_none
  */

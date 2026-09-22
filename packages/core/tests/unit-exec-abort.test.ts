@@ -1,7 +1,4 @@
-// Cancellation must actually propagate from the `shell` tool / executor exec
-// tools. The whole AbortSignal chain is a silent no-op the moment one link
-// drops it: createShell must forward the signal, and every remote executor
-// must read the trailing options.
+// The AbortSignal chain from `shell` and executor exec tools; one dropped link makes it a no-op.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -28,7 +25,6 @@ function hangingPromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
 }
 
-/** One frame as the tunnel writes it onto a device socket. */
 const TunnelFrameSchema = v.object({
   id: v.string(),
   method: v.string(),
@@ -37,9 +33,7 @@ const TunnelFrameSchema = v.object({
 
 type TunnelFrame = v.InferOutput<typeof TunnelFrameSchema>;
 
-/** The device transport over a real tunnel — the seam the cloud actually has,
- *  where a device's silence is bounded by the transport rather than by a double
- *  that answers on command. */
+/** Over a real tunnel, so a silent device is bounded by the transport, not a test double. */
 function tunnelTransport(tunnel: DeviceTunnel): DeviceTransport {
   const connected = { connected: true, registered: true, toolchain: null } as const;
 
@@ -67,7 +61,6 @@ describe('run tool — workspace shell abort', () => {
         const signal = parsed.success ? parsed.output.signal : undefined;
         executed.push(command);
 
-        // Simulate the agent-utils shell contract: aborted → exit 130.
         if (signal?.aborted) return { stdout: '', stderr: 'aborted', exitCode: 130 };
 
         return { stdout: 'done', stderr: '', exitCode: 0 };
@@ -91,12 +84,7 @@ describe('run tool — workspace shell abort', () => {
 });
 
 describe('remote executor exec abort', () => {
-  // KINU-033. The sandbox's signal is not a wait-breaker: core hands it to the
-  // adapter, which kills the container process it started and settles only once
-  // that process is gone. Core's own job is two things — pass the signal on,
-  // and refuse to DISPATCH for a caller who has already given up.
-  /** What the container was asked to run, and whether the caller's signal
-   *  reached it. `signalled: false` is the defect this suite exists to catch. */
+  // KINU-033: core forwards the signal to the sandbox adapter and refuses to dispatch when already aborted.
   interface ObservedExec {
     command: string;
     signalled: boolean;
@@ -165,9 +153,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('a transient failure is not retried for a caller who aborted meanwhile', async () => {
-    // The retry exists to swallow the eviction disconnect window. It must not
-    // start a SECOND container process for a turn that has already stopped
-    // caring about the first.
+    // The eviction retry must not start a second container process after abort.
     const controller = new AbortController();
 
     const { handle, seen } = sandboxHandleThatHonours(async () => {
@@ -182,13 +168,7 @@ describe('remote executor exec abort', () => {
     expect(seen).toHaveLength(1);
   });
 
-  /**
-   * KINU-N021. The abort path sends a cancellation keyed on the id the command
-   * was issued under, waits for the device's answer, and reports what that
-   * answer actually was. An abort that only ends the WAIT leaves the command —
-   * and anything it started — running on the user's machine after the turn
-   * reports stopped.
-   */
+  /** KINU-N021: abort sends a cancellation keyed on the command's id and reports the device's actual answer. */
   interface DeviceCall { method: string; params: JsonValue[]; requestId?: string }
 
   function cancellableTransport(
@@ -229,9 +209,6 @@ describe('remote executor exec abort', () => {
       message: 'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
 
-    // ONE identity for both frames: the cancellation names the command by the
-    // id the command was issued under, so there is no second correlation that
-    // could drift out of step and stop the wrong process.
     expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
     const execRequestId = calls[0].requestId;
 
@@ -241,8 +218,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('a command that finished first is reported as gone, not as killed', async () => {
-    // The completion/cancel race. The daemon holds no record of the request, so
-    // claiming a kill would be a claim about a process that had already ended.
+    // Completion/cancel race: the daemon has no record, so no kill may be claimed.
     const { transport } = cancellableTransport(async (requestId) => ({
       requestId, cancelled: 'unknown',
     }));
@@ -259,9 +235,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('a device too old to stop a command says so instead of claiming it stopped', async () => {
-    // Mixed versions, from the caller's side. The refusal has to name the gap:
-    // an abort that reads as "terminated" here would be a lie about the user's
-    // own machine.
+    // Mixed versions: the refusal must name the gap, not read as "terminated".
     const { transport } = cancellableTransport(() => {
       throw new Error(`${DEVICE_UNKNOWN_METHOD}: ${DEVICE_CANCEL_METHOD}`);
     });
@@ -305,15 +279,9 @@ describe('remote executor exec abort', () => {
     );
   });
 
-  /**
-   * The far end is a program on somebody else's computer, and the three ways it
-   * can be adversarial about a kill all reduce to one rule: nothing but an
-   * answer NAMING this command, arriving inside the wait, confirms a stop.
-   */
+  /** Only an answer naming this command, inside the wait, confirms a stop. */
   test('a device that ignores the cancellation is a failed stop, and its late answer cannot upgrade that', async () => {
-    // A REAL tunnel, because the bound on an unanswered cancellation is the
-    // tunnel's deadline: a transport double could assert the report and never
-    // that anything ends the wait at all.
+    // A real tunnel, because the bound under test is the tunnel's own deadline.
     const frames: TunnelFrame[] = [];
 
     const socket: TunnelSocket = {
@@ -321,11 +289,6 @@ describe('remote executor exec abort', () => {
       send: (data: string) => { frames.push(v.parse(TunnelFrameSchema, JSON.parse(data))); },
     };
 
-    // A short control deadline and a distant liveness probe: the only thing
-    // that can end this cancellation is the deadline under test. The wait below
-    // is the tunnel's own rejection, never a sleep — but the deadline itself is
-    // real time, because the subject IS that the transport bounds a silent
-    // machine at all.
     const tunnel = new DeviceTunnel(socket, 25, 60_000);
     const provider = createDeviceTunnelExecutor(tunnelTransport(tunnel));
     const controller = new AbortController();
@@ -336,13 +299,9 @@ describe('remote executor exec abort', () => {
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     await expect(pending).rejects.toThrow(/could not stop the command, which may still be running/);
     await expect(pending).rejects.toThrow(/device RPC timeout/);
-    // The frame went out and was ignored — this is a silent machine, not a
-    // cancellation this side failed to send.
     expect(frames.map((frame) => frame.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
 
-    // The device answers when it suits it, long after the wait ended. A claim
-    // that arrives after the caller was told the stop was unconfirmed cannot
-    // retroactively become a confirmed one.
+    // A late answer cannot upgrade an unconfirmed stop.
     tunnel.handleMessage(JSON.stringify({
       id: frames[1].id,
       result: { requestId: String(frames[1].params[0]), cancelled: 'terminated' },
@@ -352,9 +311,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('an answer that names another command confirms nothing about this one', async () => {
-    // The daemon echoes the request it acted on. An echo naming a DIFFERENT
-    // command is a mispaired or lying far end, and reading it as this
-    // command's answer would report a stopped command whose processes run on.
+    // An echo naming a different command must not count as this one's answer.
     const { transport } = cancellableTransport(async () => ({
       requestId: 'rpc-elsewhere0-4', cancelled: 'terminated',
     }));
@@ -370,9 +327,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('a completion that lands after the abort never becomes the tool\'s answer', async () => {
-    // The completion/cancel boundary from the caller's side: the command had
-    // already finished on the machine (so the daemon holds no control entry),
-    // and its result frame arrives after the abort was reported.
+    // The command already finished on the machine; its result arrives after the abort was reported.
     const calls: DeviceCall[] = [];
     const held = Promise.withResolvers<JsonValue>();
 
@@ -398,13 +353,9 @@ describe('remote executor exec abort', () => {
       message: 'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
 
-    // The command's own result lands now. Awaiting the very promise the
-    // transport handed out is what proves the executor has SEEN it settle.
     held.resolve({ stdout: 'all 900 tests passed', stderr: '', exitCode: 0 });
     await held.promise;
 
-    // The turn ended on the abort. The held result publishes nothing: not a
-    // value to the caller, and not another frame to the machine.
     await expect(pending).rejects.toThrow(/no active command control entry/);
     expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
   });
@@ -428,9 +379,7 @@ describe('remote executor exec abort', () => {
   });
 
   test('a pre-aborted signal sends nothing, and says nothing ran', async () => {
-    // Cancel-before-spawn. No frame went out, so there is no command and no
-    // process group anywhere — and no cancellation to send either, which is the
-    // one abort case that must NOT reach the device.
+    // Cancel-before-spawn: no frame went out, so no cancellation may reach the device.
     const calls: string[] = [];
 
     const transport: DeviceTransport = {

@@ -1,13 +1,5 @@
-/**
- * Crockford-base32 ULID — monotonic (spec's monotonic mode), sortable by
- * creation time. Within one process, ids minted in the same millisecond
- * increment the random suffix instead of re-rolling it, so `ORDER BY id`
- * is true creation order — the hub's id-ordered scans rely on this
- * (`log.ts:572` latest phase, `log.ts:589` step trace).
- *
- * Format: 10 chars timestamp (48-bit ms since epoch) + 16 chars random.
- * All EventsHub primary keys use this. Keep one canonical implementation.
- */
+/** Monotonic ULID: same-millisecond ids increment the suffix, so `ORDER BY id` is creation order
+ *  (the hub's id-ordered scans rely on this). */
 
 const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
@@ -26,8 +18,6 @@ export function ulid(): string {
   }
 
   if (ts === lastTs) {
-    // Same millisecond: increment the previous random suffix (base-32,
-    // little chance of overflow across 16 chars; on overflow, re-roll).
     let i = 15;
 
     while (i >= 0) {
@@ -50,10 +40,7 @@ export function ulid(): string {
   return tsChars.join('') + rand;
 }
 
-/** Built from the alphabet above so the two cannot drift: a 26-char id in
- *  Crockford base32 is one `ulid()` could have minted. Callers that route on an
- *  id — the signed webhook delivery path — need to refuse anything else before
- *  it reaches a Durable Object name. */
+/** Routing callers (signed webhook path) refuse non-ULIDs before they reach a DO name. */
 const ULID_PATTERN = new RegExp(`^[${ULID_ALPHABET}]{26}$`, 'u');
 
 export function isUlid(value: string): boolean {

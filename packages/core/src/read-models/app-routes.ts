@@ -1,26 +1,7 @@
-/**
- * The SPA's path table.
- *
- * It exists because a browser render-failure report has to say WHERE it broke,
- * and `location.pathname` is not a thing that may be said: every path this app
- * routes but two carries a workspace name the owner chose, so a report keyed on
- * the raw path publishes account content into a log sink. The answer is the
- * TEMPLATE — `/workspace/:agentId`, never `/workspace/quarterly-billing-fix` —
- * which is a fixed vocabulary of sixteen strings and identifies the surface just as
- * precisely.
- *
- * `App.tsx` reads its `path` props from here rather than spelling them again,
- * and that direction is the whole point: a route added to the router without
- * being added here would report as {@link UNMATCHED_ROUTE}, and a hand-kept
- * second copy of a path list is the drift this file exists to make impossible.
- * The server validates a reported route against this same set, so the closed
- * vocabulary is also what stops an arbitrary string reaching Workers Logs.
- */
+/** Route templates, so a client error report names the surface without leaking workspace names. `App.tsx`
+ * reads its paths from here; the server validates reported routes against this set. */
 
-/**
- * Every path `App.tsx` routes, by the name the router knows it as. `home` is the
- * index route, which is `/`.
- */
+/** Every path `App.tsx` routes; `home` is `/`. */
 export const APP_ROUTES = {
   home: '/',
   userSettings: '/user/settings',
@@ -43,22 +24,11 @@ export const APP_ROUTES = {
   updates: '/updates',
 } as const;
 
-/** Internal: `ReportedRoute` is the type that leaves this module, and it is the
- *  one a report's field is typed by. */
 type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
 
-/**
- * What a path outside the table reports as.
- *
- * A path, never a word: it sits in the same field as the sixteen templates, and a
- * reader scanning that field should not have to know which values are paths and
- * which are prose. Reached by a 404 the SPA fallback served, and by a route
- * someone added to the router and not to `APP_ROUTES` — which is a finding
- * rather than a crash.
- */
+/** A path, not a word, so the field holds only paths. Reached by a 404 or a route missing from `APP_ROUTES`. */
 const UNMATCHED_ROUTE = '/unmatched';
 
-/** Everything the `route` field of a client report may hold. */
 export type ReportedRoute = AppRoute | typeof UNMATCHED_ROUTE;
 
 export const REPORTED_ROUTES: readonly ReportedRoute[] = [
@@ -67,19 +37,8 @@ export const REPORTED_ROUTES: readonly ReportedRoute[] = [
 ];
 
 /**
- * The template a pathname resolves to.
- *
- * Matched on segments rather than by regex: a `:param` segment matches anything,
- * a literal segment matches itself, and a trailing `*` matches every deeper
- * path, which is react-router's own rule for the paths this table holds (none
- * uses an optional segment). No two exact templates share a segment count and a
- * first literal, so the scan cannot be order-dependent; the one splat is tried
- * last.
- *
- * A trailing slash is dropped before the split so `/control/` and `/control`
- * are one route. Query strings never arrive here: the caller passes
- * `location.pathname`, and a search string is account content of exactly the
- * kind this function exists to keep out.
+ * Segment match (react-router's rule for these paths); exact templates are order-independent and the
+ * splat is tried last. Trailing slash dropped; callers pass `location.pathname`, never a query.
  */
 export function routeTemplateOf(pathname: string): ReportedRoute {
   const segments = pathname.replace(/\/+$/u, '').split('/');
@@ -93,9 +52,7 @@ export function routeTemplateOf(pathname: string): ReportedRoute {
     if (wanted.every((part, at) => part.startsWith(':') || part === segments[at])) return template;
   }
 
-  // A splat template matches whatever is left below its literal prefix, and
-  // only after every exact template declined, so an exact page under a splat's
-  // prefix keeps its own name.
+  // Splats only after every exact template declined, so an exact page under a splat keeps its name.
   for (const template of templates) {
     const wanted = template.split('/');
 

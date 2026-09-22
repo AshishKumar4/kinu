@@ -1,21 +1,6 @@
 /**
- * The inspector column's layout, as a machine with no React and no DOM.
- *
- * The column has a per-account persisted WIDTH and a per-workspace persisted
- * open/closed CHOICE, and every committed layout is classified by INPUT, not
- * by layout matching: a commit carrying an input mark is the user's and
- * persists; any other commit — the mount, a decision the machine issued, a
- * constraint the group imposed — is adopted into state and persists
- * nothing. Control actions (collapse, expand, reset) claim their target at
- * call time. Nothing ever compares a committed layout to a remembered one,
- * so a write that changes nothing and a constraint that changes everything
- * both classify correctly.
- *
- * The hook (`cf-backend/src/hooks/use-inspector-layout.ts`) owns the
- * effects: it reads storage into a decided target, measures a commit's
- * pixels off the DOM, and turns each step's effects into an imperative
- * panel write and a storage write. Everything the effects DECIDE is here,
- * so the decisions are proved without a rendered tree.
+ * Inspector column layout machine (no React, no DOM); effects live in `cf-backend/src/hooks/use-inspector-layout.ts`.
+ * Commits are classified by input mark, never by comparing layouts: only marked commits persist.
  */
 
 export const INSPECTOR_DEFAULT_PX = 340;
@@ -26,25 +11,20 @@ export const INSPECTOR_WIDE_QUERY = "(min-width: 900px)";
 
 export interface InspectorTarget { readonly collapsed: boolean; readonly widthPx: number }
 
-/** What the machine remembers between steps. */
 export interface InspectorState {
   readonly collapsed: boolean;
   readonly widthPx: number;
-  /** The column's layout is decided and applied (or already stood). */
   readonly ready: boolean;
   /** The workspace the user has gestured on: no policy transition crosses it. */
   readonly userDecided: string | null;
   /** The workspace the one automatic open already served. */
   readonly autoOpened: string | null;
-  /** A decision made before the group's first committed pass, applied once
-   *  by that pass. Not a loop: the group's own commit is the schedule. */
+  /** A decision made before the group's first commit, applied once by that commit. */
   readonly pending: InspectorTarget | null;
-  /** The group has committed a layout at least once, so writes land. */
   readonly measured: boolean;
 }
 
-/** What a step asks the host to do: `write` is an imperative panel resize or
- *  collapse; `persist` is the user's own layout, to store as theirs. */
+/** `write`: imperative panel resize/collapse; `persist`: the user's own layout to store. */
 export interface InspectorEffects {
   readonly write?: InspectorTarget;
   readonly persist?: InspectorTarget;
@@ -64,19 +44,15 @@ export function initialInspectorState(decision: InspectorTarget | null): Inspect
   };
 }
 
-/** A new group element: the previous tree's measurement and parked decision
- *  die with it, before the new tree's first announcement. */
+/** New group element: previous measurement and parked decision are dropped. */
 export function newInspectorGroup(state: InspectorState): InspectorState {
   return { ...state, measured: false, pending: null };
 }
 
-/** The stored layout the policy reads for a workspace: the account's width
- *  (null when none is stored) and the workspace's choice (`true` opened
- *  here, `false` closed here, null means the first-visit policy decides). */
+/** `choice`: `true` opened here, `false` closed here, null means the first-visit policy decides. */
 export interface StoredInspectorLayout { readonly width: number | null; readonly choice: boolean | null }
 
-/** The WIDTH is the account's: a preference about this person's display,
- *  stored as a plain pixel number beside the theme choice. */
+/** Width is per account. */
 function readInspectorWidth(account: string): number | null {
   const raw = localStorage.getItem(`kinu.inspector.${account}`);
   const width = raw === null ? NaN : Number(raw);
@@ -84,9 +60,7 @@ function readInspectorWidth(account: string): number | null {
   return Number.isFinite(width) ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : null;
 }
 
-/** The OPEN/CLOSED choice is the workspace's: `"1"` opened here, `"0"` closed
- *  here, absent means the first-visit policy decides. A choice made in one
- *  workspace can never leak into another. */
+/** Open/closed choice is per workspace: `"1"` opened, `"0"` closed, absent defers to first-visit policy. */
 function readInspectorChoice(account: string, workspace: string | undefined): boolean | null {
   const raw = workspace === undefined
     ? null
@@ -99,25 +73,15 @@ function readInspectorChoice(account: string, workspace: string | undefined): bo
   return null;
 }
 
-/** Who keys a persisted layout, or why nobody does: a signed-in profile with
- *  an email is `known`; a session with no account — anonymous, or a profile
- *  carrying no email — is `none`; a profile the page could not read is
- *  `unreadable`. Only `known` reads or writes storage, and the failure is
- *  classified rather than swallowed into "not yet". */
+/** Only `known` (profile with email) reads or writes storage; `unreadable` is not collapsed into `none`. */
 export type InspectorAccount =
   | { readonly kind: "known"; readonly email: string }
   | { readonly kind: "none" }
   | { readonly kind: "unreadable" };
 
-/** What a layout nobody keys reads as: no remembered width, no choice — so
- *  the first-visit policy answers for it, every mount. */
 export const UNKEYED_INSPECTOR_LAYOUT: StoredInspectorLayout = { width: null, choice: null };
 
-/** What storage holds for this account and workspace. A session that keys
- *  nothing reads nothing and gets the unkeyed layout, so the policy still
- *  decides for it; null means only "the account has not resolved yet", which
- *  parks the decision until it does. Collapsing those two is what left an
- *  anonymous session's column shut for the page's life. */
+/** Null only while the account is unresolved; an unkeyed session still gets a layout the policy decides. */
 export function readStoredInspector(account: InspectorAccount | null, workspace: string | undefined): StoredInspectorLayout | null {
   if (account === null) return null;
 
@@ -127,9 +91,7 @@ export function readStoredInspector(account: InspectorAccount | null, workspace:
 }
 
 
-/** The decided layout: the stored choice when one exists, else the
- *  first-visit policy — collapsed unless the workspace holds something worth
- *  seeing (the live signal, or the one auto-open it already served). */
+/** Stored choice, else collapsed unless the live signal fired or the auto-open already served this workspace. */
 export function decideInspector(stored: StoredInspectorLayout | null, showContent: boolean): InspectorTarget {
   const width = stored?.width ?? INSPECTOR_DEFAULT_PX;
   const choice = stored?.choice ?? null;
@@ -137,23 +99,12 @@ export function decideInspector(stored: StoredInspectorLayout | null, showConten
   return { collapsed: choice === null ? !showContent : !choice, widthPx: width };
 }
 
-/**
- * The workspace's layout, decided and applied in one place: on mount, on a
- * workspace switch, when the account key lands, and on the signal that opens
- * a policy-closed column once on the workspace's behalf. A gesture the user
- * already made wins outright. The signal open is a once-per-workspace latch;
- * a stored choice ends the policy's say entirely.
- *
- * `stored` is null when the account that keys the layout has not resolved yet
- * (or the layout is not a wide-desktop one) — then nothing is decided at all,
- * and the decision arrives with the account. A session resolved to NO account
- * is decided like any other; it just persists nothing.
- */
+/** Decides and applies the layout. A user gesture wins; the signal open is a once-per-workspace latch;
+ *  a stored choice ends the policy's say. `stored` null parks the decision. */
 export function applyInspectorDecision(state: InspectorState, input: {
   readonly workspace: string | undefined;
   readonly stored: StoredInspectorLayout | null;
   readonly worthShowing: boolean;
-  /** The imperative panel handle exists: a write can land. */
   readonly panelPresent: boolean;
 }): InspectorStep {
   if (input.stored === null || state.userDecided === (input.workspace ?? null)) return { state, effects: {} };
@@ -161,14 +112,11 @@ export function applyInspectorDecision(state: InspectorState, input: {
   const target = decideInspector(input.stored, input.worthShowing || state.autoOpened === (input.workspace ?? null));
   const autoOpened = input.worthShowing && input.stored.choice === null ? input.workspace ?? null : state.autoOpened;
 
-  // Already where the decision lands: nothing writes, and the column is
-  // still marked ready — the stored state stands.
   if (state.collapsed === target.collapsed && (target.collapsed || state.widthPx === target.widthPx)) {
     return { state: { ...state, autoOpened, ready: true }, effects: {} };
   }
 
-  // A write issued into an unmeasured group is recomputed against a
-  // zero-size box and lost, so the decision parks until the first commit.
+  // A write into an unmeasured group is lost against a zero-size box, so the decision parks until the first commit.
   if (!state.measured || !input.panelPresent) {
     return { state: { ...state, autoOpened, pending: target }, effects: {} };
   }
@@ -179,11 +127,7 @@ export function applyInspectorDecision(state: InspectorState, input: {
   };
 }
 
-/** A control action — collapse, expand, reset — claims its target: the
- *  layout is the user's, reflected, persisted, latched for this workspace,
- *  and written to the panel unmarked. Whatever commit that write produces
- *  (or none, for a no-op) lands in the adopt branch like any other unmarked
- *  commit. */
+/** Control action (collapse/expand/reset): claims its target as the user's and writes the panel unmarked. */
 export function claimInspectorTarget(state: InspectorState, target: InspectorTarget, workspace: string | undefined): InspectorStep {
   return {
     state: { ...state, userDecided: workspace ?? null, collapsed: target.collapsed, widthPx: target.widthPx },
@@ -191,14 +135,8 @@ export function claimInspectorTarget(state: InspectorState, target: InspectorTar
   };
 }
 
-/**
- * A committed layout, reported exactly once. `now` is what the group
- * committed (a collapsed report carries the remembered expansion width, never
- * zero); `marked` is whether an input was observed at its source for this
- * commit. The first commit measures the group and applies a parked decision
- * once — the single write the unmeasured group could not take, and the
- * machine's own, so it marks nothing.
- */
+/** A committed layout, reported once. A collapsed `now` carries the remembered expansion width, never zero.
+ *  The first commit applies a parked decision, unmarked. */
 export function commitInspectorLayout(state: InspectorState, input: {
   readonly now: InspectorTarget;
   readonly marked: boolean;
@@ -224,22 +162,20 @@ export function commitInspectorLayout(state: InspectorState, input: {
   }
 
   if (input.marked) {
-    // A gesture: the column is the user's — anything still parked dies with it.
     return {
       state: { ...state, pending: null, ready: true, userDecided: input.workspace ?? null, collapsed: now.collapsed, widthPx: now.widthPx },
       effects: { persist: now },
     };
   }
 
-  // Environment or our own commit: adopt what landed, persist nothing.
+  // Environment or own commit: adopt, persist nothing.
   return {
     state: { ...state, collapsed: now.collapsed, widthPx: now.collapsed ? state.widthPx : now.widthPx },
     effects: {},
   };
 }
 
-/** The keys the library's separator keydown acts on — the marks these press
- *  leave are what the committed layout's classification reads. */
+/** Keys the library's separator keydown acts on; their marks drive commit classification. */
 const INSPECTOR_INPUT_KEYS = {
   ArrowLeft: true, ArrowRight: true, Home: true, End: true, Enter: true,
 } satisfies Record<string, true>;

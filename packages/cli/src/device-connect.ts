@@ -261,7 +261,7 @@ export async function deviceStatusLine(): Promise<string> {
 
     if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
 
-    return 'No PC is connected to your account yet.';
+    return 'No computer is connected to your account yet.';
   } catch (err) {
     return `Device status unavailable: ${renderThrownChain({ cause: err })}`;
   }
@@ -272,7 +272,7 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
   switch (result.kind) {
     case 'already-running':
       return result.connected
-        ? { ok: true, message: 'This PC is already connected.' }
+        ? { ok: true, message: 'This computer is already connected.' }
         : { ok: false, message: 'The daemon is installed here but not connected. Run: kinu connect' };
     case 'cancelled':
       return { ok: false, message: 'Stopped waiting for the daemon. It keeps trying to connect; check: kinu desktop logs' };
@@ -281,7 +281,7 @@ export function describeConnectOutcome(result: ConnectDeviceResult, session: boo
         ok: true,
         message: session
           ? 'Connected for this session. The daemon stops when you leave the CLI.'
-          : 'Connected. This PC stays linked across sessions.',
+          : 'Connected. This computer stays connected after you leave the CLI.',
       };
   }
 }

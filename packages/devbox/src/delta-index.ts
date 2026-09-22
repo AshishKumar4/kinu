@@ -27,10 +27,8 @@ function validOffset(offset: number, size: number, previous: number): void {
     || offset >= size || offset <= previous) throw new Error('invalid delta index offset');
 }
 
-/** Fixed pages occupy sorted ranks. A subtree [lo, hi) has its root at
- * floor((lo+hi)/2), so no pointer can redirect a read or inflate its depth.
- * Page: offset u64le, source u8 (1 chunk, 2 hole), seven zero bytes,
- * chunk sha256, left sha256, right sha256, sixteen zero bytes. */
+/** Pages occupy sorted ranks; subtree [lo, hi) roots at floor((lo+hi)/2), so no pointer
+ *  can redirect a read or inflate its depth. */
 export function buildDeltaIndex(entries: readonly DeltaOverride[], size: number) {
   const bytes = Buffer.alloc(entries.length * DELTA_INDEX_PAGE_BYTES);
   let previous = -1;

@@ -432,6 +432,23 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
+  test('a tool error with no text reads as a tool error, not as a pair of quotes', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+
+    const turn = client.send('run a tool');
+
+    const request = await firstChatRequest(mock);
+
+    mock.reply(responseChunk(request.id, { type: 'tool-input-available', toolCallId: 't1', toolName: 'shell', input: {} }));
+    mock.reply(responseChunk(request.id, { type: 'tool-output-error', toolCallId: 't1', errorText: '' }));
+    mock.reply(responseChunk(request.id, {}, true));
+
+    const result = await turn;
+    expect(result.landed === 'turn' ? result.toolCalls[0]?.result : undefined).toBe('tool error');
+    await client.close();
+  });
+
   test('stop cancels the chat stream and waits for durable device cancellation', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

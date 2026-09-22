@@ -1,5 +1,3 @@
-// EventLog — publish + pending + defer + dismiss + query.
-// In-memory SQLite via bun:sqlite as the storage backend.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -8,10 +6,7 @@ import {
 } from '../src/events/hub/index';
 import type { SqlExec } from '../src/index';
 
-/** The page policy ASKED OF THE PUBLIC SEAM rather than restated here:
- *  `boundEventQuery` is what an untrusted caller crosses, so its answers
- *  ARE the default page and the ceiling. A restated literal would be a
- *  second copy of the policy that drifts silently. */
+/** Page policy is read from `boundEventQuery`, not restated, so the suite cannot drift from it. */
 const DEFAULT_PAGE = boundEventQuery().limit;
 
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
@@ -22,11 +17,7 @@ import { makeSqlExec } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** One hub database and the ONE actor whose rows it holds.
- *
- *  `EventLog` is actor-scoped now, so the handle is part of the fixture rather
- *  than of the reader: a log bound to a fabricated id publishes rows no
- *  production reader resolves. Bound through the production directory. */
+/** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
 interface Hub {
   readonly sql: SqlExec;
   readonly actor: ActorHandle;
@@ -244,21 +235,8 @@ describe('EventLog.traceEventCount', () => {
   });
 });
 
-// The KINU-N019 mechanism in the sibling log. `query` bound `limit` with
-// `?? 100`, which catches null and undefined and nothing else, so a caller's
-// `-1` reached SQLite as `LIMIT -1` — no limit at all.
-//
-// Measured against this file's own storage with no bound, 700 rows seeded and
-// a default page of 100: `query({ limit: -1 })` returned 700, `pending({ limit:
-// -1 })` returned 700, raw `LIMIT -1` returned 700, `LIMIT 0` returned 0, and
-// `LIMIT NaN` threw 'datatype mismatch'.
-//
-// Two layers, two questions, the same shape the run-event log uses. `query` and
-// `pending` own the log's invariant — only a finite positive integer may reach
-// SQL — and apply it to every caller, including the in-object reads that never
-// cross a boundary. `boundEventQuery` owns the ceiling on what an UNTRUSTED
-// caller may ask for.
-/** A log holding `count` chat events, which do not dedupe, so every one lands. */
+// KINU-N019: `query`/`pending` clamp every caller to a finite positive integer before SQL;
+// `boundEventQuery` owns the ceiling for untrusted callers.
 function seededLog(count: number): EventLog {
   const { sql, actor } = makeSql();
   initEventsHubTables(sql);
@@ -279,15 +257,12 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
   });
 
   test('zero raises to one row rather than reading an empty page', () => {
-    // `LIMIT 0` returns nothing, and nothing is how a reader learns the log is
-    // empty. A caller's typo would report a busy workspace as having no events.
+    // `LIMIT 0` returns nothing, which reads as an empty log.
     expect(seededLog(40).query({ limit: 0 })).toHaveLength(1);
   });
 
   test('a non-finite limit means unstated and takes the default', () => {
-    // The route parses `?limit=abc` with `parseInt`, which answers NaN, and
-    // SQLite refuses NaN as a datatype mismatch — a 500 on a read that should
-    // simply have been clamped.
+    // `?limit=abc` parses to NaN, which SQLite rejects as a datatype mismatch.
     const log = seededLog(DEFAULT_PAGE + 40);
     expect(log.query({ limit: Number.NaN })).toHaveLength(DEFAULT_PAGE);
     expect(log.query({ limit: Number.POSITIVE_INFINITY }))
@@ -308,9 +283,7 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
   });
 
   test('an in-object window wider than the untrusted ceiling is honoured', () => {
-    // No ceiling lives here. `query` is also the in-object read, and a fold that
-    // states its own window must get it; narrowing it to a stranger's allowance
-    // would answer a different question than the one asked.
+    // No ceiling here: `query` is also the in-object read, which gets the window it states.
     const log = seededLog(UNTRUSTED_CEILING + 60);
     expect(log.query({ limit: UNTRUSTED_CEILING + 60 }))
       .toHaveLength(UNTRUSTED_CEILING + 60);
@@ -335,10 +308,7 @@ describe('EventLog.pending admits only a finite positive integer limit', () => {
   });
 
   test('zero, non-finite and absent limits behave like the query read', () => {
-    // The pending default has no public accessor, so these assert the PROPERTY
-    // rather than the number: an unstated limit reads a page and not the table,
-    // and a non-finite limit is indistinguishable from an absent one. Stating
-    // the number here would put a second copy of the policy in the suite.
+    // No public accessor for the pending default, so assert the property, not the number.
     const seeded = DEFAULT_PAGE + 40;
     const log = seededLog(seeded);
     expect(log.pending({ limit: 0 })).toHaveLength(1);
@@ -367,9 +337,7 @@ describe('boundEventQuery is the one policy the boundary applies', () => {
   });
 
   test('it caps what the log alone would honour', () => {
-    // The direction that makes this the BOUNDARY rather than a second copy of
-    // the log's invariant: a window the in-object read is trusted with is
-    // refused to a stranger.
+    // A window the in-object read is trusted with is refused to a stranger.
     expect(boundEventQuery({ limit: 1e9 }).limit).toBe(UNTRUSTED_CEILING);
     expect(boundEventQuery({ limit: UNTRUSTED_CEILING + 60 }).limit)
       .toBe(UNTRUSTED_CEILING);
@@ -414,9 +382,7 @@ describe('EventLog skips corrupt payload rows', () => {
     };
 
     try {
-      // A cancelled decode is the caller's own abort, not a corrupt payload:
-      // it must throw with its class intact, never read as "no events". (The
-      // message names the seam's `doing`; the class rides on `code`.)
+      // A cancelled decode is the caller's abort: it throws with its class intact, never "no events".
       let pendingPropagated = false;
 
       try { log.pending(); } catch (error) {

@@ -19,8 +19,7 @@ const root = parseSlateProject({
   },
 });
 
-// The app hop target: its own bindings walk after the root's, and its BACK
-// binding names the root — a cycle the walk must not follow twice.
+// The hop target's BACK binding names the root: a cycle walked once.
 const digest = parseSlateProject({
   main: 'server.js',
   slate: {
@@ -43,15 +42,12 @@ const graph = slateCapabilityGraph({ slate: 'issues', workspace: 'my-workspace',
 
 const NO_RISK = { public: '', users: '' };
 
-/** The two risk strings of one member, so the expected structure reads the
- *  wording once per visibility instead of repeating each sentence. */
 function risk(member: { risk: { public: string; users: string } }): [string, string] {
   return [member.risk.public, member.risk.users];
 }
 
 test('the graph renders every binding with members, effects and risk text', () => {
   expect(graph.slate).toBe('issues');
-  // Root first, then the app hop target — and BACK does not walk issues again.
   expect(graph.slates).toEqual(['issues', 'digest']);
   expect(graph.bindings.map((binding) => [binding.slate, binding.name, binding.kind]))
     .toEqual([
@@ -103,7 +99,6 @@ test('the graph renders every binding with members, effects and risk text', () =
       },
     ],
   });
-  // No members declared: the whole table's member list.
   expect(graph.bindings[3]).toMatchObject({
     name: 'TODO', kind: 'tasks', capability: { kind: 'tasks' },
     members: [
@@ -253,7 +248,6 @@ test('a path-scoped binding offers only the file members it declares', () => {
     catalog: { executors: [{ namespace: 'workspace', members: ['readFile', 'exec'] }], mcp: [], tools: [], tiers: [], slates: { scoped } },
   });
 
-  // No declared members: the catalog's members, narrowed to the file five.
   expect(whole.bindings[0].members.map((member) => member.member)).toEqual(['readFile']);
 
   const declared = parseSlateProject({

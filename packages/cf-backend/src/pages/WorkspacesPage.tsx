@@ -1,11 +1,4 @@
-/**
- * Every workspace the account owns, each saying exactly one thing about its
- * state — `overviewHeadline`, the same rule the card reads — under a control
- * row that filters by that state. The list is the 56px line; the tiles are a
- * grid for an account with too many rows to scan. The choice is the owner's
- * and it sticks, in localStorage, because a view that resets on every visit
- * is a view nobody chose.
- */
+/** Every workspace, filtered by `overviewHeadline` state; list or tiles, persisted in localStorage. */
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
@@ -26,26 +19,23 @@ const ViewSchema = v.picklist(["list", "tiled"]);
 
 type View = v.InferOutput<typeof ViewSchema>;
 
-/** The stored choice, or the list when nothing valid was stored. Read once
- *  at mount: the page is the only writer, and it writes through `setView`. */
+/** Read once at mount: the page is the only writer, via `setView`. */
 function storedView(): View {
   const parsed = v.safeParse(ViewSchema, localStorage.getItem(VIEW_KEY));
 
   return parsed.success ? parsed.output : "tiled";
 }
 
-/** The filter's buckets, cut from the same priorities the chip states: what
- *  waits on the owner, what is moving, everything else. A workspace whose
- *  overview has not landed reads as idle rather than disappearing. */
+/** A workspace whose overview has not landed reads as idle rather than disappearing. */
 type Bucket = "needs" | "working" | "idle";
 
 const BUCKET_IDS = ["all", "needs", "working", "idle"] as const;
 
 const BUCKETS: Record<"all" | Bucket, { label: string; empty: string }> = {
   all: { label: "All", empty: "No workspaces" },
-  needs: { label: "Needs you", empty: "Nothing needs you" },
-  working: { label: "Working", empty: "Nothing working" },
-  idle: { label: "Idle", empty: "Nothing idle" },
+  needs: { label: "Needs you", empty: "Nothing is waiting on you" },
+  working: { label: "Working", empty: "No workspace is working right now" },
+  idle: { label: "Idle", empty: "No idle workspaces" },
 };
 
 const SEGMENTS = BUCKET_IDS.map((id) => ({ id, label: BUCKETS[id].label }));
@@ -122,14 +112,14 @@ export default function WorkspacesPage() {
         {error !== null && (
           <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
             <span className="min-w-0 truncate">{error}</span>
-            <button type="button" onClick={refresh} className="shrink-0 underline">retry</button>
+            <button type="button" onClick={refresh} className="shrink-0 underline">Retry</button>
           </div>
         )}
 
         {entries.length === 0 && error === null && (
           <div className="p-card px-5 py-8 text-center">
             <p className="p-row-text p-text-3">No workspaces yet.</p>
-            <Link to={APP_ROUTES.home} className="mt-2 inline-block p-t-control p-accent">Create one →</Link>
+            <Link to={APP_ROUTES.home} className="mt-2 inline-block p-t-control p-accent">Create one on Home →</Link>
           </div>
         )}
 

@@ -1,13 +1,5 @@
-/**
- * `tasks.*` — the agent's own task list, projected into the codemode
- * sandbox.
- *
- * A PROJECTION: every member calls the SAME `createTasksDispatcher` output
- * the native `tasks` tool is built from (tools/tasks-tool.ts), over the
- * SAME TaskListStore instance — a script and a direct tool call see and
- * mutate the identical list, never a shadow copy.
- */
-import type { CodemodeProvider } from './sandbox-contract';
+/** `tasks.*` in codemode: projects the native `tasks` dispatcher over the same TaskListStore. */
+import { codemodeText, type CodemodeProvider } from './sandbox-contract';
 import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
 import type { AgentConfigStore } from '../config/store';
@@ -42,10 +34,7 @@ const TYPES = `export declare const tasks: {
 };
 `;
 
-/** Build the codemode provider exposing `tasks.*` over one TaskListStore and
- *  one AgentConfigStore — constructed once by the caller (the same instances
- *  the native tool uses), not per call: unlike memory/release deps, neither
- *  store rebinds. */
+/** Stores are the native tool's instances, bound once: neither rebinds. */
 export function createTasksCodemodeProvider(
   taskList: TaskListStore,
   config: AgentConfigStore,
@@ -78,16 +67,17 @@ export function createTasksCodemodeProvider(
         planAllowed: true,
         description: 'Move one task to active/done/dropped by id.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
-          const status = v.safeParse(TaskStatusSchema, args[1]);
-          const id = v.safeParse(v.string(), args[0]);
+          const status = args[1] === undefined ? undefined : v.safeParse(TaskStatusSchema, args[1]);
 
-          if (!id.success) throw new KinuError('bad_input', 'tasks.update(id, status) takes the task id as a string');
+          if (status !== undefined && !status.success) {
+            throw new KinuError('bad_input', `tasks.update(id, status) takes status as one of ${TASK_STATUSES.join(', ')}`);
+          }
 
           return decodeJsonValue({
             value: run({
               action: 'update',
-              id: id.output,
-              status: status.success ? status.output : undefined,
+              id: codemodeText({ value: args[0], parameter: 'tasks.update(id)' }),
+              status: status?.output,
             }),
           });
         }),

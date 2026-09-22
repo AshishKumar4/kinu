@@ -1,15 +1,5 @@
-// A provider failure reached the user as `[object Object]`.
-//
-// `streamText` routes provider failures into the stream as an `error` chunk
-// whose payload is whatever the endpoint sent. The OpenAI-compatible provider
-// forwards the parsed body verbatim — a PLAIN OBJECT, not an Error — so
-// rethrowing it as `new Error(String(payload))` is where `[object Object]`
-// comes from. Separately the SDK's default `onError` is `console.error(error)`,
-// which dumps the same failure raw to the terminal next to our own rendering
-// of it.
-//
-// These pin both: the thrown message carries the provider's words, and the
-// turn does not write the payload to the console behind our back.
+// Provider failures surface the provider's facts, not `[object Object]`, and the SDK's default
+// `onError` does not dump the payload to the console.
 import { stepCountIs } from 'ai';
 import { describe, test, expect, spyOn } from 'bun:test';
 import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
@@ -28,7 +18,6 @@ interface CircularProviderError {
   self?: CircularProviderError;
 }
 
-/** OpenAI-shaped in-band stream failure: 200 OK, then an error object. */
 function inBandErrorModel(error: JsonValue | Error): LanguageModel {
   return new MockLanguageModelV3({
     doStream: async () => ({
@@ -100,10 +89,7 @@ describe('describeProviderError', () => {
     expect(describeProviderError({ cause: error })).toContain('models.dev provider was not found');
   });
 
-  // KINU-043. The whole error object stringified — `'{"status":402,"body":"nope"}'`
-  // — puts whatever an SDK or a gateway attached into the user's terminal, and a
-  // gateway attaches the request it failed on. The keys are the diagnosis; the
-  // values are the leak.
+  // KINU-043: an unrecognised payload is described by its keys; values can leak the request.
   test('names the fields of an unrecognised payload instead of stringifying it', () => {
     expect(describeProviderError({ cause: { status: 402, body: 'nope' } }))
       .toBe('unrecognised provider error (fields: status, body) (HTTP 402)');
@@ -117,8 +103,6 @@ describe('describeProviderError', () => {
       url: 'https://example.invalid/v1/chat/completions',
       requestBodyValues: {},
       statusCode: 500,
-      // What a gateway really answers when it fails before the model: an HTML
-      // page, or its own echo of the request — headers included.
       responseBody: '<html><body>502 Bad Gateway — upstream POST body: {"api_key":"sk-live-9f3"}</body></html>',
     });
 
@@ -193,10 +177,7 @@ describe('describeProviderError', () => {
     expect(described).not.toContain('[object Object]');
   });
 
-  // KINU-043. The boundary message is the closed code plus the structured
-  // facts and one generic sentence; the provider's own words — where a
-  // credential echo or an injected instruction would ride — stay on the
-  // diagnostics record only.
+  // KINU-043: the provider's own words stay on the diagnostics record, out of the message.
   test('the boundary message carries facts, not the provider\'s prose', () => {
     const logger = createRecordingLogger();
     const restore = setDiagnosticsSink(logger);
@@ -240,9 +221,6 @@ describe('runChat provider failures', () => {
     expect(thrown.message).toContain('billing_not_active');
   });
 
-  // KINU-043. The boundary message carries the closed code and the structured
-  // facts; the provider's own words live on `cause` and the diagnostics
-  // record — never in the message a terminal or chat surface renders.
   test('an Error payload crosses as a classified failure without its prose in the message', async () => {
     const cause = new Error('context length exceeded');
     const thrown = await rejectionOf(() => runToCompletion(inBandErrorModel(cause)));
@@ -260,8 +238,6 @@ describe('runChat provider failures', () => {
     try {
       await rejectionOf(() => runToCompletion(inBandErrorModel({ message: 'nope', code: 'billing_not_active' })));
       expect(consoleError).not.toHaveBeenCalled();
-      // The boundary emitted its own record: the provider's words landed on
-      // the diagnostics sink, not the terminal.
       const emitted = logger.emitted.find((r) => r.event === 'provider.request_failed');
       expect(emitted?.fields.detail).toBe('nope (billing_not_active)');
     } finally {

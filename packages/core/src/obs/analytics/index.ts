@@ -1,9 +1,4 @@
-/**
- * Fleet analytics: the dataset schemas, the fire-and-forget writer, the
- * diagnostics sink adapter, and the weighted-SQL read shapes. Platform-shaped
- * but binding-free — a dataset arrives as the structural {@link
- * AnalyticsDatasetSink}, so this layer compiles and runs anywhere `obs` does.
- */
+/** Binding-free: datasets arrive as the structural {@link AnalyticsDatasetSink}. */
 export {
   boundaryOf,
   eventFamily,

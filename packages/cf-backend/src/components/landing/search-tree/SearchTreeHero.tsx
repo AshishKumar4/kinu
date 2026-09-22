@@ -4,21 +4,16 @@ import { SearchTree, type SearchTreeFrame } from '@kinu.run/core/web/hero-art';
 import { mountLivingCanvas, type LivingCanvas } from './living-canvas';
 import { keepOutOf, type FrameTimes } from './stage';
 
-/** Seeded apart from the app background's on purpose: the two artworks never rhyme. */
+/** Seeded apart from the app background's so the two artworks never rhyme. */
 const HERO_SEED = 417;
 
-/** The search a reduced-motion visitor sees: this far in, evolved once, still. */
 const STATIC_SECONDS = 14;
 
 const STATIC_STEP = 1 / 30;
 
-/** After this much simulated time the first wave has grown, scored, and pruned. */
 const SETTLED_AT = 5;
 
-/** What a gate can read off the live hero: which renderer took the canvas,
- *  and the last frames' cost. `work` is the milliseconds one tick spent in
- *  the simulation and the renderer's encode; `interval` is the wall time
- *  between consecutive ticks. */
+/** `work`: ms one tick spent in simulation plus encode; `interval`: wall time between ticks. */
 export interface SearchTreeHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
@@ -31,8 +26,6 @@ declare global {
   }
 }
 
-/** The search's own facts, on the canvas for a gate to read; a still frame
- *  is reported as settled, since it is the evolved picture. */
 function facts(frame: SearchTreeFrame, canvas: HTMLCanvasElement, still: boolean): void {
   const pruned = String(frame.pruned);
   const hidden = String(frame.hidden);
@@ -56,7 +49,6 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
     create: (aspect) => new SearchTree({ seed: HERO_SEED, aspect }),
     still: { seconds: STATIC_SECONDS, step: STATIC_STEP },
     resolution: 1,
-    // The headline's box, so no branch grows behind the copy.
     fit: (tree) => tree.setKeepOut(keepOutOf(host.getBoundingClientRect(), stage.querySelector('h1')?.getBoundingClientRect() ?? null)),
     shown: facts,
     events: { failed: 'landing.hero_webgpu_failed', faulted: 'landing.hero_webgpu_faulted', fallbackFailed: 'landing.hero_fallback_failed' },
@@ -114,18 +106,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
   };
 }
 
-/**
- * The hero's centrepiece: the living search tree, full-bleed behind the copy.
- * The host is a positioned box the mounted canvas fills. Three masks keep
- * the type readable over it, and they multiply: left to right the art
- * dissolves under the copy's column and is whole only past it; top to
- * bottom it fades at the edges; and a radial well centred on the headline
- * dissolves whatever the keep-out still let near it, so the region under
- * the copy is faint by construction whatever the simulation does. The
- * veil blurs what sits under the copy and leaves the right edge sharp.
- * Pointer input is read from the parent stage, so the copy and its links
- * stay clickable while the tree bends to the cursor.
- */
+/** Pointer input is read from the parent stage so the copy and its links stay clickable. */
 export function SearchTreeHero(): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
 

@@ -1,12 +1,4 @@
-/**
- * The canonical conversation store's flat reads: the fork-cut preflight, the
- * status count, the turn pair every grader attributes from, and the drain
- * answers a recovery finishes a reply with.
- *
- * Everything below writes through the canonical writers — `SessionHistory`
- * and the transcript it hands out — so a reader that drifted from what a turn
- * actually records goes red here rather than in production.
- */
+/** Canonical conversation store flat reads, seeded through the canonical writers. */
 
 import { describe, test, expect } from 'bun:test';
 import { answersForDrainTurns, conversationCount, conversationTurnPair, forkPointExists } from '../src/identity/conversation-store';
@@ -17,9 +9,6 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
 import { present } from '@kinu.run/test-utils';
 
-/** A workspace, the actor its transcript belongs to, and the canonical writers
- *  every seed below goes through — the entries are keyed by actor, so a
- *  fixture handing back the database alone is a chat no reader can answer for. */
 interface Fixture extends TestWorkspace {
   readonly actor: ActorHandle;
   readonly history: SessionHistory;
@@ -38,7 +27,6 @@ function setup(): Fixture {
   return { ...ws, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** One completed turn: the ask, then the answer parented on it. */
 async function turn(
   history: SessionHistory,
   ids: { ask: string; answer: string },
@@ -75,7 +63,6 @@ describe('forkPointExists — the cut preflight', () => {
     expect(forkPointExists(s.sql, s.actor, 'a1')).toBe(true);
     expect(forkPointExists(s.sql, s.actor, 'u1')).toBe(true);
     expect(forkPointExists(s.sql, s.actor, 'nobody')).toBe(false);
-    // A search trajectory is a different tree, and its ids are not cut points.
     expect(forkPointExists(s.sql, s.actor, 'm-a')).toBe(false);
   });
 });
@@ -99,7 +86,7 @@ describe('conversationTurnPair — what a grader attributes from', () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
 
-    // The ask is not a turn: a turn is named by the answer it produced.
+    // A turn is named by the answer it produced.
     expect(await conversationTurnPair(s.transcript, 'u1')).toBeUndefined();
     expect(await conversationTurnPair(s.transcript, 'nobody')).toBeUndefined();
   });
@@ -136,14 +123,12 @@ describe('conversationTurnPair — what a grader attributes from', () => {
 
     const pair = await conversationTurnPair(s.history.transcript('mcts'), 'm-a');
     expect(pair).toMatchObject({ sessionId: 'mcts', request: 'score this', response: 'a score' });
-    // …and the default chat's reader cannot see it.
     expect(await conversationTurnPair(s.transcript, 'm-a')).toBeUndefined();
   });
 });
 
 describe('answersForDrainTurns — what a recovery finishes a reply with', () => {
-  /** The enqueue seam's shape: a user entry stamped with the drain turn it
-   *  came from, which is the only link an answer can be found through. */
+  /** Stamped with the drain turn it came from, the only link to its answer. */
   async function drainAsk(s: Fixture, id: string, drainTurnId: string): Promise<void> {
     const reference = s.history.messages.insert(
       await s.history.messages.prepare({ role: 'user', content: `ask for ${drainTurnId}` }, id), 'input');

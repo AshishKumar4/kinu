@@ -1,20 +1,21 @@
 # Kinu turn extensions
 
 Extensions observe or extend one agent turn without importing engine internals.
-Both backends use one hook path. CLI uses `runChat`. Cloud uses `ActorAgent`'s Think hook
-bridge. Internal consumers and plugins use the same path.
+Both backends drive them the same way: `ActorSession.execute`
+(`packages/core/src/orchestrator/actor-session.ts`) builds a per-turn
+`ExtensionHost` and runs the turn through `runChat`. Internal consumers and
+plugins use the same path.
 
 [EXTENSIBILITY.md](./EXTENSIBILITY.md) lists the plug-in points. This document
-covers that path: hook signatures, order, internal registrants, and the cloud
-bridge. The source is `packages/core/src/extension.ts`, exported from `@kinu.run/core`.
-
-`packages/core/src/extension.ts` defines `KinuExtension` and `ExtensionHost`.
-`packages/compaction/src/extension.ts` implements it with
+covers the hook signatures, their order, the internal registrants, and how the
+cloud backend wires them. `packages/core/src/extension.ts` defines
+`KinuExtension` and `ExtensionHost`, exported from `@kinu.run/core`.
+`packages/compaction/src/extension.ts` implements one with
 `createCompactionExtension`, named `compaction`.
 
 ## The shape
 
-An extension is optional hooks plus a stable error-visible `name`.
+An extension is a set of optional hooks plus a stable `name` that errors report.
 
 ```ts
 import { ExtensionHost, type KinuExtension } from '@kinu.run/core';
@@ -28,19 +29,22 @@ const logger: KinuExtension = {
 };
 ```
 
-- `registerTools(): ToolSet` contributes tools while the set builds.
-  `ExtensionHost.tools()` calls it once. Caller tools win. Extension collisions
-  throw and name both extensions.
-- `prepareStep(ctx): ModelMessage[] | undefined` replaces one step's messages,
-  or returns `undefined` unchanged. Extensions chain in registration order. The
-  `kinu.inbox` drain splices a mid-turn send at the step boundary through it.
-  `composePrepareStep` (`core/src/prompting/prepare-step.ts`) runs extensions
-  before cache tails.
-- `transformContext(ctx): Promise<ModelMessage[] | undefined>` runs once before
-  streaming. `ctx` carries `sessionKey`, durable `messages`, `system`,
-  `contextWindow`, optional `providerReportedTokens`, and
-  `trigger: 'auto' | 'force'`. It chains. It logs and skips a throwing extension.
-  It never sees turn-local or per-step dynamic context.
+- `registerTools(): ToolSet` contributes tools to the turn.
+  `ExtensionHost.tools()` calls it once per extension. Caller tools win over
+  extension tools. Two extensions registering the same name throw, and the
+  error names both.
+- `prepareStep(ctx)` returns a replacement message array for one step, or
+  `undefined` to leave it unchanged. It may be sync or async. Extensions chain
+  in registration order. The `kinu.inbox` extension uses it to splice a mid-turn
+  send in at the step boundary. `composePrepareStep`
+  (`core/src/prompting/prepare-step.ts`) runs the extension chain before the
+  cache tails.
+- `transformContext(ctx): Promise<ModelMessage[] | undefined>` runs once per
+  turn assembly, before streaming. `ctx` carries `sessionKey`, the durable
+  `messages`, `system`, `contextWindow`, optional `providerReportedTokens`,
+  `trigger: 'auto' | 'force'` and an optional `abortSignal`. It chains. A
+  throwing extension is logged and skipped. It never sees turn-local or
+  per-step dynamic context.
 
 ## Wiring
 
@@ -69,69 +73,63 @@ onTurnStart
 onTurnEnd
 ```
 
-`registerTools` is outside that sequence. `runChat` in `core/src/chat.ts` and
-`ActorAgent.beforeTurn` in `cf-backend/src/actor-agent.ts` invoke it before
-`assembleTurnMessages`, which fires `onTurnStart`. Its position is not
-guaranteed. Other hooks run in registration order. `prepareStep` and
-`transformContext` chain outputs.
+`registerTools` sits outside that sequence. `runChat` (`core/src/chat.ts`)
+calls `extensions.tools()` before `assembleTurnMessages`, which fires
+`onTurnStart`, but that position is not a guarantee. Every other hook runs in
+registration order, and `prepareStep` and `transformContext` chain their
+outputs.
 
 ## Internal consumers
 
-Both backends register these in order.
+Both backends register these, in this order.
 
 1. `compaction` (`createCompactionExtension` in `@kinu.run/compaction`) is the
    default `transformContext` registrant. It runs better-compact once per turn
    over shared stores and keeps raw transcripts in
    `.kinu/compaction/<sessionKey>/<rangeHash>.md`. Its plan and token trigger
-   share `compaction_state`. `onOutcome` resets dynamic context for `planned`
-   and `invalidated`, never for a byte-stable replay.
+   share `compaction_state`. Its `onOutcome` callback resets dynamic context on
+   `planned` and `invalidated`, never on a byte-stable replay.
 2. `kinu.inbox` (`AgentOrchestrator.turnExtension` in
-   `core/src/orchestrator/agent-orchestrator.ts`; registered per turn in
-   `core/src/orchestrator/actor-session.ts` on the CLI, forwarded on cloud in
-   `cf-backend/src/actor-agent.ts`) watches calls for mechanical steering. It
-   splices a mid-turn send into the running turn's next step
-   (`core/src/orchestrator/inbox.ts`). Pending user messages drain as ONE
-   durable user message, before the event text in the same splice. Core marks
-   landed rows with `STEER_METADATA_KEY` (`kinuSteer`) and
-   `STEER_STEP_METADATA_KEY` (`kinuSteerAtStep`).
+   `core/src/orchestrator/agent-orchestrator.ts`) watches tool calls for
+   mechanical steering. `ActorSession.execute` registers it on every turn, after
+   the backend's own extensions. It splices a mid-turn send into the running
+   turn's next step (`core/src/orchestrator/inbox.ts`). Pending user messages
+   drain as one durable user message, placed before the event text in the same
+   splice, so event indices cannot shift replayed history. Core marks landed
+   rows with `STEER_METADATA_KEY` (`kinuSteer`) and `STEER_STEP_METADATA_KEY`
+   (`kinuSteerAtStep`).
 
-User rows precede event text inside a splice so event indices cannot shift
-replayed history.
+## The cloud side
 
-## The cloud bridge
+`ActorAgent` (`cf-backend/src/actor-agent.ts`) holds one `ExtensionHost` for
+the life of the object, with `compaction` registered on it.
+`OrchestratorAgent` is its only subclass. Each turn, the actor hands
+`this.extensions.list()` to `ActorSession.execute`, which composes that turn's
+host over them and adds `kinu.inbox`, exactly as the CLI does with its own
+compaction extension (`cli-backend/src/local-session.ts`).
+`emitTurnStart` and `runTransformContext` both run in `assembleTurnMessages`
+(`core/src/orchestrator/turn-context.ts`), so backend ordering cannot drift.
 
-`ActorAgent` hosts one persistent `ExtensionHost` per activation.
-`OrchestratorAgent` extends it. Every other actor is a logical row on the same
-host and receives the same hooks, compaction, and event injection.
-`packages/cf-backend/package.json` depends on `@cloudflare/think` at
-`^0.17.0`, resolved to 0.17.0 in this worktree.
+On cloud, the settled turn also owes a `turn_end_extensions` terminal effect.
+It replays `emitTurnEnd` on the actor's host from the recorded answer row, so a
+turn cut by eviction still announces its end. The CLI owes no such row: its
+per-turn host dies with the turn.
 
-| Think hook | ExtensionHost |
-| --- | --- |
-| `beforeTurn` (`cf-backend/src/actor-agent.ts:5584`) | `emitTurnStart`, then awaited `runTransformContext`; `ExtensionHost.tools()` folded into `TurnConfig.tools` and `activeTools` |
-| `beforeStep` (`cf-backend/src/actor-agent.ts:6021`) | `composePrepareStep`: the extension chain, then the turn's cache-breakpoint plan |
-| `beforeToolCall` / `afterToolCall` (`cf-backend/src/actor-agent.ts:6157`, `:6166`) | `emitToolCall` / `emitToolResult` |
-
-`emitTurnStart` and `runTransformContext` run in shared
-`assembleTurnMessages` at `core/src/orchestrator/turn-context.ts:161-168`, so
-backend ordering cannot drift.
-
-Contributed tools pass two filters. `extensionTools` in
-`cf-backend/src/actor-agent.ts` drops names already in the turn or MCP set
-before the merge. `resolveAgentTurnProfile()` then supplies
-`profile.allowedTools`. `effectiveActiveTools` and `effectiveTools` keep only
-allowed names.
+Contributed tools pass two filters on cloud. `extensionTools` in
+`ActorAgent.assembleTurn` drops names already in the turn or MCP set.
+`resolveAgentTurnProfile()` then supplies `profile.allowedTools`, and
+`effectiveActiveTools` and `effectiveTools` keep only allowed names.
 
 ## Notes
 
 - Hooks may be async. The engine awaits them on the hot path.
-- `onToolResult.result` is full rendered output, shared with the streamed
-  `tool-result` event and durable turn record. It stays unbounded. Turn
-  steering hashes it as call identity, and a head slice could merge distinct
-  results. Bound your own render with `evidenceWindow`. Text within a positive
-  character budget passes unchanged. Otherwise the render keeps both ends and
-  names the omitted middle.
-- Only the mutable scaffold replaces inference. It works through
-  `scaffoldChatTransform` in `core/src/scaffold/chat-transform.ts` (the
-  `_transformInferenceResult` seam), called from `core/src/orchestrator/actor-turn.ts`.
-  from `core/src/orchestrator/actor-turn.ts`.
+- `onToolResult.result` is the full rendered output, shared with the streamed
+  `tool-result` event and the durable turn record. It stays unbounded because
+  turn steering hashes it as call identity, and a head slice could merge
+  distinct results. Bound your own render with `evidenceWindow`
+  (`core/src/prompts/evidence-window.ts`): text within a positive character
+  budget passes unchanged, and longer text keeps both ends and names the
+  omitted middle.
+- Only the mutable scaffold replaces inference. It does so through
+  `scaffoldChatTransform` (`core/src/scaffold/chat-transform.ts`), called from
+  `startActorTurn` in `core/src/orchestrator/actor-turn.ts`.

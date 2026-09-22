@@ -1,36 +1,19 @@
-/**
- * The one device-roster read for the web UI.
- *
- * Three surfaces ask the same question — the Devices page, the
- * Environment tab's offline device, and the connect panel waiting for a
- * machine to arrive — and one read model answers all three. A `listDevices()`
- * call per surface means hand-rolled `setInterval` loops and a mount-time fetch
- * that never refreshes and swallows its rejection. On the app's own
- * `useAsyncResource`, a failed poll keeps the last roster AND says it
- * failed, which a swallowed catch cannot.
- */
 import type { Revalidate, AsyncResourceControl } from "./use-async-resource";
 import { useAsyncResource } from "./use-async-resource";
 import { listDevices, type UserDevice } from "@/lib/user-api";
 import type { DeviceUpdateState } from "@kinu.run/core";
 
-/** The badge beside a device's link state, for the update states worth
- *  a word. `behind` is the hub's own reading (`deviceUpdateState`), and the
- *  same reading is what makes it push the update — so the badge names what
- *  the hub is doing, not a hint the owner has to act on. `unstamped` is a
- *  source install: a dev build, by definition never the served build. */
+/** `behind` is the hub's own reading and triggers its push; `unstamped` is a source install. */
 export const DEVICE_UPDATE_COPY = {
   behind: "update available",
   off: "update off",
   unstamped: "dev build",
 } satisfies Partial<Record<DeviceUpdateState, string>>;
 
-/** A daemon that starts flips `connected` within seconds, and the connect
- *  panel waits on exactly that flip, so the roster keeps one live cadence. */
+/** The connect panel waits on a daemon's `connected` flip, so the roster keeps one live cadence. */
 export const DEVICE_ROSTER_POLL_MS = 5_000;
 
-/** Module scope, because `useAsyncResource` keys its timer effect on this
- *  identity: a fresh closure per render would rearm the poll every render. */
+/** Module scope: `useAsyncResource` keys its timer effect on this identity. */
 const keepPolling: Revalidate<UserDevice[]> = () => DEVICE_ROSTER_POLL_MS;
 
 export function useDeviceRoster(): AsyncResourceControl<UserDevice[]> {

@@ -1,21 +1,6 @@
 /**
- * What an exploration run was DISPATCHED with — the knobs of each half it has.
- *
- * `ForkRunSummary` answers "when did it search, and what did that run leave
- * behind", deliberately stopping at the summary. This is the layer that says what
- * the run was configured with, and it has the same shape for the same reason: a
- * run is not one of two dispatch policies. A search has an expansion budget, a
- * branching factor, a depth cap and an exploration constant; journalled nodes have
- * a strategy label and a count. A swarm whose `unit` is an agent has BOTH, and
- * reading it as one policy is what made a swarm's search knobs unreachable — the
- * canvas keyed these by root id, so the transcript entry simply overwrote the
- * search entry and every swarm reported a strategy label and no budget at all.
- *
- * Read from what the dispatch already persisted, so nothing here can drift from
- * what actually ran: `mcts_search_runs.config_json` is the resolved config the
- * engine that ran checkpointed, `mcts_search_runs.judge_samples_realised` is the
- * ensemble a candidate was OBSERVED to sample, and `head_journal.merge_strategy`
- * is the strategy every journalled node of a run was spawned under.
+ * An exploration run's dispatch parameters, per half: search (`mcts_search_runs`) and journalled
+ * nodes (`head_journal`). An agent-unit swarm has both. Read from persisted dispatch state only.
  */
 
 import * as v from 'valibot';
@@ -23,66 +8,36 @@ import { tolerate } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 
-/**
- * A search's dispatch parameters. `budget` is the expansion budget it was given;
- * the remaining budget and the iterations already spent live on the ledger row and
- * are a progress reading, not a parameter.
- */
+/** A search's dispatch parameters; remaining budget is progress, not a parameter. */
 export interface SearchRunParams {
   readonly budget: number;
-  /** Branches expanded per expansion. */
   readonly branches: number;
   readonly maxDepth: number | null;
-  /** The UCT exploration constant this search selected with. */
+  /** UCT exploration constant. */
   readonly explorationWeight: number | null;
-  /** Judge samples per branch the run ASKED for. */
   readonly judgeSamplesRequested: number | null;
   /**
-   * Judge samples a branch of this run was OBSERVED to actually sample — the
-   * smallest ensemble any candidate reached, recorded by the engine that ran it.
-   *
-   * The two spend knobs share one per-evaluation call pool, so a request the pool
-   * cannot fund is realised lower (mcts/evaluation.ts judgeCallBudget) — a run that
-   * asked for 20 and ran 3 says so here rather than reading as a run that ran 20.
-   *
-   * Null means no candidate's ensemble was ever observed: a run that scored by
-   * something other than a judge, or one whose every evaluation short-circuited
-   * before the ensemble. Null is not the same claim as equal to the request, and
-   * this number is never predicted from the knobs — the pool arithmetic gives the
-   * CEILING the request was clamped to, which a run that short-circuits does not
-   * reach.
+   * Smallest ensemble any candidate was observed to sample; may be below the request when the call
+   * pool cannot fund it (mcts/evaluation.ts judgeCallBudget). Null when never observed; never predicted.
    */
   readonly judgeSamplesRealised: number | null;
-  /** The trusted work mode the search ran under. */
   readonly mode: string | null;
 }
 
-/** The journalled nodes' parameters. There is no budget and no ranking here. */
 export interface TranscriptRunParams {
-  /** The label every node of this run was journalled under — how a fork's heads
-   *  were to be combined, and the derived settle in head vocabulary for a swarm. */
+  /** How a fork's heads combine; for a swarm, the derived settle in head vocabulary. */
   readonly mergeStrategy: string;
-  /** Nodes the run journalled. */
   readonly branches: number;
 }
 
-/**
- * One run's parameters: the halves it has, and null for a half it does not.
- *
- * BOTH null is not a value this read model produces — such a run is absent from
- * the result, which is what "parameters no longer recorded" means to the surface.
- */
+/** One run's halves, null for a half it lacks. A run with neither is omitted. */
 export interface ForkRunParams {
   readonly rootId: string;
-  /** The search half, or null when no ledger row survives: a settled search older
-   *  than the ledger's retention has none (the store prunes them), and the surface
-   *  says so rather than showing a plausible fiction. */
+  /** Null when no ledger row survives retention pruning. */
   readonly search: SearchRunParams | null;
   readonly transcripts: TranscriptRunParams | null;
 }
 
-/** The knobs a search's own checkpoint records — the subset the surface shows,
- *  read off the persisted config the engine wrote. */
 const ConfigSchema = v.object({
   budget: v.number(),
   branches: v.number(),
@@ -92,20 +47,9 @@ const ConfigSchema = v.object({
   judgeSamples: v.optional(v.number()),
 });
 
-/**
- * One search's dispatch parameters, or null when its checkpoint cannot be read as
- * a config.
- *
- * The JSON is decoded and validated in the same step it is consumed, so no
- * loosely-typed value ever leaves this function: a caller gets the domain type or
- * nothing. Null means "not recoverable", which the surface reports as such — a
- * number shown beside a run must be the number that run used, and inventing
- * defaults here would make an unrecorded knob indistinguishable from a knob left
- * at its default.
- */
+/** Null when the checkpoint cannot be read as a config; defaults are never invented. */
 function searchParams(configJson: string, realised: number | null): SearchRunParams | null {
-  // A checkpoint column that is not JSON is the one failure this read treats as a
-  // value; any other failure is a fault in the read itself and propagates.
+  // Only non-JSON is tolerated as a value; any other failure propagates.
   const decoded: unknown = tolerate(() => JSON.parse(configJson), 'malformed-input');
 
   if (decoded === undefined) return null;
@@ -125,12 +69,7 @@ function searchParams(configJson: string, realised: number | null): SearchRunPar
   };
 }
 
-/**
- * Dispatch parameters for the named runs, in one read per store.
- *
- * One entry per root id, carrying both halves where the run has both. Runs with
- * neither half recoverable are simply absent.
- */
+/** Dispatch parameters for the named runs, one read per store. */
 export function readForkRunParams(
   sql: SqlExecutor,
   actor: ActorHandle,
@@ -155,9 +94,7 @@ export function readForkRunParams(
     if (params) search.set(row.root_id, params);
   }
 
-  // A run's strategy label is stamped on every node it journalled, so the run's is
-  // any of them; nodes are counted the way the run list counts branches, excluding
-  // the row a recursive sub-split's parent head owns.
+  // Strategy is stamped on every node; the count excludes the row a sub-split's parent head owns.
   const journals = sql<{ root_id: string; merge_strategy: string; heads: number }>`
     SELECT root_id,
            MAX(merge_strategy)                             AS merge_strategy,

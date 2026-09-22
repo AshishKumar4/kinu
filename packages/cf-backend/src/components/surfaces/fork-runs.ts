@@ -1,23 +1,6 @@
 /**
- * Exploration runs, as the surface reads them.
- *
- * Two jobs, both pure enough to test without a DOM:
- *
- *  1. **The adapters.** A search is a tree whatever its axes resolved to, so the
- *     two stores are folded into ONE node resolution here and the renderer never learns
- *     which store a tree came from. `search_nodes` is the tree the engine selected
- *     down; `head_journal` is one row per node, carrying the reason that node
- *     exists. An agent-unit search writes BOTH, so neither store is chosen by a
- *     tag — the search rows are the tree wherever there are any, and the journal
- *     answers the questions the rows cannot.
- *
- *  2. **The revalidation policy.** Nothing pushes either store to the client:
- *     both are written row by row as the search runs, and a view that loads once
- *     renders the first instant of it and then lies for the rest. An open tab
- *     always revalidates — fast while work is visibly live, at a slow keep-fresh
- *     cadence otherwise. Never zero: a search can start from a detached job, a
- *     drain or an autonomous turn, none of which stream through this tab's chat
- *     socket.
+ * Both stores (`search_nodes`, `head_journal`) fold into one node resolution; an agent-unit search writes both.
+ * An open tab always revalidates: a search can start from a detached job that never streams through this socket.
  */
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
@@ -29,21 +12,13 @@ import { explorationForkTree, swarmResolutionOf } from "@kinu.run/core";
 import type { ForkNode, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 
-/** A settled Pareto front, as the canvas row carries it. Null on the row for
- *  every run that settled to one number. */
 export type ExplorationFrontier = NonNullable<ExplorationCanvasRun["frontier"]>;
 
 const FORK_RUN_LIMIT = 30;
 
-/** One allocation for a caller with no activity channel — the CLI-facing reads
- *  and every test that only wants the polled halves. */
 const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/**
- * One canvas page indexed by run id. A null pick means the entry carries no
- * such half — a summary-only run, a preset composition with no recorded axes —
- * and reads as absence rather than as a row.
- */
+/** A null pick means the entry carries no such half and reads as absence. */
 function canvasIndex<T>(
   entries: readonly ExplorationCanvasRun[] | null,
   pick: (entry: ExplorationCanvasRun) => T | null,
@@ -59,22 +34,15 @@ function canvasIndex<T>(
   return byRoot;
 }
 
-/** Matches the run timeline's mid-turn cadence: fast enough to read as live,
- *  slow enough that a long fork is not a poll storm. */
 export const FORK_REVALIDATE_MS = 1500;
 
-/** The idle cadence: one cheap RPC while the tab is actually open — the price
- *  of never again showing a settled snapshot as if it were the present. */
 export const FORK_IDLE_REVALIDATE_MS = 15_000;
 
-/** A fork is still being written until it leaves `running` — branches, scores,
- *  token counts and the merge all land while it is. */
 export function hasLiveForkRun(runs: readonly ForkRunSummary[] | null): boolean {
   return runs?.some((run) => run.status === "running") === true;
 }
 
-/** All workspace activity that can create or continue a fork. Detached jobs
- * do not stream through the chat connection, so they must count independently. */
+/** Detached jobs do not stream through the chat connection, so they count independently. */
 export function hasActiveForkWork(
   isStreaming: boolean,
   backgroundJobs: readonly BackgroundJob[],
@@ -83,24 +51,8 @@ export function hasActiveForkWork(
 }
 
 /**
- * Roots that just moved and whose movement the polled list cannot explain.
- *
- * The canvas draws its bands by walking the POLLED list and looking up each
- * run's tree, so a live tree or a live journal write for a root the list does not
- * carry draws nothing at all — and the list is on its idle clock exactly when
- * this matters, because a search it has never heard of and a search it believes
- * is over are both searches it has no reason to poll fast for.
- *
- * Two shapes, and the second is not about new searches. A root the list has
- * NEVER heard of is a new search. A root it holds in a state that is not
- * `running` is a search it believes is finished — which is what a RESUMED run
- * looks like the instant it re-enters, because a resume reuses its rootId and
- * flips a reclaimed row back to running.
- *
- * Sorted, so a caller can use the answer as a memo key and re-read once per
- * CHANGE of this set rather than once per journal write. `null` entries mean the
- * list has not loaded, and nothing is unexplained until there is an answer to
- * contradict.
+ * Roots the polled list cannot explain: never listed (a new search) or listed as not running (a resume reuses its rootId).
+ * Sorted for use as a memo key; `null` entries mean the list has not loaded.
  */
 export function unexplainedForkRoots(
   entries: readonly ExplorationCanvasRun[] | null,
@@ -127,14 +79,6 @@ export function selectForkRun(
   return runs[0] ?? null;
 }
 
-/**
- * How long before the fork list re-reads.
- *
- * `hasActiveWork` is everything the workspace can see in flight — a streaming
- * chat turn or a running background job. Either counts even with nothing
- * loaded yet: a fork can start at any step, and the run that appears is
- * exactly what the operator opened the tab for.
- */
 export function forkRunsRevalidateMs(
   runs: readonly ForkRunSummary[] | null,
   hasActiveWork: boolean,
@@ -142,20 +86,6 @@ export function forkRunsRevalidateMs(
   return hasActiveWork || hasLiveForkRun(runs) ? FORK_REVALIDATE_MS : FORK_IDLE_REVALIDATE_MS;
 }
 
-/**
- * The single live run-list resource. `MCTSExplorer` drills into ONE run, so the
- * list is all it needs; the embedded canvas uses {@link useExplorationCanvas},
- * which also brings every tree, its journal and its params.
- *
- * `listForkRuns` is PAGED and takes a `PageRequest`. This read passed the limit as
- * a bare number and typed the answer as an array, which is two silent failures in
- * one line: `(30)?.limit` is undefined so the server answered its own default page
- * size and the requested thirty was discarded, and the `Page` that came back was
- * then handed to `runs?.some(...)` — a `Page` has no `some`, so the revalidation
- * clock threw on the first successful load against a real server. The gallery's
- * socket stub answered `[]` for every `get*`/`list*`, which is an array, so the
- * frames could not see it.
- */
 export function useLiveForkRuns(
   rpc: Rpc,
   isStreaming: boolean,
@@ -184,38 +114,21 @@ export interface ExplorationCanvasInput {
   isStreaming: boolean;
   backgroundJobs: readonly BackgroundJob[];
   liveTrees: ReadonlyMap<string, ForkNode>;
-  /** Per-branch write counters from the `head_activity` broadcast. Read here
-   *  only as a SIGNAL that some search moved — the rows come from the read
-   *  below, never from the wire. */
+  /** Read only as a signal that some search moved; rows come from the read, never the wire. */
   headActivity?: ReadonlyMap<string, number>;
 }
 
 /**
- * Every tree the workspace has grown, on one canvas — one read per page.
- *
- * Each fork arrives WITH its own dispatch parameters and BOTH halves of its own
- * branches — the search rows of a competition, the journalled heads of a merge —
- * so the canvas cannot draw a tree for a fork the list does not have, label a
- * fork with another's parameters, or show a merged fork as empty because its
- * branches were in a separately bounded read. Parallel collections re-associated
- * here by root id, each bounded separately, are exactly how a canvas draws a
- * listed fork with no tree beside a tree for a fork it never listed.
- *
- * `liveTrees` are the socket-fed trees, keyed by search, and they WIN over both
- * polled projections for the searches they cover: a running search pushes a tree
- * per iteration, which no poll can match.
+ * Each fork arrives with its own params and both halves of its branches in one read.
+ * `liveTrees` win over polled projections for the searches they cover.
  */
 export function useExplorationCanvas({
   rpc, isStreaming, backgroundJobs, liveTrees, headActivity = EMPTY_ACTIVITY,
 }: ExplorationCanvasInput) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
 
-  // One read per page, both halves of every fork on it. The canvas draws EVERY
-  // fork, and a merged fork keeps its branches in the journal rather than in
-  // `search_nodes`. Fetching that half separately costs one request per band (N
-  // growing with the workspace's history); fetching it as one bounded
-  // `getHeadRuns` beside a paginated list leaves page two's merged forks outside
-  // the window. `readExplorationCanvas` carries both.
+  // `readExplorationCanvas` carries both halves per page; fetching the journal
+  // separately leaves page two's merged forks outside the window.
   const load = useCallback(
     () => rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
@@ -236,8 +149,7 @@ export function useExplorationCanvas({
     [rpc],
   );
 
-  // The first page's own `next`. This read's anchor is composite and opaque —
-  // only the read model knows how to spell it — so it is never built here.
+  // The anchor is composite and opaque; only the read model builds it.
   const startFrom = useCallback(
     () => (first !== null && first.status === "more" ? first.next : null),
     [first],
@@ -245,12 +157,7 @@ export function useExplorationCanvas({
 
   const tail = usePagedScroll<ExplorationCanvasRun>({ grows: "down", fetchPage, startFrom });
 
-  /**
-   * The first page keeps revalidating while work is live, so a fork that starts
-   * mid-scroll pushes the page-1 boundary down over a row the pager already
-   * holds. Deduped by fork id, first occurrence winning, so the live page stays
-   * authoritative for the rows it covers.
-   */
+  /** Live page 1 can push rows down over ones the pager holds; dedupe by fork id, first wins. */
   const entries = useMemo(() => {
     if (first === null) return null;
     const seen = new Set<string>();
@@ -265,10 +172,7 @@ export function useExplorationCanvas({
     return rows;
   }, [first, tail.fetched]);
 
-  /** Every run's tree, BOTH halves folded through the one fold. Never a choice
-   *  between the stores: a run writes whichever of them its axes call for and an
-   *  agent-unit swarm writes both, so reading one and discarding the other is how
-   *  a search the agent was actively driving drew as its root alone. */
+  /** Fold both stores: an agent-unit swarm writes both, so reading one drops nodes. */
   const trees = useMemo(() => {
     const folded = new Map<string, ForkNode>();
 
@@ -283,15 +187,7 @@ export function useExplorationCanvas({
     return folded;
   }, [entries, liveTrees]);
 
-  /**
-   * A search moved in a way the list cannot explain, so read it again NOW rather
-   * than waiting out the idle clock. Measured on the live frame: 13.2 seconds
-   * from the ledger gaining the row to the row appearing, against a 1.5s budget.
-   *
-   * Keyed on the SET, so this fires once per change of it rather than once per
-   * step — a run the list already holds AS RUNNING is not news, and re-reading
-   * per journal write would be a poll storm dressed as a push.
-   */
+  /** Re-read immediately when the unexplained set changes, not per journal write. */
   const unexplained = useMemo(
     () => unexplainedForkRoots(
       entries,
@@ -312,34 +208,20 @@ export function useExplorationCanvas({
     [entries],
   );
 
-  /** Each search's durable Pareto frontier, by root id. Absent for every run
-   *  that settled to one number — only `advance:'pareto'` writes the evidence
-   *  the canvas frontier read keeps. */
+  /** Absent for runs that settled to one number; only `advance:'pareto'` writes a frontier. */
   const frontiers = useMemo(
     () => canvasIndex(entries, (entry) => entry.frontier),
     [entries],
   );
 
-  /** Each search's per-node journal — the only record of why any individual node
-   *  exists, and therefore of which of them fanned a level in. */
   const journals = useMemo(
     () => canvasIndex(entries, (entry) => entry.head),
     [entries],
   );
 
   /**
-   * Each search's resolved resolution — the preset it resolved and the tuple it resolved
-   * to. Derived ONCE here rather than per surface, so the canvas, the run list and
-   * the full-screen explorer cannot come to disagree about what a run's axes were.
-   *
-   * Read only for a run that has BOTH halves, and the gate is load-bearing rather
-   * than defensive. `head_runs.rationale` holds two different things: for a search
-   * it is `resolved.label ?? resolved.preset`, and for a pre-swarm branching-heads
-   * run it is the author's prose "why split". A run with a journal and no search
-   * rows is the second kind, and reading its prose as a composition's label
-   * rendered `custom "Three call sites, three readers — cheaper in parallel than in
-   * sequence."` over a run that was never a search. Only a search writes both
-   * stores, so holding both IS the discriminator.
+   * Read only for runs with both halves: for a pre-swarm branching-heads run,
+   * `head_runs.rationale` is prose, not a composition label.
    */
   const resolutions = useMemo(
     () => canvasIndex(entries, (entry) =>
@@ -352,8 +234,7 @@ export function useExplorationCanvas({
   return {
     resource, reload, hasActiveWork, trees, params, journals, resolutions, frontiers,
     runs: entries === null ? null : entries.map((entry) => entry.run),
-    /** A first page that already said 'end' is exhausted before the pager runs,
-     *  and the pager has no way to know that. Never set by a failure. */
+    /** A first page that said 'end' is exhausted before the pager runs. */
     exhausted: first !== null && (first.status === "end" || tail.exhausted),
     loadingMore: tail.loading,
     pageError: tail.error,
@@ -361,12 +242,6 @@ export function useExplorationCanvas({
   };
 }
 
-/**
- * One permalink target, independent of the bounded recent-run list.
- *
- * The same composed row the canvas pages, so the drill-down can read the run's own
- * dispatch parameters without fetching a page of thirty runs and their trees.
- */
 export function useExactForkRun(
   rpc: Rpc,
   requestedId: string | null,
@@ -397,24 +272,13 @@ export function useExactForkRun(
   return { resource, reload, run: entry?.run ?? null, entry };
 }
 
-/* ── what the run was dispatched with ──────────────────────────── */
-
-/** One parameter as a label and a value. Empty when the run's parameters are no
- *  longer recorded — the caller says so rather than showing plausible defaults. */
+/** Empty when parameters are no longer recorded; callers say so rather than show defaults. */
 export interface ForkParamRow {
   readonly label: string;
   readonly value: string;
 }
 
-/**
- * The parameters the run was dispatched with, in the order they matter.
- *
- * Per half, and BOTH halves where the run has both: a search has an expansion budget,
- * a branching factor, a depth cap and the exploration constant it selected with, while
- * journalled nodes have a strategy label and a count. Nulls are dropped rather than
- * rendered as "—": an unrecorded knob and a knob left at its default are different
- * facts, and only the first is knowable here.
- */
+/** Nulls are dropped: an unrecorded knob and a knob left at its default are different facts. */
 export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[] {
   if (!params) return [];
   const rows: ForkParamRow[] = [];
@@ -424,9 +288,7 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
     rows.push({ label: "budget", value: `${search.budget} expansions` });
     rows.push({ label: "branches", value: String(search.branches) });
 
-    // A depth cap of one is not a knob beside budget — it is what "flat" means,
-    // and the resolution panel says that as a shape. Rendering `max depth 1`
-    // here read as a second throttle on a search that has none.
+    // A depth cap of one means "flat", which the resolution panel shows as a shape.
     if (search.maxDepth !== null && search.maxDepth > 1) {
       rows.push({ label: "max depth", value: String(search.maxDepth) });
     }
@@ -451,20 +313,8 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
 }
 
 /**
- * The judge ensemble a run ASKED for and the one it ran, as one phrase.
- *
- * Realised first, and the word "requested" wherever the realised size is not known
- * to equal it. Rendering the request as a per-branch figure is the original defect:
- * a run that asked for twenty and ran three read as one that ran twenty, and a run
- * whose ensemble was never observed read the same way. The two numbers are not
- * independent knobs — `judgeSamples` shares one per-evaluation call pool with check
- * generation, so a code-bearing branch realises `min(samples, maxEvalLLMCalls − 1)`
- * — and a clamp binding in silence is the defect class this repository keeps
- * fixing.
- *
- * ONE definition, because it is read in two places: the dispatch parameter strip,
- * and the resolved-resolution panel beside a search's axes. Null when the run named no
- * ensemble at all, which is every run that scored by anything other than a judge.
+ * Realised size first; "requested" wherever the realised size is unknown. `judgeSamples` shares the
+ * per-evaluation call pool with check generation, so it realises `min(samples, maxEvalLLMCalls − 1)`.
  */
 export function judgeEnsembleLabel(params: ForkRunParams | undefined): string | null {
   const search = params?.search;

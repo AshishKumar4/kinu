@@ -1,10 +1,3 @@
-/**
- * User MCP servers — connect MCP-compatible services once, pick from them
- * inside any agent's tool surface. Settings live in UserDO, not per-agent.
- * The roster, its add form and its live status are `McpServersPanel`, shared
- * with the setup modal and the plugins surface; this page is the chrome
- * around it.
- */
 import { Link } from "react-router-dom";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 import { McpServersPanel } from "@/components/account/McpServersPanel";

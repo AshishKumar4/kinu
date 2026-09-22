@@ -3347,7 +3347,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
 const MCTS_NOTICE: readonly ComposerNotice[] = [{
   id: "mcts",
   tone: "danger",
-  text: "Couldn't refresh MCTS.",
+  text: "Could not refresh MCTS.",
   action: { label: "Retry", onClick: () => {} },
 }];
 
@@ -4454,7 +4454,7 @@ function GalleryModal() {
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
-          Remove <span className="font-medium p-text">Checkout coupon bug</span> and clear its server-side state? This cannot be undone.
+          Remove <span className="font-medium p-text">Checkout coupon bug</span> and delete everything in it? This cannot be undone.
         </p>
       </Modal>
     </div>
@@ -4555,7 +4555,7 @@ function publicDocument(name: string): string | null {
 
   if (name === "loginfail") {
     return authDocument("Sign in failed", `
-      <p class="lede">The sign-in request could not be completed. Return to sign in and try again.</p>
+      <p class="lede">Kinu could not finish signing you in. Return to sign in and try again.</p>
       <p class="muted">Failure stage: <code>token_request</code></p>
       <p class="muted">Reason: <code>provider_rejected_client</code></p>
       <div class="providers"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
@@ -4566,14 +4566,14 @@ function publicDocument(name: string): string | null {
 
   if (name === "approve") {
     return approvalDocument("Connect the Kinu CLI", `
-      <p>A terminal on this machine asked to sign in as you.</p>
+      <p>A terminal asked to sign in to your Kinu account.</p>
       <dl>
-        <div><dt>Device</dt><dd>mrwhite0racle@workshop</dd></div>
+        <div><dt>Terminal</dt><dd>mrwhite0racle@workshop</dd></div>
         <div><dt>Code</dt><dd><code>KJ4-9QF</code></dd></div>
         <div><dt>Expires</dt><dd>in 9 minutes</dd></div>
       </dl>
-      <form method="post"><button type="submit">Approve this device</button></form>
-      <p class="muted">Approve only if you started this in your own terminal.</p>
+      <form method="post"><button type="submit">Approve this terminal</button></form>
+      <p class="muted">Approve only if this code matches the one in your terminal.</p>
     `);
   }
 
@@ -7103,7 +7103,7 @@ async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[]
             prompts: [],
             reason: configured
               ? ""
-              : "The Cloudflare door needs an OAuth client, and this deployment has none configured yet.",
+              : "This Kinu has no Cloudflare OAuth client configured yet.",
           }}
         />
       </div>

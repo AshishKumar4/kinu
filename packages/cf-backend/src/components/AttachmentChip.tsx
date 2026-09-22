@@ -1,8 +1,3 @@
-/**
- * A file attachment, as a chip. Shared by the composer (where it is removable)
- * and by message rendering (where it is not), which is why it lives here rather
- * than inside either one.
- */
 import { FileIcon, XIcon } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
 

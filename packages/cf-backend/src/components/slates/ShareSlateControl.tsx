@@ -1,8 +1,3 @@
-/**
- * The share affordance an open slate's tab carries: a strip button that opens
- * the one ShareSlateDialog the workspace owns. Absent when no slate is open or
- * the fixture has no workspace to publish from.
- */
 import { useState } from "react";
 import { ShareNetworkIcon } from "@phosphor-icons/react";
 import type { Rpc, SlateSummary } from "@kinu.run/core";

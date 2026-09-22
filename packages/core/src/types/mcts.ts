@@ -1,23 +1,15 @@
 /**
- * MCTS types — search nodes, phases, configuration.
- *
- * Architecture reference: docs/MCTS.md — "search_nodes Table"
- *
- * BUG-1 FIX: NodeData.value defaults to 0, NOT 0.5.
+ * MCTS types. NodeData.value defaults to 0, not 0.5.
  * Formal spec: MCTS/Backpropagation.lean — initial_in_range, init_values_equal_at_first_step.
  */
 
 import type { ModelCallSink } from '../events/model-call';
 import type { ModelPricing } from '../providers/types';
 
-/** The model a search will run on, as the pre-run gate needs to see it. */
 export interface CostModel {
-  /** Resolved `<provider>/<modelId>`. Named in the refusal so an operator can
-   *  tell a real cap from a mispriced one. */
+  /** Resolved `<provider>/<modelId>`. */
   readonly spec: string;
-  /** The catalog's rates, or null when the lookup has not landed or the
-   *  catalog publishes no price. Null is UNKNOWN — never free. A model the
-   *  catalog prices at nothing arrives as `{ input: 0, output: 0 }`. */
+  /** Null is unknown, never free; a free model arrives as `{ input: 0, output: 0 }`. */
   readonly pricing: ModelPricing | null;
 }
 
@@ -27,24 +19,21 @@ export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';
 export interface SearchNode {
   id: string;
   parent_id: string | null;
-  /** The search run this node belongs to (the root's id, itself included). */
+  /** The root's id, itself included. */
   root_id: string;
   task: string;
   action: string;
   observation: string;
-  /** Runnable source extracted from the proposal. */
   code_used: string | null;
-  /** Executor language for code_used. */
   code_language: string | null;
   visits: number;
-  /** Mean return in [0, 1]. Initialized to 0 (BUG-1 fix). */
+  /** Mean return in [0, 1], initialized to 0. */
   value: number;
   depth: number;
   status: NodeStatus;
   msg_id: string | null;
   branch_agent_key: string | null;
-  /** JSON-encoded bounded facts from this branch's evaluator. Null for a node
-   *  that was never evaluated (the root; a swarm node). */
+  /** Null for a node never evaluated (the root; a swarm node). */
   evaluation_json: string | null;
   created_at: number;
 }
@@ -59,14 +48,8 @@ export interface MCTSPhase {
 }
 
 /**
- * What a search reports, without saying which search. Branch failures are
- * non-fatal by design — a failed exploration or evaluation scores 0 and the
- * search continues — so they are reported rather than thrown; without them a
- * fully degraded run is indistinguishable from a healthy one that simply found
- * nothing.
- *
- * Never consumed on its own: {@link MCTSProgressEvent} is this plus the search
- * that raised it. Exported only so the engine can stamp that identity once.
+ * Branch failures are non-fatal (score 0, search continues), so they are reported here rather
+ * than thrown. Only consumed as {@link MCTSProgressEvent}.
  */
 export type MCTSProgressBody =
   | {
@@ -74,7 +57,7 @@ export type MCTSProgressBody =
       phase: 'explore' | 'evaluate' | 'reflect';
       iteration: number;
       remainingBudget: number;
-      /** Branches this phase covers (reflect only covers the failing ones). */
+      /** Reflect covers only the failing branches. */
       branches: number;
     }
   | {
@@ -98,18 +81,7 @@ export type MCTSProgressBody =
       scores: readonly number[];
     };
 
-/**
- * Live search progress, and WHICH search produced it.
- *
- * A workspace runs several searches at once — two `agents(settle:'mcts')` forks
- * detach independently — so a consumer that answered a progress event by
- * reading "the latest tree" was reading whichever root had been written to most
- * recently. That is a coin flip between the live searches: one search's
- * iteration shipped another's nodes under its own phase and budget, and a
- * backpropagation (which updates visits without inserting a node, so it never
- * becomes "latest") was dropped as a no-change. The event names its own tree so
- * neither is possible.
- */
+/** Progress names its own tree: a workspace runs several searches at once. */
 export type MCTSProgressEvent = MCTSProgressBody & { readonly rootId: string };
 
 export interface MCTSConfig {
@@ -130,54 +102,21 @@ export interface MCTSConfig {
   takesEpsilon?: number;
   signal?: AbortSignal;
   /**
-   * The mission ledger this search charges, when it runs under one.
-   *
-   * A branch resolves its own model in another process, so its rollout spend is
-   * invisible to the governed `rt.llm` the fork seam wraps: it arrives with the
-   * result instead, and the engine debits it between expansions. The engine is
-   * also the only place a refusal can be HANDLED — a branch that refused its own
-   * call would come back empty, score 0 and backpropagate that 0 up the
-   * persisted tree, so the stop has to be "do not open the next expansion",
-   * which only the loop can decide.
-   *
-   * Absent is the default and then nothing is asked: no port call, no query, no
-   * refusal.
+   * Mission ledger this search charges. Branch spend arrives with results, so the engine debits it
+   * between expansions and a refusal stops the next expansion rather than scoring a branch 0.
    */
   mission?: import('../mission-budget').MissionScope;
-  /**
-   * Where every rollout's usage is reported, as `mcts` spend.
-   *
-   * Separate from `mission` above, and asked UNCONDITIONALLY, because the two
-   * answer different questions: the mission port is a CAP that stops opening
-   * expansions once a declared budget is spent, and it is a no-op when no
-   * mission label exists. A search nobody labelled still costs what it costs, so
-   * its rollouts were captured from the branch report and then dropped. This is
-   * the ledger that keeps them.
-   *
-   * Absent = unreported, which the coverage fraction states rather than hides.
-   */
+  /** Reports every rollout's usage as `mcts` spend, unconditionally; `mission` is only a cap. */
   reportModelCall?: ModelCallSink;
   /**
-   * The model this search will run on, and what the catalog charges for it —
-   * read ONCE, by the pre-run `maxCostUSD` gate.
-   *
-   * A thunk rather than a value because the catalog lookup lands
-   * asynchronously (ModelCatalogSession arms it and never blocks), so a rate
-   * captured when the config was built would be null far more often than the
-   * catalog is actually silent.
-   *
-   * Absent = the gate prices at the blended fallback and says so in its
-   * refusal, which is what it did for every model before this existed.
+   * Read once by the pre-run `maxCostUSD` gate; a thunk because the catalog lookup lands
+   * asynchronously. Absent: the gate prices at the blended fallback.
    */
   costModel?: () => CostModel;
-  /** Called as the search progresses — phase transitions, branch failures and
-   *  iteration completion. Use for real-time UI updates. */
   onProgress?: (event: MCTSProgressEvent) => void;
-  /** Durable search checkpoint. When present, the loop's progress + resolved
-   *  config are persisted per iteration under a lease epoch, so a DO eviction can
-   *  re-enter runMCTS and continue the remaining budget against the persisted
-   *  tree instead of discarding the search (B6). Absent ⇒ fiber-snapshot resume
-   *  only (tests / inline fast path). Typed loosely here to avoid an mcts→store
-   *  import cycle; the concrete type is MctsSearchStore. */
+  /**
+   * Durable checkpoint so a DO eviction can resume the remaining budget against the persisted tree
+   * (B6). Absent: fiber-snapshot resume only.
+   */
   search?: import('../mcts/search-store').MctsSearchStore;
 }

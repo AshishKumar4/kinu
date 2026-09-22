@@ -897,13 +897,13 @@ function runStatusTag(run: RunStats): string {
 
 /** How long a background job has been running, or how long it took. */
 function jobDurationTag(job: DebugBackgroundJob): string {
-  if (job.status === 'running') return WARN(` — running ${formatElapsed(Date.now() - job.createdAt)}`);
+  if (job.status === 'running') return WARN(` for ${formatElapsed(Date.now() - job.createdAt)}`);
 
-  return job.settledAt === null ? '' : ` — took ${formatElapsed(job.settledAt - job.createdAt)}`;
+  return job.settledAt === null ? '' : `, took ${formatElapsed(job.settledAt - job.createdAt)}`;
 }
 
 function printHumanSummary(name: string, mode: string, summary: DebugSummary, outPath: string): void {
-  console.log(`\n${ACCENT(name)} ${DIM(`(${mode})`)} — bundle: ${DIM(outPath)}\n`);
+  console.log(`\n${ACCENT(name)} ${DIM(`(${mode})`)} bundle: ${DIM(outPath)}\n`);
 
   const displayName = stringField(summary.identity, 'displayName');
   const purpose = stringField(summary.identity, 'purpose');
@@ -911,7 +911,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
   const model = stringField(summary.identity, 'model');
 
   if (displayName || purpose) {
-    console.log(`${DIM('identity')}  ${displayName ?? name} — ${DIM((purpose ?? '').slice(0, 80))}`);
+    console.log(`${DIM('identity')}  ${displayName ?? name}: ${DIM((purpose ?? '').slice(0, 80))}`);
     console.log(`${DIM('scaffold')}  v${scaffoldVersion ?? 0}  ${DIM(model ?? '')}`);
   }
 
@@ -924,7 +924,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     const status = runStatusTag(r);
     const errTag = r.errors.length ? ERR(` ${r.errors.length} error(s)`) : '';
     const pollTag = r.jobPollsAfterHandle > 0 ? WARN(` polled job ${r.jobPollsAfterHandle}x after backgrounding`) : '';
-    console.log(`  ${DIM(when)} ${ACCENT(r.runId.slice(0, 8))} ${r.causedBy ?? '?'} — ${r.eventCount} events, ${r.toolCalls} tool calls, ${status}${errTag}${pollTag}`);
+    console.log(`  ${DIM(when)} ${ACCENT(r.runId.slice(0, 8))} ${r.causedBy ?? '?'}: ${r.eventCount} events, ${r.toolCalls} tool calls, ${status}${errTag}${pollTag}`);
   }
 
   if (summary.headRuns.length > 0) {
@@ -933,7 +933,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     for (const h of summary.headRuns.slice(0, 5)) {
       const done = h.heads.filter((head) => head.status !== 'running').length;
       const progressTag = h.status === 'running' ? ` (${done}/${h.heads.length} settled)` : '';
-      console.log(`  ${DIM(new Date(h.spawnedAt).toLocaleString())} ${ACCENT(h.rootId.slice(0, 8))} ${h.status} — ${h.heads.length} head(s)${progressTag}: ${DIM(h.task.slice(0, 60))}`);
+      console.log(`  ${DIM(new Date(h.spawnedAt).toLocaleString())} ${ACCENT(h.rootId.slice(0, 8))} ${h.status}: ${h.heads.length} head(s)${progressTag}: ${DIM(h.task.slice(0, 60))}`);
     }
   }
 
@@ -952,8 +952,8 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
       // heartbeat this backend actually has. For a still-running search this
       // is the direct answer to "is it hung or working": fresh means it
       // checkpointed recently; stale means nothing has landed in a while.
-      const heartbeat = s.status === 'running' ? ` — checkpointed ${formatElapsed(Date.now() - s.updatedAt)} ago` : '';
-      console.log(`  ${DIM(new Date(s.updatedAt).toLocaleString())} ${ACCENT(s.rootId.slice(0, 8))} ${s.status} iter=${s.iteration}/${total} (${s.budget} left) — ${depthTag}${heartbeat}`);
+      const heartbeat = s.status === 'running' ? `, checkpointed ${formatElapsed(Date.now() - s.updatedAt)} ago` : '';
+      console.log(`  ${DIM(new Date(s.updatedAt).toLocaleString())} ${ACCENT(s.rootId.slice(0, 8))} ${s.status} iter=${s.iteration}/${total} (${s.budget} left), ${depthTag}${heartbeat}`);
     }
 
     if (summary.mctsSearches.length > 1) {
@@ -976,7 +976,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
         : `best ${arrow}${String(objective.best.value)} ${objective.unit}`;
 
       const floorTag = objective.floorDigest === null ? DIM('no floor') : DIM(`floor ${objective.floorDigest.slice(0, 8)}`);
-      console.log(`  ${DIM(new Date(objective.lastRecordedAt).toLocaleString())} ${ACCENT(objective.objectiveId.slice(0, 8))} ${objective.metric} — ${objective.rows} row(s) over ${objective.cells} cell(s), ${best}, ${floorTag}`);
+      console.log(`  ${DIM(new Date(objective.lastRecordedAt).toLocaleString())} ${ACCENT(objective.objectiveId.slice(0, 8))} ${objective.metric}: ${objective.rows} row(s) over ${objective.cells} cell(s), ${best}, ${floorTag}`);
     }
   }
 
@@ -984,7 +984,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     console.log(`\n${ACCENT('Background jobs')} (${summary.backgroundJobs.length})`);
 
     for (const j of summary.backgroundJobs.slice(0, 10)) {
-      const labelTag = j.label ? ` — ${DIM(j.label)}` : '';
+      const labelTag = j.label ? `: ${DIM(j.label)}` : '';
 
       // Running jobs carry no heartbeat of their own (background_jobs has only
       // created_at/settled_at) — this is the honest answer to "how long has
@@ -992,7 +992,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
       // operator to do the timestamp math that hid the 12-hour job.
       const durationTag = jobDurationTag(j);
 
-      console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${durationTag}${labelTag}${j.error ? ERR(` — ${j.error}`) : ''}`);
+      console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${durationTag}${labelTag}${j.error ? ERR(`: ${j.error}`) : ''}`);
     }
   }
 

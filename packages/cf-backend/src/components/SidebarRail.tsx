@@ -1,20 +1,6 @@
 /**
- * The desktop rail lane: the roster, or the narrow icon rail it folds to.
- *
- * Folded, the lane keeps what a person still reaches from it — the logo, new
- * workspace, the four primary places, the account — as icons; a click on the
- * rail itself (not on one of those) unfolds it. The choice persists beside the
- * theme and section folds in localStorage.
- *
- * One mount owns the lane so every surface that shows the workbench shows the
- * same rail — the app shell around the route outlet, and the landing page's
- * sample frames. Below `md` there is no lane at all: the shell summons the
- * roster as a drawer from its own header.
- *
- * The fold is animated on one element: the `aside` keeps its identity across
- * the two states and only its width moves, while each state's column holds a
- * width of its own behind `overflow-hidden`. The column thus never reflows as
- * the lane travels, and the page beside it moves one time, not two.
+ * The desktop rail lane: the roster, or the icon rail it folds to. Only the `aside`'s width
+ * animates; each state's column has its own width behind `overflow-hidden`, so nothing reflows.
  */
 import { useState, type MouseEvent } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
@@ -30,10 +16,7 @@ const RAIL_KEY = "kinu:rail-open";
 
 const RAIL_ICON_CLS = "flex size-9 items-center justify-center rounded-lg p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text";
 
-/** The lane's width and the column that enters after it settle over the same
- *  180ms, so the fold reads as one movement. A reader who asked for less
- *  motion gets the end state at once: `fade-in` is behind `motion-safe`, and
- *  the width is pinned by `motion-reduce:transition-none`. */
+/** Lane width and entering column share 180ms; reduced motion gets the end state at once. */
 const LANE_ENTER_CLS = "motion-safe:animate-[fade-in_180ms_ease-out]";
 
 export function SidebarRail() {
@@ -61,7 +44,7 @@ export function SidebarRail() {
       title={railOpen ? undefined : "Show sidebar"}
     >
       {railOpen ? (
-        // The key is the point: a fresh node each fold restarts the enter.
+        // The key restarts the enter animation on each fold.
         <div key="roster" className={`h-full w-60 ${LANE_ENTER_CLS}`}>
           <Sidebar onCollapse={() => setOpen(false)} />
         </div>

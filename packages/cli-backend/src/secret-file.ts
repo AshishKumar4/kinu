@@ -52,7 +52,7 @@ export function enforceOwnerOnly(path: string, mode: number = SECRET_FILE_MODE):
 
   if ((observed & SHARED_BITS) !== 0) {
     throw new Error(
-      `${path} is readable beyond its owner (mode ${observed.toString(8)}) — refusing to leave a secret there`,
+      `${path} is readable beyond its owner (mode ${observed.toString(8)}) ; refusing to leave a secret there`,
     );
   }
 }

@@ -1,18 +1,4 @@
-/**
- * One workspace with its live overview, in the two shapes the app draws it:
- * the 56px line the home page's recent list and the Workspaces page share,
- * and the Workspaces page's grid tile. One component because the read
- * (`read-models/workspace-overview.ts`) is the same wherever it appears.
- *
- * Both shapes speak the one shared headline — `overviewHeadline`, exactly one
- * chip — beside the title, the last task when it says something the title
- * does not, and the bare relative time. The name renders the moment
- * the roster lands; the overview is the shared per-name read
- * (`use-workspace-overviews`) and fails independently. The retry button sits
- * BESIDE the link — a button inside an anchor is nested interactive content,
- * so the card is a wrapper holding the link and the action separately, and
- * the tile's slate picture hangs off that same wrapper.
- */
+/** The retry button sits beside the link, not inside it: a button in an anchor is nested interactive content. */
 import { Link } from "react-router-dom";
 import { overviewHeadline, shortAge, timeAgo, workspaceDisplayTitle, type WorkspaceOverview, type WorkspaceStatus } from "@kinu.run/core";
 import { lastValue } from "@/hooks/use-async-resource";
@@ -24,8 +10,6 @@ interface StatusTone {
   readonly text: string;
 }
 
-/** The one place a workspace's status becomes colour: a dot and a coloured
- *  word. `working` pulses like every other running dot in the app. */
 function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
   switch (status) {
     case "needs":
@@ -41,9 +25,6 @@ function workspaceStatusTone(status: WorkspaceStatus): StatusTone {
   }
 }
 
-/** The card's one chip: the shared headline's status as a dot and a coloured
- *  word, dimmed when its answer is old, `…` while it loads, `unavailable`
- *  when there is nothing to say from. */
 function StatusChip({ overview, stale, loading, unavailable }: {
   overview: WorkspaceOverview | null;
   stale: boolean;
@@ -69,10 +50,7 @@ function StatusChip({ overview, stale, loading, unavailable }: {
   );
 }
 
-/** The line and tile share their evidence: the mission is the last run's
- *  task preview, omitted when there is none — or when it only repeats the
- *  title, which a first message that became the title always does — and the
- *  timestamp is the bare relative time. */
+/** The mission is omitted when it only repeats the title, which a first message that became the title always does. */
 function missionOf(overview: WorkspaceOverview | null, title: string): string | null {
   const task = overview?.latestRun?.task;
 
@@ -81,30 +59,17 @@ function missionOf(overview: WorkspaceOverview | null, title: string): string | 
   return task.trim().toLowerCase() === title.trim().toLowerCase() ? null : task;
 }
 
-/** A hue of the workspace's own, from its name: stable across sessions and
- *  devices, distinct between neighbours, and never the same for two tiles
- *  that sit together by chance of creation order. */
 function hueOf(name: string): number {
   let hash = 0;
 
-  // `for…of` walks whole code points, so every char here has one.
   for (const char of name) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
 
   return hash % 360;
 }
 
 /**
- * The tile's picture: the workspace's primary slate, live, at a quarter
- * scale. A slate is a durable application on a URL that outlives its
- * process, so the tile can hold the app itself — there is no screenshot
- * service and no capture to go stale.
- *
- * The frame renders at four times the box and is scaled down from its top
- * left, so the app lays out at a real viewport width instead of reflowing
- * into a phone column. It is inert in every direction: no pointer events, no
- * tab stop, out of the accessibility tree, and `sandbox` without
- * `allow-top-navigation` or `allow-forms`. The workspace's own colour is the
- * ground under it, so a slate that has not painted yet still reads as a tile.
+ * Rendered at four times the box and scaled down so the slate lays out at a real viewport width.
+ * Inert: no pointer events, no tab stop, aria-hidden, sandbox without top-navigation or forms.
  */
 function SlateFrame({ slate, hue }: { slate: NonNullable<WorkspaceOverview["primarySlate"]>; hue: number }) {
   return (
@@ -129,14 +94,9 @@ function SlateFrame({ slate, hue }: { slate: NonNullable<WorkspaceOverview["prim
 
 export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   workspace: WorkspaceEntry;
-  /** `line` is the ruled list entry (home's recent list, the Workspaces
-   *  list); `tile` is a card in the Workspaces grid. */
   variant: 'line' | 'tile';
-  /** A row after the first draws the rule above it. */
   first?: boolean;
 }) {
-  // One shared read per name, whoever is watching it: the home list, the
-  // Workspaces page and the shell's background all see the same answer.
   const { resource, reload } = useWorkspaceOverview(workspace.name);
 
   const overview = lastValue(resource);
@@ -144,7 +104,6 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   const unavailable = resource.status === "error" && overview === null;
   const title = workspaceDisplayTitle(workspace);
   const mission = missionOf(overview, title);
-  // The same compact age the sidebar's column carries, so a workspace reads one age everywhere.
   const age = shortAge(workspace.lastVisited);
 
   const retry = (stale || unavailable) && (
@@ -165,7 +124,6 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
             <span className="block truncate p-row-text font-medium p-text">{title}</span>
             {mission !== null && <span className="block truncate p-meta p-text-3">{mission}</span>}
           </span>
-          {/* An old answer says so beside its chip; the chip alone only dims. */}
           {stale && <span className="hidden shrink-0 p-meta p-text-4 sm:inline">checked {timeAgo(overview.observedAt)}</span>}
           <StatusChip overview={overview} stale={stale} loading={resource.status === "loading"} unavailable={unavailable} />
           {age !== null && <span className="shrink-0 p-meta p-text-4 tabular-nums">{age}</span>}
@@ -180,18 +138,13 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
 
   return (
     <div className="p-card relative flex min-h-[150px] flex-col overflow-hidden transition-colors hover:p-elevated">
-      {/* The picture is the link's SIBLING, never its child: an iframe inside
-          an anchor is nested interactive content. The link stretches over the
-          whole tile instead, so a click on the picture still opens the
-          workspace. */}
+      {/* The picture is the link's sibling: an iframe inside an anchor is nested interactive content. */}
       {slate !== null && <SlateFrame slate={slate} hue={hue} />}
       <Link
         to={`/workspace/${workspace.name}`}
         className="flex min-h-0 flex-1 flex-col after:absolute after:inset-0 after:content-['']"
       >
         {slate === null && (
-          // The tile's own colour where there is nothing to show: a band and
-          // a monogram in the workspace's hue.
           <span
             className="flex h-14 items-end px-4 pb-2"
             style={{ background: `linear-gradient(180deg, oklch(62% 0.13 ${hue} / 0.28), oklch(62% 0.13 ${hue} / 0.08))` }}
@@ -212,8 +165,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
           {age !== null && <span className="mt-auto self-end pt-2 p-meta p-text-4 tabular-nums">{age}</span>}
         </span>
       </Link>
-      {/* Above the link's overlay, or the one action on a failed card would
-          open the workspace instead of retrying its read. */}
+      {/* Above the link's overlay, or the failed card's action would open the workspace instead of retrying. */}
       {retry && <span className="relative px-4 pb-3">{retry}</span>}
     </div>
   );

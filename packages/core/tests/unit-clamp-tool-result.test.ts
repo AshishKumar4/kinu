@@ -1,10 +1,5 @@
-// Restorable tool-result compression (the at-source budget): oversize tool
-// outputs are clamped head+tail with the FULL output offloaded to the
-// workspace VFS first — the marker carries the path and the file round-trips
-// through the real file surface, so nothing is irrecoverable.
-//
-// The cap covers the WHOLE string the model receives: the marker and any
-// prefix the producer adds are priced inside it, never charged on top.
+// Oversize tool outputs are clamped head+tail after offloading the full output to the VFS.
+// The cap covers the whole string the model receives, marker and producer prefix included.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute, createMemoryVfs } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
@@ -48,8 +43,6 @@ function markerPath(clamped: string): string {
 
 describe('the shared budget', () => {
   test('is ~2,000 estimated tokens, and the whole result is what it pays for', async () => {
-    // The unit the harness sizes everything else in (`estimateTokens`, a blunt
-    // chars-per-token). Not a tokenizer, not any provider's count.
     expect(estimateTokens(DEFAULT_TOOL_RESULT_MAX_CHARS)).toBe(2_000);
 
     const { rt } = createTestRuntime();
@@ -71,7 +64,6 @@ describe('clampToolResult', () => {
 
     const clamped = await clampToolResult(over, { vfs: rt.storage.vfs });
     expect(clamped).not.toBe(over);
-    // One char over the cap still leaves at or under the cap, marker included.
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
   });
 
@@ -83,10 +75,9 @@ describe('clampToolResult', () => {
 
     const clamped = await clampToolResult(original, { vfs: rt.storage.vfs });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(clamped).toContain('HEAD-OF-OUTPUT');   // head preserved
-    expect(clamped).toContain('TAIL-OF-OUTPUT');   // tail preserved
+    expect(clamped).toContain('HEAD-OF-OUTPUT');
+    expect(clamped).toContain('TAIL-OF-OUTPUT');
 
-    // Restorable: the marker path holds the FULL original output, byte for byte.
     const path = markerPath(clamped);
     expect(path).toStartWith(`${TOOL_OUTPUT_DIR}/`);
     const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
@@ -94,8 +85,6 @@ describe('clampToolResult', () => {
   });
 
   test('the marker itself is inside the budget, not charged on top of it', async () => {
-    // The defect this pins: budgeting the kept text and then appending the
-    // marker returns cap + marker, every time, on every producer.
     const { rt } = createTestRuntime();
 
     for (const size of [DEFAULT_TOOL_RESULT_MAX_CHARS + 1, 50_000, 2_000_000]) {
@@ -122,7 +111,6 @@ describe('clampToolResult', () => {
     const clamped = await clampToolResult('z'.repeat(100_000), { vfs: failing, budget, producer: 'shell' });
     expect(clamped).toContain('was not saved');
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    // The trip still counts; it just did not land anywhere readable.
     expect(budget.snapshot()).toMatchObject({ trips: { shell: 1 }, referenced: 0 });
   });
 
@@ -133,22 +121,16 @@ describe('clampToolResult', () => {
 
   test('never splits an astral character, and spills it intact', async () => {
     const { rt } = createTestRuntime();
-    // 4 UTF-16 units per emoji: some cap lands mid-pair whatever the budget is.
     const original = '🙂🚀'.repeat(20_000);
 
     const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget: new TurnContextBudget() });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    // A lone surrogate is the corruption a blind slice produces.
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(clamped)).toBe(false);
     expect(await rt.storage.vfs.readFile(markerPath(clamped), { encoding: 'utf8' })).toBe(original);
   });
 
   test('a standalone surrogate in the source is data, not something to trim away', async () => {
-    // Half a pair that was already in the text is what the producer wrote.
-    // Only a real high+low pair is protected; moving the cut to drop a lone
-    // one would silently edit the result. (The VFS encodes UTF-8, so the
-    // spilled copy of a lone surrogate is the filesystem's business, not the
-    // clamp's — this asserts what the clamp hands the model.)
+    // A lone surrogate already in the text is left alone; only a real high+low pair is protected.
     const original = `\uD83D\uDE42\uD800${'x'.repeat(50_000)}`;
     const clamped = await clampToolResult(original);
     expect(clamped).toStartWith('\uD83D\uDE42\uD800');
@@ -160,8 +142,6 @@ describe('clampToolResult', () => {
     const original = '🙂'.repeat(30_000);
     const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget, producer: 'shell' });
     const [head, , tail] = clamped.split('\n\n');
-    // Refusing to split a pair drops a unit the nominal head/tail allowed for:
-    // the ledger counts what was actually kept, not what was planned.
     expect(budget.snapshot().omittedChars)
       .toBe(original.length - (head?.length ?? 0) - (tail?.length ?? 0));
   });
@@ -170,12 +150,10 @@ describe('clampToolResult', () => {
     const budget = new TurnContextBudget();
     const original = 'L'.repeat(200_000);
     const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget, producer: 'shell' });
-    // head \n\n marker \n\n tail — the payload has no blank line of its own.
     const [head, , tail] = clamped.split('\n\n');
     const snapshot = budget.snapshot();
 
     expect(snapshot.admittedChars).toBe(clamped.length);
-    // Every char of the original is either shown or counted as withheld.
     expect(snapshot.omittedChars).toBe(original.length - (head?.length ?? 0) - (tail?.length ?? 0));
     expect(snapshot).toMatchObject({ trips: { shell: 1 }, referenced: 1 });
   });
@@ -233,14 +211,11 @@ describe('tool result budget (behavior through the public tool surface)', () => 
   test('a huge stdout is clamped and the full output is readable back via the file surface', async () => {
     const { rt } = createTestRuntime();
     const original = 'BEGIN UNIQUE-MIDDLE-MARKER-' + 'log line\n'.repeat(80_000) + ' FINAL-ERROR-LINE';
-    // The runtime's OWN shell, over the same bytes `rt.storage.vfs` reads.
     const realShell = rt.shell;
 
     if (!realShell) throw new Error('test runtime did not provide its workspace shell');
 
     const fakeShellExec = async (command: string) => {
-      // First call: the huge command output. Filtered reads of the marker
-      // path go through the REAL workspace shell over the same VFS.
       if (command.startsWith('grep ')) return realShell.exec(command);
 
       return { stdout: original, stderr: '', exitCode: 0 };
@@ -252,11 +227,8 @@ describe('tool result budget (behavior through the public tool surface)', () => 
 
     const clamped = await invoke({ command: 'generate-huge-log' });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
-    expect(clamped).toContain('FINAL-ERROR-LINE'); // the tail survives
+    expect(clamped).toContain('FINAL-ERROR-LINE');
 
-    // Restorable: the marker path round-trips via the file surface
-    // (workspace.readFile) and is filterable through the shell tool's shell —
-    // exactly what the marker tells the model to do.
     const path = markerPath(clamped);
     const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
     expect(restored).toBe(original);
@@ -284,9 +256,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
   });
 
   test('the file steer is part of the clamped string, and of the spilled original', async () => {
-    // The steer frames the output, so the model receives one string: it is
-    // composed before the clamp, which is what keeps the cap honest and the
-    // spilled copy equal to what was digested.
+    // The steer is composed before the clamp, keeping the cap honest and the spill equal to the digest.
     const { rt } = createTestRuntime();
     const stdout = 'L'.repeat(200_000);
     const shell = { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) };
@@ -304,8 +274,6 @@ describe('tool result budget (behavior through the public tool surface)', () => 
   });
 
   test('a ranged file read is bounded by the same cap and spills nothing twice', async () => {
-    // The file is already addressable at its own path, so a capped read names
-    // the next offset instead of writing a second copy of the file.
     const { rt } = createTestRuntime();
     const tools = buildBuiltinTools({ rt, history: storesFor(rt).history });
     const file = toolExecute<FileToolInput, JsonValue>(tools.file);
@@ -321,7 +289,6 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     expect(second.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(second.split('\n')[0]).toBe(lines[next - 1]);
 
-    // Never created: a file read spills nothing, because the file IS the spill.
     expect(await rt.storage.vfs.stat(TOOL_OUTPUT_DIR)).toBeNull();
   });
 
@@ -397,8 +364,7 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
 
 describe('the JSON boundary refuses what JSON cannot carry', () => {
   test('decodeJsonValue rejects non-finite numbers', () => {
-    // A tool result of Infinity would otherwise store as Infinity and
-    // serialize as null — a silent corruption of what the call returned.
+    // Infinity would serialize as null, silently corrupting the result.
     expect(() => decodeJsonValue({ value: Number.POSITIVE_INFINITY })).toThrow(
       'Invalid finite: Received Infinity',
     );

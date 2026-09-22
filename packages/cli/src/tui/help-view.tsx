@@ -26,7 +26,7 @@ export function composerHelp(registry: KeybindingRegistry): string {
     ['consent.deny', 'Approval: deny'],
   ];
 
-  return ['Keyboard', ...actions.map(([action, label]) => `  ${registry.bindingsFor(action).join(' / ')} — ${label}`)].join('\n');
+  return ['Keyboard', ...actions.map(([action, label]) => `  ${registry.bindingsFor(action).join(' / ')}  ${label}`)].join('\n');
 }
 
 export function StatusView({ status }: { status: AgentClientStatus }) {
@@ -35,7 +35,7 @@ export function StatusView({ status }: { status: AgentClientStatus }) {
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
-        <strong fg={colors.intent.accentStrong}>Workspace Status</strong>
+        <strong fg={colors.intent.accentStrong}>Workspace status</strong>
         {renderStatusLines(status).map((line) => {
           const [label = '', ...value] = line.split(/\s+/);
 

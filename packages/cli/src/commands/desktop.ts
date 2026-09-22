@@ -129,7 +129,7 @@ async function requireAuthOrLogin(): Promise<{ origin: string; token: string; us
   }
 
   const origin = resolveCloudOrigin();
-  console.log(`${DIM('Not signed in. Starting Kinu login...')}`);
+  console.log(`${DIM('Not signed in. Starting Kinu sign-in…')}`);
   await authCommand({ origin });
 
   return requireAuthConfig();

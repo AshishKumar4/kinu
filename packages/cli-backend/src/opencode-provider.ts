@@ -590,7 +590,7 @@ async function discoverModels(spawnFn: OpenCodeSpawn): Promise<OpenCodeModelInfo
       'model.catalog_entries_unreadable',
       new KinuError(
         'bad_input',
-        `opencode models --verbose: entries could not be read — ${unreadable.join('; ')}`,
+        `opencode models --verbose: entries could not be read: ${unreadable.join('; ')}`,
       ),
       { unreadable: unreadable.length, readable: models.length },
     );

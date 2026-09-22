@@ -12,13 +12,8 @@ export interface SlateContentFiles {
   readRangeUncached(path: string, offset: number, length: number): Uint8Array;
 }
 
-/** Immutable content in the workspace filesystem; SQL records retain only refs.
- * The adapter supplies a kernel-owned view, never the view used to capture live
- * source. retain joins its caller's synchronous VFS transaction without nesting.
- * Existing digest paths are never overwritten; a wrong node/owner/mode/size is
- * corruption, not permission to repair it. Size comes from the inode; no caller
- * needs media hints, so neither hints nor a second size counter are retained.
- * Workspace archives carry these inodes through the authoritative VFS tables. */
+/** Immutable content in the workspace filesystem; SQL records retain only refs. `retain` joins the caller's
+ * synchronous VFS transaction without nesting. Existing digest paths are never overwritten; a mismatched inode is corruption. */
 export class WorkspaceSlateContentStore extends ContentStore {
   constructor(private readonly files: SlateContentFiles) {
     super();

@@ -179,7 +179,7 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
 
   const without = unhostedBindings(manifest);
 
-  console.log(`${OK('✓')} Kinu ${ACCENT(manifest.version)} laid down in ${DIM(layout.root)}`);
+  console.log(`${OK('✓')} Kinu ${ACCENT(manifest.version)} installed in ${DIM(layout.root)}`);
 
   if (without.length > 0) {
     console.log(`${DIM('Not available locally:')} ${DIM(without.join(', '))}`);

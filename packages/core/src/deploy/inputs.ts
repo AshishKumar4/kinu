@@ -1,24 +1,12 @@
-/**
- * What a person answers before a deployment can run, and the defaults the
- * page and the CLI both start from.
- *
- * Everything here is data a step reads. Nothing here is a secret: the OAuth
- * token and any provider key live in the vault (`DeploySecretVault`), never in
- * the inputs, because the inputs are written into the durable run row and a
- * row is readable for as long as the run exists.
- */
+// Inputs land in the durable run row, so no secret belongs here; secrets live in the vault.
 import * as v from 'valibot';
 import type { ReleaseManifest } from './manifest';
 
-/** Where the deployment answers. `workers-dev` needs nothing from the person;
- *  `zone` needs a zone they hold and a hostname inside it, and the flow makes
- *  the custom domain (which is what creates the DNS record). */
 export type DeployAddressKind = 'workers-dev' | 'zone';
 
 export interface DeployAddress {
   readonly kind: DeployAddressKind;
-  /** Empty for `workers-dev`: the hostname is `<instance>.<account subdomain>`
-   *  and the account subdomain is read during the address step. */
+  /** Empty for `workers-dev`; the address step derives it. */
   readonly hostname: string;
   readonly zoneId: string;
 }
@@ -27,13 +15,11 @@ export interface DeployInputs {
   readonly accountId: string;
   readonly instanceName: string;
   readonly address: DeployAddress;
-  /** The address the Access policy admits and the deployment's owner. */
   readonly ownerEmail: string;
   readonly accessEmails: readonly string[];
-  /** Names of provider keys the person supplied. The values are in the vault;
-   *  these names tell the secrets step which ones to put. */
+  /** Names only; values are in the vault. */
   readonly providerKeyNames: readonly string[];
-  /** The sandbox needs Workers Paid and is off by default (SELF-DEPLOY.md). */
+  /** Needs Workers Paid (SELF-DEPLOY.md). */
   readonly sandbox: boolean;
 }
 
@@ -62,37 +48,19 @@ export const DeployInputsSchema: v.GenericSchema<DeployInputs> = v.object({
 
 export const DEFAULT_INSTANCE_NAME = 'kinu';
 
-/** The vault key the guided run holds the person's Cloudflare access token
- *  under, for the duration of the run only. */
 export const ACCESS_TOKEN_KEY = 'cloudflare.access_token';
 
-/** The refresh token, which the last step writes into the new Worker as its
- *  own secret and then deletes here. The deployment owns its key from that
- *  moment; kinu.run holds nothing. */
+/** The last step moves this into the new Worker's secrets and deletes it here. */
 export const REFRESH_TOKEN_KEY = 'cloudflare.refresh_token';
 
-/** The public OAuth client the run authorized through, held for the last step.
- *  A refresh names its client, and a deployment that could not name one could
- *  never renew the token it was handed. */
+/** A refresh must name its client, so the deployment keeps it. */
 export const DEPLOY_CLIENT_ID_KEY = 'cloudflare.client_id';
 
-/** The secret the deployment reads to refresh its own Cloudflare token. */
 export const DEPLOYMENT_REFRESH_SECRET = 'KINU_SELF_DEPLOY_REFRESH_TOKEN';
 
-/** The deployment's own record of what it is. Read by its Updates page, which
- *  re-runs the same plan from inside the deployment. */
 export const DEPLOYMENT_RECORD_SECRET = 'KINU_DEPLOYMENT_RECORD';
 
-/**
- * What a deployment knows about itself.
- *
- * THE ANSWERS, NOT A SUMMARY OF THEM. An update re-runs the same plan, so it
- * needs exactly what the first run was given — the account, the instance name,
- * the zone behind a custom hostname, whether the sandbox is on — and a record
- * that carried a flattened copy would be a second spelling of `DeployInputs`
- * that drifts from it. The address, the version and the channel are the facts
- * the first run established; the client id is what a refresh needs.
- */
+/** Holds the full `DeployInputs`, since an update reruns the same plan. */
 export interface DeploymentRecord {
   readonly inputs: DeployInputs;
   readonly address: string;
@@ -111,15 +79,9 @@ export const DeploymentRecordSchema: v.GenericSchema<DeploymentRecord> = v.objec
   deployedAt: v.string(),
 });
 
-/** Every secret the deployment needs that nobody has to type: the two root
- *  secrets and the Drive's cursor-signing secret are minted here and never
- *  leave the run. A person who wants to keep a copy reads them once from the
- *  page (the same rule the provisioner has: a key nobody has seen is a key
- *  nobody can restore). */
+/** Minted by the run; the page shows them once. */
 export const MINTED_SECRETS: readonly string[] = ['CREDENTIAL_ENCRYPTION_KEY', 'WEBHOOK_ROUTE_SECRET', 'JWT_SECRET'];
 
-/** The secrets this release asks a person for, in the order the page shows
- *  them. Optional ones are offered, required ones block the run. */
 export function promptedSecrets(manifest: ReleaseManifest): readonly string[] {
   return manifest.secrets
     .filter((secret) => secret.handling === 'prompted' && !MINTED_SECRETS.includes(secret.name))

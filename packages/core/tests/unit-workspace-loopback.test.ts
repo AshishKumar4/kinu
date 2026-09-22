@@ -1,14 +1,6 @@
 /**
- * The workspace loopback, over a real library workspace.
- *
- * `createDefaultRegistry` binds `node` to a process-global port map and
- * `curl` to no kernel at all, so a server one started was invisible to the
- * other — and a loopback `curl` with nothing listening fell through to the
- * platform `fetch`, which on Cloudflare answers `error code: 1003`.
- * `provisionWorkspaceRuntimes` re-registers both against the workspace's own
- * kernel; asserted here through the shell, the seam the agent actually drives:
- * a listening port answers its bytes, an empty one refuses as a refused
- * connection, and `node` still runs where the host compiles.
+ * The workspace loopback over a real library workspace: `provisionWorkspaceRuntimes` binds `node` and `curl`
+ * to the workspace kernel, so a listening port answers and an empty one refuses as a refused connection.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';

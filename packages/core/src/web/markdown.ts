@@ -1,20 +1,9 @@
 /**
- * HTML → agent-ready markdown — the local fallback path for `web` fetch.
- *
- * The preferred path is server-side: a `fetch` with `Accept: text/markdown`
- * gets clean markdown from any Cloudflare-proxied zone (Markdown-for-Agents),
- * and cf-backend can route HTML through `env.AI.toMarkdown`. This module is the
- * dependency-free fallback that runs in any V8 isolate when neither is
- * available — a deliberately small readability+turndown substitute (no jsdom,
- * no turndown, both of which are too heavy for a Worker).
- *
- * It is intentionally lossy: scripts/styles/SVG and base64 images are dropped,
- * structural tags become markdown, everything else is flattened to text. Good
- * enough to feed an LLM; not a faithful renderer.
+ * HTML → agent-ready markdown: the dependency-free, intentionally lossy fallback for `web` fetch when
+ * neither `Accept: text/markdown` nor `env.AI.toMarkdown` is available. Not a faithful renderer.
  */
 
-/** Strip base64 data-URI images (and SVGs) — they are pure token noise.
- *  Mirrors hermes-agent clean_base64_images. */
+/** Strip base64 data-URI images and SVGs (token noise). Mirrors hermes-agent clean_base64_images. */
 export function stripBase64Images(text: string): string {
   return text
     .replace(/\(data:image\/[^;]+;base64,[A-Za-z0-9+/=]+\)/g, '(image)')
@@ -42,16 +31,13 @@ export function decodeEntities(s: string): string {
 export function htmlToMarkdown(html: string): string {
   let s = html;
 
-  // Drop non-content elements wholesale (content + tags).
   s = s.replace(/<!--[\s\S]*?-->/g, '');
   s = s.replace(/<(script|style|noscript|template|svg|head)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
 
-  // Headings → markdown.
   s = s.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_, lvl: string, inner: string) => {
     return `\n\n${'#'.repeat(Number(lvl))} ${stripTags(inner).trim()}\n\n`;
   });
 
-  // Links → [text](href).
   s = s.replace(/<a\b[^>]*?href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, inner: string) => {
     const text = stripTags(inner).trim();
 
@@ -62,14 +48,10 @@ export function htmlToMarkdown(html: string): string {
     return `[${text}](${href})`;
   });
 
-  // List items.
   s = s.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_, inner: string) => `\n- ${stripTags(inner).trim()}`);
-  // Table cells → space-separated.
   s = s.replace(/<\/td>\s*<td\b[^>]*>/gi, ' | ');
   s = s.replace(/<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_, _t, inner: string) => `${stripTags(inner).trim()} `);
-  // Line breaks.
   s = s.replace(/<br\s*\/?>(?!\n)/gi, '\n');
-  // Block boundaries → blank lines.
   s = s.replace(new RegExp(`</(?:${BLOCK_TAGS})>`, 'gi'), '\n\n');
   s = s.replace(new RegExp(`<(?:${BLOCK_TAGS})\\b[^>]*>`, 'gi'), '\n');
 
@@ -77,7 +59,6 @@ export function htmlToMarkdown(html: string): string {
   s = decodeEntities(s);
   s = stripBase64Images(s);
 
-  // Collapse runaway whitespace.
   s = s
     .replace(/[ \t]+/g, ' ')
     .replace(/ *\n */g, '\n')

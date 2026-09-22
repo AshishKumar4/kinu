@@ -1,8 +1,5 @@
-// Behavior tests for the prompt-section template engine.
-//
-// The engine's whole justification is that prompt prose becomes an addressable
-// value, so the two properties that matter are: it renders the same bytes the
-// hand-written string did, and it refuses to render silently-wrong bytes.
+// Prompt-section template engine: renders the hand-written bytes exactly and
+// refuses to render silently-wrong bytes.
 import { describe, expect, test } from 'bun:test';
 import { definePromptSection, templateContract, type TemplateSlots } from '../src/prompting/template';
 import { readFileSync } from 'node:fs';
@@ -10,14 +7,10 @@ import { join } from 'node:path';
 import { buildSystemPromptSync } from '../src/prompt';
 import { BUILTIN_TOOL_LINE } from '../src/prompting/section-templates';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS, type BuiltinToolName } from '../src/tools/registry';
-// Narrow import: a prompt-template test has no business pulling the core barrel
-// (orchestrator, heads, chat) in behind a test runtime.
+// Narrow import: keep the core barrel out of this test.
 import { createTestRuntime } from '../../test-utils/src/runtime';
 
-/** Longest common prefix of two strings, in code units — the cache measurement. */
-/** A section source as it arrives at runtime — a store row, or a template GEPA
- *  rewrote. The `string` parameter erases the slot contract the compiler infers
- *  from an inline literal, which is the door these tests come through. */
+/** Typed as `string` to erase the inferred slot contract, as a runtime source does. */
 function storedSource(source: string): string {
   return source;
 }
@@ -48,7 +41,7 @@ describe('definePromptSection — rendering', () => {
       id: 't/repeat', template: '{{v}}-{{v}}-{{v}}', value: 'q', text: 'q-q-q',
     },
     {
-      // The distinction that matters: absent is a bug, empty is a decision.
+      // Absent is a bug; empty is a decision.
       name: 'an empty string is a legal value and renders empty',
       id: 't/empty', template: 'A{{v}}B', value: '', text: 'AB',
     },
@@ -63,17 +56,13 @@ describe('definePromptSection — rendering', () => {
   }
 
   test('interpolated content is never rewritten — no whitespace normalisation', () => {
-    // OpenSeal's engine ends compile() with .replace(/\n{3,}/g,'\n\n') plus an
-    // outer trim, which silently rewrites whatever was interpolated. Doing that
-    // here would mutate SOUL.md / SKILL.md bodies on their way into the prompt
-    // and make byte-identical conversion of an existing section impossible.
+    // No blank-line collapsing or trim: interpolated SOUL.md / SKILL.md bodies must pass through unchanged.
     const section = definePromptSection('t/verbatim', '[{{body}}]');
     const body = '\n\n\n\nkeep   every   byte\t\n\n\n';
     expect(section.render({ body })).toBe(`[${body}]`);
   });
 
   test('a slot value containing {{ }} is not re-parsed', () => {
-    // Tool examples are arbitrary code. Substituted text is output, not source.
     const section = definePromptSection('t/nested', '<{{code}}>');
     expect(section.render({ code: 'f({{x}})' })).toBe('<f({{x}})>');
   });
@@ -87,11 +76,7 @@ describe('definePromptSection — rendering', () => {
 });
 
 describe('definePromptSection — a missing slot fails loudly', () => {
-  // The type system stops a missing slot when the source is a literal. It cannot
-  // when the source arrives at runtime — which is exactly the case this engine
-  // exists to enable (a section loaded from a store, or rewritten by GEPA). So
-  // the runtime check is the one that has to hold, and it is tested through that
-  // same door: `source` typed as `string` erases the slot contract.
+  // A runtime source (store row, GEPA rewrite) has no compile-time contract, so the runtime check must hold.
   const fromStore = storedSource('A {{present}} B {{absent}} C');
 
   test('throws, naming the section and the slot, instead of rendering empty', () => {
@@ -144,16 +129,13 @@ describe('definePromptSection — cache-prefix stability, measured', () => {
   test('changing one slot leaves every byte ahead of it untouched', () => {
     const base = section.render({ first: '1', second: '2', third: '3' });
     const changed = section.render({ first: '1', second: '2', third: 'CHANGED' });
-    // The first genuine difference is where `third` is substituted, so the
-    // common prefix must reach exactly that index — not one byte less.
     const firstDifference = base.indexOf('3', base.indexOf('TAIL '));
     expect(commonPrefixLength(base, changed)).toBe(firstDifference);
     expect(base.slice(0, firstDifference)).toBe(changed.slice(0, firstDifference));
   });
 
   test('slot order follows the source, never the data object', () => {
-    // Key order in the caller's literal must not reach the output, or the
-    // prefix would move whenever a call site was reformatted.
+    // Caller key order must not move the prefix.
     const forward = section.render({ first: 'a', second: 'b', third: 'c' });
     const shuffled = section.render({ third: 'c', first: 'a', second: 'b' });
     expect(shuffled).toBe(forward);
@@ -161,9 +143,7 @@ describe('definePromptSection — cache-prefix stability, measured', () => {
 });
 
 describe('TemplateSlots — the typed boundary', () => {
-  // Exact type equality: if the extracted contract gained or lost a key, or
-  // widened, `true satisfies Exact<…>` stops compiling. `satisfies` rather than
-  // an annotation so the literal is not widened.
+  // `true satisfies Exact<…>` stops compiling if the contract gains, loses, or widens a key.
   type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
   test('extracts exactly the declared slots, as required readonly strings', () => {
@@ -198,9 +178,7 @@ describe('TemplateSlots — the typed boundary', () => {
     expect(exact).toBe(true);
   });
 
-  // One test, because the contract is type-level: `TemplateSlots<…>` takes its
-  // template as a literal type, so a table cannot drive these the way it drives
-  // a rendering case.
+  // Type-level contract: the template must be a literal type, so no table.
   test('a flag is one required key however it is written, and no block token joins it', () => {
     const usedTwice = true satisfies Exact<
       TemplateSlots<'{{#if on}}a{{/if}}{{#if on}}b{{/if}}'>,
@@ -230,8 +208,7 @@ describe('{{#if}} — prose that branches on one declared boolean', () => {
   });
 
   test('the newline-inside-the-block idiom drops a line WITH its separator', () => {
-    // The whole reason a conditional can replace `lines.push()` + `join('\n')`
-    // byte-for-byte: an omitted line must not leave the newline that joined it.
+    // An omitted line must not leave its joining newline.
     expect(section.render({ hasShell: false }).endsWith('- always')).toBe(true);
     expect(section.render({ hasShell: false })).not.toContain('\n\n');
   });
@@ -267,8 +244,6 @@ describe('{{#if}} — prose that branches on one declared boolean', () => {
 });
 
 describe('{{#if}} — a flag with no value fails loudly, like every other slot', () => {
-  // Same door as the missing-slot tests above: `string` erases the compile-time
-  // contract, which is exactly the shape a promoted candidate arrives in.
   const fromStore = storedSource('A{{#if flag}}B{{/if}}');
 
   test('an absent flag throws naming it — the section never silently vanishes', () => {
@@ -280,8 +255,7 @@ describe('{{#if}} — a flag with no value fails loudly, like every other slot',
 
   test('a string where a flag belongs throws, and says which spelling to use', () => {
     const section = definePromptSection('t/flag-typed', fromStore);
-    // No assertion needed to write this: a runtime source declares no contract,
-    // so the compiler has nothing to object to. That IS the case under test.
+    // A runtime source declares no contract, so this compiles; that is the case under test.
     const stringWhereFlagBelongs = { flag: 'true' };
     expect(() => section.render(stringWhereFlagBelongs)).toThrow(
       /flag \{\{#if flag\}\} is a boolean slot but was given a string — write \{\{flag\}\}/,
@@ -330,8 +304,6 @@ describe('{{#if}} — a malformed conditional fails at definition', () => {
   });
 
   test('rejects {{#each}} BY NAME, pointing at where iteration lives', () => {
-    // The tag a writer reaches for next. Swept into "malformed slot" it reads as
-    // a typo; named, it reads as the design decision it is.
     expect(() => definePromptSection('t/each', '{{#each items}}x{{/each}}')).toThrow(
       /unknown block tag "\{\{#each items\}\}" at index 0 — .*iteration stays in TypeScript/,
     );
@@ -347,8 +319,7 @@ describe('renderFrom — the door a promoted candidate comes through', () => {
   });
 
   test('a replacement that drops a slot is legal; one that invents a slot throws', () => {
-    // The contract check that stops the second case BEFORE a turn renders it is
-    // `templateContract`, used by the promotion gate — this is the backstop.
+    // `templateContract` in the promotion gate catches this first; this is the backstop.
     expect(section.renderFrom('static prose', { v: 'q', on: true })).toBe('static prose');
     expect(() => section.renderFrom('{{invented}}', { v: 'q', on: true })).toThrow(
       /slot \{\{invented\}\} has no value/,
@@ -378,16 +349,7 @@ describe('templateContract — what a candidate must declare', () => {
 });
 
 describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
-  // `expectedLine` is derived from the specs WITHOUT the engine, so this fails
-  // if the template's wording, spacing, separator or backticks drift.
-  //
-  // 2026-08-25: the line lost its `{{summary}}`. The summary is line 1 of the
-  // same tool's schema description, which ships in the same request, so the
-  // index was sending all eight of them twice (942 chars). The example is what
-  // only the index carries. The derivation is unchanged in kind: it just
-  // describes the one-line shape now, and the second test below makes the
-  // removal a PROVEN property rather than a note, so the duplicate cannot
-  // quietly come back.
+  // `expectedLine` is derived from the specs without the engine, so wording drift fails.
   function expectedLine(name: BuiltinToolName): string {
     const spec = BUILTIN_TOOL_SPECS[name];
 
@@ -403,9 +365,7 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
   });
 
   test('the line never carries the summary the schema description already ships', () => {
-    // The duplication this template was slimmed to remove. Asserted on the
-    // rendered line rather than on the source, so re-adding it through a
-    // promoted section override fails here too.
+    // Asserted on the rendered line, so a promoted override re-adding it fails too.
     for (const name of BUILTIN_TOOLS) {
       const spec = BUILTIN_TOOL_SPECS[name];
       expect(BUILTIN_TOOL_LINE.render({ name, example: spec.example }))
@@ -416,27 +376,20 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
   test('those exact bytes reach the built prompt', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    // Not every built-in renders on every surface; each one that does must
-    // render byte-exactly, and at least one must, or this proves nothing.
+    // At least one built-in must render, or this proves nothing.
     const present = BUILTIN_TOOLS.filter((name) => prompt.includes(`- **${name}**:`));
     expect(present.length).toBeGreaterThan(0);
 
     for (const name of present) expect(prompt).toContain(expectedLine(name));
   });
 
-  // Cut-the-wire: byte-identity alone cannot tell a live template from a
-  // reverted inline literal, because both produce the same bytes. This asserts
-  // the builder actually goes through the section, using the same source-text
-  // idiom as unit-gepa-split-wiring.test.ts. The whole-prompt version of this
-  // check — no section prose left anywhere in the builder — is in
-  // unit-prompt-sections.test.ts.
+  // Byte identity cannot tell a live template from a reverted inline literal; assert the builder uses the section.
   test('the builder renders the tool line THROUGH the template, not inline', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'prompt.ts'), 'utf8');
     const start = source.indexOf('function renderBuiltinToolLine(');
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('\n}', start));
     expect(body).toContain('render(BUILTIN_TOOL_LINE,');
-    // The literal it replaced must be gone, or both paths exist and drift.
     expect(body).not.toContain('- **${name}**');
     expect(source).toContain('BUILTIN_TOOL_LINE,');
   });

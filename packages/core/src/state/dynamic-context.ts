@@ -1,18 +1,5 @@
-/**
- * Where each plane of the agent's live per-step state is READ FROM.
- *
- * `agentDynamicContext` (prompting/volatile-context.ts) owns which planes exist
- * and when one is omitted rather than rendered empty, and it is deliberately
- * structural — "how a backend journals a head run or registers a job is not
- * this layer's business". That left the binding itself — which store answers
- * each plane — stated once per backend, in two eight-field literals that
- * differed only in how each side happened to name its own fields. This module
- * is that binding, held once.
- *
- * Only the two genuinely per-turn inputs stay arguments: the MEMORY.md tail
- * (the one read behind an await, so the caller closes over it) and the
- * unavailable-MCP roster, which each backend learns from its own connect path.
- */
+// Binds each dynamic-context plane to the store that answers it, once for both backends.
+// `agentDynamicContext` (prompting/volatile-context.ts) owns which planes exist.
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
@@ -34,27 +21,12 @@ import type { ToolSet } from 'ai';
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
   readonly stores: AgentStores;
-  /** The profile already bound to the inference, never an ambient fallback. */
   readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
-  /** The actual callable surface bound to the same inference. */
   readonly tools: ToolSet;
-  /** The turn's MEMORY.md tail — read once per turn behind the only await in
-   *  this plane, so the caller passes it rather than re-reading per step. */
+  /** Read once per turn by the caller (the only await in this plane). */
   readonly memoryTail: string | undefined;
-  /** MCP servers this backend's connect path could not reach. */
   readonly missingCapabilities: readonly MissingCapability[];
-  /**
-   * The planes only the backend's own stores can answer, passed as typed source
-   * callbacks so the assembler stays the ONE place a plane is bound and no
-   * backend re-splices fields over the assembled result.
-   *
-   * - `subordinateDelegates` — this actor's own hires, listed ahead of the
-   *   search roster `HeadJournal.listLive()` contributes.
-   * - `approvals` — decisions currently parked on the user.
-   *
-   * Backend-only capability notices join `missingCapabilities` at the adapter
-   * boundary instead of widening this shared contract with a one-sided field.
-   */
+  /** Backend-only planes, as callbacks so no backend re-splices the assembled result. */
   readonly subordinateDelegates?: () => readonly DynamicDelegate[];
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
 }
@@ -74,13 +46,7 @@ export function subordinateDelegatesOf(
   }));
 }
 
-/**
- * The live state of one agent, read fresh for ONE model step.
- *
- * Every field comes from its existing store, and nothing is clock-derived: a
- * wall-clock field would re-fingerprint the block on every request and append a
- * block per step.
- */
+/** Nothing clock-derived: a wall-clock field would re-fingerprint the block every step. */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
   const { profile } = input;
@@ -95,8 +61,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),
     executors: rt.executionRouter?.listExecutors() ?? [],
-    // The fleet, off the transport's cached snapshot: sync, cheap, and the
-    // same read the executor row is derived from, so the two cannot disagree.
+    // Same cached snapshot the executor row reads, so the two agree.
     devices: rt.deviceTransport?.status().devices,
     runningJobs: stores.jobs.listRunning(),
     openTasks: stores.taskList.listOpen(),

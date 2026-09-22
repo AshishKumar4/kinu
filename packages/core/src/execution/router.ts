@@ -1,7 +1,3 @@
-/**
- * Default ExecutionRouter — manages executor providers for codemode sandbox.
- */
-
 import type {
   ExecutionRouter,
   ExecutorProvider,
@@ -14,13 +10,7 @@ import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/ap
 export class DefaultExecutionRouter implements ExecutionRouter {
   private readonly providers = new Map<string, ExecutorProvider>();
 
-  /**
-   * Every provider this router hands out — to `shell`'s dispatch via
-   * `getProvider` and to codemode via `getProviders` — answers to the SAME
-   * approval policy, applied once here rather than by each caller. Backends
-   * with no live policy to thread (heads, tests) fall back to the safe
-   * default: strict, nobody to ask. See execution/approval.ts.
-   */
+  /** Every provider is gated once with this policy on register; default is strict with no channel. */
   constructor(private readonly approvalPolicy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY) {}
 
   register(provider: ExecutorProvider): void {

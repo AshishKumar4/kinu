@@ -1,22 +1,11 @@
-/**
- * The Canvas2D half of the living art: the `ArtFrame` renderer every
- * picture draws through when there is no GPU (the search tree, the
- * connectome), and the phone's dust. Nothing in here mounts, observes, or
- * runs a clock — a component supplies the canvas, the palette, and the
- * cadence; a recording stub supplies the same surface in tests, which is how
- * the renderers are proved against the frame.
- */
+/** Canvas2D renderers for the living art (non-GPU `ArtFrame` pictures and the phone's dust); no mounting, observing, or clocks. */
 
 import {
   type ArtPalette, type ArtRenderer, cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, seededRandom, STROKE_STRIDE, TONE_ASH,
   TONE_BRIGHT, TONE_EMBER,
 } from './art';
 
-/**
- * The slice of CanvasRenderingContext2D this renderer draws with. A real
- * context satisfies it; so does a recording stub in a test, which is how the
- * two renderers are proved to read one frame the same way.
- */
+/** The CanvasRenderingContext2D slice this renderer uses; tests satisfy it with a recording stub. */
 export interface StrokeSurface {
   lineWidth: number;
   lineCap: CanvasLineCap;
@@ -34,9 +23,7 @@ export interface StrokeSurface {
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient;
 }
 
-/** How much more presence the mesh carries on paper: the light-mode lift,
- *  measured 2026-09-16 against the rebased rim-band target (2.0-2.5x the
- *  light baseline). Strokes and pulses share it; dark is untouched. */
+/** Light-mode lift for the mesh; strokes and pulses share it, dark is untouched. */
 const LIGHT_LIFT = 2.4;
 
 function mix(from: Rgb, to: Rgb, amount: number): Rgb {
@@ -47,11 +34,7 @@ function mix(from: Rgb, to: Rgb, amount: number): Rgb {
   ];
 }
 
-/** The same tone rule the WGSL palette module applies: an ordinary attempt
- *  is cooler the weaker it scores (on paper the mix runs toward the
- *  text-grade gold, so the mesh reads against the light ground), the kept
- *  path is the gold (deepened to the text-grade gold on paper), ash is
- *  ash, an ember is a cooling gold. */
+/** Same tone rule as the WGSL palette module. */
 function toneColor(palette: ArtPalette, tone: number, glow: number): Rgb {
   if (tone === TONE_BRIGHT) return palette.mode === 'light' ? palette.bright : palette.accent;
 
@@ -59,25 +42,18 @@ function toneColor(palette: ArtPalette, tone: number, glow: number): Rgb {
 
   if (tone === TONE_EMBER) return mix(palette.accent, palette.ash, 0.35);
 
-  // Tone 0, an ordinary attempt.
   if (palette.mode === 'light') return mix(palette.ash, palette.bright, 0.35 + 0.65 * glow);
 
   return mix(palette.ash, palette.accent, 0.35 + 0.65 * glow);
 }
 
-/** Every tree colour sits behind the copy: it recedes toward the ground by RECESS. */
+/** Every tree colour recedes toward the ground by RECESS. */
 function recede(palette: ArtPalette, color: Rgb): Rgb {
   return mix(color, palette.ground, RECESS);
 }
 
-/**
- * Canvas2D drawing of an `ArtFrame`: the same frame the WebGPU renderer
- * draws, without a bloom pass. Bright strokes get one wide faint underlay so
- * the best path still reads as lit, which costs a second stroke only for the
- * few strokes that earn it.
- */
-/** What either renderer leaves behind when it is torn down: the transform reset
- *  and the whole device-pixel canvas wiped. */
+/** Canvas2D drawing of the same `ArtFrame` as the WebGPU renderer, without bloom; bright strokes get one faint underlay. */
+/** Teardown: reset the transform and wipe the whole device-pixel canvas. */
 function clearSurface(
   surface: Pick<DustSurface, 'setTransform' | 'clearRect'>,
   size: { width: number; height: number; ratio: number },
@@ -110,9 +86,7 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
     context.quadraticCurveTo(qx, qy, qx + (rx - qx) * t, qy + (ry - qy) * t);
   };
 
-  // The stretch of an edge's curve a pulse lights, tail to head: B(t) read at
-  // either end, the control point from the quadratic's blossom. The t values
-  // may run either way — a returning pulse has tail past head.
+  // Sub-curve a pulse lights, via the quadratic's blossom; a returning pulse has tail past head.
   const span = (pulses: Float32Array, at: number): readonly [number, number, number, number, number, number] => {
     const x0 = (pulses[at] ?? 0) * width;
     const y0 = (pulses[at + 1] ?? 0) * height;
@@ -159,8 +133,6 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
         const at = index * STROKE_STRIDE;
         const glow = strokes[at + 8] ?? 0;
         const tone = strokes[at + 9] ?? 0;
-        // On paper the mesh carries extra presence: a light-only lift that
-        // leaves the dark picture exactly where it was.
         const alpha = (strokes[at + 10] ?? 0) * (palette.mode === 'light' ? LIGHT_LIFT : 1);
         const lineWidth = strokes[at + 7] ?? 1;
 
@@ -185,7 +157,6 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
         const lineWidth = pulses[at + 8] ?? 1;
         const glow = pulses[at + 9] ?? 0;
         const tone = pulses[at + 10] ?? 0;
-        // Pulses share the paper lift, so the whole mesh steps up as one.
         const alpha = (pulses[at + 11] ?? 0) * (palette.mode === 'light' ? LIGHT_LIFT : 1);
 
         if (alpha <= 0.004 || (pulses[at + 6] ?? 0) === (pulses[at + 7] ?? 0)) continue;
@@ -246,34 +217,22 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
   };
 }
 
-/**
- * The dust the hero settles for on a phone: small gold motes adrift in warm
- * light, too slow to read as motion and faint enough to sit under type. Pure
- * and deterministic — the same seed and the same `step(dt)` sequence produce
- * the same frame on any runtime. There is no DOM here and no drawing; the
- * renderer at the bottom reads `frame()` and draws what it says.
- */
+/** Phone dust: faint gold motes, deterministic for a given seed and `step(dt)` sequence. No DOM, no drawing. */
 
-/** One mote in the frame buffer: x, y in the unit box, radius in CSS px, alpha in 0..1. */
+/** One mote: x, y in the unit box, radius in CSS px, alpha in 0..1. */
 const DUST_STRIDE = 4;
 
-/** Top speed of a mote in box widths per second: over a minute to cross a phone. */
+/** Top speed in box widths per second. */
 const MAX_DRIFT = 0.015;
 
-/** Alpha of a mote's core at full twinkle; the halo is a tenth of it. Set
- *  where the paragraph keeps WCAG AA under the worst pixel a mote puts behind
- *  it: measured 2026-09-13 at 390×844 and 430×932, the mean and 1% tail did
- *  not move and the worst pixel read 4.62 on dark and 4.50 on paper. */
+/** Core alpha at full twinkle (halo is a tenth); set to keep paragraph text at WCAG AA over the worst mote pixel. */
 const CORE_ALPHA: Record<ArtPalette['mode'], number> = { dark: 0.18, light: 0.18 };
 
-/** How far past an edge a mote drifts before it re-enters on the far side. */
 const WRAP_MARGIN = 0.02;
 
 const WRAP_SPAN = 1 + 2 * WRAP_MARGIN;
 
-/** The wander's vertical swing, in box heights per second. Sideways a mote
- *  draws a fifth to four-fifths of MAX_DRIFT; vertically the range below plus
- *  this never reaches it either, so nothing is clamped at runtime. */
+/** Vertical wander in box heights per second; chosen so drift never exceeds MAX_DRIFT and needs no clamp. */
 const WANDER = 0.004;
 
 export interface DustOptions {
@@ -283,7 +242,6 @@ export interface DustOptions {
 
 export interface DustFrame {
   readonly count: number;
-  /** `count` motes of DUST_STRIDE floats: x, y, radius, alpha. */
   readonly motes: Float32Array<ArrayBuffer>;
 }
 
@@ -337,7 +295,7 @@ export class DustField {
     return this.elapsed;
   }
 
-  /** height / width of the box, so vertical drift is scaled by 1/aspect and motion is isotropic in pixels. */
+  /** height / width of the box, so drift is isotropic in pixels. */
   setAspect(aspect: number): void {
     this.aspect = aspect;
   }
@@ -372,7 +330,6 @@ export class DustField {
   }
 }
 
-/** The slice of CanvasRenderingContext2D the dust draws with; a recording stub satisfies it in tests. */
 export interface DustSurface {
   fillStyle: string | CanvasGradient | CanvasPattern;
   globalAlpha: number;
@@ -391,11 +348,7 @@ export interface DustRenderer {
   dispose(): void;
 }
 
-/**
- * Canvas2D drawing of the dust field: every mote is a wide faint halo under a
- * denser core, in the same gold the tree's kept path wears — deepened to the
- * text-grade gold on paper, the same rule toneColor applies to TONE_BRIGHT.
- */
+/** Canvas2D drawing of the dust field: a faint halo under a denser core, in the tree's kept-path gold. */
 export function createDustRenderer(context: DustSurface, initialPalette: ArtPalette): DustRenderer {
   let palette = initialPalette;
   let width = 1;

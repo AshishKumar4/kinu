@@ -1,6 +1,4 @@
-/**
- * Unit tests: scaffold 4-gate validation + rollback.
- */
+/** Scaffold gate validation and rollback. */
 
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestSql } from '@kinu.run/test-utils';
@@ -23,8 +21,6 @@ describe('Scaffold modification (4-gate)', () => {
     expect(result.stage).toBe(1);
   });
 
-  // Every gate-one refusal: the source a proposal may not carry, and the one
-  // shape it must. `says` is asserted where the message itself is the contract.
   const refusedSources = [
     { name: 'rejects code with import statement', code: 'import fs from "fs";\nasync function* run(rt, task) {}', says: 'Forbidden pattern' },
     { name: 'rejects code with require()', code: 'const x = require("fs");\nasync function* run(rt, task) {}', says: null },
@@ -70,11 +66,8 @@ describe('Scaffold modification (4-gate)', () => {
   });
 
   test('pending writes to versioned file, NOT live scaffold/agent.js', async () => {
-    // Closure of `kinu-scaffold-gap`: modifyScaffold routes pending into
-    // scaffold/agent.js.v{N} only and never overwrites the live file at
-    // proposal time, which would make shadow eval compare a file to itself.
-    // The live file remains the current scaffold's content until
-    // applyPromotion runs.
+    // Pending goes to scaffold/agent.js.v{N}; the live file changes only on applyPromotion,
+    // or shadow eval would compare a file to itself.
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
@@ -91,11 +84,9 @@ describe('Scaffold modification (4-gate)', () => {
     );
 
     expect(result.ok).toBe(true);
-    // Live file must be untouched.
     const liveAfter = await rt.identity.scaffold.read();
     expect(liveAfter).toBe(before);
 
-    // Pending code must be readable from the versioned file.
     const pending = await rt.storage.vfs.readFile(
       `scaffold/agent.js.v${result.version}`,
       { encoding: 'utf8' },
@@ -111,8 +102,7 @@ describe('Scaffold rollback', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
 
-    // Write initial version — source file plus its metadata row, since a
-    // version without a row cannot be the current pointer.
+    // A version needs its metadata row to be the current pointer.
     await rt.storage.vfs.writeFile('scaffold/agent.js.v0', 'original code');
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale)
                    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'original'})`;
@@ -136,11 +126,7 @@ describe('Scaffold rollback', () => {
 
 describe('scaffold host callTool ids', () => {
   test('scope-less calls under a frozen clock each run their effect', async () => {
-    // The scope-less id was `scaffold-${Date.now()}`: two calls inside one
-    // millisecond shared one id, and the tool-effect claim replayed the
-    // first call's stored result for the second instead of running it.
-    // Driven through the real claim wrapper over real SQL, because the
-    // claim IS the row.
+    // Ids must be unique within a millisecond, or the tool-effect claim replays the first result.
     const { sql, execRaw } = createTestSql();
     initToolEffectClaimTable(execRaw);
 

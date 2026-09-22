@@ -156,7 +156,7 @@ export async function handleDeployRequest(request: Request, env: Env): Promise<R
     if (parsed === null) return err(400, 'That is not a Cloudflare token pair.');
     const clientId = deployClientId(env);
 
-    if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
+    if (clientId === '') return err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.');
     await stub.landToken(clientId, parsed.accessToken, parsed.refreshToken, parsed.expiresInSeconds);
 
     return json({ body: { authorized: true } });
@@ -200,7 +200,7 @@ async function options(request: Request, env: Env): Promise<Response> {
     prompts: promptedSecrets(manifest),
     reason: configured
       ? ''
-      : 'The Cloudflare door needs an OAuth client, and this deployment has none configured yet.',
+      : 'This Kinu has no Cloudflare OAuth client configured yet.',
   };
 
   return json({ body: offer });
@@ -228,7 +228,7 @@ async function create(env: Env): Promise<Response> {
 async function authorize(request: Request, env: Env, stub: DurableObjectStub<DeployRunDO>): Promise<Response> {
   const clientId = deployClientId(env);
 
-  if (clientId === '') return err(503, 'The Cloudflare door has no OAuth client configured.');
+  if (clientId === '') return err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.');
 
   const pkce = await createPkcePair();
   const state = await stub.holdAuthorization(pkce.verifier);
@@ -268,7 +268,7 @@ async function callback(request: Request, env: Env, url: URL): Promise<Response>
 
   const clientId = deployClientId(env);
 
-  if (clientId === '') return burnt(err(503, 'The Cloudflare door has no OAuth client configured.'));
+  if (clientId === '') return burnt(err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.'));
 
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, url.origin).href;
 

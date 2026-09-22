@@ -1,16 +1,4 @@
-/**
- * The one-click MCP presets — a row per `MCP_PRESETS` entry in the plugins
- * page's row grammar (the brand's mark on a tile, the name, the catalog's own
- * one line, one trailing control) so the Plugins list and the MCP panel read
- * as one surface.
- *
- * A row's state is the server row the account already holds: `preset_id` tags
- * it, so the same server the panel lists is what flips this row to Connected.
- * `oauth` presets connect in one click — the SDK answers an authorize URL,
- * which opens in a new tab (the same pattern the add form uses). `token`
- * presets expand one labelled field under the row. Removal is the ordinary
- * server remove, under the added row's own menu.
- */
+/** One-click MCP preset rows; a row's state is the account's server row tagged with its `preset_id`. */
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import {
@@ -29,25 +17,19 @@ import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION, PLUGIN_PILL } from "@/components/plugins/PluginRow";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
-/** Each provider's official mark; the tile is the brand's own — a mark drawn
- *  in its own hex reads on the tile BrandMark picks for it in either theme.
- *  At 22px the tile it draws is the row's 40px. */
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
   cloudflare: "cloudflare",
   google: "google",
 };
 
-/** The mark a stored server wears where a preset tagged it. `preset_id` is an
- *  arbitrary string on the wire, so the catalog is what resolves it. */
+/** `preset_id` is an arbitrary string on the wire; the catalog resolves it. */
 export function presetBrand(presetId: string | null): BrandName | undefined {
   const preset = presetId === null ? undefined : mcpPresetById(presetId);
 
   return preset === undefined ? undefined : PRESET_MARK[preset.id];
 }
 
-/** The one status a preset row says. Rows that are mid-flight still read as
- *  one word; 'Not added' means no row claims this preset at all. */
 function presetWord(server: McpServerSummary | undefined) {
   switch (server?.status) {
     case undefined:
@@ -66,8 +48,6 @@ function presetWord(server: McpServerSummary | undefined) {
   }
 }
 
-/** An added row's one control: the state its server is in, and — on click —
- *  the two things a person does with it. */
 function PresetMenu({ preset, word, dot, onRemove }: {
   preset: McpPreset;
   word: string;
@@ -109,9 +89,7 @@ function PresetMenu({ preset, word, dot, onRemove }: {
 function PresetRow({ preset, server, appConfigured, onChanged }: {
   preset: McpPreset;
   server: McpServerSummary | undefined;
-  /** Whether the deployment carries this preset's registered OAuth app.
-   *  `undefined` while the availability read is still open — optimistic, so
-   *  a configured row never flickers into its fallback on first paint. */
+  /** `undefined` while loading, treated as configured so a row never flickers to its fallback. */
   appConfigured: boolean | undefined;
   onChanged: () => void;
 }) {
@@ -124,10 +102,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   const brand = PRESET_MARK[preset.id];
   const added = server !== undefined;
 
-  // Sign-in exists for every preset that answers an authorize URL: 'oauth'
-  // unconditionally (the server registers the client itself), 'oauth-app'
-  // only while the deployment carries the registration. Without it, an
-  // oauth-app row asks for its token fallback instead.
+  // 'oauth' always signs in; 'oauth-app' only with the deployment's registration, else token fallback.
   const signIn = preset.auth === 'oauth' || (preset.auth === 'oauth-app' && appConfigured !== false);
 
   const tokenLabel = preset.auth === 'oauth-app'
@@ -176,8 +151,6 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   const asking = openToken && !added;
 
-  // The row's one control, by what the row can do next: remove what it holds,
-  // drop the field it opened, or add itself.
   let trailing: ReactNode;
 
   if (added) {
@@ -208,8 +181,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
         <div className="mt-2 space-y-1 pl-[52px]">
           {asking && (
             <div className="flex items-center gap-2">
-              {/* A credential region: the typed value must not reach a feedback
-                  screenshot, so it carries the same marker the add form does. */}
+              {/* Credential region: the marker keeps the value out of feedback screenshots. */}
               <input {...SECRET_REGION} type="password" autoComplete="off"
                 value={token} onChange={(e) => setToken(e.target.value)}
                 aria-label={tokenLabel} placeholder={tokenLabel}
@@ -232,12 +204,8 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   );
 }
 
-/** One row per preset; rendered as a fragment so the caller's list owns the
- *  layout (the plugins page's two-column list, the panel's own column in
- *  account surfaces). An `oauth-app` preset with no configured app and no
- *  token fallback offers nothing, so its row only appears once the user has
- *  added the server another way — while the availability read is open the
- *  row renders as though configured rather than vanish on first paint. */
+/** Fragment so the caller owns layout. An unconfigured `oauth-app` preset without a token
+ *  fallback appears only once added; while loading it renders as configured. */
 export function McpPresetCards({ servers, availability, onChanged }: {
   servers: readonly McpServerSummary[];
   availability: readonly { id: string; appConfigured: boolean }[] | undefined;

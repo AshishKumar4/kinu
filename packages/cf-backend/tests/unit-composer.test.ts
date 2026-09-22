@@ -25,7 +25,7 @@ import type { WorkspaceNotice } from '../src/hooks/use-kinu';
 
 const BLOCKING: WorkspaceNotice = {
   severity: 'blocking',
-  title: "Couldn't open this workspace",
+  title: "Could not open this workspace",
   scope: 'Nothing has loaded yet.',
   detail: 'Network connection lost.',
   retry: 'Retry',
@@ -41,7 +41,7 @@ const PARTIAL: WorkspaceNotice = {
 
 const ACTION_ONLY: WorkspaceNotice = {
   severity: 'partial',
-  title: "Couldn't switch model: rejected",
+  title: "Could not switch model: rejected",
   scope: '',
   detail: '',
   retry: null,
@@ -65,7 +65,7 @@ describe('workspaceLoadNotice', () => {
     expect(workspaceLoadNotice(BLOCKING, () => {})).toEqual({
       id: 'load',
       tone: 'danger',
-      title: "Couldn't open this workspace",
+      title: "Could not open this workspace",
       text: 'Nothing has loaded yet.',
       detail: 'Network connection lost.',
       action: expect.objectContaining({ label: 'Retry' }),
@@ -84,7 +84,7 @@ describe('workspaceLoadNotice', () => {
     expect(notice).toEqual({
       id: 'load',
       tone: 'warning',
-      title: "Couldn't switch model: rejected",
+      title: "Could not switch model: rejected",
     });
   });
 });

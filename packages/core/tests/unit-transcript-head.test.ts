@@ -1,17 +1,6 @@
 /**
- * The conversation head, and what a read does when it no longer resolves.
- *
- * `conversation_heads` is the entry every transcript read walks back from, and
- * `newestId()` trusted it without asking whether it still names a row. The
- * owner's report ("the chat had been cleared and only my original msg
- * remained") is what that produces: a head naming an entry this session does
- * not hold takes every read down an ancestry walk that dies on an anonymous
- * "entry is missing", with nothing naming the head, nothing recorded, and the
- * next message chaining onto the dangling id.
- *
- * So a head that does not resolve is a REPORTED fault — the refusal names the
- * session and the entry, and a diagnostics record carries it — and the writer
- * that could store one refuses instead.
+ * A `conversation_heads` entry that no longer resolves is a reported fault naming the
+ * session and entry, and the writer refuses to store one.
  */
 import { describe, test, expect, afterEach } from 'bun:test';
 import { present } from '@kinu.run/test-utils';
@@ -35,7 +24,6 @@ interface Fixture extends TestWorkspace {
   readonly transcript: SessionTranscript;
 }
 
-/** Three entries through the canonical writers, then the head they left. */
 async function seeded(): Promise<Fixture> {
   const ws = createTestWorkspace();
   const actor = createTestActor(ws.sql, ws.execRaw, 'ws-head', 'head');
@@ -55,7 +43,6 @@ async function seeded(): Promise<Fixture> {
   return { ...ws, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** Storage carrying a head no writer is allowed to produce. */
 function danglingHead(fixture: Fixture, entryId: string): void {
   void fixture.sql`UPDATE conversation_heads SET entry_id=${entryId}
     WHERE actor_id=${fixture.actor.actorId} AND session_id=${CHAT_SESSION_ID}`;

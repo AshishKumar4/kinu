@@ -1,28 +1,18 @@
 /**
- * A short signature over a public label, checked at the edge before anything
- * touches a Durable Object: a preview hostname, a blueprint address.
- *
- * WHY A SUBKEY. `CREDENTIAL_ENCRYPTION_KEY` also seals every credential the
- * owner stores (`user/credential-envelope.ts`), and a signature keyed by the
- * raw secret shares key material with that cipher, so a weakness in either
- * construction would implicate the other. HKDF with the caller's own salt and
- * info diverges a key nothing else holds; two signers with different labels
- * never verify each other's tokens. The secret's rotation list still applies,
- * because the subkey is derived from whichever secret is being tried.
+ * Short signature over a public label (preview hostname, blueprint address), checked at the edge.
+ * Signs with an HKDF subkey, never raw `CREDENTIAL_ENCRYPTION_KEY`, which also seals stored credentials.
  */
 
 import { timingSafeEqual } from './crypto';
 
-/** The two vars a signer reads: the live secret and its retired predecessors. */
 export interface LabelSignerEnv {
   CREDENTIAL_ENCRYPTION_KEY?: string;
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
 }
 
 export interface LabelSigner {
-  /** The secrets a token may verify under: the current one first, then the retired list. */
+  /** Current secret first, then the retired list. */
   secrets(env: LabelSignerEnv): string[];
-  /** The token for `message` under one secret. */
   token(secret: string, message: string): Promise<string>;
   /** Whether `token` was minted for `message` under any secret this deployment still honours. */
   verify(env: LabelSignerEnv, message: string, token: string): Promise<boolean>;
@@ -30,7 +20,7 @@ export interface LabelSigner {
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 
-/** Lowercase RFC-4648 base32 without padding — the alphabet a DNS label admits. */
+/** Lowercase RFC-4648 base32 without padding: the alphabet a DNS label admits. */
 function base32(bytes: Uint8Array): string {
   let bits = 0;
   let buffer = 0;
@@ -56,15 +46,8 @@ function utf8(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
 
-/**
- * One signer per (salt, info) pair. `length` is the token's base32 length;
- * 15 characters carry 75 bits, which is what a DNS label budget allows and
- * more than a guess can enumerate.
- */
+/** One signer per (salt, info) pair; `length` is the base32 token length (15 chars = 75 bits). */
 export function labelSigner(salt: string, info: string, length = 15): LabelSigner {
-  /** Signing keys, cached by secret. The derivation is deterministic over
-   *  material the isolate already holds, so the cache adds no exposure and
-   *  removes an HKDF from every request. */
   const signingKeys = new Map<string, Promise<CryptoKey>>();
 
   const signingKey = (secret: string): Promise<CryptoKey> => {

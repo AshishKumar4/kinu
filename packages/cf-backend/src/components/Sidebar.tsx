@@ -1,29 +1,3 @@
-/**
- * Left sidebar — the mock's 240px rail.
- *
- *   ┌─────────────────┐
- *   │ ❯ Kinu          │   Newsreader brand lockup
- *   │ + New workspace │
- *   │ ⌂ Home          │   primary nav: the five places an account goes
- *   │ ▦ Workspaces    │
- *   │ ▤ Drive         │
- *   │ ▣ Devices       │
- *   │ ⚙ Plugins       │
- *   │ WORKSPACES      │
- *   │ ● Jarvis    4h  │
- *   │   ├ Scout       │   nested subordinates of the OPEN workspace
- *   │   └ + New agent │
- *   │ ─────────────── │
- *   │ A user@…     ⚙  │
- *   └─────────────────┘
- *
- * The nested agent rows are real data for exactly one workspace: the one open
- * this session (only a mounted WorkspacePage has a live socket, and it bridges
- * its subordinate roster here over `kinu:workspace-activity`). "+ New agent"
- * asks that page's tab strip to create one and open its conversation
- * (`kinu:new-agent`) — one click, no form; with no workspace mounted there is
- * nothing to create INTO, so the row only renders under an open workspace.
- */
 import { useEffect, useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
@@ -46,10 +20,6 @@ import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
 import { PRIMARY_NAV } from "./nav";
 
-/** The primary nav rows, in the order the rail draws them. One component with
- *  one class string on the default scale, so the rail reads the same on
- *  every page — the workbench flag lives on the workspace's content root, not
- *  on html, and cannot reach this column. */
 function PrimaryNavRow({ to, label, Icon, end }: {
   to: string; label: string; Icon: React.ComponentType<{ size?: number; className?: string }>; end: boolean;
 }) {
@@ -74,13 +44,9 @@ function PrimaryNavRow({ to, label, Icon, end }: {
 }
 
 
-// Route families in App.tsx that mount a live useKinu/useAgent socket for
-// :agentId. Deleting that agent must first navigate away from ALL of them —
-// a still-mounted socket auto-reconnects and resurrects the destroyed DO.
+// Deleting an agent must first leave all of these: a mounted socket auto-reconnects and resurrects the DO.
 const WORKSPACE_SCOPED_SECTIONS = ["workspace", "mcts", "settings", "triggers"];
 
-/** The nested-agent payload the open workspace broadcasts beside its running
- *  flag — identity fields only, straight off the SubordinateRosterEntry. */
 interface SidebarAgent {
   name: string;
   displayName: string;
@@ -93,8 +59,6 @@ const SidebarAgentSchema = v.object({
   status: v.string(),
 });
 
-/** A subordinate's dot in the nested roster: working, waiting on the reader,
- *  or neither. Its own vocabulary, not the search node's (`statusDot`). */
 function subordinateDot(status: string): string {
   if (status === "working") return "p-dot-success p-dot-pulse";
 
@@ -103,7 +67,6 @@ function subordinateDot(status: string): string {
   return "bg-[var(--c-fill)] border p-border";
 }
 
-/** What the rename row says while its socket is not carrying writes. */
 function connectionWait(status: ConnectionStatus): string {
   if (status === "connecting") return "Connecting…";
 
@@ -112,9 +75,6 @@ function connectionWait(status: ConnectionStatus): string {
   return "Could not connect";
 }
 
-/** Live per-workspace activity, bridged from the mounted WorkspacePage socket
- *  via a window event (only the open workspace has a live socket, so the roster
- *  reflects status for workspaces visited this session). */
 interface WorkspaceActivity {
   running: boolean;
   unseenChangelog: number;
@@ -139,8 +99,6 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // An Error carrying no words renders as an empty chain, which is nothing to
-  // report.
   const reported = error !== null && error !== "";
 
   const save = async (event: FormEvent) => {
@@ -198,16 +156,13 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
 }
 
 export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}) {
-  // useParams can't see :agentId from here (the Sidebar renders outside the
-  // route's Outlet) — match the location directly instead.
+  // Sidebar renders outside the route's Outlet, so useParams cannot see :agentId.
   const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
 
   const agentId = sectionMatch && WORKSPACE_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
     ? sectionMatch.params.agentId
     : undefined;
 
-  // The home route IS the new-workspace form; offering the button that opens
-  // it inside the page that is it would be a control that does nothing.
   const onHome = useMatch({ path: "/", end: true }) !== null;
 
   const navigate = useNavigate();
@@ -233,8 +188,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
 
   const userMenuRef = useRef<HTMLDivElement>(null);
 
-  // Reflect the open workspace's live status on its roster row, and carry its
-  // nested agent roster for the mock's indented block.
   useEffect(() => {
     const h = (e: Event) => {
       if (!(e instanceof CustomEvent)) return;
@@ -260,9 +213,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
     setDeleteBusy(true);
     setDeleteError(null);
 
-    // Leave the agent's workspace BEFORE destroying it: the still-mounted
-    // useAgent socket would auto-reconnect to the destroyed DO name and
-    // resurrect an empty ghost agent (idFromName instantiates on connect).
+    // Navigate away first: a mounted useAgent socket reconnects and idFromName resurrects an empty agent.
     try {
       if (name === agentId) await navigate("/");
       await removeWorkspace(name);
@@ -275,8 +226,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
     }
   }, [deleteTarget, agentId, navigate, removeFromRoster]);
 
-  // The responsive wrappers (desktop rail / mobile drawer) live in layout.tsx;
-  // this renders just the column content so both reuse one roster + user menu.
   const activeAgents = agentId ? activity[agentId]?.agents : undefined;
 
   return (
@@ -299,9 +248,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         )}
       </div>
 
-      {/* New workspace — the outlined control the mock draws, into the
-          mission-first screen (the home route). Absent there: the page the
-          button opens is already mounted. */}
       {!onHome && (
         <div className="px-3.5 pb-1.5">
           <Button
@@ -316,14 +262,9 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </Button>
         </div>
       )}
-      {/* Primary nav — the places an account goes, in the workspace
-          rows' own rhythm and on their active token, above the roster. The
-          gap holds the rounded backgrounds of two touching rows apart, so a
-          hover or a selection reads as one pill and not as a blob. */}
       <nav aria-label="Primary" className="px-2 pt-1 space-y-0.5">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
-      {/* Workspace list */}
       <div className="flex-1 overflow-y-auto pt-2 pb-3">
         <div className="px-5 pb-2 pt-4 p-eyebrow">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
@@ -335,7 +276,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           <button
             onClick={refreshWorkspaces}
             className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
-          >Couldn't load workspaces. Tap to retry.</button>
+          >Could not load workspaces. Retry</button>
         )}
         <ul className="space-y-0.5">
           {workspaces.map((a) => {
@@ -343,8 +284,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             const live = activity[a.name];
             const editing = editingWorkspace === a.name;
             const isActive = a.name === agentId;
-            // A workspace is titled by its first prompt, so a row can be blank.
-            // The slug is not the fallback: it is the address this row links to.
             const shown = workspaceDisplayTitle(a);
 
             let dot: ReactNode = null;
@@ -379,9 +318,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                           }`
                         }
                       >
-                        {/* One dot, four honest states: working (green pulse),
-                            unread self-changes (accent), the open workspace
-                            (the mock's gold selection dot), plain row (none). */}
                         <span className="size-1.5 shrink-0 rounded-full">{dot}</span>
                         <span className={`min-w-0 flex-1 truncate p-row-text ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? 'italic p-text-3' : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
@@ -408,8 +344,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                   )}
                 </div>
 
-                {/* Nested subordinates — the open workspace's real roster, in
-                    the mock's indented block with its left rule. */}
                 {isActive && activeAgents && activeAgents.length > 0 && (
                   <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
                     {activeAgents.map((sub) => (
@@ -447,19 +381,16 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         </ul>
       </div>
 
-      {/* Account row — pinned to bottom; the gear opens the same menu as
-          clicking the row. */}
       <div className="border-t p-border px-4 py-3.5 relative" ref={userMenuRef}>
         <button
           onClick={() => setShowUserMenu((shown) => !shown)}
           className="flex w-full min-w-0 items-center gap-2.5 text-left"
         >
-          {/* Avatar initial: sized to the fixed 26px circle, not the scale. */}
           <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
             {profile?.email?.[0]?.toUpperCase() ?? '?'}
           </div>
           <span className="min-w-0 flex-1 truncate p-t-control p-text-4">
-            {profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading…')}
+            {profile?.email ?? (profileFailed ? 'Could not load your profile' : 'Loading…')}
           </span>
           <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-accent" />
         </button>
@@ -504,8 +435,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            Remove <span className="font-medium p-text">{workspaceDisplayTitle(deleteTarget)}</span> and clear its
-            server-side state? This cannot be undone.
+            Remove <span className="font-medium p-text">{workspaceDisplayTitle(deleteTarget)}</span> and delete
+            everything in it? This cannot be undone.
           </p>
           {deleteError && (
             <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: {deleteError}</div>

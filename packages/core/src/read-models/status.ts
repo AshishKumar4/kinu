@@ -1,13 +1,4 @@
-/**
- * The workspace's own status, transcript and tool inventory — the three reads
- * a surface makes before it can show anything.
- *
- * All three are folds over storage the agent already owns (`workspace_identity`,
- * SOUL.md, the message tables, the crafted_tools quality columns and the
- * CraftStore), which is why
- * none of them is backend-shaped: what a workspace IS does not depend on where
- * it runs.
- */
+/** Status, transcript and tool inventory: folds over agent-owned storage, so none is backend-shaped. */
 
 import type { ActorHandle } from '../identity/actor-handle';
 import { conversationCount } from '../identity/conversation-store';
@@ -26,12 +17,8 @@ import { mapPage, type Page, type PageRequest } from '../session/page';
 
 export type { ChatHistoryEntry } from '../types/chat';
 
-/** One workspace identifier reaches a surface: `name`, the permanent slug it is
- *  addressed by. `workspace_identity.id` is deliberately NOT here — on the cloud
- *  backend it is `ctx.id.toString()`, i.e. `idFromName(name)`, so showing it
- *  beside the name showed the same fact twice; on the local backend it addresses
- *  nothing. Its one real job is fork provenance
- *  (`fork_lineage.source_workspace_id`), which reads the column directly. */
+/** Only `name` reaches a surface: `workspace_identity.id` is `idFromName(name)` on cloud and addresses
+ * nothing locally; fork provenance reads the column directly. */
 export interface AgentStatus {
   name: string;
   displayName: string;
@@ -55,19 +42,13 @@ export interface ToolListEntry {
   usageCount: number;
 }
 
-/** What the identity fold cannot read out of storage: who the caller is when
- *  `workspace_identity` has no row yet. */
 export interface AgentStatusDeps {
   readonly sql: SqlExecutor;
-  /** Whose workspace this is. The scaffold pointer is per-actor, so the version
-   *  a status reports has to be the one this actor runs. */
+  /** The scaffold pointer is per-actor, so the status reports this actor's version. */
   readonly actor: ActorHandle;
-  /** The workspace filesystem — SOUL.md is a file in it. */
   readonly vfs: VFS;
-  /** The spec the NEXT turn runs, as the caller's one resolution spells it — a
-   *  claimed tier's model, else the stored spec. Never the stored override
-   *  alone: that is null on a workspace running its tier's model, and a status
-   *  that reported it painted "no model" beside a turn that just answered. */
+  /** The spec the next turn runs (claimed tier's model, else the stored spec); never the stored override
+   * alone, which is null on a workspace running its tier's model. */
   readonly model: string;
   readonly reasoningEffort: ReasoningEffort | null;
   readonly name: string;
@@ -78,10 +59,8 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }
 
-/** Identity, size and configuration in one round trip. Every table read here is
- *  one `initWorkspaceSchema` creates, so a read that fails means a broken
- *  workspace and says so — answering with a fabricated identity and zeroed
- *  counts would make it indistinguishable from a brand-new agent. */
+/** Every table read here is created by `initWorkspaceSchema`, so a failed read means a broken workspace
+ * and throws rather than answering with a fabricated identity. */
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
   const { sql, actor, vfs } = deps;
   actor.assertCurrent();
@@ -95,8 +74,6 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
     WHERE actor_id = ${actor.actorId}`;
 
-  // Message count reflects the canonical conversation store — the workspace's
-  // default-chat authority, whichever table owns it.
   const messageCount = conversationCount(sql, actor);
 
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
@@ -143,8 +120,6 @@ export async function getChatHistoryPage(
   }).reverse());
 }
 
-/** The agent's tool inventory: the fixed builtins plus every crafted tool with
- *  its live fitness score. */
 export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {
     const scoreRow = sql<{ score: number; uses: number }>`

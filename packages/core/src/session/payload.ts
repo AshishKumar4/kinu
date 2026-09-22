@@ -24,8 +24,7 @@ const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object(
 const AttachmentReference = v.object({ $sessionAttachment: v.object({ path: v.string(), digest: v.string(), bytes: v.number(), buffer: v.optional(v.boolean()) }) });
 
 export class SessionPayloadReader {
-  /** `null` is a reader with no file plane: a spilled payload is unreadable
-   *  through it, so a caller asks {@link readsFiles} before reading one. */
+  /** `null`: no file plane, so spilled payloads are unreadable; check {@link readsFiles} first. */
   constructor(private readonly readableFiles: (() => Promise<Pick<VFS, 'readFile'>>) | null) {}
 
   get readsFiles(): boolean {

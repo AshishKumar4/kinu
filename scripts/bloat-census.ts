@@ -17,6 +17,7 @@ import { type Expression, parseSync } from 'oxc-parser';
 
 import { gitEnv } from '../packages/test-utils/src/git';
 import { type DuplicateGroup, findDuplicateGroups } from './ast-duplication';
+import { packageOf } from './bloat-budget';
 import { canonical, commentCharacters } from './comment-only';
 import { measureFile } from './complexity';
 import { exportedDeclarations, inScope } from './dead-code';
@@ -52,8 +53,6 @@ const CALLABLE: ReadonlySet<string> = new Set(['FunctionDeclaration', 'FunctionE
 
 /** Callees that build an object schema: valibot's and zod's. */
 const OBJECT_SCHEMA: ReadonlySet<string> = new Set(['object', 'strictObject', 'looseObject']);
-
-const packageOf = (file: string): string => file.split('/')[1] ?? file;
 
 interface FileRow {
   readonly file: string;

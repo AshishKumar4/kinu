@@ -1,21 +1,6 @@
 /**
- * The plan frame's walkthrough as data: every cue and every cursor position,
- * with pure time-indexed functions over them. The component
- * (`LandingWorkspaceFrame`) paints this timeline onto the real workspace
- * components and owns no story of its own.
- *
- * The mechanism is the deleted `bugfix-demo-timeline.ts` re-pointed at the
- * product UI: `cursorAt` / `cueCountAt` / `discreteAt` over declared `MOVIE_CUES`,
- * an imperative per-frame paint of cursor + ripple + pressed state + progress
- * into `data-*` attributes, `IntersectionObserver` play-once with a settled
- * hold, replay only on a deliberate click, and a static settled state under
- * `prefers-reduced-motion` with no playback and no cursor.
- *
- * The journey, in the owner's order: the user types a request into the real
- * `Composer`, the agent makes tool calls streaming into the real `MessageView`,
- * it submits a plan, the plan appears in the right-hand panel, the cursor
- * clicks Approve, the agent makes more tool calls and builds a slate, and the
- * slate opens in its own tab — the settled final state.
+ * The landing walkthrough as data: cues and cursor positions with pure time-indexed
+ * functions. `LandingWorkspaceFrame` paints it onto the real workspace components.
  */
 import type { UIMessage } from 'ai';
 
@@ -23,22 +8,13 @@ import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/
 import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
 
-/** The surfaces the walkthrough ever selects: the Work tab, then the slate it
- *  builds in its own tab. Structurally the product `SurfaceKind` subset it is
- *  assigned into — `LandingWorkspaceFrame` feeds this straight to
- *  `WorkSurface`, so the backend check fails if the two ever disagree. This
- *  lives here rather than as an import so the module stays free of
- *  component-land: the scripts gate typechecks this file under its own JSX
- *  runtime, and even a type-only component import would drag the product's
- *  DOM components into that program. */
+/** Structurally the product `SurfaceKind` subset, restated rather than imported: the scripts
+ *  gate typechecks this file under its own JSX runtime, and any component import drags in DOM. */
 export type MovieSurface = 'Work' | `slate:${string}`;
 
-/** `SLATE_PREFIX` in `components/surfaces/presence.ts`, restated for the same
- *  reason: one literal, and the `MovieSurface` assignment above is the trip
- *  wire if it ever drifts. */
+/** `SLATE_PREFIX` in `components/surfaces/presence.ts`, restated for the same reason. */
 const SLATE_PREFIX = 'slate:';
 
-/** Everything the cursor can point at. Resolved to pixels by the frame. */
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';
 
 interface CursorWaypoint {
@@ -47,8 +23,8 @@ interface CursorWaypoint {
   readonly click: boolean;
 }
 
-/** The cursor dwells on a target, then travels for `CURSOR_TRAVEL_MS` ending
- *  exactly at the next waypoint's `at`. Clicks land on arrival. */
+/** The cursor dwells, then travels for `CURSOR_TRAVEL_MS` ending exactly at the next
+ *  waypoint's `at`. Clicks land on arrival. */
 const CURSOR_TRAVEL_MS = 700;
 
 const CURSOR_PRESS_MS = 180;
@@ -66,11 +42,9 @@ const CURSOR_WAYPOINTS: readonly CursorWaypoint[] = [
 
 export interface MovieCursor {
   readonly visible: boolean;
-  /** Where the cursor is coming from and going to, plus eased progress 0..1. */
   readonly from: MovieTarget;
   readonly to: MovieTarget;
   readonly progress: number;
-  /** Target currently held pressed, if a click just landed. */
   readonly pressed: MovieTarget | null;
   /** Click ripple on `to`, progress 0..1, or null when none is live. */
   readonly ripple: number | null;
@@ -116,8 +90,6 @@ export function cursorAt(t: number): MovieCursor {
   };
 }
 
-/* ── the story fixtures ─────────────────────────────────────────────────── */
-
 const MOVIE_ASK
   = 'Archived coupons still apply at checkout. Plan the fix, then build the support-queue dashboard.';
 
@@ -133,15 +105,13 @@ const APPROVED_TEXT
 const SLATE_DONE_TEXT
   = 'The dashboard is open in the Support queue tab. It reads issues through the ISSUES binding, which only reaches `list_issues` on your GitHub connection.';
 
-/** The clean plan the movie submits: no annotations, so Approve is the live
- *  affordance and the cursor's click drives the same decision the product does. */
+/** No annotations, so Approve is the live affordance. */
 export const MOVIE_PLAN: PlanReview = {
   ...PLAN_FIXTURE,
   id: 'landing-movie-plan',
   annotations: [],
 };
 
-/** The composer's draft at `t`: the request typed out, then cleared on send. */
 export function composerTextAt(t: number): string {
   if (t <= MOVIE_CUES.typeStart || t >= MOVIE_CUES.sent) return '';
   const done = (t - MOVIE_CUES.typeStart) / (MOVIE_CUES.sent - MOVIE_CUES.typeStart);
@@ -156,8 +126,7 @@ export interface MovieDiscrete {
   readonly phaseLabel: string;
   readonly composerText: string;
   readonly messages: readonly UIMessage[];
-  /** Null until the plan beat: appearing here is what "pops up automatically
-   *  in right sidebar" means — the product's own plan view, fed a `PlanReview`. */
+  /** Null until the plan beat. */
   readonly plan: PlanReview | null;
   readonly surface: MovieSurface;
   readonly slates: readonly SlateSummary[];
@@ -165,9 +134,7 @@ export interface MovieDiscrete {
   readonly settled: boolean;
 }
 
-/** How many cues have fired by `t` — the discrete-state cache key. A React
- *  memo keyed on this rebuilds messages only at beat boundaries, never per
- *  animation frame. */
+/** The discrete-state cache key: memos keyed on it rebuild only at beat boundaries. */
 export function cueCountAt(t: number): number {
   let count = 0;
 

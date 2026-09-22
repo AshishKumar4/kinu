@@ -1,77 +1,13 @@
 /**
- * The failure classification, and the one error that carries it.
- *
- * `KinuError` carries a failure classification and cause chain, and executor
- * boundaries render it as a structured refusal (`refusalOf`/`refusalText`) that
- * the tool RETURNS. A descriptive STRING carries neither, and
- * that is accurate and unusable: a caller cannot tell a timeout from a denial
- * from an OOM, so every reader that needs the distinction re-derives it by
- * matching prose. There are already two such matchers in this codebase
- * (`read-models/tool-failures.ts` reading an `Error (exit N)` prefix,
- * `execution/exec-result.ts` reading a `{"error":` head), and prose is what they
- * agree on rather than a fact either of them was told. The class travels as a
- * field, so nothing here has to become a third matcher.
- *
- * Three constraints shaped this, and each one rules out an obvious design:
- *
- *   1. It composes with the refusal shape that already exists. A refusal on a
- *      tool result is `{ reason, error }`, reason FIRST, because every seam that
- *      shows a result to a human or hashes it for steering bounds it to a head
- *      slice and the prose is the long part (tools/file-tool.ts:78-84,
- *      execution/inline.ts). `refusalOf` projects a `KinuError` into exactly
- *      that shape, so the classification travels on the wire the readers already
- *      parse instead of beside it.
- *   2. The vocabulary is SHARED, not new. `missing`, `io` and `bad_input` are
- *      already what a tool writes onto a failing result
- *      (tools/file-ledger.ts:40-49). Spelling them `absent`/`ioError`/`invalid`
- *      here would have produced two names for one fact — the drift this exists
- *      to remove. Only the classes nothing could express are new.
- *   3. This module imports nothing outside `obs/`. That is deliberate: `obs/` is
- *      reachable from every layer, and a layergate subject's transitive imports
- *      are walked by the decomposition proof (layergate/subjects.ts). So the
- *      pinned failure signatures below are literals with provenance rather than
- *      an import of `platform-catalog.ts`, and `unit-obs-error.test.ts` asserts
- *      they still match every wording that catalogue records. A local copy a
- *      test pins to its source of truth cannot drift; an UNCITED local copy is
- *      exactly what `platform-catalog.ts`'s own header is about.
- *
- * There is no `Result<T, E>` here and no `neverthrow` dependency — see
- * docs/OBSERVABILITY.md § "Why not neverthrow".
+ * Failure classification carried as a field, so readers need not match prose. `obs/` imports
+ * nothing outside `obs/`; OOM signatures below are pinned to platform-catalog.ts by a test.
  */
 
 import { classify, errnoCode, scalarText } from './expected-failure';
 
 /**
- * Why an operation did not do what it was asked.
- *
- * Closed, and every member is a distinction some reader has to make:
- *
- *   bad_input   the arguments do not describe an operation. Nothing was tried.
- *   denied      a gate refused. The work never ran, and that is the correct
- *               outcome — a denial counted as a tool defect indicts the gate for
- *               working.
- *   unsupported the environment cannot do this AT ALL. A declared-capability
- *               gap, decided from what the environment says about itself.
- *   budget      a declared bound was already spent: the operation is admissible
- *               in every other respect, and nothing about retrying changes the
- *               answer until the bound renews. Like `denied`, a refusal.
- *   unavailable it could do this, and right now it is not reachable: not
- *               provisioned yet, disconnected, cold. Distinct from
- *               `unsupported` because one is permanent and the other is a retry,
- *               and a reader that pools them reads a provisioning delay as a
- *               missing feature.
- *   missing     the thing addressed does not exist. Spelled as the file ledger
- *               spells it, not `absent`.
- *   timeout     a deadline was exceeded. The work may still be running.
- *   cancelled   the caller aborted. Not a failure of the work.
- *   oom         the environment killed it for memory. Never pooled with `io`: it
- *               RECURS on retry (platform-catalog.ts do.isolate.oom_reported)
- *               while a transport fault usually does not, so the two imply
- *               opposite responses.
- *   io          the transport or the filesystem failed.
- *
- * Additive: never re-purpose a member, because a stored `tool_call_end` row
- * outlives the code that wrote it.
+ * Why an operation did not do what it was asked. `oom` stays distinct from `io`: it recurs on retry
+ * (platform-catalog.ts do.isolate.oom_reported). Additive only: stored rows outlive the code.
  */
 export const ERROR_CODES = [
   'bad_input',
@@ -88,19 +24,7 @@ export const ERROR_CODES = [
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
-/**
- * Whether a class of failure is the operation REFUSING rather than breaking — it
- * established that proceeding would be wrong and declined.
- *
- * The distinction matters more than the count: a rate that pools a correct
- * refusal with a defect is worse than no rate
- * (read-models/tool-failures.ts:10-17).
- *
- * Total over `ErrorCode` rather than a set of the true ones, so a new code cannot
- * be added without deciding this — the compiler asks, and an unanswered question
- * defaults to nothing. `satisfies` rather than an annotation, so the totality is
- * still checked while each verdict keeps its literal type.
- */
+/** Whether a failure class is the operation refusing (a decision) rather than breaking. */
 export const CODE_IS_REFUSAL = {
   bad_input: true,
   denied: true,
@@ -115,53 +39,24 @@ export const CODE_IS_REFUSAL = {
 } satisfies Readonly<Record<ErrorCode, boolean>>;
 
 /**
- * Whether a class of failure establishes that the work NEVER STARTED — that
- * nothing was done, anywhere, under this call.
- *
- * A different question from {@link CODE_IS_REFUSAL}, which asks whether the
- * failure was a decision. This one asks whether an EFFECT happened, and the two
- * answers come apart: `denied` is a decision and no effect, `oom` is no
- * decision and a large effect.
- *
- * It has a caller that must not guess. A one-shot grant the owner gave for one
- * command is spent before the command runs, so a crash between the two costs an
- * approval rather than granting one twice (safety/deferred-approval.ts). The
- * grant is worth giving back only where the code PROVES no execution happened;
- * everywhere else the safe reading is that it did.
- *
- * So the `false` half is the load-bearing half, and each `false` is a specific
- * ignorance rather than a shrug. Total over `ErrorCode`, `satisfies` rather than
- * annotated, for the reasons above.
+ * Whether a failure class proves the work never started. `true` must be proof: a spent one-shot
+ * grant is returned only on it (safety/deferred-approval.ts).
  */
 export const CODE_WORK_DID_NOT_START = {
-  /** The arguments were rejected. Nothing was dispatched to validate them. */
   bad_input: true,
-  /** Something declined to do it. A decision not to act is not an act. */
   denied: true,
-  /** The operation does not exist at that boundary; there was nothing to run. */
   unsupported: true,
-  /** Nothing was there to receive the work — no device attached, no binding. */
   unavailable: true,
-  /** The bound refused before dispatch; nothing started. */
   budget: true,
-  /** A named thing was absent, and work can discover that after it starts. */
   missing: false,
-  /** A deadline passed. The work may still be running. */
   timeout: false,
-  /** The caller stopped waiting, which says nothing about what already ran. */
   cancelled: false,
-  /** The environment killed it for memory, so it ran until it did. */
   oom: false,
-  /** The transport broke and cannot say whether the frame arrived. This is the
-   *  unclassified failure's answer, and it must stay `false`. */
+  /** The unclassified failure's answer; must stay `false`. */
   io: false,
 } satisfies Readonly<Record<ErrorCode, boolean>>;
 
-/**
- * A classified failure. An ordinary `Error` subclass, so it throws, prints and
- * chains through native `cause` exactly like everything else — the class is an
- * addition to the language's error, never a replacement for it.
- */
+/** A classified failure; an ordinary `Error` chaining through native `cause`. */
 export class KinuError extends Error {
   override readonly name: string = 'KinuError';
   declare readonly execution?: { readonly exitCode: number };
@@ -178,16 +73,8 @@ export class KinuError extends Error {
 }
 
 /**
- * The refusal payload a tool puts on its own result: the class first, the prose
- * second. The one shape `read-models/tool-failures.ts` reads and
- * `execution/exec-result.ts` recognises as a failure.
- *
- * A type ALIAS and not an interface, which is load-bearing rather than a style
- * choice: this value's whole purpose is to cross a JSON boundary, and the
- * executor tools that return it are typed `JsonValue`. TypeScript grants an
- * implicit index signature to an object type alias and never to an interface, so
- * as an interface this shape could not be returned by the tools it exists for
- * without a spread at every site whose only job was to launder the declaration.
+ * Refusal payload on a tool result, reason first. A type alias, not an interface: only aliases get
+ * the implicit index signature needed to be returned as `JsonValue`.
  */
 export type Refusal = {
   readonly reason: ErrorCode;
@@ -203,27 +90,12 @@ export function refusalOf(error: KinuError): Refusal {
   return error.execution === undefined ? refusal : { ...refusal, execution: error.execution };
 }
 
-/**
- * The whole `cause` chain on one line, outermost first — what we were doing,
- * then what actually failed. Native `cause` is the language's `%w` and the chain
- * must never be broken (AGENTS.md § Errors); rendering only `error.message`
- * would break it at the display boundary instead of at the throw site, which is
- * the same loss one frame later.
- *
- * A thrown non-`Error` is rendered as the last link rather than dropped when it
- * has words of its own, and a cycle terminates: a chain cannot revisit an error
- * it has already rendered.
- */
+/** The whole `cause` chain on one line, outermost first; cycles terminate. */
 export function renderCauseChain(error: Error): string {
   const parts: string[] = [];
   const seen = new Set<Error>();
 
-  // A wrapper is allowed to EMBED its cause's words — `toProviderError` puts
-  // the refined provider text in its own message and keeps the raw cause for
-  // sinks — so a link whose message the chain already ends with adds nothing:
-  // rendering it again is `…: Your account is not active.: Your account is
-  // not active.` on a product surface. Containment is checked at the join
-  // boundary only; a link that says anything new still renders whole.
+  // A wrapper may embed its cause's words; skip a link the chain already ends with.
   const push = (text: string): void => {
     if (text.length === 0) return;
     const tail = parts.at(-1);
@@ -237,9 +109,7 @@ export function renderCauseChain(error: Error): string {
   while (link !== null && !seen.has(link)) {
     seen.add(link);
     push(link.message);
-    // Annotated because `link` is reassigned from it: without it the two
-    // types are mutually recursive and both resolve to `any` (TS7022).
-    // `Error.cause` is declared `unknown`, so this narrows nothing away.
+    // Annotated: without it `link` and `cause` are mutually recursive and resolve to `any` (TS7022).
     const cause: unknown = link.cause;
 
     if (cause instanceof Error) {
@@ -257,89 +127,19 @@ export function renderCauseChain(error: Error): string {
 }
 
 /**
- * The same chain, for a value nobody has narrowed yet — a `catch` binding, a
- * rejection, an RPC payload.
- *
- * THIS EXISTS BECAUSE THE ALTERNATIVE WAS WRITTEN 202 TIMES. Measured over
- * `readSources()` at 2b7b020f, one expression in two spellings:
- *
- *   - 26 files declared it as a private helper, under eight different names —
- *     `errorMessage`, `errorText`, `formatMcpError`, `describe`, `reasonText`,
- *     `errText`, `providerFailureReason`, `message`.
- *   - 176 sites wrote it inline, across 89 files.
- *
- * Every one of the 202 threw the chain away at its first frame, and nothing in a
- * lint set that is otherwise total could see it: the no-swallow rules read `catch`
- * bodies for what they RETURN, not for what they report, and a one-expression
- * function is below `gate:duplication`'s node threshold, so 26 copies of one
- * defect did not register as duplication either. `gate:silent-drop` counts both
- * spellings now.
- *
- * The two-line body is the point. `renderCauseChain` requires an `Error` so a
- * caller holding one cannot lose the type, and this narrows an untrusted value at
- * one seam so a caller holding a `catch` binding does not have to write the
- * narrowing — which is where all 202 copies got it wrong.
- *
- * TWO NAMES, AND NOT ONE JOB — asked and answered, because a second name for one
- * job is exactly the duplication this function deleted 202 instances of:
- *
- *   `renderCauseChain(error)`          the value IS an `Error`. Keeps the type
- *                                      guarantee; the 8 sites that hold one.
- *   `renderThrownChain({ cause })`     the value is a `catch` binding, a
- *                                      rejection, an RPC payload. The trust
- *                                      boundary, narrowed once.
- *   `renderCauseChain(toKinuError(  you ALSO have a `doing` frame and know
- *     { doing, cause, otherwise }))`   what an unrecognised failure means at
- *                                      THIS seam. Strictly better than the line
- *                                      above — prefer it wherever both fit.
- *
- * Collapsing the first into the second would make every already-typed caller
- * write `{ cause: error }` and lose the compiler's guarantee that it holds an
- * `Error`. Collapsing the second into the third would mean inventing 202 prose
- * strings and 202 seam classifications nobody has. The chain underneath is ONE
- * function in all three, so no spelling can drift from another —
- * `head-inference.ts` uses the third for the loop's own failure and the second for
- * a tool call's, which is the distinction doing work.
- *
- * For an `Error` with no `cause`, the result is byte-identical to
- * `error.message`. When a cause exists, this renderer preserves the chain that
- * a bare `message` read would discard.
+ * {@link renderCauseChain} for an unnarrowed value (`catch` binding, rejection, RPC payload).
+ * Prefer `renderCauseChain(toKinuError(...))` where a `doing` frame and fallback class exist.
  */
 export function renderThrownChain(input: { cause: unknown }): string {
   return input.cause instanceof Error ? renderCauseChain(input.cause) : String(input.cause);
 }
 
-/**
- * `AbortError` and `TimeoutError` are DOMException names, and the NAME is the
- * only stable discriminator: measured on bun 2026-08-17, an aborted
- * `AbortController` rejects with `name: 'AbortError'` and legacy numeric
- * `code: 20`, while `AbortSignal.timeout()` rejects with `name: 'TimeoutError'`
- * and `code: 23`. So the errno-style `code` that identifies a Node filesystem
- * error cannot see either of these, and a matcher reading only `code` files both
- * under whatever its fallback is.
- *
- * Node's own child-process abort carries `name: 'AbortError'` too, so the name
- * covers both runtimes with one test.
- *
- * A `Map` and not a `Record`, for the same reason `EXEC_REASON_BY_EXIT` is one
- * (read-models/tool-failures.ts): the key is an ARBITRARY string read off a caught
- * value, so `.get()` returning `ErrorCode | undefined` is the honest signature. A
- * `Record<string, …>` annotation over a literal is an open dictionary that
- * discards the literal's own evidence, which `no-known-value-widening` rejects,
- * and indexing one without `noUncheckedIndexedAccess` would claim every unknown
- * token has a class.
- */
+/** DOMException names; the name, not `code`, is the stable discriminator. */
 const CODE_BY_ERROR_NAME = new Map<string, ErrorCode>([
   ['AbortError', 'cancelled'],
   ['TimeoutError', 'timeout'],
 ]);
 
-/**
- * Errno codes whose meaning is unambiguous at this layer. `ENOENT` and `ESRCH`
- * are here too because both mean "the thing addressed is not there"; they are
- * also `classify`'s tolerable failures, and the one reader of `error.code` is
- * shared with it rather than duplicated.
- */
 const CODE_BY_ERRNO = new Map<string, ErrorCode>([
   ['ETIMEDOUT', 'timeout'],
   ['ABORT_ERR', 'cancelled'],
@@ -355,27 +155,10 @@ const CODE_BY_ERRNO = new Map<string, ErrorCode>([
 ]);
 
 /**
- * The memory wall's wordings, verbatim, from `platform-catalog.ts`:
- * `do.isolate.oom_catchable`'s observable, both of `do.isolate.oom_reported`'s,
- * `worker.memory_kill_is_burst_sensitive`'s, and `worker.isolate.memory`'s
- * response-body and Logpush observables. Every one of those entries carries
- * `firstPartySignal: true` — the runtime does tell us, in prose, and this is the
- * only place that prose is turned back into a fact.
- *
- * Matched on a substring because the wording arrives wrapped: the owner observed
- * it as `clone failed: Worker exceeded memory limit`, one frame of prose outside
- * the platform's own sentence.
- *
- * TWO wordings are deliberately absent, and both absences are the point:
- *
- *   `Worker exceeded resource limits` — the CLIENT-visible message, and
- *     `worker.isolate.memory` and `do.cpu_ms_per_invocation` BOTH list it. It
- *     says a resource limit was hit, not which one, so classifying it as `oom`
- *     would report a CPU-time kill as a memory kill. A wording two entries share
- *     confirms neither of them.
- *   `do.isolate.reset_silent` has no wording at all — that is what its name
- *     means, and inventing a signature for it would claim a signal the platform
- *     does not send.
+ * Memory-wall wordings from platform-catalog.ts: do.isolate.oom_catchable, do.isolate.oom_reported,
+ * worker.memory_kill_is_burst_sensitive, worker.isolate.memory. Substring match: the wording
+ * arrives wrapped. `Worker exceeded resource limits` is excluded: worker.isolate.memory and
+ * do.cpu_ms_per_invocation share it. do.isolate.reset_silent has no wording.
  */
 const OOM_SIGNATURES: readonly RegExp[] = [
   /exceeded (?:its )?memory limit/iu,
@@ -384,19 +167,8 @@ const OOM_SIGNATURES: readonly RegExp[] = [
 ];
 
 /**
- * Name the class of a caught value, or null when nothing pinned recognises it.
- *
- * Null is the honest answer, and it is why `toKinuError` makes its caller
- * supply `otherwise`: a classifier that guessed would file every unrecognised
- * failure under one code, and the code would then mean nothing. The call site
- * knows what an unrecognised failure means AT ITS OWN SEAM — for an exec
- * transport, `io`; for an argument decoder, `bad_input` — and saying so is one
- * word.
- *
- * The whole cause chain is read, outermost first. A wrapper that says what was
- * being done (`new Error('…', { cause })`) adds no class of its own, and the
- * class it wraps is the one the site that raised it knew: a VFS transaction
- * rolled back over `EACCES` is a denial, not an I/O fault.
+ * Class of a caught value, or null when nothing pinned recognises it; callers supply the fallback.
+ * Reads the cause chain outermost first; the first recognised class wins.
  */
 export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   const seen = new Set<Error>();
@@ -405,8 +177,6 @@ export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   for (;;) {
     if (caught instanceof KinuError) return caught.code;
 
-    // `classify` owns the malformed-input signatures, and at this layer malformed
-    // input is what it says: the value handed in does not parse.
     if (classify({ cause: caught }) === 'malformed-input') return 'bad_input';
 
     if (!(caught instanceof Error) || seen.has(caught)) break;
@@ -431,20 +201,8 @@ export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
 }
 
 /**
- * Wrap a caught value into a classified error, preserving the chain.
- *
- * The message is `doing` and nothing else — exactly the
- * `new Error('what we were doing', { cause: caught })` shape AGENTS.md rule 2
- * specifies. The detail lives on `cause`, where `renderCauseChain` finds it, so
- * the chain is assembled once at the display boundary instead of being baked into
- * every message and then rendered again beneath itself.
- *
- * `cause` is always attached, including when the caught value is not an `Error`:
- * a thrown string is still evidence.
- *
- * An already-classified cause keeps its code. The site that raised it knew more
- * about the failure than this one does, and re-classifying from the outside is
- * how a precise `oom` becomes a generic `io` on its way up.
+ * Wrap a caught value as a classified error whose message is `doing` and whose `cause` is the
+ * caught value. An already-classified cause keeps its code.
  */
 export function toKinuError(
   input: { doing: string; cause: unknown; otherwise: ErrorCode },

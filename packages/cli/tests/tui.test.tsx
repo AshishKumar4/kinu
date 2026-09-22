@@ -797,16 +797,16 @@ describe('CLI TUI layout', () => {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
           <DeviceConnectOverlay
-            prompt={{ phase: 'ask', statusLine: 'No PC is connected to your account yet.', deviceName: 'ashish@studio' }}
+            prompt={{ phase: 'ask', statusLine: 'No computer is connected to your account yet.', deviceName: 'ashish@studio' }}
             terminal={{ width: 96, height: 24 }}
           />
         </box>,
       );
       await renderSettled(renderOnce);
       const frame = captureCharFrame();
-      expect(frame).toContain('Let this agent use this PC?');
-      expect(frame).toContain('No PC is connected to your account yet.');
-      expect(frame).toContain('C connect and keep connected');
+      expect(frame).toContain('Let this agent use this computer?');
+      expect(frame).toContain('No computer is connected to your account yet.');
+      expect(frame).toContain('C connect and stay connected');
       expect(frame).toContain('S use this session only');
       expect(frame).toContain("D don't ask again · N not now");
     } finally {
@@ -829,7 +829,7 @@ describe('CLI TUI layout', () => {
         </box>,
       );
       await renderSettled(renderOnce);
-      expect(captureCharFrame()).toContain('Waiting for this PC to answer..');
+      expect(captureCharFrame()).toContain('Waiting for this computer to answer..');
 
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -1284,7 +1284,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
         const rows = frame().split('\\n');
         console.log(JSON.stringify({
           readinessRow: rows.some((row) => row.includes('Cloud account')),
-          briefOnOneLine: (rows.find((row) => row.includes('A standing brief')) ?? '').includes('checkout service'),
+          briefOnOneLine: (rows.find((row) => row.includes('An ongoing job')) ?? '').includes('checkout service'),
         }));
       `,
     });

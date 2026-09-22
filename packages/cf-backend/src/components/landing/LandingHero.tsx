@@ -11,19 +11,10 @@ import { useWideHero } from './search-tree/stage';
 
 const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to multiple devices.', 'work while your device is closed.'] as const;
 
-/** The install button's own words. A failure here asks for the click again
- *  rather than reporting itself, because the command is on screen either way. */
+/** A failure asks for the click again; the command is on screen either way. */
 const COPY_LABEL: Record<CopyStatus, string> = { idle: 'Copy', copied: 'Copied', failed: 'Retry copy' };
 
-/**
- * The heading a screen reader gets, DERIVED rather than restated.
- *
- * The `h1` animates one phrase at a time, so its accessible name has to carry
- * every one — and it used to carry them as a second hand-written sentence, with
- * nothing holding the two lists equal. Editing one silently desynchronised the
- * accessible text from the visible text, which is the drift a hardcoded list
- * beside its source always earns.
- */
+/** Derived from the animated phrases so the accessible name cannot drift from them. */
 const HERO_LABEL = `Agents that ${PHRASES
   .map((phrase) => phrase.replace(/\.$/, ''))
   .map((phrase, index, all) => (index === all.length - 1 ? `and ${phrase}` : phrase))
@@ -106,14 +97,8 @@ export function LandingHero({ install }: { install: string }): ReactElement {
 
   return (
     <section id="top" className="relative overflow-hidden">
-      {/* The stage is full-bleed: the search tree fills it edge to edge and
-          the copy sits over it inside the shell. The words span the measure
-          and the tree's mask keeps them readable: at 1020px the heading is
-          two lines for every phrase in the rotation (measured 2026-09-10
-          at 1280 and 1440), so the block the sizers reserve is two lines
-          and nothing under it moves. Below `lg` the copy stacks and the
-          dust replaces the tree, which would otherwise run through the
-          paragraph. */}
+      {/* Full-bleed stage; the sizers reserve two lines, the heading's height for every phrase
+          at 1020px. Below `lg` the dust replaces the tree. */}
       <div className="relative">
         {wide ? <SearchTreeHero /> : <HeroDust />}
         <div className="landing-shell relative pt-16 lg:pt-20">
@@ -127,9 +112,8 @@ export function LandingHero({ install }: { install: string }): ReactElement {
               Agents that{' '}
               <Typewriter />
             </h1>
-            {/* Base column is an explicit minmax(0,…): with no template, the
-                implicit auto track takes the install row's ~519px min-content
-                and the root's overflow-x-clip hides the clipping from scrollWidth. */}
+            {/* Explicit minmax(0,…): the implicit auto track takes the install row's min-content
+                and overflow-x-clip hides it from scrollWidth. */}
             <div className="mt-8 grid grid-cols-1 lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
               <div className="min-w-0">
                 <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
@@ -153,8 +137,6 @@ export function LandingHero({ install }: { install: string }): ReactElement {
         </div>
       </div>
       <div className="landing-shell pb-20 lg:pb-24">
-        {/* The product itself, first: the workspace the rest of the page
-            keeps returning to, in the state a real job leaves it in. */}
         <figure className="mt-14 lg:mt-16">
           <LandingFrame kind="checkout" caption={CHECKOUT_FRAME_CAPTION} />
           <figcaption className="px-1 pt-3 text-[11px] leading-relaxed p-text-4">Run and Supervise, the Work tab, and Retry act on this page only.</figcaption>

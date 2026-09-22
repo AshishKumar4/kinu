@@ -52,7 +52,6 @@ test('an open message reads its accumulated text and a sealed one its content', 
     const entry = { messageId: 'answer' };
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
-    // A window is one statement on the part's one row.
     s.messages.streamAppend('answer', 0, 'cd');
     s.messages.streamMetadata('answer', 0, await s.messages.prepareMetadata('answer', 0, { test: { partial: true } }));
     expect(streamRows()).toBe(1);
@@ -60,7 +59,6 @@ test('an open message reads its accumulated text and a sealed one its content', 
     s.messages.streamEnd('answer', 0);
     expect(() => s.messages.streamAppend('answer', 0, 'e')).toThrow('ended');
 
-    // The seal writes the final content once, and the stream rows go with it.
     const content = await s.messages.prepareContent([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: 'final' } }]);
     s.messages.seal('answer', content, { providerOptions: { test: { late: true } } });
     expect(streamRows()).toBe(0);
@@ -72,9 +70,7 @@ test('an open message reads its accumulated text and a sealed one its content', 
 });
 
 test('an accumulating part never puts one row over the platform limit and seals through the spill rule', async () => {
-  // `do.sqlite.row_bytes` is 2 MB and an INSERT or UPDATE over it fails: a
-  // reasoning part of a few hundred thousand tokens has to continue in the
-  // next row, not grow one row without bound.
+  // `do.sqlite.row_bytes` is 2 MB: a long reasoning part continues in the next row.
   const s = setup();
 
   try {
@@ -84,8 +80,6 @@ test('an accumulating part never puts one row over the platform limit and seals 
     const window = 'r'.repeat(300_000);
 
     for (let i = 0; i < 4; i++) s.messages.streamAppend('long', 0, window);
-    // The bound the segments protect: a row of UTF-16 units, at most three
-    // UTF-8 bytes each, stays inside the platform's row limit.
     const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
     expect(widest * 3).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
     expect(widest).toBeLessThan(300_000);
@@ -162,7 +156,62 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
     const stored = await s.messages.materializeParts(reference);
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
     await s.rt.storage.vfs.writeFile(external.image.$sessionAttachment.path, 'corrupt');
-    await expect(s.messages.materialize(reference)).rejects.toThrow('digest differs');
+    // The reader that verified these bytes keeps serving them; a reader that
+    // has not, as after a restart, finds the corruption.
+    expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
+    await expect(new SessionMessages(s.rt.storage.sql, s.rt.actor, s.payloads).materialize(reference)).rejects.toThrow('digest differs');
+  } finally { s.testSql.close(); }
+});
+
+test('a sealed row that is JSON but not a message is refused on read', async () => {
+  // Valid JSON is not enough; the stored text must parse as a message.
+  const corruptions = [
+    { content: '{"parts":[]}', layer: 'the part list' },
+    { content: '[{"partNo":0,"kind":"text","streamOrder":0,"replyTo":null,"value":{"type":"text","text":7}}]', layer: 'the SDK message schema' },
+  ];
+
+  for (const { content, layer } of corruptions) {
+    const s = setup();
+
+    try {
+      const prepared = await s.messages.prepare({ role: 'user', content: [{ type: 'text', text: 'hello' }] }, 'input');
+      const selected = s.context.commit(s.context.initialize(), { cause: 'input', turnId: 'turn', mutate: () => [{ ...s.messages.insert(prepared, 'input'), entryId: 'input', position: 0 }], assertEpoch: () => s.rt.actor.assertCurrent() });
+      const reference = present(s.context.entries(selected)[0], 'the input entry');
+      s.testSql.db.run("UPDATE session_messages SET content_json = ? WHERE message_id = 'input'", [content]);
+      await expect(s.messages.materialize(reference), layer).rejects.toThrow(KinuError);
+    } finally { s.testSql.close(); }
+  }
+});
+
+test('a sealed message read back cannot be edited in place, and a later read is the stored one', async () => {
+  // Steps share the sealed object, so in-place edits must fail.
+  const s = setup();
+
+  try {
+    const prepared = await s.messages.prepare({ role: 'assistant', content: [{ type: 'text', text: 'stored' }] }, 'answer');
+    s.messages.insert(prepared, 'output');
+    const read = await s.messages.materialize({ messageId: 'answer' });
+    const part = Array.isArray(read.content) ? read.content[0] : undefined;
+
+    if (part?.type !== 'text') throw new Error('the stored answer must read back as one text part');
+    expect(() => { part.text = 'edited'; }).toThrow(TypeError);
+    expect(() => { read.providerOptions = { test: { marked: true } }; }).toThrow(TypeError);
+    expect(await s.messages.materialize({ messageId: 'answer' })).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'stored' }] });
+  } finally { s.testSql.close(); }
+});
+
+test('a reader holds only the sealed messages its last context read named', async () => {
+  const s = setup();
+
+  try {
+    for (const [id, text] of [['first', 'one'], ['second', 'two']]) s.messages.insert(await s.messages.prepare({ role: 'user', content: text }, id), 'input');
+    await s.messages.materializeAll([{ messageId: 'first' }, { messageId: 'second' }]);
+    await s.messages.materializeAll([{ messageId: 'second' }]);
+    s.testSql.db.run("UPDATE session_messages SET content_json = '{}'");
+
+    // `first` left the context, so reading it goes back to its row, now corrupt.
+    await expect(s.messages.materialize({ messageId: 'first' })).rejects.toThrow(KinuError);
+    expect(await s.messages.materialize({ messageId: 'second' })).toEqual({ role: 'user', content: 'two' });
   } finally { s.testSql.close(); }
 });
 
