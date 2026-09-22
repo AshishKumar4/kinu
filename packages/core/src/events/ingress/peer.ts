@@ -123,7 +123,9 @@ export interface ReceiverDeps {
   openPeerBackChannel?(event_id: string, msg: PeerMessage): void;
 }
 
-/** Receiver API: accept a peer message off the transport. Admitted/dropped. */
+/** Receiver API: accept a peer message off the transport. Resolves admitted, or
+ *  refused for a reason the next attempt would meet again; rejects when the
+ *  receiver could not decide or record it, which the sender retries. */
 export async function receivePeerMessage(
   deps: ReceiverDeps,
   msg: PeerMessage,
@@ -152,7 +154,7 @@ export async function receivePeerMessage(
   }
 
   // Spilled after the grant check so a refused message never writes a file.
-  const bodyPath = await spillEventContent(deps.vfs, serialized);
+  const spilled = await spillEventContent(deps.vfs, serialized);
 
   const payload: PeerAgentPayload = {
     from_agent_name: msg.sender_agent_name,
@@ -164,10 +166,14 @@ export async function receivePeerMessage(
     reply_expected: msg.reply_expected ?? false,
   };
 
-  if (bodyPath) Object.assign(payload, { body_path: bodyPath });
+  if (spilled?.path !== undefined) payload.body_path = spilled.path;
+
+  if (spilled?.unsaved !== undefined) payload.body_unsaved = spilled.unsaved;
+
+  let published: { id: string; admitted: boolean };
 
   try {
-    const { id, admitted } = deps.log.publish({
+    published = deps.log.publish({
       descriptor: {
         ingress: 'peer_async',
         variant: 'peer_agent',
@@ -177,17 +183,18 @@ export async function receivePeerMessage(
       },
       now,
     });
-
-    counted(admitted);
-
-    if (admitted && msg.reply_expected) deps.openPeerBackChannel?.(id, msg);
-
-    return { admitted, event_id: id };
   } catch (err) {
+    // Arrival is still counted, and the failure goes back to the sender as a
+    // hop failure: answered as a refusal, it would dead-letter for good.
     counted(false);
-
-    return { admitted: false, reason: renderThrownChain({ cause: err }) };
+    throw err;
   }
+
+  counted(published.admitted);
+
+  if (published.admitted && msg.reply_expected) deps.openPeerBackChannel?.(published.id, msg);
+
+  return { admitted: published.admitted, event_id: published.id };
 }
 
 // ── PeerHub — sender/receiver endpoint over one agent's hub ─────

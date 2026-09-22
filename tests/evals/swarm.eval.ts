@@ -923,7 +923,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
    * have shown it was empty, and no suite in this tree could reach the loop that
    * did it: the LOCAL target's driver is core `runChat`, which is genuinely
    * unbounded, and the cap lives in `@cloudflare/think`. Run this arm with
-   * `KINU_EVAL_BACKEND=cloud` and `plan.provision` hands it a real staging
+   * `KINU_EVAL_BACKEND=cloud` and `plan.provision` hands it a real deployed
    * workspace, so it drives the capped loop instead.
    *
    * ITS OWN WORKSPACE, for two reasons that are one reason. Sharing the in-process

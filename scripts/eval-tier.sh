@@ -44,17 +44,16 @@
 #      success, which is how `TOTAL: 0 model call(s)` passed a deploy gate.
 #
 # WHO IT RUNS AS, AND WHERE. The tier authenticates as the `eval-service`
-# account and points at the staging deployment. Both are resolved once, by
+# account and points at the deployment. Both are resolved once, by
 # scripts/eval-credentials.ts over packages/test-utils/src/eval-identity.ts:
 #
-#   KINU_EVAL_TOKEN   the eval-service credential. Mint it against staging:
-#                          kinu auth --origin https://staging.kinu.run
-#                          kinu tokens create --name evals --scopes ai.proxy
-#                        Staging synthesizes one fixed identity for every request
-#                        (env.staging's DEV_USER_EMAIL), so that session IS
+#   KINU_EVAL_TOKEN   the eval-service credential. Mint it with
+#                          KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts
+#                        The deployment's DEV_USER_EMAIL names one fixed identity
+#                        that the DEV_IDENTITY_SECRET approves, so that session IS
 #                        eval-service and no person's account is involved.
-#   KINU_EVAL_ORIGIN  optional. Defaults to the staging origin; a loopback dev
-#                        server is the other accepted value.
+#   KINU_EVAL_ORIGIN  optional. Defaults to the deployment origin; a loopback
+#                        dev server is the other accepted value.
 #
 # The resolved pair is exported as KINU_ORIGIN + KINU_TOKEN, which is what
 # `resolveLiveModel` reads. An origin outside that allowlist (the deployment or
@@ -98,7 +97,7 @@
 #   1. The route does not exist. Our inference path is the deployment's own
 #      proxy, and `handleUserAIProxyRequest` serves exactly two routes —
 #      `GET /models` and `POST /chat/completions` — answering 404 to everything
-#      else (cf-backend/src/user/ai-proxy.ts). Staging, where this tier points,
+#      else (cf-backend/src/user/ai-proxy.ts). The eval identity, which this tier uses,
 #      goes through `createDirectWorkersAIFetch`, which turns ONE
 #      chat-completions request into ONE `binding.run()` call; there is no
 #      `requests[]` / `queueRequest` shape anywhere in it.
@@ -156,7 +155,7 @@ cd "$(dirname "$0")/.."
 # ── WHICH TARGET THIS RUN MEASURES ────────────────────────────────────────────
 #
 # `--backend local` (the default) drives the in-process cli-backend runtime.
-# `--backend cloud` drives a real workspace on the staging deployment, through
+# `--backend cloud` drives a real workspace on the deployment, through
 # the shipped CloudAgentClient and the AGENT_RPC_ACCESS RPC surface. Tests and
 # evals are ONE suite; which of the two an arm runs against is configuration,
 # and `packages/test-utils/src/eval-target.ts` is that configuration's type.
@@ -329,7 +328,7 @@ if [[ "$BACKEND" == cloud ]]; then
   TARGETS=(tests/live-smoke.test.ts)
   RUN_EVALS_ARM=0
   # The swarm arm's CROSS-TARGET test provisions through the plan, so it drives a
-  # real staging workspace here — the only arm in the tree that reaches
+  # real deployed workspace here — the only arm in the tree that reaches
   # `@cloudflare/think`, the loop that carries the step cap. That suite's
   # in-process arms skip themselves under this backend and print why.
   RUN_SWARM_ARM=1
@@ -442,9 +441,8 @@ fi
 if [[ "$BACKEND" == cloud ]]; then
   if [[ -z "${KINU_TOKEN:-}" || -z "${KINU_ORIGIN:-}" ]]; then
     echo "eval-tier: REFUSED — --backend cloud needs an eval-service credential for a Kinu" >&2
-    echo "  deployment, and none resolved. Mint one against staging:" >&2
-    echo "    kinu auth --origin https://staging.kinu.run" >&2
-    echo "    kinu tokens create --name evals --scopes ai.proxy" >&2
+    echo "  deployment, and none resolved. Mint one:" >&2
+    echo "    KINU_EVAL_WEB_IDENTITY=... bun scripts/eval-session-mint.ts" >&2
     echo "  then export it as KINU_EVAL_TOKEN. The local arm needs none:" >&2
     echo "    bun run test:eval" >&2
     exit 1
@@ -464,7 +462,7 @@ echo "── eval tier ───────────────────
 # while every suite in the tree stayed green. A run whose output does not say
 # which agent it drove is not evidence.
 if [[ "$BACKEND" == cloud ]]; then
-  echo "agent:   CLOUD — a real workspace on the staging deployment, driven"
+  echo "agent:   CLOUD — a real workspace on the deployment, driven"
   echo "         through the shipped CloudAgentClient (the @cloudflare/think loop)"
   echo "         workspaces are eval-prefixed and deleted in teardown"
   echo "         arms that drive a CLIRuntime skip themselves here and print why"

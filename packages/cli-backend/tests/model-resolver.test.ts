@@ -348,6 +348,32 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     expect(providers.find((provider) => provider.id === 'my-gateway')?.unavailableReason).toBe('account unavailable');
   });
 
+  test('a credential the account holds and cannot read fails its provider, and only that one', async () => {
+    const resolver = createLocalModelResolver({
+      llm: proxyLLMConfig(),
+      credentials: {},
+      cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
+      fetch: asFetchFunction(async (input) => {
+        const url = input instanceof Request ? input.url : input.toString();
+
+        if (url.endsWith('/api/user/ai/proxy/credentials')) {
+          return Response.json({ credentials: [
+            { key: 'anthropic.bearer', failure: 'opening the stored credential anthropic.bearer: failed to decrypt' },
+            { key: 'openrouter.bearer' },
+          ] });
+        }
+
+        return url.endsWith('/api/cli/models') ? Response.json({ models: [], failures: [] }) : Response.json({});
+      }),
+    });
+
+    const providers = await resolver.listProviders();
+    expect(providers.find((provider) => provider.id === 'anthropic')).toMatchObject({
+      available: false, unavailableReason: expect.stringContaining('failed to decrypt'),
+    });
+    expect(providers.find((provider) => provider.id === 'openrouter')?.available).toBe(true);
+  });
+
   test('lists workers-ai and my-gateway models from the server menu with metadata', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),

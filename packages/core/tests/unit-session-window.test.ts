@@ -6,8 +6,7 @@ import type { CompletedTurn } from '../src/evolution/types';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** The window is ONE actor's: `completed_turns` is keyed by actor, and a turn
- *  a subordinate completed is not a turn in the root's evolution window. */
+/** One actor's window: a subordinate's turn is not in the root's window. */
 function newStore(): CompletedTurnStore {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
@@ -30,7 +29,7 @@ describe('SessionWindow — the open window', () => {
     const claimed = present(win.claim(), 'the claimed window');
     expect(claimed.startedAt).toBe(1000);
     expect(claimed.turns.map(t => t.userMessage)).toEqual(['t0', 't1', 't2']);
-    // The turns stay in the window until the pass that claimed them settles.
+    // The turns stay until the claiming pass settles.
     expect(win.size()).toBe(3);
 
     claimed.settle();
@@ -81,23 +80,20 @@ describe('SessionWindow — the open window', () => {
     expect(win.claimPendingReview()).toBeNull(); // taken once, then claimed
   });
 
-  // The recording is durable work a backend can OWE, so it may run twice. Both
-  // lifetimes of the row and the session cadence — which counts window rows —
-  // have to survive that.
+  // Recording is owed work and may run twice; the row and the cadence must survive that.
   test('appending one turn id twice leaves ONE row and one cadence tick', () => {
     const win = newStore();
     const id = win.append(aTurn(0), { awaitsFollowup: true, id: 'settle:msg-1', now: 1000 });
     expect(id).toBe('settle:msg-1');
 
-    // The replay re-offers the same recording — same id, later clock.
+    // The replay re-offers the same recording at a later clock.
     expect(win.append(aTurn(0), { awaitsFollowup: true, id: 'settle:msg-1', now: 9000 }))
       .toBe('settle:msg-1');
 
     expect(win.size()).toBe(1);
     const claimed = present(win.claim(), 'the claimed window');
     expect(claimed.turns).toEqual([aTurn(0)]);
-    // The row the FIRST append wrote, untouched: the replay must not restamp
-    // the window it opened.
+    // The first append's row is untouched.
     expect(claimed.startedAt).toBe(1000);
   });
 
@@ -107,7 +103,7 @@ describe('SessionWindow — the open window', () => {
     const pending = present(win.claimPendingReview(), 'the turn owed a review');
     win.settleReview(pending.rowId);
 
-    // The graded turn must not come back as a fresh one owing a review.
+    // The graded turn must not come back owing a review.
     win.append(aTurn(0), { awaitsFollowup: true, id: 'settle:msg-1', now: 9000 });
     expect(win.claimPendingReview()).toBeNull();
     expect(win.size()).toBe(1);
@@ -127,8 +123,7 @@ describe('SessionWindow — the pending outcome review', () => {
     const win = newStore();
     win.append(aTurn(0), { awaitsFollowup: true, now: 1 });
     win.append(aTurn(1), { awaitsFollowup: true, now: 2 });
-    // Newest first, and claiming PARKS the row until its review settles
-    // instead of destroying it — a claim whose process dies is recoverable.
+    // Newest first; claiming parks the row, so a dead claimer is recoverable.
     const first = present(win.claimPendingReview(), 'the turn owed a review');
     expect(first.turn).toEqual(aTurn(1));
     const second = present(win.claimPendingReview(), 'the turn owed a review');
@@ -142,8 +137,7 @@ describe('SessionWindow — the pending outcome review', () => {
   test('a turn with no follow-up coming joins the window but never waits for one', () => {
     const win = newStore();
     win.append(aTurn(0), { awaitsFollowup: true, now: 1 });
-    // A reactor turn, or any turn of a one-shot host: the caller says no
-    // follow-up can grade it, so it must not displace the turn that IS waiting.
+    // A turn no follow-up can grade must not displace the one waiting.
     win.append(aTurn(1, { origin: 'programmatic' }), { awaitsFollowup: false, now: 2 });
     expect(win.size()).toBe(2);
     expect(present(win.claimPendingReview(), 'the turn owed a review').turn).toEqual(aTurn(0));
@@ -168,8 +162,7 @@ describe('SessionWindow — the pending outcome review', () => {
   });
 });
 
-// A retired row can no longer say what happened to it, and every one of these
-// rows is retired on somebody else's schedule. What survives is the tombstone.
+// Rows retire on others' schedules; the tombstone is what survives.
 describe('SessionWindow — durability past the row', () => {
   function open() {
     const { sql, execRaw } = createTestSql();
@@ -192,8 +185,7 @@ describe('SessionWindow — durability past the row', () => {
     expect(taken.reviews).toHaveLength(1);
     win.recordReviewRan(taken.reviews[0].id);
     win.settleReview(taken.reviews[0].id);
-    // Both lifetimes over: the row the append wrote is gone, so `ON CONFLICT(id)`
-    // has nothing left to conflict with.
+    // The row is gone, so `ON CONFLICT(id)` has nothing to conflict with.
     expect(rowCount(sql, actor)).toBe(0);
 
     expect(win.append(aTurn(0), { awaitsFollowup: false, id: 'settle:msg-1', now: 9000 }))
@@ -207,8 +199,7 @@ describe('SessionWindow — durability past the row', () => {
     const { win } = open();
     win.append(aTurn(0), { awaitsFollowup: false, now: 1 });
     const id = win.takeQueuedReviews(5).reviews[0].id;
-    // reviewTurn resolved — the turn_outcomes row and the craft EMA moves have
-    // landed — and the host was evicted before it could settle the lease.
+    // reviewTurn's writes landed, then eviction before the lease settled.
     win.recordReviewRan(id);
 
     expect(win.resetStaleClaims()).toBe(0);
@@ -231,8 +222,7 @@ describe('SessionWindow — durability past the row', () => {
     win.append(aTurn(0), { awaitsFollowup: false, now: 1 });
     const id = win.takeQueuedReviews(5).reviews[0].id;
     win.recordReviewRan(id);
-    // Some other lane put the lease back — a release, a stale-claim reset on a
-    // second host. The review still must not run twice.
+    // Another lane put the lease back; the review still must not run twice.
     win.releaseQueuedReview(id);
 
     expect(win.takeQueuedReviews(5).reviews).toEqual([]);
@@ -244,8 +234,7 @@ describe('SessionWindow — durability past the row', () => {
     win.append(aTurn(0), { awaitsFollowup: true, now: 1000 });
     win.append(aTurn(1), { awaitsFollowup: true, now: 5000 });
 
-    // A replayed independent-task recording, expiring only what existed when the
-    // task it recorded ended.
+    // Expires only what existed when the recorded task ended.
     expect(win.expireAwaitingReviews({ before: 2000 })).toBe(1);
     expect(present(win.claimPendingReview(), 'the turn owed a review').turn).toEqual(aTurn(1));
     expect(win.takeQueuedReviews(5).reviews.map((r) => r.turn)).toEqual([aTurn(0)]);

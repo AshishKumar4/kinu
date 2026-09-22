@@ -1218,14 +1218,14 @@ describe('oversize subordinate reports stay reachable', () => {
    *  admit with the citation. */
   async function admitFromSubordinate(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
     const content = normalizeReportContent(raw);
-    const contentPath = await spillEventContent(vfs, content);
+    const spilled = await spillEventContent(vfs, content);
 
     const input = {
       fromSubordinate: 'researcher', status: 'completed', content,
       sequenceId: 'settle:msg-1', task: 'Survey auth', mode: 'build', now: 11,
     } satisfies Parameters<typeof admitSubordinateReport>[1];
 
-    if (contentPath) Object.assign(input, { contentPath });
+    if (spilled) Object.assign(input, { spilled });
 
     return admitSubordinateReport(log, input);
   }

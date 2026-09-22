@@ -202,6 +202,18 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     return parts;
   }
 
+  /** Whether this message's parts sit in a spilled payload: its sealed
+   *  content, or an open part's descriptor. Asked, so a reader with no file
+   *  plane can say which messages it cannot open before it tries one. */
+  spilled(messageId: string): boolean {
+    const row = this.row(messageId);
+
+    if (row.sealed_at !== null) return row.content_path !== null;
+
+    return this.sql<{ x: number }>`SELECT 1 AS x FROM stream_parts
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND descriptor_path IS NOT NULL LIMIT 1`.length > 0;
+  }
+
   /** A sealed message reads its content row; an open one reads what its
    *  stream has accumulated so far. */
   protected async stored(reference: MessageReference): Promise<{ readonly row: MessageRow; readonly parts: readonly StoredPart[] }> {

@@ -35,7 +35,7 @@ export function resolveEvalBackend(
   return {
     kind: 'refused',
     reason: `${EVAL_BACKEND_ENV}=${raw} names no target. It is \`local\` (the in-process `
-      + 'cli-backend runtime) or `cloud` (a workspace on the staging deployment). Unset it '
+      + 'cli-backend runtime) or `cloud` (a workspace on the deployment). Unset it '
       + 'for local.',
   };
 }

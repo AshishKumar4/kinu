@@ -1,8 +1,5 @@
-// Failure pathologies — the named cells a scaffold proposal targets.
-//
-// What these pin: identity is deterministic and model-free, the vocabularies
-// are closed, the clustering is a pure function of the outcome text, and the
-// optional LLM pass can only change a title. No test calls a live model.
+// Failure pathologies: deterministic model-free identity, closed vocabularies, pure
+// clustering over outcome text; the optional LLM pass can only change a title.
 import { describe, expect, test } from 'bun:test';
 import {
   COMPLAINT_CLASSES, RESPONSE_MODES,
@@ -56,8 +53,7 @@ describe('complaint classification — closed vocabulary, first match wins', () 
   });
 
   test('explicit evidence outranks the inferred repeat', () => {
-    // A follow-up that both re-states the request AND names an error is an
-    // error report, not a bare repetition.
+    // Re-stating the request while naming an error is an error report.
     expect(complaintClass(
       'add retries to the uploader',
       'add retries to the uploader — it failed again',

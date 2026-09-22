@@ -321,6 +321,7 @@ export type MctsProgress = v.InferOutput<typeof MctsProgressMessageSchema>;
 
 const SubordinateRosterEntrySchema = v.object({
   name: v.string(),
+  actorId: v.nullable(v.string()),
   displayName: v.string(),
   role: v.string(),
   nameOrigin: v.optional(v.picklist(["user", "auto", "provisional"])),

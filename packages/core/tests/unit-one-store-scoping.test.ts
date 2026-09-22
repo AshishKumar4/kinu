@@ -1,26 +1,8 @@
 /**
- * Every remaining per-actor table, over ONE physical database.
- *
- * The companion to `unit-actor-private-stores.test.ts`, which covers the five
- * store families that were scoped first. This file covers the rest: the
- * evolution ledgers, the identity logs, the effect ledgers, the safety
- * decisions, the plan/curriculum/prompt stores, the search and exploration
- * records, the subordinate roster, the events hub, and the workspace baseline.
- *
- * Every case here runs TWO issued actor handles over a SINGLE `SqlExecutor`.
- * That is the shape the scoping exists for and the only shape that can falsify
- * it: with a database per actor these assertions all pass vacuously, because
- * the rows were never in the same table.
- *
- * THE KEYS COLLIDE ON PURPOSE, and each case picks the identifier the two
- * actors really would present the same: a turn id, a session key, a debt-key
- * digest over the same turn ids, a subordinate name chosen by its parent, a
- * candidate id minted by the caller, a mission label, an upstream webhook or
- * timer delivery id. "The ids happen to differ" is not available as a reason
- * these rows stay apart.
- *
- * The last block is the other half of the binding: a handle whose validation
- * throws is refused BEFORE its statement runs, and the row count is unchanged.
+ * Every per-actor table not covered by `unit-actor-private-stores.test.ts`, with two
+ * actor handles over one `SqlExecutor` (a database per actor would pass vacuously).
+ * Keys collide on purpose, using identifiers both actors would really present. The
+ * last block: a handle whose validation throws is refused before its statement runs.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -96,8 +78,6 @@ import {
   initWorkspaceBaselineTable, resetWorkspaceBaseline, getWorkspaceDiff,
 } from '../src/read-models/workspace-diff';
 
-// ── the world ────────────────────────────────────────────────────
-
 interface World {
   readonly db: Database;
   readonly sql: SqlExecutor;
@@ -105,16 +85,14 @@ interface World {
   readonly exec: SqlExec;
   readonly a: ActorHandle;
   readonly b: ActorHandle;
-  /** Stop `revocable` answering — the binding's validation then throws. */
+  /** Makes `revocable`'s validation throw. */
   revoke(): void;
-  /** A handle that is live until {@link World.revoke}. */
   readonly revocable: ActorHandle;
   count(table: string): number;
   close(): void;
 }
 
-/** One database, three handles over it: two peers, and one the test can
- *  revoke to observe the refusal every bound store owes. */
+/** Two peers and one revocable handle over one database. */
 function world(): World {
   const db = new Database(':memory:');
   const sql = makeSql(db);
@@ -133,8 +111,7 @@ function world(): World {
   };
 }
 
-/** A runtime over the world's database, bound to one of its actors — for the
- *  stores whose entry point is an `AgentRuntime` rather than a raw handle. */
+/** For stores whose entry point is an `AgentRuntime`. */
 function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().vfs): AgentRuntime {
   return {
     actor,
@@ -183,8 +160,6 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
   };
 }
 
-// ── evolution/outcomes.ts ────────────────────────────────────────
-
 describe('two actors, one database: turn_outcomes', () => {
   test('both actors grade the same turn id, and each reads back its own verdict', () => {
     const w = world();
@@ -225,8 +200,7 @@ describe('two actors, one database: lessons', () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
 
-    // `key` makes the row id deterministic — the exact collision two actors
-    // replaying the same import or reflection would present.
+    // `key` makes the row id deterministic, so both actors collide.
     const idA = recordLesson(w.sql, w.a, {
       turnIds: ['turn-1'], text: 'from-a', source: 'turn_reflection', status: 'provisional', key: 'k1',
     });
@@ -274,8 +248,7 @@ describe('two actors, one database: pattern_extractions', () => {
     const w = world();
     initTurnOutcomeTables(w.execRaw);
 
-    // The store for this table lives in the evolution engine; what is scoped
-    // here is the row identity, so the exercise is the identity itself.
+    // The store lives in the engine; the row identity is what is scoped.
     for (const [actor, answer] of [[w.a, 'from-a'], [w.b, 'from-b']] as const) {
       void w.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer, created_at)
         VALUES (${actor.actorId}, ${'turn-1:pattern'}, ${answer}, 1)`;
@@ -292,8 +265,6 @@ describe('two actors, one database: pattern_extractions', () => {
     w.close();
   });
 });
-
-// ── evolution/session-window.ts + identity/effect-tombstones.ts ──
 
 describe('two actors, one database: completed_turns', () => {
   test('the same recorded turn id opens a window for each actor', () => {
@@ -337,8 +308,6 @@ describe('two actors, one database: effect_tombstones', () => {
   });
 });
 
-// ── evolution/replay.ts ──────────────────────────────────────────
-
 describe('two actors, one database: replay_evals', () => {
   test('each actor samples its own ledger and reads back only its own curve', async () => {
     const w = world();
@@ -366,8 +335,6 @@ describe('two actors, one database: replay_evals', () => {
   });
 });
 
-// ── evolution/refinement.ts ──────────────────────────────────────
-
 describe('two actors, one database: refinement_requests', () => {
   test('one debt key opens a request for EACH actor', () => {
     const w = world();
@@ -382,13 +349,12 @@ describe('two actors, one database: refinement_requests', () => {
 
     const first = a.open(input);
     const second = b.open(input);
-    // Both CREATED: the unique debt-key index is per owner, so one actor's
-    // batch cannot refuse a sibling that owes a refinement over the same turns.
+    // Both created: the unique debt-key index is per owner.
     expect(first.created).toBe(true);
     expect(second.created).toBe(true);
     expect(w.count('refinement_requests')).toBe(2);
 
-    // And a re-open under the same key still collapses WITHIN one actor.
+    // A re-open under the same key still collapses within one actor.
     expect(a.open(input).created).toBe(false);
     expect(w.count('refinement_requests')).toBe(2);
 
@@ -398,15 +364,13 @@ describe('two actors, one database: refinement_requests', () => {
 
     const claim = a.claim(first.request.id);
     expect(claim).not.toBeNull();
-    // A's claim moved A's row off `requested`; B's is still the next one owed.
+    // A's claim moved only A's row.
     expect(a.nextRequested()).toBeNull();
     expect(b.nextRequested()?.id).toBe(second.request.id);
     expect(a.coveredTurnIds().size).toBe(2);
     w.close();
   });
 });
-
-// ── evolution/gepa/persistence.ts ────────────────────────────────
 
 describe('two actors, one database: gepa_runs and gepa_candidates', () => {
   test('a caller-minted candidate id belongs to one run of one actor', () => {
@@ -432,8 +396,6 @@ describe('two actors, one database: gepa_runs and gepa_candidates', () => {
     w.close();
   });
 });
-
-// ── identity/schema.ts logs ──────────────────────────────────────
 
 describe('two actors, one database: fibers, evolution_events, executor_output, activity_log', () => {
   test('each log row belongs to the actor that wrote it', () => {
@@ -470,15 +432,12 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
   });
 });
 
-// ── orchestrator/terminal-effects.ts ─────────────────────────────
-
 describe('two actors, one database: terminal_effects', () => {
   test('one sequence id is a separate suffix for each actor', async () => {
     const w = world();
     initTerminalEffectTable(w.execRaw);
 
-    // Claim only — the roster write is what the scoping is about, and it is
-    // synchronous, so no wake and no effect body is involved.
+    // Claim only: the roster write is synchronous, so no wake or effect body runs.
     const a = new TerminalEffectLedger({
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
     });
@@ -495,7 +454,7 @@ describe('two actors, one database: terminal_effects', () => {
     expect(a.pendingSequences()).toEqual(['turn-1']);
     expect(b.pendingSequences()).toEqual(['turn-1']);
 
-    // A settles its row directly; B's identically-keyed row is still owed.
+    // B's identically-keyed row is still owed.
     void w.sql`UPDATE terminal_effects SET status = 'completed'
       WHERE actor_id = ${w.a.actorId} AND sequence_id = ${'turn-1'}`;
     expect(a.pendingSequences()).toEqual([]);
@@ -506,8 +465,6 @@ describe('two actors, one database: terminal_effects', () => {
     w.close();
   });
 });
-
-// ── tools/effect-claim.ts ────────────────────────────────────────
 
 describe('two actors, one database: tool_effect_claims', () => {
   test('one call key is claimable by each actor and settles only for its owner', () => {
@@ -522,7 +479,7 @@ describe('two actors, one database: tool_effect_claims', () => {
     settleToolEffect(w.sql, w.a, key, JSON.stringify('done-by-a'));
     const a = claimToolEffect(w.sql, w.a, key);
     expect(a.kind === 'settled' ? a.result : null).toBe('done-by-a');
-    // B's own attempt is still unsettled — not settled by A's result.
+    // B's own attempt is unsettled, not settled by A's result.
     expect(claimToolEffect(w.sql, w.b, key).kind).toBe('indeterminate');
 
     releaseTurnEffectClaims(w.sql, w.a, 'turn-1');
@@ -531,8 +488,6 @@ describe('two actors, one database: tool_effect_claims', () => {
     w.close();
   });
 });
-
-// ── safety ───────────────────────────────────────────────────────
 
 describe('two actors, one database: deferred_approvals', () => {
   test('the owner\'s decision for one actor does not answer for the other', () => {
@@ -578,8 +533,7 @@ describe('two actors, one database: instruction_approvals', () => {
     expect(a.trustOf('SKILL.md', content)).toBe('approved');
     expect(b.trustOf('SKILL.md', content)).toBe('unverified');
 
-    // No carry-over exists to inherit: a file B never decided about stays
-    // unverified for B whatever A approved.
+    // No carry-over: B never decided about this file.
     expect(b.get('LEGACY.md')).toBeNull();
     expect(b.trustOf('LEGACY.md', 'legacy')).toBe('unverified');
     expect(a.list().map((r) => r.path)).toEqual(['SKILL.md']);
@@ -587,8 +541,6 @@ describe('two actors, one database: instruction_approvals', () => {
     w.close();
   });
 });
-
-// ── plans/review.ts ──────────────────────────────────────────────
 
 describe('two actors, one database: plan_reviews', () => {
   test('both actors hold plan-1 revision 1, and one approval decides one of them', () => {
@@ -610,8 +562,6 @@ describe('two actors, one database: plan_reviews', () => {
     w.close();
   });
 });
-
-// ── curriculum/proposer.ts ───────────────────────────────────────
 
 describe('two actors, one database: proposed_tasks', () => {
   test('one proposal id is a row per actor, and a status change stops at the owner', () => {
@@ -639,8 +589,6 @@ describe('two actors, one database: proposed_tasks', () => {
   });
 });
 
-// ── prompting/section-store.ts ───────────────────────────────────
-
 describe('two actors, one database: prompt_section_versions and prompt_section_evaluations', () => {
   test('one section id carries a different promoted source per actor', () => {
     const w = world();
@@ -667,7 +615,7 @@ describe('two actors, one database: prompt_section_versions and prompt_section_e
     expect(firstPendingPromptSection(w.sql, w.b)).toBe(section.id);
     expect(listPromptSectionVersions(w.sql, w.a)).toHaveLength(1);
 
-    // Trials on the SAME section, version and instance.
+    // Trials on the same section, version and instance.
     for (const [actor, winner] of [[w.a, 'pending'], [w.b, 'current']] as const) {
       recordPromptSectionTrial(w.sql, actor, {
         sectionId: section.id, pendingVersion: 1, instanceId: 'i1',
@@ -687,13 +635,11 @@ describe('two actors, one database: prompt_section_versions and prompt_section_e
     expect(getPendingPromptSection(w.sql, w.a, section.id)).toBeNull();
 
     applyPromptSectionDecision(w.sql, w.b, pendingB, 'rollback');
-    // A's promoted row is untouched by B's rollback of the same (section, version).
+    // A's promoted row is untouched by B's rollback.
     expect(activePromptSectionOverrides(w.sql, w.a)[section.id]).toBe('a-source');
     w.close();
   });
 });
-
-// ── mcts/takes.ts + mcts/schemas.ts ──────────────────────────────
 
 describe('two actors, one database: alternate_takes and search_nodes', () => {
   test('one branch settlement key records a take set for each actor', () => {
@@ -714,7 +660,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     expect(listAlternateTakeSets(w.sql, w.a)).toHaveLength(1);
     expect(latestAlternateTakeSet(w.sql, w.b)?.id).toBe(setB.id);
 
-    // A replay under the same key returns the row the first attempt wrote.
+    // A replay under the same key returns the first row.
     expect(recordBranchTakeSet(w.sql, w.a, input)?.id).toBe(setA.id);
     expect(w.count('alternate_takes')).toBe(2);
     w.close();
@@ -752,8 +698,7 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     initTurnOutcomeTables(w.execRaw);
     initAlternateTakesTable(w.execRaw);
     initSearchTables(w.execRaw);
-    // `recordTakePick` resolves the turn's conversation pair, so the transcript
-    // tables have to exist — the ledger row it writes quotes what was said.
+    // `recordTakePick` quotes the conversation pair, so transcript tables must exist.
     initActorTables(w.execRaw, w.sql);
     initSessionContextTables(w.execRaw);
     initSessionTranscriptTables(w.execRaw);
@@ -797,14 +742,12 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     // B's identically-named nodes never moved.
     expect(status(w.b, 'n-1')).toBe('terminal');
     expect(status(w.b, 'n-2')).toBe('terminal');
-    // And the ledger row the pick wrote is A's alone.
+    // The pick's ledger row is A's alone.
     expect(listTurnOutcomes(w.sql, w.a, { outcomes: ['corrected'] })).toHaveLength(1);
     expect(listTurnOutcomes(w.sql, w.b, { outcomes: ['corrected'] })).toHaveLength(0);
     w.close();
   });
 });
-
-// ── strategy/records.ts ──────────────────────────────────────────
 
 describe('two actors, one database: exploration_records', () => {
   test('the same artifact under the same objective is a record per actor', () => {
@@ -841,8 +784,6 @@ describe('two actors, one database: exploration_records', () => {
   });
 });
 
-// ── strategy/swarm-resume.ts ─────────────────────────────────────
-
 describe('two actors, one database: swarm_node_records', () => {
   test('one node id carries a different record for each actor', () => {
     const w = world();
@@ -872,8 +813,6 @@ describe('two actors, one database: swarm_node_records', () => {
   });
 });
 
-// ── experience/imports.ts ────────────────────────────────────────
-
 describe('two actors, one database: imported_experience', () => {
   test('both actors adopt the same library entry, and each settles only its own', () => {
     const w = world();
@@ -889,11 +828,10 @@ describe('two actors, one database: imported_experience', () => {
     const rtA = runtimeFor(w, w.a);
     const rtB = runtimeFor(w, w.b);
     expect(stageImport(rtA, entry, 1).ok).toBe(true);
-    // The same library id: admitted for B too, because "already imported here"
-    // is a question about THIS actor's adopted set.
+    // Admitted for B too: "already imported" is per actor.
     expect(stageImport(rtB, entry, 1).ok).toBe(true);
     expect(w.count('imported_experience')).toBe(2);
-    // And a second attempt by the SAME actor is still refused.
+    // The same actor is still refused.
     expect(stageImport(rtA, entry, 1).ok).toBe(false);
 
     bindPendingImports(w.sql, w.a, 'turn-1');
@@ -902,8 +840,6 @@ describe('two actors, one database: imported_experience', () => {
     w.close();
   });
 });
-
-// ── mission-budget.ts ────────────────────────────────────────────
 
 describe('two actors, one database: mission_budget', () => {
   test('one mission label is a separate cumulative ledger per actor', () => {
@@ -926,8 +862,6 @@ describe('two actors, one database: mission_budget', () => {
     w.close();
   });
 });
-
-// ── subordinates ─────────────────────────────────────────────────
 
 describe('two actors, one database: actor_subordinates', () => {
   test('two parents each hire a "reviewer" and neither can dismiss the other\'s', () => {
@@ -984,8 +918,6 @@ describe('two actors, one database: subordinate_identity', () => {
   });
 });
 
-// ── events/hub ───────────────────────────────────────────────────
-
 describe('two actors, one database: agent_log', () => {
   test('one upstream dedupe key admits an event for EACH actor', () => {
     const w = world();
@@ -1002,8 +934,7 @@ describe('two actors, one database: agent_log', () => {
 
     const first = a.publish({ descriptor, now: 1_000 });
     const second = b.publish({ descriptor, now: 1_000 });
-    // BOTH admitted. A table-wide unique dedupe index would have swallowed the
-    // second actor's event as a duplicate of the first actor's row.
+    // Both admitted: a table-wide dedupe index would swallow B's event.
     expect(first.admitted).toBe(true);
     expect(second.admitted).toBe(true);
     expect(first.id).not.toBe(second.id);
@@ -1016,7 +947,7 @@ describe('two actors, one database: agent_log', () => {
     expect(a.idForDedupeKey('timer:trg-1:1000')).toBe(first.id);
     expect(b.idForDedupeKey('timer:trg-1:1000')).toBe(second.id);
 
-    // And a genuine replay WITHIN one actor is still deduped.
+    // A replay within one actor is still deduped.
     expect(a.publish({ descriptor, now: 1_000 }).admitted).toBe(false);
     expect(w.count('agent_log')).toBe(2);
 
@@ -1113,15 +1044,11 @@ describe('two actors, one database: triggers', () => {
   });
 });
 
-// ── read-models/workspace-diff.ts ────────────────────────────────
-
 describe('two actors, one database: vfs_baseline', () => {
   test('one actor re-baselining does not deactivate the other\'s generation', async () => {
     const w = world();
     initWorkspaceBaselineTable(w.execRaw);
-    // An EMPTY plane on purpose: what this proves is that the generation FLIP is
-    // per owner, and the flip is a single statement over the whole table. A file
-    // would add rows to both actors' snapshots and change nothing about it.
+    // Empty plane on purpose: the generation flip is one statement over the whole table.
     const vfs = createMemoryVfs().vfs;
     const rtA = runtimeFor(w, w.a, vfs);
     const rtB = runtimeFor(w, w.b, vfs);
@@ -1133,9 +1060,7 @@ describe('two actors, one database: vfs_baseline', () => {
 
     if (activeA === undefined) throw new Error('A captured a baseline generation');
 
-    // B captures its own baseline. Without the owner on the flip, this would
-    // have deactivated A's rows and A's next diff would report the whole
-    // workspace as newly added.
+    // Without the owner on the flip, B would deactivate A's baseline.
     await resetWorkspaceBaseline(rtB);
 
     const stillActiveA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline
@@ -1148,8 +1073,6 @@ describe('two actors, one database: vfs_baseline', () => {
     w.close();
   });
 });
-
-// ── the refusal ──────────────────────────────────────────────────
 
 describe('a handle whose validation throws is refused before the statement runs', () => {
   test('every bound store refuses, and the table is unchanged', () => {
@@ -1174,12 +1097,10 @@ describe('a handle whose validation throws is refused before the statement runs'
     const events = new EventLog(w.exec, w.revocable);
     const channels = new ReplyChannelStore(w.exec, w.revocable);
 
-    // Revoked AFTER construction: the store exists, and it is the per-statement
-    // check that refuses — not a failure to build one.
+    // Revoked after construction, so the per-statement check is what refuses.
     w.revoke();
 
-    // `() => void`, not `() => unknown`: each attempt's contract is the write
-    // it tries, never a value — the loop below only asserts that it throws.
+    // Each attempt's contract is the write it tries; the loop asserts only that it throws.
     const attempts: ReadonlyArray<readonly [string, () => void]> = [
       ['turn_outcomes', () => recordTurnOutcome(w.sql, w.revocable, {
         turnId: 't', outcome: 'accepted', confidence: 1, source: 'explicit',

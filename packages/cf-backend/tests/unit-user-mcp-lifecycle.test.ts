@@ -14,7 +14,7 @@
 //     state the UI already renders; a tool's own prose about a 401 does not
 import { describe, expect, test } from 'bun:test';
 import {
-  createTestUserDO, sqlExec, testOwner,
+  createTestUserDO, sqlExec, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY,
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
@@ -24,7 +24,7 @@ import {
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
 import { storedMcpOptionsCarryCredential, validateMcpServerInput } from '../src/user/mcp';
-import { McpToolSurfaceSchema } from '@kinu.run/core';
+import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import type { McpToolSurface } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -619,6 +619,27 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
     });
 
     expect(seen).toEqual(['Bearer rotated']);
+    h.close();
+  });
+
+  test('stored headers that no longer open fail the request instead of sending it bare', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1', { headers: { Authorization: 'Bearer sealed' } });
+    // An envelope sealed for another server: it does not open under this one.
+    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+    sqlExec(h.db).exec(
+      'UPDATE user_mcp_servers SET headers = ? WHERE id = ?',
+      await cipher.seal('test-user-do:mcp:other', JSON.stringify({ Authorization: 'Bearer other' })), 'srv1',
+    );
+
+    const send = recordedMcpFetch('srv1');
+    expect(send).not.toBeNull();
+
+    const seen = await authorizationsSeenDuring(async () => {
+      await expect(send?.('https://srv1.example/sse')).rejects.toThrow('opening the stored headers of MCP server srv1');
+    });
+
+    expect(seen).toEqual([]);
     h.close();
   });
 

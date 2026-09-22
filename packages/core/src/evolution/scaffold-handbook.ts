@@ -1,70 +1,37 @@
 /**
- * Scaffold handbook — the behaviour→site index the scaffold-proposal prompt
- * navigates by.
- *
- * Harness Handbook (arXiv:2607.13285) measured the thing this fixes: an agent
- * editing its own harness works better from a behaviour→implementation map
- * than from raw source, and plans it in fewer tokens. Kinu's proposal
- * prompt showed the scaffold source and the `host.*` d.ts and nothing else —
- * no map of what the loop it is rewriting actually sits on.
- *
- * The behaviour taxonomy already exists and has exactly one owner: the layer
- * gate's decomposition (`../layergate/layers.ts`), the same layers that score
- * every scaffold change. This module RENDERS that taxonomy; it does not
- * define a second one.
- *
- *   L1 — a layer: what it owns, and whether the gate has a deterministic
- *        slice for it (a change there is scored) or not (it is not).
- *   L2 — the sites behind it: the module each of the layer's subjects is
- *        exported from, straight out of `SUBJECT_SOURCE`.
- *
- * The live scaffold gets the same two levels over its own source: its
- * top-level declarations and the bridge calls each one makes, found by
- * scanning section comments and declarations. Deterministic throughout — a
- * pure function of `LAYERS`, `SUBJECT_SOURCE` and the source text. No model
- * call, no clock, no store.
- *
- * Deliberately NOT included: any claim about which layers a given `host.*`
- * call reaches at runtime. That would be a hand-maintained reachability table
- * with nothing proving it, and a handbook that quietly lies to the agent
- * rewriting itself is worse than one that stays silent.
+ * Scaffold handbook: the behaviour→site index for the scaffold-proposal prompt
+ * (Harness Handbook, arXiv:2607.13285). Renders the layer gate's `LAYERS` taxonomy
+ * (L1 layers, L2 `SUBJECT_SOURCE` sites) plus the live scaffold's own sites.
+ * Deliberately makes no claim about which layers a `host.*` call reaches at runtime:
+ * nothing would prove such a table.
  */
 
 import { LAYERS } from '../layergate/layers';
 import { SUBJECT_SOURCE } from '../layergate/subjects';
 
-/** A top-level site in the live scaffold source. */
 export interface ScaffoldSite {
-  /** Declaration name, or `<module>` for statements outside any declaration. */
+  /** `<module>` for statements outside any declaration. */
   name: string;
   kind: 'generator' | 'function' | 'class' | 'binding' | 'module';
-  /** 1-based line of the declaration. */
+  /** 1-based. */
   line: number;
-  /** The comment line immediately above it, when it carries prose. */
+  /** The prose comment line immediately above it, if any. */
   note: string | null;
-  /** `host.*` bridge functions called in this site's span, first use first. */
+  /** First use first. */
   bridgeCalls: string[];
 }
 
-/** Top-level declarations only — a scaffold is a flat module by contract
- *  (`export`ed or not, the executor wraps it), so column-0 anchoring is the
- *  whole grammar we need and costs no parser. */
+/** A scaffold is a flat module by contract, so column-0 anchoring needs no parser. */
 const DECLARATION =
   /^(?:export\s+(?:default\s+)?)?(?:(async\s+)?function(\s*\*)?\s+([A-Za-z_$][\w$]*)|class\s+([A-Za-z_$][\w$]*)|(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=)/;
 
 const BRIDGE_CALL = /\bhost\.([A-Za-z_$][\w$]*)\s*\(/g;
 
-/** A comment line worth showing as a site's note: prose, not a rule. */
 const PROSE_COMMENT = /^\/\/\s*(.*[A-Za-z].*)$/;
 
 const SEPARATOR = /^[\s─—=*+-]*$/;
 
-/**
- * Blank out comments, line for line. The v0 bootstrap header explains
- * `host.defaultInference()` in prose, so scanning raw text would report the
- * whole comment block as a site that calls the bridge. Quote state is tracked
- * so a `//` inside a string literal stays code.
- */
+/** Blank out comments line for line, so prose mentioning `host.*` is not reported as a bridge call. Quote state is tracked. */
 function stripComments(lines: readonly string[]): string[] {
   let inBlock = false;
 
@@ -115,9 +82,7 @@ function bridgeCallsIn(code: readonly string[], from: number, to: number): strin
   return found;
 }
 
-/** The topic sentence of the comment block directly above a declaration.
- *  Lines are rejoined before the sentence is taken, so a wrapped paragraph
- *  contributes its opening statement rather than its first physical line. */
+/** Wrapped lines are rejoined first so the opening sentence is taken, not the first physical line. */
 function noteAbove(lines: readonly string[], index: number): string | null {
   const block: string[] = [];
 
@@ -144,7 +109,6 @@ function noteAbove(lines: readonly string[], index: number): string | null {
   return sentence.length > 160 ? `${sentence.slice(0, 159)}…` : sentence;
 }
 
-/** Which of DECLARATION's alternatives matched, read off its groups. */
 function declarationKind(star: string, fn: string, cls: string): ScaffoldSite['kind'] {
   if (fn) return star ? 'generator' : 'function';
 
@@ -153,11 +117,7 @@ function declarationKind(star: string, fn: string, cls: string): ScaffoldSite['k
   return 'binding';
 }
 
-/**
- * Index the live scaffold source into its top-level sites. Statements before
- * the first declaration are reported as one `<module>` site, and only when
- * they actually reach the bridge — an unused preamble is not a site.
- */
+/** Pre-declaration statements form one `<module>` site, only when they reach the bridge. */
 export function indexScaffoldSites(source: string): ScaffoldSite[] {
   const lines = source.split('\n');
   const code = stripComments(lines);
@@ -189,8 +149,6 @@ export function indexScaffoldSites(source: string): ScaffoldSite[] {
   return sites;
 }
 
-/** Subjects grouped by the module they are exported from, in declaration
- *  order — the L2 line of a layer. */
 function layerSites(subjects: readonly string[]): string {
   const byModule = new Map<string, string[]>();
 
@@ -207,8 +165,6 @@ function layerSites(subjects: readonly string[]): string {
   return [...byModule].map(([module, symbols]) => `${module} ${symbols.join(', ')}`).join(' · ');
 }
 
-/** First sentence of the unmeasured rationale — enough to say why the gate is
- *  silent here without reprinting the whole argument. */
 function firstSentence(text: string): string {
   const stop = text.indexOf('. ');
 
@@ -226,10 +182,7 @@ function renderSite(site: ScaffoldSite): string {
     (site.note ? ` — ${site.note}` : '');
 }
 
-/**
- * The handbook, ready to prepend to the proposal prompt. Byte-stable for a
- * given scaffold source: same input, same string, every time.
- */
+/** Byte-stable for a given scaffold source. */
 export function renderScaffoldHandbook(scaffoldSource: string): string {
   const layers = LAYERS.map((layer) => {
     const scored = layer.probes.length > 0

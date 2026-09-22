@@ -1215,31 +1215,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 
+  /** Send the replies a drained turn owes, then close its delivery leases.
+   *  False while a reply channel is still open; a failed dispatch or close
+   *  rejects, so the caller records it as the failure it is. */
   private async completeEventBatch(turnId: string, assistantText: string): Promise<boolean> {
-    try {
-      const replies = await dispatchEmailRepliesForTurn(
-        { log: this.eventLog, replies: this.replyChannels },
-        turnId, assistantText, Date.now(),
-      );
+    const replies = await dispatchEmailRepliesForTurn(
+      { log: this.eventLog, replies: this.replyChannels },
+      turnId, assistantText, Date.now(),
+    );
 
-      if (replies.pending) {
-        diagnostics.event('event.reply_pending', { turnId });
-
-        return false;
-      }
-
-      this.eventLog.markTurnCompleted(turnId);
-
-      return true;
-    } catch (err) {
-      diagnostics.failure('event.reply_dispatch_failed', toKinuError({
-        doing: 'dispatching the event replies a completed turn owes',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { turnId });
+    if (replies.pending) {
+      diagnostics.event('event.reply_pending', { turnId });
 
       return false;
     }
+
+    this.eventLog.markTurnCompleted(turnId);
+
+    return true;
   }
 
   /**
@@ -1540,12 +1533,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }), { workspace: this.name });
     }
 
-    // No catch: `completeEventBatch` answers false instead of throwing (its
-    // own catch covers the dispatch and the completion write), so a catch
-    // here could only fire for the announce line beside it.
+    // One reply's failure is recorded and leaves only ITS lease open, which
+    // keeps the wake armed for it: the other owed replies and the terminal
+    // replay below still run in this frame.
     for (const [drainTurnId, answer] of owed) {
-      const closed = await this.completeEventBatch(drainTurnId, answer);
-      diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
+      try {
+        const closed = await this.completeEventBatch(drainTurnId, answer);
+        diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
+      } catch (err) {
+        diagnostics.failure('event.owed_reply_failed', toKinuError({
+          doing: 'finishing an event reply a drained turn still owes',
+          cause: err,
+          otherwise: 'io',
+        }), { drainTurnId });
+      }
     }
 
     await super.owedDeliveryWork();
@@ -1751,20 +1752,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return await stub.receivePeerMessage(msg);
       },
       isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
+      // A lookup that fails admits nothing and is not a refusal either: it
+      // rejects the delivery, and the sender's outbox retries it.
       hasGrant: async (senderAgentName, senderUserId) => {
-        try {
-          const { stub, caller } = await this.userHub();
+        const { stub, caller } = await this.userHub();
 
-          return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
-        } catch (err) {
-          diagnostics.failure('peer.grant_lookup_failed', toKinuError({
-            doing: 'asking the owner UserDO whether a peer grant exists',
-            cause: err,
-            otherwise: 'unavailable',
-          }), { sender: senderAgentName });
-
-          return false;   // default deny on lookup failure
-        }
+        return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
       },
       scheduleDispatch: (at) => this.armTimer(at),
       onAdmitted: () => { this.orch.scheduleDrain(); },

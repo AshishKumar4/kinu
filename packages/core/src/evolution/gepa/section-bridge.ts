@@ -1,33 +1,10 @@
 /**
- * GEPA → prompt-section bridge.
- *
- * The sibling of `scaffold-bridge.ts`, and deliberately the same shape: run
- * GEPA over one addressable artifact under artifact-aware constraints, then
- * hand a strictly-better winner to the gate that owns proposals. Flow:
- *
- *   1. Resolve the target from `PROMPT_SECTION_TARGETS` — the nine sections
- *      `prompting/section-templates.ts` registers. An unknown id is refused
- *      rather than optimised into nothing.
- *   2. Seed from the INCUMBENT: the promoted source if the section has one,
- *      else the template compiled into the bundle. Evolution is cumulative or
- *      it is a treadmill.
- *   3. Run GEPA with section-aware constraints — the slot contract, the fixed
- *      misevolution checklist, and the byte ceiling — so a candidate that
- *      cannot ship never costs a scoring call.
- *   4. Hand the winner to `proposePromptSection`, where it lands PENDING. The
- *      live prompt does not move: `buildSystemPromptSync` reads only
- *      `status='current'` rows, and a pending one is not current. Promotion
- *      needs trials and `decidePromotion` — the scaffold's own calibrated rule.
- *
- * No behavioural promotion happens here, exactly as in the scaffold bridge.
- * GEPA is a proposal generator.
- *
- * What this bridge adds that the scaffold's does not need: THE SIZE RULE
- * (`checkPromptSizeRule`). A scaffold is one file the agent runs; a prompt
- * section is bytes every turn pays for. So a longer candidate has to earn the
- * bytes with a score that clears the incumbent's mean, and the refusal is
- * reported as its own outcome rather than folded into "the gate said no" —
- * anti-bloat working as designed reads differently from a safety veto.
+ * GEPA → prompt-section bridge, shaped like `scaffold-bridge.ts`. Seeds from the
+ * incumbent, rejects unshippable candidates in-loop (slot contract, misevolution
+ * checklist, byte ceiling), and hands a strictly better winner to
+ * `proposePromptSection`, where it lands pending; promotion is `decidePromotion`'s.
+ * A section is bytes every turn pays for, so a longer candidate must also pass
+ * `checkPromptSizeRule`, reported as its own outcome.
  */
 
 import type { SqlExecutor } from '../../types/primitives';
@@ -48,19 +25,9 @@ import type {
 } from './types';
 
 /**
- * The prompt sections GEPA may target: the eleven base sections and seven
- * root-only lead rule families, each under the same mutation-size ceiling.
- *
- * Every one is prose the model reads and the builder emits as one block, which
- * is what makes it scorable end to end. The per-line fragments
- * (`tools/builtin-line`, the executor lines) are deliberately absent: a line
- * evolved on its own would be scored against a prompt it cannot move, and its
- * wording is mapped over typed data rather than authored.
- *
- * Nothing here is a safety exemption. The Execution-environments section
- * carries the approvals doctrine, so it is exactly the section the misevolution
- * `consent-weakening` criterion exists for — the answer is the gate, not a
- * shorter list.
+ * Sections GEPA may target, all under one mutation-size ceiling. Per-line fragments
+ * are absent: evolved alone, a line is scored against a prompt it cannot move.
+ * None is a safety exemption; the misevolution gate covers the approvals doctrine.
  */
 export const PROMPT_SECTION_TARGETS: readonly PromptSection<string>[] = PROMPT_SECTIONS;
 
@@ -70,45 +37,31 @@ export function findPromptSectionTarget(sectionId: string): PromptSection<string
 
 export interface RunSectionGepaOpts<I = unknown, E = unknown> extends GepaProgressHooks {
   sql: SqlExecutor;
-  /** Whose prompt section is being evolved. The incumbent, the candidate rows
-   *  and the run ledger are all that actor's. */
   actor: ActorHandle;
-  /** Which registered section to evolve. */
   sectionId: string;
-  /** Held-out instances the winner is selected on. */
   evalSet: ReadonlyArray<EvalInstance<I, E>>;
-  /** Reflection-minibatch source (the outcome-labeled negatives to fix).
-   *  Defaults to evalSet — see GepaConfig.trainSet. */
+  /** Reflection-minibatch source; defaults to evalSet. */
   trainSet?: ReadonlyArray<EvalInstance<I, E>>;
-  /** Scores a candidate SECTION SOURCE against one labeled turn. */
   metric: GepaMetric<I, E>;
   reflectionLm: ReflectionLM;
   budget?: GepaConfig<I, E>['budget'];
 }
 
 export interface RunSectionGepaResult {
-  /** The section this run targeted. */
   sectionId: string;
-  /** The raw GEPA output — winner + Pareto front + history. Absent when the
-   *  run never started because the target was unknown. */
+  /** Null when the target was unknown and the run never started. */
   gepa: GepaResult | null;
-  /** The winner's eval-set score with its 95% interval. */
   winnerScore: ScoreInterval;
-  /** The incumbent's eval-set score with its 95% interval. Read the two
-   *  intervals against each other before believing the winner is better. */
+  /** Compare both intervals before believing the winner is better. */
   incumbentScore: ScoreInterval;
-  /** Whether the winner was handed to `proposePromptSection` and accepted. */
   proposed: boolean;
-  /** If proposed, the section's new pending version; null otherwise. */
   pendingVersion: number | null;
-  /** Why we didn't propose. `size_rule` is its own outcome on purpose: it is
-   *  the anti-bloat rule doing its job, not a failure. */
+  /** `size_rule` is the anti-bloat rule working, not a failure. */
   skipReason?:
     | 'unknown_section'
     | 'winner_equals_incumbent'
     | 'size_rule'
     | 'propose_gate_rejected';
-  /** If the gate refused, which bar and why. */
   proposeError?: { code: ProposeSectionRefusal; error: string };
 }
 
@@ -128,9 +81,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
   }
 
   const seed = incumbentSectionSource(opts.sql, opts.actor, section);
-  // The contract the builder will supply values for. A candidate that declares
-  // anything else renders a prompt with a hole in it or throws mid-turn, so it
-  // is rejected in-loop rather than after it has been scored.
+  // A candidate declaring any other slot would leave a hole or throw mid-turn, so it is rejected before scoring.
   const wanted = templateContract(section.id, seed);
   const wantedKey = `${wanted.slots.join('|')}//${wanted.flags.join('|')}`;
 
@@ -174,11 +125,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
   const scores = { winnerScore, incumbentScore };
   const base = { sectionId: section.id, gepa, ...scores };
 
-  // `bestAggregate` breaks ties by `createdAt` (older wins) and the seed is
-  // always the oldest, so any candidate tied with or below the incumbent yields
-  // `winner === seed`. Reaching the gate at all means GEPA found a strictly
-  // better aggregate; the size rule then asks whether "better" survives the
-  // interval, which is a different and higher question.
+  // Ties go to the older candidate and the seed is oldest, so reaching the gate means a strictly better aggregate.
   if (winner.source === seed) {
     return { ...base, proposed: false, pendingVersion: null, skipReason: 'winner_equals_incumbent' };
   }

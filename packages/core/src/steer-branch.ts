@@ -192,23 +192,28 @@ export interface BranchSettlement {
  * The shared both-sides settle both backends run (detached) at turn end:
  * await the branch head, compare against the finished live turn, persist the
  * takes set, and broadcast the terminal branch_status. A dead live turn
- * (`turnId` null / empty answer) aborts the branch instead.
+ * (`turnId` null / empty answer) aborts the branch instead. Answers what it
+ * broadcast, so the caller records a failed settle as one.
  */
-export async function settlePendingBranch(deps: BranchSettleDeps, pending: BranchSettlement): Promise<void> {
+export async function settlePendingBranch(
+  deps: BranchSettleDeps, pending: BranchSettlement,
+): Promise<BranchSettleOutcome> {
   const { entry, turnId, liveText, settlementKey } = pending;
 
-  const fail = (message: string) => deps.broadcast({
-    type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
-  });
+  const fail = (reason: string): BranchSettleOutcome => {
+    deps.broadcast({
+      type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message: reason,
+    });
+
+    return { ok: false, reason };
+  };
 
   let handle: SteerBranchHandle;
 
   try {
     handle = await entry.handle;
   } catch (err) {
-    fail(renderThrownChain({ cause: err }));
-
-    return;
+    return fail(renderThrownChain({ cause: err }));
   }
 
   if (!turnId || !liveText.trim()) {
@@ -216,10 +221,10 @@ export async function settlePendingBranch(deps: BranchSettleDeps, pending: Branc
     // abort does. The detached settle owner records an abort rejection: a head
     // that refuses to abort is a branch still burning tokens, which a discarded
     // rejection would hide.
-    fail('the live turn did not complete, so there is nothing to compare against');
+    const failed = fail('the live turn did not complete, so there is nothing to compare against');
     await handle.abort('the live turn did not complete');
 
-    return;
+    return failed;
   }
 
   const report = await handle.result;
@@ -234,14 +239,14 @@ export async function settlePendingBranch(deps: BranchSettleDeps, pending: Branc
     settlementKey === undefined ? settlement : { ...settlement, settlementKey },
   );
 
-  if (outcome.ok) {
-    deps.broadcast({
-      type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
-      takeSetId: outcome.set.id, turnId,
-    });
-  } else {
-    fail(outcome.reason);
-  }
+  if (!outcome.ok) return fail(outcome.reason);
+
+  deps.broadcast({
+    type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
+    takeSetId: outcome.set.id, turnId,
+  });
+
+  return outcome;
 }
 
 /**

@@ -17,6 +17,8 @@ import {
 } from '@kinu.run/core';
 import { createMemoryVfs, createTestActorsOver, type MemoryVfs, present } from '@kinu.run/test-utils';
 import { sqlExec } from './helpers/user-do';
+import { makeEnv, orchestratorHarness } from './helpers/actor-harness';
+import { jsrpcStub } from './helpers/jsrpc-stub';
 
 function makeExec(db: Database): SqlExec {
   return sqlExec(db);
@@ -483,6 +485,22 @@ describe('per-receiver ordering + retry backoff', () => {
     expect(row.last_error).toContain('undeliverable after 8 attempts');
     expect(alice.hub.nextRetryAt()).toBeNull();
   });
+
+  test('a receiver that cannot record the message is transport trouble, not a refusal', async () => {
+    const { addAgent } = makeNetwork();
+    const alice = addAgent('alice', 'u1'.padEnd(32, '0'));
+    const bob = addAgent('bob', alice.userId);
+    // The receiver's own event log cannot take the write.
+    bob.sql.exec('DROP TABLE agent_log');
+
+    const sent = await alice.hub.send({ mode: 'build', agent: 'bob', userId: bob.userId, topic: 'step', message: 'first' });
+
+    // A refusal dead-letters for good; this one must stay owed and retry.
+    expect(sent.status).toBe('queued');
+    const [row] = outboxRows(alice);
+    expect(row).toMatchObject({ state: 'pending', attempt_count: 1 });
+    expect(row?.last_error).toContain('no such table: agent_log');
+  });
 });
 
 describe('spawn a specialist (fresh peer joins mid-flight)', () => {
@@ -564,5 +582,26 @@ describe('oversize peer bodies stay reachable', () => {
 
     expect(pendingPeerEvents(alice)).toHaveLength(0);
     expect(alice.files.size).toBe(0);
+  });
+});
+
+describe('the workspace object as the receiver', () => {
+  test('a grant lookup that fails is not a refusal: the delivery rejects, so the sender retries', async () => {
+    const lookupFailure = new Error('the owner object reset mid-call');
+    const env = makeEnv();
+
+    Object.assign(env, {
+      UserDO: {
+        idFromName: (name: string) => ({ toString: () => name }),
+        get: () => jsrpcStub({ hasPeerGrant: async (): Promise<boolean> => { throw lookupFailure; } }),
+      },
+    });
+
+    const { agent } = orchestratorHarness(undefined, undefined, env);
+
+    await expect(agent.receivePeerMessage({
+      mode: 'build', sender_event_id: 'out-1', sender_agent_name: 'carol', sender_user_id: 'b'.repeat(32),
+      topic: 'hello', body: 'hi from another owner',
+    })).rejects.toBe(lookupFailure);
   });
 });

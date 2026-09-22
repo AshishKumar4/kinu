@@ -178,7 +178,7 @@ async function processDoneDescriptor(
   deps: ContainerIngressDeps,
   envelope: Extract<ContainerEventEnvelope, { kind: 'process_done' }>,
 ): Promise<IngressDescriptor> {
-  const [stdoutHandle, stderrHandle] = await Promise.all([
+  const [stdout, stderr] = await Promise.all([
     spillEventContent(deps.vfs, envelope.stdout),
     spillEventContent(deps.vfs, envelope.stderr),
   ]);
@@ -194,8 +194,10 @@ async function processDoneDescriptor(
       stdout_excerpt: envelope.stdout.slice(0, EVENT_BRIEF_MAX_CHARS),
       stderr_excerpt: envelope.stderr.slice(0, EVENT_BRIEF_MAX_CHARS),
       duration_ms: envelope.duration_ms,
-      full_stdout_handle: stdoutHandle ?? undefined,
-      full_stderr_handle: stderrHandle ?? undefined,
+      full_stdout_handle: stdout?.path,
+      full_stderr_handle: stderr?.path,
+      stdout_unsaved: stdout?.unsaved,
+      stderr_unsaved: stderr?.unsaved,
     },
   };
 }

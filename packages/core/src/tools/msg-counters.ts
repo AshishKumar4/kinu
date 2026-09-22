@@ -208,9 +208,10 @@ export interface MsgReceivedFact {
   readonly messageId: string;
   /** Serialized body length in characters. Never the body. */
   readonly chars: number;
-  /** False when the receiver refused it — an ungranted cross-owner sender, or a
-   *  log that would not take it. A refused message is still traffic that
-   *  arrived, so it is counted here rather than dropped. */
+  /** False when it was not admitted — an ungranted cross-owner sender (a
+   *  refusal), or a log that would not take it (a failure the sender retries).
+   *  Either is still traffic that arrived, so it is counted here rather than
+   *  dropped. */
   readonly admitted: boolean;
 }
 

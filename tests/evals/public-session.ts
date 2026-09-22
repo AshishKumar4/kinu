@@ -2,7 +2,7 @@
  * THE PUBLIC-API SESSION: one reusable session over the surfaces the WEB CLIENT
  * speaks, against a DEPLOYED workspace.
  *
- * WHY THIS EXISTS BESIDE `target-cloud.ts`, which already reaches staging. That
+ * WHY THIS EXISTS BESIDE `target-cloud.ts`, which already reaches the deployment. That
  * target drives the OPERATOR plane: `CloudAgentClient` over a connect ticket,
  * and every read a named method over `POST /api/cli/workspaces/:name/rpc` whose
  * `AGENT_RPC_ACCESS` table is its allowlist. So it measures what a credentialed
@@ -122,8 +122,8 @@ import { resolveEvalTarget } from './target';
  * Named separately from `KINU_EVAL_TOKEN` because it is a different credential
  * for a different plane, and conflating them would let a run holding only the
  * CLI bearer believe it could reach `/api/user/*`. Its VALUE is the
- * deployment's `DEV_IDENTITY_SECRET` (scripts/infra-manifest.ts:586) — the whole
- * authority for staging's synthetic identity — which is why the remedy below
+ * deployment's `DEV_IDENTITY_SECRET` (its `SUPPLY` row in scripts/infra-manifest.ts) — the whole
+ * authority for the deployment's synthetic identity — which is why the remedy below
  * names how it was installed rather than inventing a second source for it.
  */
 export const PUBLIC_IDENTITY_ENV = 'KINU_EVAL_WEB_IDENTITY';
@@ -188,7 +188,7 @@ export type PublicWebIdentityResolution =
  * The browser-plane identity for `origin`, or the remedy that would supply one.
  *
  * Pure over its inputs so the gating is testable credential-free: the wiring
- * suite drives it with a staging origin and an empty environment and asserts the
+ * suite drives it with the deployed origin and an empty environment and asserts the
  * remedy names both halves.
  */
 export function resolveWebIdentity(
@@ -210,7 +210,7 @@ export function resolveWebIdentity(
       + '`/api/cli` (cli/routes.ts:87), so it cannot reach `/api/user/workspaces`, '
       + '`/api/workspaces/:name/runs` or the files route this session reads. Export the '
       + `deployment's synthetic-identity secret as ${PUBLIC_IDENTITY_ENV} — the value installed `
-      + 'with `wrangler secret put DEV_IDENTITY_SECRET --env staging`, which is what '
+      + 'with `wrangler secret put DEV_IDENTITY_SECRET`, which is what '
       + '`authenticateRequest` accepts in `x-kinu-dev-identity` (auth/session.ts:162-177). '
       + 'A loopback `wrangler dev` origin needs no secret at all.',
   };
@@ -1529,7 +1529,7 @@ export class KinuPublicSession {
    * a finding about the harness.
    *
    * `status` and `text` are both returned: an exposure row is not evidence of a
-   * live server (docs/EXECUTION-LAYER-SPEC.md:329-332), so what the port
+   * live server (docs/EXECUTION-LAYER-SPEC.md § Slate preview home), so what the port
    * ANSWERED is the whole subject.
    *
    * `body` makes it a WRITE too, because an app's own contract is checked

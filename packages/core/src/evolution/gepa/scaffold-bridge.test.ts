@@ -1,14 +1,7 @@
 /**
- * GEPA → scaffold bridge end-to-end behaviour.
- *
- * Verifies the round-trip:
- *   runScaffoldGepa →  GEPA finds an improved candidate
- *                  →  passes the scaffold-required constraints
- *                  →  hands off to modifyScaffold
- *                  →  scaffold_versions has a pending row at v+1
- *                  →  live `scaffold/agent.js` stays on the current's content
- *
- * Plus the negative paths: dry-run, no-improvement, modify-gate rejection.
+ * GEPA → scaffold bridge: an improved candidate passes the constraints, lands as a
+ * pending row at v+1, and live `scaffold/agent.js` keeps the current content. Plus
+ * dry-run, no-improvement and modify-gate rejection.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -69,7 +62,7 @@ describe('runScaffoldGepa', () => {
     expect(result.pendingVersion).not.toBeNull();
     expect(result.skipReason).toBeUndefined();
 
-    // The pending version's code should be in scaffold/agent.js.v{pendingVersion}.
+    // The pending code is in scaffold/agent.js.v{pendingVersion}.
     if (result.pendingVersion === null) throw new Error('expected a pending scaffold version');
 
     const pending = await rt.storage.vfs.readFile(
@@ -79,12 +72,10 @@ describe('runScaffoldGepa', () => {
 
     expect(v.parse(v.string(), pending)).toContain('improved');
 
-    // The LIVE scaffold/agent.js MUST still hold the seed (Phase 0 invariant).
+    // The live scaffold still holds the seed.
     expect(await rt.identity.scaffold.read()).toBe(VALID_SEED);
 
-    // Both scores come back as intervals, and the rationale the promotion
-    // decision is read against carries them — 0.9 over two instances is not
-    // a fact about the scaffold.
+    // Scores are intervals; 0.9 over two instances is not a fact about the scaffold.
     expect(result.winnerScore).toEqual({ mean: 0.9, lo: expect.any(Number), hi: expect.any(Number), n: 2 });
     expect(result.winnerScore.lo).toBeCloseTo(0.2787, 4);
     expect(result.winnerScore.hi).toBeCloseTo(0.9953, 4);
@@ -120,9 +111,7 @@ describe('runScaffoldGepa', () => {
   });
 
   test('does NOT propose when LM produces a different but no-better candidate', async () => {
-    // bestAggregate breaks ties on createdAt (older wins → seed). So even
-    // when the LM proposes a strictly-different candidate with an identical
-    // aggregate, the seed remains the winner and we hit `winner_equals_seed`.
+    // Ties go to the older candidate, so an equal-scoring proposal yields `winner_equals_seed`.
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
@@ -146,7 +135,7 @@ describe('runScaffoldGepa', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write(VALID_SEED);
-    // Reflection LM produces something that violates the required signature.
+    // Violates the required signature.
     const reflectionLm = async () => 'function notAGenerator(rt, task) { return null; }';
     const metric = async (): Promise<MetricOutcome> => ({ score: 0.9, feedback: '' });
 
@@ -159,8 +148,7 @@ describe('runScaffoldGepa', () => {
       random: seededRng(1),
     });
 
-    // Constraints should have rejected the candidate in-loop — the winner
-    // remains the seed and proposed is false.
+    // Rejected in-loop: the seed wins and nothing is proposed.
     expect(result.gepa.winner.source).toBe(VALID_SEED);
     expect(result.proposed).toBe(false);
   });

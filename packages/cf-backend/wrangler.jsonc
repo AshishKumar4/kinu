@@ -47,10 +47,7 @@
   // one attached gives {"outer":true,"inner":true}. That is the whole tracing
   // investment silently dead with the Worker still answering 200, so
   // `scripts/tracing-gate.ts` fails when the tracer factory is used in src and
-  // this key is absent from ANY deployable environment. It is repeated in
-  // `env.staging` because wrangler does NOT inherit `observability` into named
-  // environments — a preview with traces off reports success while measuring a
-  // different system.
+  // this key is absent.
   //
   // There is deliberately NO `tail_consumers` here. A tail consumer is not
   // needed for the platform to ingest traces, and a Worker that names ITSELF as
@@ -82,13 +79,6 @@
   // HSTS `includeSubDomains` from the apex would then pin preview hostnames
   // that have no certificate at all. One label is the shape that is free AND
   // safe, so the app host is also the preview suffix.
-  //
-  // `staging.kinu.run` is claimed by env.staging as a ROUTE rather than a custom
-  // domain, precisely because it sits under this wildcard: route matching picks
-  // the most specific pattern, so an exact hostname beats `*.kinu.run/*`, while
-  // custom-domain-versus-route precedence is documented only for the SAME
-  // hostname and would be an assumption here. The cost is a proxied DNS record
-  // for that name created by hand — see docs/DEPLOYMENT.md.
   "routes": [
     { "pattern": "kinu.run", "custom_domain": true },
     { "pattern": "*.kinu.run/*", "zone_name": "kinu.run" }
@@ -172,9 +162,8 @@
   // the SDK asks the container for its own SANDBOX_VERSION on every start and
   // logs a mismatch (Sandbox.checkVersionCompatibility). The intended
   // version→digest pair is declared once, in `scripts/release-config.test.ts`,
-  // which holds it against package.json, holds BOTH environments to the same
-  // reference and refuses a tagged one. A version bump edits that pair, this
-  // block and env.staging's — and nothing else.
+  // which holds it against package.json and refuses a tagged reference. A
+  // version bump edits that pair and this block — and nothing else.
   "containers": [
     {
       "class_name": "KinuSandbox",
@@ -269,8 +258,8 @@
   // browsers to hostnames with no certificate. The bare zone wildcard is also
   // safe to claim here in a way it was not on a shared personal zone: kinu.run
   // carries this product and nothing else, so every subdomain SHOULD reach this
-  // Worker, and anything that should not gets a more specific route, which is
-  // exactly how env.staging takes `staging.kinu.run`.
+  // Worker, and anything that should not gets a more specific route: route
+  // matching picks the most specific pattern.
   //
   // Setting this empty means previews are unavailable: exposePort tells the
   // agent so instead of handing back a URL that cannot resolve. It does NOT

@@ -7,6 +7,7 @@ import { createTestFactsStore, present } from '@kinu.run/test-utils';
 import {
   hybridSearch,
   memorySnippetRehydrator,
+  createCloudflareVectorStore,
   createNoopVectorStore,
   type LexicalHit,
   type LexicalSearchFn,
@@ -84,6 +85,23 @@ describe('hybridSearch', () => {
     expect(out.length).toBeGreaterThan(0);
 
     for (const h of out) expect(h.sources).toEqual(['lexical']);
+  });
+
+  test('a dead index behind the real store does not read as "no matches" when FTS is down too', async () => {
+    const store = createCloudflareVectorStore({
+      index: {
+        async insert() { return {}; },
+        async upsert() { return {}; },
+        async query() { throw new Error('vectorize down'); },
+        async deleteByIds() { return {}; },
+        async getByIds() { return []; },
+      },
+      embedder: { dimensions: 1, async embed() { return [1]; } },
+    });
+
+    const failing: LexicalSearchFn = async () => { throw new Error('FTS down'); };
+
+    await expect(hybridSearch('q', failing, store)).rejects.toThrow('no retrieval source answered');
   });
 
   test('enriches with snippet from lexical when available', async () => {
