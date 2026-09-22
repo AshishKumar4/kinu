@@ -47,6 +47,7 @@ import {
   approvalTypeForEnvironment,
   deployApprovalDigest,
   deployTargetAsCommand,
+  suppliedCommand,
 } from './approval-digest';
 
 // ── Seams ────────────────────────────────────────────────────────────────
@@ -613,12 +614,7 @@ export class ReleaseEngine {
     }
 
     const workdir = this.workdirFor(changeId);
-    // A blank command is no command: the binding's deploy target answers for it.
-    const requested = opts.command?.trim();
-
-    const command = requested === undefined || requested === ''
-      ? deployTargetAsCommand(binding?.deployTarget ?? null)
-      : requested;
+    const command = suppliedCommand(opts.command) ?? deployTargetAsCommand(binding?.deployTarget ?? null);
 
     // Preview promotion is local-only: staging/production deploys run a real
     // deploy command, so without one there is nothing to record — fail before
@@ -752,8 +748,7 @@ export class ReleaseEngine {
 
     const target = latest.rollbackTarget;
     const isCommitTarget = /^[0-9a-f]{7,40}$/.test(target);
-    const requestedCommand = opts?.command?.trim();
-    const explicitCommand = requestedCommand === undefined || requestedCommand === '' ? null : requestedCommand;
+    const explicitCommand = suppliedCommand(opts?.command);
     const platformCommand = isCommitTarget ? null : explicitCommand;
 
     if (!isCommitTarget && !platformCommand) {

@@ -319,6 +319,13 @@ function friendlySource(event: KinuEvent): string {
   }
 }
 
+/** The `size` a replaced payload stored, as text a brief can print. */
+function storedSize(payload: JsonObject): string {
+  const stored = v.safeParse(v.number(), payload.size);
+
+  return stored.success ? String(stored.output) : 'unknown';
+}
+
 function briefForVariant(event: KinuEvent): string {
   // Hash/HMAC/opaque policies replace the payload. Redaction preserves the
   // domain shape and may continue through the variant renderer below.
@@ -326,8 +333,7 @@ function briefForVariant(event: KinuEvent): string {
     const parsed = v.safeParse(JsonObjectSchema, event.payload);
     const visibilityPayload = parsed.success ? parsed.output : {};
     const marker = visibilityPayload._visibility;
-    const stored = v.safeParse(v.number(), visibilityPayload.size);
-    const size = stored.success ? String(stored.output) : 'unknown';
+    const size = storedSize(visibilityPayload);
 
     if (marker === 'hash') {
       const digest = visibilityPayload.sha256;
