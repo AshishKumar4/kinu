@@ -75,10 +75,9 @@ const stubClientNodeBuiltins = {
  * `sourceMappingURL`. Without this hook there is no map to read and the flag is
  * a silent no-op.
  *
- * The environment is named per worker (`kinu`, `kinu_staging` under
- * `CLOUDFLARE_ENV=staging`), so it is selected the way the stub plugin above
- * selects it — everything that is not `client`. Naming the worker environments
- * instead would leave staging without maps the day the name changes.
+ * The environment is named after the worker (`kinu`), so it is selected the way
+ * the stub plugin above selects it — everything that is not `client`. Naming
+ * the worker environment instead would lose the maps the day the name changes.
  *
  * The client is deliberately excluded: its output is published static assets, so
  * a map there is original TypeScript served from the public origin.

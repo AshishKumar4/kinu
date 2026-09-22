@@ -9,10 +9,10 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  describeStagingVerdict, deploymentVerdict, type DeployedHealth,
+  describeDeploymentVerdict, deploymentVerdict, type DeployedHealth,
 } from './deploy-preflight';
 
-const ORIGIN = 'https://staging.kinu.run';
+const ORIGIN = 'https://kinu.run';
 
 function health(sha: string | null): DeployedHealth {
   return sha === null
@@ -20,17 +20,17 @@ function health(sha: string | null): DeployedHealth {
     : { ok: true, build: { version: `0.2.0+${sha}`, sha, builtAt: '2026-08-24T00:00:00.000Z' } };
 }
 
-describe('the staging preflight', () => {
+describe('the deployment preflight', () => {
   test('a deployment on this checkout is current, and says which build', () => {
     const verdict = deploymentVerdict({ localSha: 'abc1234', health: health('abc1234') });
     expect(verdict.kind).toBe('current');
-    expect(describeStagingVerdict(verdict, ORIGIN)).toContain('abc1234');
+    expect(describeDeploymentVerdict(verdict, ORIGIN)).toContain('abc1234');
   });
 
   test('a deployment on another build is stale and names both shas plus the fix', () => {
     const verdict = deploymentVerdict({ localSha: 'ffff999', health: health('17abc2980') });
     expect(verdict.kind).toBe('stale');
-    const line = describeStagingVerdict(verdict, ORIGIN);
+    const line = describeDeploymentVerdict(verdict, ORIGIN);
     // Both shas, because "stale" without the pair leaves a reader unable to tell
     // how far behind it is or whether they are looking at the right branch. This
     // is the exact 2026-08-24 shape: deployed 17abc2980, checkout 27 ahead.
@@ -46,7 +46,7 @@ describe('the staging preflight', () => {
     // comparing shas that do not exist.
     const verdict = deploymentVerdict({ localSha: 'abc1234', health: health(null) });
     expect(verdict.kind).toBe('unstamped');
-    expect(describeStagingVerdict(verdict, ORIGIN)).toContain('incomplete');
+    expect(describeDeploymentVerdict(verdict, ORIGIN)).toContain('incomplete');
   });
 
   test('an unanswered health endpoint carries the transport failure verbatim', () => {
@@ -57,7 +57,7 @@ describe('the staging preflight', () => {
     expect(verdict.kind).toBe('unreachable');
     // The status is the whole evidence for calling it infrastructure. A verdict
     // that dropped it would be asking to be trusted instead.
-    expect(describeStagingVerdict(verdict, ORIGIN)).toContain('HTTP 503');
+    expect(describeDeploymentVerdict(verdict, ORIGIN)).toContain('HTTP 503');
   });
 
   test('every verdict names a command or a flag a reader can act on', () => {
@@ -69,7 +69,7 @@ describe('the staging preflight', () => {
     ];
 
     for (const verdict of verdicts) {
-      const line = describeStagingVerdict(verdict, ORIGIN);
+      const line = describeDeploymentVerdict(verdict, ORIGIN);
 
       // `current` states the build it verified; the other three must name the
       // remedy. A state reported without either has moved the problem.

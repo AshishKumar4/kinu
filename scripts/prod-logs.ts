@@ -13,7 +13,7 @@
  *
  * `--worker` is the SERVICE name the account files events under, not the
  * project's name. It defaults to the top-level `name` in
- * `packages/cf-backend/wrangler.jsonc` (`kinu-staging` names staging), and the
+ * `packages/cf-backend/wrangler.jsonc`, and the
  * account id is read from the same file rather than restated here. A
  * service the account holds no events for is indistinguishable from a name
  * asked wrongly, so the census is worth re-reading before concluding a window

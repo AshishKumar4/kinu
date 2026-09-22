@@ -83,8 +83,6 @@ const CONTAINER_HARNESS_DIR = '/workspace/.r2-bench';
 
 const DEFAULT_BUCKET = 'kinu-bench-r2fs';
 
-const STAGING_BUCKET = 'kinu-backups-staging';
-
 /** Phases run per repetition, overridable with `--phases`. The durability pair
  *  is driven separately, around a container restart, so it is not in this list.
  *  Ordered cheapest-first so a run that has to be cut short still produced the
@@ -590,16 +588,6 @@ function acquireBucket(name: string): BucketLease {
     wrangler(['r2', 'bucket', 'create', name]);
 
     return { created: true, name };
-  }
-
-  if (name === STAGING_BUCKET) {
-    log(
-      'WARNING: running against the staging backup bucket. Objects outside '
-      + 'bench/<runId>/ will NOT be removed by teardown, and any workspace-snapshot '
-      + 'traffic in the same bucket will appear in these numbers.',
-    );
-
-    return { created: false, name };
   }
 
   const listing = wrangler(['r2', 'object', 'get', `${name}/`, '--pipe'], { allowFailure: true });

@@ -45,7 +45,7 @@ const HealthSchema = v.object({
 
 export type DeployedHealth = v.InferOutput<typeof HealthSchema>;
 
-export type StagingVerdict =
+export type DeploymentVerdict =
   /** The deployment runs this checkout's HEAD. */
   | { readonly kind: 'current'; readonly sha: string; readonly builtAt: string }
   /** It runs something else, and says what. */
@@ -64,7 +64,7 @@ export function deploymentVerdict(input: {
   readonly localSha: string;
   readonly health: DeployedHealth | null;
   readonly failure?: string;
-}): StagingVerdict {
+}): DeploymentVerdict {
   if (input.health === null) {
     return { kind: 'unreachable', reason: input.failure ?? 'the health endpoint did not answer' };
   }
@@ -86,7 +86,7 @@ export function deploymentVerdict(input: {
  * Every branch names a command or a flag. A preflight that reports a state
  * without a remedy has moved the problem rather than surfaced it.
  */
-export function describeStagingVerdict(verdict: StagingVerdict, origin: string): string {
+export function describeDeploymentVerdict(verdict: DeploymentVerdict, origin: string): string {
   switch (verdict.kind) {
     case 'current':
       return `the deployment runs this checkout (${verdict.sha}, built ${verdict.builtAt})`;
@@ -157,7 +157,7 @@ if (import.meta.main) {
   const { health, failure } = await readDeployedHealth(allowed.origin);
   const localSha = localHeadSha();
   const verdict = deploymentVerdict({ localSha, health, failure });
-  const line = describeStagingVerdict(verdict, allowed.origin);
+  const line = describeDeploymentVerdict(verdict, allowed.origin);
 
   if (verdict.kind === 'current') {
     console.error(`deploy-preflight: ${line}`);

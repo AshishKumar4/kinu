@@ -44,7 +44,7 @@ function envAfterPreload(env: Record<string, string>) {
 }
 
 const SIGNED_IN_SHELL = {
-  KINU_ORIGIN: 'https://staging.kinu.run',
+  KINU_ORIGIN: 'https://kinu.run',
   KINU_TOKEN: 'ptc_ambient_from_a_previous_command',
 };
 
