@@ -30,6 +30,20 @@ async function serveSlate(page: Page): Promise<void> {
 
 /** Click the plan card whose header carries `label` — the list's own way of
  *  opening a review, the gesture a reader makes. */
+/** Click the plan control whose label reads `text`; those controls carry no
+ *  test hook of their own. */
+async function clickControl(page: Page, text: string): Promise<void> {
+  const clicked = await page.evaluate((label) => {
+    const control = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes(label));
+
+    control?.click();
+
+    return control !== undefined;
+  }, text);
+
+  if (!clicked) throw new Error('Missing plan control: ' + text);
+}
+
 async function openPlan(page: Page, label: string): Promise<void> {
   const clicked = await page.evaluate((text) => {
     const card = [...document.querySelectorAll<HTMLButtonElement>('[data-work-plans] button')]
@@ -130,10 +144,10 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
           // Offsets inside the strip's own scrollable content. A phone-width
           // strip is a scroller that brings the current tab into view, so a
           // viewport-relative left would measure the scroll, not the layout.
-          const origin = box.getBoundingClientRect().left - box.scrollLeft;
+          const contentLeft = box.getBoundingClientRect().left - box.scrollLeft;
 
           const tabs = [...box.querySelectorAll<HTMLElement>('button')]
-            .map((tab) => ({ name: tab.getAttribute('aria-label'), left: tab.getBoundingClientRect().left - origin }));
+            .map((tab) => ({ name: tab.getAttribute('aria-label'), left: tab.getBoundingClientRect().left - contentLeft }));
 
           return { padding: parseFloat(getComputedStyle(box).paddingLeft), tabs };
         });
@@ -141,7 +155,7 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
         // Flush with the strip's own content edge: not centred, not indented,
         // and ahead of the fixed surfaces rather than behind them.
         expect(strip.tabs[0]?.name).toBe('Dashboard');
-        expect(Math.round(strip.tabs[0]!.left - strip.padding)).toBe(0);
+        expect(Math.round(strip.tabs[0].left - strip.padding)).toBe(0);
         const previews = ['Dashboard', 'Sandbox app', 'Device app'];
         const lastPreview = Math.max(...strip.tabs.filter((tab) => previews.includes(tab.name ?? '')).map((tab) => tab.left));
         const firstSurface = Math.min(...strip.tabs.filter((tab) => !previews.includes(tab.name ?? '')).map((tab) => tab.left));
@@ -315,10 +329,10 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await openPlan(page, 'Worker revision two');
         expect(await page.$eval('[data-plan-owner]', el => el.getAttribute('data-plan-owner'))).toBe('main');
         expect(await page.$('[data-plan-decisions]')).toBeNull();
-        await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Review in worker conversation'))?.click());
+        await clickControl(page, 'Review in worker conversation');
         await page.waitForSelector('[data-plan-owner="worker"]');
         await page.waitForSelector('[data-plan-decisions]');
-        await page.evaluate(() => [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'))?.click());
+        await clickControl(page, 'Approve & implement');
         await page.waitForFunction(() => document.querySelector('[data-plan-status]')?.textContent === 'Approved');
         expect(await page.$eval('[data-plan-title]', el => el.textContent)).toContain('Worker revision two');
         // ── The hint is spent for the CONNECTION, not for one pane ──────

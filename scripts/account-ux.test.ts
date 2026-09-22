@@ -80,6 +80,124 @@ async function settleAccountFixture(page: Page): Promise<void> {
   await retry?.click();
 }
 
+/** What one welcome step shows: the panel that is neither hidden nor inert
+ *  carries that step's own copy, and the first step's name field is prefilled. */
+async function expectWelcomeStep(page: Page, step: 0 | 1 | 2, active: string, body: string): Promise<void> {
+  if (step === 0) {
+    expect(await page.$('[aria-label="Your name"]')).not.toBeNull();
+    expect(active).toContain('Your name');
+
+    const field = await page.$eval('[aria-label="Your name"]', (el) => {
+      if (!(el instanceof HTMLInputElement)) throw new Error('the name field is not an input');
+
+      return el.value;
+    });
+
+    expect(field).toBe('Owner');
+
+    return;
+  }
+
+  if (step === 1) {
+    expect(active).toContain('API keys');
+
+    return;
+  }
+
+  // The three showcase cards fade in staggered; a capture taken mid-transition
+  // photographs the last one translucent.
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
+      .every((el) => getComputedStyle(el).opacity === '1'),
+  );
+
+  expect(active).toContain('Work that runs without you');
+  expect(active).toContain('Live apps, not just answers');
+  expect(active).toContain('Your machines, when you want them');
+  expect(body).toContain('Create your first workspace');
+}
+
+/** What one view of the Workspaces page draws for a reader, and the shot of
+ *  it taken where a reader meets it: before the filter tabs are exercised. */
+async function checkWorkspacesView(
+  page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS, theme: 'dark' | 'light',
+): Promise<string> {
+  await page.waitForSelector('[aria-label="Search workspaces"]');
+  const body = await page.evaluate(() => document.body.innerText);
+  expect(body).toContain('Workspaces');
+
+  for (const name of ['Checkout coupon bug', 'Perf audit', 'Email triage automation', 'Design system v2']) {
+    expect(body).toContain(name);
+  }
+
+  expect(await page.$eval('[aria-pressed="true"]', (button) => button.getAttribute('aria-label')))
+    .toBe(view === 'tiled' ? 'Tiled view' : 'List view');
+  expect(await page.$eval('[data-workspaces-view]', (section) => section.getAttribute('data-workspaces-view'))).toBe(view);
+
+  // One state per card, no more: the chip count equals the row count, and the
+  // headline words are the shared rule's.
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-overview-chip]').length === 5,
+  );
+  const body2 = await page.evaluate(() => document.body.innerText);
+  expect(body2).toContain('Needs you · 2');
+  expect(body2).toContain('Last run failed');
+
+  // The tile of the one workspace with a primary slate holds the slate itself
+  // — live, and inert in every direction a reader could touch it. The other
+  // four tiles, and every row of the list, hold no frame at all.
+  const frames = await page.$$eval('[data-workspaces-view] iframe', (nodes) => nodes.map((node) => ({
+    src: node.getAttribute('src'),
+    tabIndex: node.tabIndex,
+    pointerEvents: getComputedStyle(node).pointerEvents,
+    card: node.closest('[data-slate-frame]')?.parentElement?.textContent ?? '',
+  })));
+
+  expect(frames.length).toBe(view === 'tiled' ? 1 : 0);
+
+  if (view === 'tiled') {
+    expect(frames[0]?.src).toBe(SLATE_FIXTURE_URL);
+    expect(frames[0]?.tabIndex).toBe(-1);
+    expect(frames[0]?.pointerEvents).toBe('none');
+    expect(frames[0]?.card).toContain('Checkout coupon bug');
+  }
+
+  // The filter tabs and the page's own create action sit in the control row;
+  // the count is a tabular "N of M", not a sentence.
+  const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.textContent?.trim() ?? ''));
+  expect(tabs).toEqual(['All', 'Needs you', 'Working', 'Idle']);
+  expect(await page.$$eval('main button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'New workspace').length)).toBe(1);
+  expect(body2).toContain('5 of 5');
+
+  if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
+
+  const shot = await shoot(page, `workspaces-${view}-${viewport}-${theme}`);
+
+  // 'Needs you' holds exactly the workspace whose decisions wait.
+  await page.click('[data-segment="needs"]');
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
+  );
+  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Checkout coupon bug');
+  await page.click('[data-segment="all"]');
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-workspaces-view] a').length === 5,
+  );
+
+  await page.type('[aria-label="Search workspaces"]', 'perf');
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
+  );
+  expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Perf audit');
+
+  return shot;
+}
+
+/** Is the delete-everything button awake? Asked in the page, so the polled
+ *  wait and the assertions read the same button. */
+const deleteArmed = (): boolean =>
+  [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled);
+
 describe('account panels', () => {
   test('the setup modal and the providers section render at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
@@ -208,28 +326,7 @@ describe('account panels', () => {
                 return panel?.textContent ?? '';
               });
 
-              if (step === 0) {
-                expect(await page.$('[aria-label="Your name"]')).not.toBeNull();
-                expect(active).toContain('Your name');
-                // SAFETY: the selector is the name field's own input, so the
-                // element carrying the value is that input.
-                const field = await page.$eval('[aria-label="Your name"]', (el) => (el as HTMLInputElement).value);
-                expect(field).toBe('Owner');
-              } else if (step === 1) {
-                expect(active).toContain('API keys');
-              } else {
-                // The three showcase cards fade in staggered; a capture taken
-                // mid-transition photographs the last one translucent.
-                await page.waitForFunction(
-                  () => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
-                    .every((el) => getComputedStyle(el).opacity === '1'),
-                );
-
-                expect(active).toContain('Work that runs without you');
-                expect(active).toContain('Live apps, not just answers');
-                expect(active).toContain('Your machines, when you want them');
-                expect(body).toContain('Create your first workspace');
-              }
+              await expectWelcomeStep(page, step, active, body);
 
               shots.push(await shoot(page, `welcome-step${String(step)}-${viewport}-${theme}`));
             } finally {
@@ -269,18 +366,13 @@ describe('account panels', () => {
             });
             await page.waitForSelector('[aria-label="Confirm your email"]');
 
-            const armed = (): Promise<boolean> => page.evaluate(() =>
-              [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled));
-
-            expect(await armed()).toBe(false);
+            expect(await page.evaluate(deleteArmed)).toBe(false);
             await page.type('[aria-label="Confirm your email"]', 'someone@else.com');
-            expect(await armed()).toBe(false);
+            expect(await page.evaluate(deleteArmed)).toBe(false);
             await page.$eval('[aria-label="Confirm your email"]', (input) => { if (input instanceof HTMLInputElement) input.value = ''; });
             await page.type('[aria-label="Confirm your email"]', 'Owner@Example.com');
-            await page.waitForFunction(
-              () => [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled),
-            );
-            expect(await armed()).toBe(true);
+            await page.waitForFunction(deleteArmed);
+            expect(await page.evaluate(deleteArmed)).toBe(true);
             shots.push(await shoot(page, `settings-account-armed-${viewport}-${theme}`));
           } finally {
             await page.close();
@@ -330,73 +422,7 @@ describe('account panels', () => {
             const page = await freshPage(gallery, view === 'list' ? 'workspaces&view=list' : 'workspaces', theme, viewport);
 
             try {
-              await page.waitForSelector('[aria-label="Search workspaces"]');
-              const body = await page.evaluate(() => document.body.innerText);
-              expect(body).toContain('Workspaces');
-
-              for (const name of ['Checkout coupon bug', 'Perf audit', 'Email triage automation', 'Design system v2']) {
-                expect(body).toContain(name);
-              }
-
-              expect(await page.$eval('[aria-pressed="true"]', (button) => button.getAttribute('aria-label')))
-                .toBe(view === 'tiled' ? 'Tiled view' : 'List view');
-              expect(await page.$eval('[data-workspaces-view]', (section) => section.getAttribute('data-workspaces-view'))).toBe(view);
-
-              // One state per card, no more: the chip count equals the row
-              // count, and the headline words are the shared rule's.
-              await page.waitForFunction(
-                () => document.querySelectorAll('[data-overview-chip]').length === 5,
-              );
-              const body2 = await page.evaluate(() => document.body.innerText);
-              expect(body2).toContain('Needs you · 2');
-              expect(body2).toContain('Last run failed');
-
-              // The tile of the one workspace with a primary slate holds the
-              // slate itself — live, and inert in every direction a reader
-              // could touch it. The other four tiles, and every row of the
-              // list, hold no frame at all.
-              const frames = await page.$$eval('[data-workspaces-view] iframe', (nodes) => nodes.map((node) => ({
-                src: node.getAttribute('src'),
-                tabIndex: node.tabIndex,
-                pointerEvents: getComputedStyle(node).pointerEvents,
-                card: node.closest('[data-slate-frame]')?.parentElement?.textContent ?? '',
-              })));
-
-              expect(frames.length).toBe(view === 'tiled' ? 1 : 0);
-
-              if (view === 'tiled') {
-                expect(frames[0]?.src).toBe(SLATE_FIXTURE_URL);
-                expect(frames[0]?.tabIndex).toBe(-1);
-                expect(frames[0]?.pointerEvents).toBe('none');
-                expect(frames[0]?.card).toContain('Checkout coupon bug');
-              }
-
-              // The filter tabs and the page's own create action sit in the
-              // control row; the count is a tabular "N of M", not a sentence.
-              const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.textContent?.trim() ?? ''));
-              expect(tabs).toEqual(['All', 'Needs you', 'Working', 'Idle']);
-              expect(await page.$$eval('main button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'New workspace').length)).toBe(1);
-              expect(body2).toContain('5 of 5');
-
-              if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
-              shots.push(await shoot(page, `workspaces-${view}-${viewport}-${theme}`));
-
-              // 'Needs you' holds exactly the workspace whose decisions wait.
-              await page.click('[data-segment="needs"]');
-              await page.waitForFunction(
-                () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
-              );
-              expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Checkout coupon bug');
-              await page.click('[data-segment="all"]');
-              await page.waitForFunction(
-                () => document.querySelectorAll('[data-workspaces-view] a').length === 5,
-              );
-
-              await page.type('[aria-label="Search workspaces"]', 'perf');
-              await page.waitForFunction(
-                () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
-              );
-              expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Perf audit');
+              shots.push(await checkWorkspacesView(page, view, viewport, theme));
             } finally {
               await page.close();
             }

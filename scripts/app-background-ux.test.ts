@@ -92,6 +92,28 @@ async function waitForMode(page: Page, mode: string, timeoutMs = 20_000): Promis
   );
 }
 
+/** What the page reports for `document.hidden`, and the event the clock
+ *  listens for. */
+async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
+  await page.evaluate((value: boolean) => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => value });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+}
+
+/** The pointer hold half a second of frames after the pointer last moved. The
+ *  gallery page owns the stepping, so the picture moves only where a test
+ *  advances it. */
+function holdAfterFrames(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const handle = window.__kinuAppBackground;
+
+    for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
+
+    return handle?.pointer() ?? 0;
+  });
+}
+
 /* The pauses below measure the page's own rAF clock over real wall time —
  *  the thing under test is that Chromium's loop stopped (or resumed) across
  *  an actual interval, and nothing a fake timer could reach lives in this
@@ -194,19 +216,13 @@ describe('the living background', () => {
 
         const before = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
 
-        await page.evaluate(() => {
-          Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
-          document.dispatchEvent(new Event('visibilitychange'));
-        });
+        await setTabHidden(page, true);
         await pause(800);
 
         const hidden = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
         expect(hidden - before).toBeLessThanOrEqual(0.1);
 
-        await page.evaluate(() => {
-          Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
-          document.dispatchEvent(new Event('visibilitychange'));
-        });
+        await setTabHidden(page, false);
         await pause(800);
 
         const shown = await page.evaluate(() => window.__kinuAppBackground?.time() ?? -1);
@@ -334,35 +350,17 @@ describe('the living background', () => {
         await liveBackground(page);
         await page.mouse.move(0.8 * 1440, 0.3 * 900);
 
-        const cardHold = await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-
-          for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
-
-          return handle?.pointer() ?? 0;
-        });
+        const cardHold = await holdAfterFrames(page);
 
         expect(cardHold).toBeGreaterThan(0);
         await page.mouse.move(0.94 * 1440, 0.2 * 900);
 
-        const backgroundHold = await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-
-          for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
-
-          return handle?.pointer() ?? 0;
-        });
+        const backgroundHold = await holdAfterFrames(page);
 
         expect(backgroundHold).toBeGreaterThan(0);
         await page.mouse.move(-50, -50);
 
-        const releasedHold = await page.evaluate(() => {
-          const handle = window.__kinuAppBackground;
-
-          for (let i = 0; i < 30; i += 1) handle?.advance?.(1 / 60);
-
-          return handle?.pointer() ?? 0;
-        });
+        const releasedHold = await holdAfterFrames(page);
 
         expect(releasedHold).toBeLessThan(backgroundHold);
       } finally {

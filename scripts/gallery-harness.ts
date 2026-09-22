@@ -105,8 +105,8 @@ export function recordDiagnostics(page: Page): RecordedDiagnostics {
   return Object.assign(lines, {
     settled: (count: number): Promise<void> => {
       if (lines.length >= count) return Promise.resolve();
-      const { promise, resolve } = Promise.withResolvers<void>();
-      waiting.push({ count, resolve });
+      const { promise, resolve: settle } = Promise.withResolvers<void>();
+      waiting.push({ count, resolve: settle });
 
       return promise;
     },
