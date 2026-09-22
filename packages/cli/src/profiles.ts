@@ -87,7 +87,7 @@ export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
  * counts the replacements so a reader can tell one from the next.
  */
 function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
-  const validated = validateProfileCatalog(catalog);
+  const validated = validateProfileCatalog({ value: catalog });
   let envelope!: ProfileCatalogEnvelope;
   updateConfigFile((config) => {
     envelope = {

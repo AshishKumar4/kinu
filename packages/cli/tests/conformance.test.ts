@@ -168,7 +168,9 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   await session.send('what can you do?');
 
   const db = new Database(dbPath, { readonly: true });
-  const byName = new Map(captured.map((tool) => [tool.name, tool]));
+  // Only a function tool carries an input schema to observe; a provider-defined
+  // tool is the provider's own and has no action enum of Kinu's.
+  const byName = new Map(captured.flatMap((tool) => tool.type === 'function' ? [[tool.name, tool] as const] : []));
 
   const tables = db.query<{ name: string }, []>(
     "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",

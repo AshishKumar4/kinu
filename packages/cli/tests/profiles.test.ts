@@ -223,7 +223,7 @@ describe('local profile authority', () => {
     const seeded = v.parse(ParsedEnvelope, expectOk(steps.seeded));
     expect(seeded.authority).toEqual({ kind: 'local' });
     expect(seeded.version).toBe(1);
-    expect(seeded.digest).toBe(profileCatalogDigest(validateProfileCatalog(seededCatalog('deepseek'))));
+    expect(seeded.digest).toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('deepseek') })));
     expect(v.parse(ParsedEnvelope, expectOk(steps.reload))).toEqual(seeded);
     // The envelope lives in config.json under the local slot, and nowhere
     // does the file claim account authority.
@@ -269,7 +269,7 @@ describe('local profile authority', () => {
     expect(reloaded.catalog.tiers.default.model).toBe('other-model');
     // Re-derived over the whole new catalog rather than carried from the old.
     expect(reloaded.digest)
-      .toBe(profileCatalogDigest(validateProfileCatalog(seededCatalog('other-model'))));
+      .toBe(profileCatalogDigest(validateProfileCatalog({ value: seededCatalog('other-model') })));
     // Superseded, not merged: the model the first edit wrote leaves no trace.
     expect(expectText(steps.configOnDisk)).not.toContain('deepseek');
   });

@@ -493,7 +493,7 @@ export function listLocalRecordCells(
 ): RecordCellSummary[] {
   return withLocalDb(name, (db) => (
     tableExists(db, 'exploration_records')
-      ? [...listRecordCells(makeSql(db), requireMainActor(db), handle, null, limit).items]
+      ? [...listRecordCells(makeSql(db), requireMainActor(db), handle, { limit }).items]
       : []
   ));
 }
@@ -506,7 +506,7 @@ export function readLocalRecordCell(
 ): Page<ExplorationRecord> {
   return withLocalDb(name, (db) => (
     tableExists(db, 'exploration_records')
-      ? readRecordCell(makeSql(db), requireMainActor(db), handle, cursor, limit)
+      ? readRecordCell(makeSql(db), requireMainActor(db), handle, { cursor, limit })
       : { status: 'end', items: [] }
   ));
 }
