@@ -23,7 +23,7 @@ import { Composer } from '../src/components/Composer';
 function composerMarkup(liveness: TurnLiveness): string {
   return renderToStaticMarkup(createElement(Composer, {
     value: '', onValueChange: () => {}, onSend: () => {}, placeholder: 'Send a message...',
-    disabled: false, liveness, onStop: () => {}, onRecover: () => Promise.resolve(),
+    disabled: false, liveness, onStop: () => {}, onRecover: () => Promise.resolve(null),
   }));
 }
 

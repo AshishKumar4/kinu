@@ -280,7 +280,8 @@ export interface ComposerProps {
    *  without an action. Rejects on RPC failure — this owns the line that says
    *  so, for the reason the feedback toggle does: the press must not report
    *  success the server did not give. */
-  onRecover?: () => Promise<void>;
+  /** Resolves the failure reason, or null once the turn is settled. */
+  onRecover?: () => Promise<string | null>;
   /** Statuses above the draft, oldest first. Empty renders nothing. */
   notices?: readonly ComposerNotice[];
   /** Turn mode. Every agent conversation passes its own; omitted only on
@@ -318,8 +319,7 @@ export function Composer({
   const canBranch = Boolean(onBranch) && streaming && !empty && mode?.value !== "plan";
   const [stopping, setStopping] = useState(false);
   const [recovering, setRecovering] = useState(false);
-  const [recoverFailed, setRecoverFailed] = useState(false);
-  const recoverLabel = recoverFailed ? "Retry recovery" : RECOVER_LABEL[recovering ? "busy" : "idle"];
+  const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
   // The runtime sends no stopped event, so the streaming flag going false is
   // the only confirmation a stop landed.
   useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
@@ -475,10 +475,11 @@ export function Composer({
             )}
             {stranded && onRecover && (
               <button type="button" disabled={recovering}
-                onClick={() => {
+                onClick={async () => {
                   setRecovering(true);
-                  setRecoverFailed(false);
-                  onRecover().catch(() => { setRecoverFailed(true); setRecovering(false); });
+                  // The outcome is the workspace notice's to report; the button only waits.
+                  await onRecover();
+                  setRecovering(false);
                 }}
                 className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2 disabled:opacity-50"
                 aria-label="Recover this turn"

@@ -580,7 +580,7 @@ const SNAPSHOT_SEEDED_SOURCES: readonly LiveRefreshSource[] = [
 /** A failed read, plus the two failures that belong to an action the user
  *  asked for: those name what did not happen, which no refresh sentence can
  *  say for them, so they keep their own prose. */
-type ErrorSource = LiveRefreshSource | "model" | "memory";
+type ErrorSource = LiveRefreshSource | "model" | "memory" | "recover";
 
 export type WorkspaceErrors = Partial<Record<ErrorSource, string>>;
 
@@ -706,7 +706,7 @@ function redactErrorText(text: string): string {
  * and the detail prints that single reason once, not once per surface.
  */
 export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): WorkspaceNotice | null {
-  const action = errors.model ?? errors.memory ?? null;
+  const action = errors.model ?? errors.memory ?? errors.recover ?? null;
   const { labels, reasons } = collectReadFailures(errors);
 
   if (action === null && labels.length === 0) return null;
@@ -1975,10 +1975,31 @@ export function useKinu(target?: string | KinuActorAddress) {
    *  affordance is derived from. The press never edits the claim locally: the
    *  server's next answer is what retires the button, so a recovery that
    *  refused leaves the turn shown as stuck. */
-  const recoverTurn = useCallback(async (): Promise<void> => {
-    await rpc("recoverStrandedTurn", []);
+  /** Settle a stranded turn. Resolves the failure reason, or null once the
+   *  claim is settled; the reason is also the workspace's notice, like every
+   *  other action the user asked for, so the caller reads a value and never a
+   *  rejection. */
+  const recoverTurn = useCallback(async (): Promise<string | null> => {
+    setSourceError("recover", null);
+    let thrown: { cause: unknown } | null = null;
+
+    try {
+      await rpc("recoverStrandedTurn", []);
+    } catch (cause) {
+      thrown = { cause };
+    }
+
+    if (thrown !== null) {
+      const reason = `Recovery failed: ${errorMessage(thrown)}`;
+      setSourceError("recover", reason);
+
+      return reason;
+    }
+
     refreshLiveData();
-  }, [refreshLiveData, rpc]);
+
+    return null;
+  }, [refreshLiveData, rpc, setSourceError]);
 
   // Refresh surface data when a turn completes (streaming ends).
   const wasStreaming = useRef(false);
