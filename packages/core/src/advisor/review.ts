@@ -23,7 +23,7 @@
  */
 
 import * as v from 'valibot';
-import type { LLM, SqlExecutor } from '../types/primitives';
+import type { FiberCtx, LLM, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { AgentSignal, SendOutcome } from '../types/signals';
@@ -720,7 +720,7 @@ function advisorLaneKey(turn: Pick<CompletedTurn, 'turnId'>): string | null {
  * second lane beside the first, and two advisors would review one turn, each
  * spending a model call and appending its own note.
  */
-export function advisorLaneStarted(
+function advisorLaneStarted(
   sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
 ): boolean {
   const key = advisorLaneKey(turn);
@@ -730,12 +730,67 @@ export function advisorLaneStarted(
 
 /** Record that this turn's lane is checkpointed. Written ADJACENT to the
  *  stash, which is exactly the instant a second lane becomes a duplicate. */
-export function markAdvisorLaneStarted(
+function markAdvisorLaneStarted(
   sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
 ): void {
   const key = advisorLaneKey(turn);
 
   if (key !== null) recordEffectDone(sql, actor, { scope: ADVISOR_LANE_SCOPE, key: key });
+}
+
+/** One turn's advisor lane, as a backend hands it over. */
+export interface AdvisorLaneStart {
+  readonly turn: Pick<CompletedTurn, 'turnId'>;
+  /** What the lane's recovery re-drives, stashed at the checkpoint. */
+  readonly snapshot: JsonValue;
+  /** The platform's carrier: an Agents SDK durable fiber on a Durable Object,
+   *  a process-tracked fiber on the CLI. */
+  readonly carry: (name: string, body: (ctx: Pick<FiberCtx, 'stash'>) => Promise<void>) => Promise<void>;
+  readonly review: () => Promise<void>;
+}
+
+/**
+ * Start one turn's advisor lane and resolve at its CHECKPOINT.
+ *
+ * From the checkpoint the lane is recoverable on its own, which is what an owed
+ * row may complete on: resolving at the review's finish holds the row through a
+ * model call, and resolving before the stash completes a row no interruption
+ * can resume. ONE lane per turn, ever started, so a terminal replay arriving
+ * after the checkpoint opens no second review. A lane that dies before its
+ * checkpoint rejects, which keeps the row owed.
+ */
+export function startAdvisorLane(
+  store: { readonly sql: SqlExecutor; readonly actor: ActorHandle }, lane: AdvisorLaneStart,
+): Promise<void> {
+  if (advisorLaneStarted(store.sql, store.actor, lane.turn)) return Promise.resolve();
+  const checkpointed = Promise.withResolvers<void>();
+
+  lane.carry(ADVISOR_LANE_FIBER, async (ctx) => {
+    try {
+      ctx.stash(lane.snapshot);
+    } catch (cause) {
+      const failure = toKinuError({
+        doing: 'checkpointing the advisor review so an interruption can resume it', cause, otherwise: 'io',
+      });
+
+      diagnostics.failure('advisor.snapshot_failed', failure, { turnId: lane.turn.turnId ?? '(none)' });
+      checkpointed.reject(failure);
+      throw failure;
+    }
+
+    markAdvisorLaneStarted(store.sql, store.actor, lane.turn);
+    checkpointed.resolve();
+    await lane.review();
+  }).catch((...rejection: [unknown]) => {
+    // The LANE died around the review: a carrier that never ran the body, or a
+    // review that threw after the checkpoint. The first leaves the row owed.
+    const failure = toKinuError({ doing: 'running the advisor review lane', cause: rejection[0], otherwise: 'unavailable' });
+
+    diagnostics.failure('advisor.lane_failed', failure);
+    checkpointed.reject(failure);
+  });
+
+  return checkpointed.promise;
 }
 
 /**

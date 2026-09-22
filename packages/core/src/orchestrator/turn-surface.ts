@@ -2,8 +2,7 @@
  * The per-turn capability surface — which skills are active this turn and how
  * they restrict the tool surface, plus the facts block that rides the
  * volatile turn context. One implementation for both backends: the resolution
- * gate, the union filtering, the SkillsVfs adapter and the facts rendering have
- * one definition each.
+ * gate, the union filtering and the facts rendering have one definition each.
  */
 
 import type { ToolSet } from 'ai';
@@ -16,21 +15,7 @@ import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../prompting/step-prune';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
-import type { VFS } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
-
-/** Passthrough SkillsVfs adapter over the runtime's Storage.vfs. */
-export function skillsVfsOver(vfs: VFS): SkillsVfs {
-  return {
-    exists: (p) => vfs.exists(p),
-    readFile: (p, opts) => vfs.readFile(p, opts),
-    writeFile: (p, data) => vfs.writeFile(p, data),
-    readdir: (p) => vfs.readdir(p),
-    stat: (p) => vfs.stat(p),
-    unlink: (p) => vfs.unlink(p),
-    mkdir: (p, opts) => vfs.mkdir(p, opts),
-  };
-}
 
 export interface TurnSkillsConfig {
   getAlwaysActiveSkills(): string[];
