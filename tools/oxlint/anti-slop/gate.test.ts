@@ -242,6 +242,29 @@ assert.deepEqual(
   "all three suppression directives must be banned outright",
 );
 
+// The same argument covers every other built-in the config turns on: no rule file, no suite, no
+// `expectedRules` entry, so the severity and the option are only ever true here. A bare "error"
+// for a rule with an option leaves the threshold to whatever the next oxlint release defaults to,
+// which is why each pin carries its option. The `typescript/*` block is governed as one set in
+// type-aware.gate.test.ts; these two are read from syntax alone and state their reason here.
+const builtinRulePins = [
+  ["max-depth", ["error", { max: 4 }], "a fifth level of nesting hides a branch from the reader"],
+  ["max-params", ["error", { max: 4 }], "past four positional parameters a caller gets the order wrong silently"],
+  ["no-nested-ternary", "error", "a ternary inside a ternary hides one of its branches"],
+  ["no-shadow", "error", "an inner binding reusing an outer name makes the reader track two values under one name"],
+  ["no-param-reassign", "error", "a reassigned parameter erases the argument the caller passed"],
+  ["no-implicit-coercion", "error", "`+value` and `!!value` hide a conversion whose failure is a silent NaN or a dropped empty string"],
+  ["no-else-return", "error", "an else after a return buries the main path one level deeper than it is"],
+  ["unicorn/no-lonely-if", "error", "a lone if inside an else is one condition written as two levels"],
+  ["unicorn/no-array-for-each", "error", "forEach discards an await and cannot break, so control flow stays in a loop"],
+  ["typescript/no-non-null-assertion", "error", "`x!` asserts away a null the compiler proved reachable"],
+  ["typescript/no-inferrable-types", "error", "an annotation the initializer already fixes goes stale when the initializer changes"],
+] as const;
+
+for (const [rule, setting, protects] of builtinRulePins) {
+  assert.deepEqual(config.rules[rule], setting, `${rule} must stay at this severity and option: ${protects}`);
+}
+
 assert.equal(packageJson.devDependencies.oxlint, packageJson.devDependencies["@oxlint/plugins"]);
 assert.equal(packageJson.devDependencies.oxlint, "1.78.0");
 assert.equal(pluginPackage.private, true);
