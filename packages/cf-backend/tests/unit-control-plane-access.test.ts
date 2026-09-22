@@ -45,6 +45,7 @@ import {
 import {
   adminDenialMessage, adminDenialStatus, authorizeAdmin, isControlPlaneOperator,
 } from '../src/control-plane/admin-caller';
+import { requestUrl } from './helpers/fetch-input';
 
 /** The header Cloudflare Access sets, spelled independently of the production
  *  constant on purpose. A shared import would let a rename pass both sides; an
@@ -120,7 +121,7 @@ beforeAll(async () => {
   // instead of reaching Cloudflare from a unit suite.
   //
   const answerCerts = (input: RequestInfo | URL): Promise<Response> => {
-    const url = input instanceof URL ? input.href : input instanceof Request ? input.url : input;
+    const url = requestUrl(input);
     const match = Object.entries(sets).find(([certsUrl]) => certsUrl === url);
 
     if (match === undefined) throw new Error(`unexpected fetch in a unit test: ${url}`);

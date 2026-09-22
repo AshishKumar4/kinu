@@ -213,7 +213,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     }
 
     // Both families ran: six of the twelve operation rows name each judge.
-    expect(operations.map((r) => r.spec).sort()).toEqual([
+    expect(operations.map((r) => r.spec).sort((a, b) => String(a).localeCompare(String(b)))).toEqual([
       'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1',
       'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1', 'fake-b/m1',
     ]);

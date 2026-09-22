@@ -581,15 +581,15 @@ interface ArmedStall {
 
 function armStall(match: DeployFakeStall): ArmedStall {
   const entered = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
+  const answered = Promise.withResolvers<void>();
 
   return {
     match,
     taken: false,
     reached: entered.promise,
     enter: entered.resolve,
-    released: release.promise,
-    answer: release.resolve,
+    released: answered.promise,
+    answer: answered.resolve,
   };
 }
 
@@ -612,9 +612,9 @@ function refusal(status: number, code: number, message: string): Response {
 
 /** The bearer a call presented, or ''. */
 function bearerOf(request: Request): string {
-  const held = request.headers.get('authorization') ?? '';
+  const authorization = request.headers.get('authorization') ?? '';
 
-  return /^bearer /iu.test(held) ? held.slice('bearer '.length).trim() : '';
+  return /^bearer /iu.test(authorization) ? authorization.slice('bearer '.length).trim() : '';
 }
 
 /**
@@ -740,7 +740,7 @@ async function api(url: URL, request: Request): Promise<Response> {
       body,
     ).versions;
 
-    for (const named of versions) held.deployments.push(named.version_id);
+    for (const version of versions) held.deployments.push(version.version_id);
 
     return envelope({ id: `deployment-${String(held.deployments.length)}` });
   }
@@ -765,7 +765,7 @@ async function api(url: URL, request: Request): Promise<Response> {
     // the manifest has arrived, not once a bucket has.
     const wanted = files()
       .filter(([name]) => name.startsWith('client/'))
-      .map(([, body]) => sha256(body).slice(0, 32));
+      .map(([, content]) => sha256(content).slice(0, 32));
 
     held.assetsWanted = new Set(wanted);
     held.assetsUploaded = new Set<string>();
