@@ -205,6 +205,30 @@ export function renderToolsDeclaration(
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
 
+/** What a codemode program passed, by kind: its arguments arrive as JSON. */
+function receivedKind(argument: { readonly value: unknown }): string {
+  if (v.is(v.number(), argument.value)) return 'a number';
+
+  if (v.is(v.boolean(), argument.value)) return 'a boolean';
+
+  return Array.isArray(argument.value) ? 'an array' : 'an object';
+}
+
+/**
+ * One text parameter of a codemode member, read the one way every member reads
+ * one. An omitted argument is empty text, which the member refuses in its own
+ * words; anything else that is not a string is refused here, by parameter and
+ * by what arrived, so `web.search(42)` is not reported as a search for nothing.
+ */
+export function codemodeText(argument: { readonly value: unknown; readonly parameter: string }): string {
+  if (argument.value === undefined || argument.value === null) return '';
+  const text = v.safeParse(v.string(), argument.value);
+
+  if (!text.success) throw new KinuError('bad_input', `${argument.parameter} takes a string, not ${receivedKind(argument)}`);
+
+  return text.output;
+}
+
 /**
  * The `tools` namespace's host functions: every native tool of a finished
  * surface, called with the one input object the native call takes. Anything

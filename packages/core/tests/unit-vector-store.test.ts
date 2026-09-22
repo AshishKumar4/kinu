@@ -153,6 +153,20 @@ describe('CloudflareVectorStore', () => {
     expect(hits[0].endLine).toBe(5);
   });
 
+  test('a record whose metadata breaks the convention is not served as a hit with an invented location', async () => {
+    // One mistyped field used to blank every field: the hit came back under its
+    // storage id with path '' and lines 0, and fused with nothing.
+    const { index, records } = makeMockIndex();
+    const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
+    await store.upsertChunk({ id: 'mem-1', path: 'memory/MEMORY.md', startLine: 1, endLine: 5, text: 'apples and bananas' });
+    records.set('foreign', { values: [1, 0, 0], metadata: { chunkId: 'mem-2', path: 'memory/OTHER.md', startLine: '3', endLine: 4 } });
+
+    const hits = await store.search('apples', 5);
+
+    expect(hits.map((hit) => hit.id)).toEqual(['mem-1']);
+    expect(hits[0]?.path).toBe('memory/MEMORY.md');
+  });
+
   test('upsertChunks (batched) inserts all + survives single embedBatch path', async () => {
     const { index } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
