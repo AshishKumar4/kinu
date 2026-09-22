@@ -856,22 +856,36 @@ describe('library search', () => {
     expect(library.search({ query: 'wrangler "OR" NEAR(' }).map((e) => e.key)).toEqual(['l1']);
   });
 
-  test('a malformed stored payload is skipped rather than half-parsed', () => {
-    const db = new Database(':memory:');
-    const exec = sqlExec(db);
-    initExperienceLibraryTables(exec);
-    const library = createExperienceLibrary(exec);
-    library.publish({
-      kind: 'fact', key: 'ok', title: 'ok', evidence: 'e',
-      payload: { kind: 'fact', key: 'ok', value: 1, confidence: 1 },
-    }, 'alpha');
-    db.prepare(`INSERT INTO experience_library
-      (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
-      VALUES ('exp-bad', 'craft', 'alpha', 'bad', 'bad', '{"kind":"craft"}', 'e', 'bad', 1)`).run();
+  const UNREADABLE_ROWS = [
+    {
+      name: 'a malformed stored payload is skipped rather than half-parsed',
+      id: 'exp-bad', kind: 'craft', payload: '{"kind":"craft"}',
+    },
+    {
+      name: 'a non-JSON stored payload is skipped like a shape mismatch',
+      id: 'exp-nonjson', kind: 'lesson', payload: 'not-json{{{',
+    },
+  ];
 
-    expect(library.search().map((e) => e.key)).toEqual(['ok']);
-    expect(library.get('exp-bad')).toBeNull();
-  });
+  for (const unreadable of UNREADABLE_ROWS) {
+    test(unreadable.name, () => {
+      const db = new Database(':memory:');
+      const exec = sqlExec(db);
+      initExperienceLibraryTables(exec);
+      const library = createExperienceLibrary(exec);
+      library.publish({
+        kind: 'fact', key: 'ok', title: 'ok', evidence: 'e',
+        payload: { kind: 'fact', key: 'ok', value: 1, confidence: 1 },
+      }, 'alpha');
+      db.prepare(`INSERT INTO experience_library
+        (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
+        VALUES (?, ?, 'alpha', 'bad', 'bad', ?, 'e', 'bad', 1)`)
+        .run(unreadable.id, unreadable.kind, unreadable.payload);
+
+      expect(library.search().map((e) => e.key)).toEqual(['ok']);
+      expect(library.get(unreadable.id)).toBeNull();
+    });
+  }
 });
 
 // ── absence is structural ───────────────────────────────────────────────────
@@ -964,23 +978,6 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
     } finally {
       restore();
     }
-  });
-
-  test('a non-JSON stored payload is skipped like a shape mismatch', () => {
-    const db = new Database(':memory:');
-    const exec = sqlExec(db);
-    initExperienceLibraryTables(exec);
-    const library = createExperienceLibrary(exec);
-    library.publish({
-      kind: 'fact', key: 'ok', title: 'ok', evidence: 'e',
-      payload: { kind: 'fact', key: 'ok', value: 1, confidence: 1 },
-    }, 'alpha');
-    db.prepare(`INSERT INTO experience_library
-      (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
-      VALUES ('exp-nonjson', 'lesson', 'alpha', 'bad', 'bad', 'not-json{{{', 'e', 'bad', 1)`).run();
-
-    expect(library.search().map((e) => e.key)).toEqual(['ok']);
-    expect(library.get('exp-nonjson')).toBeNull();
   });
 
   test('a promoted lesson carries the settling turn id', async () => {

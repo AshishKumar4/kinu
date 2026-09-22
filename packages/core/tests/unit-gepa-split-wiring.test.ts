@@ -154,6 +154,25 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
 
 /** A runtime that can execute scaffold candidates, seeded with `SEED_SCAFFOLD`
  *  as the current scaffold GEPA optimises from. */
+/** A judge that scores every instance and fails the Nth call — the shape of a
+ *  provider that drops out mid-measurement. */
+function judgeFailingOnCall(count: () => number, reason: string): ScaffoldControl['judge'] {
+  return async ({ schema }) => {
+    if (count() === 2) throw new Error(reason);
+
+    return v.parse(schema, { score: 0.8, feedback: 'measured one instance' });
+  };
+}
+
+/** A judge that scores the incumbent and fails on the candidate's own prompt. */
+function judgeFailingOnCandidate(candidateSource: string, failure: Error): ScaffoldControl['judge'] {
+  return async ({ prompt, schema }) => {
+    if (prompt.includes(candidateSource)) throw failure;
+
+    return v.parse(schema, { score: 0.1, feedback: 'measured incumbent quality' });
+  };
+}
+
 async function evolvableRuntime(): Promise<AgentRuntime> {
   const { rt } = createTestRuntime();
   rt.executor = createEvalExecutor();
@@ -352,11 +371,7 @@ test('a mixed measured and unavailable seed reports the actual attempts without 
   const { control: base } = runnableControl(rt);
   let calls = 0;
 
-  const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
-    if (++calls === 2) throw new Error('second measurement unavailable');
-
-    return v.parse(schema, { score: 0.8, feedback: 'measured first instance' });
-  } };
+  const control: ScaffoldControl = { ...base, judge: judgeFailingOnCall(() => ++calls, 'second measurement unavailable') };
 
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('second measurement unavailable') });
@@ -373,11 +388,7 @@ test('section GEPA reports mixed scored and unavailable measurements as an abort
   const { control: base } = runnableControl(rt);
   let calls = 0;
 
-  const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
-    if (++calls === 2) throw new Error('section judge unavailable');
-
-    return v.parse(schema, { score: 0.8, feedback: 'measured one instance' });
-  } };
+  const control: ScaffoldControl = { ...base, judge: judgeFailingOnCall(() => ++calls, 'section judge unavailable') };
 
   const result = await advancePromptSectionLane(control);
   expect(result).toMatchObject({ step: 'pass', pass: { ok: false, error: expect.stringContaining('section judge unavailable') } });
@@ -398,11 +409,7 @@ test('an unavailable candidate judge cannot turn measured incumbent quality into
   const source = section.source.slice(0, -6) + 'ASKED.';
   const failure = new Error('candidate judge unavailable');
 
-  const control: ScaffoldControl = { ...base, judge: async ({ prompt, schema }) => {
-    if (prompt.includes(source)) throw failure;
-
-    return v.parse(schema, { score: 0.1, feedback: 'measured incumbent quality' });
-  } };
+  const control: ScaffoldControl = { ...base, judge: judgeFailingOnCandidate(source, failure) };
 
   await expect(proposeMeasuredPromptSection(control, { sectionId: section.id, source,
     rationale: 'Clarify the response format while retaining the existing output requirements.' })).rejects.toBe(failure);
@@ -430,11 +437,7 @@ test('an unavailable paired trial cannot supply the last win needed to promote a
   });
   const failure = new Error('pending trial judge unavailable');
 
-  const control: ScaffoldControl = { ...base, judge: async ({ prompt, schema }) => {
-    if (prompt.includes(source)) throw failure;
-
-    return v.parse(schema, { score: 0.1, feedback: 'measured incumbent quality' });
-  } };
+  const control: ScaffoldControl = { ...base, judge: judgeFailingOnCandidate(source, failure) };
 
   await expect(advancePromptSectionLane(control)).rejects.toBe(failure);
   expect(getPendingPromptSection(rt.storage.sql, rt.actor, section.id)).toMatchObject({ trialsSoFar: 4, pendingWins: 4 });

@@ -573,29 +573,30 @@ describe('a run that wrote both stores', () => {
     expect(listForkRuns(sql, actor).items[0].task).toBe('compare two rewrites');
   });
 
-  test('is running while either half is still writing', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearchRun(db, actorId, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: 0.5, ledger: 'converged' });
-    seedJournalledRun(db, actorId, {
-      rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
-      heads: [{ status: 'completed' }, { status: 'running' }],
-    });
-    expect(listForkRuns(sql, actor).items[0].status).toBe('running');
-  });
+  const BOTH_HALVES = [
+    { name: 'is running while either half is still writing', winner: 0.5, second: 'running', status: 'running' },
+    {
+      // The tree's own ledger is the run's statement about how it ended; a failed
+      // branch is normal in a search. The journal rule — nothing synthesised and
+      // something errored means `partial` — is about heads reaching a synthesis, and
+      // applying it here would report every swarm with a lost node as unfinished.
+      name: 'a settled search with one failed node reads as settled, not partial',
+      winner: 0.6, second: 'errored', status: 'completed',
+    },
+  ] as const;
 
-  test('a settled search with one failed node reads as settled, not partial', () => {
-    // The tree's own ledger is the run's statement about how it ended; a failed
-    // branch is normal in a search. The journal rule — nothing synthesised and
-    // something errored means `partial` — is about heads reaching a synthesis, and
-    // applying it here would report every swarm with a lost node as unfinished.
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearchRun(db, actorId, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: 0.6, ledger: 'converged' });
-    seedJournalledRun(db, actorId, {
-      rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
-      heads: [{ status: 'completed' }, { status: 'errored' }],
+  for (const both of BOTH_HALVES) {
+    test(both.name, () => {
+      const { db, sql, actor, actorId } = freshDb();
+      seedSearchRun(db, actorId, { rootId: 'swarm-1', task: TASK, at: 1000, branches: 2, winner: both.winner, ledger: 'converged' });
+      seedJournalledRun(db, actorId, {
+        rootId: 'swarm-1', task: TASK, at: 1400, rationale: PRESET,
+        heads: [{ status: 'completed' }, { status: both.second }],
+      });
+
+      expect(listForkRuns(sql, actor).items[0].status).toBe(both.status);
     });
-    expect(listForkRuns(sql, actor).items[0].status).toBe('completed');
-  });
+  }
 
   test('arrives whole on whichever page it falls on, halves together', () => {
     // The page boundary is the other place a run can lose a half. Bounding each

@@ -537,10 +537,13 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   // budget plus that single disclosure line — never the stored body.
   const bound = cap + 80;
 
+  /** One stored assistant body in a fresh transcript — the row the read caps. */
+  const seededStoredBody = async (content: string) => seededTranscript(0, async (history) => {
+    await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content } });
+  });
+
   test('the transcript read caps each stored body as it builds the digest', async () => {
-    const seeded = await seededTranscript(0, async (history) => {
-      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content: stored } });
-    });
+    const seeded = await seededStoredBody(stored);
 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);
 
@@ -572,9 +575,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   });
 
   test('buildHeadMessages neither expands nor re-windows what the read already capped', async () => {
-    const seeded = await seededTranscript(0, async (history) => {
-      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content: stored } });
-    });
+    const seeded = await seededStoredBody(stored);
 
     const inheritedContext = await inheritedContextFromTranscript(seeded.transcript);
 

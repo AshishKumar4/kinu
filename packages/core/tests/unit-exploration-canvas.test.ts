@@ -136,36 +136,37 @@ describe('readForkRunParams', () => {
   // shares one per-evaluation call pool with check generation, so a request the
   // pool cannot fund runs smaller. A surface showing only the request hides
   // that entirely.
-  test('a search that asked for 20 judges and was seen running 3 says both numbers', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearch(db, actorId, {
-      rootId: 'clamped', task: 'twenty judges please', at: 1_000, nodes: 1,
-      config: { budget: 4, branches: 2, judgeSamples: 20, mode: 'build' },
-      realised: 3,
-    });
-    expect(readForkRunParams(sql, actor, ['clamped'])[0]?.search).toMatchObject({
-      judgeSamplesRequested: 20,
-      judgeSamplesRealised: 3,
-    });
-  });
+  const ENSEMBLES = [
+    {
+      name: 'a search that asked for 20 judges and was seen running 3 says both numbers',
+      rootId: 'clamped', task: 'twenty judges please', realised: 3,
+    },
+    {
+      // The realised size is OBSERVED, never predicted. The pool arithmetic gives
+      // the CEILING a request is clamped to (mcts/evaluation.ts judgeCallBudget,
+      // pinned in unit-mcts-evaluation.test.ts), and an evaluation that
+      // short-circuits before judging never reaches it — so a run whose knobs
+      // imply three and whose only candidate sampled one reports one.
+      name: 'the realised ensemble is what was seen, not what the knobs imply',
+      rootId: 'observed', task: 'short-circuited', realised: 1,
+    },
+  ];
 
-  // The realised size is OBSERVED, never predicted. The pool arithmetic gives the
-  // CEILING a request is clamped to (mcts/evaluation.ts judgeCallBudget, pinned in
-  // unit-mcts-evaluation.test.ts), and an evaluation that short-circuits before
-  // judging never reaches it — so a run whose knobs imply three and whose only
-  // candidate sampled one reports one.
-  test('the realised ensemble is what was seen, not what the knobs imply', () => {
-    const { db, sql, actor, actorId } = freshDb();
-    seedSearch(db, actorId, {
-      rootId: 'observed', task: 'short-circuited', at: 1_000, nodes: 1,
-      config: { budget: 4, branches: 2, judgeSamples: 20, mode: 'build' },
-      realised: 1,
+  for (const ensemble of ENSEMBLES) {
+    test(ensemble.name, () => {
+      const { db, sql, actor, actorId } = freshDb();
+      seedSearch(db, actorId, {
+        rootId: ensemble.rootId, task: ensemble.task, at: 1_000, nodes: 1,
+        config: { budget: 4, branches: 2, judgeSamples: 20, mode: 'build' },
+        realised: ensemble.realised,
+      });
+
+      expect(readForkRunParams(sql, actor, [ensemble.rootId])[0]?.search).toMatchObject({
+        judgeSamplesRequested: 20,
+        judgeSamplesRealised: ensemble.realised,
+      });
     });
-    expect(readForkRunParams(sql, actor, ['observed'])[0]?.search).toMatchObject({
-      judgeSamplesRequested: 20,
-      judgeSamplesRealised: 1,
-    });
-  });
+  }
 
   test('a journalled run reports its strategy and node count, and no budget at all', () => {
     const { db, sql, actor, actorId } = freshDb();
