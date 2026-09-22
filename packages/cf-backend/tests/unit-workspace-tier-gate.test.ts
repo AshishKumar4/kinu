@@ -481,13 +481,17 @@ describe('a registered workspace reaches the whole surface', () => {
 });
 
 describe('the boundary fails closed', () => {
-  type MalformedCaller = string | { workspaceToken: string } | undefined;
-
-  const badCallers: Array<{ name: string; caller: MalformedCaller }> = [
-    { name: 'no token at all', caller: undefined },
-    { name: 'an empty token', caller: { workspaceToken: '' } },
-    { name: 'a token-shaped string in the wrong place', caller: 'pwc_whatever' },
-    { name: 'an unknown token', caller: { workspaceToken: 'pwc_never_minted' } },
+  /** Four callers a privileged method must refuse: two presenting no identity
+   *  at all, and two presenting a token this deployment never minted —
+   *  including a workspace-shaped token offered in the owner's slot, which is
+   *  the confusion the two-armed caller type invites. The shapes the gate's
+   *  own parse rejects are its unit's to cover; these are the values that
+   *  reach every method. */
+  const badCallers: Array<{ name: string; caller: UserCaller }> = [
+    { name: 'an empty owner token', caller: { ownerToken: '' } },
+    { name: 'an empty workspace token', caller: { workspaceToken: '' } },
+    { name: 'a workspace-shaped token in the owner slot', caller: { ownerToken: 'pwc_whatever' } },
+    { name: 'an unknown workspace token', caller: { workspaceToken: 'pwc_never_minted' } },
   ];
 
   for (const { name, caller } of badCallers) {
@@ -496,12 +500,7 @@ describe('the boundary fails closed', () => {
       const allowed: string[] = [];
 
       for (const call of GATED_CALLS) {
-        // SAFETY: `badCallers` is the locally constructed fixture union above;
-        // this deliberate type violation crosses only the runtime trust gate
-        // under test, which must reject every value before using its fields.
-        const untrustedCaller = caller as UserCaller;
-
-        if (!(await refused(call, harness.userDO, untrustedCaller))) allowed.push(`${call.capability}:${call.name}`);
+        if (!(await refused(call, harness.userDO, caller))) allowed.push(`${call.capability}:${call.name}`);
       }
 
       expect(allowed).toEqual([]);

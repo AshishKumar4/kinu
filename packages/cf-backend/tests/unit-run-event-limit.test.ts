@@ -9,7 +9,7 @@
 // `getRunEvents(recorder, runId, opts)` and nothing else — so the direct-RPC
 // cases below exercise the real boundary, which is the bypass a route-only fix
 // leaves open.
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import type { RunEventsResolver, RunEventsTarget } from '../src/run-events-routes';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -31,7 +31,7 @@ const SEEDED_EVENTS = 700;
 
 /** A workspace whose `getRunEventsWire` is the production one: the boundary
  *  read-model over a real recorder, with no validation added by the test. */
-function runEventsEnv() {
+function runEventsWorkspace() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
@@ -41,29 +41,23 @@ function runEventsEnv() {
     recorder.emit('run-1', { type: 'error', message: `event ${i}` });
   }
 
-  const stub = {
+  const stub: RunEventsTarget = {
+    listRuns: () => { throw new Error('OrchestratorAgent.listRuns: not reachable in this test'); },
     async getRunEventsWire(runId: string, opts?: RunEventQuery) {
       return JSON.stringify(getRunEvents(recorder, runId, opts));
     },
   };
 
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  });
-  // SAFETY: this suite reaches only the locally constructed orchestrator
-  // namespace and credential secret.
-  const env = partialEnv as Env;
-
-  return { env, stub };
+  return { resolveAgent: () => Promise.resolve(stub), stub };
 }
 
-async function eventsVia(env: Env, query: string): Promise<{ status: number; count: number }> {
+async function eventsVia(
+  resolveAgent: RunEventsResolver, query: string,
+): Promise<{ status: number; count: number }> {
   // The list route never polls, so the real pacing is never asked for a wait.
   const res = await handleRunEventsRequest(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
-  ), env, REAL_CLOCK);
+  ), resolveAgent, REAL_CLOCK);
 
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();
@@ -71,55 +65,38 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
   return { status: res.status, count: Array.isArray(body) ? body.length : -1 };
 }
 
+/** Every query string the route must close, and the number of events it may
+ *  answer with. One row is one test, so a failure still names its own case. */
+const BOUNDED_QUERIES: readonly { readonly name: string; readonly query: string; readonly count: number }[] = [
+  { name: 'a negative limit returns one event, not the whole run', query: '?limit=-1', count: 1 },
+  { name: 'a far more negative limit is bounded the same way', query: '?limit=-999999', count: 1 },
+  { name: 'a negative limit stays bounded with a type filter as well', query: '?limit=-1&types=error', count: 1 },
+  // Not a 400: absent and unreadable are the same statement, so the route
+  // never has to decide what a garbage query string meant. Forwarded raw,
+  // each of these is a 500 from SQLite's datatype mismatch.
+  { name: 'unparseable limit text means unstated and takes the default', query: '?limit=abc', count: RUN_EVENT_LIMIT_DEFAULT },
+  { name: 'a literal NaN means unstated too', query: '?limit=NaN', count: RUN_EVENT_LIMIT_DEFAULT },
+  { name: 'a literal Infinity means unstated too', query: '?limit=Infinity', count: RUN_EVENT_LIMIT_DEFAULT },
+  { name: 'a fractional limit truncates instead of failing the query', query: '?limit=2.7', count: 2 },
+  { name: 'an oversized limit clamps to the ceiling', query: '?limit=1000000000', count: RUN_EVENT_LIMIT_MAX },
+  { name: 'a legitimate limit is still honoured exactly', query: '?limit=37', count: 37 },
+  { name: 'no limit at all takes the default page', query: '', count: RUN_EVENT_LIMIT_DEFAULT },
+  { name: 'an unparseable since reads from the start of the run', query: '?since=abc&limit=3', count: 3 },
+  { name: 'a negative since reads from the start of the run', query: '?since=-5&limit=3', count: 3 },
+];
+
 describe('the run-events route closes `limit` before it can reach SQL', () => {
-  test('a negative limit returns one event, not the whole run', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=-1')).toEqual({ status: 200, count: 1 });
-    expect(await eventsVia(env, '?limit=-999999')).toEqual({ status: 200, count: 1 });
-  });
-
-  test('a negative limit stays bounded with a type filter as well', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=-1&types=error')).toEqual({ status: 200, count: 1 });
-  });
-
-  test('unparseable limit text means unstated and takes the default', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=abc'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-    expect(await eventsVia(env, '?limit=NaN'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-    expect(await eventsVia(env, '?limit=Infinity'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-  });
-
-  test('a fractional limit truncates instead of failing the query', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=2.7')).toEqual({ status: 200, count: 2 });
-  });
-
-  test('an oversized limit clamps to the ceiling', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=1000000000'))
-      .toEqual({ status: 200, count: RUN_EVENT_LIMIT_MAX });
-  });
-
-  test('a legitimate limit is still honoured exactly', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?limit=37')).toEqual({ status: 200, count: 37 });
-    expect(await eventsVia(env, '')).toEqual({ status: 200, count: RUN_EVENT_LIMIT_DEFAULT });
-  });
-
-  test('an unparseable or negative since reads from the start of the run', async () => {
-    const { env } = runEventsEnv();
-    expect(await eventsVia(env, '?since=abc&limit=3')).toEqual({ status: 200, count: 3 });
-    expect(await eventsVia(env, '?since=-5&limit=3')).toEqual({ status: 200, count: 3 });
-  });
+  for (const bound of BOUNDED_QUERIES) {
+    test(bound.name, async () => {
+      const { resolveAgent } = runEventsWorkspace();
+      expect(await eventsVia(resolveAgent, bound.query)).toEqual({ status: 200, count: bound.count });
+    });
+  }
 });
 
 describe('a direct RPC cannot ask for more than the route may', () => {
   test('the RPC applies the same bounds with no route in the path', async () => {
-    const { stub } = runEventsEnv();
+    const { stub } = runEventsWorkspace();
 
     const countOf = async (opts: RunEventQuery): Promise<number> => {
       const parsed: unknown = JSON.parse(await stub.getRunEventsWire('run-1', opts));

@@ -1264,7 +1264,7 @@ export class OrchestratorAgent extends ActorAgent {
     return new URL(ctx.request.url).pathname !== WORKSPACE_TERMINAL_PATH;
   }
 
-  protected override async terminalFor(connection: Connection): Promise<WorkspaceTerminal | null> {
+  protected override async terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
     return isWorkspaceTerminal(connection.tags) ? await this.hostedWorkspace().terminal() : null;
   }
 

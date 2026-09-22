@@ -52,8 +52,9 @@ import { diagnostics, KinuError, tolerate, toKinuError, type Refusal } from '@ki
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
+import type { ObjectNamespace } from './bindings';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortExposure, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
@@ -102,9 +103,41 @@ function fabricLoader(loader: WorkerLoader): FabricWorkerLoader {
   return v.parse(FabricWorkerLoaderSchema, loader);
 }
 
+/**
+ * The one call the fabric makes on an object it resolves in the host
+ * namespace: a facet's supervisor envelope, dispatched by the composed
+ * `hostDispatchMethod`. It holds for every name this object is opened under —
+ * the siblings Nimbus opens for the npm resolver's wide layers and for peer
+ * process hosting answer the same method.
+ */
+export interface WorkspaceHostTarget {
+  supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
+}
+
+/** The fabric's host namespace. `idFromString` rides beside the pair every
+ *  other port names because the supervisor entrypoint resolves its host from
+ *  an id it was handed, never from a name. */
+export interface WorkspaceHostNamespace<Id> extends ObjectNamespace<Id, WorkspaceHostTarget> {
+  idFromString(id: string): Id;
+}
+
+/**
+ * Every binding a hosted workspace reads.
+ *
+ * Three are Nimbus's own — the loader it spawns facets through, the assets it
+ * serves and the R2 runtime catalogue it installs toolchains from — and the
+ * fourth is the fabric's host namespace. Nothing else of the actor's Env is
+ * reachable from here, and handing the whole of it over would put every
+ * binding this Worker holds inside a package manager.
+ */
+export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUNTIME_CACHE'> {
+  readonly ASSETS?: Fetcher;
+  readonly OrchestratorAgent: WorkspaceHostNamespace<Id>;
+}
+
 /** The bindings the runtime reads: the fabric's host namespace beside the
  *  loader, the assets and the runtime catalogue its own env type names. */
-type HostedRuntimeBindings = HostedRuntimeOptions['env'] & { readonly OrchestratorAgent: Env['OrchestratorAgent'] };
+type HostedRuntimeBindings<Id> = HostedRuntimeOptions['env'] & { readonly OrchestratorAgent: WorkspaceHostNamespace<Id> };
 
 /**
  * The hosted runtime's module, loaded on first composition rather than at
@@ -243,9 +276,9 @@ function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_
   };
 }
 
-export interface HostedWorkspaceDeps {
+export interface HostedWorkspaceDeps<Id> {
   readonly ctx: DurableObjectState;
-  readonly env: Env;
+  readonly env: HostedWorkspaceEnv<Id>;
   /**
    * The public URL an exposed port is reachable at, or the reason there is
    * none. Supplied by the actor because a preview URL names the workspace and
@@ -278,8 +311,59 @@ interface HostComposition {
   readonly ports: PortRegistry;
 }
 
-/** The runtime's terminal surface, as this host exposes it to the actor. */
-export type WorkspaceTerminal = Pick<HostedRuntime, 'attachTerminal' | 'terminalFrame' | 'terminalClose'>;
+/**
+ * The socket an attached terminal writes to.
+ *
+ * `send` is the whole of it: `attachTerminal` answers `{"type":"ready"}` on it,
+ * `terminalFrame` writes the shell's output frames through the same call, and
+ * `terminalClose` only detaches. The runtime compares the socket by identity
+ * and never reads a state, a URL or a listener off it, so a caller owes it one
+ * method. Measured against `@nimbus-sh/worker` dist/hosted/runtime.js
+ * (`attachTerminal`/`terminalFrame`/`terminalClose`) and dist/facets/
+ * ws-terminal.js (every `this.ws` read) on 2026-09-22.
+ */
+export interface TerminalSocket {
+  send(data: string): void;
+}
+
+/**
+ * The runtime's terminal surface, as this host exposes it to the actor.
+ *
+ * Declared rather than `Pick`ed so the socket is named at this seam: the
+ * runtime types the parameter as the platform's whole `WebSocket`, and the
+ * actor hands it a `Connection`, both of which satisfy {@link TerminalSocket}.
+ */
+export interface WorkspaceTerminal {
+  attachTerminal(ws: TerminalSocket): Promise<void>;
+  terminalFrame(ws: TerminalSocket, frame: string | ArrayBuffer): Promise<void>;
+  terminalClose(ws: TerminalSocket): void;
+}
+
+/**
+ * A supervisor envelope as a facet sends it.
+ *
+ * `supervisorOp` is a Durable Object RPC method, so the `op` arrives as wire
+ * data: any string a process in this workspace put on it.
+ */
+export interface WireSupervisorEnvelope extends Omit<SupervisorOpEnvelope, 'op'> {
+  readonly op: string;
+}
+
+const SERVED_OPS: ReadonlySet<string> = new Set(SUPERVISOR_OPS);
+
+/**
+ * Does Nimbus's op table name this envelope's operation?
+ *
+ * The refusal behind this guard is a RUNTIME one because it cannot be a typed
+ * one. Measured on this tree 2026-09-22: `SUPERVISOR_OPS` carries 81 names,
+ * `SUPERVISOR_NATIVE_OPS` 44 and `SUPERVISOR_OP_ROUTES` 37, and the set
+ * difference is empty — every member of `SupervisorOpName` is served, so no
+ * value of that type can reach the refusal. A name that does reach it came off
+ * the wire and was never in the type.
+ */
+function servesOp(envelope: WireSupervisorEnvelope): envelope is SupervisorOpEnvelope {
+  return SERVED_OPS.has(envelope.op);
+}
 
 export interface HostedWorkspace {
   /** The filesystem and the shell, as `Storage.vfs` and every file surface
@@ -314,7 +398,7 @@ export interface HostedWorkspace {
    * the workspace exactly as the first file touch does, through the same
    * memoized open with the same failure-clearing retry.
    */
-  supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
+  supervisorOp(envelope: WireSupervisorEnvelope): Promise<SupervisorOpResult>;
   /**
    * The facet manager composed over this object — the slate host's spawn
    * and kill path, and the one registrar of a resident's port: it binds the
@@ -405,7 +489,7 @@ async function redriveSlate(ensuring: Promise<Refusal | null>, owner: string): P
   }
 }
 
-function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Promise<null> {
+function resolveSlateLaunch<Id>(deps: HostedWorkspaceDeps<Id>, recipe: WorkerRecipe): Promise<null> {
   if (recipe.resident !== undefined || deps.ensureSlate === undefined) return Promise.resolve(null);
 
   deps.ctx.waitUntil(redriveSlate(deps.ensureSlate(recipe.owner), recipe.owner));
@@ -420,7 +504,7 @@ function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Pr
  * counter, and the filesystem itself does not open until the first operation
  * touches it, so an activation that never reads a file pays for neither.
  */
-export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspace {
+export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): HostedWorkspace {
   const sql = deps.ctx.storage.sql;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
 
@@ -498,7 +582,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // REPLs, and starts the workspace. This host supplies what only it
         // has: the bindings the runtime reads, the launch re-drive for the
         // slates it owns, and the scheduling above.
-        const runtimeBindings: HostedRuntimeBindings = {
+        const runtimeBindings: HostedRuntimeBindings<Id> = {
           OrchestratorAgent: deps.env.OrchestratorAgent,
           LOADER: fabricLoader(deps.env.LOADER),
           ASSETS: deps.env.ASSETS,
@@ -543,7 +627,11 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
   return {
     bundle,
-    async supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult> {
+    async supervisorOp(envelope: WireSupervisorEnvelope): Promise<SupervisorOpResult> {
+      if (!servesOp(envelope)) {
+        throw new KinuError('bad_input', `supervisor op: '${envelope.op}' names no operation this host serves`);
+      }
+
       return (await runtime()).supervisorOp(envelope);
     },
     box(shellId) {

@@ -35,11 +35,9 @@ import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
 } from './slate-durability-shapes';
 import type { JsonValue } from '@kinu.run/core';
-import type { ExecutorInfo } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
   craftedSlate(): Promise<string>;
-  exercise(family: 'subordinate' | 'exploration'): Promise<{ answer: ExecutorInfo[]; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
 

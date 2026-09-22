@@ -12,9 +12,10 @@ import {
   asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   resolveTurnProfile, workspaceSlug, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
-import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
+import { handleCreateWorkspaceRequest, type CreateWorkspaceEnv } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import type { UserCaller } from '@kinu.run/core';
+import { userAccount, workspaceObject } from './helpers/bindings';
+import type { NameOrigin, ReasoningEffort, UserCaller } from '@kinu.run/core';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -48,7 +49,7 @@ async function postCreate(
 ): Promise<{ status: number; calls: string[]; error: string | null }> {
   const calls: string[] = [];
 
-  const userDO = {
+  const userDO = userAccount({
     async getProfileCatalog(_caller: UserCaller) { return envelope; },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {
@@ -64,31 +65,42 @@ async function postCreate(
     },
     async releaseWorkspaceReservation() { return true; },
     async removeWorkspace() {},
-  };
-
-  const orchestrator = {
-    async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
-    async setInitialDisplayName() {},
-    async setSoul() {},
-    async resetWorkspaceBaseline() {},
-    async setModel(model: string) { calls.push(`model:${model}`); },
-    async setReasoningEffort(effort: string) { calls.push(`effort:${effort}`); },
-    async setRole(roleId: string) { calls.push(`role:${roleId}`);
-
- return { role: roleId }; },
-    async beginGenesisTurn() { calls.push('genesis'); },
-  };
-
-  const env: Partial<Env> = {};
-  Object.assign(env, {
-    UserDO: { idFromName: (name: string) => name, get: () => userDO },
-    OrchestratorAgent: { idFromName: (name: string) => name, get: () => orchestrator },
-    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
-  // SAFETY: Workspace creation reads exactly the constructed UserDO and
-  // OrchestratorAgent namespaces plus credential key. Every typed binding
-  // reachable in this test is present.
-  const typed = env as Env;
+
+  const orchestrator = workspaceObject({
+    async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
+    async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
+    async setSoul(soul: string) { return { soul, purpose: '' }; },
+    async resetWorkspaceBaseline() { return { ok: true as const, files: 0 }; },
+    async setModel(spec: string) {
+      calls.push(`model:${spec}`);
+
+      return { ok: true, spec };
+    },
+    async setReasoningEffort(effort: ReasoningEffort | null) {
+      calls.push(`effort:${String(effort)}`);
+
+      if (effort === null) throw new Error('setReasoningEffort(null): a create never clears the effort');
+
+      return { ok: true as const, effort };
+    },
+    async setRole(roleId: string) {
+      calls.push(`role:${roleId}`);
+
+      return { role: roleId };
+    },
+    async beginGenesisTurn() {
+      calls.push('genesis');
+
+      return { started: true };
+    },
+  });
+
+  const env: CreateWorkspaceEnv<string> = {
+    UserDO: { idFromName: (name) => name, get: () => userDO },
+    OrchestratorAgent: { idFromName: (name) => name, get: () => orchestrator },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
 
   const originalFetch = globalThis.fetch;
   // No provider is reachable, so the model menu falls back to the native
@@ -102,9 +114,9 @@ async function postCreate(
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       }),
-      env: typed,
+      env,
       userId: USER_ID,
-      userDO: typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
+      userDO,
     });
 
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;

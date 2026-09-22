@@ -254,19 +254,15 @@ export default defineConfig({
           modules: probeModules(hostedPreviewProbe),
           durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
         }, {
-          // The seal target is the production root itself, bound here under
-          // its own names: `exercise` addresses it by binding (never by a
-          // retyped subclass), and the root's directory and UserDO hub resolve
-          // exactly as they do in production. `SLATE_ACTOR_ROOT` is this
-          // file's probe root, which owns no identity row and answers only
-          // the two fixture methods the tests drive.
+          // `SLATE_ACTOR_ROOT` is this file's probe root, which owns no
+          // identity row and answers only the two fixture methods the tests
+          // drive; `LOADER` is the dynamic-Worker loader `code` runs programs
+          // through.
           workerLoaders: { LOADER: {} },
           name: 'slate-actor-probe', ...workerCompatibility,
           modules: probeModules(slateActorProbe),
           durableObjects: {
             SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', useSQLite: true },
-            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
-            UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
           // The child resolves its workspace through a binding named exactly

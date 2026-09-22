@@ -28,6 +28,7 @@
 
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
+import type { KvStore } from '@kinu.run/agent-utils';
 import {
   boundEventQuery, DEFAULT_RATE_LIMIT_PER_MIN, normalizeWebhookRateLimitPerMin,
 } from '@kinu.run/core';
@@ -110,36 +111,80 @@ function requireStepUp(request: Request): Response | null {
 
 // ── Route entry point ────────────────────────────────────────────
 
+/** Every call the hub routes make on the workspace object they address. */
+export type HubTarget = Pick<OrchestratorAgent,
+  'listTriggersWire' | 'createDurableWebhook' | 'cancelTrigger' | 'listRecentEventsWire'
+  | 'getEmailIngress' | 'setEmailAllowlist' | 'setEmailNotifications'
+>;
+
+/**
+ * How a route here reaches that object.
+ *
+ * A function rather than the namespace binding, because resolving one is not
+ * `get(idFromName(name))`: the deployment binds the Agents SDK's own
+ * `getAgentByName` (agents@0.22.0, `dist/agent-routing.js:176-183`, read
+ * 2026-09-22), which resolves the stub and then awaits
+ * `__unsafe_ensureInitialized` on it — the lifecycle gate that runs `onStart`
+ * before the first RPC — under the SDK's own retry. Injecting the resolver
+ * leaves all of that to the vendor and lets a test hand over its own object.
+ */
+export type HubResolver = (name: string) => Promise<HubTarget>;
+
+/** The deployment's resolver: the SDK's own, over this Worker's binding. */
+export const hubAgentResolver = (env: Env): HubResolver =>
+  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
+
+/** Every binding the hub routes read: the one that signs a delivery URL. */
+export type HubEnv = Pick<Env, 'WEBHOOK_ROUTE_SECRET'>;
+
 export async function handleHubRequest(
   request: Request,
-  env: Env,
+  env: HubEnv,
   agentName: string,
+  resolveAgent: HubResolver,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+  const resolve = () => resolveAgent(agentName);
 
   // ── Triggers CRUD (auth + ownership already enforced upstream) ─
   const triggersBase = `/api/workspaces/${agentName}/triggers`;
 
   if (path === triggersBase || path.startsWith(triggersBase + '/')) {
-    return await handleTriggersRoute(request, env, agentName, path.slice(triggersBase.length));
+    return await handleTriggersRoute(request, env, path.slice(triggersBase.length), resolve);
   }
 
   // ── Events listing ────────────────────────────────────────────
   if (path === `/api/workspaces/${agentName}/events` && method === 'GET') {
-    return await handleEventsList(request, env, agentName);
+    return await handleEventsList(request, resolve);
   }
 
   // ── Email ingress config (Mission Inbox) ──────────────────────
   if (path === `/api/workspaces/${agentName}/email`) {
-    return await handleEmailConfigRoute(request, env, agentName);
+    return await handleEmailConfigRoute(request, resolve);
   }
 
   return null;
 }
 
 // ── Public webhook delivery ──────────────────────────────────────
+
+/** Every call a verified delivery makes on the workspace object it addresses. */
+export type WebhookDeliveryTarget = Pick<OrchestratorAgent, 'acceptWebhookDelivery'>;
+
+/** How a delivery reaches that object — see {@link HubResolver}. */
+export type WebhookDeliveryResolver = (name: string) => Promise<WebhookDeliveryTarget>;
+
+/** The deployment's resolver: the SDK's own, over this Worker's binding. */
+export const webhookDeliveryResolver = (env: Env): WebhookDeliveryResolver =>
+  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
+
+/** Every binding the public delivery rail reads: the secret that verifies the
+ *  URL's capability, and the knock budget it spends before reading a body. */
+export interface WebhookDeliveryEnv extends HubEnv {
+  AUTH_KV?: KvStore;
+}
 
 /**
  * The public delivery endpoint, and the only entry point for it.
@@ -157,7 +202,8 @@ export async function handleHubRequest(
  */
 export async function handleWebhookDeliveryRequest(
   request: Request,
-  env: Env,
+  env: WebhookDeliveryEnv,
+  resolveAgent: WebhookDeliveryResolver,
 ): Promise<Response | null> {
   const match = matchWebhookDeliveryPath(new URL(request.url).pathname);
 
@@ -170,7 +216,7 @@ export async function handleWebhookDeliveryRequest(
 
   if (!(await verifyWebhookRoute(secret, match))) return deliveryNotFound();
 
-  return await handleWebhookDelivery(request, env, match);
+  return await handleWebhookDelivery(request, env, match, resolveAgent);
 }
 
 /** One answer for every unroutable delivery: nothing read, nothing cached, and
@@ -186,10 +232,9 @@ function deliveryNotFound(): Response {
 
 async function handleEmailConfigRoute(
   request: Request,
-  env: Env,
-  agentName: string,
+  resolveAgent: () => Promise<HubTarget>,
 ): Promise<Response> {
-  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  const agent = await resolveAgent();
 
   if (request.method === 'GET') {
     return json({ body: await agent.getEmailIngress() });
@@ -237,8 +282,9 @@ async function handleEmailConfigRoute(
  */
 async function handleWebhookDelivery(
   request: Request,
-  env: Env,
+  env: WebhookDeliveryEnv,
   route: SignedWebhookRoute,
+  resolveAgent: WebhookDeliveryResolver,
 ): Promise<Response> {
   const kv = env.AUTH_KV;
 
@@ -259,9 +305,7 @@ async function handleWebhookDelivery(
     return err(400, 'could not read the request body');
   }
 
-  const agent = await getAgentByName<Env, OrchestratorAgent>(
-    env.OrchestratorAgent, route.workspaceName,
-  );
+  const agent = await resolveAgent(route.workspaceName);
 
   const parsedCf = v.safeParse(RequestCfSchema, request.cf);
 
@@ -305,11 +349,11 @@ async function handleWebhookDelivery(
 
 async function handleTriggersRoute(
   request: Request,
-  env: Env,
-  agentName: string,
+  env: HubEnv,
   rest: string,
+  resolveAgent: () => Promise<HubTarget>,
 ): Promise<Response> {
-  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  const agent = await resolveAgent();
   const method = request.method;
 
   if (rest === '' || rest === '/') {
@@ -378,7 +422,10 @@ async function handleTriggersRoute(
 
 // ── Events list handler ──────────────────────────────────────────
 
-async function handleEventsList(request: Request, env: Env, agentName: string): Promise<Response> {
+async function handleEventsList(
+  request: Request,
+  resolveAgent: () => Promise<HubTarget>,
+): Promise<Response> {
   const url = new URL(request.url);
   const variant = url.searchParams.get('variant') ?? undefined;
 
@@ -394,7 +441,7 @@ async function handleEventsList(request: Request, env: Env, agentName: string): 
       ? parseInt(url.searchParams.get('limit') ?? '', 10) : undefined,
   });
 
-  const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  const agent = await resolveAgent();
 
   return json({
     body: decodeJsonWire(await agent.listRecentEventsWire({

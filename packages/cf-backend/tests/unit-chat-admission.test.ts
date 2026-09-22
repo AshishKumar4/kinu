@@ -19,6 +19,7 @@ import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
+import { socketConnection } from './helpers/bindings';
 
 /** A turn the suite runs end to end answers one scripted line: no provider,
  *  no harness UserDO credential, so the admission is what the test measures
@@ -41,17 +42,12 @@ interface AdmissionSocket {
 function connection(agent: { broadcast: (message: string, exclude?: string[]) => void }): AdmissionSocket {
   const frames = new AwaitedList<string>();
   const sent = frames.items;
-  const partial: Partial<Connection> = {};
-  Object.assign(partial, {
-    id: 'admission-conn', tags: [],
+
+  const wire = socketConnection({
+    id: 'admission-conn',
     send: (data: string) => { frames.push(data); },
-    close: () => {},
   });
-  // SAFETY: every member the frame gate touches is constructed above — the
-  // platform contract for a hibernated connection carries its tags and its
-  // wire and nothing else, so the checked members above exhaust what the code
-  // under test can reach.
-  const wire = partial as Connection;
+
   // The actor broadcasts over its connection set, which is empty in this
   // harness; route its fan-out to this socket too, so the test reads the
   // frames a connected tab would. The sender's own hook already holds the
