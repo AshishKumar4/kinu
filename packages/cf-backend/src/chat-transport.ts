@@ -125,6 +125,8 @@ interface LiveStream {
    *  object never reads a second stream on the first stream's state while the
    *  answer stays one message under one id. */
   accumulator: StreamAccumulator;
+  /** What the client's own reader would have open by now — see {@link OpenParts}. */
+  readonly open: OpenParts;
   readonly cadence: PartialFlushCadence;
   /** The transcript spent this answer before `turn-end` closed the stream. */
   taken: boolean;
@@ -146,22 +148,52 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
 }
 
 /**
- * Whether the relay can PLACE this chunk — whether the message it is building
- * has somewhere to put it.
+ * The part ids this relay has seen OPENED, mirroring the state the client's
+ * own stream reader keeps.
  *
- * One chunk type cannot be placed and must not be forwarded: a
- * `tool-input-delta` whose `tool-input-start` this relay never saw. The SDK's
- * server-side builder drops it silently (`applyChunkToParts` mutates a tool
- * part only when it finds one), but the CLIENT's reader THROWS on it —
- * `Received tool-input-delta for missing tool call with ID "…". Ensure a
- * "tool-input-start" chunk is sent before any "tool-input-delta" chunks.` —
- * and that throw ends the tab's whole answer. Handing a client a frame it
- * cannot follow is the relay failing, so it degrades here instead.
+ * The reader (`ai`'s `processUIMessageStream`) THROWS on a continuation of a
+ * part it never saw open — `Received text-delta for missing text part with ID
+ * "…"`, the same for `reasoning-delta`, `reasoning-end`, `text-end`, and
+ * `Received tool-input-delta for missing tool call with ID "…"` — and that
+ * throw ends the tab's whole answer, which is how an owner sees an unexplained
+ * tool-call error (#15) and reasoning that appears and then vanishes (#14).
+ * The SDK's SERVER-side builder is forgiving about all of it, so the relay
+ * cannot learn this from the accumulator: it has to keep the reader's rule.
+ *
+ * `text`/`reasoning` ids are scoped to the STEP, because the reader clears
+ * `activeTextParts` and `activeReasoningParts` on every `finish-step`; tool
+ * call ids are not, because it never clears `partialToolCalls`.
  */
-function placeable(chunk: UIMessageChunk, parts: UIMessage['parts']): boolean {
-  if (chunk.type !== 'tool-input-delta') return true;
+class OpenParts {
+  private readonly step = new Set<string>();
+  private readonly calls = new Set<string>();
 
-  return parts.some((part) => 'toolCallId' in part && part.toolCallId === chunk.toolCallId);
+  /** Take this chunk in, and answer whether the client could follow it. */
+  admits(chunk: UIMessageChunk): boolean {
+    if (chunk.type === 'text-start' || chunk.type === 'reasoning-start') {
+      this.step.add(`${chunk.type === 'text-start' ? 'text' : 'reasoning'}:${chunk.id}`);
+
+      return true;
+    }
+
+    if (chunk.type === 'text-delta' || chunk.type === 'text-end') return this.step.has(`text:${chunk.id}`);
+
+    if (chunk.type === 'reasoning-delta' || chunk.type === 'reasoning-end') return this.step.has(`reasoning:${chunk.id}`);
+
+    if (chunk.type === 'finish-step') {
+      this.step.clear();
+
+      return true;
+    }
+
+    if (chunk.type === 'tool-input-start' || chunk.type === 'tool-input-available' || chunk.type === 'tool-input-error') {
+      this.calls.add(chunk.toolCallId);
+
+      return true;
+    }
+
+    return chunk.type !== 'tool-input-delta' || this.calls.has(chunk.toolCallId);
+  }
 }
 
 /** The frame a tab draws its whole transcript from: the seed one socket reads
@@ -430,7 +462,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
     const streamId = this.resume?.resumable.start(requestId, { messageId: turn.messageId }) ?? requestId;
 
-    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
+    this.live = { requestId, carried, streamId, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), cadence: partialFlushCadence(), taken: false, broken: false };
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history()));
   }
@@ -543,10 +575,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       for await (const chunk of stream) {
         const { action } = live.accumulator.applyChunk(chunk);
 
-        if (!placeable(chunk, live.accumulator.parts)) {
+        if (!live.open.admits(chunk)) {
           this.degradeRelay(live, toKinuError({
             doing: 'relaying the answer stream to the connected clients',
-            cause: new KinuError('io', `the model stream carried a ${chunk.type} for a tool call this relay never saw open`),
+            cause: new KinuError('io', `the model stream carried a ${chunk.type} continuing a part this relay never saw open`),
             otherwise: 'io',
           }));
 

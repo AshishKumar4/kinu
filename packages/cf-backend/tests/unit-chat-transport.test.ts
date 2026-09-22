@@ -443,6 +443,39 @@ describe('ChatWireTransport', () => {
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
+  test('a reasoning delta the relay cannot place degrades it too, so the thought is not half-sent', async () => {
+    // The same fatal rule as the tool-call case, and the reason "Thinking"
+    // appeared and vanished: the client's reader throws on a `reasoning-delta`
+    // whose `reasoning-start` it never saw, and the thought — plus everything
+    // after it — dies in the tab. The reader clears its text and reasoning ids
+    // on every `finish-step`, so this relay does too.
+    const h = openRequest();
+    const conn = h.connection('c1');
+    const { answered } = await h.open(conn, 'req-1', 'hello');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+
+    await h.transport.observe(chunks([
+      { type: 'start' }, { type: 'start-step' },
+      { type: 'reasoning-start', id: 'r' }, { type: 'reasoning-delta', id: 'r', delta: 'weighing it' },
+      { type: 'finish-step' }, { type: 'start-step' },
+      // The second step reuses the id; the reader forgot it at the step end.
+      { type: 'reasoning-delta', id: 'r', delta: 'and again' },
+    ]), { index: 0 });
+
+    const failed = h.responses().at(-1);
+    expect(failed).toMatchObject({ id: 'req-1', done: false, error: true });
+    expect(failed?.body).toContain('relaying the answer stream');
+    const relayed = h.responses().filter((frame) => frame.error !== true).map((frame) => frame.body ?? '');
+    expect(relayed.some((body) => body.includes('and again'))).toBe(false);
+    // What the client DID see still reached it.
+    expect(relayed.some((body) => body.includes('weighing it'))).toBe(true);
+
+    await h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: '', toolCalls: [], steps: 2, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+    await h.land(answered);
+    expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
+  });
+
   test("a turn's second provider call cannot rename the answer: one message, under the row's id", async () => {
     // An answer the provider cut at its output limit is continued by a SECOND
     // provider call, and that call is its own SDK stream — its own `start`,
