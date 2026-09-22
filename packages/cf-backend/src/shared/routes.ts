@@ -6,7 +6,7 @@
  *                                      link: the id carries a signature checked here,
  *                                      before any object is touched, and the owner's
  *                                      object re-reads the row on every call (S6).
- *   GET  /api/shared                 — my shared, shared with me
+ *   GET  /api/shared                 — my slates, my shared, shared with me
  *   POST /api/shared/publish         — publish a committed version of my slate as a
  *                                      blueprint and name users on it
  *   POST /api/shared/fork            — admit a blueprint into one of my workspaces
@@ -19,8 +19,8 @@ import * as v from 'valibot';
 import {
   err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError, retryTransientDO,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, LiveShareRecordSchema, labelSigner,
-  type BlueprintView, type SharedLibrary, type SharedRow, type BlueprintFork, type UserCaller,
-  LiveShareCreatedSchema,
+  type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
+  type LiveShareVisibility, LiveShareCreatedSchema,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import { forgetPublicShare, indexPublicShare, listPublicShares } from './public-index';
@@ -32,6 +32,11 @@ import { sharesGiven } from '../user/shares-given';
 import type { SharedBlueprintReceipt } from '../user/user-do';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
+
+/** What `{ op: 'list' }` answers, read for the fields the Drive shows. */
+const SlateListingSchema = v.object({
+  slates: v.array(v.object({ id: v.string(), title: v.string(), bindings: v.array(v.string()) })),
+});
 
 /** The blueprint signer: its own salt and info, so a preview token and a
  *  blueprint token never verify each other. */
@@ -132,6 +137,7 @@ export async function handleSharedRequest(request: Request, env: Env, identity: 
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
+  const slates: OwnedSlate[] = [];
   const mine: SharedRow[] = [];
   const named: string[] = [];
 
@@ -159,6 +165,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     const live = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
 
     if (!live.ok) throw new Error(`listing live shares of ${workspace}: ${live.reason}: ${live.error}`);
+    const shared = new Map<string, LiveShareVisibility>();
 
     for (const share of v.parse(v.array(LiveShareRecordSchema), live.value)) {
       if (share.revokedAt !== null) continue;
@@ -166,12 +173,29 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
       if (!reading.ok) continue;
 
+      // Two shares of one slate: the badge says the wider reach, never the
+      // narrower one, so it cannot understate who can see the slate.
+      if (share.visibility === 'public' || shared.get(share.slate) === undefined) shared.set(share.slate, share.visibility);
+
       mine.push({
         id: share.id, kind: 'live', share: share.id, title: reading.value.title, description: reading.value.description,
         createdAt: share.createdAt, bindings: share.grant.members.length, visibility: share.visibility,
         workspace, users: share.users,
       });
       named.push(...share.users);
+    }
+
+    // The slates themselves, from the workspace that holds them: no user-level
+    // index of them exists, and this workspace is already awake for its shares.
+    // A slate this workspace cannot read is one of its `problems` and is left
+    // out — a listing that names a slate it could not open would offer a tile
+    // that opens nothing.
+    const owns = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'list' });
+
+    if (!owns.ok) throw new Error(`listing slates of ${workspace}: ${owns.reason}: ${owns.error}`);
+
+    for (const slate of v.parse(SlateListingSchema, owns.value).slates) {
+      slates.push({ id: slate.id, title: slate.title, workspace, bindings: slate.bindings.length, visibility: shared.get(slate.id) });
     }
   }
 
@@ -232,7 +256,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     if (known.has(entry.ownerUserId)) knownRows.push(row);
   }
 
-  return { mine, received, public: publicRows, known: knownRows };
+  return { slates, mine, received, public: publicRows, known: knownRows };
 }
 
 /** One index entry verified against its owner's object, as a Shared row. */

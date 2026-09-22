@@ -10,6 +10,13 @@
  * front matter is refused inside the dialog with the parser's reason rather
  * than closing it.
  *
+ * The root carries four tile sections above the files — the owner's slates and
+ * blueprints, then sharing in both directions. What is asserted there is what
+ * a reader acts on: which sections exist and in which order, what each tile
+ * names, and which actions its menu offers, since a received share cannot be
+ * revoked and a live share of mine can. A section holding nothing is one line,
+ * not an empty card.
+ *
  * The fixture is the gallery's own: `?frame=drive` mounts the real DrivePage
  * over an in-memory tenant driven by the SAME core rules the Durable Object
  * runs (gallery-drive.tsx), so every refusal here is the product's rule.
@@ -85,6 +92,35 @@ async function waitForRow(page: Page, name: string, present = true): Promise<voi
 }
 
 const crumbs = (page: Page) => page.$$eval('nav[aria-label="Folder"] a', (anchors) => anchors.map((a) => a.textContent ?? ''));
+
+/** One section of the Drive root as a reader sees it: its heading order, the
+ *  tiles under it, and the quiet line it shows instead when it holds none. */
+interface Section {
+  title: string;
+  empty: string | null;
+  tiles: { name: string; kind: string; meta: string; visibility: string | null }[];
+}
+
+async function sections(page: Page): Promise<Section[]> {
+  return page.$$eval('[data-drive-section]', (elements) => elements.map((element) => ({
+    title: element.getAttribute('data-drive-section') ?? '',
+    empty: element.querySelector('[data-drive-section-empty]')?.textContent ?? null,
+    tiles: [...element.querySelectorAll('[data-drive-tile]')].map((tile) => ({
+      name: tile.querySelector('[data-drive-tile-name]')?.textContent ?? '',
+      kind: tile.getAttribute('data-drive-tile-kind') ?? '',
+      meta: tile.querySelector('[data-drive-tile-meta]')?.textContent ?? '',
+      visibility: tile.querySelector('[data-drive-tile-visibility]')?.textContent ?? null,
+    })),
+  })));
+}
+
+function sectionNamed(list: Section[], title: string): Section {
+  const found = list.find((section) => section.title === title);
+
+  if (!found) throw new Error(`no section named ${title}: ${JSON.stringify(list.map((section) => section.title))}`);
+
+  return found;
+}
 
 describe('the Drive page', () => {
   test('lists a folder, follows a folder link, uploads a file, and makes a folder', async () => {
@@ -203,10 +239,107 @@ describe('the Drive page', () => {
         // An empty tenant still lists the two reserved folders, and nothing
         // else; a fresh reserved folder says it is empty.
         expect((await rows(page)).map((row) => row.name)).toEqual(['blueprints', 'skills']);
+
+        // Nothing owned and nothing shared: every section is one quiet line
+        // and no card, at the width where a card costs the most.
+        const empty = await sections(page);
+        expect(empty.map((section) => section.title)).toEqual(['Slates', 'Blueprints', 'Shared with you', 'Shared by you']);
+        expect(empty.every((section) => section.tiles.length === 0 && section.empty !== null)).toBe(true);
+        await shoot(page, 'drive-sections-empty-mobile-dark');
         await page.click('[data-drive-entry="skills"] a');
         await page.waitForSelector('[data-drive-empty]');
         expect(await page.$eval('[data-drive-empty]', (element) => element.textContent ?? '')).toContain('This folder is empty');
+        expect(await sections(page)).toEqual([]);
         await shoot(page, 'drive-empty-mobile-dark');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('the root tiles every slate, blueprint and share, and opens one from its menu', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive', 'dark', 'desktop');
+
+      try {
+        const list = await sections(page);
+
+        // The owner's own assets first, then the two directions of sharing.
+        // Files stay below, on the rows the file manager already had.
+        expect(list.map((section) => section.title)).toEqual(['Slates', 'Blueprints', 'Shared with you', 'Shared by you']);
+
+        const slates = sectionNamed(list, 'Slates');
+
+        expect(slates.tiles.map((tile) => tile.name)).toEqual(['Issue triage', 'Landing perf report', 'Standup notes']);
+        expect(slates.tiles.every((tile) => tile.kind === 'slate')).toBe(true);
+        // The workspace a slate runs in is on its meta line, because a slate
+        // of the same name can live in two of them.
+        expect(slates.tiles[0].meta).toBe('checkout-fixes');
+        expect(slates.tiles[0].visibility).toBe('public');
+        expect(slates.tiles[1].visibility).toBeNull();
+
+        // A blueprint is the owner's own; a received row names who shared it.
+        expect(sectionNamed(list, 'Blueprints').tiles.map((tile) => [tile.name, tile.kind]))
+          .toEqual([['Issue triage', 'blueprint'], ['Landing perf report', 'blueprint']]);
+        expect(sectionNamed(list, 'Shared with you').tiles.map((tile) => tile.name)).toEqual(['Inbox digest', 'Inbox digest']);
+        expect(sectionNamed(list, 'Shared with you').tiles[0].meta).toContain('sam@example.com');
+        expect(sectionNamed(list, 'Shared by you').tiles.map((tile) => tile.kind)).toEqual(['live', 'blueprint', 'blueprint']);
+
+        // The Files list is still the page's, under its own heading.
+        expect((await rows(page)).map((row) => row.name)).toContain('README.md');
+        await shoot(page, 'drive-sections-desktop-dark');
+
+        // A live row of mine offers ending the share; a received row cannot,
+        // and offers importing it instead.
+        const mine = '[data-drive-section="Shared by you"] [data-drive-tile]:first-child';
+        await page.click(`${mine} [data-drive-tile-menu]`);
+        await page.waitForSelector(`${mine} [role="menu"]`);
+        expect(await page.$$eval(`${mine} [data-drive-tile-action]`, (items) => items.map((item) => item.getAttribute('data-drive-tile-action'))))
+          .toEqual(['Open', 'Fork', 'Stop sharing']);
+        await shoot(page, 'drive-tile-menu-desktop-dark');
+
+        const theirs = '[data-drive-section="Shared with you"] [data-drive-tile]:last-child';
+        await page.click(`${theirs} [data-drive-tile-menu]`);
+        await page.waitForSelector(`${theirs} [role="menu"]`);
+        expect(await page.$$eval(`${theirs} [data-drive-tile-action]`, (items) => items.map((item) => item.getAttribute('data-drive-tile-action'))))
+          .toEqual(['Open', 'Import']);
+
+        // Import is the fork dialog, which is where a workspace is picked.
+        await page.click(`${theirs} [data-drive-tile-action="Import"]`);
+        await page.waitForSelector('[role="dialog"]');
+        expect(await page.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Fork into a workspace');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  test('the sections read at a phone width and in both themes', async () => {
+    await withGallery(async (gallery) => {
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await freshPage(gallery, 'drive', theme, 'mobile');
+
+        try {
+          // One column at 390: a tile that needed two would cut its own name.
+          expect(sectionNamed(await sections(page), 'Slates').tiles).toHaveLength(3);
+          await shoot(page, `drive-sections-mobile-${theme}`);
+        } finally {
+          await page.close();
+        }
+      }
+    });
+
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'drive', 'light', 'desktop');
+
+      try {
+        // A folder below the root is the file manager alone: the sections are
+        // the root's, and a reader who opened a folder asked for the folder.
+        expect(sectionNamed(await sections(page), 'Blueprints').tiles).toHaveLength(2);
+        await shoot(page, 'drive-sections-desktop-light');
+        await page.click('[data-drive-entry="projects"] a');
+        await waitForRow(page, 'ops');
+        expect(await sections(page)).toEqual([]);
       } finally {
         await page.close();
       }

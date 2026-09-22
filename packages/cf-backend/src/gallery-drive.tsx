@@ -4,9 +4,11 @@
  *   /gallery.html?frame=drive[&path=/projects/ops]
  *     → the Drive page behind the shipped chrome over a seeded tenant: a
  *       skill folder outside `/skills`, a folder that is not one, plain
- *       files, and one skill already linked.
+ *       files, and one skill already linked. The root also draws the tile
+ *       sections over a fixture library; a folder deeper in draws none.
  *   /gallery.html?frame=drive-empty
- *     → the same page over a tenant nothing has landed on.
+ *     → the same page over a tenant nothing has landed on, and a library
+ *       holding nothing: every section shows its own quiet line.
  *   /gallery.html?frame=shared and ?frame=shared-empty
  *     → the Drive's `/blueprints` folder, which draws the shared library.
  *
@@ -24,7 +26,7 @@ import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
 import {
-  addSkill, deleteDriveEntry, listDrive, makeDriveFolder, markAsSkill, mossaicVfs, packDriveFolder, receiveDriveUpload,
+  addSkill, APP_ROUTES, deleteDriveEntry, listDrive, makeDriveFolder, markAsSkill, mossaicVfs, packDriveFolder, receiveDriveUpload,
   renameDriveEntry, SKILL_FOLDER_FILE, type DriveUploadTarget, type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
 import { KinuError, renderThrownChain, type ErrorCode } from "@kinu.run/core/obs";
@@ -181,8 +183,8 @@ export function DrivePageFrame({ library, workspaces }: { library?: SharedLibrar
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
           <Routes>
-            <Route path="/shared" element={<DrivePage library={fixture} />} />
-            <Route path="/shared/*" element={<DrivePage library={fixture} />} />
+            <Route path={APP_ROUTES.drive} element={<DrivePage library={fixture} />} />
+            <Route path={APP_ROUTES.driveFolder} element={<DrivePage library={fixture} />} />
           </Routes>
         </Suspense>
       </main>
@@ -190,7 +192,7 @@ export function DrivePageFrame({ library, workspaces }: { library?: SharedLibrar
   );
 }
 
-/** A frame's Drive page for the app-shell frame's `/shared` route. */
+/** A frame's Drive page for the app-shell frame's `/drive` route. */
 export function DriveRoute({ children }: { children?: ReactNode }) {
   return (
     <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
