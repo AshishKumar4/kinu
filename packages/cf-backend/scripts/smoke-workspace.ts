@@ -18,13 +18,11 @@ function wsOrigin(httpOrigin: string): string {
 }
 
 async function jsonFetch(path: string, init: RequestInit = {}): Promise<JsonValue | undefined> {
-  const res = await fetch(`${origin}${path}`, {
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...init.headers,
-    },
-  });
+  const headers = new Headers(init.headers);
+
+  if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+
+  const res = await fetch(`${origin}${path}`, { ...init, headers });
 
   const text = await res.text();
 
@@ -53,7 +51,7 @@ const WorkspaceMessageSchema = v.variant('type', [
     type: v.literal('rpc'),
     id: v.string(),
     success: v.optional(v.boolean()),
-    error: v.optional(JsonValueSchema),
+    error: v.optional(v.string()),
     result: v.optional(WorkspaceSnapshotSchema),
   }),
 ]);
@@ -111,7 +109,7 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       if (message.type !== 'rpc' || message.id !== rpcId) return;
 
       if (message.success === false) {
-        finish(() => reject(new Error(`getWorkspaceSnapshot failed: ${String(message.error ?? 'unknown')}`)));
+        finish(() => reject(new Error(`getWorkspaceSnapshot failed: ${message.error ?? 'unknown'}`)));
 
         return;
       }
