@@ -147,6 +147,25 @@ const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (name) => !CONDITIONAL_TOOL_NAMES.has(name),
 );
 
+/** A FactsStore over one in-memory map: the keyed half of `memory`, and the
+ *  map itself so a test can read what the tool actually wrote. */
+function factsOverMap() {
+  const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
+
+  const facts = {
+    upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
+      store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
+
+      return 'created' as const;
+    },
+    recall: (key: string) => store.get(key) ?? null,
+    forget: (key: string) => { store.delete(key); },
+    recentTopK: () => [], all: () => [],
+  };
+
+  return { store, facts };
+}
+
 function codemodeExecute(provider: CodemodeProvider, name: string): (...args: JsonValue[]) => Promise<object | string | number | boolean | null | undefined> {
   const entry = provider.tools[name];
 
@@ -295,18 +314,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory keyed-fact actions round-trip through the facts store', async () => {
     const { rt } = createTestRuntime();
-    const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
-
-    const facts = {
-      upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
-        store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
-
-        return 'created' as const;
-      },
-      recall: (key: string) => store.get(key) ?? null,
-      forget: (key: string) => { store.delete(key); },
-      recentTopK: () => [], all: () => [],
-    };
+    const { facts } = factsOverMap();
 
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
@@ -517,7 +525,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // tool's own action-enum gating.
     expect(Object.keys(provider.tools).sort()).toEqual(['conversations', 'save', 'search']);
     const saved = await codemodeExecute(provider, 'save')('Remember: prefer snake_case');
-    expect(String(saved)).toContain('saved');
+    expect(v.parse(v.string(), saved)).toContain('saved');
     const found = await rt.memory.read('memory/MEMORY.md');
     expect(found).toContain('snake_case');
   });
@@ -525,18 +533,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('memory.* exposes remember/recall/forget only when a FactsStore is wired, over the SAME store', async () => {
     const { rt } = createTestRuntime();
     const { history } = storesFor(rt);
-    const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
-
-    const facts = {
-      upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
-        store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
-
-        return 'created' as const;
-      },
-      recall: (key: string) => store.get(key) ?? null,
-      forget: (key: string) => { store.delete(key); },
-      recentTopK: () => [], all: () => [],
-    };
+    const { store, facts } = factsOverMap();
 
     const provider = createMemoryCodemodeProvider(() => ({
       memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts,
@@ -630,8 +627,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // `unsupported`: this runtime has no shell, and retrying cannot change that.
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
-    const tool = { execute: toolExecute<{ command: string }, string>(t.shell) };
-    await expect(tool.execute({ command: 'echo hi' })).rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('no workspace shell') });
+    const shellTool = { execute: toolExecute<{ command: string }, string>(t.shell) };
+    await expect(shellTool.execute({ command: 'echo hi' })).rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('no workspace shell') });
   });
 
   test('run with an unprovisioned runtime returns structured runtime_not_provisioned', async () => {
@@ -642,10 +639,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // classification added AHEAD of it, which the UI's `v.object` ignores.
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.shell) };
+    const shellTool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.shell) };
 
     for (const runtime of ['sandbox', 'nimbus', 'device'] as const) {
-      const pending = tool.execute({ command: 'echo hi', runtime });
+      const pending = shellTool.execute({ command: 'echo hi', runtime });
       await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
       await expect(pending).rejects.toThrow('runtime_not_provisioned');
     }
@@ -659,13 +656,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const escalations = new TurnEscalationLedger();
     const t = tools(rt, escalations);
 
-    const tool = {
+    const shellTool = {
       execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.shell),
     };
 
     // Unprovisioned here, so this is the `refused` branch — which is itself the
     // finding "the runtime was never there", not a failed command.
-    await expect(tool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(shellTool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' })).rejects.toMatchObject({ code: 'unavailable' });
     expect(escalations.snapshot().escalations).toEqual([
       { runtime: 'sandbox', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
     ]);
@@ -673,8 +670,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // The workspace shell is the DEFAULT, not an escalation: running there — and
     // naming it explicitly — must leave the ledger exactly as it was.
     const before = escalations.snapshot().escalations;
-    await tool.execute({ command: 'echo hi' });
-    await tool.execute({ command: 'echo hi', runtime: 'workspace' });
+    await shellTool.execute({ command: 'echo hi' });
+    await shellTool.execute({ command: 'echo hi', runtime: 'workspace' });
     expect(escalations.snapshot().escalations).toEqual(before);
   });
 
@@ -691,11 +688,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
     const t = tools({ ...rt, shell });
-    const tool = { execute: toolExecute<{ command: string }, string>(t.shell) };
+    const shellTool = { execute: toolExecute<{ command: string }, string>(t.shell) };
     // A force-push: gated even on the agent's own workspace, because the harm
     // lands on a remote. `sudo whoami` would run here now — that shell IS the
     // agent's own machine.
-    const pending = tool.execute({ command: 'git push --force origin main' });
+    const pending = shellTool.execute({ command: 'git push --force origin main' });
     await expect(pending).rejects.toThrow('needs owner approval, nobody to ask');
     await expect(pending).rejects.toThrow('git-force-push');
     await expect(pending).rejects.not.toThrow('setShellApprovalMode');
@@ -704,9 +701,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('eval exposes the workspace and tools globals', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
+    const evalTool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
 
-    const result = await tool.execute({
+    const result = await evalTool.execute({
       code: "return typeof workspace + ',' + typeof tools;",
     });
 
@@ -722,11 +719,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = tools(rt);
 
-    const tool = {
+    const evalTool = {
       execute: toolExecute<{ code: string }, { result: JsonValue | undefined; error?: string }>(t.eval),
     };
 
-    const result = await tool.execute({ code: 'return await tools.double(21);' });
+    const result = await evalTool.execute({ code: 'return await tools.double(21);' });
     expect(result.error).toBeUndefined();
     expect(result.result).toBe(42);
   });
@@ -740,8 +737,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'weak'`;
 
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
-    const result = await tool.execute({ code: 'return typeof tools.weak;' });
+    const evalTool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
+    const result = await evalTool.execute({ code: 'return typeof tools.weak;' });
     expect(result.result).toBe('undefined');
   });
 

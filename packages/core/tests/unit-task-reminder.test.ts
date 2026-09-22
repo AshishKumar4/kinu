@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { TaskReminders, TASK_REMINDER_EVENT } from '../src/tasks/reminder';
 import type { AgentTaskTree } from '../src/tasks/store';
 import type { ActiveRoster } from '../src/prompting/volatile-context';
+import { present } from '@kinu.run/test-utils';
 
 function tree(over: Partial<AgentTaskTree> & { title: string }): AgentTaskTree {
   return {
@@ -38,19 +39,19 @@ function decideAt(reminders: TaskReminders, open: AgentTaskTree[], over: {
 test('a turn that settles with open tasks owes a reminder naming them', () => {
   const reminders = new TaskReminders();
 
-  const decision = decideAt(reminders, [
+  const decision = present(decideAt(reminders, [
     tree({ title: 'ship the feature', status: 'active' }),
     tree({ title: 'done already', status: 'done', subtasks: [
       { id: 's1', parentId: 'x', title: 'write the test', status: 'open', createdAt: 0, updatedAt: 0, note: null },
     ] }),
-  ]);
+  ]), 'the reminder decision');
 
   expect(decision).not.toBeNull();
-  expect(decision!.text).toContain('ship the feature');
-  expect(decision!.text).toContain('  - write the test');
-  expect(decision!.text).toContain('(Reminder 1/2)');
-  expect(decision!.text).toContain('<system-reminder>');
-  expect(decision!.text).toContain('2 open task(s)');
+  expect(decision.text).toContain('ship the feature');
+  expect(decision.text).toContain('  - write the test');
+  expect(decision.text).toContain('(Reminder 1/2)');
+  expect(decision.text).toContain('<system-reminder>');
+  expect(decision.text).toContain('2 open task(s)');
 });
 
 test('an empty open list owes nothing and resets the count', () => {
@@ -59,8 +60,8 @@ test('an empty open list owes nothing and resets the count', () => {
   decideAt(reminders, []);
   // The list went empty: the count parked, so a fresh list starts over rather
   // than inheriting the old attempts.
-  const decision = decideAt(reminders, [tree({ title: 'y' })]);
-  expect(decision!.text).toContain('(Reminder 1/2)');
+  const decision = present(decideAt(reminders, [tree({ title: 'y' })]), 'the reminder decision');
+  expect(decision.text).toContain('(Reminder 1/2)');
 });
 
 test('a turn that errored or is a plan owes no reminder', () => {
@@ -77,8 +78,8 @@ test('the cap is honored: two reminders then silence without progress', () => {
   expect(first).not.toBeNull();
   reminders.noteToolResult();
 
-  const second = decideAt(reminders, open);
-  expect(second!.text).toContain('(Reminder 2/2)');
+  const second = present(decideAt(reminders, open), 'the second reminder');
+  expect(second.text).toContain('(Reminder 2/2)');
   reminders.noteToolResult();
 
   expect(decideAt(reminders, open)).toBeNull();

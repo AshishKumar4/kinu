@@ -131,7 +131,7 @@ describe('the reach declaration', () => {
         transcriptFor: (sessionId) => history.transcript(sessionId),
       })),
       tasks: () => createTasksCodemodeProvider(
-        new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync),
+        new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage)),
         rt.actor.config,
       ),
       web: () => createWebCodemodeProvider({
@@ -149,7 +149,7 @@ describe('the reach declaration', () => {
       db: () => createDbCodemodeProvider(createAppDataStore({
         sql: rt.storage.sql,
         actor: rt.actor,
-        transactionSync: rt.storage.transactionSync,
+        transactionSync: rt.storage.transactionSync.bind(rt.storage),
         events: () => new RunEventRecorder(rt.storage.sql, rt.actor),
         runId: () => 'run-tool-reach',
       })),

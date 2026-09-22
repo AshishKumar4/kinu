@@ -28,7 +28,7 @@ import {
   type ShadowConfig,
   type AgentRuntime,
 } from '../src/index';
-import { testActorHandle, createTestActors } from '@kinu.run/test-utils';
+import { testActorHandle, createTestActors, present } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
@@ -76,12 +76,11 @@ describe('getPendingScaffold', () => {
     const { sql, actor } = setup();
     void sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
         VALUES (${actor.actorId}, 3, ${Date.now()}, 'try new loop', 'pending')`;
-    const p = getPendingScaffold(sql, actor);
-    expect(p).not.toBeNull();
-    expect(p!.version).toBe(3);
-    expect(p!.trialsSoFar).toBe(0);
-    expect(p!.pendingWins).toBe(0);
-    expect(p!.currentWins).toBe(0);
+    const p = present(getPendingScaffold(sql, actor), 'the pending scaffold');
+    expect(p.version).toBe(3);
+    expect(p.trialsSoFar).toBe(0);
+    expect(p.pendingWins).toBe(0);
+    expect(p.currentWins).toBe(0);
   });
 
   test('aggregates evaluation counts correctly', () => {
@@ -110,7 +109,7 @@ describe('getPendingScaffold', () => {
       judgeResult: { winner: 'tie', rationale: '', currentScore: 0.6, pendingScore: 0.6 },
     });
 
-    const p = getPendingScaffold(sql, actor)!;
+    const p = present(getPendingScaffold(sql, actor), 'the pending scaffold');
     expect(p.trialsSoFar).toBe(5);
     expect(p.pendingWins).toBe(3);
     expect(p.currentWins).toBe(1);
@@ -121,10 +120,10 @@ describe('getPendingScaffold', () => {
 describe('readShadowVerdict — the promote/rollback decision grid', () => {
   test('empty verdict when no pending version', () => {
     const { sql, actor } = setup();
-    const v = readShadowVerdict(sql, actor, null);
-    expect(v.version).toBeNull();
-    expect(v.trials).toEqual([]);
-    expect(v.summary).toEqual({ trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 });
+    const verdict = readShadowVerdict(sql, actor, null);
+    expect(verdict.version).toBeNull();
+    expect(verdict.trials).toEqual([]);
+    expect(verdict.summary).toEqual({ trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 });
   });
 
   test('reads scaffold_evaluations, orders regressions-first, aggregates win-rate', () => {
@@ -137,14 +136,14 @@ describe('readShadowVerdict — the promote/rollback decision grid', () => {
     // A row for a DIFFERENT version must be excluded.
     recordShadowEvaluation(sql, actor, { currentVersion: 4, pendingVersion: 5, task: 'other', currentOutput: 'c', pendingOutput: 'p', judgeResult: { winner: 'pending', rationale: '', currentScore: 0.1, pendingScore: 0.9 } });
 
-    const v = readShadowVerdict(sql, actor, 4);
-    expect(v.version).toBe(4);
-    expect(v.trials.length).toBe(4);
+    const verdict = readShadowVerdict(sql, actor, 4);
+    expect(verdict.version).toBe(4);
+    expect(verdict.trials.length).toBe(4);
     // Regressions first: the first row is the 'current' winner.
-    expect(v.trials[0]!.winner).toBe('current');
-    expect(v.trials[0]!.task).toBe('cw1');
-    expect(v.trials[0]!.rationale).toBe('regressed');
-    expect(v.summary).toEqual({ trials: 4, pendingWins: 2, currentWins: 1, ties: 1, winRate: 2 / 3 });
+    expect(verdict.trials[0].winner).toBe('current');
+    expect(verdict.trials[0].task).toBe('cw1');
+    expect(verdict.trials[0].rationale).toBe('regressed');
+    expect(verdict.summary).toEqual({ trials: 4, pendingWins: 2, currentWins: 1, ties: 1, winRate: 2 / 3 });
   });
 });
 
@@ -167,12 +166,19 @@ describe('decidePromotion', () => {
     expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
-  test('promotes a clean winning record', () => {
-    const p = make({ trialsSoFar: 5, pendingWins: 5, currentWins: 0 });
-    const d = decidePromotion(p, cfg);
-    expect(d.decision).toBe('promote');
-    expect(d.winRate).toBeCloseTo(1, 2);
-  });
+  // One decisive five-trial record, one verdict, and the win-rate it reports.
+  const decisiveCases = [
+    { name: 'promotes a clean winning record', wins: 5, losses: 0, decision: 'promote', winRate: 1 },
+    { name: 'rollbacks when the pending clearly loses', wins: 1, losses: 4, decision: 'rollback', winRate: 0.2 },
+  ] as const;
+
+  for (const c of decisiveCases) {
+    test(c.name, () => {
+      const d = decidePromotion(make({ trialsSoFar: 5, pendingWins: c.wins, currentWins: c.losses }), cfg);
+      expect(d.decision).toBe(c.decision);
+      expect(d.winRate).toBeCloseTo(c.winRate, 2);
+    });
+  }
 
   test('tolerates one loss (maxRegressions=1, Monte-Carlo settled) but vetoes the second', () => {
     // 6-1 (winRate 0.86): within the regression tolerance → promote. The old
@@ -192,18 +198,19 @@ describe('decidePromotion', () => {
     expect(decidePromotion(p, strict).decision).toBe('rollback');
   });
 
-  test('rollbacks when the pending clearly loses', () => {
-    const p = make({ trialsSoFar: 5, pendingWins: 1, currentWins: 4 });
-    const d = decidePromotion(p, cfg);
-    expect(d.decision).toBe('rollback');
-    expect(d.winRate).toBeCloseTo(0.2, 2);
-  });
-
-  test('continues below minDecisiveTrials even with a perfect win-rate', () => {
+  // Three ties and too few decisive trials to settle anything either way.
+  const undecidedCases = [
     // 2-0 with 3 ties: winRate 1.0 but only 2 decisive trials < minDecisiveTrials(5).
-    const p = make({ trialsSoFar: 5, pendingWins: 2, currentWins: 0, ties: 3 });
-    expect(decidePromotion(p, cfg).decision).toBe('continue');
-  });
+    { name: 'continues below minDecisiveTrials even with a perfect win-rate', trials: 5, wins: 2 },
+    { name: 'returns continue when no decisive trials yet', trials: 3, wins: 0 },
+  ];
+
+  for (const c of undecidedCases) {
+    test(c.name, () => {
+      const p = make({ trialsSoFar: c.trials, pendingWins: c.wins, currentWins: 0, ties: 3 });
+      expect(decidePromotion(p, cfg).decision).toBe('continue');
+    });
+  }
 
   test('maxTrials force: losses beyond tolerance still roll back (veto wins over the force)', () => {
     const p = make({ trialsSoFar: cfg.maxTrials, pendingWins: 6, currentWins: 5, ties: 9 });
@@ -220,11 +227,6 @@ describe('decidePromotion', () => {
     expect(decidePromotion(ahead, cfg).decision).toBe('promote');
     const level = make({ trialsSoFar: cfg.maxTrials, pendingWins: 1, currentWins: 1, ties: cfg.maxTrials - 2 });
     expect(decidePromotion(level, cfg).decision).toBe('rollback');
-  });
-
-  test('returns continue when no decisive trials yet', () => {
-    const p = make({ trialsSoFar: 3, pendingWins: 0, currentWins: 0, ties: 3 });
-    expect(decidePromotion(p, cfg).decision).toBe('continue');
   });
 
   test('an all-tie record keeps observing PAST the ceiling — the window legitimately extends', () => {
@@ -299,10 +301,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(await rt.identity.scaffold.read()).toBe(v0Code);
 
     // Promote: live file now holds the pending code.
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
-    expect(pending).not.toBeNull();
-
-    if (!pending) return;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     const promo = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(promo.action).toBe('promote');
     expect(promo.newCurrentVersion).toBe(pending.version);
@@ -407,7 +406,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     // Propose + promote v1.
     const v1 = 'async function* run(rt, task) { yield "v1-promoted"; }';
     await modifyScaffold(rt, 'Propose v1 for promotion in the version-cycle regression test.', v1);
-    let pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    let pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(await rt.identity.scaffold.read()).toBe(v1);
 
@@ -415,7 +414,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     const v2 = 'async function* run(rt, task) { yield "v2-rejected"; }';
     const mod = await modifyScaffold(rt, 'Propose v2, which the judge rejects in the cycle regression test.', v2);
     expect(mod.ok).toBe(true);
-    pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     expect(pending.version).toBe(2); // monotonic above the promoted v1
     const rb = await applyPromotionDecision(rt, pending, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(rb.action).toBe('rollback');

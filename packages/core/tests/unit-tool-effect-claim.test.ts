@@ -11,8 +11,9 @@
  * a fixture store would prove things about the fixture.
  */
 import { describe, expect, test } from 'bun:test';
-import { createTestActors, createTestSql, toolExecute } from '@kinu.run/test-utils';
-import { jsonSchema, tool } from 'ai';
+import { createTestActors, createTestSql, present, toolExecute } from '@kinu.run/test-utils';
+import type { JsonObject } from '../src/utils/json';
+import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
   buildMcpToolSet, claimToolEffect, initToolEffectClaimTable, releaseTurnEffectClaims,
   settleToolEffect, TurnContextBudget,
@@ -20,6 +21,16 @@ import {
   type SerializableToolDescriptor,
 } from '../src/index';
 import { createMemoryVfs } from '@kinu.run/test-utils';
+
+/** One admitted MCP tool, called the way the turn calls it. `ToolSet`'s index
+ *  type erases the `jsonSchema<JsonObject>()` input the registry declared, so
+ *  the shape a test hands over is restated here once instead of at every call. */
+function mcpCall(tools: ToolSet, name: string): (args: JsonObject, options: ToolExecutionOptions) => Promise<string> {
+  const entry: { execute?: (args: JsonObject, options: ToolExecutionOptions) => PromiseLike<string> }
+    = present(tools[name], `the ${name} tool`);
+
+  return async (args, options) => await toolExecute(entry)(args, options);
+}
 
 /** A workspace's claim table over a real SQLite, the actor whose turn is
  *  making the calls, and the deps the wrapper reads. `turnId` is mutable so a
@@ -314,16 +325,14 @@ describe('tool effect claims', () => {
             expect(rows[0].n).toBe(1);
             dispatched += 1;
 
-            return `charged-${String(args.amount)}`;
+            return `charged-${Number(args.amount)}`;
           },
           effectClaims: { sql, actor, turnId: () => 'turn-1' },
           clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(), producer: 'external_tool' },
         },
       );
 
-      // SAFETY: a ToolSet entry is the tool() builder's own shape — a declared
-      // ExecutableTool whose input is the admitted schema's JsonObject.
-      const call = toolExecute(tools['mcp__srv__charge'] as never);
+      const call = mcpCall(tools, 'mcp__srv__charge');
 
       expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [] })).toBe('charged-5');
 
@@ -350,7 +359,7 @@ describe('tool effect claims', () => {
 
       // SAFETY: same ToolSet entry shape as above — the adapter always carries
       // execute.
-      expect(await toolExecute(tools['mcp__srv__quiet'] as never)({}, { toolCallId: 'c1', messages: [] })).toBe('ok');
+      expect(await mcpCall(tools, 'mcp__srv__quiet')({}, { toolCallId: 'c1', messages: [] })).toBe('ok');
       expect(sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`[0].n).toBe(1);
     });
 
@@ -377,7 +386,7 @@ describe('tool effect claims', () => {
 
       // SAFETY: same ToolSet entry shape as above — the adapter always carries
       // execute.
-      const call = toolExecute(tools['mcp__srv__lookup'] as never);
+      const call = mcpCall(tools, 'mcp__srv__lookup');
 
       expect(await call({}, { toolCallId: 'c1', messages: [] })).toBe('lookup-1');
       expect(await call({}, { toolCallId: 'c1', messages: [] })).toBe('lookup-2');

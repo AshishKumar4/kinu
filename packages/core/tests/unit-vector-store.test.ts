@@ -15,6 +15,7 @@ import {
   type JsonObject,
   type VectorRecord,
 } from '../src/index';
+import { present } from '@kinu.run/test-utils';
 
 // ── Reciprocal Rank Fusion ───────────────────────────────────────────
 
@@ -53,7 +54,7 @@ describe('reciprocalRankFusion', () => {
     const lex: ReadonlyArray<{ id: string; kind: string }> = [{ id: 'x', kind: 'lex' }];
     const sem: ReadonlyArray<{ id: string; kind: string }> = [{ id: 'x', kind: 'sem' }, { id: 'y', kind: 'sem' }];
     const out = reciprocalRankFusion([lex, sem]);
-    const x = out.find((o) => o.id === 'x')!;
+    const x = present(out.find((o) => o.id === 'x'), 'the fused entry for x');
     expect(x.sources.length).toBe(2);
     expect(x.sources.map((s: { kind: string }) => s.kind).sort()).toEqual(['lex', 'sem']);
   });
@@ -64,17 +65,15 @@ describe('reciprocalRankFusion', () => {
 function makeMockIndex() {
   const records = new Map<string, { values: number[]; metadata?: JsonObject }>();
 
+  const write = (vecs: Parameters<VectorizeIndex['upsert']>[0]) => {
+    for (const vec of vecs) records.set(vec.id, { values: [...vec.values], metadata: vec.metadata });
+
+    return { ids: vecs.map((vec) => vec.id) };
+  };
+
   const index: VectorizeIndex = {
-    async insert(vecs) {
-      for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
-
-      return { ids: vecs.map((v) => v.id) };
-    },
-    async upsert(vecs) {
-      for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
-
-      return { ids: vecs.map((v) => v.id) };
-    },
+    async insert(vecs) { return write(vecs); },
+    async upsert(vecs) { return write(vecs); },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
 
@@ -144,8 +143,7 @@ describe('CloudflareVectorStore', () => {
     };
 
     await store.upsertChunk(chunk);
-    expect(records.has('mem-1')).toBe(true);
-    expect(records.get('mem-1')!.metadata?.path).toBe('memory/MEMORY.md');
+    expect(present(records.get('mem-1'), 'the upserted mem-1 record').metadata?.path).toBe('memory/MEMORY.md');
 
     const hits = await store.search('apples', 5);
     expect(hits.length).toBeGreaterThan(0);
@@ -397,7 +395,7 @@ describe('createWorkersAIEmbedder', () => {
     };
 
     const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
-    const embedBatch = embedder.embedBatch;
+    const embedBatch = embedder.embedBatch?.bind(embedder);
 
     if (!embedBatch) throw new Error('expected batch embed support');
     const out = await embedBatch(['a', 'b', 'c']);
@@ -419,7 +417,8 @@ describe('createWorkersAIEmbedder', () => {
     };
 
     const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
-    const out = await embedder.embedBatch!(['a', 'b']);
+    const embedBatch = present(embedder.embedBatch?.bind(embedder), 'batch embed support');
+    const out = await embedBatch(['a', 'b']);
     expect(out.length).toBe(2);
   });
 

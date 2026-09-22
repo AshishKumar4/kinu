@@ -76,7 +76,15 @@ async function spoken(sql: SqlExecutor, actorId: string): Promise<string | undef
 
 /** One actor's conversation, claim and promoted-loop pointer — the three things
  *  a snapshot has to carry FOR EVERY actor, not for one. */
-async function seedActorState(ws: Workspace, actor: ActorHandle, text: string, runId: string, version: number): Promise<void> {
+interface SeededActorState {
+  ws: Workspace;
+  actor: ActorHandle;
+  text: string;
+  runId: string;
+  version: number;
+}
+
+async function seedActorState({ ws, actor, text, runId, version }: SeededActorState): Promise<void> {
   const now = Date.now();
 
   const history = new SessionHistory({
@@ -100,9 +108,9 @@ describe('a workspace snapshot covers every actor', () => {
     const ws = workspace();
     const hire = ws.directory.create({ parent: ws.main, name: 'alpha', creationId: 'c1', kind: 'subordinate', lifetime: 'durable' });
     const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c2', kind: 'head', lifetime: 'task' });
-    await seedActorState(ws, ws.main, 'the main actor said this', 'run-main', 4);
-    await seedActorState(ws, hire, 'alpha said this', 'run-alpha', 1);
-    await seedActorState(ws, head, 'the head said this', 'run-head', 7);
+    await seedActorState({ ws, actor: ws.main, text: 'the main actor said this', runId: 'run-main', version: 4 });
+    await seedActorState({ ws, actor: hire, text: 'alpha said this', runId: 'run-alpha', version: 1 });
+    await seedActorState({ ws, actor: head, text: 'the head said this', runId: 'run-head', version: 7 });
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local', now: 7 });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');
@@ -138,8 +146,8 @@ describe('a workspace snapshot covers every actor', () => {
   test('a retained dismissal is still in the snapshot', async () => {
     const ws = workspace();
     const gone = ws.directory.create({ parent: ws.main, name: 'beta', creationId: 'c3', kind: 'subordinate', lifetime: 'durable' });
-    await seedActorState(ws, ws.main, 'main', 'run-main', 1);
-    await seedActorState(ws, gone, 'beta said this before it was dismissed', 'run-beta', 2);
+    await seedActorState({ ws, actor: ws.main, text: 'main', runId: 'run-main', version: 1 });
+    await seedActorState({ ws, actor: gone, text: 'beta said this before it was dismissed', runId: 'run-beta', version: 2 });
     const reference = { actorId: gone.actorId, workspaceId: gone.workspaceId, parentActorId: gone.parentActorId };
     const path = ws.directory.storagePath({ actorId: ws.main.actorId, workspaceId: ws.main.workspaceId, parentActorId: null });
     ws.directory.apply(ws.main, path, { action: 'retire', name: 'beta', reference });
@@ -158,8 +166,8 @@ describe('a workspace snapshot covers every actor', () => {
   test('an archive that lost one actor is refused even when its row total agrees', async () => {
     const ws = workspace();
     const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c4', kind: 'head', lifetime: 'task' });
-    await seedActorState(ws, ws.main, 'main', 'run-main', 1);
-    await seedActorState(ws, head, 'head', 'run-head', 1);
+    await seedActorState({ ws, actor: ws.main, text: 'main', runId: 'run-main', version: 1 });
+    await seedActorState({ ws, actor: head, text: 'head', runId: 'run-head', version: 1 });
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local' });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');

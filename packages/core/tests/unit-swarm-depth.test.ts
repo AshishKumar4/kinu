@@ -44,7 +44,7 @@ import {
   arbitrateBranch, resolveSwarm, swarmValidity, JUDGE_MARGINALISATION_MIN,
   BRANCH_PROPOSAL_WIDTH, BRANCH_REFUSAL_POLICIES, SWARM_ADVANCES,
   type BranchProposal, type BranchRefusalPolicy, type ResolvedSwarm,
-  type ResolvedSwarmCaps, type SwarmConfig, type SwarmResult,
+  type ResolvedSwarmCaps, type SwarmAdvance, type SwarmConfig, type SwarmResult,
 } from '../src/strategy/swarm';
 import { bestInCell, recordsFor, verifierDigestOf } from '../src/strategy/records';
 import { resolveVerifier } from '../src/strategy/verifier-registry';
@@ -53,7 +53,8 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
+import * as v from 'valibot';
 import { refuseHostNode } from './helpers-actor-host';
 
 /**
@@ -101,18 +102,19 @@ function proposal(over?: Partial<BranchProposal>): BranchProposal {
 /** A proposal whose branches all ask to FORK — the shape the fifth arm refuses under a
  *  `fresh` search and accepts under an inheriting one. */
 function inheriting(width = 2): BranchProposal {
-  return proposal({
-    branches: Array.from({ length: width }, (_unused, i) => ({
-      task: `sub-question ${String(i)}`, rationale: 'r', context: 'inherit' as const,
-    })),
-  });
+  return branchesOf(width, 'inherit');
 }
 
 /** A proposal of exactly `width` branches, for the band checks. */
 function widthOf(width: number): BranchProposal {
+  return branchesOf(width, 'fresh');
+}
+
+/** `width` sub-questions, each asking for the same context arm. */
+function branchesOf(width: number, context: 'inherit' | 'fresh'): BranchProposal {
   return proposal({
     branches: Array.from({ length: width }, (_unused, i) => ({
-      task: `sub-question ${String(i)}`, rationale: 'r', context: 'fresh' as const,
+      task: `sub-question ${String(i)}`, rationale: 'r', context,
     })),
   });
 }
@@ -245,25 +247,27 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
     // `every_proposal_gets_a_verdict`, over a grid that crosses every arm. Silence is the
     // failure mode *Arbitration* is written against: a node that cannot tell refusal from
     // being ignored will simply propose again.
+    const verdictIsStated = (advance: SwarmAdvance, context: 'inherit' | 'fresh', width: number): void => {
+      for (const asked of ['inherit', 'fresh'] as const) {
+        const verdict = arbitrateBranch({
+          config: treeConfig({
+            advance: advance === 'archive' ? { kind: advance, novelty: 0.6 } : { kind: advance },
+            context,
+          }),
+          caps: caps(3, 2), atDepth: 1,
+          remainingChildren: 4,
+          proposal: branchesOf(width, asked),
+        });
+
+        expect(['accepted', 'refused']).toContain(verdict.kind);
+
+        if (verdict.kind === 'refused') expect(verdict.error.length).toBeGreaterThan(0);
+      }
+    };
+
     for (const advance of SWARM_ADVANCES) {
       for (const context of ['inherit', 'fresh'] as const) {
-        for (const width of [0, 1, 2, 4, 5]) {
-          for (const asked of ['inherit', 'fresh'] as const) {
-            const verdict = arbitrateBranch({
-              config: treeConfig({
-                advance: advance === 'archive' ? { kind: advance, novelty: 0.6 } : { kind: advance },
-                context,
-              }),
-              caps: caps(3, 2), atDepth: 1,
-              remainingChildren: 4,
-              proposal: asked === 'inherit' ? inheriting(width) : widthOf(width),
-            });
-
-            expect(['accepted', 'refused']).toContain(verdict.kind);
-
-            if (verdict.kind === 'refused') expect(verdict.error.length).toBeGreaterThan(0);
-          }
-        }
+        for (const width of [0, 1, 2, 4, 5]) verdictIsStated(advance, context, width);
       }
     }
   });
@@ -580,9 +584,15 @@ function answering(
 /** A resolved `custom` composition, through the real resolver and the real validity
  *  predicate — a test that hand-built a `ResolvedSwarm` could assert a tree the tool
  *  surface cannot actually ask for. */
-function resolved(
-  depth: number, branches: number, over?: Partial<SwarmConfig>, floor?: Floor, key?: string,
-): ResolvedSwarm {
+interface ResolveRequest {
+  depth: number;
+  branches: number;
+  over?: Partial<SwarmConfig>;
+  floor?: Floor;
+  key?: string;
+}
+
+function resolved({ depth, branches, over, floor, key }: ResolveRequest): ResolvedSwarm {
   const call = resolveSwarm({
     preset: 'custom',
     label: 'depth-suite',
@@ -635,7 +645,7 @@ async function run(input: {
 
   const result = await runSwarm(
     { rt, hostNode: NO_NODE, model: answering(input.proposeWidth, input.answers ?? [OPTIMAL], prompts), mode: 'build', logger },
-    resolved(input.depth, input.branches, input.config, input.floor, input.key),
+    resolved({ depth: input.depth, branches: input.branches, over: input.config, floor: input.floor, key: input.key }),
   );
 
   const nodes = rt.storage.sql<SearchNode>`
@@ -1184,7 +1194,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
 
     const page = readExplorationCanvas(rt.storage.sql, rt.actor);
     expect(page.items).toHaveLength(1);
-    const entry = page.items[0]!;
+    const entry = page.items[0];
     // The knobs this run ran under, from the ledger row the swarm path writes: without
     // it, `readForkRunParams` answers a swarm with the transcript half alone.
     expect(entry.params?.search).toMatchObject({
@@ -1294,7 +1304,7 @@ describe('merge-back at the settle barrier', () => {
 
     const result = await runSwarm(
       { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
-      resolved(1, 2),
+      resolved({ depth: 1, branches: 2 }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1333,7 +1343,7 @@ describe('merge-back at the settle barrier', () => {
 
     const result = await runSwarm(
       { rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
-      resolved(1, 1),
+      resolved({ depth: 1, branches: 1 }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1416,7 +1426,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const result = await runSwarm(
       { rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
-      resolved(3, 3, { expand: 'aggregate' }),
+      resolved({ depth: 3, branches: 3, over: { expand: 'aggregate' } }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1469,7 +1479,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const result = await runSwarm(
       { rt, hostNode: NO_NODE, model: scripted([variant('same'), variant('same'), variant('odd')]), mode: 'build', logger },
-      resolved(3, 3, { expand: 'aggregate' }),
+      resolved({ depth: 3, branches: 3, over: { expand: 'aggregate' } }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1510,7 +1520,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       // bytes have not conflicted, and spawning a graded node to reconcile them with
       // themselves would spend a model call to decide nothing.
       { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger },
-      resolved(2, 2, { expand: 'aggregate' }),
+      resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1544,7 +1554,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
         mode: 'build',
         logger,
       },
-      resolved(3, 3, { expand: 'aggregate', pruneThreshold: 0.5, minVisitsForPrune: 1 }),
+      resolved({ depth: 3, branches: 3, over: { expand: 'aggregate', pruneThreshold: 0.5, minVisitsForPrune: 1 } }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1574,7 +1584,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       // One candidate the instrument cannot measure. It has no answer to aggregate, so it
       // gets no edge — and a level with one consumable parent left is not a fan-in.
       { rt, hostNode: NO_NODE, model: scripted(['export function solve() { throw new Error("no"); }\n', OPTIMAL]), mode: 'build', logger },
-      resolved(2, 2, { expand: 'aggregate' }),
+      resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1594,7 +1604,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const result = await runSwarm(
       { rt, hostNode: NO_NODE, model: answering(null, [padded]), mode: 'build', logger },
-      resolved(2, 2, { expand: 'aggregate' }),
+      resolved({ depth: 2, branches: 2, over: { expand: 'aggregate' } }),
     );
 
     expect('reason' in result).toBe(false);
@@ -1629,7 +1639,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     const refusal = await runSwarm(
       { rt, hostNode: NO_NODE, model: answering(null), mode: 'build', logger: createRecordingLogger() },
-      resolved(1, 3, { expand: 'aggregate' }),
+      resolved({ depth: 1, branches: 3, over: { expand: 'aggregate' } }),
     );
 
     // Depth 1 runs one wave off the root, whose level is the root alone. The refusal
@@ -1719,7 +1729,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 
     // TWO CELLS, and each holds the answer whose measurement put it there.
     const rows = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
-    expect(rows.map((row) => row.descriptor).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
+    expect(rows.map((row) => present(row.descriptor, 'the record descriptor')).sort((a, b) => a.localeCompare(b))).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
     expect(bestInCell(rt.storage.sql, rt.actor, {
       identity: identityOf(), floor: SUITE_FLOOR, descriptor: OPTIMAL_CELL,
     })?.value).toBe(N - 1);
@@ -1730,7 +1740,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     // And the trail says which cell each row landed in, so the coverage on the report and
     // the descriptors in the store cannot disagree.
     const written = logger.emitted.filter((line) => line.event === 'swarm.record_written');
-    expect(written.map((line) => line.fields.cell).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
+    expect(written.map((line) => v.parse(v.string(), line.fields.cell)).sort((a, b) => a.localeCompare(b))).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
   });
 
   test('A SECOND RUN READS THE OCCUPANTS, and reports the COVERAGE it started from', async () => {

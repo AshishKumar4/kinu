@@ -24,6 +24,7 @@ import {
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { RunEventRecorder } from '../src/events/recorder';
+import { present } from '@kinu.run/test-utils';
 
 const V0 = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -68,7 +69,7 @@ async function seedAndPropose(rt: AgentRuntime): Promise<number> {
 
   expect(mod.ok).toBe(true);
 
-  return mod.version!;
+  return present(mod.version, 'the proposed scaffold version');
 }
 
 describe('bootstrap seeds the canonical source', () => {
@@ -158,7 +159,7 @@ describe('proposal boundary — source lands before the pending row', () => {
     );
 
     expect(retry.ok).toBe(true);
-    expect(await readScaffoldVersion(rt, retry.version!)).toBe(V1);
+    expect(await readScaffoldVersion(rt, present(retry.version, 'the retried proposal version'))).toBe(V1);
   });
 });
 
@@ -166,7 +167,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   test('promote commits the pointer even when the view write dies', async () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
     const realWrite = rt.identity.scaffold.write.bind(rt.identity.scaffold);
     let viewWrites = 0;
@@ -185,7 +186,10 @@ describe('promotion boundary — one current pointer, executed source follows it
 
     // Cold reopen executes the pointer's version file, not the stale view.
     expect(await reopen(rt).identity.scaffold.read()).toBe(V1);
-    expect(rt.identity.scaffold.write).not.toBe(realWrite);
+    // The injected writer is still the one installed: a failed promotion puts
+    // nothing back behind the caller.
+    await expect(rt.identity.scaffold.write(V1)).rejects.toThrow('injected view-write failure');
+    expect(viewWrites).toBe(2);
 
     // Activation heals the rebuildable view.
     rt.identity.scaffold.write = realWrite;
@@ -196,7 +200,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   test('rollback decision retires the pending without touching the pointer', async () => {
     const { rt } = createTestRuntime();
     await seedAndPropose(rt);
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
 
     rt.identity.scaffold.write = async () => {
       throw new Error('injected view-write failure');
@@ -216,7 +220,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   test('manual rollback flips the pointer first and refreshes the view', async () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
-    const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
+    const promo = await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold'), 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(promo.action).toBe('promote');
 
     const rb = await rollbackScaffold(rt, 0);
@@ -243,11 +247,11 @@ describe('promotion boundary — one current pointer, executed source follows it
       expect(mod.ok).toBe(true);
 
       if (i % 2 === 1) {
-        const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
+        const promo = await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold'), 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
         expect(promo.action).toBe('promote');
         expect(await reopen(rt).identity.scaffold.read()).toBe(code);
       } else {
-        const rb = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
+        const rb = await applyPromotionDecision(rt, present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold'), 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
         expect(rb.action).toBe('rollback');
       }
 

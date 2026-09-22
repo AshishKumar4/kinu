@@ -63,8 +63,8 @@ describe('createScaffoldHistory', () => {
   test('pages forward from an absolute offset', async () => {
     const page = await read(conversation(50))({ offset: 0, limit: 5 });
     expect(page.entries.map((e) => e.index)).toEqual([0, 1, 2, 3, 4]);
-    expect(page.entries[0]!.role).toBe('user');
-    expect(page.entries[1]!.role).toBe('assistant');
+    expect(page.entries[0].role).toBe('user');
+    expect(page.entries[1].role).toBe('assistant');
   });
 
   test('an empty history is a page, not a throw', async () => {
@@ -100,7 +100,7 @@ describe('the budget cannot be argued out of', () => {
 
   test('a truncated message says how much of it there was, so the scaffold can go and get it', async () => {
     const page = await read([{ role: 'user', content: 'HEAD'.padEnd(9_000, '.') + 'TAIL' }])({ offset: 0, maxChars: 200 });
-    const entry = page.entries[0]!;
+    const entry = page.entries[0];
     expect(entry.truncated).toBe(true);
     expect(entry.chars).toBe(9_004);
     expect(entry.text.startsWith('HEAD')).toBe(true);
@@ -111,14 +111,14 @@ describe('the budget cannot be argued out of', () => {
     // The omission marker makes a window LONGER than a message only slightly
     // over budget, so comparing lengths would call this one whole.
     const page = await read([{ role: 'user', content: 'y'.repeat(205) }])({ offset: 0, maxChars: 200 });
-    expect(page.entries[0]!.text.length).toBeGreaterThan(205);
-    expect(page.entries[0]!.truncated).toBe(true);
+    expect(page.entries[0].text.length).toBeGreaterThan(205);
+    expect(page.entries[0].truncated).toBe(true);
   });
 
   test('a message within budget is not reported as truncated', async () => {
     const page = await read([{ role: 'user', content: 'y'.repeat(200) }])({ offset: 0, maxChars: 200 });
-    expect(page.entries[0]!.truncated).toBe(false);
-    expect(page.entries[0]!.text).toBe('y'.repeat(200));
+    expect(page.entries[0].truncated).toBe(false);
+    expect(page.entries[0].text).toBe('y'.repeat(200));
   });
 });
 
@@ -139,9 +139,9 @@ describe('rendering', () => {
     ] satisfies ModelMessage[];
 
     const page = await read(messages)({ offset: 0 });
-    expect(page.entries[0]!.text).toBe('find it');
-    expect(page.entries[1]!.text).toBe('[tool-call shell {"cmd":"ls"}]');
-    expect(page.entries[2]!.text).toBe('[tool-result shell {"type":"json","value":{"ok":true}}]');
+    expect(page.entries[0].text).toBe('find it');
+    expect(page.entries[1].text).toBe('[tool-call shell {"cmd":"ls"}]');
+    expect(page.entries[2].text).toBe('[tool-result shell {"type":"json","value":{"ok":true}}]');
   });
 
   test('an unknown part is named, not dropped silently', async () => {
@@ -151,14 +151,14 @@ describe('rendering', () => {
     }] satisfies ModelMessage[];
 
     const page = await read(messages)({ offset: 0 });
-    expect(page.entries[0]!.text).toBe('[file]');
+    expect(page.entries[0].text).toBe('[file]');
   });
 
   test('the view is read-only — a page is a copy, and mutating it cannot reach the history', async () => {
     const messages = conversation(3);
     const page = await read(messages)({ offset: 0 });
-    page.entries[0]!.text = 'tampered';
-    expect((await read(messages)({ offset: 0 })).entries[0]!.text).toBe('message 0 body');
+    page.entries[0].text = 'tampered';
+    expect((await read(messages)({ offset: 0 })).entries[0].text).toBe('message 0 body');
   });
 
   test('the source is read per call, so a scaffold sees the history as it stands when it looks', async () => {

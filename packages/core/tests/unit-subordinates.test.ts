@@ -316,11 +316,11 @@ describe('the delegation depth cap', () => {
       return found;
     };
 
-    const describe = (actorId: string) => rows.get(actorId) ?? null;
-    expect(delegationBudgetOf(describe, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
-    expect(delegationBudgetOf(describe, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
-    expect(delegationBudgetOf(describe, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
-    expect(delegationBudgetOf(describe, row('orphan'))).toEqual({ depth: 1, maxDepth: 3 });
+    const describeActor = (actorId: string) => rows.get(actorId) ?? null;
+    expect(delegationBudgetOf(describeActor, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
+    expect(delegationBudgetOf(describeActor, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
+    expect(delegationBudgetOf(describeActor, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
+    expect(delegationBudgetOf(describeActor, row('orphan'))).toEqual({ depth: 1, maxDepth: 3 });
   });
 });
 
@@ -782,13 +782,14 @@ describe('team action routing', () => {
       const broadcastsBefore = h.broadcasts.length;
       h.failures.add(operation);
 
-      const action = operation === 'spawn'
-        ? h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' })
-        : operation === 'assign'
-          ? h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' })
-          : operation === 'message'
-            ? h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' })
-            : h.team.dismiss({ name: 'researcher-a1b2c3' });
+      const actions = {
+        spawn: () => h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }),
+        assign: () => h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' }),
+        message: () => h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' }),
+        dismiss: () => h.team.dismiss({ name: 'researcher-a1b2c3' }),
+      };
+
+      const action = actions[operation]();
 
       await expect(action).rejects.toMatchObject({ code: 'unavailable' });
 
@@ -882,20 +883,18 @@ describe('team action routing', () => {
     const actorDb = new Database(':memory:');
     const actor = createTestActor(makeTagged(actorDb), makeExecRaw(actorDb), 'transition-workspace', 'main');
 
+    const observe = (operation: 'assign' | 'message', name: string) => {
+      observed.push({ operation, roster: roster.get(name) });
+
+      return fakeHandoff('starts_now');
+    };
+
     const runtime: SubordinateRuntime = {
       async spawn() { return actorReferenceOf(actor); },
       async cancelBirth() { return actorReferenceOf(actor); },
-      async assign(name) {
-        observed.push({ operation: 'assign', roster: roster.get(name) });
-
-        return fakeHandoff('starts_now');
-      },
+      async assign(name) { return observe('assign', name); },
       async status() { return { lastActivity: null, recentSteps: [] }; },
-      async message(name) {
-        observed.push({ operation: 'message', roster: roster.get(name) });
-
-        return fakeHandoff('starts_now');
-      },
+      async message(name) { return observe('message', name); },
       async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
       async dismiss(name) { observed.push({ operation: 'dismiss', roster: roster.get(name) }); },
     };
@@ -1075,14 +1074,17 @@ describe('subordinate event admission', () => {
     expect(() => admitSubordinateTask(log, {
       fromWorkspace: 'main', kind: 'task', body: ' ', mode: 'build', now: 1,
     })).toThrow('body');
-    expect(() => admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'progress', content: ' ',
-      sequenceId: 'settle:msg-1', mode: 'build', now: 1,
-    })).toThrow('content');
-    expect(() => admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'progress', content: 'work',
-      sequenceId: ' ', mode: 'build', now: 1,
-    })).toThrow('sequenceId');
+
+    for (const blank of [
+      { content: ' ', sequenceId: 'settle:msg-1', names: 'content' },
+      { content: 'work', sequenceId: ' ', names: 'sequenceId' },
+    ]) {
+      expect(() => admitSubordinateReport(log, {
+        fromSubordinate: 'researcher', status: 'progress', content: blank.content,
+        sequenceId: blank.sequenceId, mode: 'build', now: 1,
+      })).toThrow(blank.names);
+    }
+
     expect(log.pending()).toEqual([]);
   });
 });
@@ -1326,7 +1328,7 @@ describe('the parent ingress, in the order it runs', () => {
     // The VFS write is async and the transaction body is not: observing the
     // file already on the plane when the transaction opens is what proves the
     // ordering, not the shape of the source.
-    const transaction = scene.deps.transaction;
+    const transaction = scene.deps.transaction.bind(scene.deps);
     scene.deps.transaction = <T,>(body: () => T): T => {
       expect(scene.files.has(spilled)).toBe(true);
 
@@ -1480,7 +1482,7 @@ describe('the structured handoff a report carries', () => {
       findings: ['the gateway already limits per-account, so per-IP double-counts'],
     });
     // The payload is not what the parent reads — this is.
-    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]!).brief).toBe(
+    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief).toBe(
       'completed [re: Map the market.]: Rate limiter landed behind the existing flag.'
       + '\nconcerns:\n  - the 429 budget is a guess — no production trace to size it from'
       + '\nfindings:\n  - the gateway already limits per-account, so per-IP double-counts',
@@ -1499,7 +1501,7 @@ describe('the structured handoff a report carries', () => {
     // every reader has to learn to tell an empty list from a silent one.
     expect(payload.concerns).toBeUndefined();
     expect(payload.open_work).toBeUndefined();
-    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]!).brief)
+    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief)
       .toBe('progress [re: Map the market.]: Mapped 8 of the 14 so far.');
   });
 

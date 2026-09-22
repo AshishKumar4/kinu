@@ -829,7 +829,7 @@ describe('terminal transition conformance across two adapters', () => {
       // stored roster serially would run them in that order; the forward path
       // never would, and a detached reply that hangs would then hold the
       // recording behind it indefinitely.
-      const roster = (): readonly OwedEffect[] => [
+      const declared = (): readonly OwedEffect[] => [
         { name: 'auto_title', scope: TRANSITION.messageId, lane: 'detached', input: { answer: 'a' } },
         { name: 'turn_record', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'r' } },
       ];
@@ -838,7 +838,7 @@ describe('terminal transition conformance across two adapters', () => {
       // so the replay is handed BOTH rows and its scheduling is what decides the
       // order below.
       plane.interruptAt('before', 'turn_record');
-      await plane.settle(roster);
+      await plane.settle(declared);
       await plane.join();
       plane.interruptAt(null);
       plane.restart();
@@ -868,7 +868,7 @@ describe('terminal transition conformance across two adapters', () => {
       const circular: JsonObject = {};
       circular.self = circular;
 
-      const roster = (): readonly OwedEffect[] => [
+      const declared = (): readonly OwedEffect[] => [
         { name: 'takes', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'a' } },
         {
           name: 'turn_record', scope: TRANSITION.messageId, lane: 'inline',
@@ -876,7 +876,7 @@ describe('terminal transition conformance across two adapters', () => {
         },
       ];
 
-      await expect(plane.settle(roster)).rejects.toThrow();
+      await expect(plane.settle(declared)).rejects.toThrow();
       const after = plane.snapshot();
       // NEITHER row. The first insert is rolled back with the failed one.
       expect(after.effects).toEqual([]);

@@ -33,7 +33,7 @@ import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { testActorHandle, present } from '@kinu.run/test-utils';
 
 /** One in-memory database with every handle this suite drives it through. */
 interface Workspace {
@@ -240,7 +240,7 @@ describe('workspace archive', () => {
 
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, paged);
-    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0]!.n).toBe(5);
+    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0].n).toBe(5);
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {
@@ -264,7 +264,7 @@ describe('workspace archive', () => {
           { path: 'project/data.bin', type: 'file' as const },
         ];
       },
-      async readFile(path: string) { return bodies.get(path)!.slice(); },
+      async readFile(path: string) { return present(bodies.get(path), `the archived body of ${path}`).slice(); },
     };
 
     const whole = await writeWorkspaceArchive(source.archive, {
@@ -349,7 +349,7 @@ describe('workspace archive', () => {
         const match = /FROM "([^"]+)"/.exec(query);
 
         if (match && /LIMIT \?/.test(query)) {
-          asked.push({ table: match[1]!, limit: Number(bindings[bindings.length - 1]) });
+          asked.push({ table: match[1], limit: Number(bindings[bindings.length - 1]) });
         }
 
         return ws.archive.exec(query, ...bindings);
@@ -401,7 +401,7 @@ describe('workspace archive', () => {
     const target = fresh();
     const result = await restoreWorkspaceArchive(target.archive, lines);
     expect(result.tables).toBeGreaterThan(0);
-    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0]!.n).toBe(0);
+    expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM conversation_entries`[0].n).toBe(0);
   });
 
   test('omits derived conversation revision triggers and restores a mutable transcript', async () => {
@@ -521,7 +521,7 @@ describe('the table set an export walks is pinned by its first page', () => {
       if (rows.length > 0) {
         // THE PAGE BOUNDARY: one row emitted, the cursor pointing at the next.
         expect(rows).toHaveLength(1);
-        expect(JSON.parse(rows[0]!).values.k).toBe('a');
+        expect(JSON.parse(rows[0]).values.k).toBe('a');
         cursor = page.next;
         break;
       }

@@ -20,6 +20,7 @@ import {
   settlePendingBranch, branchHeadId, branchOutcomeFromJournal,
   type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch';
+import { present } from '@kinu.run/test-utils';
 
 function setup() {
   const ws = createTestWorkspace();
@@ -89,17 +90,17 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     expect(report.status).toBe('completed');
     expect(report.summary).toBe('branch answer');
     expect(spawns).toHaveLength(1);
-    expect(spawns[0]!).toMatchObject({
+    expect(spawns[0]).toMatchObject({
       task: 'try the other approach',
       rationale: BRANCH_RATIONALE,
       rootId: handle.id,
       mergeStrategy: 'best_of',
     });
-    expect(spawns[0]!.budget.maxDepth).toBe(BRANCH_HEAD_BUDGET.maxDepth);
-    expect(spawns[0]!.inheritedContext[0]!.content).toBe('original ask');
+    expect(spawns[0].budget.maxDepth).toBe(BRANCH_HEAD_BUDGET.maxDepth);
+    expect(spawns[0].inheritedContext[0].content).toBe('original ask');
 
     // Journaled like any head run: spawn row + final report status.
-    const row = journal.readHead(spawns[0]!.id)!;
+    const row = present(journal.readHead(spawns[0].id), 'the journaled head row');
     expect(row.status).toBe('completed');
     expect(row.summary).toBe('branch answer');
     expect(journal.readTree(handle.id)).toHaveLength(1);
@@ -214,18 +215,18 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
 
     expect(outcome.ok).toBe(true);
 
-    const set = latestAlternateTakeSet(sql, actor)!;
+    const set = present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set');
     expect(set).toMatchObject({ source: 'branch', turnId: 'turn-9', sessionId: 'default', task: 'use approach B instead' });
     expect(set.candidates).toHaveLength(2);
     expect(set.candidates[0]).toMatchObject({ text: 'A-style answer', origin: 'live' });
     expect(set.candidates[1]).toMatchObject({ text: 'B-style answer', origin: 'branch' });
     // The live answer is the winner until the user says otherwise.
-    expect(set.winnerNodeId).toBe(set.candidates[0]!.nodeId);
+    expect(set.winnerNodeId).toBe(set.candidates[0].nodeId);
     expect(set.chosenNodeId).toBeNull();
 
     // Already claimed — the turn-end claim sweep finds nothing unclaimed.
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'other', sessionId: 'default', startedAt: 0 })).toBe(0);
-    expect(latestAlternateTakeSet(sql, actor)!.turnId).toBe('turn-9');
+    expect(present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set').turnId).toBe('turn-9');
   });
 
   test('an errored branch writes NO takes set and surfaces the failure reason', () => {
@@ -274,18 +275,18 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
     // The re-point only applies to mcts-sourced sets (see setup()).
     const { sql, actor, transcript } = setup();
 
-    const set = recordBranchTakeSet(sql, actor, {
+    const set = present(recordBranchTakeSet(sql, actor, {
       task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
       liveText: 'A-style answer', branchText: 'B-style answer',
-    })!;
+    }), 'the recorded take set');
 
-    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1]!.nodeId });
+    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[1].nodeId });
     expect(record.outcome).toBe('corrected');
     expect(record.changedAnswer).toBe(true);
     expect(record.chosen.text).toBe('B-style answer');
 
     const ledger = sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
-      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0]!;
+      SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0];
 
     expect(ledger).toMatchObject({
       outcome: 'corrected', source: 'take_pick', followup: 'B-style answer', turn_id: 'turn-9',
@@ -299,12 +300,12 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
   test('confirming the live answer records acceptance', async () => {
     const { sql, actor, transcript } = setup();
 
-    const set = recordBranchTakeSet(sql, actor, {
+    const set = present(recordBranchTakeSet(sql, actor, {
       task: 't', turnId: 'turn-9', sessionId: 'default',
       liveText: 'live answer', branchText: 'branch answer',
-    })!;
+    }), 'the recorded take set');
 
-    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
+    const record = await recordTakePick(sql, actor, transcript, { takeId: set.id, nodeId: set.candidates[0].nodeId });
     expect(record.outcome).toBe('accepted');
     expect(record.changedAnswer).toBe(false);
   });
@@ -326,10 +327,9 @@ describe('recordBranchTakeSet — the settlement key', () => {
 
   test('a replayed keyed settlement returns the SAME set and writes no second one', () => {
     const { sql, actor } = setup();
-    const first = recordBranchTakeSet(sql, actor, args('branch:b-1'))!;
-    expect(first).not.toBeNull();
+    const first = present(recordBranchTakeSet(sql, actor, args('branch:b-1')), 'the recorded take set');
 
-    const replay = recordBranchTakeSet(sql, actor, args('branch:b-1'))!;
+    const replay = present(recordBranchTakeSet(sql, actor, args('branch:b-1')), 'the recorded take set');
     expect(replay.id).toBe(first.id);
     expect(replay.candidates).toEqual(first.candidates);
     expect(listAlternateTakeSets(sql, actor)).toHaveLength(1);
@@ -337,7 +337,7 @@ describe('recordBranchTakeSet — the settlement key', () => {
 
   test('a replay after the set row was retired writes nothing', () => {
     const { sql, actor } = setup();
-    const first = recordBranchTakeSet(sql, actor, args('branch:b-1'))!;
+    const first = present(recordBranchTakeSet(sql, actor, args('branch:b-1')), 'the recorded take set');
     void sql`DELETE FROM alternate_takes WHERE id = ${first.id}`;
 
     // The set existed and was consumed. Re-minting one is the duplicate the key
@@ -355,8 +355,8 @@ describe('recordBranchTakeSet — the settlement key', () => {
 
   test('unkeyed settlements are unchanged — two calls, two sets', () => {
     const { sql, actor } = setup();
-    const a = recordBranchTakeSet(sql, actor, args())!;
-    const b = recordBranchTakeSet(sql, actor, args())!;
+    const a = present(recordBranchTakeSet(sql, actor, args()), 'the recorded take set');
+    const b = present(recordBranchTakeSet(sql, actor, args()), 'the recorded take set');
     expect(a.id).not.toBe(b.id);
     expect(listAlternateTakeSets(sql, actor)).toHaveLength(2);
   });
@@ -393,7 +393,7 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     expect(settled).toHaveLength(1);
 
     if (settled[0]?.status !== 'settled') throw new Error('expected a settled event');
-    expect(settled[0].takeSetId).toBe(latestAlternateTakeSet(sql, actor)!.id);
+    expect(settled[0].takeSetId).toBe(present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set').id);
     expect(listAlternateTakeSets(sql, actor)).toHaveLength(1);
   });
 

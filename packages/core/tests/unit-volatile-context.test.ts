@@ -41,7 +41,7 @@ import { estimateTokens } from '../src/llm';
 import type {
   ActiveSkill, ActiveSkillSet, DiscoveredSkill, InstructionTrustResolver, SkillsVfs,
 } from '../src/index';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 
 const idleSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' };
 
@@ -273,9 +273,9 @@ describe('byte-stable system prefix', () => {
     expect(chatPrefix).not.toContain('Background-resume');
 
     // …and the volatile fact still reaches the model, in the turn that has it.
-    const wakeTail = turnLocalContextMessage({ provenance: 'background_resume' });
+    const wakeTail = present(turnLocalContextMessage({ provenance: 'background_resume' }), 'background-wake tail');
     expect(wakeTail).toMatchObject({ role: 'user' });
-    expect(String(wakeTail!.content)).toContain('the referenced job result first');
+    expect(messageText(wakeTail)).toContain('the referenced job result first');
     // A chat turn says nothing at all: the overlay exists for the wake alone,
     // and a per-turn message that renders on every turn is weight this move
     // was not meant to add.
@@ -285,30 +285,29 @@ describe('byte-stable system prefix', () => {
 
 describe('renderDynamicContextBlock', () => {
   test('renders facts, memory tail, and live executor labels inside one tagged block', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       factsBlock: '- user.tz = Europe/Berlin',
       memoryTail: '### Lesson: verify before claiming',
       executors: [connectedDevice, idleSandbox, workspace],
-    });
+    }), 'dynamic context block');
 
-    expect(text).not.toBeNull();
-    expect(isDynamicBlock(text!)).toBe(true);
-    expect(text!).toContain(DYNAMIC_CONTEXT_HEADER);
-    expect(text!).toContain('user.tz = Europe/Berlin');
-    expect(text!).toContain('verify before claiming');
-    expect(text!).toContain('- device: connected');
-    expect(text!).toContain('- sandbox: ready on demand');
+    expect(isDynamicBlock(text)).toBe(true);
+    expect(text).toContain(DYNAMIC_CONTEXT_HEADER);
+    expect(text).toContain('user.tz = Europe/Berlin');
+    expect(text).toContain('verify before claiming');
+    expect(text).toContain('- device: connected');
+    expect(text).toContain('- sandbox: ready on demand');
   });
 
   test('a configured capability that is NOT on the surface is named, with its reason', () => {
     // A slow MCP server misses its startup budget and its tools are simply
     // absent. Without this the model plans around a capability it was promised
     // and cannot explain why the tools it was told about are not there.
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       missingCapabilities: [
         { source: 'MCP server "github"', reason: 'not connected within 5s of this turn starting — its tools are absent' },
       ],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('Configured but not available this turn');
     expect(text).toContain('MCP server "github"');
@@ -316,9 +315,9 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('the missing-capability roster is capped with an honest count', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       missingCapabilities: Array.from({ length: 11 }, (_, i) => ({ source: `server-${i}`, reason: 'down' })),
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('server-7');
     expect(text).not.toContain('server-8');
@@ -336,28 +335,28 @@ describe('renderDynamicContextBlock', () => {
     // The caffe OOM: `nproc` inside a 1-CPU/2GB cgroup answers with the host's
     // cores. The measured ceiling has to be in the status line, and only where
     // it was actually measured.
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [
         { ...workspace, resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 } },
         connectedDevice,
       ],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
     expect(text).toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 
   test('a half-declared cgroup reports only the half it measured', () => {
-    const cpuOnly = renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: { cpus: 4 } }] })!;
+    const cpuOnly = present(renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: { cpus: 4 } }] }), 'dynamic context block');
     expect(cpuOnly).toContain('- workspace: active (cpus=4)');
 
-    const memOnly = renderDynamicContextBlock({
+    const memOnly = present(renderDynamicContextBlock({
       executors: [{ ...workspace, resourceLimits: { memBytes: 1536 * 1024 ** 2 } }],
-    })!;
+    }), 'dynamic context block');
 
     expect(memOnly).toContain('- workspace: active (mem=1.5G)');
     // An empty limits object is not a limit.
-    expect(renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: {} }] })!)
+    expect(present(renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: {} }] }), 'dynamic context block'))
       .toEndWith('- workspace: active\n</dynamic_context>');
   });
 
@@ -367,9 +366,9 @@ describe('renderDynamicContextBlock', () => {
     // The field was declared on PromptExecutorInfo, populated by the router,
     // and read by nothing — so that sentence pointed at a list the model never
     // saw, and it guessed instead (the git-clone-into-a-Worker failure).
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{ ...workspace, capabilities: ['shell', 'javascript', 'fs_shared'] }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('- workspace: active, runs: javascript, shell, fs_shared');
   });
@@ -379,13 +378,13 @@ describe('renderDynamicContextBlock', () => {
     // (execution/nimbus.ts), and a Set preserves insertion order. Rendering in
     // iteration order would re-fingerprint this block on a reordering that
     // means nothing and append one more block per step.
-    const forward = renderDynamicContextBlock({
+    const forward = present(renderDynamicContextBlock({
       executors: [{ ...workspace, capabilities: ['javascript', 'shell', 'git'] }],
-    })!;
+    }), 'dynamic context block');
 
-    const shuffled = renderDynamicContextBlock({
+    const shuffled = present(renderDynamicContextBlock({
       executors: [{ ...workspace, capabilities: ['git', 'shell', 'javascript'] }],
-    })!;
+    }), 'dynamic context block');
 
     expect(shuffled).toBe(forward);
     expect(forward).toContain('runs: javascript, shell, git');
@@ -395,22 +394,22 @@ describe('renderDynamicContextBlock', () => {
     // Only ids in the declared union are read; anything else came from a
     // provider this build does not know and must not be repeated to the model
     // as though it were a contract.
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{ ...workspace, capabilities: ['shell', 'quantum_annealing'] }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('runs: shell');
     expect(text).not.toContain('quantum_annealing');
   });
 
   test('an executor that declares nothing says nothing', () => {
-    expect(renderDynamicContextBlock({ executors: [{ ...workspace, capabilities: [] }] })!)
+    expect(present(renderDynamicContextBlock({ executors: [{ ...workspace, capabilities: [] }] }), 'dynamic context block'))
       .toEndWith('- workspace: active\n</dynamic_context>');
   });
 
   test('memory renders in the unit it was set in, and never rounds a cap upward', () => {
     const render = (memBytes: number) =>
-      renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: { memBytes } }] })!;
+      present(renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: { memBytes } }] }), 'dynamic context block');
 
     expect(render(512 * 1024 ** 2)).toContain('mem=512M');
     expect(render(64 * 1024)).toContain('mem=64K');
@@ -453,7 +452,7 @@ describe('renderDynamicContextBlock', () => {
    * writes to the wrong place and reports success.
    */
   test('a sandboxed device says what a command gets: the home, the GPU, the roots', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{
         ...connectedDevice,
         sandbox: {
@@ -466,7 +465,7 @@ describe('renderDynamicContextBlock', () => {
           roots: ['/home/ashish/projects/kinu'],
         },
       }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('- device: connected');
     expect(text).toContain('sandboxed full bash');
@@ -479,7 +478,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('a device that cannot sandbox says so, with the reason and no shell', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{
         ...connectedDevice,
         sandbox: {
@@ -492,7 +491,7 @@ describe('renderDynamicContextBlock', () => {
           roots: [],
         },
       }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('device cannot sandbox: no_userns');
     expect(text).toContain('files only, no shell');
@@ -504,7 +503,7 @@ describe('renderDynamicContextBlock', () => {
     // `probe_failed` alone names nothing the model can relay to the owner;
     // the daemon's line is the cause, and the prompt reads it from the same
     // helper the refusal does, so the two never disagree.
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{
         ...connectedDevice,
         sandbox: {
@@ -517,14 +516,14 @@ describe('renderDynamicContextBlock', () => {
           roots: [],
         },
       }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain("device cannot sandbox: probe_failed: sandbox probe failed: bwrap: Can't chdir to");
     expect(text).not.toContain('the daemon reported no reason');
   });
 
   test('a device with the sandbox switched off says the agent runs as the owner', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{
         ...connectedDevice,
         sandbox: {
@@ -537,7 +536,7 @@ describe('renderDynamicContextBlock', () => {
           roots: [],
         },
       }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('sandbox off for this device');
     expect(text).toContain('full access to the machine');
@@ -545,7 +544,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('a machine with no GPU says none, which is measured rather than unknown', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       executors: [{
         ...connectedDevice,
         sandbox: {
@@ -553,7 +552,7 @@ describe('renderDynamicContextBlock', () => {
           agentHome: '/home/ashish/.kinu/agents/notes/home', roots: [],
         },
       }],
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('GPU: none');
     // Nothing to say about writable roots when the owner consented none.
@@ -561,7 +560,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('an executor with no sandbox block adds nothing to its row', () => {
-    expect(renderDynamicContextBlock({ executors: [connectedDevice] })!)
+    expect(present(renderDynamicContextBlock({ executors: [connectedDevice] }), 'dynamic context block'))
       .toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 });
@@ -572,7 +571,7 @@ describe('the crafted-tools plane', () => {
     // building, and an omitted section left that check unanswered: the model
     // probed with a `eval` call just to learn there was nothing to
     // call. The empty set is itself the answer, so it renders.
-    const text = renderDynamicContextBlock({ craftedTools: [] })!;
+    const text = present(renderDynamicContextBlock({ craftedTools: [] }), 'dynamic context block');
 
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('## Crafted tools available through eval');
@@ -592,9 +591,9 @@ describe('the crafted-tools plane', () => {
     ledger.weave(history, { craftedTools: [] });
     history.push({ role: 'assistant', content: 'saved a tool' });
 
-    const gained = String(ledger.weave(history, {
+    const gained = messageText(present(ledger.weave(history, {
       craftedTools: [{ name: 'echo_back', description: 'Return the input' }],
-    }).at(-1)?.content);
+    }).at(-1), 'woven tail'));
 
     expect(gained).toContain('kind="delta"');
     expect(gained).toContain('## Crafted tools available through eval');
@@ -602,7 +601,7 @@ describe('the crafted-tools plane', () => {
     expect(gained).not.toContain('Cleared:');
 
     history.push({ role: 'assistant', content: 'removed it' });
-    const emptied = String(ledger.weave(history, { craftedTools: [] }).at(-1)?.content);
+    const emptied = messageText(present(ledger.weave(history, { craftedTools: [] }).at(-1), 'woven tail'));
 
     expect(emptied).toContain('kind="delta"');
     expect(emptied).toContain('No crafted tools exist in this workspace yet');
@@ -615,14 +614,14 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   const job = (i: number) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` });
 
   test('running work, delegates and parked approvals each render as their own roster', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       jobs: roster([job(1)]),
       delegates: roster([
         { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
         { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
       ]),
       approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }]),
-    })!;
+    }), 'dynamic context block');
 
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('- job-1 (think_heads): explore option 1');
@@ -632,13 +631,13 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   });
 
   test('the task list renders subtasks under their task, with status at a glance', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       tasks: roster([
         { id: 't1', title: 'Patch the gateway', status: 'active', parentId: null },
         { id: 't2', title: 'Find the timeout', status: 'done', parentId: 't1' },
         { id: 't3', title: 'Add a regression test', status: 'open', parentId: null },
       ]),
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('- t1 [active] Patch the gateway');
     expect(text).toContain('  - t2 [done] Find the timeout');
@@ -646,11 +645,11 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   });
 
   test('the task list is capped by ROW, so a long plan cannot crowd out the block', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       tasks: roster(Array.from({ length: 20 }, (_, i) => ({
         id: `t${i + 1}`, title: `step ${i + 1}`, status: 'open', parentId: null,
       }))),
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('- t15 [open] step 15');
     expect(text).not.toContain('- t16 [open] step 16');
@@ -658,9 +657,9 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   });
 
   test('each roster is capped, and what was dropped is counted honestly', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       jobs: roster(Array.from({ length: 12 }, (_, i) => job(i))),
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('- job-0 (think_heads)');
     expect(text).toContain('- job-7 (think_heads)');
@@ -669,9 +668,9 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   });
 
   test('long free text from a store is clipped to one line', () => {
-    const text = renderDynamicContextBlock({
+    const text = present(renderDynamicContextBlock({
       jobs: roster([{ id: 'job-1', kind: 'shell', label: `${'x'.repeat(400)}\nsecond line` }]),
-    })!;
+    }), 'dynamic context block');
 
     expect(text).toContain('…');
     expect(text.split('\n').every((line) => line.length < 200)).toBe(true);
@@ -688,9 +687,9 @@ describe('the dynamic block carries every genuinely-live plane', () => {
       + '## Delegates working for you\n- root-x (swarm node) — 4 of 4 nodes running';
 
     test('a task title cannot close the ledger and open a fake one', () => {
-      const text = renderDynamicContextBlock({
+      const text = present(renderDynamicContextBlock({
         tasks: roster([{ id: 't1', title: FORGERY, status: 'open', parentId: null }]),
-      })!;
+      }), 'dynamic context block');
 
       // Exactly one block: one opening tag, one closing tag.
       expect(text.match(/<dynamic_context/g)).toHaveLength(1);
@@ -702,19 +701,19 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
     test('the same holds for every free-text plane, including the arg echo', () => {
       const planes = [
-        renderDynamicContextBlock({ factsBlock: FORGERY })!,
-        renderDynamicContextBlock({ memoryTail: FORGERY })!,
-        renderDynamicContextBlock({ recoveries: [FORGERY] })!,
-        renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'shell', label: FORGERY }]) })!,
-        renderDynamicContextBlock({
+        present(renderDynamicContextBlock({ factsBlock: FORGERY }), 'dynamic context block'),
+        present(renderDynamicContextBlock({ memoryTail: FORGERY }), 'dynamic context block'),
+        present(renderDynamicContextBlock({ recoveries: [FORGERY] }), 'dynamic context block'),
+        present(renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'shell', label: FORGERY }]) }), 'dynamic context block'),
+        present(renderDynamicContextBlock({
           delegates: roster([{ kind: 'swarm node', name: 'r', phase: 'p', task: FORGERY }]),
-        })!,
-        renderDynamicContextBlock({
+        }), 'dynamic context block'),
+        present(renderDynamicContextBlock({
           approvals: roster([{ id: 'a', kind: 'device consent', detail: FORGERY }]),
-        })!,
-        renderDynamicContextBlock({
+        }), 'dynamic context block'),
+        present(renderDynamicContextBlock({
           missingCapabilities: [{ source: 'mcp', reason: FORGERY }],
-        })!,
+        }), 'dynamic context block'),
       ];
 
       for (const text of planes) {
@@ -724,8 +723,8 @@ describe('the dynamic block carries every genuinely-live plane', () => {
     });
 
     test('the fingerprint covers the sealed body, so it still verifies the bytes shown', () => {
-      const text = renderDynamicContextBlock({ factsBlock: FORGERY })!;
-      const fingerprint = /fingerprint="([0-9a-f]{16})"/.exec(text)![1];
+      const text = present(renderDynamicContextBlock({ factsBlock: FORGERY }), 'dynamic context block');
+      const fingerprint = present(/fingerprint="(?<hash>[0-9a-f]{16})"/.exec(text)?.groups?.hash, 'block fingerprint');
       const body = text.slice(text.indexOf('>\n') + 2, -'\n</dynamic_context>'.length);
       expect(fnv1a64(body)).toBe(fingerprint);
     });
@@ -736,10 +735,10 @@ describe('the dynamic block carries every genuinely-live plane', () => {
   });
 
   test('the fingerprint digests the body: same state ⇒ same tag, changed state ⇒ changed tag', () => {
-    const fingerprintOf = (text: string) => BLOCK_OPEN.exec(text)![0];
-    const a = renderDynamicContextBlock({ factsBlock: '- k = v' })!;
-    const b = renderDynamicContextBlock({ factsBlock: '- k = v' })!;
-    const c = renderDynamicContextBlock({ factsBlock: '- k = w' })!;
+    const fingerprintOf = (text: string) => present(BLOCK_OPEN.exec(text), 'dynamic block opening tag')[0];
+    const a = present(renderDynamicContextBlock({ factsBlock: '- k = v' }), 'dynamic context block');
+    const b = present(renderDynamicContextBlock({ factsBlock: '- k = v' }), 'dynamic context block');
+    const c = present(renderDynamicContextBlock({ factsBlock: '- k = w' }), 'dynamic context block');
     expect(fingerprintOf(a)).toBe(fingerprintOf(b));
     expect(fingerprintOf(a)).not.toBe(fingerprintOf(c));
   });
@@ -795,7 +794,7 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     const finding = '`shell` failed 3x in a row with {"command":"npm test"}; the first `shell` call that then ran clean was {"command":"bun test"}';
     const ctx = agentDynamicContext({ ...sources, recoveryFindings: [finding] });
     expect(ctx.recoveries).toEqual([finding]);
-    const block = renderDynamicContextBlock(ctx)!;
+    const block = present(renderDynamicContextBlock(ctx), 'dynamic context block');
     expect(block).toContain('## Proven by execution');
     expect(block).toContain('bun test');
     // The header states the ceiling: environment evidence, not a verdict on correctness.
@@ -841,22 +840,21 @@ describe('observeSystemPromptHash', () => {
 
 describe('renderTurnLocalContext', () => {
   test('renders activation reasons and the device notice under the turn header', () => {
-    const text = renderTurnLocalContext({
+    const text = present(renderTurnLocalContext({
       activeSkills: { active: [skill('alpha')], reasons: [{ name: 'alpha', reason: { kind: 'keyword', matched_keyword: 'deploy' } }] },
       deviceNotice: '## Context update\nYour user\'s PC just connected.',
-    });
+    }), 'turn-local context');
 
-    expect(text).not.toBeNull();
-    expect(text!).toStartWith(TURN_CONTEXT_HEADER);
-    expect(text!).toContain('alpha (keyword "deploy")');
-    expect(text!).toContain('PC just connected');
+    expect(text).toStartWith(TURN_CONTEXT_HEADER);
+    expect(text).toContain('alpha (keyword "deploy")');
+    expect(text).toContain('PC just connected');
   });
 
   test('every activation reason kind renders in its own form', () => {
     // The three kinds carry different payload fields; rendering one in
     // another's form would tell the model a skill was pinned when the user
     // actually typed a slash command (or vice versa).
-    const text = renderTurnLocalContext({
+    const text = present(renderTurnLocalContext({
       activeSkills: {
         active: [skill('alpha'), skill('beta'), skill('gamma')],
         reasons: [
@@ -865,11 +863,11 @@ describe('renderTurnLocalContext', () => {
           { name: 'gamma', reason: { kind: 'always_active', via: 'config' } },
         ],
       },
-    });
+    }), 'turn-local context');
 
-    expect(text!).toContain('- alpha (explicit /deploy)');
-    expect(text!).toContain('- beta (keyword "ship")');
-    expect(text!).toContain('- gamma (pinned via config)');
+    expect(text).toContain('- alpha (explicit /deploy)');
+    expect(text).toContain('- beta (keyword "ship")');
+    expect(text).toContain('- gamma (pinned via config)');
   });
 
   test('empty turn-local context renders nothing (and no message)', () => {
@@ -879,9 +877,9 @@ describe('renderTurnLocalContext', () => {
   });
 
   test('turnLocalContextMessage wraps the render as one user message', () => {
-    const msg = turnLocalContextMessage({ deviceNotice: 'PC connected.' });
+    const msg = present(turnLocalContextMessage({ deviceNotice: 'PC connected.' }), 'turn-local message');
     expect(msg).toMatchObject({ role: 'user' });
-    expect(String(msg!.content)).toStartWith(TURN_CONTEXT_HEADER);
+    expect(messageText(msg)).toStartWith(TURN_CONTEXT_HEADER);
   });
 });
 
@@ -897,7 +895,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     history.push({ role: 'assistant', content: 'Read.' });
     const current = { ...initial, executors: [workspace, activeSandbox] };
     const second = ledger.weave(history, current);
-    const delta = String(second.at(-1)?.content);
+    const delta = messageText(present(second.at(-1), 'woven tail'));
 
     expect(second[1]).toBe(first[1]);
     expect(delta).toContain('sandbox status went from `ready on demand` to `active`');
@@ -978,7 +976,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       { name: 'new, gpu', available: true, capabilities: ['native_binary'] },
     ] });
 
-    const delta = String(result.at(-1)?.content);
+    const delta = messageText(present(result.at(-1), 'woven tail'));
 
     expect(delta).toContain('- old: gpu: removed from execution status.');
     expect(delta).toContain('- new, gpu: available, runs: native_binary');
@@ -992,7 +990,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const history: ModelMessage[] = [{ role: 'user', content: 'inspect mounts' }];
     ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, activeSandbox] });
     history.push({ role: 'assistant', content: 'device connected' });
-    const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedDevice] }).at(-1)?.content);
+    const delta = messageText(present(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedDevice] }).at(-1), 'woven tail'));
 
     expect(delta).toContain('- device: connected, files at /pc');
     expect(delta).toContain('- sandbox: removed from execution status.');
@@ -1007,7 +1005,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     ledger.weave(history, { ...state, jobs: roster([{ id: 'job', kind: 'shell', label: 'read file' }]) });
     history.push({ role: 'assistant', content: 'collected' });
     const current = { ...state, jobs: roster([]) };
-    const delta = String(ledger.weave(history, current).at(-1)?.content);
+    const delta = messageText(present(ledger.weave(history, current).at(-1), 'woven tail'));
 
     expect(delta).toContain('## Background work still running');
     expect(delta).toContain('Cleared: no current entries.');
@@ -1023,7 +1021,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(history).toHaveLength(1); // input never mutated
     expect(out).toHaveLength(2);
     expect(out[1]).toMatchObject({ role: 'user' });
-    expect(isDynamicBlock(String(out[1]!.content))).toBe(true);
+    expect(isDynamicBlock(messageText(out[1]))).toBe(true);
     expect(ledger.size).toBe(1);
   });
 
@@ -1031,7 +1029,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     const first = ledger.weave(history, state);
-    const frozen = first[1]!;
+    const frozen = first[1];
 
     history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'turn-2' });
     const second = ledger.weave(history, state);
@@ -1044,7 +1042,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(second[1]).toBe(frozen);
     expect(third[1]).toBe(frozen);
     expect(third.map(messageText)).toEqual([
-      'turn-1', String(frozen.content), 'answer-1', 'turn-2', 'answer-2', 'turn-3',
+      'turn-1', messageText(frozen), 'answer-1', 'turn-2', 'answer-2', 'turn-3',
     ]);
   });
 
@@ -1052,7 +1050,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     const first = ledger.weave(history, state);
-    const frozen = first[1]!;
+    const frozen = first[1];
 
     history.push({ role: 'assistant', content: 'answer-1' }, { role: 'user', content: 'turn-2' });
     const changed = { ...state, factsBlock: '- k = v\n- new.fact = learned' };
@@ -1060,11 +1058,11 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     expect(ledger.size).toBe(2);
     expect(out[1]).toBe(frozen); // old block frozen at its birth position
-    const tail = out[out.length - 1]!;
-    expect(isDynamicBlock(String(tail.content))).toBe(true);
-    expect(String(tail.content)).toContain('new.fact = learned');
+    const tail = out[out.length - 1];
+    expect(isDynamicBlock(messageText(tail))).toBe(true);
+    expect(messageText(tail)).toContain('new.fact = learned');
     expect(out.map(messageText)).toEqual([
-      'turn-1', String(frozen.content), 'answer-1', 'turn-2', String(tail.content),
+      'turn-1', messageText(frozen), 'answer-1', 'turn-2', messageText(tail),
     ]);
   });
 
@@ -1083,7 +1081,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(compacted, state);
     expect(ledger.size).toBe(1);
     expect(out).toHaveLength(3);
-    expect(isDynamicBlock(String(out[2]!.content))).toBe(true);
+    expect(isDynamicBlock(messageText(out[2]))).toBe(true);
   });
 
   test('cross-turn sandbox-only change emits a delta naming only that section', () => {
@@ -1103,9 +1101,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const second = ledger.weave(secondTurn, changed);
     expect(ledger.size).toBe(2);
     expect(second[1]).toBe(first[1]);
-    const tail = second.at(-1);
-    expect(tail).toBeDefined();
-    const text = String(tail?.content);
+    const text = messageText(present(second.at(-1), 'woven tail'));
     expect(text).toContain('kind="delta"');
     expect(text).toContain('## Execution status');
     expect(text).not.toContain('## World model');
@@ -1120,9 +1116,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const cleared = { executors: [idleSandbox] };
     const out = ledger.weave(history, cleared);
     expect(ledger.size).toBe(2);
-    const tail = out.at(-1);
-    expect(tail).toBeDefined();
-    const text = String(tail?.content);
+    const text = messageText(present(out.at(-1), 'woven tail'));
     expect(text).toContain('kind="delta"');
     expect(text).toContain('## World model');
     expect(text).toContain('Cleared: no current entries.');
@@ -1142,9 +1136,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }, { role: 'user', content: 'next' }];
     const out = ledger.weave(compacted, state);
     expect(ledger.size).toBe(1);
-    const tail = out.at(-1);
-    expect(tail).toBeDefined();
-    const text = String(tail?.content);
+    const text = messageText(present(out.at(-1), 'woven tail'));
     expect(text).toContain('kind="full"');
     expect(text).toBe(renderDynamicContextBlock(state) ?? '');
   });
@@ -1165,7 +1157,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     const replacement: ModelMessage[] = [{ role: 'user', content: 'new-user-1' }];
     const freshState = { ...state, factsBlock: '- fresh = yes' };
-    const freshBlock = renderDynamicContextBlock(freshState)!;
+    const freshBlock = present(renderDynamicContextBlock(freshState), 'dynamic context block');
     const out = ledger.weave(replacement, freshState);
 
     expect(out).toEqual([
@@ -1186,7 +1178,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     ledger.weave(history, state);                                  // block @ 1
     history.push({ role: 'assistant', content: 'a1' }, { role: 'user', content: 'turn-2' });
     const changed = { ...state, factsBlock: '- k = v2' };
-    const frozenDelta = ledger.weave(history, changed).at(-1);       // block @ 3 (the tail)
+    const frozenDelta = present(ledger.weave(history, changed).at(-1), 'woven tail'); // block @ 3 (the tail)
     expect(ledger.size).toBe(2);
 
     // Re-weave with the history and state both unchanged: nothing is stale, so
@@ -1194,7 +1186,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(history, changed);
     expect(ledger.size).toBe(2);
     expect(out.map(messageText)).toEqual([
-      'turn-1', renderDynamicContextBlock(state) ?? '', 'a1', 'turn-2', String(frozenDelta?.content),
+      'turn-1', renderDynamicContextBlock(state) ?? '', 'a1', 'turn-2', messageText(frozenDelta),
     ]);
   });
 
@@ -1214,8 +1206,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       { role: 'user', content: 'steer' },
     ];
 
-    const frozen = ledger.weave(firstTurn, state)[2]!;
-    expect(isDynamicBlock(String(frozen.content))).toBe(true);
+    const frozen = ledger.weave(firstTurn, state)[2];
+    expect(isDynamicBlock(messageText(frozen))).toBe(true);
 
     const nextTurn: ModelMessage[] = [
       { role: 'user', content: 'add caching' },
@@ -1249,7 +1241,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       { role: 'user', content: 'steer' },
     ];
 
-    const frozen = ledger.weave(firstTurn, state)[2]!;
+    const frozen = ledger.weave(firstTurn, state)[2];
 
     const nextTurn: ModelMessage[] = [
       { role: 'user', content: 'do both' },
@@ -1277,7 +1269,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     // the provider prefix cache is keyed on for every ordinary turn.
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'q1' }, { role: 'user', content: 'steer' }];
-    const frozen = ledger.weave(history, state)[2]!;
+    const frozen = ledger.weave(history, state)[2];
 
     history.push(
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} }] },
@@ -1304,7 +1296,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const after = ledger.weave([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }], {});
     expect(ledger.size).toBe(2);
     expect(after).toHaveLength(4);
-    expect(isDynamicBlock(String(after[1]!.content))).toBe(true);
+    expect(isDynamicBlock(messageText(after[1]))).toBe(true);
     expect(after.at(-1)?.content).toContain('Cleared: no current entries.');
   });
 });
@@ -1339,7 +1331,7 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
     expect(ledger.size).toBe(3);
     const before = ledger.weave(history, finalState);
     expect(before.map(messageText)).toEqual([
-      'turn-0', renders[0]!, 'a0', 'turn-1', renders[1]!, 'a1', 'turn-2', renders[2]!, 'a2',
+      'turn-0', renders[0], 'a0', 'turn-1', renders[1], 'a1', 'turn-2', renders[2], 'a2',
     ]);
 
     const freed = ledger.dropSuperseded();
@@ -1384,6 +1376,27 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
   });
 });
 
+/** The whole answer a step can give when it stops: one text part, then finish. */
+function textOnlyStream(delta: string): ReadableStream<LanguageModelV3StreamPart> {
+  return new ReadableStream<LanguageModelV3StreamPart>({
+    start(c) {
+      c.enqueue({ type: 'stream-start', warnings: [] });
+      c.enqueue({ type: 'text-start', id: 't1' });
+      c.enqueue({ type: 'text-delta', id: 't1', delta });
+      c.enqueue({ type: 'text-end', id: 't1' });
+      c.enqueue({
+        type: 'finish',
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
+      });
+      c.close();
+    },
+  });
+}
+
 /** A one-step text model that captures every prompt it was handed. */
 function promptCapturingModel() {
   const prompts: PromptMessage[][] = [];
@@ -1392,26 +1405,7 @@ function promptCapturingModel() {
     doStream: async (options) => {
       prompts.push(parsePrompt({ value: options.prompt }));
 
-      return {
-        stream: new ReadableStream<LanguageModelV3StreamPart>({
-          start(c) {
-            c.enqueue({ type: 'stream-start', warnings: [] });
-            c.enqueue({ type: 'text-start', id: 't1' });
-            c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
-            c.enqueue({ type: 'text-end', id: 't1' });
-            c.enqueue({
-              type: 'finish',
-              finishReason: { unified: 'stop', raw: undefined },
-              usage: {
-                inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-                outputTokens: { total: 1, text: 1, reasoning: undefined },
-              },
-            });
-            c.close();
-          },
-        }),
-        response: { headers: {} },
-      };
+      return { stream: textOnlyStream('ok'), response: { headers: {} } };
     },
   });
 
@@ -1467,19 +1461,19 @@ describe('the ledger + turn-local split through real runChat turns', () => {
     // Turn 1: user message, turn-local tail, then the step's dynamic block —
     // the block is woven per STEP, so it lands after everything turn assembly
     // produced.
-    expect(p1![0]).toBe('turn-1');
-    expect(p1![1]).toStartWith(TURN_CONTEXT_HEADER);
-    expect(p1![1]).toContain('PC connected.');
-    expect(isDynamicBlock(p1![2]!)).toBe(true);
+    expect(p1[0]).toBe('turn-1');
+    expect(p1[1]).toStartWith(TURN_CONTEXT_HEADER);
+    expect(p1[1]).toContain('PC connected.');
+    expect(isDynamicBlock(p1[2])).toBe(true);
     // Turns 2 and 3: the block's bytes AND index are untouched while history
     // grows after it. The varying turn-local state never spawned a second one.
     expect(ledger.size).toBe(1);
-    expect(p2![2]).toBe(p1![2]!);
-    expect(p3![2]).toBe(p1![2]!);
+    expect(p2[2]).toBe(p1[2]);
+    expect(p3[2]).toBe(p1[2]);
     // Turn 2 had nothing turn-local → no tail at all.
-    expect(p2!.some((t) => t.startsWith(TURN_CONTEXT_HEADER))).toBe(false);
+    expect(p2.some((t) => t.startsWith(TURN_CONTEXT_HEADER))).toBe(false);
     // Turn 3's tail is fresh per-turn state, before the frozen block.
-    expect(p3!.find((t) => t.startsWith(TURN_CONTEXT_HEADER))).toContain('PC disconnected.');
+    expect(p3.find((t) => t.startsWith(TURN_CONTEXT_HEADER))).toContain('PC disconnected.');
   });
 
   test('a state change mid-conversation appends a second block at the new tail', async () => {
@@ -1508,8 +1502,8 @@ describe('the ledger + turn-local split through real runChat turns', () => {
     const [p1, p2] = prompts.map(promptTexts);
     expect(ledger.size).toBe(2);
     // First block frozen where it was born; the new block rides the new tail.
-    expect(p2![1]).toBe(p1![1]!);
-    expect(p2![p2!.length - 1]).toContain('learned = later');
+    expect(p2[1]).toBe(p1[1]);
+    expect(p2[p2.length - 1]).toContain('learned = later');
     // The durable history never captured any block.
     expect(history.some((m) => isDynamicBlock(messageText(m)))).toBe(false);
   });
@@ -1535,9 +1529,9 @@ describe('the ledger + turn-local split through real runChat turns', () => {
       stopWhen: stepCountIs(1),
     })) { /* drain */ }
 
-    const texts = promptTexts(prompts[0]!);
+    const texts = promptTexts(prompts[0]);
     expect(texts.filter(isDynamicBlock)).toHaveLength(1);
-    expect(isDynamicBlock(texts[texts.length - 1]!)).toBe(true);
+    expect(isDynamicBlock(texts[texts.length - 1])).toBe(true);
   });
 });
 
@@ -1569,23 +1563,7 @@ function threeStepToolModel() {
               c.close();
             },
           })
-        : new ReadableStream<LanguageModelV3StreamPart>({
-            start(c) {
-              c.enqueue({ type: 'stream-start', warnings: [] });
-              c.enqueue({ type: 'text-start', id: 't1' });
-              c.enqueue({ type: 'text-delta', id: 't1', delta: 'done' });
-              c.enqueue({ type: 'text-end', id: 't1' });
-              c.enqueue({
-                type: 'finish',
-                finishReason: { unified: 'stop', raw: undefined },
-                usage: {
-                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-                  outputTokens: { total: 1, text: 1, reasoning: undefined },
-                },
-              });
-              c.close();
-            },
-          });
+        : textOnlyStream('done');
 
       return { stream, response: { headers: {} } };
     },
@@ -1626,7 +1604,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     // The one block sits at its birth index (right after the user message) in
     // every request, with the tool traffic accumulating AFTER it.
     for (const prompt of prompts) {
-      expect(isDynamicBlock(promptTexts(prompt)[1]!)).toBe(true);
+      expect(isDynamicBlock(promptTexts(prompt)[1])).toBe(true);
     }
   });
 
@@ -1659,20 +1637,20 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     const [r0, r1, r2] = prompts.map(promptTexts);
     // (b) exactly ONE new block, and the first block is byte-identical and
     // still at its birth index.
-    expect(r0!.filter(isDynamicBlock)).toHaveLength(1);
-    expect(r1!.filter(isDynamicBlock)).toHaveLength(2);
-    expect(r2!.filter(isDynamicBlock)).toHaveLength(2);
-    expect(r1![1]).toBe(r0![1]!);
-    expect(r2![1]).toBe(r0![1]!);
-    expect(r1!.find((t) => t.includes('job-1'))).toBeDefined();
+    expect(r0.filter(isDynamicBlock)).toHaveLength(1);
+    expect(r1.filter(isDynamicBlock)).toHaveLength(2);
+    expect(r2.filter(isDynamicBlock)).toHaveLength(2);
+    expect(r1[1]).toBe(r0[1]);
+    expect(r2[1]).toBe(r0[1]);
+    expect(r1.find((t) => t.includes('job-1'))).toBeDefined();
 
     // (c) the cached prefix: request N+1 repeats request N's messages verbatim
     // and only appends. Cache markers are excluded — they roll to the tail on
     // purpose, and a breakpoint is not content.
     const bytes = prompts.map((prompt) => prompt.map(cacheableBytes));
-    expect(bytes[1]!.slice(0, bytes[0]!.length)).toEqual(bytes[0]!);
-    expect(bytes[2]!.slice(0, bytes[1]!.length)).toEqual(bytes[1]!);
-    expect(bytes[2]!.length).toBeGreaterThan(bytes[0]!.length);
+    expect(bytes[1].slice(0, bytes[0].length)).toEqual(bytes[0]);
+    expect(bytes[2].slice(0, bytes[1].length)).toEqual(bytes[1]);
+    expect(bytes[2].length).toBeGreaterThan(bytes[0].length);
   });
 
   test('the newest block always ends the request, so the rolling cache breakpoint lands on it', async () => {
@@ -1692,7 +1670,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
 
     for (const prompt of prompts) {
       const texts = promptTexts(prompt);
-      expect(isDynamicBlock(texts[texts.length - 1]!)).toBe(true);
+      expect(isDynamicBlock(texts[texts.length - 1])).toBe(true);
     }
 
     expect(ledger.size).toBe(3);

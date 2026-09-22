@@ -29,6 +29,7 @@ import { createTestRuntime, storesFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type {  } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
+import * as v from 'valibot';
 
 type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
@@ -123,6 +124,6 @@ describe('the inline executor `exec` honours the same contract', () => {
 
   test('a clean run is untouched', async () => {
     const exec = inlineExec({ exec: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }) });
-    expect(String(await exec.tools.exec.execute('true'))).toBe('ok');
+    expect(v.parse(v.string(), await exec.tools.exec.execute('true'))).toBe('ok');
   });
 });

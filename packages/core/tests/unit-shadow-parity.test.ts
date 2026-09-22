@@ -104,7 +104,7 @@ describe('shadow context parity', () => {
     // ui_chunk text reached the eval row verbatim.
     const row = rt.storage.sql<{ pending_output: string; winner: string }>`
       SELECT pending_output, winner FROM scaffold_evaluations
-      WHERE actor_id = ${rt.actor.actorId}`[0]!;
+      WHERE actor_id = ${rt.actor.actorId}`[0];
 
     expect(row.pending_output).toBe(CONTEXT_AWARE_ANSWER);
     expect(row.winner).toBe('tie');

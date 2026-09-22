@@ -22,6 +22,7 @@ import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
 import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
+import { present } from '@kinu.run/test-utils';
 
 /** The PRODUCTION schema, not this module's own tables alone: the eval split
  *  reconstructs process evidence from the message and run-event ledgers, and a
@@ -120,17 +121,22 @@ describe('the classifier prompt', () => {
     expect(prompt).toContain('"hm" / "what about the other one?" → nothing is settled');
   });
 
-  test('every outcome definition carries its own worked example', () => {
-    expect(prompt).toContain('("great, now add the retry"');
-    expect(prompt).toContain('("no, I said STAGING"');
-    expect(prompt).toContain('("why do you keep breaking the build"');
-  });
+  const promptClaims = [
+    {
+      name: 'every outcome definition carries its own worked example',
+      phrases: ['("great, now add the retry"', '("no, I said STAGING"', '("why do you keep breaking the build"'],
+    },
+    {
+      name: 'names the false-accept, so moving on is not read as approval',
+      phrases: ['Not evidence the answer worked:', 'changes the subject while the ask still stands', 'the user does the work themselves'],
+    },
+  ];
 
-  test('names the false-accept, so moving on is not read as approval', () => {
-    expect(prompt).toContain('Not evidence the answer worked:');
-    expect(prompt).toContain('changes the subject while the ask still stands');
-    expect(prompt).toContain('the user does the work themselves');
-  });
+  for (const c of promptClaims) {
+    test(c.name, () => {
+      for (const phrase of c.phrases) expect(prompt).toContain(phrase);
+    });
+  }
 
   test('an unsettled follow-up is directed at `confidence` rather than at a firmer verdict', () => {
     // Without this the model answers one of three labels whatever it saw, and
@@ -560,8 +566,9 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     expect(split.train).toHaveLength(1);
     expect(split.heldOutNegatives).toBe(0);
     expect(split.val.every((i) => i.expected?.outcome === 'accepted')).toBe(true);
-    expect(split.degeneracy).toBe('no_held_out_negatives');
-    expect(describeSplitDegeneracy(split.degeneracy!)).toContain('not evidence');
+    const degeneracy = present(split.degeneracy, 'the split degeneracy');
+    expect(degeneracy).toBe('no_held_out_negatives');
+    expect(describeSplitDegeneracy(degeneracy)).toContain('not evidence');
   });
 
   test('no negatives yet → empty train set, flagged (never the accepted set)', async () => {

@@ -103,9 +103,9 @@ function setup(opts: {
   const drained: Array<{ steers: UserSteer[]; atStep: number }> = [];
 
   const host: BackendHost = {
-    broadcast: (event: BroadcastEvent) => {
-      raw.push(event);
-      broadcasts.push(v.parse(BroadcastSchema, event));
+    broadcast: (broadcast: BroadcastEvent) => {
+      raw.push(broadcast);
+      broadcasts.push(v.parse(BroadcastSchema, broadcast));
     },
     enqueueTurn: async (turn) => {
       queued.push(turn);
@@ -123,7 +123,7 @@ function setup(opts: {
   const accepted: string[] = [];
 
   const inbox = new Inbox(host, undefined, {
-    onAccept: (steer) => { accepted.push(steer.id); },
+    onAccept: (acceptedSteer) => { accepted.push(acceptedSteer.id); },
     onDrain: (steers, atStep) => {
       drained.push({ steers: [...steers], atStep });
 
@@ -150,7 +150,7 @@ describe('Inbox — the user kind, accepted', () => {
     // key, and nothing was ever queued mid-turn. What IS owed is where the
     // words went — a turn of their own — because the surface that sent them
     // to a running turn learns their landing from this broadcast alone.
-    expect(queued[0]!.idempotencyKey).toBeUndefined();
+    expect(queued[0].idempotencyKey).toBeUndefined();
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'turn', steerId: 's1', text: 'nothing is running' },
     ]);
@@ -166,7 +166,7 @@ describe('Inbox — the user kind, accepted', () => {
     ]);
     // The wire shape a surface parses: the event's own key order, not the
     // schema's.
-    expect(Object.keys(raw[0]!)).toEqual(['type', 'status', 'steerId', 'text']);
+    expect(Object.keys(raw[0])).toEqual(['type', 'status', 'steerId', 'text']);
   });
 
   test('durable reset state replaces the process-local user queue in its stored order', async () => {
@@ -356,7 +356,7 @@ describe('Inbox — the user kind, landing in the step', () => {
         ],
       },
     ]);
-    expect(drained[0]!.steers[0]!.files).toEqual(files);
+    expect(drained[0].steers[0].files).toEqual(files);
   });
 });
 
@@ -547,7 +547,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     expect(queued[0]).toMatchObject({
       origin: 'user', steerIds: ['s2'], metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
     });
-    expect(queued[0]!.idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
+    expect(queued[0].idempotencyKey).toMatch(/^steer-rerun:.*:build:/);
   });
 
   test('an interrupt returns users only and leaves a pending event to requeue at settle', async () => {
@@ -564,7 +564,7 @@ describe('Inbox — the user kind beside the event kind', () => {
     inbox.settle({ completed: false });
     await Promise.resolve();
     expect(queued.map((turn) => turn.text)).toEqual(['still owed']);
-    expect(queued[0]!.origin).toBeUndefined();
+    expect(queued[0].origin).toBeUndefined();
   });
 
   test('a failed durable landing restores users AND events ahead of a steer delivered mid-await', async () => {
@@ -635,7 +635,9 @@ describe('Inbox — the user kind beside the event kind', () => {
     // The host's enqueue is held open — the window between a turn's
     // admission and its opening. The first message starts the turn; the other
     // two are buffered for its first step, never queued as turns behind it.
-    let open: (() => void) | null = null;
+    let open = (): void => {};
+
+    const heldEnqueue = new Promise<void>((resolve) => { open = resolve; });
     const queued: ProgrammaticTurn[] = [];
     let inFlight = false;
 
@@ -643,7 +645,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       broadcast: () => {},
       enqueueTurn: async (turn) => {
         queued.push(turn);
-        await new Promise<void>((resolve) => { open = resolve; });
+        await heldEnqueue;
 
         return { status: 'queued' };
       },
@@ -665,7 +667,7 @@ describe('Inbox — the user kind beside the event kind', () => {
       { role: 'user', content: 'first' },
       { role: 'user', content: 'second\n\nthird' },
     ]);
-    open!();
+    open();
     expect(await first).toBe('queued');
     expect(queued).toHaveLength(1);
   });

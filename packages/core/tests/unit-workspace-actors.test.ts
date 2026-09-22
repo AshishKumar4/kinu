@@ -94,8 +94,13 @@ describe('one workspace actor directory', () => {
     const right = directory.create({ parent: main, name: 'right', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
     const child = directory.apply(right, directory.storagePath(right), { action: 'register', name: 'researcher', kind: 'subordinate', lifetime: 'task', creationId: crypto.randomUUID() });
     expect(() => directory.apply(left, directory.storagePath(right), { action: 'register', name: 'intruder', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
-    expect(() => directory.apply(left, directory.storagePath(left), { action: 'validate', name: 'researcher', reference: child.reference })).toThrow(expect.objectContaining({ code: 'denied' }));
-    expect(() => directory.apply(left, directory.storagePath(left), { action: 'retire', name: 'researcher', reference: child.reference })).toThrow(expect.objectContaining({ code: 'denied' }));
+
+    const byTheWrongParent = (action: 'validate' | 'retire') =>
+      expect(() => directory.apply(left, directory.storagePath(left), { action, name: 'researcher', reference: child.reference }))
+        .toThrow(expect.objectContaining({ code: 'denied' }));
+
+    byTheWrongParent('validate');
+    byTheWrongParent('retire');
     expect(directory.apply(right, directory.storagePath(right), { action: 'validate', name: 'researcher', reference: child.reference }).state).toBe('active');
     expect(directory.resolveChild(right, 'intruder')).toBeNull();
     expect(() => directory.open('unseeded')).toThrow(expect.objectContaining({ code: 'missing' }));
@@ -109,11 +114,16 @@ describe('one workspace actor directory', () => {
     const retried = cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name: 'researcher', kind: 'subordinate', lifetime: 'durable' });
     expect(retried.reference.actorId).toBe(first.reference.actorId);
     expect(cold.open(retried.reference.actorId).config.getModel()).toBe('saved-model');
-    expect(() => cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name: 'other', kind: 'subordinate', lifetime: 'durable' })).toThrow(expect.objectContaining({ code: 'denied' }));
+
+    const reRegister = (name: string, code: string) =>
+      expect(() => cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name, kind: 'subordinate', lifetime: 'durable' }))
+        .toThrow(expect.objectContaining({ code }));
+
+    reRegister('other', 'denied');
     cold.apply(cold.main(), [], { action: 'retire', name: 'researcher', reference: first.reference });
     cold.apply(cold.main(), [], { action: 'release', name: 'researcher', reference: first.reference });
     const replacement = cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-two', name: 'researcher', kind: 'subordinate', lifetime: 'durable' });
-    expect(() => cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name: 'researcher', kind: 'subordinate', lifetime: 'durable' })).toThrow(expect.objectContaining({ code: 'missing' }));
+    reRegister('researcher', 'missing');
     expect(cold.resolveChild(cold.main(), 'researcher')?.actorId).toBe(replacement.reference.actorId);
   });
   test('cancelling before registration rejects the late creator without touching a replacement', () => {

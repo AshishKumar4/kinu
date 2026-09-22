@@ -50,7 +50,7 @@ import {
 import { dispatchAgentsAction, parseAgentsToolInput } from '../src/delegation/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec, createTestActor } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
 
@@ -369,7 +369,7 @@ describe('a task-lifetime hire returns one completed answer', () => {
     await scene.recover(true);
     expect(scene.assignments[0]?.inheritedContext).toEqual(inherited);
     expect(scene.roster.requireExisting('auditor-a1b2c3').birth).toBeNull();
-    await scene.deps.team!.assign({ name: 'auditor-a1b2c3', task: 'One more question.', mode: 'build' });
+    await present(scene.deps.team, 'the scene\'s team port').assign({ name: 'auditor-a1b2c3', task: 'One more question.', mode: 'build' });
     expect(scene.assignments[1]?.inheritedContext?.kind).not.toBe('fork');
   });
 
@@ -432,9 +432,8 @@ describe('a task-lifetime hire returns one completed answer', () => {
 
   test('the same call from codemode takes NO action field and answers identically', async () => {
     const scene = makeScene();
-    const hire = scene.sandbox().hire;
-    expect(hire).toBeDefined();
-    const settled = hire!({ lifetime: 'task', role: 'auditor', mission: 'Is the migration reversible?' });
+    const hire = present(scene.sandbox().hire, 'the codemode hire entry');
+    const settled = hire({ lifetime: 'task', role: 'auditor', mission: 'Is the migration reversible?' });
     await Promise.resolve().then(() => Promise.resolve());
     await scene.report({ content: 'Yes.' });
     expect(v.parse(CompletedOutcome, await settled)).toMatchObject({
@@ -624,7 +623,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     const scene = makeScene();
     // The name the scene's `createName` will generate, already taken by a
     // durable hire.
-    await scene.deps.team!.spawn({
+    await present(scene.deps.team, 'the scene\'s team port').spawn({
       name: TEMP_NAME, role: 'auditor',
       mission: 'Investigate.', mode: 'build',
     });
@@ -754,7 +753,7 @@ describe('an answer that outlives its waiter', () => {
   /** The same policy must NOT touch a durable subordinate: it is meant to stay. */
   test('a durable subordinate is left in the roster by the very report that releases a task one', async () => {
     const scene = makeScene();
-    await scene.deps.team!.spawn({
+    await present(scene.deps.team, 'the scene\'s team port').spawn({
       name: 'researcher', role: 'researcher',
       mission: 'Investigate.', mode: 'build',
     });
@@ -783,9 +782,8 @@ describe('a child that cannot answer still ends the call', () => {
       const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
       await run.ready;
       // Exactly what the child now emits for this ending.
-      const report = terminalTaskReport({ lifetime: 'task', ending, assistantText: '' });
-      expect(report).not.toBeNull();
-      await scene.report({ status: report!.status, origin: 'turn_end', content: report!.content });
+      const report = present(terminalTaskReport({ lifetime: 'task', ending, assistantText: '' }), 'the child\'s terminal report');
+      await scene.report({ status: report.status, origin: 'turn_end', content: report.content });
 
       const failed = v.parse(FailedOutcome, await run.settled);
       expect(failed).toMatchObject({ status: 'failed', reason: 'unavailable', transcript: 'kept' });
@@ -844,7 +842,7 @@ describe('the two hire targets are decided by `role`', () => {
 
   test('a hire to an existing agent is unchanged: it reports back later, it does not resolve here', async () => {
     const scene = makeScene();
-    await scene.deps.team!.spawn({
+    await present(scene.deps.team, 'the scene\'s team port').spawn({
       name: 'researcher', role: 'researcher',
       mission: 'Investigate.', mode: 'build',
     });
@@ -938,7 +936,7 @@ describe('the rung is structural, and so is its absence', () => {
    */
   test('at the cap a task-lifetime hire is refused exactly as a durable one is', async () => {
     const capped = makeScene({ delegation: { depth: DELEGATION_MAX_DEPTH } });
-    expect(delegationExhausted(capped.deps.team!.delegation)).toBe(true);
+    expect(delegationExhausted(present(capped.deps.team, 'the capped scene\'s team port').delegation)).toBe(true);
 
     const team = capped.deps.team;
 
@@ -990,7 +988,7 @@ describe('the rung is structural, and so is its absence', () => {
     // same substrate.
     for (const depth of [1, 2, 3]) {
       const child = makeScene({ delegation: { depth } });
-      expect(child.deps.team!.temporary).toBeDefined();
+      expect(present(child.deps.team, 'the child scene\'s team port').temporary).toBeDefined();
       expect(agentsActionsFor(child.deps)).toContain('hire');
     }
 

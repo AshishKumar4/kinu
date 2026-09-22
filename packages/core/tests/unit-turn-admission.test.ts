@@ -32,6 +32,14 @@ import { createOpenAICompatProvider } from '../src/providers/openai-compat';
 import type { ProviderDeps } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 
+/** The JSON a captured request carried: a string body is the only shape these
+ *  fakes are ever handed, and an absent one is an empty object. */
+function bodyText(init: RequestInit | undefined): string {
+  const body = v.safeParse(v.string(), init?.body);
+
+  return body.success ? body.output : '{}';
+}
+
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'the long conversation' },
   { role: 'assistant', content: 'the long answer' },
@@ -391,7 +399,7 @@ describe('provider count support', () => {
       ...NO_DEPS,
       fetch: asFetchFunction(async (input, init) => {
         url = input instanceof Request ? input.url : String(input);
-        body = JSON.parse(String(init?.body ?? '{}'));
+        body = JSON.parse(bodyText(init));
 
         return new Response(JSON.stringify({ input_tokens: 4242 }), {
           status: 200, headers: { 'content-type': 'application/json' },
@@ -518,7 +526,7 @@ describe('provider count support', () => {
     const vendorDeps: ProviderDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
-        vendorBody = JSON.parse(String(init?.body ?? '{}'));
+        vendorBody = JSON.parse(bodyText(init));
 
         return new Response('{"error":{"message":"captured, not served"}}', { status: 400 });
       }),
@@ -548,7 +556,7 @@ describe('provider count support', () => {
     const countDeps: ProviderDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
-        countBody = JSON.parse(String(init?.body ?? '{}'));
+        countBody = JSON.parse(bodyText(init));
 
         return new Response(JSON.stringify({ input_tokens: 1 }), { status: 200 });
       }),

@@ -15,7 +15,7 @@ import {
   type SqlExec, type WebhookDelivery,
 } from '../src/index';
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
-import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
+import { createMemoryVfs, createTestActors, present } from '@kinu.run/test-utils';
 import { makeSqlExec, makeSql as taggedSql, makeExecRaw } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -400,7 +400,7 @@ describe('webhook registration', () => {
 
     const webhook = await registerDurableWebhook(triggers, secrets, { label: 'ci', auth_mode: 'bearer', secret: 'shhh' }, NOW);
 
-    const row = triggers.get(webhook.trigger_id)!;
+    const row = present(triggers.get(webhook.trigger_id), 'the registered trigger');
     expect(JSON.stringify(row.spec)).not.toContain('shhh');
     expect(row.spec).toEqual({
       label: 'ci', auth_mode: 'bearer', secret_id: webhook.secret_id,
@@ -433,7 +433,7 @@ describe('webhook registration', () => {
     expect(await h.deliver({
       trigger_id: created.trigger_id, body_text,
       hmac_timestamp: String(NOW),
-      hmac_signature: await hmacSha256Hex(created.secret!, `${NOW}.${body_text}`),
+      hmac_signature: await hmacSha256Hex(present(created.secret, 'the minted webhook secret'), `${NOW}.${body_text}`),
     })).toMatchObject({ status: 'admitted', admitted: true });
   });
 
@@ -459,7 +459,7 @@ describe('webhook registration', () => {
 
     const refusing = {
       put: () => { throw new Error('disk is unwell'); },
-      deleteByTrigger: h.secrets.deleteByTrigger,
+      deleteByTrigger: (trigger_id: string) => h.secrets.deleteByTrigger(trigger_id),
     };
 
     await expect(registerDurableWebhook(
@@ -494,15 +494,15 @@ describe('revocation closes the trigger and deletes its secret together', () => 
   test('revoking deletes the secret material and retains the byte-free audit row', async () => {
     const h = hub();
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
-    const spec: Partial<WebhookTriggerSpec> = h.triggers.get(trigger_id)!.spec;
+    const spec: Partial<WebhookTriggerSpec> = present(h.triggers.get(trigger_id), 'the registered trigger').spec;
 
     expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets)).toEqual({ ok: true, changed: true });
 
     // The plaintext is gone from storage the moment the trigger closed — one
     // host call, one transaction on the single-threaded SQLite both backends run.
-    expect(await h.secrets.get(spec.secret_id!)).toBeNull();
+    expect(await h.secrets.get(present(spec.secret_id, 'the stored secret id'))).toBeNull();
     // The audit half survives, and it never carried the secret.
-    const row = h.triggers.get(trigger_id)!;
+    const row = present(h.triggers.get(trigger_id), 'the registered trigger');
     expect(row.state).toBe('revoked');
     expect(row.revoked_at).toBe(NOW);
     expect(JSON.stringify(row.spec)).not.toContain('shhh');
@@ -524,7 +524,7 @@ describe('revocation closes the trigger and deletes its secret together', () => 
     // renders the trigger id into model-visible context for every admitted
     // delivery — so the id in the model's hand is this one.
     const trigger_id = await h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
-    const spec: Partial<WebhookTriggerSpec> = h.triggers.get(trigger_id)!.spec;
+    const spec: Partial<WebhookTriggerSpec> = present(h.triggers.get(trigger_id), 'the registered trigger').spec;
 
     // `agent.cancelSchedule` reaches the same host call as the operator's route.
     expect(cancelTrigger(h.triggers, trigger_id, NOW, 'self', h.secrets)).toEqual({
@@ -535,8 +535,8 @@ describe('revocation closes the trigger and deletes its secret together', () => 
 
     // Refused all the way down: the ingress still accepts, and its credential
     // was not collected on the way past.
-    expect(h.triggers.get(trigger_id)!.state).toBe('active');
-    expect(await h.secrets.get(spec.secret_id!)).toBe('shhh');
+    expect(present(h.triggers.get(trigger_id), 'the registered trigger').state).toBe('active');
+    expect(await h.secrets.get(present(spec.secret_id, 'the stored secret id'))).toBe('shhh');
 
     // The owner's own surface is unchanged.
     expect(cancelTrigger(h.triggers, trigger_id, NOW, 'owner', h.secrets).changed).toBe(true);

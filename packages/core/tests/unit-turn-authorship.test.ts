@@ -94,8 +94,8 @@ describe('the seam stamps who wrote the turn', () => {
       kind: 'mcp', text: 'ship the coupon fix',
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
-    expect(turns[0]!.metadata?.[TURN_AUTHOR_METADATA_KEY]).toBe('operator');
-    expect(turnAuthor({ metadata: turns[0]!.metadata })).toBe('operator');
+    expect(turns[0].metadata?.[TURN_AUTHOR_METADATA_KEY]).toBe('operator');
+    expect(turnAuthor({ metadata: turns[0].metadata })).toBe('operator');
   });
 
   test('the live card and the durable turn carry the same authorship', async () => {
@@ -105,8 +105,8 @@ describe('the seam stamps who wrote the turn', () => {
     const { host, turns, cards } = recordingHost();
     await new Inbox(host).send({ kind: FORK_INTERRUPTED_SIGNAL, text: '23 head(s)…' });
     expect(cards).toHaveLength(1);
-    expect(cards[0]![TURN_AUTHOR_METADATA_KEY]).toBe('harness');
-    expect(turns[0]!.metadata?.[TURN_AUTHOR_METADATA_KEY]).toBe('harness');
+    expect(cards[0][TURN_AUTHOR_METADATA_KEY]).toBe('harness');
+    expect(turns[0].metadata?.[TURN_AUTHOR_METADATA_KEY]).toBe('harness');
   });
 
   test('the stamp survives the metadata a producer brings with it', () => {

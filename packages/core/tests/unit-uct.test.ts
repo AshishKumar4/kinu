@@ -6,7 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, present } from '@kinu.run/test-utils';
 import { selectNode } from '../src/mcts/uct';
 import { initSearchTables } from '../src/mcts/schemas';
 
@@ -33,30 +33,43 @@ describe('UCT selection', () => {
     const { sql, actor } = setup();
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
         VALUES (${actor.actorId}, 'r', 'root', 'test', 0, 0, 'open')`;
-    const node = selectNode(sql, actor, 'r');
-    expect(node).not.toBeNull();
-    expect(node!.id).toBe('root');
+    const node = present(selectNode(sql, actor, 'r'), 'the selected node');
+    expect(node.id).toBe('root');
   });
 
-  test('never selects pruned nodes', () => {
-    const { sql, actor } = setup();
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${actor.actorId}, 'r', 'pruned1', 'test', 0.99, 100, 'pruned')`;
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${actor.actorId}, 'r', 'open1', 'test', 0.1, 1, 'open')`;
-    const node = selectNode(sql, actor, 'r');
-    expect(node!.id).toBe('open1');
-  });
+  // Two sibling nodes and the one UCT picks: a closed status is never
+  // selectable however good its value, and among open ones value decides when
+  // the visit counts (and so the exploration bonus) match.
+  const twoNodeCases = [
+    {
+      name: 'never selects pruned nodes',
+      nodes: [['pruned1', 0.99, 100, 'pruned'], ['open1', 0.1, 1, 'open']],
+      selects: 'open1',
+    },
+    {
+      name: 'never selects failed nodes',
+      nodes: [['failed1', 0.99, 100, 'failed'], ['open1', 0.1, 1, 'open']],
+      selects: 'open1',
+    },
+    {
+      name: 'selects higher-value node when exploration bonus is equal',
+      nodes: [['low', 0.3, 5, 'open'], ['high', 0.9, 5, 'open']],
+      selects: 'high',
+    },
+  ] satisfies ReadonlyArray<{ name: string; nodes: [string, number, number, string][]; selects: string }>;
 
-  test('never selects failed nodes', () => {
-    const { sql, actor } = setup();
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${actor.actorId}, 'r', 'failed1', 'test', 0.99, 100, 'failed')`;
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${actor.actorId}, 'r', 'open1', 'test', 0.1, 1, 'open')`;
-    const node = selectNode(sql, actor, 'r');
-    expect(node!.id).toBe('open1');
-  });
+  for (const c of twoNodeCases) {
+    test(c.name, () => {
+      const { sql, actor } = setup();
+
+      for (const [id, value, visits, status] of c.nodes) {
+        void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
+            VALUES (${actor.actorId}, 'r', ${id}, 'test', ${value}, ${visits}, ${status})`;
+      }
+
+      expect(present(selectNode(sql, actor, 'r'), 'the selected node').id).toBe(c.selects);
+    });
+  }
 
   // Platform contract, NOT a UCT test: SQLite's log() is log₁₀, which is the
   // whole reason uct.ts divides by log(exp(1.0)). selectNode's own use of ln is
@@ -70,17 +83,6 @@ describe('UCT selection', () => {
 
     if (!result) throw new Error('SQLite logarithm query returned no row');
     expect(Math.abs(result.ln10 - 2.302585)).toBeLessThan(0.001);
-  });
-
-  test('selects higher-value node when exploration bonus is equal', () => {
-    const { sql, actor } = setup();
-    // Two nodes with same visits (so same exploration bonus)
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${actor.actorId}, 'r', 'low', 'test', 0.3, 5, 'open')`;
-    void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status)
-        VALUES (${actor.actorId}, 'r', 'high', 'test', 0.9, 5, 'open')`;
-    const node = selectNode(sql, actor, 'r');
-    expect(node!.id).toBe('high');
   });
 
   test('#5: root keeps a non-zero exploration term so it can re-widen across iterations', () => {
@@ -100,7 +102,7 @@ describe('UCT selection', () => {
     // Fresh children deepen first, but once they are well-visited the root's
     // surviving exploration term makes it the UCT-max → the tree re-widens.
     void sql`UPDATE search_nodes SET visits = 50 WHERE actor_id = ${actor.actorId} AND id IN ('c1','c2')`;
-    const reselect = selectNode(sql, actor, 'r')!;
+    const reselect = present(selectNode(sql, actor, 'r'), 'the selected node');
     expect(reselect.id).toBe('root');
   });
 
@@ -113,8 +115,8 @@ describe('UCT selection', () => {
         VALUES (${actor.actorId}, 'r', 'shallow', 'test', 0.1, 1, 'open', 1)`;
     // Old behavior aborted the whole search on the deep argmax. Now selection
     // skips it and returns the shallower node so the budget keeps flowing.
-    const node = selectNode(sql, actor, 'r', undefined, 3);
-    expect(node!.id).toBe('shallow');
+    const node = present(selectNode(sql, actor, 'r', undefined, 3), 'the selected node');
+    expect(node.id).toBe('shallow');
   });
 
   test('WP-A4: returns null only when every open node is at/beyond the cap', () => {
@@ -122,7 +124,7 @@ describe('UCT selection', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, depth)
         VALUES (${actor.actorId}, 'r', 'capped', 'test', 0.9, 1, 'open', 5)`;
     expect(selectNode(sql, actor, 'r', undefined, 5)).toBeNull();
-    expect(selectNode(sql, actor, 'r', undefined, 6)!.id).toBe('capped');
+    expect(present(selectNode(sql, actor, 'r', undefined, 6), 'the selected node').id).toBe('capped');
   });
 
   test('exploration bonus favors less-visited nodes', () => {
@@ -137,11 +139,11 @@ describe('UCT selection', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status)
         VALUES (${actor.actorId}, 'r', 'fresh', 'root', 'test', 0.5, 1, 'open')`;
 
-    const node = selectNode(sql, actor, 'r');
+    const node = present(selectNode(sql, actor, 'r'), 'the selected node');
     // fresh should be selected: it has visits=1 so exploration bonus is high
     // UCT(fresh) = 0.5 + √2 * √(ln(100)/1) ≈ 0.5 + 1.414 * √4.605 ≈ 0.5 + 3.03 = 3.53
     // UCT(visited) = 0.6 + √2 * √(ln(100)/50) ≈ 0.6 + 1.414 * √0.092 ≈ 0.6 + 0.43 = 1.03
-    expect(node!.id).toBe('fresh');
+    expect(node.id).toBe('fresh');
   });
 });
 
@@ -167,7 +169,7 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth)
         VALUES (${actor.actorId}, 'r', 'explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
 
-    return selectNode(sql, actor, 'r', W)!.id;
+    return present(selectNode(sql, actor, 'r', W), 'the selected node').id;
   }
 
   test('a 20-visit low-value sibling still out-explores the exploited node (log₁₀ would not)', () => {

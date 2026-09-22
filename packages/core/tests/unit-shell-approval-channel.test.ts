@@ -74,9 +74,9 @@ describe('run tool — interactive shell approval channel', () => {
     expect(executed).toEqual([GATED]);
     // The channel sees the command and the review that explains the gate.
     expect(asked.length).toBe(1);
-    expect(asked[0]!.command).toBe(GATED);
-    expect(asked[0]!.review.decision).toBe('gate');
-    expect(asked[0]!.review.hits.length).toBeGreaterThan(0);
+    expect(asked[0].command).toBe(GATED);
+    expect(asked[0].review.decision).toBe('gate');
+    expect(asked[0].review.hits.length).toBeGreaterThan(0);
   });
 
   test('"deny" reports the refusal to the model and never runs the command', async () => {

@@ -23,77 +23,33 @@ describe('Scaffold modification (4-gate)', () => {
     expect(result.stage).toBe(1);
   });
 
-  test('rejects code with import statement', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+  // Every gate-one refusal: the source a proposal may not carry, and the one
+  // shape it must. `says` is asserted where the message itself is the contract.
+  const refusedSources = [
+    { name: 'rejects code with import statement', code: 'import fs from "fs";\nasync function* run(rt, task) {}', says: 'Forbidden pattern' },
+    { name: 'rejects code with require()', code: 'const x = require("fs");\nasync function* run(rt, task) {}', says: null },
+    { name: 'rejects code with eval()', code: 'eval("malicious"); async function* run(rt, task) {}', says: null },
+    { name: 'rejects code with globalThis', code: 'globalThis.fetch("evil"); async function* run(rt, task) {}', says: null },
+    { name: 'rejects code without required signature', code: 'function wrongSignature() { return 42; }', says: 'async function* run(rt, task)' },
+  ];
 
-    const result = await modifyScaffold(
-      rt,
-      'This is a long enough rationale to pass the 50 char minimum check.',
-      'import fs from "fs";\nasync function* run(rt, task) {}',
-    );
+  for (const c of refusedSources) {
+    test(c.name, async () => {
+      const { rt } = createTestRuntime();
+      initScaffoldTables(rt.storage.execRaw);
 
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe(1);
-    expect(result.error).toContain('Forbidden pattern');
-  });
+      const result = await modifyScaffold(
+        rt,
+        'This is a long enough rationale to pass the 50 char minimum check.',
+        c.code,
+      );
 
-  test('rejects code with require()', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
+      expect(result.ok).toBe(false);
+      expect(result.stage).toBe(1);
 
-    const result = await modifyScaffold(
-      rt,
-      'This is a long enough rationale to pass the 50 char minimum check.',
-      'const x = require("fs");\nasync function* run(rt, task) {}',
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe(1);
-  });
-
-  test('rejects code with eval()', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
-
-    const result = await modifyScaffold(
-      rt,
-      'This is a long enough rationale to pass the 50 char minimum check.',
-      'eval("malicious"); async function* run(rt, task) {}',
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe(1);
-  });
-
-  test('rejects code with globalThis', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
-
-    const result = await modifyScaffold(
-      rt,
-      'This is a long enough rationale to pass the 50 char minimum check.',
-      'globalThis.fetch("evil"); async function* run(rt, task) {}',
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe(1);
-  });
-
-  test('rejects code without required signature', async () => {
-    const { rt } = createTestRuntime();
-    initScaffoldTables(rt.storage.execRaw);
-
-    const result = await modifyScaffold(
-      rt,
-      'This is a long enough rationale to pass the 50 char minimum check.',
-      'function wrongSignature() { return 42; }',
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.stage).toBe(1);
-    expect(result.error).toContain('async function* run(rt, task)');
-  });
+      if (c.says !== null) expect(result.error).toContain(c.says);
+    });
+  }
 
   test('accepts valid scaffold code', async () => {
     const { rt } = createTestRuntime();
