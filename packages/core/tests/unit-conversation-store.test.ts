@@ -15,6 +15,7 @@ import { SessionHistory } from '../src/session/history';
 import type { SessionTranscript } from '../src/session/transcript';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
+import { present } from '@kinu.run/test-utils';
 
 /** A workspace, the actor its transcript belongs to, and the canonical writers
  *  every seed below goes through — the entries are keyed by actor, so a
@@ -84,14 +85,14 @@ describe('conversationTurnPair — what a grader attributes from', () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
 
-    const pair = await conversationTurnPair(s.transcript, 'a1');
-    expect(pair).toBeDefined();
-    expect(pair!.sessionId).toBe(CHAT_SESSION_ID);
-    expect(pair!.responseId).toBe('a1');
-    expect(pair!.request).toBe('first ask');
-    expect(pair!.response).toBe('first answer');
-    expect(pair!.startedAtMs).not.toBeNull();
-    expect(pair!.endedAtMs).toBeGreaterThanOrEqual(pair!.startedAtMs!);
+    const pair = present(await conversationTurnPair(s.transcript, 'a1'), 'the turn pair for a1');
+
+    expect(pair.sessionId).toBe(CHAT_SESSION_ID);
+    expect(pair.responseId).toBe('a1');
+    expect(pair.request).toBe('first ask');
+    expect(pair.response).toBe('first answer');
+    expect(pair.startedAtMs).not.toBeNull();
+    expect(pair.endedAtMs).toBeGreaterThanOrEqual(present(pair.startedAtMs, 'the pair start'));
   });
 
   test('a turn id that names no answer has no pair', async () => {
@@ -111,9 +112,10 @@ describe('conversationTurnPair — what a grader attributes from', () => {
     await s.history.record(CHAT_SESSION_ID, { id: 'u2', parentId: 'a1', origin: 'input',
       message: { role: 'user', content: 'second ask' } });
 
-    const pair = await conversationTurnPair(s.transcript, 'sib');
-    expect(pair!.request).toBe('first answer');
-    expect(pair!.response).toBe('branch take');
+    const pair = present(await conversationTurnPair(s.transcript, 'sib'), 'the turn pair for sib');
+
+    expect(pair.request).toBe('first answer');
+    expect(pair.response).toBe('branch take');
   });
 
   test('an answer that roots its own chain reports a null request, not an absent pair', async () => {
@@ -121,11 +123,11 @@ describe('conversationTurnPair — what a grader attributes from', () => {
     await s.history.record(CHAT_SESSION_ID, { id: 'orphan', parentId: null, origin: 'output',
       message: { role: 'assistant', content: 'unprompted' } });
 
-    const pair = await conversationTurnPair(s.transcript, 'orphan');
-    expect(pair).toBeDefined();
-    expect(pair!.request).toBeNull();
-    expect(pair!.startedAtMs).toBeNull();
-    expect(pair!.response).toBe('unprompted');
+    const pair = present(await conversationTurnPair(s.transcript, 'orphan'), 'the turn pair for orphan');
+
+    expect(pair.request).toBeNull();
+    expect(pair.startedAtMs).toBeNull();
+    expect(pair.response).toBe('unprompted');
   });
 
   test('a non-default tree answers for its own session', async () => {

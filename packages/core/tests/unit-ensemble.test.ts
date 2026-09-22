@@ -7,7 +7,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { present, testActorHandle } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
 import {
@@ -35,7 +35,7 @@ type Sql = ReturnType<typeof makeSql>;
 function panelOf(judges: ReadonlyArray<EnsembleJudge>): EnsemblePanel {
   return {
     async specs() { return judges.map((j) => j.spec); },
-    judge(spec) { return judges.find((j) => j.spec === spec)!; },
+    judge(spec) { return present(judges.find((j) => j.spec === spec), `a judge for ${spec}`); },
   };
 }
 
@@ -209,7 +209,7 @@ describe('running the panel', () => {
     const { run, gap } = await runEnsemble(sql, actor, panelOf([always('a/1', 'accepted'), always('b/1', 'accepted')]));
     expect(run).toBeNull();
     expect(gap?.kind).toBe('no_gold_labels');
-    const said = describeEnsembleGap(gap!);
+    const said = describeEnsembleGap(present(gap, 'the ensemble gap'));
     expect(said).toContain('kinu label export');
     expect(said).toContain('kinu label ingest');
   });
@@ -222,7 +222,7 @@ describe('running the panel', () => {
     labelAll(sql, actor, () => 'accepted');
     const { gap } = await runEnsemble(sql, actor, panelOf([always('a/1', 'accepted')]));
     expect(gap?.kind).toBe('too_few_judges');
-    expect(describeEnsembleGap(gap!)).toContain('two models from different vendors');
+    expect(describeEnsembleGap(present(gap, 'the ensemble gap'))).toContain('two models from different vendors');
     expect(ensembleLabels(sql, actor)).toHaveLength(0);
   });
 
@@ -395,7 +395,8 @@ describe('the panel report', () => {
     const coherence = report.standIn?.conditions[1];
     expect(coherence?.met).toBe(false);
     expect(coherence?.detail).toContain('panel');
-    expect(report.kappa.humanEnsemble!.value).toBeLessThan(report.kappa.humanClassifier!.value);
+    expect(present(report.kappa.humanEnsemble, 'the human-ensemble κ').value)
+      .toBeLessThan(present(report.kappa.humanClassifier, 'the human-classifier κ').value);
   });
 
   test('splits become unclear, are counted, and cost the panel its recall', async () => {
@@ -411,8 +412,10 @@ describe('the panel report', () => {
     expect(report.split).toBe(40);
     expect(report.confusion).toContainEqual({ ensemble: 'unclear', human: 'frustrated', count: 40 });
     // An abstention on a bad turn is a miss, not a neutral outcome.
-    expect(report.accuracy!.sensitivity.mean).toBeLessThan(1);
-    expect(report.accuracy!.sensitivity.mean).toBeGreaterThan(0.5);
+    const accuracy = present(report.accuracy, 'the panel accuracy');
+
+    expect(accuracy.sensitivity.mean).toBeLessThan(1);
+    expect(accuracy.sensitivity.mean).toBeGreaterThan(0.5);
   });
 
   test('the classifier κ is measured over the panel’s own turns, so the two compare', async () => {
@@ -439,9 +442,11 @@ describe('the panel report', () => {
 
     const report = ensembleReport(sql, actor);
     expect(report.members.map((m) => m.model)).toEqual(['anthropic/one', 'codex/two']);
-    expect(report.members[0].kappa!.value).toBeCloseTo(1, 10);
-    expect(report.members[1].kappa!.value).toBeCloseTo(0, 6);
-    expect(report.kappa.humanEnsemble!.value).toBeLessThan(report.members[0].kappa!.value);
+    const firstMember = present(report.members[0].kappa, 'the first member κ');
+
+    expect(firstMember.value).toBeCloseTo(1, 10);
+    expect(present(report.members[1].kappa, 'the second member κ').value).toBeCloseTo(0, 6);
+    expect(present(report.kappa.humanEnsemble, 'the human-ensemble κ').value).toBeLessThan(firstMember.value);
   });
 });
 
@@ -488,15 +493,14 @@ describe('an unmeasured panel', () => {
 function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: number; budget: number; seed: number }) {
   const random = seededRandom(spec.seed);
 
-  const rows = Array.from({ length: 3000 }, () => {
+  const population = Array.from({ length: 3000 }, () => {
     const negative = random() < 0.15;
     // The classifier is the one the sample is stratified on: 60% sensitive,
     // 95% specific — roughly what the real one measures at.
     const classifierFlags = negative ? random() < 0.6 : random() >= 0.95;
+    let predicted: TurnOutcome = 'accepted';
 
-    const predicted: TurnOutcome = classifierFlags
-      ? (random() < 0.7 ? 'corrected' : 'frustrated')
-      : 'accepted';
+    if (classifierFlags) predicted = random() < 0.7 ? 'corrected' : 'frustrated';
 
     return {
       negative,
@@ -505,19 +509,19 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
     };
   });
 
-  const byVerdict = new Map<TurnOutcome, typeof rows>();
+  const byVerdict = new Map<TurnOutcome, typeof population>();
 
-  for (const row of rows) {
+  for (const row of population) {
     const bucket = byVerdict.get(row.predicted) ?? [];
     bucket.push(row);
     byVerdict.set(row.predicted, bucket);
   }
 
-  const verdicts = [...byVerdict.keys()];
-  const quotas = allocateLabelBudget(verdicts.map((v) => byVerdict.get(v)!.length), spec.budget);
+  const strata = [...byVerdict];
+  const quotas = allocateLabelBudget(strata.map(([, bucket]) => bucket.length), spec.budget);
   const compared: ComparedTurn[] = [];
-  verdicts.forEach((verdict, i) => {
-    const bucket = byVerdict.get(verdict)!;
+
+  for (const [i, [, bucket]] of strata.entries()) {
     const take = Math.min(quotas[i], bucket.length);
 
     // Systematic, so the draw spans the stratum rather than a corner of it.
@@ -530,9 +534,9 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
         perJudge: [],
       });
     }
-  });
+  }
 
-  return panelStrata(compared, new Map(verdicts.map((v) => [v, byVerdict.get(v)!.length])));
+  return panelStrata(compared, new Map(strata.map(([verdict, bucket]) => [verdict, bucket.length])));
 }
 
 function profiles(spec: { panelSensitivity: number; panelSpecificity: number; budget: number; reps: number }) {
@@ -660,17 +664,21 @@ describe('the pre-registered bar', () => {
     const { sql, actor } = await panelOver({
       ledger: { accepted: 200, corrected: 60, frustrated: 40 },
       human: (row) => row.outcome,
-      says: (turn) => turn.verdict === 'accepted'
-        ? (turn.index % 10 === 0 ? 'corrected' : 'accepted')
-        : (turn.index % 2 === 0 ? 'accepted' : turn.verdict),
+      says: (turn) => {
+        if (turn.verdict === 'accepted') return turn.index % 10 === 0 ? 'corrected' : 'accepted';
+
+        return turn.index % 2 === 0 ? 'accepted' : turn.verdict;
+      },
     });
 
     const report = ensembleReport(sql, actor);
-    const recall = report.standIn!.conditions[2];
+    const recall = present(report.standIn, 'the stand-in verdict').conditions[2];
+    const accuracy = present(report.accuracy, 'the panel accuracy');
+
     expect(recall.met).toBe(false);
     expect(recall.detail).toMatch(/recall ≥ 0\.\d\d, specificity ≥ 0\.\d\d/);
     // The point estimate is the honest middle; the bound is what the bar reads.
-    expect(report.accuracy!.sensitivity.lo).toBeLessThan(report.accuracy!.sensitivity.mean);
-    expect(report.accuracy!.sensitivity.mean).toBeGreaterThan(0.4);
+    expect(accuracy.sensitivity.lo).toBeLessThan(accuracy.sensitivity.mean);
+    expect(accuracy.sensitivity.mean).toBeGreaterThan(0.4);
   });
 });

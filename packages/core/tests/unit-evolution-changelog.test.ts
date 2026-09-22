@@ -30,6 +30,7 @@ import { describePathology } from '../src/evolution/pathology';
 import { createRefinementStore, initRefinementTables } from '../src/evolution/refinement';
 import { createTestRuntime } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
+import { present } from '@kinu.run/test-utils';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -58,7 +59,15 @@ async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
   const result = await modifyScaffold(rt, RATIONALE, V1_CODE);
   expect(result.ok).toBe(true);
 
-  return result.version!;
+  return present(result.version, 'the version modifyScaffold assigned');
+}
+
+interface ReplayRowSeed {
+  id: string;
+  at: number;
+  n: number;
+  mean: number;
+  scaffoldVersion: number;
 }
 
 describe('buildChangelog — every kind from the seeded ledgers', () => {
@@ -77,19 +86,18 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
-    const scaffold = entries.find((e) => e.kind === 'scaffold');
-    expect(scaffold).toBeDefined();
-    expect(scaffold!.summary).toBe('I am testing an improvement to how I work');
-    expect(scaffold!.evidence).toContain(`Proposed scaffold v${version}`);
-    expect(scaffold!.evidence).toContain('shadow trial in progress');
-    expect(scaffold!.evidence).toContain('1W-1L-0T');
-    expect(scaffold!.evidence).toContain('win-rate 50%');
-    expect(scaffold!.revert).toEqual({ type: 'scaffold_rollback', target: String(version) });
-    expect(scaffold!.scaffoldVersion).toBe(version);
+    const scaffold = present(entries.find((e) => e.kind === 'scaffold'), 'the scaffold entry');
+    expect(scaffold.summary).toBe('I am testing an improvement to how I work');
+    expect(scaffold.evidence).toContain(`Proposed scaffold v${version}`);
+    expect(scaffold.evidence).toContain('shadow trial in progress');
+    expect(scaffold.evidence).toContain('1W-1L-0T');
+    expect(scaffold.evidence).toContain('win-rate 50%');
+    expect(scaffold.revert).toEqual({ type: 'scaffold_rollback', target: String(version) });
+    expect(scaffold.scaffoldVersion).toBe(version);
     // The v0 bootstrap is not a self-change — no entry for it.
     expect(entries.filter((e) => e.kind === 'scaffold')).toHaveLength(1);
     // Nothing named a pathology, so the line claims none.
-    expect(scaffold!.evidence).not.toContain('targets');
+    expect(scaffold.evidence).not.toContain('targets');
   });
 
   test('a scaffold entry says which failure the version was written for', async () => {
@@ -100,8 +108,12 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const result = await modifyScaffold(rt, RATIONALE, `// pathology: no_action/prose\n${V1_CODE}`);
     expect(result.ok).toBe(true);
 
-    const scaffold = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold');
-    expect(scaffold!.evidence).toContain(`targets ${describePathology('no_action/prose')}`);
+    const scaffold = present(
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold'),
+      'the scaffold entry',
+    );
+
+    expect(scaffold.evidence).toContain(`targets ${describePathology('no_action/prose')}`);
   });
 
   test('crafted tool entry shows the EMA score and is informational (no revert)', () => {
@@ -130,12 +142,13 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact');
     expect(entry.summary).toBe('Learned 1 thing about your environment');
     expect(entry.items).toHaveLength(1);
-    expect(entry.items![0].id).toBe('fact:sandbox.npm_version');
-    expect(entry.items![0].summary).toBe('Your sandbox runs npm v10');
-    expect(entry.items![0].evidence).toContain('sandbox.npm_version = npm v10');
-    expect(entry.items![0].evidence).toContain('confidence 90%');
-    expect(entry.items![0].evidence).toContain('via sleep-time-compute');
-    expect(entry.items![0].revert).toEqual({ type: 'fact_forget', target: 'sandbox.npm_version' });
+    const [item] = present(entry.items, 'the fact aggregate items');
+    expect(item.id).toBe('fact:sandbox.npm_version');
+    expect(item.summary).toBe('Your sandbox runs npm v10');
+    expect(item.evidence).toContain('sandbox.npm_version = npm v10');
+    expect(item.evidence).toContain('confidence 90%');
+    expect(item.evidence).toContain('via sleep-time-compute');
+    expect(item.revert).toEqual({ type: 'fact_forget', target: 'sandbox.npm_version' });
     expect(entry.revert).toEqual({ type: 'fact_forget_many', targets: ['sandbox.npm_version'] });
   });
 
@@ -168,12 +181,14 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     facts.upsert('sandbox.npm_version', 'npm v10');
     void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000
       WHERE actor_id = ${rt.actor.actorId} AND key = 'sandbox.npm_version'`;
-    const original = buildChangelog(rt.storage.sql, rt.actor)[0].items![0];
+    const original = present(buildChangelog(rt.storage.sql, rt.actor)[0].items, 'the fact items')[0];
 
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
 
-    expect(buildChangelog(rt.storage.sql, rt.actor)[0].items![0].id).toBe(original.id);
-    expect(buildChangelog(rt.storage.sql, rt.actor)[0].items![0].at).toBe(1000);
+    const reobserved = present(buildChangelog(rt.storage.sql, rt.actor)[0].items, 'the fact items')[0];
+
+    expect(reobserved.id).toBe(original.id);
+    expect(reobserved.at).toBe(1000);
     expect(buildChangelog(rt.storage.sql, rt.actor, { since: 1000 })).toEqual([]);
   });
 
@@ -186,8 +201,9 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     facts.upsert('sandbox.npm_version', 'npm v10');
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: 1000 });
-    expect(entry.items![0].id).toBe('fact:sandbox.npm_version');
-    expect(entry.items![0].summary).toBe('Your sandbox runs npm v10');
+    const [item] = present(entry.items, 'the fact aggregate items');
+    expect(item.id).toBe('fact:sandbox.npm_version');
+    expect(item.summary).toBe('Your sandbox runs npm v10');
   });
 
   test('GEPA, replay, and outcome entries are informational (no revert)', () => {
@@ -225,17 +241,17 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(gepa[0].evidence).toContain('12 metric calls');
     expect(gepa[0].revert).toBeUndefined();
 
-    const replay = entries.find((e) => e.kind === 'replay');
-    expect(replay!.summary).toContain('Self-test score');
-    expect(replay!.evidence).toContain('loss 0.25');
-    expect(replay!.evidence).toContain('6 labeled turns');
-    expect(replay!.revert).toBeUndefined();
+    const replay = present(entries.find((e) => e.kind === 'replay'), 'the replay entry');
+    expect(replay.summary).toContain('Self-test score');
+    expect(replay.evidence).toContain('loss 0.25');
+    expect(replay.evidence).toContain('6 labeled turns');
+    expect(replay.revert).toBeUndefined();
 
-    const outcomes = entries.find((e) => e.kind === 'outcomes');
-    expect(outcomes!.summary).toContain('Graded 2 turns');
-    expect(outcomes!.evidence).toContain('1 accepted');
-    expect(outcomes!.evidence).toContain('1 corrected');
-    expect(outcomes!.revert).toBeUndefined();
+    const outcomes = present(entries.find((e) => e.kind === 'outcomes'), 'the outcomes entry');
+    expect(outcomes.summary).toContain('Graded 2 turns');
+    expect(outcomes.evidence).toContain('1 accepted');
+    expect(outcomes.evidence).toContain('1 corrected');
+    expect(outcomes.revert).toBeUndefined();
   });
 
   test('the digest attributes each verdict to the source that produced it', () => {
@@ -258,7 +274,11 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       userMessage: 'fix it', assistantResponse: 'fixed', followup: 'thanks',
     });
 
-    const outcomes = buildChangelog(sql, actor).find((e) => e.kind === 'outcomes')!;
+    const outcomes = present(
+      buildChangelog(sql, actor).find((e) => e.kind === 'outcomes'),
+      'the outcomes entry',
+    );
+
     expect(outcomes.summary).toContain('Graded 3 turns');
     expect(outcomes.summary).toContain('2 by whether their tool calls ran');
     expect(outcomes.summary).toContain('1 from how the user replied');
@@ -285,7 +305,13 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       userMessage: 'ship it', assistantResponse: 'shipped', now: 200,
     });
 
-    const items = buildChangelog(sql, actor).find((e) => e.kind === 'outcomes')!.items!;
+    const outcomes = present(
+      buildChangelog(sql, actor).find((e) => e.kind === 'outcomes'),
+      'the outcomes entry',
+    );
+
+    const items = present(outcomes.items, 'the graded-turn items');
+
     expect(items.map((i) => i.summary)).toEqual([
       'accepted — "ship it"',
       'corrected — "add pagination to the chat list"',
@@ -397,35 +423,37 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       });
     }
 
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
+
+    await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     const now = Date.now();
 
-    const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
+    const replayRow = ({ id, at, n, mean, scaffoldVersion }: ReplayRowSeed) => {
       void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
           VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
     };
 
     // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
     // this is not a direction and must not be reported as one.
-    replayRow('rpl-old', now - 1000, 4, 0.50, 0);
-    replayRow('rpl-new', now, 4, 0.75, version);
+    replayRow({ id: 'rpl-old', at: now - 1000, n: 4, mean: 0.50, scaffoldVersion: 0 });
+    replayRow({ id: 'rpl-new', at: now, n: 4, mean: 0.75, scaffoldVersion: version });
     // 0.30 → 0.95 over 40 instances: the intervals clear each other.
-    replayRow('rpl-lo', now + 1, 40, 0.30, version);
-    replayRow('rpl-hi', now + 2, 40, 0.95, version);
-    replayRow('rpl-drop', now + 3, 40, 0.30, version);
+    replayRow({ id: 'rpl-lo', at: now + 1, n: 40, mean: 0.30, scaffoldVersion: version });
+    replayRow({ id: 'rpl-hi', at: now + 2, n: 40, mean: 0.95, scaffoldVersion: version });
+    replayRow({ id: 'rpl-drop', at: now + 3, n: 40, mean: 0.30, scaffoldVersion: version });
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
-    const scaffold = entries.find((entry) => entry.kind === 'scaffold')!;
+    const scaffold = present(entries.find((entry) => entry.kind === 'scaffold'), 'the scaffold entry');
     expect(scaffold.summary).toBe('I improved how I work (won 3 of 4 trial runs)');
     expect(scaffold.evidence).toContain(`Promoted scaffold v${version}`);
     expect(scaffold.evidence).toContain(RATIONALE);
-    const replay = entries.find((entry) => entry.id === 'replay:rpl-new')!;
+    const replay = present(entries.find((entry) => entry.id === 'replay:rpl-new'), 'the rpl-new entry');
     expect(replay.summary).toBe('Self-test score held within noise at 0.75 (95% CI 0.30–0.95)');
     expect(replay.evidence).toContain('loss 0.25 (95% CI 0.05–0.70)');
     expect(replay.evidence).toContain(`scaffold v${version}`);
-    expect(entries.find((entry) => entry.id === 'replay:rpl-hi')!.summary)
+    expect(present(entries.find((entry) => entry.id === 'replay:rpl-hi'), 'the rpl-hi entry').summary)
       .toBe('Self-test score improved to 0.95 (95% CI 0.83–0.99)');
-    expect(entries.find((entry) => entry.id === 'replay:rpl-drop')!.summary)
+    expect(present(entries.find((entry) => entry.id === 'replay:rpl-drop'), 'the rpl-drop entry').summary)
       .toBe('Self-test score declined to 0.30 (95% CI 0.18–0.45)');
   });
 });
@@ -461,9 +489,9 @@ describe('unseen-count logic (the badge)', () => {
     });
 
     const windowed = buildChangelog(sql, actor, { since: now - 30_000 });
-    const agg = windowed.find((e) => e.kind === 'outcomes');
-    expect(agg!.summary).toContain('Graded 1 turn');
-    expect(agg!.evidence).toBe('1 corrected');
+    const agg = present(windowed.find((e) => e.kind === 'outcomes'), 'the outcomes entry');
+    expect(agg.summary).toContain('Graded 1 turn');
+    expect(agg.evidence).toBe('1 corrected');
   });
 
   /**
@@ -551,7 +579,14 @@ describe('reverts — real paths only', () => {
   test('stable child fact id resolves against a fresh aggregate digest', async () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v10');
-    const id = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!.items![0].id;
+
+    const aggregate = present(
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact'),
+      'the fact aggregate',
+    );
+
+    const id = present(aggregate.items, 'the fact aggregate items')[0].id;
+
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.95 });
 
     const result = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, id);
@@ -564,7 +599,11 @@ describe('reverts — real paths only', () => {
     const { rt, facts } = setup();
     facts.upsert('editor', 'helix');
     facts.upsert('shell', 'fish');
-    const aggregate = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!;
+
+    const aggregate = present(
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact'),
+      'the fact aggregate',
+    );
 
     const result = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, aggregate.id);
 
@@ -578,7 +617,11 @@ describe('reverts — real paths only', () => {
     // announces nothing: there is no act to audit.
     const { rt, facts } = setup();
     facts.upsert('editor', 'helix');
-    const entry = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!;
+
+    const entry = present(
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact'),
+      'the fact aggregate',
+    );
 
     const audit = () => rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'reflection' AND message LIKE 'Operator reverted%'`;
@@ -626,12 +669,16 @@ describe('reverts — real paths only', () => {
   test('promoted scaffold revert round-trips back to the predecessor', async () => {
     const { rt, facts } = setup();
     const version = await seedScaffoldPending(rt);
-    const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
+    const pending = present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold');
     await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(await rt.identity.scaffold.read()).toBe(V1_CODE);
 
     // The digest now shows the promotion as a revertable entry…
-    const entry = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold')!;
+    const entry = present(
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'scaffold'),
+      'the scaffold entry',
+    );
+
     expect(entry.summary).toContain('I improved how I work');
     expect(entry.evidence).toContain(`Promoted scaffold v${version}`);
     expect(entry.revert).toBeDefined();
@@ -646,8 +693,8 @@ describe('reverts — real paths only', () => {
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
 
-    expect(rows.find((r) => r.version === 0)!.status).toBe('current');
-    expect(rows.find((r) => r.version === version)!.status).toBe('rolled_back');
+    expect(present(rows.find((r) => r.version === 0), 'the v0 row').status).toBe('current');
+    expect(present(rows.find((r) => r.version === version), 'the promoted row').status).toBe('rolled_back');
 
     // A second revert of the same (now rolled-back) entry refuses.
     const again = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, {
@@ -668,7 +715,11 @@ describe('reverts — real paths only', () => {
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain('not found');
 
-    const info = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'outcomes')!;
+    const info = present(
+      buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'outcomes'),
+      'the outcomes entry',
+    );
+
     const refused = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, info.id);
     expect(refused.ok).toBe(false);
     expect(refused.error).toContain('informational');
@@ -729,11 +780,11 @@ describe('session-end digest — assembled when the window closes', () => {
 
 /** Seed `n` crafted tools stamped at distinct, controllable times. */
 function seedTools(rt: AgentRuntime, names: ReadonlyArray<string>, at: (i: number) => number): void {
-  names.forEach((name, i) => {
+  for (const [i, name] of names.entries()) {
     rt.craftStore.create({ name, description: `d-${name}`, code: 'async () => 1', params: null, scope: 'local' });
     void rt.storage.sql`UPDATE crafted_tools SET created_at = ${at(i)}, updated_at = ${at(i)}
                    WHERE name = ${name}`;
-  });
+  }
 }
 
 describe('buildChangelog — ordering, limit, and the since window', () => {
@@ -826,18 +877,19 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     );
 
     // The promotion belongs to the version promoted INTO, not the one left behind.
-    expect(byVersion.get(2)!.at).toBe(promotedAt);
-    expect(byVersion.get(1)!.at).toBe(written);
+    expect(present(byVersion.get(2), 'the v2 scaffold entry').at).toBe(promotedAt);
+    expect(present(byVersion.get(1), 'the v1 scaffold entry').at).toBe(written);
   });
 
   test('only live scaffold versions offer a revert', () => {
     const { rt } = setup();
     const written = Date.now() - 10_000;
     const statuses = ['current', 'pending', 'rolled_back', 'superseded'] as const;
-    statuses.forEach((status, i) => {
+
+    for (const [i, status] of statuses.entries()) {
       void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
                      VALUES (${rt.actor.actorId}, ${i + 1}, ${written + i}, 'r', ${status})`;
-    });
+    }
 
     const revertable = new Map(
       buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'scaffold')
@@ -880,7 +932,9 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     facts.upsert('project.deploy_target', 'example.workers.dev');
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact');
-    expect(entry.items![0].summary).toBe('Your project deploy target is example.workers.dev');
+    const [item] = present(entry.items, 'the fact aggregate items');
+
+    expect(item.summary).toBe('Your project deploy target is example.workers.dev');
   });
 
   test('the fact aggregate id is observation-order independent', () => {
@@ -974,7 +1028,7 @@ describe('renderChangelogText + revert guards', () => {
                    VALUES (${rt.actor.actorId}, 1, ${written}, 'stale proposal', 'pending')`;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
                    VALUES (${rt.actor.actorId}, 2, ${written + 1}, 'live proposal', 'pending')`;
-    expect(getPendingScaffold(rt.storage.sql, rt.actor)!.version).toBe(2);
+    expect(present(getPendingScaffold(rt.storage.sql, rt.actor), 'the pending scaffold').version).toBe(2);
 
     const result = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, { type: 'scaffold_rollback', target: '1' });
     expect(result.ok).toBe(false);
