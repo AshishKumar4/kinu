@@ -138,8 +138,8 @@ describe('createHubDeviceTransport', () => {
     try { await transport.rpc('exec', ['ls']); }
     catch (caught) { unattached = caught instanceof Error ? caught : new Error(String(caught)); }
 
-    expect(isDeviceNotConnectedError(unattached)).toBe(true);
-    expect(isWorkspaceUnattachedError(unattached)).toBe(true);
+    expect(isDeviceNotConnectedError({ cause: unattached })).toBe(true);
+    expect(isWorkspaceUnattachedError({ cause: unattached })).toBe(true);
 
     // The denominator: a hub that answers, with no device on it, is the OTHER
     // condition and must not read as unattached.
@@ -153,7 +153,7 @@ describe('createHubDeviceTransport', () => {
     try { await unlinked.rpc('exec', ['ls']); }
     catch (caught) { hubRefusal = caught instanceof Error ? caught : new Error(String(caught)); }
 
-    expect(isWorkspaceUnattachedError(hubRefusal)).toBe(false);
+    expect(isWorkspaceUnattachedError({ cause: hubRefusal })).toBe(false);
   });
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {

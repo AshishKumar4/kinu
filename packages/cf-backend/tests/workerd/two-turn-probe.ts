@@ -75,6 +75,7 @@ import {
   createConsoleLogger,
   createRecordingLogger,
   setDiagnosticsSink,
+  type RecordedLog,
   type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -86,6 +87,7 @@ import type {
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
+  HistoryResult,
   HttpCall,
   ParityCompleted,
   ParityFrame,
@@ -102,6 +104,7 @@ import {
   DriveOnceInputSchema,
   DriveOnceResultSchema,
   ExerciseResultSchema,
+  HistorySchema,
   HttpCallSchema,
   ParityCompletedSchema,
   ParityFrameSchema,
@@ -115,7 +118,6 @@ import {
   type WakeHoldPlacement,
   type WakeRows,
 } from './two-turn-shapes';
-import type { UserDO } from '../../src/user/user-do';
 import { ownerCaller, type WorkMode } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 
@@ -124,6 +126,12 @@ import type { ToolSet } from 'ai';
 // slate-actor-probe.ts:43-48 uses, for the same reason: a probe that retargets
 // the class measures its own fixture, not the shipped surface.
 export { UserDO } from '../../src/user/user-do';
+
+/** A TEXT column read as the string it holds. DO SQLite types every column as
+ *  `ArrayBuffer | string | number | null`, so `String()` over a blob column
+ *  would project `[object ArrayBuffer]` into a row the parity normalizer then
+ *  compares as text; this refuses at the read instead. */
+const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value);
 
 /** The production orchestrator, sealed with its own surface plus the fixture
  *  reads, bound under the production name so the same service-binding
@@ -138,6 +146,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
     this.actorState = ctx;
+    Reflect.deleteProperty(this, 'chatHistoryPage');
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
@@ -150,7 +159,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'armedWakeRows');
     Reflect.deleteProperty(this, 'driveArmedWakes');
     Reflect.deleteProperty(this, 'runStartCauses');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'armedWakeRows', 'driveArmedWakes', 'runStartCauses']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'chatHistoryPage', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'armedWakeRows', 'driveArmedWakes', 'runStartCauses']);
   }
 
   /** The wake proof's hold on the SETTLE WINDOW: a turn-end extension is run
@@ -193,6 +202,15 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     };
   }
 
+  /** The history page a reader gets, parsed into the shape the drive's result
+   *  schema names. The production read runs here, inside the object, because
+   *  `DurableObjectStub`'s mapping of its `Page<ChatHistoryEntry>` return —
+   *  the AI SDK's recursive message parts — overflows TypeScript's
+   *  instantiation depth at the caller. */
+  async chatHistoryPage(): Promise<HistoryResult> {
+    return v.parse(HistorySchema, await this.getChatHistoryPage({}));
+  }
+
   /** The durable rows the wake proof reads: the job, the runs, the answers. */
   async wakeRows(): Promise<WakeRows> {
     const sql = this.actorState.storage.sql;
@@ -200,16 +218,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return v.parse(WakeRowsSchema, {
       jobs: sql.exec('SELECT id, kind, status, result, settled_at FROM background_jobs ORDER BY created_at').toArray()
         .map((row) => ({
-          id: String(row.id), kind: String(row.kind), status: String(row.status),
-          result: row.result === null ? null : String(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
+          id: textColumn(row.id), kind: textColumn(row.kind), status: textColumn(row.status),
+          result: row.result === null ? null : textColumn(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
         })),
       runs: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid").toArray()
         .reduce<Array<{ runId: string; userMessage: string; reason: string | null }>>((runs, row) => {
-          const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(String(row.payload)));
+          const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(textColumn(row.payload)));
 
-          if (String(row.type) === 'run_start') runs.push({ runId: String(row.run_id), userMessage: payload.userMessage ?? '', reason: null });
+          if (textColumn(row.type) === 'run_start') runs.push({ runId: textColumn(row.run_id), userMessage: payload.userMessage ?? '', reason: null });
           else {
-            const run = runs.find((candidate) => candidate.runId === String(row.run_id));
+            const run = runs.find((candidate) => candidate.runId === textColumn(row.run_id));
 
             if (run !== undefined) run.reason = payload.reason ?? null;
           }
@@ -255,11 +273,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       .exec('SELECT actor_id, id, turn_id, mode, text FROM pending_steers ORDER BY actor_id, id')
       .toArray()
       .map((row) => ({
-        actorId: String(row.actor_id),
-        id: String(row.id),
-        turnId: String(row.turn_id),
-        mode: String(row.mode),
-        text: String(row.text),
+        actorId: textColumn(row.actor_id),
+        id: textColumn(row.id),
+        turnId: textColumn(row.turn_id),
+        mode: textColumn(row.mode),
+        text: textColumn(row.text),
       }));
   }
 
@@ -270,11 +288,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       .exec('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq')
       .toArray()
       .map((row) => ({
-        actorId: String(row.actor_id),
-        steerId: String(row.steer_id),
-        filename: String(row.filename),
-        mediaType: String(row.media_type),
-        url: String(row.url),
+        actorId: textColumn(row.actor_id),
+        steerId: textColumn(row.steer_id),
+        filename: textColumn(row.filename),
+        mediaType: textColumn(row.media_type),
+        url: textColumn(row.url),
       }));
   }
 
@@ -285,10 +303,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       .exec("SELECT id, turn_id, consumed_at, variant FROM agent_log WHERE kind = 'event' ORDER BY id")
       .toArray()
       .map((row) => ({
-        id: String(row.id),
-        turnId: row.turn_id === null ? null : String(row.turn_id),
+        id: textColumn(row.id),
+        turnId: row.turn_id === null ? null : textColumn(row.turn_id),
         consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
-        variant: String(row.variant),
+        variant: textColumn(row.variant),
       }));
   }
 
@@ -304,8 +322,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       .exec(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`)
       .toArray()
       .map((row) => ({
-        runId: String(row.run_id),
-        reason: v.parse(v.object({ reason: v.string() }), JSON.parse(String(row.payload))).reason,
+        runId: textColumn(row.run_id),
+        reason: v.parse(v.object({ reason: v.string() }), JSON.parse(textColumn(row.payload))).reason,
       }));
   }
 
@@ -326,17 +344,17 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       pendingSteerFiles: await this.pendingSteerFileRows(),
       agentLog: sql.exec('SELECT id, kind, turn_id, variant, consumed_at, payload FROM agent_log ORDER BY rowid').toArray()
         .map((row) => ({
-          id: String(row.id), kind: String(row.kind), turnId: row.turn_id === null ? null : String(row.turn_id),
-          variant: row.variant === null ? null : String(row.variant), consumed: row.consumed_at !== null, payload: String(row.payload),
+          id: textColumn(row.id), kind: textColumn(row.kind), turnId: row.turn_id === null ? null : textColumn(row.turn_id),
+          variant: row.variant === null ? null : textColumn(row.variant), consumed: row.consumed_at !== null, payload: textColumn(row.payload),
         })),
       terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome, attempts, settled_at FROM terminal_effects ORDER BY rowid').toArray()
         .map((row) => ({
-          sequenceId: String(row.sequence_id), effectKey: String(row.effect_key), effectName: String(row.effect_name), scope: String(row.scope),
-          seq: Number(row.seq), input: String(row.input_json), lane: String(row.lane), status: String(row.status),
-          outcome: row.outcome === null ? null : String(row.outcome), attempts: Number(row.attempts), settled: row.settled_at !== null,
+          sequenceId: textColumn(row.sequence_id), effectKey: textColumn(row.effect_key), effectName: textColumn(row.effect_name), scope: textColumn(row.scope),
+          seq: Number(row.seq), input: textColumn(row.input_json), lane: textColumn(row.lane), status: textColumn(row.status),
+          outcome: row.outcome === null ? null : textColumn(row.outcome), attempts: Number(row.attempts), settled: row.settled_at !== null,
         })),
       runEvents: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid").toArray()
-        .map((row) => ({ runId: String(row.run_id), type: String(row.type), payload: String(row.payload) })),
+        .map((row) => ({ runId: textColumn(row.run_id), type: textColumn(row.type), payload: textColumn(row.payload) })),
     });
   }
   /** The state a dead activation leaves behind: an event bound to a drain turn
@@ -439,7 +457,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       .toArray()
       .map((row) => v.parse(
         v.fallback(v.looseObject({ caused_by: v.fallback(v.string(), '') }), { caused_by: '' }),
-        JSON.parse(String(row.payload)),
+        JSON.parse(textColumn(row.payload)),
       ).caused_by);
   }
 }
@@ -517,16 +535,31 @@ function titleAnswer(): string {
   return answer;
 }
 
+/** The lane a call belongs to, keyed on request SHAPE and never on prompt
+ *  text: a streamed call is the turn, and among the completion lanes a leading
+ *  system message is the title suggest (`suggestTitle` passes the system half
+ *  separately, actor-agent.ts:5609-5615) while user-only messages are the
+ *  sleep-time judge (orchestrator.ts:2698). */
+function laneOf(stream: boolean, messages: readonly { role?: string }[]): CallRecord['lane'] {
+  if (stream) return 'turn';
+
+  if (messages[0]?.role === 'system') return 'title';
+
+  return 'sleep';
+}
+
 export class FakeAI extends WorkerEntrypoint {
   /** The one method `createDirectWorkersAIFetch` calls on the binding. */
   async run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response> {
     const signal = options?.signal;
 
-    const signalKind =
-      signal === undefined ? 'undefined'
-      : signal === null ? 'null'
-      : signal instanceof AbortSignal ? 'AbortSignal'
-      : 'foreign';
+    // Absent and null stay distinct kinds: only one of them means the adapter
+    // never passed a signal at all.
+    let signalKind = 'foreign';
+
+    if (signal === undefined) signalKind = 'undefined';
+    else if (signal === null) signalKind = 'null';
+    else if (signal instanceof AbortSignal) signalKind = 'AbortSignal';
 
     const parsed = v.parse(RunInputsSchema, inputs);
     const stream = parsed.stream ?? false;
@@ -541,15 +574,11 @@ export class FakeAI extends WorkerEntrypoint {
     const users = messages
       .filter((m) => m.role === 'user')
       .map((m) => messageText(v.parse(MessageContentSchema, m.content ?? '')));
-    // The lane key. The openai-compatible layer normalizes every call to
-    // `messages` before the binding (a `prompt` string never arrives as one),
-    // so the turn is `stream: true` and every completion lane is `stream:
-    // false`; among completions the title lane's leading system message —
-    // `suggestTitle` passes the system half separately
-    // (actor-agent.ts:5609-5615) — separates it from the sleep judge's
-    // user-only messages (orchestrator.ts:2698). Roles, never text.
 
-    const lane = stream ? 'turn' : messages[0]?.role === 'system' ? 'title' : 'sleep';
+    // The openai-compatible layer normalizes every call to `messages` before
+    // the binding (a `prompt` string never arrives as one), so the lane key
+    // below reads the stream flag and the leading role.
+    const lane = laneOf(stream, messages);
 
     recordedCalls.push({ model, users, signalKind, stream, lane });
 
@@ -585,6 +614,27 @@ export class FakeAI extends WorkerEntrypoint {
 }
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
+
+/** The probe worker's own bindings. `durableObjects` installs
+ *  `ObservedOrchestrator` under the `OrchestratorAgent` name (the re-export at
+ *  the top of this file), which the production `Env` declares by its base
+ *  class, so every stub the namespace returns carries the fixture reads. */
+interface ProbeRootEnv extends Omit<ProbeEnv, 'AI' | 'OrchestratorAgent'> {
+  readonly OrchestratorAgent: DurableObjectNamespace<ObservedOrchestrator>;
+  /** `vitest.config.ts` binds `AI` to this worker's own `FakeAI` entrypoint,
+   *  whose `run` answers the probe's model name; the production `Env` declares
+   *  the platform Workers AI binding, keyed on its model catalogue. */
+  readonly AI?: AIRunner;
+}
+
+/** The orchestrator RPC the exercise arms drive, named member by member:
+ *  `DurableObjectStub<OrchestratorAgent>` maps the whole class, and mapping
+ *  `getChatHistoryPage`'s page of AI SDK message parts overflows TypeScript's
+ *  instantiation depth — `chatHistoryPage` is that read, parsed inside the
+ *  object into the shape the result schema names. */
+type ExerciseTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
+  'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'writeWorkspaceFile'>
+  & Pick<ObservedOrchestrator, 'chatHistoryPage'>;
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
@@ -624,6 +674,18 @@ const RawChatFrameSchema = v.looseObject({
  *  as one it compresses does. */
 function sleepTimeSettled(emitted: readonly { event: string }[]): number {
   return emitted.filter((e) => e.event === 'memory.facts_deferred' || e.event === 'memory.facts_compressed').length;
+}
+
+/** The effect keys a finished close left owed, as the `turn.terminal_effects_owed`
+ *  rows carry them: one comma-joined field per row, empty when clean. */
+function owedEffectKeys(emitted: readonly RecordedLog[]): string[] {
+  return emitted
+    .filter((e) => e.event === 'turn.terminal_effects_owed')
+    .flatMap((e) => {
+      const owed = e.fields['owed'];
+
+      return v.is(v.string(), owed) ? owed.split(',').filter((key) => key.length > 0) : [];
+    });
 }
 
 /** Join on the product's own completion evidence: one sleep-time settle per
@@ -673,16 +735,13 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
 }
 
 
-export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
+export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   /** Spike 1: does an AbortSignal cross the service binding into `shell`?
    *  Returns the kind FakeAI recorded, or the throw's message — the caller
    *  cannot distinguish "no signal" from a serialization failure otherwise. */
   async signalProbe(): Promise<{ signalKind: string } | { threw: string }> {
     try {
-      // SAFETY: the vitest config declares `env.AI` as this worker's service
-      // binding to `FakeAI`, whose entrypoint contract provides `shell` — the
-      // member AIRunner names and the only member the adapter calls.
-      const binding: AIRunner | undefined = this.env.AI as AIRunner | undefined;
+      const binding = this.env.AI;
       const controller = new AbortController();
 
       await binding?.run(
@@ -727,27 +786,16 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     let restore: () => void = () => {};
 
     try {
-      const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
+      const target: ExerciseTarget = await getAgentByName<ProbeEnv, ObservedOrchestrator>(
         this.env.OrchestratorAgent, 'two-turn-workspace',
       );
-
-      // SAFETY: `getAgentByName` constructed the stub over the `OrchestratorAgent`
-      // binding, and every picked name is a method the production class declares
-      // and `ORCHESTRATOR_RPC_SURFACE` lists, so the narrowed calls resolve.
-      const target = raw as Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-        'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'getChatHistoryPage'>;
 
       // The production workspace-create sequence: the owner registers the name,
       // the workspace claims its owner, and the UserDO mints the capability
       // token `userCaller()` needs for the registry reads a turn performs
       // (title hydration, release board, credential listing).
       const caller = await ownerCaller(this.env);
-
-      // SAFETY: `env.UserDO` declares the real `UserDO` class in this worker's
-      // durableObjects, so the stub carries the registry methods the owner
-      // caller tier admits.
-      const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('probe-owner')) as
-        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential'>;
+      const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('probe-owner'));
 
       const register = await userDO.registerWorkspace(caller, 'two-turn-workspace', 'Two-Turn Probe');
       const claim = await target.claimOwner('probe-owner');
@@ -787,7 +835,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       await awaitQuiet(recording);
 
       const snapshot = await target.getWorkspaceSnapshot();
-      const history = await target.getChatHistoryPage({});
+      const history = await target.chatHistoryPage();
 
       // Parsed at the boundary: the wire carries exactly these shapes, so the
       // RPC declaration (InferOutput below) can never drift from them.
@@ -798,13 +846,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         failures: recording.emitted
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: recording.emitted
-          .filter((e) => e.event === 'turn.terminal_effects_owed')
-          .flatMap((e) => {
-            const owed = e.fields['owed'];
-
-            return v.is(v.string(), owed) ? owed.split(',').filter((k) => k.length > 0) : [];
-          }),
+        owedEffects: owedEffectKeys(recording.emitted),
         sleepTimeSettled: sleepTimeSettled(recording.emitted),
         catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,
@@ -1570,20 +1612,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     }
   }
 
-  /** The orchestrator stub, typed to the fixture class the durableObjects
-   *  binding installs — `env.OrchestratorAgent` is declared against the
-   *  production class in env.d.ts, so the one place the fixture names its own
-   *  class is the one place the type widens. */
+  /** The orchestrator stub, typed to the fixture class `ProbeRootEnv` names
+   *  under the production binding. */
   private queueTarget(workspace: string): Promise<QueueTarget> {
-    return getAgentByName<ProbeEnv, ObservedOrchestrator>(
-      // SAFETY: the durableObjects binding declares ObservedOrchestrator under
-      // the OrchestratorAgent name (the re-export at the top of this file), and
-      // that class extends ProductionOrchestrator and adds pendingSteers, so
-      // every stub the namespace returns carries the member the production
-      // declaration does not name.
-      this.env.OrchestratorAgent as DurableObjectNamespace<ObservedOrchestrator>,
-      workspace,
-    );
+    return getAgentByName<ProbeEnv, ObservedOrchestrator>(this.env.OrchestratorAgent, workspace);
   }
 
 
@@ -2087,23 +2119,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     let restore: () => void = () => {};
 
     try {
-      const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
+      const target: ExerciseTarget = await getAgentByName<ProbeEnv, ObservedOrchestrator>(
         this.env.OrchestratorAgent, drive.workspace,
       );
 
-      // SAFETY: `getAgentByName` constructed the stub over the `OrchestratorAgent`
-      // binding, and every picked name is a method the production class declares
-      // and `ORCHESTRATOR_RPC_SURFACE` lists, so the narrowed calls resolve.
-      const target = raw as Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-        'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'getChatHistoryPage' | 'writeWorkspaceFile'>;
-
       const caller = await ownerCaller(this.env);
-
-      // SAFETY: `env.UserDO` declares the real `UserDO` class in this worker's
-      // durableObjects, so the stub carries the registry methods the owner
-      // caller tier admits.
-      const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(drive.owner)) as
-        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential'>;
+      const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(drive.owner));
 
       await userDO.registerWorkspace(caller, drive.workspace, drive.displayName);
       const claim = await target.claimOwner(drive.owner);
@@ -2136,7 +2157,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       if (turn.status !== 'queued') {
         const http = await this.httpCalls();
 
-        const history = await target.getChatHistoryPage({});
+        const history = await target.chatHistoryPage();
 
         const failures = recording.emitted
           .filter((e) => e.code !== null)
@@ -2149,7 +2170,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       await awaitQuiet(recording);
 
       const snapshot = await target.getWorkspaceSnapshot();
-      const history = await target.getChatHistoryPage({});
+      const history = await target.chatHistoryPage();
 
       return v.parse(DriveOnceResultSchema, {
         turn, snapshot, history,
@@ -2158,13 +2179,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         failures: recording.emitted
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
-        owedEffects: recording.emitted
-          .filter((e) => e.event === 'turn.terminal_effects_owed')
-          .flatMap((e) => {
-            const owed = e.fields['owed'];
-
-            return v.is(v.string(), owed) ? owed.split(',').filter((k) => k.length > 0) : [];
-          }),
+        owedEffects: owedEffectKeys(recording.emitted),
         sleepTimeSettled: sleepTimeSettled(recording.emitted),
         catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
         catalogHits: (await this.probeLog()).catalogHits,

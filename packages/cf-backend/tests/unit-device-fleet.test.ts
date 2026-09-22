@@ -158,8 +158,8 @@ describe('two daemons connected at once', () => {
       await fleet.userDO.deviceRpc(fleet.workspace, 'checkpointStatus', []);
     } catch (caught) { statusRefused = caught; }
 
-    expect(isDeviceAmbiguityError(statusRefused)).toBe(true);
-    expect(isDeviceNotConnectedError(statusRefused)).toBe(false);
+    expect(isDeviceAmbiguityError({ cause: statusRefused })).toBe(true);
+    expect(isDeviceNotConnectedError({ cause: statusRefused })).toBe(false);
     expect(fleet.consentPrompts).toEqual([]);
     await fleet.end();
   });
