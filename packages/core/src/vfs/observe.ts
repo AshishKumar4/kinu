@@ -10,15 +10,19 @@
  */
 
 import type { VFS, VfsRevision } from '../types/primitives';
-import { isVfsError } from './errno';
+import { diagnostics, toKinuError } from '../obs/index';
 
 /** A write or delete that landed, reported to an observer. */
 export interface WriteEvent {
   /** The path as the caller addressed it. */
   readonly path: string;
   /** Content before this write, or null when the path did not exist. Absent
-   *  when the observer declined it (see {@link WriteObserver}). */
+   *  when the observer declined it (see {@link WriteObserver}), or when
+   *  `unread` says why it is unknown. */
   readonly before?: string | Uint8Array | null;
+  /** Why an asked-for `before` is unknown: the path was a directory, which has
+   *  no content and is never read, or reading it failed. The change landed. */
+  readonly unread?: 'directory' | 'unreadable';
   /** Content after. null for a delete. */
   readonly after: string | Uint8Array | null;
 }
@@ -73,40 +77,48 @@ function decodedText(bytes: Uint8Array): string | null {
  * The pre-write content is fetched only when `needsBaseline` says so, which is
  * what keeps this from costing a second read on every write: an observer
  * accumulating a NET change per path wants the content only the first time a
- * path is touched. When that read fails for any reason other than the file not
- * existing, nothing is reported for that write at all — an unknown baseline is
- * not a change of unknown size, it is a change this observer cannot describe.
+ * path is touched. A directory is never read, and a baseline that cannot be
+ * taken is reported as `unread` rather than dropped: the write landed, so the
+ * change is real even when its size is unknown.
  */
 export interface WriteObserver {
   needsBaseline(path: string): boolean;
   record(event: WriteEvent): void;
 }
 
+type Baseline = Pick<WriteEvent, 'before' | 'unread'>;
+
 /**
  * `vfs`, with every write and delete reported to `observer`.
  *
  * Reports only AFTER the plane accepted the mutation, so a failed write is
- * never reported as a change.
+ * never reported as a change, and never blocks one: taking the baseline cannot
+ * fail the write it observes.
  */
 export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T {
-  const baselineFor = async (path: string): Promise<{ before?: string | Uint8Array | null } | null> => {
+  const baselineFor = async (path: string): Promise<Baseline> => {
     if (!observer.needsBaseline(path)) return {};
 
     try {
+      // Asked, not caught: a directory is a state of the path, not a failed read.
+      const stat = await vfs.stat(path);
+
+      if (stat === null) return { before: null };
+
+      if (stat.isDir) return { unread: 'directory' };
+
       return { before: (await vfs.readFile(path)) ?? null };
     } catch (err) {
-      if (isVfsError(err) && err.code === 'ENOENT') return { before: null };
+      diagnostics.failure('vfs.write_baseline_unreadable', toKinuError({
+        doing: 'reading what a watched write replaces', cause: err, otherwise: 'io',
+      }), { path });
 
-      return null;
+      return { unread: 'unreadable' };
     }
   };
 
-  const report = (
-    path: string,
-    baseline: { before?: string | Uint8Array | null } | null,
-    after: string | Uint8Array | null,
-  ): void => {
-    if (baseline) observer.record({ path, ...baseline, after });
+  const report = (path: string, baseline: Baseline, after: string | Uint8Array | null): void => {
+    observer.record({ path, ...baseline, after });
   };
 
   const conditional = vfs.writeFileIfRevision?.bind(vfs);

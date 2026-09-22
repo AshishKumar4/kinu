@@ -154,7 +154,7 @@ export async function receivePeerMessage(
   }
 
   // Spilled after the grant check so a refused message never writes a file.
-  const bodyPath = await spillEventContent(deps.vfs, serialized);
+  const spilled = await spillEventContent(deps.vfs, serialized);
 
   const payload: PeerAgentPayload = {
     from_agent_name: msg.sender_agent_name,
@@ -166,7 +166,9 @@ export async function receivePeerMessage(
     reply_expected: msg.reply_expected ?? false,
   };
 
-  if (bodyPath) Object.assign(payload, { body_path: bodyPath });
+  if (spilled?.path !== undefined) payload.body_path = spilled.path;
+
+  if (spilled?.unsaved !== undefined) payload.body_unsaved = spilled.unsaved;
 
   let published: { id: string; admitted: boolean };
 

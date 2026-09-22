@@ -140,7 +140,7 @@ export async function receiveSubordinateEvent(
 
   // Before the transaction: the VFS write is async, admission is not.
   const content = normalizeReportContent(input.content);
-  const contentPath = await spillEventContent(deps.vfs, content);
+  const spilled = await spillEventContent(deps.vfs, content);
 
   const published = deps.transaction(() => {
     const result = admitSubordinateReport(deps.log, {
@@ -150,7 +150,7 @@ export async function receiveSubordinateEvent(
       sequenceId: input.sequenceId,
       mode: input.mode,
       task: subordinate.currentTask ?? undefined,
-      contentPath: contentPath ?? undefined,
+      spilled: spilled ?? undefined,
       handoff: input.handoff,
       now,
     });
