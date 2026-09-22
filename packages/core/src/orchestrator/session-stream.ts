@@ -35,6 +35,13 @@ const COALESCE_BYTES = 4096;
 
 const utf8 = new TextEncoder();
 
+/** A settled tool's output as the part records it: a string stays text, anything else is JSON. */
+function toolOutput(output: { readonly value: unknown }): JsonObject {
+  if (v.is(v.string(), output.value)) return { type: 'text', value: output.value };
+
+  return { type: 'json', value: projectJsonValue(output) };
+}
+
 interface StreamContainer {
   readonly id: string;
   readonly role: 'assistant' | 'tool';
@@ -45,6 +52,20 @@ interface StreamContainer {
   readonly working: boolean;
   sealed: boolean;
   readonly parts: Map<string, StreamPart>;
+}
+
+/** One update to a streamed part. */
+interface PublishedPart {
+  readonly container: StreamContainer;
+  /** Identifies the part within its container across the updates that build it. */
+  readonly key: string;
+  /** The native part without its text; what the part's row opens with. */
+  readonly descriptor: JsonObject;
+  /** Text this update carries, or null when it carries none. */
+  readonly delta: string | null;
+  readonly providerMetadata?: ProviderMetadata;
+  /** The part's last update: the window flushes and the row is ended. */
+  readonly end?: boolean;
 }
 
 /** Native SDK order is assistant then non-provider tool results (ai 6.0.214 toResponseMessages).
@@ -83,7 +104,7 @@ export class SessionStream {
 
     switch (part.type) {
       case 'start-step':
-        await this.publish(this.ui, 'step-start', { type: 'step-start' }, null);
+        await this.publish({ container: this.ui, key: 'step-start', descriptor: { type: 'step-start' }, delta: null });
 
         return;
       case 'source': {
@@ -92,7 +113,7 @@ export class SessionStream {
           : { type: 'source-document', sourceId: part.id, mediaType: part.mediaType, title: part.title };
 
         if (part.title !== undefined) source.title = part.title;
-        await this.publish(this.ui, `source:${part.id}`, source, null, part.providerMetadata);
+        await this.publish({ container: this.ui, key: `source:${part.id}`, descriptor: source, delta: null, providerMetadata: part.providerMetadata });
 
         return;
       }
@@ -106,13 +127,13 @@ export class SessionStream {
       }
 
       case 'reasoning-start':
-        await this.publish(this.assistant, `reasoning:${part.id}`, { type: 'reasoning' }, '', part.providerMetadata);
+        await this.publish({ container: this.assistant, key: `reasoning:${part.id}`, descriptor: { type: 'reasoning' }, delta: '', providerMetadata: part.providerMetadata });
 
         return;
       case 'text-delta':
       case 'reasoning-delta': {
         const kind = part.type === 'text-delta' ? 'text' : 'reasoning';
-        await this.publish(this.assistant, `${kind}:${part.id}`, { type: kind }, part.text, part.providerMetadata);
+        await this.publish({ container: this.assistant, key: `${kind}:${part.id}`, descriptor: { type: kind }, delta: part.text, providerMetadata: part.providerMetadata });
 
         return;
       }
@@ -122,7 +143,7 @@ export class SessionStream {
         const kind = part.type === 'text-end' ? 'text' : 'reasoning';
         const key = `${kind}:${part.id}`;
 
-        if (this.assistant.parts.get(key)?.opened) await this.publish(this.assistant, key, { type: kind }, null, part.providerMetadata, true);
+        if (this.assistant.parts.get(key)?.opened) await this.publish({ container: this.assistant, key, descriptor: { type: kind }, delta: null, providerMetadata: part.providerMetadata, end: true });
 
         return;
       }
@@ -132,7 +153,7 @@ export class SessionStream {
         const descriptor: JsonObject = { type: 'tool-call', toolCallId: part.toolCallId, toolName: part.toolName, input };
 
         if (part.providerExecuted !== undefined) descriptor.providerExecuted = part.providerExecuted;
-        await this.publish(this.assistant, `call:${part.toolCallId}`, descriptor, null, part.providerMetadata);
+        await this.publish({ container: this.assistant, key: `call:${part.toolCallId}`, descriptor, delta: null, providerMetadata: part.providerMetadata });
 
         return;
       }
@@ -141,29 +162,38 @@ export class SessionStream {
       case 'tool-error': {
         const output = part.type === 'tool-error'
           ? { type: 'error-text', value: renderThrownChain({ cause: part.error }) }
-          : v.is(v.string(), part.output) ? { type: 'text', value: part.output } : { type: 'json', value: projectJsonValue({ value: part.output }) };
+          : toolOutput({ value: part.output });
 
-        await this.publish(part.providerExecuted ? this.assistant : this.tool, `result:${part.toolCallId}`,
-          { type: 'tool-result', toolCallId: part.toolCallId, toolName: part.toolName, output }, null, part.providerMetadata);
+        await this.publish({ container: part.providerExecuted ? this.assistant : this.tool, key: `result:${part.toolCallId}`,
+          descriptor: { type: 'tool-result', toolCallId: part.toolCallId, toolName: part.toolName, output }, delta: null, providerMetadata: part.providerMetadata });
 
         return;
       }
 
       case 'file':
-        await this.publish(this.assistant, `file:${this.assistant.parts.size}`, { type: 'file', data: part.file.base64, mediaType: part.file.mediaType }, null, part.providerMetadata);
+        await this.publish({ container: this.assistant, key: `file:${this.assistant.parts.size}`, descriptor: { type: 'file', data: part.file.base64, mediaType: part.file.mediaType }, delta: null, providerMetadata: part.providerMetadata });
 
         return;
       case 'tool-approval-request': {
         const descriptor: JsonObject = { type: 'tool-approval-request', approvalId: part.approvalId, toolCallId: part.toolCall.toolCallId };
 
         if (part.signature !== undefined) descriptor.signature = part.signature;
-        await this.publish(this.assistant, `approval:${part.approvalId}`, descriptor, null);
+        await this.publish({ container: this.assistant, key: `approval:${part.approvalId}`, descriptor, delta: null });
 
         return;
       }
 
-      default:
-        // Source/UI frames and lifecycle evidence are not model-message parts.
+      case 'start':
+      case 'finish-step':
+      case 'finish':
+      case 'abort':
+      case 'error':
+      case 'raw':
+      case 'tool-input-start':
+      case 'tool-input-delta':
+      case 'tool-input-end':
+      case 'tool-output-denied':
+        // Lifecycle evidence and input assembly are not model-message parts.
         return;
     }
   }
@@ -180,12 +210,12 @@ export class SessionStream {
 
     if (event.type === 'text-delta' || event.type === 'reasoning-delta') {
       const kind = event.type === 'text-delta' ? 'text' : 'reasoning';
-      await this.publish(this.assistant, kind, { type: kind }, event.delta);
+      await this.publish({ container: this.assistant, key: kind, descriptor: { type: kind }, delta: event.delta });
     } else if (event.type === 'tool-call') {
-      await this.publish(this.assistant, `call:${event.toolCallId}`, { type: 'tool-call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.args }, null);
+      await this.publish({ container: this.assistant, key: `call:${event.toolCallId}`, descriptor: { type: 'tool-call', toolCallId: event.toolCallId, toolName: event.toolName, input: event.args }, delta: null });
     } else if (event.type === 'tool-result') {
       const output = event.success ? { type: 'text', value: event.result } : { type: 'error-text', value: event.error ?? event.result };
-      await this.publish(this.tool, `result:${event.toolCallId}`, { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, null);
+      await this.publish({ container: this.tool, key: `result:${event.toolCallId}`, descriptor: { type: 'tool-result', toolCallId: event.toolCallId, toolName: event.toolName, output }, delta: null });
     } else if (event.type === 'step-finish') {
       await this.finishStep(event.responseMessages);
       await this.nextStep();
@@ -221,8 +251,8 @@ export class SessionStream {
     return part;
   }
 
-  private async publish(container: StreamContainer, key: string, descriptor: JsonObject, delta: string | null,
-    providerMetadata?: ProviderMetadata, end = false): Promise<void> {
+  private async publish(update: PublishedPart): Promise<void> {
+    const { container, key, descriptor, delta, providerMetadata, end = false } = update;
     const kind = v.parse(v.string(), descriptor.type);
     const part = this.reserve(container, key, kind);
     const joins = part.opened && !end && providerMetadata === undefined && (kind === 'text' || kind === 'reasoning');
