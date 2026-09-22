@@ -1,20 +1,5 @@
-// agent_facts — typed, idempotent, keyed world-model store, PRIVATE to one actor.
-//
-// MEMORY.md is unstructured prose; FTS5 retrieval is fuzzy. For long-lived
-// state ("user prefers TS over Py", "deploy target = foo.workers.dev",
-// "last successful build = abc") the agent wants UPSERT by key, not append.
-// Facts are JSON values keyed by string; each carries a confidence (0..1)
-// and an observation timestamp. Top-K recent facts are auto-rendered into
-// the system prompt every turn.
-//
-// PRIVATE, because the key space is the agent's own. `remember`/`recall`/
-// `forget` are this actor's tool, `renderFactsForTurn` injects its top-K into
-// THIS actor's prompt, and sleep-time compression rewrites its own model — so a
-// sibling that learns "deploy target" must not overwrite what this one observed
-// under the same words. Adoption is still a real path and still lands here: an
-// experience import UPSERTS the imported fact into the importing actor's own
-// set under `source: experience:<workspace>`, which is a copy into a target,
-// not a shared row two actors read differently.
+// agent_facts: typed, keyed world-model store private to one actor; UPSERT by key, each fact with
+// confidence (0..1) and observation time. Experience imports copy facts in under `source: experience:<workspace>`.
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -46,9 +31,7 @@ export function initFactsTable(execRaw: (ddl: string) => void): void {
       PRIMARY KEY (actor_id, key)
     )
   `);
-  // Leading with the owner keeps `recentTopK` index-served inside one actor's
-  // rows: a recency-only index would scan every sibling's facts to find this
-  // actor's twenty newest.
+  // Owner-leading index keeps `recentTopK` within one actor's rows.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_facts_observed
              ON agent_facts(actor_id, last_observed_at DESC)`);
 }
@@ -88,22 +71,11 @@ function safeParse(json: string): JsonValue {
   }
 }
 
-/** One key space for the world model. Trims, lowercases, and folds runs of
- *  whitespace to one underscore, so variant spellings share one row. */
 export function normalizeFactKey(key: string): string {
   return key.trim().toLowerCase().replace(/\s+/g, '_');
 }
 
-/**
- * Bind the fact store to ONE actor.
- *
- * `actorId` is captured once from a handle the caller already holds and is
- * never read again, so a re-issued or re-pointed handle cannot silently move a
- * live store onto another actor's rows. `assertCurrent()` runs before every
- * statement for the other half of that: it is the binding's own validation, so
- * a handle whose directory row was retired stops writing here at the same
- * instant it stops serving `config`.
- */
+/** `actorId` is captured once; `assertCurrent()` runs before every statement so a retired handle stops writing. */
 export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
@@ -177,49 +149,31 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
   };
 }
 
-/** The text a fact shows where a fact is data: a string verbatim, anything
- *  else as JSON. One rule, so the prompt block and a search hit agree. */
+/** String verbatim, anything else as JSON; shared by the prompt block and search hits. */
 function renderFactValue(value: JsonValue): string {
   const text = v.safeParse(v.string(), value);
 
   return text.success ? text.output : JSON.stringify(value);
 }
 
-/** A fact the fact arm of memory search surfaced. Renders beside a note hit
- *  as `[fact: <key>]` with the rendered value as the snippet; `id` namespaces
- *  the hit so it can never fuse with a `path:start-end` note chunk. */
+/** `id` is namespaced so it never fuses with a `path:start-end` note chunk. */
 export interface FactSearchHit {
   readonly id: string;
   readonly key: string;
   readonly snippet: string;
-  /** Coarse rank signal inside the fact list: the RRF consumer reads the
-   *  position, never the number. */
+  /** The RRF consumer reads position, never the number. */
   readonly score: number;
   readonly lastObservedAt: number;
 }
 
-/** A fact's key is normalized on write (lowercase, whitespace → '_'), so the
- *  corpus side tokenizes on every non-alphanumeric run — one that folded the
- *  way keys do would never split `deploy_target` into the two terms the query
- *  side produces. The QUERY side goes through `ftsQueryTerms` so a fact arm
- *  answers to exactly the terms the FTS index would. */
+/** The corpus side splits on every non-alphanumeric run so `deploy_target` yields both query terms; the query side uses `ftsQueryTerms`. */
 function factTermSet(text: string): Set<string> {
   return new Set(
     text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
   );
 }
 
-/**
- * The lexical arm of memory search over `agent_facts`: a fact is a candidate
- * when every query term appears in its key, in its rendered value, or split
- * across the two — the same all-terms-anywhere rule the note index applies to
- * a chunk. `remember` is the only write path, so a search that cannot see a
- * remembered fact reports "no results" for state the agent itself just wrote.
- *
- * Ranked matches-first: a hit whose key covers every query term outranks one
- * that needed the value, then most recently observed, then key for a stable
- * tie. Best `limit` returned.
- */
+/** Candidate when every query term appears across key and rendered value. Ranked key-covering first, then recency, then key. */
 export function searchFacts(facts: FactsStore, query: string, limit: number): FactSearchHit[] {
   const terms = new Set(
     ftsQueryTerms(query).flatMap((term) => term.toLowerCase().split(/[^a-z0-9]+/)).filter(Boolean),
@@ -253,8 +207,7 @@ export function searchFacts(facts: FactsStore, query: string, limit: number): Fa
     .map((entry) => entry.hit);
 }
 
-/** Render the top-K most recently observed facts as a system-prompt block.
- *  Returned format is concise YAML-ish so the LLM treats it as data, not prose. */
+/** YAML-ish so the model treats it as data. */
 export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}): string {
   const max = opts.maxChars ?? 4000;
 

@@ -1,21 +1,8 @@
-/**
- * The authored-facing runtime modules. `server.js` is the `kinu:slate`
- * implementation the worker half links against — kernel-owned, written
- * under `/usr/lib/kinu/slate/` — and `client.js` is the module
- * the browser's import map serves at `/__kinu/slate.js`.
- */
+/** Authored-facing `kinu:slate` modules: `server.js` under `/usr/lib/kinu/slate/`, `client.js` at `/__kinu/slate.js`. */
 
 import { SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
-/**
- * `server.js` — `kinu:slate` on the server. `SlateObject` is the class every
- * authored `main` extends; the marker on its prototype is how the runner
- * verifies the contract without importing this module a second time
- * (application.js bundles its own copy).
- *
- * The client-only names exist so single-file sources can import them and the
- * server build still links: called on the server, they throw.
- */
+/** The prototype marker lets the runner verify the contract without importing this module twice. Client-only names throw on the server. */
 export const SLATE_SERVER_MODULE = `export class SlateObject {
   #context;
   #bindings;
@@ -41,10 +28,7 @@ export const resize = clientOnly("resize");
 export const mount = clientOnly("mount");
 `;
 
-/** `client.js` — `kinu:slate` in the browser bundle, served verbatim at
- *  `/__kinu/slate.js` through the shell's import map. React and capnweb
- *  resolve there too, so this module keeps the singletons the authored
- *  component and the host frame share. */
+/** React and capnweb resolve through the same import map, so this module keeps the singletons shared with the host frame. */
 export const SLATE_CLIENT_MODULE = `import { createElement, useMemo, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { newWebSocketRpcSession } from "capnweb";

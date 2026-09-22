@@ -4,24 +4,15 @@ import type { RawSqlExec, SqlExec, SqlExecRow } from '../types/primitives';
 import { JsonValueSchema, parseJsonValue, renderIssues, type JsonValue } from '../utils/json';
 import type { SlateBindingRequest } from './bindings';
 
-/** The one binding name a slate never declares: every slate gets it, and the
- *  host answers it from the workspace object's own `slate_state` table. */
+/** Implicit on every slate; answered from the workspace object's `slate_state` table. */
 export const SLATE_STORAGE_BINDING = '__storage';
 
-/** The other reserved binding name: the process's channel back to its host,
- *  minted beside `__storage` and answered by `bindingCall`'s `__host` arm —
- *  today the one call `release`, which retires a socket-held invocation. */
+/** Reserved host channel; `release` retires a socket-held invocation. */
 export const SLATE_HOST_BINDING = '__host';
 
 const Key = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
 
-/**
- * A slate's durable KV table — rows the authored `this.storage` owns, keyed
- * per slate so one slate cannot read another's state. Values are JSON text.
- * Called from `initWorkspaceSchema` and by the resident-slate probe, which
- * runs the same table on its own DO storage to stand in for the workspace
- * object.
- */
+/** Keyed per slate so one slate cannot read another's state. Also run by the resident-slate probe on its own DO storage. */
 export function initSlateStateTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS slate_state (
     slate_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL,
@@ -36,7 +27,6 @@ const ListOptions = v.strictObject({
 
 export type SlateStorageListOptions = v.InferInput<typeof ListOptions>;
 
-/** The ops `__storage` routes to, after `routeSlateStorageCall` validates one. */
 export type SlateStorageOp =
   | { readonly op: 'get'; readonly key: string }
   | { readonly op: 'put'; readonly key: string; readonly value: JsonValue }
@@ -57,11 +47,7 @@ function oneKey(request: SlateBindingRequest): string {
   return parsed.output;
 }
 
-/**
- * Turn one `__storage` member call into a typed store operation. `member`
- * selects the signature; a name the KV does not offer is `denied` and a
- * malformed argument set is `bad_input` naming the signature it broke.
- */
+/** Unknown members are `denied`; malformed arguments are `bad_input` naming the broken signature. */
 export function routeSlateStorageCall(request: SlateBindingRequest): SlateStorageOp {
   switch (request.member) {
     case 'get': return { op: 'get', key: oneKey(request) };
@@ -101,18 +87,13 @@ const StateValue = v.object({ value: v.string() });
 
 const StateEntry = v.object({ key: v.string(), value: v.string() });
 
-/** One row as the pair `list` answers with. */
 function stateEntry(row: SqlExecRow): [string, JsonValue] {
   const { key, value } = v.parse(StateEntry, row);
 
   return [key, parseJsonValue(value)];
 }
 
-/**
- * A slate's durable KV over the workspace object's `slate_state` table.
- * Values are stored as JSON text; `updated_at` is wall time for the host's
- * own diagnostics, never a guard.
- */
+/** `updated_at` is diagnostics only, never a guard. */
 export class SqliteSlateStateStore {
   constructor(private readonly db: SqlExec) {}
 
@@ -143,9 +124,8 @@ export class SqliteSlateStateStore {
         .map(stateEntry);
     }
 
-    // The smallest key strictly above every key `prefix` begins: the prefix
-    // with its last code unit one higher, trailing U+FFFF stripped first. A
-    // prefix that is nothing but U+FFFF tops the collation and has no bound.
+    // Smallest key above every `prefix` key: bump the last code unit after stripping trailing U+FFFF;
+    // an all-U+FFFF prefix has no bound.
     const stem = prefix.replace(/￿+$/u, '');
     const bound = stem === '' ? undefined : stem.slice(0, -1) + String.fromCharCode(stem.charCodeAt(stem.length - 1) + 1);
 

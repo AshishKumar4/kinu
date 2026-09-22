@@ -1,13 +1,6 @@
 /**
- * The capability graph: what a slate could do if a viewer opened it, rendered
- * so the share dialog can show it and the owner can approve over it.
- *
- * One graph answers the two questions sharing has to answer honestly: WHAT a
- * grant would admit (the members, each classified read or mutating by
- * `members.ts`) and WHY a mutating one is worth a second thought (the risk
- * text, worded once per visibility). An `app` binding extends the walk into
- * the slate it names — a viewer that opens the root can hop — so `slates` is
- * the walk order the grant's admission set is cut from.
+ * What a slate could do if a viewer opened it: each grantable member classified read or mutating, with
+ * per-visibility risk text. `app` bindings extend the walk; `slates` is the walk order.
  */
 import { KinuError } from '../obs/error';
 import {
@@ -19,9 +12,7 @@ import type {
   ShareGrant, ShareGrantMember, SlateCapability, SlateCapabilityGraph, SlateGraphBinding, SlateGraphMember,
 } from './sharing';
 
-/** What the workspace can actually satisfy a binding with — the catalog the
- *  graph is drawn against, so a binding that names something absent is a
- *  `problem` on its row rather than a silent blank. */
+/** Bindings naming something absent become a `problem` row rather than a silent blank. */
 export interface SlateBindingCatalog {
   readonly executors: readonly { readonly namespace: string; readonly members: readonly string[] }[];
   readonly mcp: readonly {
@@ -29,17 +20,14 @@ export interface SlateBindingCatalog {
     readonly title: string;
     readonly tools: readonly { readonly name: string; readonly readOnly: boolean }[];
   }[];
-  /** Crafted tool names beside the native ones. */
   readonly tools: readonly string[];
   readonly tiers: readonly string[];
-  /** Every slate in the workspace by id, for app hops. */
   readonly slates: Readonly<Record<string, SlateProject>>;
 }
 
 const DELEGATION_PROBLEM = 'a slate cannot delegate or control its calling agent';
 
-/** A `paths`-scoped workspace binding narrows to the file members — the same
- *  five `routeNamespaceCall` will admit at call time. */
+/** The same five file members `routeNamespaceCall` admits. */
 const PATH_SCOPED_FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'] as const;
 
 interface Risk {
@@ -47,11 +35,7 @@ interface Risk {
   readonly users: string;
 }
 
-/** What one member on one capability does to the owner, once per visibility.
- *  A read member has no risk to state. The wording is per member — never a
- *  generic "this may change things" — because the dialog is the consent the
- *  grant is cut from, and a warning that does not name the act consents to
- *  nothing. */
+/** Worded per member: the dialog is the consent, and a warning that does not name the act consents to nothing. */
 function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'mutate', workspace: string): Risk {
   if (effect === 'read') return { public: '', users: '' };
   let body: string;
@@ -109,14 +93,12 @@ function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'm
       body = `Runs a model call on your ${capability.tier} tier. Every call spends your inference.`;
       break;
     case 'web':
-      // `members.ts` names `search` and `fetch` read, so a mutating web member
-      // is one its table does not name and fails closed to mutating.
+      // Web members other than `search`/`fetch` fail closed to mutating.
       body = `Calls ${member} on the web as you. The web tool does not name it, so what it does is not known here.`;
       break;
     case 'rpc':
     case 'slate':
-      // Neither reaches this text: every rpc member is a read model, and an
-      // app binding's slate row carries no members at all.
+      // Unreachable: rpc members are read models; app rows carry no members.
       body = `Calls ${member} as you.`;
       break;
   }
@@ -141,11 +123,7 @@ interface GraphBindingInput {
   readonly workspace: string;
 }
 
-/** One binding as its row on the graph: the capability it reaches, every
- *  member a grant could name classified by effect, and the reason the row
- *  cannot be honoured when the workspace cannot honour it. A problem row
- *  still carries its members — the grant cut includes them, so the call
- *  refuses for the real reason rather than for absence from the grant. */
+/** Problem rows still carry members so a call refuses for the real reason, not absence from the grant. */
 function graphBinding({ slate, name, binding, catalog, workspace }: GraphBindingInput): SlateGraphBinding {
   const row = (capability: SlateCapability, members: SlateGraphMember[], problem?: string): SlateGraphBinding => {
     const result: SlateGraphBinding = { slate, name, kind: binding.kind, capability, members };
@@ -260,12 +238,7 @@ function graphBinding({ slate, name, binding, catalog, workspace }: GraphBinding
   }
 }
 
-/**
- * The grant surface of sharing `slate` live: its own bindings plus, behind
- *  each `app` binding's row, the bindings of the slate it names — `slates`
- *  holds the walk order, root first, a slate already walked never walked
- *  again.
- */
+/** Walks `app` bindings root first, each slate once. */
 export function slateCapabilityGraph(input: {
   readonly slate: string;
   readonly workspace: string;
@@ -296,12 +269,7 @@ export function slateCapabilityGraph(input: {
   return { slate, slates, bindings };
 }
 
-/**
- * The grant a dialog's approval cuts from the graph: every read member, plus
- *  each approved mutating member. An approval that names a member the graph
- *  does not carry — or a read member — refuses rather than silently widening
- *  the grant.
- */
+/** Every read member plus each approved mutating member; approving an unknown or read member refuses. */
 export function cutShareGrant(
   graph: SlateCapabilityGraph,
   approved: readonly { slate: string; binding: string; member: string }[],
@@ -338,8 +306,6 @@ export function cutShareGrant(
   return { slates: [...graph.slates], members };
 }
 
-/** The grant's entry for exactly this (slate, binding, member), or null when
- *  the grant does not admit it. */
 export function grantAdmits(grant: ShareGrant, slate: string, binding: string, member: string): ShareGrantMember | null {
   return grant.members.find((entry) => entry.slate === slate && entry.binding === binding && entry.member === member) ?? null;
 }

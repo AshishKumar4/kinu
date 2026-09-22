@@ -20,8 +20,7 @@ const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
 
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
 
-/** Code-unit order on the entry name. The captured tree is content-addressed,
- *  so the walk order is part of the ref and must not become locale-aware. */
+/** Code-unit order: the walk order is part of the content-addressed ref, so never locale-aware. */
 function byName(left: { name: string }, right: { name: string }): number {
   if (left.name < right.name) return -1;
 

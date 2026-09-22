@@ -1,14 +1,4 @@
-/**
- * Semantic-memory sync — the seam that keeps a Vectorize index in step with the
- * FTS5 memory store. Kept separate from runtime.ts (which pulls in the sandbox /
- * codemode / Think bindings) so this logic stays dependency-light and unit-
- * testable against a fake VectorStore.
- *
- *   • adaptMemory          — every memory write embeds its chunks; changed line
- *                            ranges drop their stale vectors.
- *   • backfillMemoryVectors — one-time embed of chunks indexed before the vector
- *                             store existed (idempotent, cursor-paged).
- */
+/** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { type AgentConfigStore } from '../config/store';
 import { type Memory, type VFS } from '../types/primitives';
@@ -19,29 +9,15 @@ import { readTailWithVfsOps } from '../vfs/mounts';
 import type { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { diagnostics, toKinuError } from "../obs/index";
 
-/** A chunk FTS5 holds and the vector index does not makes the semantic index
- *  incomplete, so the completeness marker must stop claiming otherwise. Clearing
- *  it (and the page cursor) hands the repair to the backfill, which re-embeds
- *  idempotently on the next boot — the one mechanism for exactly this gap. */
+/** Clearing the completeness marker and cursor hands the repair to the idempotent backfill. */
 function invalidateSemanticIndex(config: AgentConfigStore): void {
   config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'false');
   config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, '');
 }
 
 /**
- * Adapt agent-utils' MemoryStore to core's Memory, syncing the semantic index
- * on every write. FTS5 is the source of truth; the vector store is synced from
- * the index delta and its failures are only recorded — a Vectorize hiccup must not fail
- * the memory write (FTS5 already succeeded). The vector calls ARE awaited so the
- * embeddings are durable before the turn continues.
- *
- * A failed sync degrades to lexical-only recall, but it does not pretend the
- * write was indexed: it clears the backfill's completeness marker so the chunks
- * are re-embedded rather than lost.
- *
- * `files` is the plane the store indexes, alongside it because the tail reads
- * off that plane's stat + ranged read and MemoryStore's filesystem seam has
- * neither.
+ * FTS5 is the source of truth: vector failures are recorded, never fail the write, and clear the backfill
+ * marker so chunks are re-embedded. Vector calls are awaited so embeddings are durable before the turn continues.
  */
 export function adaptMemory(
   store: MemoryStore, files: VFS & Pick<VfsNativeReads, 'readRange'>,
@@ -77,22 +53,10 @@ export function adaptMemory(
   };
 }
 
-/** Chunks embedded per boot during the one-time backfill. Bounded so a large
- *  memory table is embedded across several boots rather than blocking one. */
+/** Bounded so a large memory table embeds across several boots. */
 const MEMORY_VECTOR_BACKFILL_CAP = 512;
 
-/**
- * One-time backfill: memories indexed into FTS5 before the vector store existed
- * aren't embedded, so their semantic recall is empty. On boot (when a vector
- * store is available and the backfill isn't marked done) embed one bounded page
- * of existing chunks, advancing a cursor so a huge table pages across boots
- * without re-embedding. Idempotent — a no-op once the marker is set.
- *
- * Rejects when the page cannot be read or embedded, before the cursor or the
- * marker moves: advancing over a failed page is what let the marker claim a
- * complete semantic index over content it never indexed. The next boot retries
- * the same page.
- */
+/** Pages across boots by cursor; rejects before moving cursor or marker, so the next boot retries the page. */
 export async function backfillMemoryVectors(
   store: MemoryStore,
   config: AgentConfigStore,

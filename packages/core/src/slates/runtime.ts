@@ -38,8 +38,7 @@ class WorkspaceSlateMutation extends SlateMutationSeam {
     return this.authority.mutate(request, () => {
       const result = mutation();
 
-      // An admitted blueprint lands its source the way a fork does: the record
-      // and the tree are one transaction, and the process is never started.
+      // Record and tree land in one transaction; the process is never started.
       if (request.operation === 'fork' || request.operation === 'instantiate' || this.restoring && request.operation === 'update') {
         this.files.restore(request.slateId, request.source);
       }
@@ -117,11 +116,7 @@ export class WorkspaceSlates {
     return this.runtime(undefined, true).update(id, version.source, current.revision);
   }
 
-  /**
-   * Publish a committed version. `materialization` is the bundle a forker
-   * receives: the version's whole source by default, or the subset of it the
-   * owner chose to include, retained in the same content store.
-   */
+  /** `materialization` is the whole version source by default, or the owner's included subset. */
   publish(versionId: SlateVersionId, bindings: readonly BindingRequirement[], materialization?: ContentRef): Promise<SlatePublication> {
     const version = this.version(versionId);
 
@@ -136,13 +131,7 @@ export class WorkspaceSlates {
     return publication;
   }
 
-  /**
-   * The credential-free export of a publication: the identity of the bundle
-   * and its requirements, nothing that names this workspace. The vendored
-   * export projects the VERSION's source; when the owner published a subset,
-   * the bundle is the publication's materialization and the skeleton names
-   * that instead, so a forker's `instantiate` admits exactly the bytes shipped.
-   */
+  /** Credential-free: when a subset was published, the skeleton names the materialization, not the version source. */
   skeleton(publicationId: SlatePublicationId): SlateSkeleton {
     const publication = this.publication(publicationId);
     const version = this.version(publication.versionId);

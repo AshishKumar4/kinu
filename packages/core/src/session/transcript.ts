@@ -40,8 +40,7 @@ export interface ConversationProjection {
   readonly recordedAt: number;
   readonly toolCalls: readonly string[];
   metadata?: JsonObject;
-  /** Set by a reader with no file plane when the entry's content sits in a
-   *  spilled payload: the row keeps its place and says it cannot be read here. */
+  /** Content sits in a spilled payload this reader (no file plane) cannot read. */
   unavailable?: true;
 }
 
@@ -60,9 +59,6 @@ export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuth
   });
 }
 
-/** Everything a transcript reader is bound to: the actor's SQL, the authority
- *  its reads are fenced by, the conversation it reads, and the two stores that
- *  resolve a row's parts and payloads. */
 interface TranscriptStores<A extends ActorReadAuthority, P extends SessionPayloadReader> {
   readonly sql: SqlExecutor;
   readonly actor: A;
@@ -172,16 +168,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND id=${id}`.length > 0;
   }
 
-  /**
-   * The entry the next record chains from: the head a revert set, else the newest leaf.
-   *
-   * A stored head is only an answer while it still names a row. One that does
-   * not is a fault in the only direction that matters — it is not a shorter
-   * conversation, it is a conversation nobody can read — so it refuses here,
-   * naming the entry, instead of being handed to an ancestry walk that dies on
-   * an anonymous "entry is missing" or to `record` as a parent that turns the
-   * next message into a new root.
-   */
+  /** The head a revert set, else the newest leaf. A head naming a missing row refuses rather than truncating or re-rooting. */
   newestId(): string | null {
     this.actor.assertCurrent();
     const head = this.sql<{ entry_id: string | null }>`SELECT entry_id FROM conversation_heads WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId}`[0];
@@ -235,7 +222,6 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return this.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${this.actor.actorId} AND session_id=${this.sessionId} AND parent_id=${id} ORDER BY rowid`.map(row => row.id);
   }
 
-  /** Entries on the head's ancestry. */
   count(): number {
     return this.ancestry().length;
   }
@@ -297,7 +283,6 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     return messages;
   }
 
-  /** User and assistant projections of the head's ancestry, newest first. */
   async newestFirst(limit = 10_000): Promise<readonly ConversationProjection[]> {
     const rows: ConversationProjection[] = [];
 
@@ -423,9 +408,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 }
 
-/** One admitted batch of user steers, sharing the message the batch was
- *  written into: every row's parts point at `reference`, and `parentId` is what
- *  the FIRST of them hangs off. */
+/** Every row's parts point at `reference`; `parentId` is what the first hangs off. */
 interface SteerBatch {
   readonly rows: readonly {
     readonly id: string;
@@ -439,14 +422,11 @@ interface SteerBatch {
   readonly parentId: string | null;
 }
 
-/** A writing transcript's stores, plus the two seams a write needs. */
 interface TranscriptWriterStores extends TranscriptStores<ActorHandle, SessionPayloads> {
   readonly messages: SessionMessages;
   /** Runs one write as a transaction on the same connection as `sql`. */
   readonly atomic: <T>(write: () => T) => T;
-  /** The actor's working context at record time: an entry that names no context
-   *  of its own is stamped with it, so a fork cut at that entry restores
-   *  exactly the model context the actor held there. */
+  /** Stamped on entries naming no context, so a fork at that entry restores the model context held there. */
   readonly selection: () => ContextSelection | null;
 }
 
@@ -465,8 +445,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     const textPart = rows.reduce((count, row) => count + (row.files?.length ?? 0), 0);
     let filePart = 0;
     let start = 0;
-    // Each steer's parent is the one before it, so the batch reads as the chain
-    // the operator typed rather than as siblings of one turn.
+    // Chained, not siblings, so the batch reads as the operator typed it.
     let parentId = batch.parentId;
     const entries: PreparedConversationEntry[] = [];
 
@@ -537,10 +516,7 @@ export class SessionTranscript extends SessionTranscriptReader<ActorHandle, Sess
     });
   }
 
-  /** Move the head; entries beyond it stay recorded but leave the ancestry every
-   *  read follows. An id this conversation does not hold is refused here: a
-   *  stored head that resolves to nothing wedges every later read and there is
-   *  no writer that means it. */
+  /** Entries beyond the head stay recorded but leave the ancestry. Unknown ids are refused: they would wedge later reads. */
   setHead(entryId: string | null): void {
     this.atomic(() => {
       this.actor.assertCurrent();
