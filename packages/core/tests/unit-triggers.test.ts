@@ -11,7 +11,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   DEFAULT_FORK_POLICY, TriggerRegistry, initEventsHubTables,
@@ -77,7 +77,7 @@ describe('TriggerRegistry.register', () => {
     const { registry } = setup();
     const id = await registry.register(spec({ spec: { cron: '*/5 * * * *' } }), NOW);
 
-    const row = registry.get(id)!;
+    const row = present(registry.get(id), 'registered trigger');
     expect(row.id).toBe(id);
     expect(row.kind).toBe('timer_cron');
     expect(row.state).toBe('active');
@@ -90,25 +90,25 @@ describe('TriggerRegistry.register', () => {
   test('round-trips the spec through JSON rather than stringifying it into the row', async () => {
     const { registry } = setup();
     const id = await registry.register(spec({ spec: { cron: '0 9 * * *', tz: 'UTC', nested: { a: [1, 2] } } }), NOW);
-    expect(registry.get(id)!.spec).toEqual({ cron: '0 9 * * *', tz: 'UTC', nested: { a: [1, 2] } });
+    expect(present(registry.get(id), 'registered trigger').spec).toEqual({ cron: '0 9 * * *', tz: 'UTC', nested: { a: [1, 2] } });
   });
 
   test('rate limit defaults to 60/min and an explicit one is honoured', async () => {
     const { registry } = setup();
-    expect(registry.get(await registry.register(spec(), NOW))!.rate_limit_per_min).toBe(60);
-    expect(registry.get(await registry.register(spec({ rate_limit_per_min: 5 }), NOW))!.rate_limit_per_min).toBe(5);
+    expect(present(registry.get(await registry.register(spec(), NOW)), 'registered trigger').rate_limit_per_min).toBe(60);
+    expect(present(registry.get(await registry.register(spec({ rate_limit_per_min: 5 }), NOW)), 'registered trigger').rate_limit_per_min).toBe(5);
   });
 
   test('an explicit rate limit of 0 is preserved, not defaulted away', async () => {
     // `?? 60` must not degrade into `|| 60` — 0 means "block", not "unset".
     const { registry } = setup();
-    expect(registry.get(await registry.register(spec({ rate_limit_per_min: 0 }), NOW))!.rate_limit_per_min).toBe(0);
+    expect(present(registry.get(await registry.register(spec({ rate_limit_per_min: 0 }), NOW)), 'registered trigger').rate_limit_per_min).toBe(0);
   });
 
   test('fork_policy is null unless overridden — the per-kind default is applied at fork time', async () => {
     const { registry } = setup();
-    expect(registry.get(await registry.register(spec(), NOW))!.fork_policy).toBeNull();
-    expect(registry.get(await registry.register(spec({ fork_policy: 'share' }), NOW))!.fork_policy).toBe('share');
+    expect(present(registry.get(await registry.register(spec(), NOW)), 'registered trigger').fork_policy).toBeNull();
+    expect(present(registry.get(await registry.register(spec({ fork_policy: 'share' }), NOW)), 'registered trigger').fork_policy).toBe('share');
   });
 
   test('schedules an alarm only when the trigger has a fire time', async () => {
@@ -161,7 +161,7 @@ describe('TriggerRegistry pause / resume', () => {
     const id = await registry.register(spec(), NOW);
 
     expect(registry.pause(id, NOW + 5)).toBe(true);
-    const row = registry.get(id)!;
+    const row = present(registry.get(id), 'registered trigger');
     expect(row.state).toBe('paused');
     expect(row.paused_at).toBe(NOW + 5);
   });
@@ -173,7 +173,7 @@ describe('TriggerRegistry pause / resume', () => {
 
     expect(registry.pause(id, NOW + 1)).toBe(false);      // already paused
     expect(registry.pause('nope', NOW)).toBe(false);       // unknown id
-    expect(registry.get(id)!.paused_at).toBe(NOW);         // not re-stamped
+    expect(present(registry.get(id), 'registered trigger').paused_at).toBe(NOW);         // not re-stamped
   });
 
   test('a revoked trigger cannot be paused', async () => {
@@ -190,7 +190,7 @@ describe('TriggerRegistry pause / resume', () => {
     alarm.requested.length = 0;
 
     expect(await registry.resume(id, NOW + 2)).toBe(true);
-    const row = registry.get(id)!;
+    const row = present(registry.get(id), 'registered trigger');
     expect(row.state).toBe('active');
     expect(row.paused_at).toBeNull();
     expect(alarm.requested).toEqual([NOW + 60_000]);
@@ -229,9 +229,9 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
     registry.revoke(revoked, NOW);
 
     expect(registry.pauseAll(NOW + 1)).toBe(2);
-    expect(registry.get(a)!.state).toBe('paused');
-    expect(registry.get(b)!.state).toBe('paused');
-    expect(registry.get(revoked)!.state).toBe('revoked');
+    expect(present(registry.get(a), 'registered trigger').state).toBe('paused');
+    expect(present(registry.get(b), 'registered trigger').state).toBe('paused');
+    expect(present(registry.get(revoked), 'registered trigger').state).toBe('revoked');
     expect(registry.pauseAll(NOW + 2)).toBe(0);
   });
 
@@ -264,7 +264,7 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
     registry.revoke(revoked, NOW);
 
     expect(await registry.resumeAll(NOW + 1)).toBe(0);
-    expect(registry.get(revoked)!.state).toBe('revoked');
+    expect(present(registry.get(revoked), 'registered trigger').state).toBe('revoked');
   });
 });
 
@@ -274,7 +274,7 @@ describe('TriggerRegistry revoke / revokeAll', () => {
     const id = await registry.register(spec({ next_fire_at: NOW + 60_000 }), NOW);
 
     expect(registry.revoke(id, NOW + 5)).toBe(true);
-    const row = registry.get(id)!;
+    const row = present(registry.get(id), 'registered trigger');
     expect(row.state).toBe('revoked');
     expect(row.revoked_at).toBe(NOW + 5);
     expect(row.next_fire_at).toBeNull();
@@ -287,7 +287,7 @@ describe('TriggerRegistry revoke / revokeAll', () => {
 
     expect(registry.revoke(id, NOW + 1)).toBe(true);
     expect(registry.revoke(id, NOW + 2)).toBe(false);
-    expect(registry.get(id)!.revoked_at).toBe(NOW + 1);
+    expect(present(registry.get(id), 'registered trigger').revoked_at).toBe(NOW + 1);
   });
 
   test('revoke reports false for an unknown id', () => {
@@ -343,7 +343,7 @@ describe('TriggerRegistry alarm wakeup path', () => {
 
     await registry.markFired(id, NOW, NOW + 3_600_000);
 
-    const row = registry.get(id)!;
+    const row = present(registry.get(id), 'registered trigger');
     expect(row.fire_count).toBe(1);
     expect(row.last_fire_at).toBe(NOW);
     expect(row.next_fire_at).toBe(NOW + 3_600_000);
@@ -358,8 +358,8 @@ describe('TriggerRegistry alarm wakeup path', () => {
 
     await registry.markFired(id, NOW, null);
 
-    expect(registry.get(id)!.next_fire_at).toBeNull();
-    expect(registry.get(id)!.fire_count).toBe(1);
+    expect(present(registry.get(id), 'registered trigger').next_fire_at).toBeNull();
+    expect(present(registry.get(id), 'registered trigger').fire_count).toBe(1);
     expect(alarm.requested).toEqual([]);
   });
 
@@ -370,8 +370,8 @@ describe('TriggerRegistry alarm wakeup path', () => {
     await registry.markFired(id, NOW + 60_000, NOW + 120_000);
     await registry.markFired(id, NOW + 120_000, null);
 
-    expect(registry.get(id)!.fire_count).toBe(3);
-    expect(registry.get(id)!.last_fire_at).toBe(NOW + 120_000);
+    expect(present(registry.get(id), 'registered trigger').fire_count).toBe(3);
+    expect(present(registry.get(id), 'registered trigger').last_fire_at).toBe(NOW + 120_000);
   });
 });
 
@@ -468,19 +468,21 @@ describe('timer ingress', () => {
     const t = timers();
     const timer = await createTimerTrigger(t.registry, { cron: '*/5 * * * *', label: 'sweep' }, NOW);
     expect(timer.kind).toBe('timer_cron');
-    expect(timer.nextFireAt).toBeGreaterThan(NOW);
+    const firesAt = present(timer.nextFireAt, 'the cron trigger\'s first fire time');
+    expect(firesAt).toBeGreaterThan(NOW);
 
-    expect(await t.fire(timer.nextFireAt!)).toEqual({ fired: 1 });
+    expect(await t.fire(firesAt)).toEqual({ fired: 1 });
     expect(t.fired()).toEqual([{
-      trigger_id: timer.id, scheduled_fire_at: timer.nextFireAt!, label: 'sweep',
+      trigger_id: timer.id, scheduled_fire_at: firesAt, label: 'sweep',
       user_payload: undefined, mission_label: undefined,
     }]);
-    const row = t.registry.get(timer.id)!;
+    const row = present(t.registry.get(timer.id), 'registered trigger');
     expect(row.state).toBe('active');
     expect(row.fire_count).toBe(1);
-    expect(row.next_fire_at).toBeGreaterThan(timer.nextFireAt!);
+    const rearmedAt = present(row.next_fire_at, 'the re-armed fire time');
+    expect(rearmedAt).toBeGreaterThan(firesAt);
     // …and the next wake was requested, so the chain does not end here.
-    expect(t.alarm.requested).toContain(row.next_fire_at!);
+    expect(t.alarm.requested).toContain(rearmedAt);
   });
 
   test('a one-shot fires once and revokes itself', async () => {
@@ -504,10 +506,11 @@ describe('timer ingress', () => {
   test('a re-fire after the host was evicted dedupes on (trigger, scheduled fire)', async () => {
     const t = timers();
     const timer = await createTimerTrigger(t.registry, { cron: '*/5 * * * *' }, NOW);
-    await t.fire(timer.nextFireAt!);
+    const firesAt = present(timer.nextFireAt, 'the cron trigger\'s first fire time');
+    await t.fire(firesAt);
     // The same due row, fired again at the same scheduled time: one event.
-    await t.registry.markFired(timer.id, timer.nextFireAt!, timer.nextFireAt);
-    expect(await t.fire(timer.nextFireAt!)).toEqual({ fired: 1 });
+    await t.registry.markFired(timer.id, firesAt, timer.nextFireAt);
+    expect(await t.fire(firesAt)).toEqual({ fired: 1 });
     expect(t.fired()).toHaveLength(1);
   });
 
@@ -520,7 +523,7 @@ describe('timer ingress', () => {
 
     expect(await t.fire(NOW)).toEqual({ fired: 0 });
     expect(t.fired()).toEqual([]);
-    expect(t.registry.get(watch)!.state).toBe('active');
+    expect(present(t.registry.get(watch), 'registered trigger').state).toBe('active');
   });
 
   test('an unusable schedule is refused at registration, before a row exists', async () => {
@@ -546,6 +549,6 @@ describe('timer ingress', () => {
     expect(cancelTrigger(t.registry, timer.id, NOW, 'owner')).toEqual({ ok: true, changed: true });
     // Idempotent: cancelling twice is not an error, and reports no change.
     expect(cancelTrigger(t.registry, timer.id, NOW, 'owner')).toEqual({ ok: true, changed: false });
-    expect(await t.fire(timer.nextFireAt!)).toEqual({ fired: 0 });
+    expect(await t.fire(present(timer.nextFireAt, 'the cancelled trigger\'s fire time'))).toEqual({ fired: 0 });
   });
 });
