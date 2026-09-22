@@ -20,7 +20,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../src/auth/session';
-import { handleClientErrorRequest } from '../src/client-error/route';
+import { handleClientErrorRequest, type ClientErrorEnv } from '../src/client-error/route';
 import {
   CLIENT_ERROR_ENDPOINT,
   CLIENT_ERROR_MAX_REQUEST_BYTES,
@@ -56,9 +56,8 @@ const ME: AuthIdentity = {
  * answers the way the real `single-page-application` fallback does, which is how
  * an undeployed bundle and a `vite dev` server look from in here.
  */
-function envWithStamp(stamp: typeof STAMP | null): Env {
-  const partialEnv: Partial<Env> = {};
-  Object.assign(partialEnv, {
+function envWithStamp(stamp: typeof STAMP | null): ClientErrorEnv {
+  return {
     ASSETS: {
       async fetch(request: Request): Promise<Response> {
         if (stamp !== null && new URL(request.url).pathname === '/downloads/kinu-version.json') {
@@ -70,10 +69,7 @@ function envWithStamp(stamp: typeof STAMP | null): Env {
         return new Response(SPA_SHELL, { headers: { 'content-type': 'text/html' } });
       },
     },
-  });
-
-  // SAFETY: the route reads only ASSETS.fetch, which this fixture constructs.
-  return partialEnv as Env;
+  };
 }
 
 /** A well-formed report, with the fields each case varies overridden. */

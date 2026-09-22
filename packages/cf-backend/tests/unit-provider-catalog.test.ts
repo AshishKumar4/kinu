@@ -5,7 +5,7 @@ import { asFetchFunction } from '@kinu.run/core';
 import { userCredentialSource } from './helpers/user-credentials';
 import { createMockFetch } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { listProviderCatalog } from '../src/user/available-models';
+import { listProviderCatalog, type AvailableModelsEnv } from '../src/user/available-models';
 
 const CATALOG = {
   groq: {
@@ -95,17 +95,16 @@ describe('listProviderCatalog', () => {
       key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0,
     }));
 
-    const partialEnv: Partial<Env> = {};
-    Object.assign(partialEnv, {
+    const env: AvailableModelsEnv<string> = {
       UserDO: {
-        idFromName: (name: string) => name,
-        get: () => ({ listCredentials: async () => list }),
+        idFromName: (name) => name,
+        get: () => ({
+          listCredentials: async () => list,
+          getAuthHeaders: async () => null,
+          getCredentialBaseURL: async () => null,
+        }),
       },
-    });
-    // SAFETY: listProviderCatalog reaches env.UserDO alone. The constructed
-    // namespace answers listCredentials, and no other Env binding is reachable
-    // in this call.
-    const env = partialEnv as Env;
+    };
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify(MODELS_DEV_API), {
       status: 200, headers: { 'content-type': 'application/json' },
