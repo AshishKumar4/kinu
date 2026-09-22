@@ -183,7 +183,7 @@ export async function setupCommand(opts: {
     // Storing nothing is deliberate: the platform default is one constant in
     // @kinu.run/core, and an unset model reads it at resolve time instead of
     // pinning a copy that would go stale.
-    updateConfigFile((config) => { delete config.model; });
+    updateConfigFile((stored) => { delete stored.model; });
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
     console.log(DIM(`Default model: ${DEFAULT_WORKERS_AI_MODEL_SPEC}`));
     console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
