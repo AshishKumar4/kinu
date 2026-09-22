@@ -823,7 +823,7 @@ export class UserDO extends Agent<Env> {
     this.ensureInit();
     openAnalyticsWindow(this.env);
 
-    return requireTier(this.ctx.storage.sql, this.env, caller, capability);
+    return requireTier(this.ctx.storage.sql, this.env, { caller }, capability);
   }
 
   /** Provisioning in flight, per workspace. A Durable Object serializes nothing

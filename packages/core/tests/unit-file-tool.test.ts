@@ -362,7 +362,7 @@ describe('the honest read, scanned rather than made resident', () => {
     expect(giant.last).toBe(giant.first - 1);
 
     const ledger = new TurnFileLedger();
-    ledger.observeRange('/f', fnv1a64(original), giant.first, giant.last, giant.total);
+    ledger.observeRange('/f', { fingerprint: fnv1a64(original), first: giant.first, last: giant.last, total: giant.total });
     // That very content is now known AND known to be unread: an overwrite
     // discarding it is refused with nothing covered, rather than waved
     // through because a read happened.
@@ -417,18 +417,18 @@ describe('TurnFileLedger', () => {
   test('coverage extends only when a read continues the prefix already paged', () => {
     const ledger = new TurnFileLedger();
     const content = 'a\nb\nc\nd\n';
-    ledger.observeRange('/f', fnv1a64(content), 1, 2, 4);
+    ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 1, last: 2, total: 4 });
     expect(ledger.seenState('/f', content, 'whole')).toMatchObject({ state: 'partial', coveredTo: 2 });
-    ledger.observeRange('/f', fnv1a64(content), 4, 4, 4);  // a gap — line 3 still unseen
+    ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 4, last: 4, total: 4 });  // a gap — line 3 still unseen
     expect(ledger.seenState('/f', content, 'whole')).toMatchObject({ state: 'partial', coveredTo: 2 });
-    ledger.observeRange('/f', fnv1a64(content), 3, 4, 4);  // continues the prefix
+    ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 3, last: 4, total: 4 });  // continues the prefix
     expect(ledger.seenState('/f', content, 'whole').state).toBe('seen');
   });
 
   test('a partial read still authorizes an edit — the anchor carries its own proof', () => {
     const ledger = new TurnFileLedger();
     const content = 'a\nb\nc\n';
-    ledger.observeRange('/f', fnv1a64(content), 1, 1, 3);
+    ledger.observeRange('/f', { fingerprint: fnv1a64(content), first: 1, last: 1, total: 3 });
     expect(ledger.seenState('/f', content, 'part').state).toBe('seen');
   });
 

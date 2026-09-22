@@ -849,7 +849,7 @@ describe('a denial is a row that says denied', () => {
 
     const env: OwnerCapabilityEnv = {};
     await throughAsyncSink(plane, async () => {
-      await expect(requireTier(sql, env, {}, 'credentials.other')).rejects.toThrow(/no valid caller identity/);
+      await expect(requireTier(sql, env, { caller: {} }, 'credentials.other')).rejects.toThrow(/no valid caller identity/);
     });
     const point = onlyPoint(plane.agent);
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'event')).toBe('capability.denied');

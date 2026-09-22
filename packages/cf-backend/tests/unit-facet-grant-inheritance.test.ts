@@ -191,7 +191,7 @@ describe('a facet holds the root set, or a subset of it', () => {
       },
       (error) => error.message,
       'sandbox',
-      createInheritedApprovalPolicy(probe.deps),
+      { policy: createInheritedApprovalPolicy(probe.deps) },
     );
 
     expect(await run(GATED)).toBe(`ran:${GATED}`);

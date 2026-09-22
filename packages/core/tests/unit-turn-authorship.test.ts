@@ -167,12 +167,12 @@ describe('a row that carries no stamp is read from what it does carry', () => {
     // getChatHistoryPage reported the fork_interrupted rows above as `user`,
     // because it read only the id prefix and those rows predate it. The rule is
     // one function now, so the two surfaces cannot disagree again.
-    expect(transcriptRole('f8798675-5e9a-4d13-aac2-293f4557f1c1', 'user', {
-      kinuEvent: 'fork_interrupted',
+    expect(transcriptRole({
+      id: 'f8798675-5e9a-4d13-aac2-293f4557f1c1', role: 'user', metadata: { kinuEvent: 'fork_interrupted' },
     })).toBe('system');
-    expect(transcriptRole('oeqkRs2rHNekyDPv', 'user', { kinuMode: 'build' })).toBe('user');
-    expect(transcriptRole(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, 'user')).toBe('system');
+    expect(transcriptRole({ id: 'oeqkRs2rHNekyDPv', role: 'user', metadata: { kinuMode: 'build' } })).toBe('user');
+    expect(transcriptRole({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, role: 'user' })).toBe('system');
     // Assistant rows are never touched, whatever they carry.
-    expect(transcriptRole(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, 'assistant')).toBe('assistant');
+    expect(transcriptRole({ id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}x`, role: 'assistant' })).toBe('assistant');
   });
 });

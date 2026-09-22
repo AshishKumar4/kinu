@@ -3075,7 +3075,7 @@ export class OrchestratorAgent extends ActorAgent {
       const summary = this.ctx.storage.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.facts, update);
 
-        recordEffectDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, key);
+        recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_APPLIED, key: key });
         void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
         // Nothing is left unprocessed, so no timed trigger is owed. The close
         // instant goes too: a tab closed once earns one run over what was
@@ -6966,15 +6966,15 @@ export class OrchestratorAgent extends ActorAgent {
       diagnostics.event('evolution.interrupted_pass_abandoned', {
         workspace: this.name, lane: scope, tick,
       });
-      recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`);
+      recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
 
       return;
     }
 
     const running = pass();
-    recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:entered`);
+    recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:entered` });
     await running;
-    recordEffectDone(this.boundSql, this.actorHandle(), scope, `${tick}:done`);
+    recordEffectDone(this.boundSql, this.actorHandle(), { scope: scope, key: `${tick}:done` });
   }
 
   /**

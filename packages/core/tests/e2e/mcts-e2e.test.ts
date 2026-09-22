@@ -45,7 +45,7 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   function createRealBranch(branchLLM: LLM): BranchHandle {
     return {
       release: async () => {},
-      async explore(priorHistory) {
+      async explore({ priorHistory }) {
         const context = priorHistory.map(m => `${m.role}: ${m.content}`).join('\n');
 
         const text = await branchLLM.complete(
