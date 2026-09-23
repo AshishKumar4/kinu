@@ -2,7 +2,7 @@
 
 exports[`every registered section reaches a rendered prompt the Markdown extraction preserves every rendered byte of the surface matrix 1`] = `
 {
-  "cf-full-surface": "2cc6d57bbd2fcdabd5df73ef26ad7a75b9402b96e4d4579b5a952aa8230b9c57",
+  "cf-full-surface": "0724a096477bac53049fbd9f07bc82d57b0cb503490742f75e28bf6b6f7e6edd",
   "cli-local-full-surface": "5089734aa0b1199c7db70d22dcab907117f3ab175af986538abdc144282d309a",
   "code-execution": "bab85fc67402e5914e7cab9f948dc14310aa46daf8196e264aa1808327fb9233",
   "defaults": "309cc9d87996000a09f9eb06aa96e35f322d0a7bf0a9f709f9a79472e192b7c6",

@@ -1,11 +1,12 @@
 /**
- * Claude-Code / Hermes-compatible SKILL.md files at `/workspace/skills/<name>.md`.
+ * Claude-Code / Hermes-compatible SKILL.md files, read from `/skills`.
  * An active skill's body joins the system prompt and its `allowed_tools`
  * bounds the tool surface. Unknown front-matter keys round-trip via `ext`.
  */
 
 import type { JsonObject } from '../utils/json';
 import type { InstructionTrust } from '../types/instruction-trust';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 export type SkillParseResult =
   | { ok: true; skill: ParsedSkill }
@@ -18,12 +19,6 @@ export interface SkillHeader {
   description: string;
   /** Glob-suffix (`workspace.*`) or exact patterns; empty means no restriction. */
   allowed_tools: string[];
-  /** Case-insensitive whole-word triggers, used only when `auto_activate` is true. */
-  keywords: string[];
-  /** Default false: only explicit `/skill-name` activates. */
-  auto_activate: boolean;
-  /** When true, `keywords`/`auto_activate` are forced off; explicit invocation still works. */
-  disable_model_invocation: boolean;
   /** When false, `/skill-name` in a user message cannot activate it. Default true. */
   user_invocable: boolean;
   ext: JsonObject;
@@ -82,29 +77,23 @@ export interface ActiveSkillSet {
 
 export type ActivationReason =
   | { kind: 'explicit'; matched_token: string }
-  | { kind: 'keyword'; matched_keyword: string }
   | { kind: 'always_active'; via: 'config' };
 
-export class SkillError extends Error {
-  constructor(public readonly code: SkillErrorCode, message: string) {
-    super(message);
-    this.name = 'SkillError';
-  }
+/** The read-only view of every skill (`skills/view.ts`). */
+export const SKILLS_VIEW = '/skills';
+
+/** Where the workspace writes its own skills. */
+export const WORKSPACE_SKILLS_DIR = `${WORKSPACE_ROOT}/skills`;
+
+export const SKILL_FOLDER_FILE = 'SKILL.md';
+
+export function skillViewPath(name: string): string {
+  return `${SKILLS_VIEW}/${name}/${SKILL_FOLDER_FILE}`;
 }
 
-export type SkillErrorCode =
-  | 'not_found'
-  | 'invalid_name'
-  | 'invalid_frontmatter'
-  | 'duplicate'
-  | 'vfs_error'
-  | 'forbidden_action';
-
-export const SKILLS_DIR = '/workspace/skills';
-
-/** Index line for a workspace file: provenance only, no unapproved description. */
+/** Index line for a workspace or Drive file: provenance only, no unapproved description. */
 export function workspaceSkillIndexLine(name: string, source: SkillSource = 'vfs'): string {
   const origin = source === 'shared' ? 'shared drive skill' : 'workspace skill';
 
-  return `- **${name}** (${origin}; contents are reference material until the owner approves them)`;
+  return `- **${name}** \`${skillViewPath(name)}\` — ${origin}; reference material until the owner approves it`;
 }

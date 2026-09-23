@@ -2,11 +2,11 @@
  * The owner's instruction desk on the hosted backend, driven through the
  * actor's own RPCs over its real workspace plane. The rule is core's
  * (InstructionApprovalDesk); what this pins is the Durable Object's wiring of
- * it: the skill file the agent can write is the one the owner reads, and an
- * approval binds exactly the bytes the owner was shown.
+ * it: the skill file the agent can write is the one the owner reads and the one
+ * `/skills` serves, and an approval binds exactly the bytes the owner was shown.
  */
 import { describe, expect, test } from 'bun:test';
-import { SKILLS_DIR } from '@kinu.run/core';
+import { BUILTIN_SKILL_FILES, skillViewPath, workspaceSkillPath } from '@kinu.run/core';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const SKILL = '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n';
@@ -15,9 +15,10 @@ describe('the instruction desk on a Durable Object', () => {
   test('an approval binds the bytes the owner read, and refuses bytes changed since', async () => {
     const { agent } = orchestratorHarness();
     const vfs = agent.observeRuntime().storage.vfs;
-    const path = `${SKILLS_DIR}/focused.md`;
-    await vfs.mkdir(SKILLS_DIR, { recursive: true });
+    const path = workspaceSkillPath('focused');
     await vfs.writeFile(path, SKILL);
+    expect(await vfs.readFile(skillViewPath('focused'), { encoding: 'utf8' })).toBe(SKILL);
+    expect(await vfs.readFile(skillViewPath('slates'), { encoding: 'utf8' })).toBe(BUILTIN_SKILL_FILES.slates);
 
     const reviewed = await agent.readInstructionApproval(path);
 

@@ -26,7 +26,7 @@ import {
   withMountTable, standardMounts, readTailWithVfsOps,
   withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
-  createAgentStores, contextMount,
+  createAgentStores, contextMount, skillsMount,
   resolveRoutingProfile, createRoutedModelLane,
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
@@ -518,6 +518,7 @@ export function createCLIRuntime(
 
   const agentVfs = withMountTable(fileVfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    skillsMount((): VFS => agentVfs),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
@@ -794,6 +795,7 @@ async function buildCLIHeadRuntime(
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    skillsMount((): VFS => agentVfs),
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     }),

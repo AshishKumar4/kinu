@@ -33,7 +33,7 @@ import {
   type EventVariant,
   createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
-  SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
+  workspaceSkillPath, WORKSPACE_SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
@@ -1101,9 +1101,11 @@ function isWorkspaceInstructions(text: string): boolean {
 const FOCUSED_SKILL =
   '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n';
 
+const FOCUSED_PATH = workspaceSkillPath('focused');
+
 async function writeFocusedSkill(rt: CLIRuntime): Promise<void> {
-  await rt.storage.vfs.mkdir(SKILLS_DIR, { recursive: true });
-  await rt.storage.vfs.writeFile(`${SKILLS_DIR}/focused.md`, FOCUSED_SKILL);
+  await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
+  await rt.storage.vfs.writeFile(FOCUSED_PATH, FOCUSED_SKILL);
 }
 
 function messageText(message: PromptMessage): string {
@@ -1939,7 +1941,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       rt.actor,
       `local:${realpathSync(process.cwd())}`,
     )
-      .revoke(`${SKILLS_DIR}/focused.md`);
+      .revoke(FOCUSED_PATH);
     await session.send('/focused remember this');
     // An agent-written skill's `allowed_tools` is not policy until approved.
     expect(captured).toContain('memory');
@@ -1956,7 +1958,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       rt.actor,
       `local:${realpathSync(process.cwd())}`,
     )
-      .approve(`${SKILLS_DIR}/focused.md`, instructionDigest(FOCUSED_SKILL));
+      .approve(FOCUSED_PATH, instructionDigest(FOCUSED_SKILL));
 
     await session.send('/focused remember this');
     expect(new Set(captured)).toEqual(new Set(['memory']));
@@ -1966,7 +1968,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('approval refuses bytes changed after the owner reviewed them', async () => {
     const { rt, session } = setup('ok');
     await writeFocusedSkill(rt);
-    const path = `${SKILLS_DIR}/focused.md`;
+    const path = FOCUSED_PATH;
     const reviewed = await session.readInstructionApproval(path);
 
     if (reviewed === null) throw new Error('expected focused skill');
@@ -1979,6 +1981,42 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (result.ok) throw new Error('expected rejection');
     expect(result.error).toContain('changed');
   });
+
+  test('a scripted agent follows the skills index and loads the slates body on its first call', async () => {
+    const results: string[] = [];
+    let step = 0;
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
+
+    const model = scriptedTurnModel({ doGenerate: (options) => {
+      step += 1;
+
+      if (step === 1) {
+        const system = options.prompt.find((message) => message.role === 'system')?.content ?? '';
+        // The path the prompt's own index gives for `slates`, not one this test knows.
+        const path = /\*\*slates\*\* `([^`]+)`/u.exec(system)?.[1] ?? 'the index names no path';
+
+        return {
+          content: [{ type: 'tool-call', toolCallId: 'load-skill', toolName: 'file', input: JSON.stringify({ action: 'read', path }) }],
+          finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
+        };
+      }
+
+      for (const message of options.prompt) {
+        if (message.role !== 'tool') continue;
+
+        for (const part of message.content) if (part.type === 'tool-result') results.push(JSON.stringify(part.output));
+      }
+
+      return { content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
+    } });
+
+    const { session } = setup('ok', model);
+    await session.send('Build a small 2048 game I can play here.');
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toContain('class Slate extends SlateObject');
+  });
+
   test('recoverBackgroundJobs fails + wakes an orphaned job of a non-resumable kind, clears stale fibers', async () => {
     const { db, rt, session, events } = setup();
     // `shell` has partial side effects, so it declines resume and fails. Both rows are under the recovering actor:
