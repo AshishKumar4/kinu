@@ -4,12 +4,11 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
-import { CODEMODE_CODE_DESCRIPTION } from '@kinu.run/core';
-import { scratchDir, toolExecute, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { CODEMODE_CODE_DESCRIPTION, WORKSPACE_ROOT } from '@kinu.run/core';
+import { toolExecute, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
-import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 interface ExecuteToolResult {
@@ -375,14 +374,63 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
   });
 });
 
-test('Plan refuses native JavaScript before it can use machine require, while Build stays native', async () => {
-  const directory = scratchDir('plan-native');
-  const path = join(directory, 'native-write');
+/** A workspace over a map that answers a missing file the way the host does: a refusal value, not a throw. */
+function mapWorkspace(files: Map<string, string>, commands: string[]): CodemodeProvider {
+  return {
+    name: 'workspace',
+    tools: {
+      readFile: {
+        description: 'read',
+        execute: async (path) => files.get(String(path))
+          ?? { success: false, reason: 'missing', error: `ENOENT: no such file or directory, open '${String(path)}'` },
+      },
+      writeFile: {
+        description: 'write',
+        execute: async (path, content) => {
+          files.set(String(path), String(content));
 
-  const execute = makeTool();
-  const code = 'require("node:fs").writeFileSync(' + JSON.stringify(path) + ', "native effect"); return "done";';
-  await expect(inWorkMode('plan', () => execute({ code }))).rejects.toMatchObject({ code: 'denied' });
-  expect(existsSync(path)).toBe(false);
-  expect(await execute({ code })).toMatchObject({ result: 'done' });
-  expect(await readFile(path, 'utf8')).toBe('native effect');
+          return 'ok';
+        },
+      },
+      exists: { description: 'exists', execute: async (path) => files.has(String(path)) },
+      exec: {
+        description: 'run',
+        execute: async (command) => {
+          commands.push(String(command));
+
+          return 'ran';
+        },
+      },
+    },
+  };
+}
+
+test('a program writes only into the workspace it was given, and Plan refuses before any effect', async () => {
+  // The eval-harness leak: `solution.mjs` landed in the CLI process's cwd, the repo root.
+  const name = `kinu-leak-probe-${crypto.randomUUID()}.mjs`;
+  const machinePath = join(process.cwd(), name);
+  const files = new Map<string, string>();
+  const commands: string[] = [];
+
+  const execute = toolExecute<{ code: string }, ExecuteToolResult>(
+    createNodeCodemodeToolFactory({ extraProviders: [mapWorkspace(files, commands)] })({ native: {}, craftedTools: () => ({}), providers: [] }),
+  );
+
+  const code = [
+    '// Write the solution beside the program and run its test',
+    `await require('fs/promises').writeFile(${JSON.stringify(name)}, 'export const solve = () => 1;');`,
+    "await require('child_process').exec('echo ran');",
+    'return process.cwd();',
+  ].join('\n');
+
+  try {
+    await expect(inWorkMode('plan', () => execute({ code }))).rejects.toMatchObject({ code: 'denied' });
+    expect(files.size).toBe(0);
+    expect(await execute({ code })).toMatchObject({ result: WORKSPACE_ROOT });
+    expect(files.get(`${WORKSPACE_ROOT}/${name}`)).toBe('export const solve = () => 1;');
+    expect(commands).toEqual(['echo ran']);
+    expect(existsSync(machinePath)).toBe(false);
+  } finally {
+    rmSync(machinePath, { force: true });
+  }
 });

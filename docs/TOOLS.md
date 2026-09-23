@@ -322,7 +322,8 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 `createInlineExecutor` registers `workspace` in `ExecutionRouter`. Native
 `file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
 Workspace skills are written at `WORKSPACE_SKILLS_DIR` (`/home/user/skills`) on
-that VFS.
+that VFS. In an `eval` program, `process.cwd()` is the workspace root, and the
+`fs` shim resolves a relative path against it.
 
 ### Slates
 

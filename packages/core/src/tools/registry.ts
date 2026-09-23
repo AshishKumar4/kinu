@@ -494,17 +494,20 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
   report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
 } satisfies Record<BuiltinToolName, string>;
 
-/** Which substrate runs the program; they differ in what `require` and `fs` mean. */
+/** Which substrate runs the program. */
 export type SandboxSubstrate = 'hosted' | 'local';
+
+const SANDBOX_WORKSPACE = '`require()` resolves the Node builtins (`path`, `url`, `util`, `crypto`, `buffer`, `events`, `stream`, …) plus `fs`, `fs/promises` and `child_process` implemented over your workspace files and shell, and `process.cwd()` is the workspace root: `await require("fs/promises").readFile("notes.md", "utf8")`, `await require("child_process").exec("ls -la")`. ';
 
 const SANDBOX_FACTS = {
   hosted:
     'The sandbox is a fresh JavaScript isolate per program, written like a Node script: statements at the top level, `await` anywhere, and `return` (or a trailing expression) to hand back the result. Type annotations do not parse there. '
-    + '`require()` resolves the Node builtins (`path`, `url`, `util`, `crypto`, `buffer`, `events`, `stream`, …) plus `fs`, `fs/promises` and `child_process` implemented over your workspace files and shell: `await require("fs/promises").readFile("notes.md", "utf8")`, `await require("child_process").exec("ls -la")`. '
+    + SANDBOX_WORKSPACE
     + '`fetch` reaches the internet. `console.log` output comes back beside the result. `env.workspace` is your workspace name and `env.state` is the `state` namespace.',
   local:
     'The sandbox runs the program in-process, written like a Node script: statements at the top level, `await` anywhere, and `return` (or a trailing expression) to hand back the result. Type annotations do not parse there. '
-    + 'The Node builtins, `require` and `fetch` are the machine\'s own; the `workspace` namespace is the durable workspace, which is not the machine\'s filesystem. `console.log` output comes back beside the result.',
+    + SANDBOX_WORKSPACE
+    + '`fetch` is the machine\'s own. `console.log` output comes back beside the result.',
 } satisfies Record<SandboxSubstrate, string>;
 
 /** The `code` field description on the `eval` input schema, shared via `codemodeInputSchema`. */

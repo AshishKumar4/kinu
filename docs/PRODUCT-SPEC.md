@@ -365,7 +365,7 @@ A hosted code program receives capability namespaces, not the trusted Worker's r
 | Hosted Node-compatible shims | Supported asynchronous filesystem and process operations over workspace capabilities. Unsupported synchronous/native operations refuse. They do not grant the trusted host filesystem. |
 | Hosted global `fetch` | The selected outbound capability. Plan receives no network capability; Build uses the shared destination policy. |
 
-Hosted programs run in dynamic Worker isolation. Locally, `createNodeCodemodeToolFactory` runs normalized code in process with provider bindings and the machine's own `require`. These are different security boundaries even though both are called codemode.
+Hosted programs run in dynamic Worker isolation. Locally, `createNodeCodemodeToolFactory` runs normalized code in process with provider bindings and the hosted sandbox's own `require` and `process`, so `fs`, `child_process` and `process.cwd()` reach the workspace on both. The rest of the local process stays reachable (`Bun`, `import()`, `globalThis.process`), so these are different security boundaries even though both are called codemode.
 
 ### 9.2 Required database contract
 
