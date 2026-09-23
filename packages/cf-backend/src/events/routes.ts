@@ -1,7 +1,6 @@
 /** Hub routes (triggers, events, email) behind the workspace gate; grants need step-up. Public delivery: `webhookDeliveryRoutes`. */
 
 import { Hono, type Context } from 'hono';
-import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { KvStore } from '@kinu.run/agent-utils';
 import {
@@ -67,9 +66,6 @@ export type HubTarget = Pick<OrchestratorAgent,
  * own retry (agents@0.22.0 `dist/agent-routing.js:176-183`, read 2026-09-22). Injectable for tests.
  */
 export type HubResolver = (name: string) => Promise<HubTarget>;
-
-export const hubAgentResolver = (env: Env): HubResolver =>
-  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
 export type HubEnv = Pick<Env, 'WEBHOOK_ROUTE_SECRET'>;
 
@@ -207,9 +203,6 @@ export type WebhookDeliveryTarget = Pick<OrchestratorAgent, 'acceptWebhookDelive
 
 /** See {@link HubResolver}. */
 export type WebhookDeliveryResolver = (name: string) => Promise<WebhookDeliveryTarget>;
-
-export const webhookDeliveryResolver = (env: Env): WebhookDeliveryResolver =>
-  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
 export interface WebhookDeliveryEnv extends HubEnv {
   AUTH_KV?: KvStore;

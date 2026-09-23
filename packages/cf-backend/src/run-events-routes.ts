@@ -5,7 +5,6 @@
  */
 
 import { Hono } from 'hono';
-import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
 import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
   type RunEventType } from "@kinu.run/core";
@@ -50,9 +49,6 @@ export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEvents
 /** A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.22.0,
  *  `dist/agent-routing.js:176-183`, read 2026-09-22) awaits `__unsafe_ensureInitialized`. */
 export type RunEventsResolver = (name: string) => Promise<RunEventsTarget>;
-
-export const runEventsResolver = (env: Env): RunEventsResolver =>
-  (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
 function parseTypesParam(s: string | null): RunEventType[] | undefined {
   if (!s) return undefined;

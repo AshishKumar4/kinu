@@ -1,10 +1,9 @@
 /** Raw bytes cross in FILE_CHUNK_BYTES chunks: a whole file as one RPC argument hits `do.facet.rpc_bytes`. */
 
 import { Hono } from 'hono';
-import { getAgentByName } from "agents";
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult, type VfsRevision } from "@kinu.run/core";
 import * as v from 'valibot';
-import type { ExecutorFileChunkRead, ExecutorFileChunkWrite, OrchestratorAgent } from "./orchestrator";
+import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
 import type { FamilyEnv } from './api/context';
@@ -22,9 +21,6 @@ export interface FilesRouteAgent {
 
 /** Null reads as "no object to talk to" and answers 503. */
 export type FilesAgentResolver<Bindings> = (env: Bindings, agentName: string) => Promise<FilesRouteAgent | null>;
-
-export const filesAgentResolver: FilesAgentResolver<Env> = (env, agentName) =>
-  getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
 
 /** Method, then query, then object, as before. */
 export function filesRoutes<Bindings extends object>(

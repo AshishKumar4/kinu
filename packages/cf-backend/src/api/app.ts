@@ -1,5 +1,7 @@
 /** `/api/*` as one Hono app: registration order is dispatch order, so this file's order is the gate order. */
 import { Hono } from 'hono';
+import { getAgentByName } from 'agents';
+import type { OrchestratorAgent } from '../orchestrator';
 import { err, healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { AuthError, authenticateRequest, crossSiteRejection } from '../auth/session';
@@ -19,15 +21,18 @@ import { sharedPublicRoutes, sharedRoutes } from '../shared/routes';
 import { driveRoutes } from '../drive/routes';
 import { feedbackRoutes } from '../feedback/routes';
 import { clientErrorRoutes } from '../client-error/route';
-import { hubAgentResolver, hubRoutes, webhookDeliveryResolver, webhookDeliveryRoutes } from '../events/routes';
-import { runEventsResolver, runEventsRoutes } from '../run-events-routes';
+import { hubRoutes, webhookDeliveryRoutes } from '../events/routes';
+import { runEventsRoutes } from '../run-events-routes';
 import { evalAbortRoutes } from '../eval/abort-route';
-import { filesAgentResolver, filesRoutes } from '../files-routes';
+import { filesRoutes } from '../files-routes';
 import { terminalRouteDeps, terminalRoutes } from '../terminal-route';
 import { apiError, apiPath, beneath, type FamilyEnv } from './context';
 import { workspaceGate } from './workspace';
 
 const app = new Hono<FamilyEnv<Env>>({ getPath: apiPath });
+
+/** The SDK's one binding for every workspace family. */
+const workspaceAgent = (env: Env) => (name: string) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name);
 
 /** Checks each family's declared bindings against `Env`. */
 function mount<Bindings extends object, Variables extends object>(
@@ -69,7 +74,7 @@ app.all('/api/health', async (c) => serveApp(c.req.raw, c.env));
 
 app.all('/api/auth/*', beneath<FamilyEnv<Env>>('/api/auth', async (c) => serveApp(c.req.raw, c.env)));
 
-mount(webhookDeliveryRoutes(webhookDeliveryResolver));
+mount(webhookDeliveryRoutes(workspaceAgent));
 
 app.use('/api/*', async (c, next) => {
   let identity;
@@ -115,13 +120,13 @@ mount(updatesRoutes);
 
 app.use('/api/workspaces/:name/*', workspaceGate);
 
-mount(runEventsRoutes(REAL_CLOCK, runEventsResolver));
+mount(runEventsRoutes(REAL_CLOCK, workspaceAgent));
 
 mount(evalAbortRoutes);
 
-mount(hubRoutes(hubAgentResolver));
+mount(hubRoutes(workspaceAgent));
 
-mount(filesRoutes(filesAgentResolver));
+mount(filesRoutes((env: Env, name: string) => workspaceAgent(env)(name)));
 
 mount(terminalRoutes(terminalRouteDeps));
 
