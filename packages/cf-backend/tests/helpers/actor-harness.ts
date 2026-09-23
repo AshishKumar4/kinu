@@ -30,22 +30,21 @@ import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
 import {
   shadowTrialPlan, claimToolEffect, actorReferenceOf,
-  type ActorHandle, type SqlExecutor,
+  type ActorHandle,
   type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
   type IngressDescriptor, type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type RoleCatalog, type ResolvedTurnProfile, type RunEndReason, type SqlValue, type SubordinateRosterStore,
+  type RoleCatalog, type ResolvedTurnProfile, type SqlValue, type SubordinateRosterStore,
   type TierAssignments,
-  projectJsonValue, composePrepareStep,
+  composePrepareStep,
   type BackgroundJobStore, type JsonValue,
   type DeviceStatus,
   type WorkMode, type JsonObject,
   startBranchHead, branchHeadId,
   type HeadInput, type HeadReport, type HeadRuntime,
-  type NimbusExecResult,
   type FactsStore, type SleepTimeUpdate,
   type AgentSignal, type SendOutcome, type ReleaseBoard, type EgressSecretBinding,
 } from '@kinu.run/core';
@@ -59,7 +58,6 @@ import {
 import type { ExplorationHostSeams } from '../../src/exploration-hosting';
 import type { HostedTaskProfile } from '../../src/subordinate-hosting';
 import type { AgentProviderRegistry } from '../../src/providers/agent-registry';
-import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
 mockAgentsSdk();
@@ -118,8 +116,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     if (current.entries.length > 0) return;
     await this.actorSession.restoreHistory(messages);
   }
-  /** An observer on the actor's extension host: tool calls and results in settle order. */
-  harnessRegisterExtension(extension: KinuExtension): void { this.extensions.register(extension); }
   get harnessTranscript(): SessionTranscript { return this.chatTranscript; }
   get harnessHistory(): SessionHistory { return this.actorSession.canonical; }
   harnessEnqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> { return this.chatLoop.enqueueTurn(input); }
@@ -199,8 +195,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRuntime(): AgentRuntime { return this.rt; }
   /** The slate host, so a suite can arm its one launch seam (`ensure`) as a tripwire. */
   observeSlateHost(): SlateHost { return this.slates; }
-  /** The profile the last `beforeTurn` resolved. */
-  observeResolvedTurnProfile(): ResolvedTurnProfile | null { return this.resolvedTurnProfile(); }
   /** The turn-start device-status refresh, awaited; production detaches it. */
   harnessRefreshDeviceStatus(): Promise<DeviceStatus> { return this.rt.deviceTransport.refreshStatus(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
@@ -255,10 +249,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly tiers?: TierAssignments;
     readonly availableModels?: readonly string[];
   } | null = null;
-  /** Run a shell command on the workspace box as a host-stamped credential. */
-  harnessBoxExec(shellId: string, command: string, cred: VfsCred): Promise<NimbusExecResult> {
-    return this.workspaceBox(shellId).exec(command, { cred });
-  }
   /** A cold activation: the owner row persists in SQL, in-memory latches do not. */
   forgetActivationLatches(): void {
     this._scaffoldReady = false;
@@ -301,19 +291,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The background-job registry; its store owns lease epoch and resume counter policy. */
   harnessJobs(): BackgroundJobStore { return this.jobs; }
-  /** The actor's SQL executor and handle, for seeding through production classes. */
-  harnessSql(): SqlExecutor { return this.boundSql; }
-  harnessActor(): ActorHandle { return this.actorHandle(); }
   /** One post-turn evolution lane, started exactly as a completed turn does. */
   harnessSettleEvolution(): void { this.settleEvolutionInBackground(); }
   /** One activation's alarm housekeeping: runs the interrupted-fiber scan with no client. */
   harnessAlarmHousekeeping(): Promise<void> { return this._onAlarmHousekeeping(); }
-
-  /** Whether this session records evolution state, as `beforeTurn` would set it;
-   *  the settled response records it so a recovering host cannot re-judge. */
-  declareTurnEvolutionGate(): void {
-    this._turnEvolutionEnabled = this.turnRecordsEvolution();
-  }
 
   /** The user message this turn runs for; `turnWorkMode()` reads its metadata. */
   harnessDrivingUserMessage(text: string, metadata?: JsonObject): void {
@@ -544,10 +525,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The world-model store, through its own API rather than an INSERT. */
   harnessFacts(): FactsStore { return this.facts; }
-  /** The scaffold's tool bridge for one shadow-trial rollout, with the trial's scope. */
-  harnessScaffoldCallTool(callScope?: string) {
-    return this.makeScaffoldCallTool(callScope);
-  }
 
   /** Declare one steer branch in flight, as `steerAsBranch` does. The handle never
    *  settles: a rejected one would be an unhandled rejection on creation. */
@@ -616,27 +593,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this.headJournal.markInterrupted({ spawnedBefore: Date.now() + 1 });
   }
 
-  /** The exploration reclamation pass `onStart` detaches, awaited. */
-  harnessReclaimSettledExplorationActors(): Promise<void> {
-    return this.reclaimSettledExplorationActors();
-  }
-
-  /** The exploration actors this workspace still holds, read through the directory. */
-  harnessExplorationActors(): string[] {
-    return this.actorDirectoryStore().list()
-      .filter((record) => record.kind === 'head' || record.kind === 'branch')
-      .map((record) => record.name);
-  }
-
   observeActorHost(): ActorHost { return this.actorHost(); }
   /** The seams the production head runtime and node seat factory are built from. */
   observeExplorationSeams(): ExplorationHostSeams { return this.explorationSeams(); }
-
-  /** The profile one hosted actor's turn resolves under (`resolveProfile`). */
-  observeHostedActorProfile(actor: HostedActor, workMode: WorkMode = 'build'): Promise<ResolvedTurnProfile> {
-    return this.hostedActorProfile({ actor: actor.handle, availableTools: [], workMode })
-      .then((resolved) => resolved.profile);
-  }
 
   /** A hired child's delegated-turn profile, captured inside `runHostedTask` so it is
    *  the one the turn got. The turn then fails at the model under bun; the profile is built first. */
@@ -773,50 +732,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.terminal.resumeAll();
   }
 
-  /** Whether this workspace owes a wake, as `onStart` classifies it. */
-  harnessOwedWorkExists(): boolean {
-    return this.owedWorkExists();
-  }
-
-  /** The budget-first interrupted-fiber prune, as `onStart` runs it. */
-  harnessSweepUnrecoverableFibers(): void {
-    this.sweepUnrecoverableFiberRows();
-  }
-
   /** The recovery hook's decision, which the scan hides. */
   harnessRecoverFiber(ctx: FiberRecoveryContext): Promise<void | FiberRecoveryResult> {
     return this.onFiberRecovered(ctx);
-  }
-
-  /** The improvement lanes, through the claimed effect production uses; returns
-   *  whether the lanes were open. */
-  async harnessSettleSpine(
-    input: { status: RunEndReason; turn: CompletedTurn; workMode?: WorkMode },
-  ): Promise<boolean> {
-    const lanes = this.terminalEffectTable().improvement_lanes;
-
-    if (lanes === undefined) return false;
-
-    const outcome = await lanes.run({
-      status: input.status,
-      turn: projectJsonValue({ value: input.turn }),
-      workMode: input.workMode ?? this.turnWorkMode(),
-      advisor: projectJsonValue({ value: this.advisorSnapshotFor(input.turn, Object.keys(this.harnessPreparedTools())) }),
-    }, input.turn.turnId ?? '');
-
-    return outcome.status === 'completed' && outcome.detail === undefined;
-  }
-
-  /** Enable the advisor via its durable config row and script the reviewer. */
-  harnessAdvisorsOn(reviewReply: string): void {
-    this.config.setAdvisorEnabled(true);
-    Object.defineProperty(this.rt, 'advisorLlm', {
-      value: {
-        stream: async function* () { yield ''; },
-        complete: async () => reviewReply,
-      },
-      configurable: true,
-    });
   }
 
   /** Script the review model and run one turn review, as the deferred lane does;
@@ -834,18 +752,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     await this.engine.reviewTurn(turn, followup);
   }
 
-  harnessAdvisorNotes(): number {
-    return this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM evolution_events
-      WHERE type = 'advisor_note'`[0]?.n ?? 0;
-  }
-
-  /** Drive the post-turn MCP warm lane with a real `workspace_capability` row and the
-   *  `env.UserDO` hub. The join is harness-local: production never waits on the warm. */
-  async harnessWarmUserMcp(): Promise<void> {
-    this.warmUserMcpInBackground();
-    await (this._mcpWarmTask?.promise ?? Promise.resolve());
-  }
-
   /** Issue the workspace capability token as a claim does: one row. */
   harnessHoldsCapability(token: string): void {
     void this.sql`INSERT OR REPLACE INTO workspace_capability (id, token) VALUES (1, ${token})`;
@@ -857,10 +763,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   harnessJoinDetachedFibers(): Promise<void> { return joinHarnessFibers(); }
-
-  /** Join the activation's detached tasks (timer, event-delivery and fork-journal
-   *  reconciles, facet reclaim), which production never waits on. */
-  harnessSettleBackgroundTasks(): Promise<void> { return this.settleBackgroundTasks(); }
 
   /** When the ledger would next wake, given the sequences a live activation claims. */
   harnessNextRetryAt(inFlight: ReadonlySet<string>): number | null {
@@ -894,10 +796,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       SELECT normalized_call_id AS call_id FROM tool_effect_claims
       WHERE turn_id = ${turnId} AND normalized_call_id NOT LIKE 'terminal:response:%'
       ORDER BY normalized_call_id`.map((row) => row.call_id);
-  }
-  /** The per-step dynamic context, via core's assembler over this actor's stores. */
-  observeDynamicContext(): DynamicContext {
-    return this.dynamicContextSnapshot({ workMode: 'build', allowedTools: [] }, {}, undefined);
   }
 }
 
