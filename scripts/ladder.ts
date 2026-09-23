@@ -2164,9 +2164,27 @@ export const LADDER: readonly Gate[] = [
       + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
       + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. With `KINU_E2E_ORIGIN` set the same rows drive a named deployment '
-      + 'instead; that arm runs in no tier.',
+      + 'the right one. The deployed build\'s browser rows are the product flows\' '
+      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
+      + 'deployment alike.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
+    label: 'Product flows in a browser, on the local dev server',
+    tier: 'deploy',
+    seconds: 0,
+    catches: 'a flow a person runs in the page that breaks while every API, socket and '
+      + 'fixture-backed browser gate stays green: the owner\'s #13, where every agent a '
+      + 'workspace held was present over the API and the reloaded page showed none of them. '
+      + 'Each row drives real Chrome through the product\'s own controls against `vite dev` '
+      + '(the real Worker and Durable Objects, no fixtures) and asserts only what the page '
+      + 'shows. The rows are the same file the deployment runs after the publish, with the '
+      + 'origin the only difference, so a flow red here is red before it ships.',
+    blind: 'what `vite dev` is not: the production isolate, the edge, the deployed assets and '
+      + 'the real identity, which are the post-publish row\'s. One viewport, one theme. The '
+      + 'model is real, so a row that needs an answer reads that one arrived, never its words.',
+    inputs: { kind: 'live', why: 'boots `vite dev` on an ephemeral port with this box\'s `.dev.vars` credentials, drives Chrome against it and spends real model turns; a hash over the tracked tree stands for none of them.' },
   },
   {
     run: 'bun run gate:infra',
@@ -2268,6 +2286,28 @@ export const LADDER: readonly Gate[] = [
       + 'model choosing to use the capability it was asked for, so a refusal is red and reads '
       + 'identically to a broken one until somebody reads the transcript the record keeps.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and live model turns.' },
+  },
+  {
+    run: 'bash scripts/product-flows-tier.sh',
+    label: 'Product flows in a browser, on the deployment',
+    phase: 'post-publish',
+    alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
+      + 'other tiers whose subject is the build that just shipped. Its workspaces carry the '
+      + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
+      + 'so it stands outside the device fleet the first-run tier counts.',
+    tier: 'deploy',
+    seconds: 0,
+    catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
+      + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
+      + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
+      + 'the deployment over its API and socket and the trajectory tier drives the model, so '
+      + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
+      + 'page showed no agents.',
+    blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
+      + 'pixels. It reports on a build that is already serving, so a red here is a red users '
+      + 'have now. The model is real, so a row that needs an answer reads that one arrived, '
+      + 'never its words.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the eval identity and spends real model turns.' },
   },
   {
     run: 'bun run gate:trajectory',
@@ -2523,6 +2563,10 @@ export const PYTHON_SUITES_SCRIPT = 'scripts/python-suites.ts';
 /** The path of the eval tier's runner, as `bun run test:eval` spells it. */
 export const EVAL_TIER_SCRIPT = 'scripts/eval-tier.sh';
 
+/** The wrapper that boots the local dev server and runs a command against it,
+ *  as a gate spells it. */
+export const DEV_SERVER_WRAPPER = 'scripts/with-dev-server.ts';
+
 /** The eval tier's arms, as data. */
 export interface EvalTierArms {
   /** The DEFAULT-backend `bun test` argv, verbatim. `--backend cloud` names a
@@ -2645,6 +2689,12 @@ export const CI_EXEMPT = {
     + 'neither of which belongs on a pull request. Its subject is production as it stands, '
     + 'which a pull request has not changed; it runs at deploy, alone, as the last gate '
     + 'before the build.',
+  'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts':
+    'boots the same dev server the live-app row does, on the same `.dev.vars` credentials a '
+    + 'pull request must not hold, and spends real model turns on the account through it.',
+  'bash scripts/product-flows-tier.sh':
+    'has nothing to run against at CI: its subject is the deployment that just went up, as the '
+    + 'eval identity, whose secret no pull request holds.',
   'bun test --timeout=0 scripts/live-app-tier.test.ts':
     'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
     + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
@@ -2737,10 +2787,15 @@ export const PATH_IGNORE_FLAG = '--path-ignore-patterns';
 export function claims(command: string, tracked: readonly string[]): string[] {
   const words = command.split(/\s+/).filter((word) => word.length > 0);
 
-  // The deadline wrapper runs the command that follows it and claims nothing
-  // of its own, so the claim is the wrapped command's.
+  // The deadline wrapper and the dev-server wrapper each run the command that
+  // follows them and claim nothing of their own, so the claim is the wrapped
+  // command's.
   if (words[0] === 'bun' && words[1] === 'scripts/ladder.ts' && words[2] === '--run') {
     return claims(words.slice(3).join(' '), tracked);
+  }
+
+  if (words[0] === 'bun' && words[1] === DEV_SERVER_WRAPPER) {
+    return claims(words.slice(2).join(' '), tracked);
   }
 
   if (words[0] === 'bun' && words[1] === 'run') {

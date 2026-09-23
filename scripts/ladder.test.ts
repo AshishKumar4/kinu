@@ -79,9 +79,9 @@ const NON_BUN_RUNNERS: readonly {
  * were credited to `bun test ./tests/` at the ci tier — a bun gate that cannot
  * select a `.eval.ts` at all. Four live eval suites therefore read as CI-covered
  * while the only thing that ran them was `bun run test:eval`, which claimed
- * nothing. The live-app suite is here because its own deploy row is its only
- * runner: CI_EXEMPT carries why a pull request cannot boot the product's dev
- * server.
+ * nothing. The live-app suite and the product flows are here because their own
+ * deploy rows are their only runners: CI_EXEMPT carries why a pull request
+ * cannot boot the product's dev server.
  */
 const AFTER_CI_SUITES = {
   'tests/evals/behaviour.eval.ts': 'bun run test:eval',
@@ -92,6 +92,7 @@ const AFTER_CI_SUITES = {
   'tests/evals/trajectory.eval.ts': 'bun run test:eval',
   'tests/evals/kinu-tasks.eval.ts': 'bun run test:eval',
   'scripts/live-app-tier.test.ts': 'bun test --timeout=0 scripts/live-app-tier.test.ts',
+  'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
 } satisfies Record<string, string>;
 
 /**

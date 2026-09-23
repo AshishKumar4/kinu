@@ -28,7 +28,7 @@
 import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
+import { releaseOnSignals, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
 
 const tmp = tmpdir();
@@ -102,18 +102,9 @@ export const release = (): void => {
 };
 
 // The signal path stays: it is the `timeout <n> bun test` case that every agent
-// and CI step runs under, whose default kill is SIGTERM, and a runner that
-// reported success for a killed suite would be worse than the leak — so the
-// listener releases, deregisters itself, and re-raises the default disposition
-// rather than swallowing the signal. SIGKILL remains uncatchable by definition;
-// `scripts/preflight.ts --reclaim` is the backstop for that.
-for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
-  process.on(signal, () => {
-    release();
-    process.removeAllListeners(signal);
-    process.kill(process.pid, signal);
-  });
-}
+// and CI step runs under, and a runner that reported success for a killed suite
+// would be worse than the leak.
+releaseOnSignals();
 
 // The SIGKILL backstop, and only that: the runner's `afterAll` and the signal
 // listeners above release on every path JS can reach, so what is left here is

@@ -879,12 +879,12 @@ fi
 # did the deploy land at all. Running this against an origin that is not serving
 # would report six product failures for one deployment failure.
 #
-# ONE WAVE, both gates the plan marks `post-publish`: their rows say why each
-# stays clear of the source wave (both drive the account as the same identity
+# ONE WAVE, every gate the plan marks `post-publish`: their rows say why each
+# stays clear of the source wave (all drive the account as the same identity
 # `gate:infra` authenticates with — real machines, a real browser, live model
 # turns). They share a wave because they measure the same thing — the build
-# that just shipped — and neither perturbs what the other asserts. A red here
-# is a red on what users have NOW, and the runner says so.
+# that just shipped — and none perturbs what another asserts. A red here is a
+# red on what users have NOW, and the runner says so.
 run_phase post-publish
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
