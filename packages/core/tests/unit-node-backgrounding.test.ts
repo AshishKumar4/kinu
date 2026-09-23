@@ -208,8 +208,6 @@ function fixture(over: {
       return seat;
     },
     model: over.model, journal,
-
-    maxWallClockMs: 60_000,
     logger,
     backgroundPolicy: () => ({
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,

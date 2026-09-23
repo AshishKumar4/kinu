@@ -24,7 +24,6 @@ export type {
 export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-  budgetExhausted,
   HEAD_BUILTIN_TOOLS,
   keepBuiltins,
   headStatusUnsettled,

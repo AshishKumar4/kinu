@@ -145,8 +145,6 @@ export interface NodeAgentDeps {
   nodeCodemode?: NodeCodemode;
   webSearch?: WebSearchProvider;
   gradeReport?: (candidate: string) => Promise<string | null>;
-  /** Caller-declared deadline, checked between steps. There is no default wall clock over a node. */
-  maxWallClockMs?: number;
   backgroundPolicy?: () => BackgroundPolicy;
 }
 
@@ -533,11 +531,7 @@ export async function runNodeAgent(
     deps.provisionHome,
   );
 
-  const nodeBudget: HeadBudget = {
-    maxDepth: 0,
-    spawnedAt: Date.now(),
-    maxWallClockMs: deps.maxWallClockMs,
-  };
+  const nodeBudget: HeadBudget = { maxDepth: 0, spawnedAt: Date.now() };
 
   const headInput: HeadInput = {
     id: input.nodeId,

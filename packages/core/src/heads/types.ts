@@ -21,14 +21,12 @@ export type MergeStrategy =
   | 'consensus';   // emphasize areas of agreement; surface disagreements
 
 /**
- * A head gets its parent's envelope: no token pool, no default wall clock. Cost is governed by the
+ * A head gets its parent's envelope: no token pool, no wall clock. Cost is governed by the
  * mission budget governor (mission-budget.ts). `maxDepth` terminates recursion; it refuses new splits only.
  */
 export interface HeadBudget {
   /** Decremented per spawn. 0 rejects splits. */
   readonly maxDepth: number;
-  /** Undefined = run to completion. */
-  readonly maxWallClockMs?: number;
   readonly spawnedAt: number;
 }
 
@@ -211,29 +209,8 @@ export interface HeadScore {
 
 export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';
 
-/**
- * Depth decrements. A requested wall clock is bounded by the parent's remaining time, since the child
- * resets `spawnedAt` (THINKING-AUDIT §4 #7).
- */
 export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()): HeadBudget {
-  if (parent.maxWallClockMs === undefined) {
-    return { maxDepth: parent.maxDepth - 1, spawnedAt: now };
-  }
-
-  return {
-    maxDepth: parent.maxDepth - 1,
-    maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)),
-    spawnedAt: now,
-  };
-}
-
-/** Split depth is checked where children are created, not here. */
-export function budgetExhausted(b: HeadBudget) {
-  if (b.maxWallClockMs !== undefined && Date.now() - b.spawnedAt >= b.maxWallClockMs) {
-    return { exhausted: true, reason: 'wall-clock' };
-  }
-
-  return { exhausted: false };
+  return { maxDepth: parent.maxDepth - 1, spawnedAt: now };
 }
 
 import type { WorkMode } from '../types/turn';

@@ -864,7 +864,6 @@ export function buildNodeDeps(input: {
   readonly clock?: Clock;
   readonly reportModelCall?: ModelCallSink;
   readonly publishHeadStream?: PublishHeadStream;
-  readonly maxWallClockMs?: number;
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
@@ -875,7 +874,6 @@ export function buildNodeDeps(input: {
 
   const nodeDeps: NodeAgentDeps = {
     hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
-    // No default wall clock; `maxWallClockMs` is opt-in.
   };
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
@@ -885,8 +883,6 @@ export function buildNodeDeps(input: {
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
 
   if (deps.publishHeadStream !== undefined) nodeDeps.publishHeadStream = deps.publishHeadStream;
-
-  if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;
 
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
 

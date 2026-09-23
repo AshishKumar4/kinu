@@ -64,7 +64,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
     task: 'study the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
-    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    budget: { maxDepth: 2, spawnedAt: Date.now() },
     // A fork explores under the loop it forks from; a fresh bootstrap loop measures the wrong program.
     loop: { kind: 'inherit' },
     mergeStrategy: 'synthesize',
@@ -150,7 +150,7 @@ describe('head tool surface — containment', () => {
   test('split_subheads is not on the surface at all once the depth budget is spent', async () => {
     // Depth is fixed for the run, so the tool could only ever refuse.
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      input: headInput({ budget: { maxDepth: 0, spawnedAt: Date.now() } }),
     });
 
     expect(tools.split_subheads).toBeUndefined();
@@ -160,32 +160,10 @@ describe('head tool surface — containment', () => {
 
   test('the surface states the depth that is actually left', async () => {
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      input: headInput({ budget: { maxDepth: 2, spawnedAt: Date.now() } }),
     });
 
     expect(tools.split_subheads?.description).toContain('2 more level(s)');
-  });
-
-  test('split_subheads refuses once a caller-requested deadline has passed, and records the refusal', async () => {
-    // Wall-clock can pass mid-run, unlike depth, so the tool stays and refuses when called.
-    const calls = { splits: 0 };
-
-    const { tools, capture } = buildSurface({
-      input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
-      split: countingSplit(calls, { narrative: '', headCount: 0 }),
-    });
-
-    const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
-    await expect(split({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }))
-      .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('budget exhausted (wall-clock)') });
-    expect(calls.splits).toBe(0);
-    expect(capture.toolCalls).toHaveLength(1);
-    const refusal = capture.toolCalls.at(0);
-
-    if (!refusal) throw new Error('Expected split refusal to be recorded');
-    expect(refusal.name).toBe('split_subheads');
-    expect(refusal.result).toContain('wall-clock');
-    expect(refusal.outcome).toEqual({ success: false, reason: 'denied' });
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
@@ -325,11 +303,7 @@ describe('recursive split budget', () => {
           { task: 'child two', rationale: 'second angle' },
         ],
       },
-      parentBudget: {
-        maxDepth: 2,
-        maxWallClockMs: 60_000,
-        spawnedAt: Date.now(),
-      },
+      parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
 
     expect(spawned).toHaveLength(2);

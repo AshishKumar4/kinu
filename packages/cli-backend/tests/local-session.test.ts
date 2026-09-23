@@ -5011,7 +5011,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     const head = await runtime.spawnHead({
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
-      budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      budget: { maxDepth: 2, spawnedAt: Date.now() },
       loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
 

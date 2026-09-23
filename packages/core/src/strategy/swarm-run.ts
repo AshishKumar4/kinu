@@ -77,8 +77,6 @@ export interface SwarmRunDeps {
   readonly announceHeadActivity?: AnnounceHeadActivity;
   /** Defaults to the process logger. The only place a refused toolless proposal is observable. */
   readonly logger?: Logger;
-  /** Optional per-agent-node wall-clock deadline. No default: owner ruling 2026-08-21, no per-turn bounds. */
-  readonly maxWallClockMs?: number;
   /**
    * Charged per model call as calls happen, for every call this run makes; the spawning
    * caller must not charge a lump afterwards. Absent = unbudgeted.
@@ -299,7 +297,7 @@ export async function runSwarm(
   const nodeDeps = buildNodeDeps({
     hostNode: deps.hostNode, model: nodeModel, journal, logger: log,
     signal: deps.signal, clock: deps.clock, reportModelCall: deps.reportModelCall,
-    maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
+    mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
     nodeCodemode: deps.nodeCodemode, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,

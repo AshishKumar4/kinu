@@ -6,7 +6,7 @@
 import type { SqlExecutor } from './types/primitives';
 import type { HeadInput, HeadReport, HeadRunHeadView, SerializedMessage } from './heads/types';
 import { headStatusUnsettled, storedHeadReportStatus } from './heads/types';
-import { raceWithTimeout, type HeadRuntime } from './heads/controller';
+import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
@@ -91,7 +91,7 @@ export async function startBranchHead(
     let report: HeadReport;
 
     try {
-      report = await raceWithTimeout(spawned, undefined);
+      report = await spawned.run();
     } catch (cause) {
       report = {
         id: headInput.id,
