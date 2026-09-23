@@ -31,7 +31,7 @@ describe('the mount', () => {
 
   test('a panel that never registers still applies its decision — once, and nothing is armed', () => {
     const decided = applyInspectorDecision(initialInspectorState(null), {
-      workspace: WS, stored: { width: 300, choice: true }, worthShowing: false, panelPresent: false,
+      workspace: WS, stored: { width: 300, choice: true }, needsUser: false, panelPresent: false,
     });
 
     expect(decided.effects).toEqual({});
@@ -70,7 +70,7 @@ describe('the mount', () => {
     const state = measured({ width: 300, choice: true });
 
     const step = applyInspectorDecision(state, {
-      workspace: WS, stored: { width: 300, choice: true }, worthShowing: false, panelPresent: true,
+      workspace: WS, stored: { width: 300, choice: true }, needsUser: false, panelPresent: true,
     });
 
     expect(step.effects).toEqual({});
@@ -151,14 +151,14 @@ describe('control actions and gestures', () => {
     }).state;
 
     const same = applyInspectorDecision(gestured, {
-      workspace: WS, stored: { width: 300, choice: false }, worthShowing: true, panelPresent: true,
+      workspace: WS, stored: { width: 300, choice: false }, needsUser: true, panelPresent: true,
     });
 
     expect(same.effects).toEqual({});
     expect(same.state).toBe(gestured);
 
     const other = applyInspectorDecision(gestured, {
-      workspace: 'ws-2', stored: { width: 300, choice: false }, worthShowing: true, panelPresent: true,
+      workspace: 'ws-2', stored: { width: 300, choice: false }, needsUser: true, panelPresent: true,
     });
 
     expect(other.effects).toEqual({ write: { collapsed: true, widthPx: 300 } });
@@ -176,14 +176,14 @@ describe('the first-visit policy', () => {
     const closed: InspectorState = { ...state, collapsed: true };
 
     const opened = applyInspectorDecision(closed, {
-      workspace: WS, stored: { width: 300, choice: null }, worthShowing: true, panelPresent: true,
+      workspace: WS, stored: { width: 300, choice: null }, needsUser: true, panelPresent: true,
     });
 
     expect(opened.effects).toEqual({ write: { collapsed: false, widthPx: 300 } });
     expect(opened.state.autoOpened).toBe(WS);
 
     const again = applyInspectorDecision(opened.state, {
-      workspace: WS, stored: { width: 300, choice: null }, worthShowing: false, panelPresent: true,
+      workspace: WS, stored: { width: 300, choice: null }, needsUser: false, panelPresent: true,
     });
 
     expect(again.effects).toEqual({});
@@ -206,7 +206,7 @@ describe('the account that keys the layout', () => {
       expect(readStoredInspector(account, WS)).toEqual({ width: null, choice: null });
 
       const step = applyInspectorDecision(measured({ width: null, choice: null }), {
-        workspace: WS, stored: readStoredInspector(account, WS), worthShowing: true, panelPresent: true,
+        workspace: WS, stored: readStoredInspector(account, WS), needsUser: true, panelPresent: true,
       });
 
       expect(step.effects).toEqual({ write: { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX } });
@@ -220,14 +220,14 @@ describe('the account that keys the layout', () => {
     expect(readStoredInspector(null, WS)).toBeNull();
 
     const parked = applyInspectorDecision(state, {
-      workspace: WS, stored: readStoredInspector(null, WS), worthShowing: true, panelPresent: true,
+      workspace: WS, stored: readStoredInspector(null, WS), needsUser: true, panelPresent: true,
     });
 
     expect(parked.effects).toEqual({});
     expect(parked.state).toEqual(state);
 
     const landed = applyInspectorDecision(parked.state, {
-      workspace: WS, stored: readStoredInspector({ kind: 'none' }, WS), worthShowing: true, panelPresent: true,
+      workspace: WS, stored: readStoredInspector({ kind: 'none' }, WS), needsUser: true, panelPresent: true,
     });
 
     expect(landed.effects).toEqual({ write: { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX } });

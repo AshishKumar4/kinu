@@ -4,6 +4,8 @@
  */
 
 import type { DeferredApproval } from '../safety/deferred-approval';
+import type { PendingConsent } from '../protocol';
+import type { PlanReview } from '../types/plans';
 import { planTitle } from '../plans/review';
 
 export type PendingActionKind =
@@ -25,6 +27,30 @@ export interface PendingAction {
   readonly at: number;
   /** Lets the click find the row in the work read without reparsing a formatted id. */
   readonly planRef?: { readonly owner: string; readonly id: string; readonly revision: number };
+}
+
+/** What a workspace asks of the person now. */
+export interface PersonAsks {
+  readonly pendingActions: readonly PendingAction[];
+  readonly pendingConsents: readonly PendingConsent[];
+  readonly activePlan: PlanReview | null;
+}
+
+/** Rows holding the person's work until they decide; the agent's own proposals and notes do not (#21). */
+const HOLDS_THE_PERSON = {
+  deferred_action: true,
+  release_approval: true,
+  plan_review: true,
+  scaffold_version: false,
+  curriculum_task: false,
+  unseen_changes: false,
+} satisfies Record<PendingActionKind, boolean>;
+
+/** What the inspector opens for on its own: an action or a consent to approve, or a plan to review. */
+export function needsTheUser(asks: PersonAsks): boolean {
+  return asks.pendingActions.some((action) => HOLDS_THE_PERSON[action.kind])
+    || asks.pendingConsents.length > 0
+    || asks.activePlan?.status === 'pending';
 }
 
 export interface PendingActionInputs {
