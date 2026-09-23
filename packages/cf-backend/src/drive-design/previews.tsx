@@ -303,7 +303,7 @@ function Page({ heading, lines, band }: { heading: string; lines: readonly strin
   );
 }
 
-const KEYWORDS = /^(import|export|async|function|const|for|await|return|set|echo)\b/u;
+const KEYWORDS: ReadonlySet<string> = new Set(["import", "export", "async", "function", "const", "for", "await", "return", "set", "echo"]);
 
 function Code({ lines }: { lines: readonly string[] }) {
   return (
@@ -311,7 +311,8 @@ function Code({ lines }: { lines: readonly string[] }) {
       {lines.map((text, index) => {
         const indent = text.length - text.trimStart().length;
         const body = text.trimStart();
-        const keyword = KEYWORDS.exec(body)?.[0];
+        const first = body.split(" ", 1)[0] ?? "";
+        const keyword = KEYWORDS.has(first) ? first : undefined;
 
         return (
           <text key={index} x={20 + indent * 5.4} y={30 + index * 17} fontSize="9" style={MONO}>
