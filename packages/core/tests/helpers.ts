@@ -20,17 +20,15 @@ import type {
 } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
-
-type TestSqlBinding = JsonValue | ArrayBuffer | Uint8Array | undefined;
 
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
 import { createWorkspace, workspaceGenerationStorage, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
-import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
+import { localTransactions, nimbusSql } from '../../cli-backend/src/nimbus-sql';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 import { WORKSPACE_IDENTITY_DDL, tableExists, initActorTables } from '../src/identity/schema';
@@ -103,8 +101,6 @@ type NativeSqlValue = string | number | boolean | null | Uint8Array;
 
 type NativeSqlRow = Record<string, NativeSqlValue>;
 
-type NativeWorkspaceSqlRow = Record<string, string | number | bigint | null | Uint8Array>;
-
 function canonicalSqlValue(value: NativeSqlValue): SqlValue {
   if (!(value instanceof Uint8Array)) return value;
   const copy = new Uint8Array(value.byteLength);
@@ -168,24 +164,11 @@ function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<Vfs
   };
 }
 
+/** The workspace filesystem over the test database, bound as the local host binds its own. */
 export function createWorkspaceBundle(db: Database) {
-  const sql = {
-    exec(query: string, ...bindings: TestSqlBinding[]) {
-      const bound = bindings.map((value) => nativeSqlBinding({ value }));
-      const stmt = db.prepare<NativeWorkspaceSqlRow, SQLQueryBindings[]>(query);
+  const sql = nimbusSql(db);
 
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
-      stmt.run(...bound);
-
-      return [];
-    },
-  };
-
-  return createWorkspace({
-    sql,
-    transactions: { storage: { transactionSync: <T,>(cb: () => T): T => db.transaction(cb)() } },
-    generation: workspaceGenerationStorage(sql),
-  });
+  return createWorkspace({ sql, transactions: localTransactions(db), generation: workspaceGenerationStorage(sql) });
 }
 
 function nativeSqlBinding(binding: { value: unknown }): SQLQueryBindings {
@@ -283,69 +266,14 @@ export function createEvalExecutor(): Executor {
   };
 }
 
-// ── In-memory CraftStore ─────────────────────────────────────────
+// ── CraftStore ───────────────────────────────────────────────────
 
+/** The store both backends bind, over the test database. */
 export function createMemoryCraftStore(db: Database): CraftStore {
-  initCraftedToolsTables(makeSql(db));
+  const store = new AgentUtilsCraftStore(makeSql(db));
+  store.ensureSchema();
 
-  // The production row→tool mapping: `params` is JSON text and timestamps are snake_case.
-  interface CraftRow {
-    name: string; description: string; params: string | null; code: string;
-    scope: string; created_at: number; updated_at: number;
-  }
-
-  const CraftRowSchema: v.GenericSchema<CraftRow> = v.object({
-    name: v.string(), description: v.string(), params: v.nullable(v.string()), code: v.string(),
-    scope: v.string(), created_at: v.number(), updated_at: v.number(),
-  });
-
-  const CraftParamsSchema = v.record(v.string(), v.string());
-  const CraftScopeSchema = v.picklist(['local', 'shared']);
-
-  const toTool = (row: CraftRow): CraftedTool => ({
-    name: row.name,
-    description: row.description,
-    params: row.params ? v.parse(CraftParamsSchema, JSON.parse(row.params)) : null,
-    code: row.code,
-    scope: v.parse(CraftScopeSchema, row.scope),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  });
-
-  const rows = (query: string, ...bindings: TestSqlBinding[]): CraftRow[] =>
-    db.query<NativeSqlRow, SQLQueryBindings[]>(query).all(...bindings.map((value) => nativeSqlBinding({ value })))
-      .map((row) => v.parse(CraftRowSchema, row));
-
-  return {
-    create(tool) {
-      db.run(
-        'INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [tool.name, tool.description, tool.params ? JSON.stringify(tool.params) : null, tool.code, tool.scope, Date.now(), Date.now()],
-      );
-    },
-    update(name, patch) {
-      if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
-
-      if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
-
-      if (patch.params !== undefined) db.run('UPDATE crafted_tools SET params = ?, updated_at = ? WHERE name = ?', [patch.params ? JSON.stringify(patch.params) : null, Date.now(), name]);
-    },
-    get(name) {
-      const row = rows('SELECT * FROM crafted_tools WHERE name = ?', name)[0];
-
-      return row ? toTool(row) : undefined;
-    },
-    delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
-    list() { return rows('SELECT * FROM crafted_tools').map(toTool); },
-    search(query, limit = 10) {
-      const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-
-      return rows('SELECT * FROM crafted_tools')
-        .filter(t => words.some(w => t.description.toLowerCase().includes(w)))
-        .slice(0, limit)
-        .map(toTool);
-    },
-  };
+  return craftStoreView(store);
 }
 
 /**

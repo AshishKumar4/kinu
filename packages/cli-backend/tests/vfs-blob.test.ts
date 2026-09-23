@@ -4,7 +4,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { createCLIRuntime, localTransactions, nimbusSql } from '../src/runtime';
+import { createCLIRuntime } from '../src/runtime';
+import { localTransactions, nimbusSql } from '../src/nimbus-sql';
 import { scratchPath } from '@kinu.run/test-utils';
 
 function freshVfs() {

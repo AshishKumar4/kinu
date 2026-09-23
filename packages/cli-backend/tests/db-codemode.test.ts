@@ -9,7 +9,8 @@ import {
 } from '@kinu.run/core';
 import { createTestActors, toolExecute, type TestActors } from '@kinu.run/test-utils';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
-import { localTransactions, makeWorkspaceSchemaSql } from '../src/runtime';
+import { makeWorkspaceSchemaSql } from '../src/runtime';
+import { localTransactions } from '../src/nimbus-sql';
 
 interface ExecuteToolResult {
   result: JsonValue | undefined;

@@ -8,7 +8,7 @@ import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
-import { nimbusSql, localTransactions } from '../src/runtime';
+import { nimbusSql, localTransactions } from '../src/nimbus-sql';
 
 const RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 

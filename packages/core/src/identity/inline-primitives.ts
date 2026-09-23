@@ -4,12 +4,12 @@ import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorag
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
 import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
 } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
-import type { CraftedTool } from '../types/craft';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
@@ -120,28 +120,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
 }
 
 export function createInlineCraftStore(db: AgentDatabase): CraftStore {
-  return {
-    create(tool) {
-      db.run(
-        'INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [tool.name, tool.description, tool.params ? JSON.stringify(tool.params) : null, tool.code, tool.scope, Date.now(), Date.now()],
-      );
-    },
-    update(name, patch) {
-      if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
-
-      if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
-    },
-    get(name) { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools WHERE name = ?').all(name)[0]; },
-    delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
-    list() { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all(); },
-    search(query, limit = 10) {
-      const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const all = db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all();
-
-      return all.filter(t => words.some(w => t.description.toLowerCase().includes(w))).slice(0, limit);
-    },
-  };
+  return craftStoreView(new AgentUtilsCraftStore(wrapDatabase(db).sql));
 }
 
 export function createInlineExecutor(): Executor {

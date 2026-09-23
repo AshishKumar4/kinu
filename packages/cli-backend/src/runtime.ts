@@ -6,7 +6,7 @@
 
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell,
 } from '@kinu.run/core';
 import type {
@@ -47,12 +47,13 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
-import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils';
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
+import { bunSqlBinding, localTransactions, nimbusSql } from './nimbus-sql';
 import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
 import { createBranchSpawner } from './branch-process';
 import {
@@ -135,27 +136,8 @@ export interface CLIRuntime extends AgentRuntime {
 
 export type LocalDb = Database;
 
-type WorkspaceSql = Parameters<typeof createWorkspaceFilesystem>[0]['sql'];
-
-type WorkspaceTransactions = Parameters<typeof createWorkspaceFilesystem>[0]['transactions'];
-
-interface NimbusSqlRow {
-  [column: string]: string | number | bigint | null | ArrayBuffer | ArrayBufferView;
-}
-
 interface LocalSqlRow {
   [column: string]: string | number | boolean | null | ArrayBuffer | Uint8Array;
-}
-
-const sqlBindingSchema = v.union([
-  v.string(), v.number(), v.bigint(), v.boolean(), v.null(),
-  v.instance(ArrayBuffer), v.instance(Uint8Array),
-]);
-
-function bunSqlBinding(input: { value: unknown }): SQLQueryBindings {
-  const value = v.parse(sqlBindingSchema, input.value);
-
-  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 }
 
 export function makeSql(db: Database): SqlExecutor {
@@ -164,8 +146,6 @@ export function makeSql(db: Database): SqlExecutor {
     ...values: SqlValue[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
-    // native type); bun:sqlite only binds TypedArrays, so coerce.
     const bound = values.map((value) => bunSqlBinding({ value }));
 
     // `all()` for every statement, as DO `storage.sql` does: `UPDATE … RETURNING`
@@ -187,29 +167,6 @@ export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 're
   const vfs = new SqliteVFS(nimbusSql(db), localTransactions(db)).as(CRED_KERNEL);
 
   return { readFile: (path, opts) => Promise.resolve(opts?.encoding === undefined ? vfs.readFile(path) : vfs.readFileString(path)) };
-}
-
-export function nimbusSql(db: Database): WorkspaceSql {
-  const exec: WorkspaceSql['exec'] = (query, ...bindings) => {
-    const bound = bindings.map((value) => bunSqlBinding({ value }));
-    const stmt = db.prepare<NimbusSqlRow, SQLQueryBindings[]>(query);
-
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
-    stmt.run(...bound);
-
-    return [];
-  };
-
-  return { exec };
-}
-
-/** `bun:sqlite` transactions; a database without one runs non-atomically, stated rather than pretended. */
-export function localTransactions(db: Database): WorkspaceTransactions {
-  return {
-    storage: {
-      transactionSync: <T,>(callback: () => T): T => db.transaction(callback)(),
-    },
-  };
 }
 
 /**
@@ -265,24 +222,6 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRa
     },
     read: (path) => store.readFile(path),
     tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
-  };
-}
-
-/** The concrete store returns null for a miss; core uses undefined. */
-function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
-  return {
-    create(tool) {
-      store.create(tool);
-    },
-    update(name, patch) {
-      store.update(name, patch);
-    },
-    get(name) {
-      return store.get(name) ?? undefined;
-    },
-    delete(name) { store.delete(name); },
-    list() { return store.list(); },
-    search(query, limit = 10) { return store.search(query, limit); },
   };
 }
 
@@ -460,7 +399,7 @@ export function createCLIRuntime(
 
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
-  const craftStore = adaptCraftStore(craftStoreImpl);
+  const craftStore = craftStoreView(craftStoreImpl);
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;

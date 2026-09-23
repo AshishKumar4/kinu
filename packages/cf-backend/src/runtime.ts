@@ -8,7 +8,6 @@ import type {
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
   ExecuteResult, ResolvedProvider,
-  CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
   DeferredApprovalChannel,
@@ -52,7 +51,7 @@ import { previewHostSuffix } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
-import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -280,7 +279,7 @@ export function createCFRuntime(
 
   const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
 
-  const craftStore = adaptCraftStore(craftStoreImpl);
+  const craftStore = craftStoreView(craftStoreImpl);
 
   const envForExec = env;
 
@@ -569,41 +568,6 @@ function buildVectorStore(
 
     return createNoopVectorStore();
   }
-}
-
-function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
-  return {
-    create(t) {
-      impl.create({
-        name: t.name, description: t.description,
-        params: t.params ?? undefined,
-        code: t.code, scope: t.scope ?? "local",
-      });
-    },
-    update(name, patch) {
-      impl.update(name, patch);
-    },
-    get(name) {
-      const tool = impl.get(name);
-
-      return tool ? adaptCraftedTool(tool) : undefined;
-    },
-    delete(name) { impl.delete(name); },
-    list() { return impl.list().map(adaptCraftedTool); },
-    search(query, limit) { return impl.search(query, limit).map(adaptCraftedTool); },
-  };
-}
-
-function adaptCraftedTool(t: ReturnType<AgentUtilsCraftStore['list']>[number]): CoreCraftedTool {
-  return {
-    name: t.name,
-    description: t.description,
-    params: t.params,
-    code: t.code,
-    scope: t.scope,
-    createdAt: t.createdAt,
-    updatedAt: t.updatedAt,
-  };
 }
 
 function createExecutor(loader: WorkerLoader): Executor {

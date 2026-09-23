@@ -22,7 +22,7 @@ import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js'
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import { nimbusSql, localTransactions } from '../packages/cli-backend/src/runtime';
+import { nimbusSql, localTransactions } from '../packages/cli-backend/src/nimbus-sql';
 
 const PROBES = [
   'node --version',
