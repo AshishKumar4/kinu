@@ -46,6 +46,9 @@ export function requireInteractiveTerminal(): void {
   throw new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic).');
 }
 
+/** opentui's handlers free only the renderer; the TUI ends itself on these. */
+export const TUI_EXIT_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
+
 /** Canonical read(2) returns at most one line; accumulate until newline or EOF. */
 function readLineFromTerminal(fd: number): string | null {
   const buf = Buffer.alloc(1024);

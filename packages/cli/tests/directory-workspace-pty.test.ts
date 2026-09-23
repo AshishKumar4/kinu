@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { utimesSync, writeFileSync } from 'node:fs';
 import { scratchDir } from '@kinu.run/test-utils';
 
-import { runTuiInPty } from './helpers/pty-screen';
+import { runTuiInPty, type PtyStep } from './helpers/pty-screen';
 
 const cliBin = resolve(import.meta.dir, '../bin/cli.ts');
 
@@ -35,13 +35,13 @@ function createLocalWorkspace(home: string, directory: string, name: string, wri
   utimesSync(join(home, name, 'agent.db'), at, at);
 }
 
-function launchIn(home: string, directory: string, until: string) {
+function launchIn(home: string, directory: string, until: string, after: readonly PtyStep[] = []) {
   return runTuiInPty(cliBin, {
     cwd: directory,
     cols: 120,
     rows: 32,
     env: { KINU_HOME: home, KINU_SKIP_DAEMON: '1', KINU_UPDATE_CHECK: '0' },
-    steps: [{ wait: until, timeout: 45 }],
+    steps: [{ wait: until, timeout: 45 }, ...after],
   });
 }
 
@@ -72,5 +72,31 @@ describe('kinu in a directory', () => {
 
     expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
     expect(run.screen).not.toContain('Send a message');
+  });
+});
+
+/** A closed terminal window or `kill` must end kinu: a TUI left running keeps the conversation's driver lease. */
+describe('kinu ends with its terminal', () => {
+  for (const signal of ['SIGHUP', 'SIGTERM'] as const) {
+    test(`${signal} on an open conversation ends the process`, () => {
+      const home = kinuHome();
+      const project = scratchDir('dir-workspace-signal');
+      createLocalWorkspace(home, project, 'signalled', 0);
+
+      const run = launchIn(home, project, 'Send a message', [{ signal }, { sleep: 10 }]);
+
+      expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
+      expect(run.exited, run.screen).toBe(true);
+    });
+  }
+
+  test('SIGHUP on the home screen ends the process', () => {
+    const home = kinuHome();
+    const empty = scratchDir('dir-workspace-signal-home');
+
+    const run = launchIn(home, empty, 'What is this workspace for?', [{ signal: 'SIGHUP' }, { sleep: 10 }]);
+
+    expect(run.waits.every((wait) => wait.met), run.screen).toBe(true);
+    expect(run.exited, run.screen).toBe(true);
   });
 });

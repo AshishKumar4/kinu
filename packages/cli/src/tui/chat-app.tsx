@@ -43,7 +43,7 @@ import { describePromptAttachment, resolvePromptAttachments } from '../attachmen
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
 import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
-import { requireInteractiveTerminal } from '../prompt';
+import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { loadActiveProfile } from '../profiles';
 import { canonicalProjectRoot } from '../config';
 import { guideFailure } from '../provider-guidance';
@@ -270,7 +270,6 @@ function ChatScene({
 
   // Editor-wrapped visual rows, not typed lines.
   const [composerRows, setComposerRows] = useState(1);
-  // Drafts are kept per conversation.
   const draftsRef = useRef(new Map<string, string>());
   const [inputState, setInputState] = useState(initialInputState);
 
@@ -1504,7 +1503,7 @@ function ChatScene({
       setTimeout(() => {
         copySelection();
 
-        // Any click moves native focus off the input, a plain one too; reclaim it.
+        // A click moves native focus off the input; reclaim it.
         if (inputShouldFocusRef.current) inputRef.current?.focus();
       }, 10);
     };
@@ -1952,7 +1951,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();
   const hubData = opts.hubData ?? await loadHubData(opts.client);
   const renderOptions: ChatAppOpts = { ...opts, hubData };
-  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true, exitSignals: [] });
   const root = createRoot(renderer);
   let currentClient = opts.client;
 
@@ -1973,7 +1972,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     process.exit(0);
   };
 
-  const exit = async () => {
+  const shutDown = async () => {
     try {
       await cleanup();
     } catch (cause) {
@@ -1982,12 +1981,20 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     }
   };
 
+  let exiting: Promise<void> | null = null;
+
+  const exit = () => {
+    exiting ??= shutDown();
+
+    return exiting;
+  };
+
   globalExit = exit;
-  process.on('SIGINT', exit);
+
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, exit);
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 
-  // Keep the process alive
   await new Promise<void>(() => {});
 }
 

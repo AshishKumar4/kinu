@@ -24,7 +24,7 @@ import {
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import { installTurnDiagnostics } from '../turn-log';
 import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
-import { requireInteractiveTerminal } from '../prompt';
+import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { VERSION } from '../display';
 import {
   loadActiveProfile,
@@ -788,12 +788,12 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   // Interactive surface: stderr is the person's screen, so diagnostics go to cli.log.
   installTurnDiagnostics();
   requireInteractiveTerminal();
-  const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [] });
   const root = createRoot(renderer);
   const { promise, resolve } = Promise.withResolvers<HomeTuiAction>();
 
   const complete = (action: HomeTuiAction) => {
-    process.off('SIGINT', onSigint);
+    for (const signal of TUI_EXIT_SIGNALS) process.off(signal, onExitSignal);
     // Unmount synchronously (flushSync) before the renderer frees native state: a queued commit on a
     // destroyed renderer writes through a freed pointer and segfaults.
     flushSync(() => { root.unmount(); });
@@ -801,9 +801,10 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
     resolve(action);
   };
 
-  const onSigint = () => complete({ type: 'exit' });
+  const onExitSignal = () => complete({ type: 'exit' });
   finishHome = complete;
-  process.on('SIGINT', onSigint);
+
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, onExitSignal);
   root.render(<HomeApp opts={opts} />);
 
   return await promise.finally(() => {
