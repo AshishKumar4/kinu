@@ -1,5 +1,5 @@
 /** Workspace navigation: titled live previews first, then work/read surfaces. */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
@@ -98,6 +98,36 @@ export interface WorkSurfaceProps {
   onUnmappedOpened?: () => void;
 }
 
+/** A surface can be selected without a click (deep link, restored tab); keep its tab in view. */
+function useSelectedTabInView(strip: RefObject<HTMLDivElement | null>, surface: SurfaceKind): void {
+  useEffect(() => {
+    const container = strip.current;
+    const selected = container?.querySelector('[aria-current="true"]');
+
+    if (!container || !selected) return;
+    const viewport = container.getBoundingClientRect();
+    const tab = selected.getBoundingClientRect();
+    const left = viewport.left + container.clientLeft;
+    const right = left + container.clientWidth;
+
+    if (tab.left < left) container.scrollLeft += tab.left - left;
+    else if (tab.right > right) container.scrollLeft += tab.right - right;
+  }, [strip, surface]);
+}
+
+/** The open Slate's pane: its bindings panel while a blueprint fork has unmapped ones, else its frame. */
+function OpenSlatePanel(props: WorkSurfaceProps & { readonly slate: string; readonly summary: SlateSummary | undefined }) {
+  const reloadKey = props.slateReloads?.get(props.slate) ?? 0;
+
+  if (props.slate === props.unmappedSlate) {
+    return <UnmappedBindingsPanel slate={props.slate} title={props.summary?.title ?? props.slate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />;
+  }
+
+  if (props.summary === undefined) return <SlateFrame id={props.slate} rpc={props.rpc} reloadKey={reloadKey} />;
+
+  return props.slateBody?.(props.summary) ?? <SlateFrame id={props.summary.id} rpc={props.rpc} reloadKey={reloadKey} onReady={props.onRefreshPorts} />;
+}
+
 export function WorkSurface(props: WorkSurfaceProps) {
   const requested = props.surface;
   const strip = useRef<HTMLDivElement>(null);
@@ -150,40 +180,14 @@ export function WorkSurface(props: WorkSurfaceProps) {
     ? undefined
     : props.slates?.find((slate) => slate.id === openSlate);
 
-  const openSlateReloadKey = openSlate === null ? 0 : (props.slateReloads?.get(openSlate) ?? 0);
   // One connect dialog owned here: three surfaces in this column request it, and only
   // one is mounted at a time.
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
 
-  // A surface can be selected without a click (deep link, restored tab); keep it in view.
-  useEffect(() => {
-    const container = strip.current;
-    const selected = container?.querySelector('[aria-current="true"]');
-
-    if (!container || !selected) return;
-    const viewport = container.getBoundingClientRect();
-    const tab = selected.getBoundingClientRect();
-    const left = viewport.left + container.clientLeft;
-    const right = left + container.clientWidth;
-
-    if (tab.left < left) container.scrollLeft += tab.left - left;
-    else if (tab.right > right) container.scrollLeft += tab.right - right;
-  }, [surface]);
+  useSelectedTabInView(strip, surface);
   const bodyFit = previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
-
-  let slatePanel: ReactNode = null;
-
-  if (openSlate !== null) {
-    if (openSlate === props.unmappedSlate) {
-      slatePanel = <UnmappedBindingsPanel slate={openSlate} title={openSlateSummary?.title ?? openSlate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />;
-    } else if (openSlateSummary === undefined) {
-      slatePanel = <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />;
-    } else {
-      slatePanel = props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />;
-    }
-  }
 
   return (
     <div className="@container flex flex-col h-full p-sidebar">
@@ -302,7 +306,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
-          {slatePanel}
+          {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
         </ErrorBoundary>
       </div>
       <div className={surface === "Diffs" ? "flex-1 min-h-0" : "hidden"}>

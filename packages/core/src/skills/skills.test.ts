@@ -1169,7 +1169,7 @@ describe('the /skills view', () => {
 
     expect(await plane.readFile(skillViewPath('fresh'), { encoding: 'utf8' })).toBe(skillFile('fresh', 'new'));
     expect(await plane.exists(skillViewPath('nope'))).toBe(false);
-    await expect(plane.readFile(skillViewPath('nope'))).rejects.toThrow(`'${skillViewPath('nope')}'`);
+    await expect(plane.readFile(skillViewPath('nope'))).rejects.toThrow("'/skills/nope/SKILL.md'");
   });
 
   test('every write is refused and names where a skill is written instead', async () => {

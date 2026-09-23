@@ -1,6 +1,7 @@
 /** The image's `sync.js` (D30): `run` ticks in the background; `flush` is a stop's final
  *  checkpoint. Logs go to stderr, which the box's commands route to the container's stdout. */
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { describeThrown as describe } from './lifecycle';
 import { snapshotChainStorage } from './snapshot-chain';
 import { DEVBOX_RUNTIME_DIR, type CheckpointKind, type CheckpointOutcome } from './storage';
 import {
@@ -55,7 +56,7 @@ async function flushThroughProgram(kind: CheckpointKind): Promise<CheckpointOutc
 
     return parseSyncOutcome(await reply.text(), '', reply.ok ? 0 : reply.status);
   } catch (error) {
-    return { kind: 'failed', reason: `the running sync did not answer the flush: ${String(error)}`, bytes: undefined, movedBytes: undefined };
+    return { kind: 'failed', reason: `the running sync did not answer the flush: ${describe({ cause: error })}`, bytes: undefined, movedBytes: undefined };
   }
 }
 

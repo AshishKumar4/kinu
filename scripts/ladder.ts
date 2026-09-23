@@ -230,8 +230,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/pattern-inventory.ts',
     label: 'Pattern inventory',
-    tier: 'push',
-    seconds: 2.5, // Measured 2026-09-06 on the 24-thread workstation.
+    tier: 'commit',
+    seconds: 2.5, // Measured 2026-09-23 on the 24-thread box at load 5: 2.50/2.51/2.63 s.
     catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
     blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
     inputs: { kind: 'derived' },
@@ -577,10 +577,9 @@ export const LADDER: readonly Gate[] = [
     // budget exists so nobody learns to bypass the hook, and a skip set is fully
     // recoverable at push. Nothing it asserts was narrowed to fit.
     tier: 'push',
-    // Re-measured 2026-09-05 on the 24-thread box: 11.5/11.9/12.3s (in-tier plus two
-    // solo). The 2.9s was the move-day figure; the vitest arm has grown since.
-    // Replaces 2.9s.
-    seconds: 12,
+    // Re-measured 2026-09-23 on the 24-thread box at load 5: 17.8/17.9/18.5 s; the
+    // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
+    seconds: 18,
     catches: 'a test that starts skipping, and a declared skip that has started running '
       + 'without the lock being tightened. Credential-free the eval tier reports 60 skips '
       + 'across its two runners and exits 0, and that exit code is all anyone reads — so the '
@@ -783,31 +782,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/test-census.ts --ratchet',
     label: 'Test census ratchet',
-    // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
-    // WHOLE-TREE census — 835 test files parsed, plus every product module a
-    // test imports — and a test cannot become coupled to an implementation
-    // between a commit and the push that follows it.
-    //
-    // NOT COMMIT, and the arithmetic decides it rather than taste. The commit
-    // tier declares 53.24s against the ladder-budget lock (re-measured 2026-09-05
-    // on the 24-thread box; the per-row figures above carry the date), so a
-    // whole-tree census that walls several seconds fits at push, beside the other
-    // censuses.
-    // The original intent for this gate was the commit tier on the precedent
-    // of `bun scripts/schema-drift.ts` at 0.23s; that precedent does not
-    // carry, because schema-drift walls a quarter of a second and this walls
-    // several.
-    //
-    // MEASURED, AND CALIBRATED, because this box is not the box the rest of
-    // this file's figures came from. Six readings on a 24-thread box under load
-    // ~70, taken in one window and interleaved so the load is common to all of
-    // them: this gate 13.25/16.09/11.94s, `gate:complexity` 8.29/8.00/8.78s
-    // against its declared 1.8s, `gate:wired` 8.66/7.70/9.34s against its
-    // declared 3.6s. Scaling the median 13.25s by each neighbour's own ratio
-    // gives 2.9s and 5.5s, and the LARGER is declared: a budget may only ever
-    // be made stricter by a reading nobody can reproduce on the reference box.
-    tier: 'push',
-    seconds: 5.5,
+    // COMMIT, with the other static gates that take seconds: a coupled test
+    // found at push is found after the lane has built on it (2026-09-23, Main).
+    // Measured 2026-09-23 on the 24-thread box at load 5: 3.88/4.05/5.14 s.
+    tier: 'commit',
+    seconds: 4.1,
     catches: 'a NEW coupled test, by the five axes a test review judges on — an assertion '
       + "over the implementation's TEXT, a constant restating a module's own, a matcher that "
       + 'cannot fail on the defect its title names, a reach into a member production declares '
@@ -828,22 +807,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:complexity',
     label: 'Complexity budget',
-    // PUSH, beside the other whole-tree censuses: 1.8s measured 2026-09-01 on
-    // the 24-thread box for 1,906 files and 48,048 functions, and a function
-    // cannot become complex between a commit and the push that follows it.
-    //
-    // ONE ROW, and it was two. A second entry for this same `run` string sat
-    // earlier in this array declaring 3s over 1,907 files and 48,052 functions
-    // — the same command measured at a different commit, so the ladder ran
-    // `gate:complexity` TWICE per push and counted 4.8s for it in the tier's
-    // declared sum. Both readings are kept here because the deletion of one is
-    // a decision rather than a tidy-up: 2.2s over 1,907/48,052 and 1.8s over
-    // 1,906/48,048, both 2026-09-01. The row that survives is the one whose
-    // blind spots and oxlint cross-check are written out. A third reading,
-    // 8.29/8.00/8.78s, is this same gate on a 24-thread box under load ~70 —
-    // recorded because the census row below is calibrated against it.
-    tier: 'push',
-    seconds: 1.8,
+    // COMMIT: at push, lanes had already committed functions over the line
+    // (2026-09-23). Measured that day on the 24-thread box at load 5 over 2,575
+    // files and 63,573 functions: 2.44/2.50/2.54 s.
+    tier: 'commit',
+    seconds: 2.5,
     catches: 'a new function at the hard end of this codebase, arriving unnamed. The budget is '
       + 'MEASURED rather than chosen: cyclomatic complexity for every function in the '
       + 'enumeration, a ceiling at the highest (126, `handleUserRequest`) and a budget line at '
@@ -866,8 +834,9 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:silent-drop',
     label: 'Silently dropped failures',
-    tier: 'push',
-    seconds: 1.4,
+    tier: 'commit',
+    // Measured 2026-09-23 on the 24-thread box at load 5: 0.98/1.00/1.03 s.
+    seconds: 1,
     catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
       + 'structurally blind to — a sentinel returned behind a log line (the rule fires on a '
       + 'ONE-statement handler only), a cause chain projected down to `error.message`, an '
@@ -883,9 +852,9 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:test-clocks',
     label: 'Wall-clock waits in tests',
-    tier: 'push',
-    // Measured 2026-09-15 on the 24-thread workstation: 1.4 s over 1,130 test
-    // files, one oxc parse each.
+    tier: 'commit',
+    // Measured 2026-09-23 on the 24-thread box at load 5: 1.41/1.44/1.46 s over
+    // 1,248 test files, one oxc parse each.
     seconds: 1.5,
     catches: 'a test that waits on a duration instead of an end condition — a timer call '
       + '(`setTimeout`, `Bun.sleep`, `timers/promises`, `AbortSignal.timeout`), a comparison '
