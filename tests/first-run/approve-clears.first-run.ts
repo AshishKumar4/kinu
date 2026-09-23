@@ -36,13 +36,14 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, test } from 'vitest';
-import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 
 import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
-import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
+import type { PublicSessionPlan } from '../evals/public-session';
 import type { DeviceAccount } from '../evals/device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
 import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
+import { openBrowser, signedInPage } from './browser';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -235,12 +236,7 @@ interface ButtonRun {
 /**
  * Load the deployed workspace in Chrome, click Approve, and count the boxes.
  *
- * THE HEADER IS THE SIGN-IN. The deployment accepts the synthetic identity in
- * core's `DEV_IDENTITY_HEADER` and nowhere else — never as a cookie, deliberately — so
- * `setExtraHTTPHeaders` is what makes this page the same user the RPC half
- * acted as. Everything else is the product: its own bundle, its own socket, its
- * own render.
- *
+
  * The counts come from the DOM rather than from React state, because the defect
  * was a rendered checkbox: a person saw ticks after clicking Approve, and what
  * the component believed about `selected` is not the claim.
@@ -249,15 +245,11 @@ async function approveThroughTheButton(
   browser: Browser, plan: PublicSessionPlan, workspace: string, command: string,
 ): Promise<ButtonRun> {
   const empty = { boxesBefore: 0, checkedBefore: 0, boxesAfter: 0, checkedAfter: 0 };
-  const page = await browser.newPage();
+  const page = await signedInPage(browser, plan.identity);
+
+  page.setDefaultTimeout(PAINT_MS);
 
   try {
-    // The SAME authority the RPC half acted with, off the same plan, so the two
-    // halves cannot be two users looking at two queues.
-    const headers = webHeaders(plan.identity);
-
-    if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
-
     return await drive({ page, origin: plan.origin, workspace, command, empty });
   } finally {
     await page.close();
@@ -369,27 +361,6 @@ async function countBoxes(page: Page, command: string): Promise<{ boxes: number;
 
     return { boxes: boxes.length, checked: boxes.filter((box) => box.checked).length };
   });
-}
-
-/** Chrome, with the pointer declared. Headless reports no pointing device, so
- *  every `hover:` utility the product emits is dead and a card can render
- *  differently than it does for a person — the gallery harness makes the same
- *  declaration for the same reason. */
-async function openBrowser(): Promise<Browser> {
-  const options: LaunchOptions = {
-    defaultViewport: { width: 1440, height: 900 },
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
-    ],
-  };
-
-  const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH ?? process.env.CHROME_PATH;
-
-  if (executablePath !== undefined && executablePath.length > 0) options.executablePath = executablePath;
-
-  return puppeteer.launch(options);
 }
 
 export const DEFECT = FIRST_RUN_DEFECTS[CASE];

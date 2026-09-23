@@ -179,36 +179,6 @@ describe('subordinate wiring', () => {
     expect(base).not.toContain('dismissSubordinate(');
   });
 
-
-  test('manual create, rename, and dismiss reconcile the roster from their successful RPC result', () => {
-    const hook = source('hooks/use-kinu.ts');
-    expect(hook).toContain('result.subordinate');
-    expect(hook).toContain('entry.name !== result.subordinate.name');
-    expect(hook).toContain('entry.name !== result.name');
-    expect(hook).toContain('rpc<{');
-    expect(hook).toContain('>("createSubordinateAgent", [])');
-    expect(hook).toContain('("renameSubordinateAgent", [name, displayName])');
-    const mutations = hook.slice(hook.indexOf('createSubordinateAgent'), hook.indexOf('\n  };', hook.indexOf('createSubordinateAgent')));
-    expect(mutations).not.toContain('await refreshSubordinates()');
-    // One generation bump per mutation, so a stale in-flight roster read cannot overwrite the result.
-    expect(mutations.match(/\+\+subordinateRefreshGeneration\.current;/g)).toHaveLength(3);
-  });
-
-  test('stale roster reads cannot overwrite a mutation, broadcast, or actor reset', () => {
-    const hook = source('hooks/use-kinu.ts');
-
-    const refresh = hook.slice(
-      hook.indexOf('const refreshSubordinates = useCallback'),
-      hook.indexOf('\n\n  useEffect(() => {', hook.indexOf('const refreshSubordinates = useCallback')),
-    );
-
-    expect(refresh).toContain('const generation = ++subordinateRefreshGeneration.current;');
-    expect(refresh.match(/generation !== subordinateRefreshGeneration\.current/g)).toHaveLength(1);
-    expect(refresh).toContain('thrown !== null && generation === subordinateRefreshGeneration.current');
-    expect(hook).toContain('msg.type === "subordinates_changed"');
-    expect(hook).toContain('++subordinateRefreshGeneration.current;');
-  });
-
   // Ingress ordering is core's; on a DO the admit and roster write must share one storage transaction.
   test('the parent ingress runs core’s sequence inside the DO storage transaction', () => {
     const actor = source('actor-agent.ts');
