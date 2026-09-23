@@ -652,8 +652,10 @@ function ChatScene({
           : []),
       ]);
       setClient(candidate);
+      setReady(true);
       onClientChange?.(candidate);
       candidate = null;
+      selectionPendingRef.current = false;
 
       try {
         await previous.close();
@@ -684,7 +686,6 @@ function ChatScene({
 
       setReady(true);
       addError({ cause: error });
-    } finally {
       selectionPendingRef.current = false;
     }
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
