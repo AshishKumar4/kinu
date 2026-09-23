@@ -457,7 +457,7 @@ const DOC_BULLET = /^- (q-\S+) · (.+) · (\w+)$/u;
  *  reference is the TICKET IDS the verifier POSTs, so the nonce reaches the
  *  episode through {@link queueSeed} rather than through the ask. */
 const CASE_SLATE_TURNS = (): readonly string[] => [
-  'Build a slate at /home/user/slates/queue/ (package.json main "server.ts", slate '
+  'Build a slate at /home/main/slates/queue/ (package.json main "server.ts", slate '
   + '{"title":"Queue","port":8790,"bindings":{}}) that keeps a support-ticket queue in memory '
   + 'with this exact JSON HTTP contract, then start its preview and reply with only the preview URL.\n'
   + '- POST /tickets {id, title, priority, agent} → 201 {ticket}; 409 {"error":"DUPLICATE_ID"} if '
@@ -2503,8 +2503,8 @@ function cloneWorld(options: CloneFixtureOptions): FixtureWorld {
     [
       runStart('c0', turns[0] ?? '', base),
       toolRow({ runId: 'c0', index: 1, at: base + 1_000, name: 'shell', id: 'git',
-        args: { command: 'cd seed/app-a && git init && git add -A && git commit -m seed && git clone . /home/user/apps/a', runtime: 'workspace' },
-        result: 'Cloning into /home/user/apps/a' }),
+        args: { command: 'cd seed/app-a && git init && git add -A && git commit -m seed && git clone . /home/main/apps/a', runtime: 'workspace' },
+        result: 'Cloning into /home/main/apps/a' }),
       runEnd('c0', base + 2_000),
     ],
     [runStart('c1', turns[1] ?? '', base + 20_000), runEnd('c1', base + 21_000)],
