@@ -6,10 +6,11 @@ import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import { estimateTokens } from '../llm';
 import { stepContextLimit } from '../prompting/step-prune';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { KinuError } from '../obs/index';
 import { permitInPlan } from '../execution/work-mode';
 import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
-import { mcpToolKey } from './mcp-naming';
+import { mcpToolKey, suffixedMcpToolKey } from './mcp-naming';
 
 /** An MCP tool after crossing the RPC seam, with namespacing context for dispatch. */
 export interface SerializableToolDescriptor {
@@ -23,7 +24,6 @@ export interface SerializableToolDescriptor {
   title?: string;
   /** JSON Schema (not Zod) so it survives RPC serialization. */
   inputSchema?: JsonObject;
-  outputSchema?: JsonObject;
   readOnly?: true;
 }
 
@@ -35,7 +35,6 @@ export const SerializableToolDescriptorSchema = v.object({
   description: v.optional(v.string()),
   title: v.optional(v.string()),
   inputSchema: v.optional(JsonObjectSchema),
-  outputSchema: v.optional(JsonObjectSchema),
   readOnly: v.optional(v.literal(true)),
 });
 
@@ -51,21 +50,84 @@ export interface RemoteMcpTool {
   title?: string;
   annotations?: { title?: string; readOnlyHint?: boolean };
   inputSchema: unknown;
-  outputSchema?: unknown;
 }
+
+export interface McpToolRefusal {
+  readonly server: string;
+  readonly reason: string;
+}
+
+export type McpToolDescription = { readonly admitted: SerializableToolDescriptor } | { readonly refused: McpToolRefusal };
+
+export interface ListedMcpTools {
+  readonly tools: RemoteMcpTool[];
+  readonly refused: McpToolRefusal[];
+}
+
+const ToolListPageSchema = v.looseObject({ tools: v.array(v.unknown()), nextCursor: v.optional(v.string()) });
+
+const ListedToolSchema = v.looseObject({
+  name: v.string(),
+  description: v.optional(v.string()),
+  title: v.optional(v.string()),
+  annotations: v.optional(v.looseObject({ title: v.optional(v.string()), readOnlyHint: v.optional(v.boolean()) })),
+  inputSchema: v.optional(v.unknown()),
+});
+
+export async function listMcpToolsLeniently(
+  server: { readonly name: string },
+  page: (cursor: string | undefined) => Promise<object>,
+): Promise<ListedMcpTools> {
+  const tools: RemoteMcpTool[] = [];
+  const refused: McpToolRefusal[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const answer = await page(cursor);
+    const listed = v.safeParse(ToolListPageSchema, answer);
+
+    if (!listed.success) {
+      throw new KinuError('bad_input', `${server.name} answered tools/list without a tools array: ${JSON.stringify(answer)}`);
+    }
+
+    for (const entry of listed.output.tools) {
+      const remote = v.safeParse(ListedToolSchema, entry);
+
+      if (remote.success) tools.push({ ...remote.output, inputSchema: remote.output.inputSchema });
+      else refused.push({ server: server.name, reason: `a listed tool has no name, so it is not offered: ${JSON.stringify(entry)}` });
+    }
+
+    cursor = listed.output.nextCursor;
+  } while (cursor !== undefined);
+
+  return { tools, refused };
+}
+
+const RemoteInputSchemaSchema = v.pipe(JsonObjectSchema, v.check((value) => !Array.isArray(value)));
 
 /** Blank optional prose is omitted: an empty `description` would defeat the orchestrator's `??` fallback,
  *  and an empty `title` must not shadow `annotations.title`. */
 export function describeMcpTool(
   server: { id: string; name: string },
   remote: RemoteMcpTool,
-): SerializableToolDescriptor {
+): McpToolDescription {
+  const inputSchema = v.safeParse(RemoteInputSchemaSchema, remote.inputSchema);
+  const rootType = inputSchema.success ? inputSchema.output.type : undefined;
+
+  if (!inputSchema.success || (rootType !== undefined && rootType !== 'object')) {
+    const found = inputSchema.success
+      ? `its input schema's root type is ${JSON.stringify(rootType)}, not "object"`
+      : `its input schema is ${schemaKind({ value: remote.inputSchema })}, not a JSON Schema object`;
+
+    return { refused: { server: server.name, reason: `tool "${remote.name}" is not offered: ${found}` } };
+  }
+
   const descriptor: SerializableToolDescriptor = {
     serverId: server.id,
     serverName: server.name,
     name: remote.name,
     toolKey: mcpToolKey(server.name, remote.name),
-    inputSchema: v.parse(JsonObjectSchema, remote.inputSchema),
+    inputSchema: inputSchema.output,
   };
 
   const description = nonBlank(sanitizeRemoteProse(remote.description));
@@ -77,11 +139,19 @@ export function describeMcpTool(
 
   if (title !== undefined) descriptor.title = title;
 
-  if (remote.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, remote.outputSchema);
-
   if (remote.annotations?.readOnlyHint === true) descriptor.readOnly = true;
 
-  return descriptor;
+  return { admitted: descriptor };
+}
+
+function schemaKind(input: { value: unknown }): string {
+  if (input.value === undefined) return 'missing';
+
+  if (input.value === null) return 'null';
+
+  if (v.is(v.array(v.unknown()), input.value)) return 'an array';
+
+  return v.is(v.boolean(), input.value) ? `the boolean ${String(input.value)}` : `the scalar ${JSON.stringify(input.value)}`;
 }
 
 function nonBlank(value: string | undefined): string | undefined {
@@ -181,7 +251,15 @@ export function admitMcpDescriptors(
 ): McpDescriptorAdmission {
   const total = Math.max(0, stepContextLimit(budget) - budget.nativeToolTokens);
 
-  const ordered = [...descriptors].sort(byServerThenTool);
+  const keyUses = new Map<string, number>();
+
+  for (const descriptor of descriptors) keyUses.set(descriptor.toolKey, (keyUses.get(descriptor.toolKey) ?? 0) + 1);
+
+  const ordered = descriptors
+    .map((descriptor) => ((keyUses.get(descriptor.toolKey) ?? 0) > 1
+      ? { ...descriptor, toolKey: suffixedMcpToolKey(descriptor.serverName, descriptor.name) }
+      : descriptor))
+    .sort(byServerThenTool);
 
   const admitted: SerializableToolDescriptor[] = [];
   const lost = new Map<string, number>();

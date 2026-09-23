@@ -6,12 +6,14 @@
 import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
-  admitMcpDescriptors, McpToolSurfaceSchema,
+  admitMcpDescriptors, describeMcpTool, listMcpToolsLeniently, McpToolSurfaceSchema,
   mcpPresetById, MCP_PRESETS,
-  type JsonObject, type JsonValue, type McpPreset, type McpPresetId,
+  type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { SseError } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -348,22 +350,116 @@ export function storedMcpOptionsCarryCredential(raw: string | null | undefined):
     .some((carried) => carried !== undefined && carried !== null);
 }
 
-/**
- * Whether a failed MCP dispatch failed on transport authorization, decided by error class, never text.
- * Only `UnauthorizedError` and a 401 `code` on `StreamableHTTPError`/`SseError` count.
- */
+/** Whether a failed MCP dispatch failed on transport authorization, decided by error class, never text. */
 export function isMcpTransportUnauthorized(input: { cause: unknown }): boolean {
-  const seen = new Set<unknown>();
+  return causeChain(input).some((error) => error instanceof UnauthorizedError
+    || ((error instanceof StreamableHTTPError || error instanceof SseError) && error.code === 401));
+}
 
-  for (let error: unknown = input.cause; error instanceof Error && !seen.has(error); error = error.cause) {
-    seen.add(error);
+function causeChain(input: { cause: unknown }): Error[] {
+  const chain: Error[] = [];
 
-    if (error instanceof UnauthorizedError) return true;
+  for (let error: unknown = input.cause; error instanceof Error && !chain.includes(error); error = error.cause) chain.push(error);
 
-    if ((error instanceof StreamableHTTPError || error instanceof SseError) && error.code === 401) return true;
+  return chain;
+}
+
+export type McpToolListing = { readonly listed: ListedMcpTools } | { readonly failure: string };
+
+export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
+  try {
+    return {
+      listed: await listMcpToolsLeniently(server, (cursor) => client.request(
+        { method: 'tools/list', params: cursor === undefined ? {} : { cursor } },
+        ResultSchema,
+      )),
+    };
+  } catch (cause) {
+    const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause, otherwise: 'unavailable' });
+    diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
+
+    return { failure: renderCauseChain(error) };
+  }
+}
+
+export function mcpListingRefusals(server: { readonly id: string; readonly name: string }, listed: ListedMcpTools): McpToolRefusal[] {
+  return [...listed.refused, ...listed.tools.flatMap((tool) => {
+    const described = describeMcpTool(server, tool);
+
+    return 'refused' in described ? [described.refused] : [];
+  })];
+}
+
+export interface McpSessionHost {
+  readonly mcpConnections: Readonly<Record<string, McpSessionConnection | undefined>>;
+  connectToServer(id: string): Promise<{ readonly state: string; readonly error?: string }>;
+  discoverIfConnected(id: string): Promise<{ readonly success: boolean } | undefined>;
+}
+
+interface McpSessionConnection {
+  readonly sessionId: string | undefined;
+  clearResumedSession(): void;
+}
+
+interface SessionTraffic {
+  readonly calls: Set<Promise<unknown>>;
+  readonly renewals: Map<string, Promise<void>>;
+}
+
+const sessionTraffic = new WeakMap<McpSessionHost, Map<string, SessionTraffic>>();
+
+export async function callRenewingExpiredSession<Result>(
+  host: McpSessionHost,
+  serverId: string,
+  call: () => Promise<Result>,
+): Promise<Result> {
+  const servers = sessionTraffic.get(host) ?? new Map<string, SessionTraffic>();
+  sessionTraffic.set(host, servers);
+  const traffic = servers.get(serverId) ?? { calls: new Set(), renewals: new Map() };
+  servers.set(serverId, traffic);
+  const expired = host.mcpConnections[serverId]?.sessionId;
+
+  try {
+    return await sent(traffic, call);
+  } catch (cause) {
+    if (expired === undefined || !causeChain({ cause }).some((error) => error instanceof StreamableHTTPError && error.code === 404)) throw cause;
   }
 
-  return false;
+  const renewal = traffic.renewals.get(expired)
+    ?? renewSession({ host, serverId, expired, traffic }).finally(() => traffic.renewals.delete(expired));
+
+  traffic.renewals.set(expired, renewal);
+  await renewal;
+
+  return sent(traffic, call);
+}
+
+async function sent<Result>(traffic: SessionTraffic, call: () => Promise<Result>): Promise<Result> {
+  const running = call();
+  traffic.calls.add(running);
+
+  try {
+    return await running;
+  } finally {
+    traffic.calls.delete(running);
+  }
+}
+
+async function renewSession(input: { host: McpSessionHost; serverId: string; expired: string; traffic: SessionTraffic }): Promise<void> {
+  const { host, serverId, expired } = input;
+  // Starting a session closes the old client and every call still on it.
+  await Promise.allSettled(input.traffic.calls);
+  const connection = host.mcpConnections[serverId];
+
+  if (connection === undefined || connection.sessionId !== expired) return;
+  connection.clearResumedSession();
+  const started = await host.connectToServer(serverId);
+
+  if (started.state !== 'connected') {
+    throw new KinuError('unavailable', `MCP server ${serverId} ended its session and a new one did not start (${started.error ?? started.state})`);
+  }
+
+  await host.discoverIfConnected(serverId);
 }
 
 /** Avoids importing the SDK enum so this module doesn't pull the agents SDK transitively. */

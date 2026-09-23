@@ -761,6 +761,8 @@ export interface RecordedMcpConnection {
   connectionError: string | null;
   tools: { name: string; description?: string; title?: string; inputSchema: unknown; annotations?: Tool['annotations'] }[];
   options: { transport: RecordedMcpTransport };
+  /** The connection's MCP client, as far as a raw `tools/list` read goes. */
+  client?: { request(): Promise<object> };
 }
 
 /** `restored` / `waited` are call counts: they prove a read did not touch the connection machinery. */
@@ -780,6 +782,13 @@ const mcpDiscovered: string[] = [];
 let mcpCallToolFailure: Error | null = null;
 
 let mcpCallToolAnswer: CallToolResult | undefined;
+
+const mcpToolCalls: { serverId: string; name: string; arguments?: JsonObject }[] = [];
+
+/** Every `callTool` the manager received, in order, as the SDK was handed it. */
+export function recordedMcpToolCalls(): readonly { serverId: string; name: string; arguments?: JsonObject }[] {
+  return mcpToolCalls;
+}
 
 export function seedMcpAnswer(answer: CallToolResult): void {
   mcpCallToolAnswer = answer;
@@ -931,8 +940,23 @@ export function seedMcpTools(id: string, tools: RecordedMcpConnection['tools']):
   connection.tools = tools;
 }
 
+/** The state a failed discovery leaves: `connected`, no tools, and a client that answers `tools/list` raw. */
+export function seedUndiscoveredMcpTools(id: string, answer: () => Promise<object>): void {
+  const manager = liveMcpManager;
+
+  if (!manager) throw new Error('No MCP manager has been constructed yet.');
+  manager.mcpConnections[id] ??= {
+    connectionState: 'connected', connectionError: null, tools: [], options: { transport: {} },
+  };
+  const connection = manager.mcpConnections[id];
+  connection.connectionState = 'connected';
+  connection.tools = [];
+  connection.client = { request: answer };
+}
+
 export function resetRecordedMcp(): void {
   mcpCallToolAnswer = undefined;
+  mcpToolCalls.length = 0;
   mcpServers.clear();
   mcpEstablished.length = 0;
   mcpDiscovered.length = 0;
@@ -1124,7 +1148,8 @@ class FakeMCPClientManager {
     connection.connectionState = isMcpDiscoveryUnauthorized(probe) ? 'authenticating' : 'connected';
   }
 
-  async callTool(): Promise<CallToolResult> {
+  async callTool(params: { serverId: string; name: string; arguments?: JsonObject }): Promise<CallToolResult> {
+    mcpToolCalls.push(params);
     const failure = mcpCallToolFailure;
 
     if (failure !== null) {

@@ -143,7 +143,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
+  admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, toolSchemaDialect, withToolSchemaDialect,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -1164,7 +1164,7 @@ export class LocalAgentSession implements BackendHost {
           source: `MCP server "${d.server}"`,
           reason: d.reason ?? 'failed to start, so its tools are missing from this turn',
         })),
-      ...admission.deferred.map((d) => ({
+      ...[...conn.refused, ...admission.deferred].map((d) => ({
         source: `MCP server "${d.server}"`,
         reason: d.reason,
       })),
@@ -1636,8 +1636,9 @@ export class LocalAgentSession implements BackendHost {
       Object.entries(this.filterToolsBySkills(activeSkills)).filter(([name]) => toolAllowed(name)),
     );
 
-    const filteredExternal = Object.fromEntries(
-      Object.entries(this.extraTools).filter(([name]) => toolAllowed(name)),
+    const filteredExternal = withToolSchemaDialect(
+      Object.fromEntries(Object.entries(this.extraTools).filter(([name]) => toolAllowed(name))),
+      toolSchemaDialect(this.effectiveModelSpec()),
     );
 
     const turnTools = toolsInWorkMode(this.actorSession.workMode, { ...filteredBuiltins, ...filteredExternal });
