@@ -98,6 +98,7 @@ export const FIRST_RUN_CASES = [
   'delegation',
   'agent-tab',
   'agent-chats-persist',
+  'agent-dismissed-chat',
   'deploy-door',
 ] as const;
 
@@ -397,6 +398,21 @@ export const FIRST_RUN_DEFECTS = {
       + 'deployed build \u2014 the unit reds are recorded in packages/cf-backend/tests/'
       + 'unit-subordinates.test.ts and packages/core/tests/unit-transcript-head.test.ts.',
   },
+  'agent-dismissed-chat': {
+    id: 'agent-dismissed-chat',
+    found: 'A subagent dismissed with its conversation kept, the Dismiss dialog\'s default, kept '
+      + 'its tab but its chat never loaded: the pager refused the dismissed agent with "The actor '
+      + 'is not registered in this workspace.", while the dialog promises "Its conversation is '
+      + 'kept, not deleted".',
+    missedBecause: '`agent-chats-persist` proves EMPLOYED agents keep their chats and never '
+      + 'dismisses one, so it passes with the fix (e29da7f01) reverted. The pre-deploy half '
+      + 'arrived with the fix, in packages/cf-backend/tests/workerd/public-surface.test.ts; no '
+      + 'deployed row read a dismissed agent\'s kept chat the way its pane reads it.',
+    provedRedAt: '5e53b4248',
+    redDirection: 'Run against 5e53b4248, the parent of e29da7f01, served by `vite dev` on '
+      + 'loopback (the Worker the deploy ships, with local state): `kept-chat-reads` misses on '
+      + 'the refusal above. Green on e29da7f01 served the same way.',
+  },
   'deploy-door': {
     id: 'deploy-door',
     found: 'The Cloudflare door is new surface, so no owner has driven it by hand yet. What the '
@@ -525,6 +541,7 @@ const SHORT_SUBJECT = {
   'delegation': 'deleg',
   'agent-tab': 'tab',
   'agent-chats-persist': 'chats',
+  'agent-dismissed-chat': 'kept',
   'deploy-door': 'door',
 } satisfies Record<FirstRunCase, string>;
 
