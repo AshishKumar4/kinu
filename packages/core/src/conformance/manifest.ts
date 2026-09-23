@@ -150,6 +150,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // Created by initWorkspaceSchema on every root, so a missing table is a fault.
     alternate_takes: EVERYWHERE,
     exploration_records: EVERYWHERE,
+    exploration_seals: EVERYWHERE,
     swarm_node_records: EVERYWHERE,
     // `traces` and `facet_model_operation_outbox` are gone with the facet class;
     // no DDL creates them, so they are not plane members.
