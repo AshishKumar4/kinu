@@ -289,28 +289,28 @@ Primary key `(actor_id, id)`.
 
 ## Formal properties (Lean 4)
 
-36 of the corpus's 442 named declarations live in `lean/Kinu/MCTS/`
+38 of the corpus's 452 named declarations live in `lean/Kinu/MCTS/`
 (measured 2026-09-23 with `node lean/check-traceability.mjs --list-declarations`). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 
 | Property | File | Theorem | Claim status |
 |----------|------|---------|--------------|
-| Budget terminates (well-founded on Nat) | `StorageIsolation.lean` | `budget_well_founded` | by-construction-witness |
+| Budget terminates (well-founded on Nat) | `StorageIsolation.lean` | `budget_well_founded` | proved-in-abstract-model |
 | Initial state is storage-isolated | `StorageIsolation.lean` | `init_isolated` | proved-in-abstract-model |
 | All 7 MCTS transitions preserve isolation | `StorageIsolation.lean` | `transition_preserves_isolation` | proved-in-abstract-model |
-| A reward in [0,S] keeps a node's mean in range | `Backpropagation.lean` | `update_preserves_range` | proved-in-abstract-model |
-| …lifted to a whole reward history | `Backpropagation.lean` | `applyRewards_preserves_range` | proved-in-abstract-model |
-| `value · visits = Σ rewards` after any history | `Backpropagation.lean` | `applyRewards_sum_invariant`, `sum_invariant` | proved-in-abstract-model |
+| A reward in [0,S] keeps a node's mean in range | `Backpropagation.lean` | `update_preserves_range` | proved-and-refined |
+| …lifted to a whole reward history | `Backpropagation.lean` | `applyRewards_preserves_range` | proved-and-refined |
+| `value · visits = Σ rewards` after any history | `Backpropagation.lean` | `applyRewards_sum_invariant`, `sum_invariant` | proved-and-refined |
 | At the first visit the init value is erased | `Backpropagation.lean` | `init_values_equal_at_first_step` | by-construction-witness |
 | One update yields exactly the running-mean numerator | `Backpropagation.lean` | `update_matches_ts_numerator` | by-construction-witness |
 | A fresh node starts in range | `Backpropagation.lean` | `initial_in_range` | by-construction-witness |
 | The ancestor walk touches visits/value only, never row IDs | `Backpropagation.lean` | `backprop_preserves_ids` | by-construction-witness |
-| The bonus falls with a node's own visits from one visit on | `Uct.lean` | `bonus_falls_with_own_visits` | proved-in-abstract-model |
-| The bonus rises with the parent's visits from two on | `Uct.lean` | `bonus_rises_with_parent_visits` | proved-in-abstract-model |
-| The root's bonus rises from two visits to three | `Uct.lean` | `the_root_bonus_rises_from_two_visits_to_three` | proved-in-abstract-model |
-| The selected row is eligible and no eligible row outranks it | `Uct.lean` | `select_is_eligible`, `select_is_maximal` | proved-in-abstract-model |
-| A unique best unexpanded candidate is the only winner | `Convergence.lean` | `a_unique_best_leaf_is_the_only_winner` | proved-in-abstract-model |
-| The search can expand its best candidate and converge past it | `Convergence.lean` | `the_search_expands_its_best_candidate_then_converges_past_it` | proved-in-abstract-model |
+| The bonus falls with a node's own visits from one visit on | `Uct.lean` | `bonus_falls_with_own_visits` | proved-and-refined |
+| The bonus rises with the parent's visits from two on | `Uct.lean` | `bonus_rises_with_parent_visits` | proved-and-refined |
+| The root's bonus rises from two visits to three | `Uct.lean` | `the_root_bonus_rises_from_two_visits_to_three` | proved-and-refined |
+| The selected row is eligible and no eligible row outranks it | `Uct.lean` | `select_is_eligible`, `select_is_maximal` | proved-and-refined |
+| A unique best unexpanded candidate is the only winner | `Convergence.lean` | `a_unique_best_leaf_is_the_only_winner` | proved-and-refined |
+| The search can expand its best candidate and converge past it | `Convergence.lean` | `the_search_expands_its_best_candidate_then_converges_past_it` | proved-and-refined |
 
 The bonus order is exact: for W > 0, `W·√(ln M₁ / N₁) < W·√(ln M₂ / N₂)` exactly
 when `M₁^N₂ < M₂^N₁` (`bonus_order_is_power_order`), so every monotonicity claim
