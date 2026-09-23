@@ -29,6 +29,8 @@ import Kinu.Safety.CapabilitySafety
 -- MCTS proofs
 import Kinu.MCTS.StorageIsolation
 import Kinu.MCTS.Backpropagation
+import Kinu.MCTS.Uct
+import Kinu.MCTS.Convergence
 
 -- Evolution proofs
 import Kinu.Evolution.Timescales
@@ -47,6 +49,7 @@ import Kinu.Storage.SqliteFSCorrectness
 import Kinu.Storage.CostModel
 import Kinu.Storage.SnapshotChain
 import Kinu.Storage.BlockLayer
+import Kinu.Storage.LossWindow
 
 -- Execution layer proofs (5-tool architecture + capability routing)
 import Kinu.Execution.Capabilities
@@ -64,3 +67,6 @@ import Kinu.Exploration.RecordsStore
 import Kinu.Exploration.ArchiveAdmission
 import Kinu.Exploration.FanIn
 import Kinu.Exploration.Rebase
+import Kinu.Exploration.Concurrent
+import Kinu.Exploration.Counterfactual
+import Kinu.Exploration.Improvement

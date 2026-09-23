@@ -289,8 +289,8 @@ Primary key `(actor_id, id)`.
 
 ## Formal properties (Lean 4)
 
-Eleven of the corpus's 396 named declarations live in `lean/Kinu/MCTS/`
-(measured 2026-09-22 with `node lean/check-traceability.mjs --list-declarations`). The model uses exact scaled-integer arithmetic; SQLite
+36 of the corpus's 442 named declarations live in `lean/Kinu/MCTS/`
+(measured 2026-09-23 with `node lean/check-traceability.mjs --list-declarations`). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 
 | Property | File | Theorem | Claim status |
@@ -305,8 +305,17 @@ uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 | One update yields exactly the running-mean numerator | `Backpropagation.lean` | `update_matches_ts_numerator` | by-construction-witness |
 | A fresh node starts in range | `Backpropagation.lean` | `initial_in_range` | by-construction-witness |
 | The ancestor walk touches visits/value only, never row IDs | `Backpropagation.lean` | `backprop_preserves_ids` | by-construction-witness |
+| The bonus falls with a node's own visits from one visit on | `Uct.lean` | `bonus_falls_with_own_visits` | proved-in-abstract-model |
+| The bonus rises with the parent's visits from two on | `Uct.lean` | `bonus_rises_with_parent_visits` | proved-in-abstract-model |
+| The root's bonus rises from two visits to three | `Uct.lean` | `the_root_bonus_rises_from_two_visits_to_three` | proved-in-abstract-model |
+| The selected row is eligible and no eligible row outranks it | `Uct.lean` | `select_is_eligible`, `select_is_maximal` | proved-in-abstract-model |
+| A unique best unexpanded candidate is the only winner | `Convergence.lean` | `a_unique_best_leaf_is_the_only_winner` | proved-in-abstract-model |
+| The search can expand its best candidate and converge past it | `Convergence.lean` | `the_search_expands_its_best_candidate_then_converges_past_it` | proved-in-abstract-model |
 
-Two requirements stay `specified-not-modeled`: UCT-bonus monotonicity (global
-argmax, visit-count plateaus, and root self-parenting defeat a naive
-self-antitonic claim) and production-search convergence. A different textbook
-model would not be evidence about Kinu.
+The bonus order is exact: for W > 0, `W·√(ln M₁ / N₁) < W·√(ln M₂ / N₂)` exactly
+when `M₁^N₂ < M₂^N₁` (`bonus_order_is_power_order`), so every monotonicity claim
+is about natural powers. `converge` ranks by `value`, a subtree mean, and
+returns the winner's own proposal. Expanding a candidate into weaker
+refinements lowers its mean, so the search does not in general converge on its
+best evaluated candidate. It does when refinements never score below their
+parent (`the_winner_is_optimal_when_refinements_never_score_worse`).

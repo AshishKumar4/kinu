@@ -18,16 +18,16 @@ evidence.
 
 | Area | Theorems | What is modeled | Boundary |
 |------|---------:|-----------------|----------|
-| Exploration | 251 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds | Two modules are conditional by their own headers: the descriptor partition depends on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation, not a bound |
-| Storage | 70 | index/list properties, byte-chunk reassembly, a list-backed filesystem, the SQLite filesystem's own correctness obligations, snapshot-chain attach, tick, rebase, generation and crash-loss cost, and read-only block-layer composition | SQLite tokenization, ranking, concurrency and table-to-model correspondence remain external evidence obligations. Every chain independence claim is checked against a cost definition, not against the algorithm |
+| Exploration | 265 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds, the records store under concurrent runs, the verifier counterfactual, eventual improvement under a discrimination floor | Two modules are conditional by their own headers: the descriptor partition depends on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation, not a bound. `Improvement.lean` models the engine's rounds, not its code |
+| Storage | 77 | index/list properties, byte-chunk reassembly, a list-backed filesystem, the SQLite filesystem's own correctness obligations, snapshot-chain attach, tick, rebase, generation and crash-loss cost, read-only block-layer composition, and the wall-clock loss window of a periodic sync | SQLite tokenization, ranking, concurrency and table-to-model correspondence remain external evidence obligations. Every chain independence claim is checked against a cost definition, not against the algorithm. Alarm lateness and tick duration are parameters, not measurements |
+| MCTS | 36 | the UCT bonus order and the selection argmax, convergence over the tree the search leaves, exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite scores and backpropagates in IEEE-754 `REAL` values, and the storage-isolation transitions are maintained by hand |
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale against the current provider and the eight tools in `BUILTIN_TOOLS` |
-| MCTS | 11 | exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite backpropagation uses IEEE-754 `REAL` values, and transition postconditions are maintained by hand |
 | Safety | 6 | the shape of operations constructible from modeled provider names | These are constructor witnesses, not a proof of the deployed sandbox boundary |
 
-Measured 2026-09-22: `node lean/check-traceability.mjs --list-declarations`
-reports 396 named declarations, and the traceability map enrolls all 396: 322
+Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
+reports 442 named declarations, and the traceability map enrolls all 442: 368
 under `proved-in-abstract-model` requirements and 74 under
 `by-construction-witness` requirements.
 
@@ -39,10 +39,9 @@ Near-definitional statements (nonnegativity of a `Nat` EMA score; a constructor
 that never produces `SQLWrite`) count as witnesses. They are not deep safety
 proofs.
 
-By requirement, over 47: 29 `proved-in-abstract-model`, 12
-`by-construction-witness`, 5 `specified-not-modeled`, 1
-`trusted-model-assumption`. The last two statuses appear only in this total,
-because those six requirements claim no theorem.
+By requirement, over 48: 35 `proved-in-abstract-model`, 12
+`by-construction-witness`, 1 `trusted-model-assumption`. The last status appears
+only in this total, because that requirement claims no theorem.
 
 ## Statuses
 
@@ -58,15 +57,16 @@ Each requirement has exactly one:
 - `specified-not-modeled`: the property is tracked, but no Lean model or
   theorem exists.
 
-The five `specified-not-modeled` requirements are UCT-score monotonicity as
-implemented (`PR-MCTS-004`), production search convergence (`PR-MCTS-005`), the
-verifier-discrimination counterfactual (`PR-DISCRIM-003`), the publication seal
-under two concurrent runs (`PR-PUBLISH-004`), and eventual improvement under a
-fallible verifier (`PR-EXPL-002`). The first two wait for a settled production
-selection algorithm; proving another textbook algorithm would say nothing about
-Kinu. The other three lack, in order, a verifier semantics, a concurrent step
-relation and a candidate-quality distribution. Each entry says so in its
-`remainingEvidence`.
+No requirement is `specified-not-modeled`. The five that were, and where each
+is now proved:
+
+| Requirement | Module | What the model settled |
+|---|---|---|
+| `PR-MCTS-004`, UCT bonus monotonicity | `MCTS/Uct.lean` | The bonus order is the order of natural powers. It falls with a node's own visits and rises with its parent's, off two plateaus. At the root it rises from two visits to three (`the_root_bonus_rises_from_two_visits_to_three`) |
+| `PR-MCTS-005`, search convergence | `MCTS/Convergence.lean` | A unique best unexpanded candidate always wins. The shipped search expands its best candidate and can then converge on a worse sibling (`the_search_expands_its_best_candidate_then_converges_past_it`). With refinements that never score worse, the winner's reward is the best and stabilizes |
+| `PR-DISCRIM-003`, the verifier counterfactual | `Exploration/Counterfactual.lean` | B1 implies the counterfactual for a deterministic verifier and not for a nondeterministic one (`b1_passes_input_blind_noise`) |
+| `PR-PUBLISH-004`, the seal under concurrent runs | `Exploration/Concurrent.lean` | The best never falls under any interleaving. The seal is per run, so one run's breach leaves a concurrent run writing (`a_breach_in_one_run_does_not_seal_another`) |
+| `PR-EXPL-002`, eventual improvement | `Exploration/Improvement.lean` | With a per-round improvement floor `a/b`, `n` rounds without gain have probability at most `(1 - a/b)ⁿ`. The engine has no gain stop to report `gain-decayed` |
 
 ## Axiom boundary
 
