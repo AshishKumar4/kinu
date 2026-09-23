@@ -39,7 +39,9 @@ import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
-import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
+import {
+  CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
+} from './ladder-cache';
 import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -186,6 +188,12 @@ const AMBIENT_BY_NAME: Inputs = {
     ...Object.values(LIVE_MODEL_ENV).flat(), 'KINU_EVAL_LIVE', 'KINU_EVAL_BACKEND',
   ],
 };
+
+/** A row that builds the client with vite: vite reads the client graph by
+ *  path and Tailwind scans the tree for class names, so every tracked file is
+ *  an input. Measured by `--audit-closure` 2026-09-23: React runtime identity
+ *  opened 1,319 tracked files off its module graph. */
+const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
@@ -1155,7 +1163,9 @@ export const LADDER: readonly Gate[] = [
       + 'equality with the gate that runs it.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens hundreds of
     // tracked sources by path (it scans the tree), so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true },
+    // `mutation-exploration-policy.test.ts` imports mutant copies of core
+    // sources, written outside the tree, by computed specifier.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/'] },
   },
   {
     run: 'bun run test:spine',
@@ -1227,7 +1237,9 @@ export const LADDER: readonly Gate[] = [
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
       + 'whole files instead of the members they named because this was untested.',
     blind: 'the suites that use it.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23: git runs in the tree and reads
+    // every `.gitignore` in it, beside `wrangler.jsonc` and `.mailmap`.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     // Measured 2026-08-22: 6.43s, four isolated workers. Re-measured 2026-09-05 on the
@@ -1329,7 +1341,8 @@ export const LADDER: readonly Gate[] = [
       + '`node --check`s this package\'s syntax, so the suite is the only thing that '
       + 'reads it.',
     blind: 'the pairing and transport it talks to.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23: git in the root reads these two.
+    inputs: { ...AMBIENT_BY_NAME, reads: ['.gitattributes', '.gitignore'] },
   },
   {
     run: 'bun scripts/tracing-gate.ts',
@@ -1478,7 +1491,8 @@ export const LADDER: readonly Gate[] = [
       + 'scripts/eval-triage.verdicts.json is right. A verdict is a written argument about a '
       + 'trajectory, so nothing here can check one; what is checked is that a stale verdict '
       + 'and an unverified group both print.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23.
+    inputs: { ...AMBIENT_BY_NAME, reads: ['tests/eval/corpus/seed.jsonl'] },
   },
   {
     // The COMMAND deploy.sh runs, spelled identically. Stopping at the
@@ -1567,7 +1581,7 @@ export const LADDER: readonly Gate[] = [
       + 'over a locally built bundle — never a deployed session, a real OAuth flow or a '
       + 'live model — and nothing compares pixels. The diagnostics drive costs nothing '
       + 'measurable: 55.8s before and 55.6s after for this suite, 2026-09-01.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts',
@@ -1662,7 +1676,7 @@ export const LADDER: readonly Gate[] = [
       + 'memory after read faults. Those run over a local browser and a locally built bundle: '
       + 'a stale edge asset, a real network stall and whether a report reaches a deployed '
       + 'sink are outside it, and nothing compares pixels.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
@@ -1687,7 +1701,7 @@ export const LADDER: readonly Gate[] = [
       + 'The old product name is not grepped here at all: that gate is '
       + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
       + 'documents rather than the rendered page.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/react-runtime-identity.test.ts',
@@ -1705,7 +1719,7 @@ export const LADDER: readonly Gate[] = [
       + 'and to every source-reading instrument here.',
     blind: 'the locally built artifact, not the object the edge serves. It cannot see a '
       + 'CDN serving an older bundle, and it says nothing about render correctness.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/nested-container-resolution.test.ts',
@@ -1750,7 +1764,7 @@ export const LADDER: readonly Gate[] = [
       + '— the refused run, the named preset, the fan-in composition — is proven to mount '
       + 'by `gate:computed-style` and measured by nothing. Chrome cost keeps it out of '
       + 'the commit tier, so a geometry regression reaches a branch before it is caught.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/chat-scroll.test.ts',
@@ -1776,7 +1790,7 @@ export const LADDER: readonly Gate[] = [
       + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun run layergate',
@@ -1786,7 +1800,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers.',
     blind: '`tool-construction`, declared and measured at 0/0 — and all three tool-surface '
       + 'defects live exactly there.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', reads: [] },
   },
   {
     run: 'bun run layergate --matrix',
@@ -1796,7 +1810,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a layer whose probes cannot localise a fault to it — cross-talk. Without '
       + 'this a layer at 100% may be scoring another layer\'s behaviour.',
     blind: 'a layer with no probes, which scores null and localises nothing.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', reads: [] },
   },
   {
     run: 'bun run gate:capability-parity',
@@ -3236,17 +3250,28 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  // THE CLOSURE AUDIT. Every cacheable gate in the tier runs once under
-  // strace, and every tree file it opened that its closure does not hold is
+  // THE CLOSURE AUDIT. Every cacheable gate in the tier — or the one row
+  // `--gate` names — runs once under strace in the environment the ladder
+  // gives it, and every tree file it opened that its closure does not hold is
   // a finding. This is the measurement behind a `reads` declaration, and the
   // red direction of the cache's soundness: a closure that errs narrow is a
   // stale green, and this is the one place that can see it.
   if (process.argv.includes('--audit-closure')) {
     const flag = process.argv.find((argument) => argument.startsWith('--tier='));
     const tier = TIERS.find((candidate) => candidate === flag?.slice('--tier='.length)) ?? 'push';
+    const named = process.argv.indexOf('--gate');
     const repo = repoAt(root, (run, files) => claims(run, files));
     const tracked = trackedTestFiles();
-    const gates = gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+
+    const gates = named === -1
+      ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+      : LADDER.filter((gate) => gate.run === process.argv[named + 1]);
+
+    if (gates.length === 0) {
+      console.error('ladder --audit-closure --gate: expected an exact command from the declared gate table');
+      process.exit(2);
+    }
+
     let holes = 0;
     let audited = 0;
 
@@ -3258,7 +3283,7 @@ if (import.meta.main) {
         continue;
       }
 
-      const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure);
+      const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure, gateEnvironment(closure));
       audited += 1;
 
       if (audit.undeclared.length === 0) {
@@ -3272,7 +3297,10 @@ if (import.meta.main) {
       for (const file of audit.undeclared) console.error(`        ${file}`);
     }
 
-    console.log(`\naudit-closure --tier=${tier}: ${String(audited)} gate(s) audited, ${String(holes)} with undeclared reads`);
+    console.log(
+      `\naudit-closure ${named === -1 ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
+      + `${String(holes)} with undeclared reads`,
+    );
     process.exit(holes === 0 ? 0 : 1);
   }
 
@@ -3383,7 +3411,7 @@ if (import.meta.main) {
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
@@ -3424,7 +3452,9 @@ if (import.meta.main) {
   // else does, and there is no per-gate switch. A row declared `live`, or
   // whose closure cannot be computed, runs every time and the reason is
   // printed beside it, so an uncached gate is a visible fact rather than a
-  // quiet one.
+  // quiet one. A derived gate runs under exactly the environment its key
+  // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
+  // taken in one environment.
   const caching = !process.argv.includes('--no-cache');
   const repo = repoAt(root, (run, files) => claims(run, files));
   const tools = toolVersions(root);
@@ -3452,10 +3482,15 @@ if (import.meta.main) {
       console.log(`      never cached: ${plan.closure.why}`);
       uncached.push(`${gate.run} — ${plan.closure.why}`);
     } else if (plan?.kind === 'miss') {
-      console.log(`      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure)`);
+      console.log(
+        `      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure, `
+        + `${String(gateEnvNames(plan.closure).length)} environment names given)`,
+      );
 
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }
+
+    const closure = plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo);
 
     // Under the row's own deadline: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -3463,6 +3498,7 @@ if (import.meta.main) {
     const outcome = await runUnderDeadline({
       argv: runnableArgv(gate.run, tracked), cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
+      env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
     });
 
     const { seconds } = outcome;

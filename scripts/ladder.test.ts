@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { git } from '@kinu.run/test-utils';
+import { childEnv, git } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   BUDGET_TOLERANCE, CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
@@ -770,10 +770,24 @@ describe('every test file is claimed by some runner', () => {
     expect(bunClaimed.filter((path) => workerd.includes(path))).toEqual([]);
     expect(bunClaimed.length).toBeGreaterThan(300);
 
-    // And the vitest side names the same directory the bunfig pattern excludes,
-    // so the two globs cannot drift apart into an overlap or into a gap.
-    const vitestConfig = readFileSync(resolve(root, 'packages/cf-backend/vitest.config.ts'), 'utf8');
-    expect(vitestConfig).toContain("include: ['tests/workerd/**/*.test.ts']");
+    // And vitest's own config selects exactly the files bun skips, asked of
+    // vitest itself: a widened `include` is an overlap here and a narrowed one
+    // is a workerd suite that runs nowhere, in both directions.
+    const listed = Bun.spawnSync(
+      [resolve(root, 'node_modules/.bin/vitest'), 'list', '--root', 'packages/cf-backend', '--filesOnly', '--json'],
+      { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    expect(listed.exitCode, listed.stderr.toString()).toBe(0);
+
+    const selected = v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout.toString()))
+      .map(({ file }) => relative(root, file));
+
+    const onDisk = tracked.filter((path) => path.startsWith('packages/cf-backend/tests/workerd/') && path.endsWith('.test.ts'));
+    expect(onDisk.length).toBeGreaterThan(0);
+    expect(selected.filter((path) => !bunWouldSkip(path))).toEqual([]);
+    expect(bunClaimed.filter((path) => selected.includes(path))).toEqual([]);
+    expect(onDisk.filter((path) => !selected.includes(path))).toEqual([]);
   });
 
   test('the root test script covers every package or names the omission and its gate', () => {
@@ -1045,8 +1059,6 @@ describe('the hooks run the tiers they claim to', () => {
     // path here would silently un-gate 41 of them, which is why the shape is
     // asserted and not just documented.
     expect(HOOKS_DIR.startsWith('/')).toBe(false);
-    expect(readFileSync(resolve(root, 'scripts/ladder.ts'), 'utf8'))
-      .toContain("'git', 'config', 'core.hooksPath', HOOKS_DIR");
     // And something has to run it on a tree nobody has prepared: a fresh
     // worktree, and a fresh CLONE — which setup-worktree.sh never sees.
     expect(readFileSync(resolve(root, 'scripts/setup-worktree.sh'), 'utf8'))

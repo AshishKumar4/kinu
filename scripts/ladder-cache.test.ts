@@ -9,10 +9,13 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import * as v from 'valibot';
 import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { claims, LADDER, gatesFor } from './ladder';
 import { auditClosure } from './ladder-audit';
-import { CACHE_BLIND_SPOTS, keyFor, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
+import {
+  CACHE_BLIND_SPOTS, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, storeAt, toolVersions,
+} from './ladder-cache';
 import type { Plan, Store, ToolVersions } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs, Repo } from './ladder-closure';
@@ -72,7 +75,8 @@ function runGate(fx: Fixture, run: string, inputs: Inputs = DERIVED, tools = fx.
   const plan = planGate({ run, inputs, repo, tools, store: fx.store });
 
   if (plan.kind === 'hit') return { plan, refused: undefined, exitCode: 0 };
-  const proc = Bun.spawnSync(run.split(' '), { cwd: fx.root, stdout: 'pipe', stderr: 'pipe' });
+  const env = plan.kind === 'miss' ? gateEnvironment(plan.closure) : undefined;
+  const proc = Bun.spawnSync(run.split(' '), { cwd: fx.root, env, stdout: 'pipe', stderr: 'pipe' });
 
   if (plan.kind === 'uncacheable' || proc.exitCode !== 0) return { plan, refused: undefined, exitCode: proc.exitCode };
   const refused = recordGreen(plan, { run, inputs, repo: fx.repo(), tools, store: fx.store }, { seconds: 0.1, revision: 'fixture' });
@@ -157,14 +161,12 @@ describe('ladder-cache — red in every direction it claims', () => {
     const fx = fixture({
       'scripts/shell.sh': 'exit 0',
       'scripts/dyn.ts': `const name = 'shared';\nexport const dyn = () => import(\`./\${name}\`);\n${GREEN}`,
-      'scripts/whole.ts': `export const whole = { ...process.env };\n${GREEN}`,
       'scripts/reads.ts': `import { readFileSync } from 'node:fs';\nexport const r = readFileSync('package.json');\n${GREEN}`,
     });
 
     for (const [run, inputs, why] of [
       ['bash scripts/shell.sh', DERIVED, 'shell gate'],
       ['bun scripts/dyn.ts', DERIVED, 'computed specifier'],
-      ['bun scripts/whole.ts', DERIVED, 'reads the environment whole'],
       ['bun scripts/reads.ts', { kind: 'derived' }, 'declares no `reads`'],
     ] as const) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -177,6 +179,20 @@ describe('ladder-cache — red in every direction it claims', () => {
     }
 
     expect(entries(fx.store)).toEqual([]);
+  });
+
+  test('a result recorded in one checkout is never reused in another', () => {
+    // Byte-identical trees at two roots: the second is a MISS, because the
+    // gate runs in its checkout and an absolute path, an untracked file or a
+    // linked node_modules is that checkout's and not the other's.
+    const files = { 'scripts/a.ts': `export const a = 1;\n${GREEN}` };
+    const recorded = fixture(files);
+    expect(runGate(recorded, 'bun scripts/a.ts').refused).toBeUndefined();
+    expect(runGate(recorded, 'bun scripts/a.ts').plan.kind).toBe('hit');
+
+    const other = fixture(files);
+    const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo: other.repo(), tools: other.tools, store: recorded.store });
+    expect(plan.kind).toBe('miss');
   });
 
   test('a red result leaves no cache entry, and the next run is still a miss', () => {
@@ -213,7 +229,7 @@ describe('ladder-cache — red in every direction it claims', () => {
     }
   });
 
-  test('a declared environment value enters the key, and an undeclared one does not', () => {
+  test('a keyed environment value enters the key, and a name the gate is not given does not', () => {
     const fx = fixture({ 'scripts/a.ts': `export const a = process.env.ALPHA;\n${GREEN}` });
     const repo = fx.repo();
     const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
@@ -225,14 +241,48 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ ALPHA: 'x' }) })).not.toBe(base);
     expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ ALPHA: '' }) })).not.toBe(base);
     expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ UNRELATED: 'x' }) })).toBe(base);
+    // The base names every gate is given are keyed like the graph's own.
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ CI: 'true' }) })).not.toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ PATH: '/opt/other' }) })).not.toBe(base);
 
     // A declared name the graph never reads is a key input once declared:
     // with it, a value for BETA moves the key away from the base; without it,
     // the same value leaves the base untouched.
     const declared = { ...plan.closure, env: ['ALPHA', 'BETA'] };
     expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).toBe(base);
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({}) })).not.toBe(base);
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).not.toBe(base);
+    expect(keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).not.toBe(
+      keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({}) }),
+    );
+  });
+
+  test('a name the key does not hash never reaches the gate, however the gate reads the environment', () => {
+    // The planted input: a verdict that flips on an environment name the
+    // walker cannot see, read through a computed key and by enumeration.
+    // Handed the ambient environment, the planted value turns the gate red
+    // under an UNCHANGED key; handed its gate environment, the gate cannot
+    // see the name at all, so no value of it can split two runs of one key.
+    const fx = fixture({
+      'scripts/planted.ts': [
+        "const name = ['PLAN', 'TED'].join('');",
+        'console.log(JSON.stringify(Object.keys(process.env).sort()));',
+        'process.exit(process.env[name] === undefined ? 0 : 1);',
+      ].join('\n'),
+    });
+
+    const plan = planGate({ run: 'bun scripts/planted.ts', inputs: DERIVED, repo: fx.repo(), tools: fx.tools, store: fx.store });
+
+    if (plan.kind === 'uncacheable') throw new Error(plan.closure.why);
+    const ambient = Object.assign(childEnv(), { PLANTED: 'x' });
+    const reader = (name: string) => ambient[name];
+    const run = (env: Record<string, string | undefined>) => Bun.spawnSync(['bun', 'scripts/planted.ts'], { cwd: fx.root, env, stdout: 'pipe' });
+
+    expect(run(ambient).exitCode).toBe(1);
+    const gated = run(gateEnvironment(plan.closure, reader));
+    expect(gated.exitCode).toBe(0);
+    const seen = v.parse(v.array(v.string()), JSON.parse(gated.stdout.toString()));
+    expect(seen.filter((name) => !gateEnvNames(plan.closure).includes(name))).toEqual([]);
+    expect(keyFor({ run: 'bun scripts/planted.ts', closure: plan.closure, tools: fx.tools, repo: fx.repo(), env: reader }))
+      .toBe(keyFor({ run: 'bun scripts/planted.ts', closure: plan.closure, tools: fx.tools, repo: fx.repo(), env: (name) => (name === 'PLANTED' ? undefined : reader(name)) }));
   });
 
   test('a closure that changes while the gate runs is not recorded', () => {
@@ -276,11 +326,11 @@ describe('ladder-cache — the audit sees what the walker cannot', () => {
     const undeclared = deriveClosure('bun scripts/a.ts', { kind: 'derived', reads: [] }, repo);
 
     if (undeclared.kind !== 'derived') throw new Error(undeclared.why);
-    expect(auditClosure(argv, fx.root, undeclared).undeclared).toEqual(['fixtures/data.txt']);
+    expect(auditClosure(argv, fx.root, undeclared, gateEnvironment(undeclared)).undeclared).toEqual(['fixtures/data.txt']);
     const declared = deriveClosure('bun scripts/a.ts', { kind: 'derived', reads: ['fixtures/data.txt'] }, repo);
 
     if (declared.kind !== 'derived') throw new Error(declared.why);
-    const audit = auditClosure(argv, fx.root, declared);
+    const audit = auditClosure(argv, fx.root, declared, gateEnvironment(declared));
     expect(audit.undeclared).toEqual([]);
     expect(audit.covered).toBeGreaterThan(0);
   });

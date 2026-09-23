@@ -26,7 +26,11 @@
  *     closure file; `bun.lock` and `patches/` standing in for `node_modules`.
  *   - The row's declared `reads`, expanded against the tracked corpus, and
  *     the row's declared `env` names beside every literal `process.env.NAME`
- *     the graph carries.
+ *     the graph carries. Those names, and the base names in
+ *     `ladder-cache.ts`, are the whole environment the runner gives a
+ *     derived gate, so a read of any other name, however it is spelled,
+ *     sees nothing: enumerating `process.env`, reading it by a computed key
+ *     and handing it to a child are all bounded by what the key hashes.
  *
  * What makes a closure UNCOMPUTABLE, and therefore the gate never cached:
  *   - a shell gate or a word form this resolver does not understand;
@@ -51,7 +55,8 @@ import { moduleEdges, readAliases, readWorkspace, resolveSpecifier, walkModules 
 import type { Alias, PackageDir } from './import-graph';
 import { enumerateRepository, isManifest, isParseable, isTypescriptConfig, readRepositoryFile } from './sources';
 import type { Node } from 'oxc-parser';
-import { literalString, parse, walk } from './syntax';
+import { parseJsonc } from './jsonc';
+import { collapsePath, literalString, parse, walk } from './syntax';
 import type { SyntaxNode } from './syntax';
 
 /** What a ladder row says about its inputs. Every row declares one. */
@@ -63,7 +68,8 @@ export type Inputs =
      *  empty list is a declaration too: nothing beyond the graph. */
     readonly reads?: readonly string[];
     /** Environment names whose values change the verdict, beyond the literal
-     *  `process.env.NAME` reads the graph carries. */
+     *  `process.env.NAME` reads the graph carries. The runner passes a
+     *  derived gate these names and no undeclared one. */
     readonly env?: readonly string[];
     /** Tracked paths a computed `import()` or `require()` in the graph can
      *  load. A graph with such a site and no declaration is never cached; a
@@ -381,6 +387,13 @@ interface Form {
   readonly corpus: boolean;
 }
 
+/** The ladder's own deadline wrapper, as a package script spells it:
+ *  `bun scripts/ladder.ts --run <command…>` runs the command, so the
+ *  command's closure is the gate's, beside the wrapper's own graph. */
+const RUNNER_SCRIPT = 'scripts/ladder.ts';
+
+const RUNNER_FLAG = '--run';
+
 /** One command's entry files, or why it has none. Recurses through `bun run`. */
 function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputable {
   if (depth > 4) return { kind: 'uncomputable', why: `${run}: package scripts nest deeper than four levels` };
@@ -423,6 +436,14 @@ function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputabl
   }
 
   if ((first === 'bun' || first === 'node') && second !== undefined && isParseable(second) && !second.startsWith('-')) {
+    if (second === RUNNER_SCRIPT && words[2] === RUNNER_FLAG) {
+      const inner = resolveForm(words.slice(3).join(' '), repo, depth + 1);
+
+      if ('kind' in inner) return inner;
+
+      return { entries: [second, ...inner.entries], reads: inner.reads, corpus: inner.corpus };
+    }
+
     return { entries: [second], reads: [], corpus: false };
   }
 
@@ -471,6 +492,33 @@ function configsOnPath(file: string, universe: ReadonlySet<string>): string[] {
   return out;
 }
 
+const TsconfigExtends = v.object({ extends: v.optional(v.union([v.string(), v.array(v.string())])) });
+
+/** The configs a TypeScript config extends, transitively, as the tree holds
+ *  them: bun and the compiler read the whole chain, and a config on the path
+ *  whose base is not an input is a key that misses the compiler options.
+ *  A package `extends` resolves into `node_modules`, which the lock stands for. */
+function extendedConfigs(config: string, repo: Repo, universe: ReadonlySet<string>): string[] {
+  const chain: string[] = [];
+  const pending = [config];
+
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const parents = parseJsonc(repo.read(next), TsconfigExtends, next).extends;
+
+    for (const parent of parents === undefined ? [] : [parents].flat()) {
+      if (!parent.startsWith('.')) continue;
+      const base = collapsePath(`${next.slice(0, next.lastIndexOf('/') + 1)}${parent}`);
+      const target = [base, `${base}.json`].find((candidate) => universe.has(candidate));
+
+      if (target === undefined || chain.includes(target)) continue;
+      chain.push(target);
+      pending.push(target);
+    }
+  }
+
+  return chain;
+}
+
 /** The declaration a derived row carries, with every list present. */
 type Declared = Extract<Inputs, { kind: 'derived' }>;
 
@@ -478,12 +526,13 @@ type Declared = Extract<Inputs, { kind: 'derived' }>;
  * Why a walked graph cannot be cached under its declaration, or nothing.
  *
  * Each rule is fail-closed: the closure is a proof that nothing the gate can
- * read has changed, and a graph that reads the environment whole, imports by
- * a computed specifier, reads through a computed key, or opens the tree by an
- * undeclared path has inputs no hash over the module graph stands for. A path
- * read on a CORPUS gate is bounded by the corpus — every tracked file is
- * already in the closure, and what it opens outside the tree is the cache's
- * stated blind spot — so only a non-corpus gate must declare one.
+ * read has changed, and a graph that imports by a computed specifier or opens
+ * the tree by an undeclared path has inputs no hash over the module graph
+ * stands for. A path read on a CORPUS gate is bounded by the corpus — every
+ * tracked file is already in the closure, and what it opens outside the tree
+ * is the cache's stated blind spot — so only a non-corpus gate must declare
+ * one. The environment is not a rule here: the runner hands a derived gate
+ * only the names its key hashes (`gateEnvironment` in `ladder-cache.ts`).
  */
 function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): string | undefined {
   const [computedImport] = walked.computedImports;
@@ -494,19 +543,6 @@ function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): 
 
   if (computedImport === undefined && inputs.imports !== undefined) {
     return `${run}: the row declares \`imports\` and the graph has no computed import — a stale declaration`;
-  }
-
-  const [enumerated] = walked.envEnumerated;
-
-  if (enumerated !== undefined) {
-    return `${run}: ${enumerated} reads the environment whole (spread, enumerated or passed as a value), `
-      + `so no list of names bounds what the gate can see (${String(walked.envEnumerated.length)} such file(s))`;
-  }
-
-  const [computedEnv] = walked.envComputed;
-
-  if (computedEnv !== undefined && inputs.env === undefined) {
-    return `${run}: ${computedEnv} reads the environment through a computed key and the row declares no \`env\``;
   }
 
   const [pathReader] = walked.readsByPath;
@@ -538,6 +574,7 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
 
   if (refused !== undefined) return { kind: 'uncomputable', why: refused };
   const [computedImport] = walked.computedImports;
+  const [enumeratedEnv] = walked.envEnumerated;
   const [computedEnv] = walked.envComputed;
   const [pathReader] = walked.readsByPath;
   const notes: string[] = [];
@@ -581,12 +618,17 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
       + ' — checked by --audit-closure, not by the walker');
   }
 
-  if (computedEnv !== undefined) {
-    notes.push(`environment read through a computed key in ${walked.envComputed.join(', ')}; the row declares `
-      + `env [${(inputs.env ?? []).join(', ')}] — only literal and declared names enter the key`);
+  if (enumeratedEnv !== undefined || computedEnv !== undefined) {
+    const readers = [...new Set([...walked.envEnumerated, ...walked.envComputed])];
+    notes.push(`${String(readers.length)} file(s) read the environment whole or by a computed key (${readers.join(', ')}); `
+      + 'the gate is run with only the names its key hashes, so any other name reads as unset');
   }
 
   for (const file of Array.from(files)) for (const config of configsOnPath(file, universe)) files.add(config);
+
+  for (const file of Array.from(files)) {
+    if (isTypescriptConfig(file)) for (const base of extendedConfigs(file, repo, universe)) files.add(base);
+  }
 
   for (const file of dependencyInputs(repo)) files.add(file);
   const env = new Set<string>([...walked.env, ...(inputs.env ?? [])]);

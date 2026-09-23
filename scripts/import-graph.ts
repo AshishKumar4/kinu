@@ -242,10 +242,15 @@ export interface ResolutionRequest {
   readonly strict?: boolean;
 }
 
+/** A declaration file answers a type-only import the way TypeScript resolves
+ *  one (`./env` → `./env.d.ts`); no runtime import can name one, so it comes
+ *  after every source candidate. */
+const DECLARATION_CANDIDATE = '.d.ts';
+
 function probe(base: string, request: ResolutionRequest): Resolution {
   const { from, specifier, universe, strict = false } = request;
   const collapsed = collapsePath(base);
-  const candidate = IMPORT_CANDIDATES.map((suffix) => collapsed + suffix).find((path) => universe.has(path));
+  const candidate = [...IMPORT_CANDIDATES, DECLARATION_CANDIDATE].map((suffix) => collapsed + suffix).find((path) => universe.has(path));
 
   if (candidate !== undefined) return found(candidate);
 
