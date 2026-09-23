@@ -51,10 +51,19 @@ export function isTierId(value: string): value is TierId {
   return v.safeParse(TierIdSchema, value).success;
 }
 
-const TierAssignmentSchema = v.strictObject({
-  model: v.pipe(v.string(), v.minLength(1)),
-  reasoningEffort: v.optional(v.picklist(REASONING_EFFORTS)),
-});
+const ModelSpecSchema = v.pipe(v.string(), v.minLength(1));
+
+const TierAssignmentSchema = v.pipe(
+  v.strictObject({
+    model: ModelSpecSchema,
+    reasoningEffort: v.optional(v.picklist(REASONING_EFFORTS)),
+    fallbacks: v.optional(v.pipe(v.array(ModelSpecSchema), v.minLength(1))),
+  }),
+  v.check(
+    (tier) => new Set([tier.model, ...(tier.fallbacks ?? [])]).size === 1 + (tier.fallbacks?.length ?? 0),
+    'a tier names each model once: a fallback repeats neither the tier model nor another fallback',
+  ),
+);
 
 const TierAssignmentsSchema = v.pipe(
   v.objectWithRest({ default: TierAssignmentSchema }, TierAssignmentSchema),

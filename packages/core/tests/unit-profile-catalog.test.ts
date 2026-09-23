@@ -72,6 +72,16 @@ describe('catalog validation', () => {
       .toThrow(/model/);
   });
 
+  test('a tier names its fallbacks in order, each model once, and never an empty list', () => {
+    const chained = { ...VALID_CATALOG, tiers: { default: { model: 'm-default', fallbacks: ['m-backup', 'm-last'] } } };
+    expect(validateProfileCatalog({ value: chained }).tiers.default.fallbacks).toEqual(['m-backup', 'm-last']);
+
+    for (const fallbacks of [['m-default'], ['m-backup', 'm-backup'], [], ['']]) {
+      expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, tiers: { default: { model: 'm-default', fallbacks } } } }))
+        .toThrow(/invalid profile catalog/);
+    }
+  });
+
   test('an owner-added tier is a tier: roles may name it, and a role naming one the catalog lacks is refused', () => {
     // Tiers are open like roles; a role naming an unconfigured tier is refused at write, not aliased to
     // default.

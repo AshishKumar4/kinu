@@ -1249,6 +1249,13 @@ function ChatScene({
       return;
     }
 
+    if (event.event.type === 'model_fallback' && event.event.message !== undefined) {
+      sealSegment();
+      addMessage({ role: 'system', content: event.event.message });
+
+      return;
+    }
+
     if (!isBranchStatusEvent(event.event)) return;
     const branchStatus = event.event;
     setBranchTasks((prev) => {
@@ -1262,7 +1269,7 @@ function ChatScene({
 
     // The settle/error line is the takes affordance; running state lives in the status bar.
     if (branchStatus.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(branchStatus) });
-  }, [addMessage, setBranchTasks]);
+  }, [addMessage, sealSegment, setBranchTasks]);
 
   const handleClientEvent = useCallback(async (event: AgentClientEvent) => {
     switch (event.type) {

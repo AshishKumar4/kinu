@@ -105,6 +105,12 @@ export type ResolveAgentTurnProfileInput = Omit<ResolveTurnProfileInput, 'roleId
   activeRoleId: string;
 };
 
+export interface TierRoute {
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort;
+  readonly fallbacks: readonly string[];
+}
+
 export interface ResolvedTurnProfile {
   readonly role: {
     readonly id: RoleId;
@@ -113,15 +119,13 @@ export interface ResolvedTurnProfile {
     readonly instructions: string;
   };
   readonly tier: {
-      readonly id: TierId;
+    readonly id: TierId;
     readonly source: TierSource;
     readonly model: string;
     readonly reasoningEffort: ReasoningEffort;
+    readonly fallbacks: readonly string[];
   };
-  readonly tiers: Readonly<Record<TierId, {
-    model: string;
-    reasoningEffort: ReasoningEffort;
-  }>>;
+  readonly tiers: Readonly<Record<TierId, TierRoute>>;
   readonly workMode: WorkMode;
   readonly skills: readonly string[];
   readonly allowedTools: readonly string[];
@@ -213,11 +217,13 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   // a mistyped model on a healthy provider fails at call time instead.
   const listingComplete = provider.unavailableProviders.length === 0;
 
-  const requireAvailable = (model: string, id: TierId): void => {
-    if (!listingComplete || provider.availableModels.includes(model)) return;
+  // Refused only when no model of the chain is listed.
+  const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): void => {
+    if (!listingComplete || [model, ...fallbacks].some((spec) => provider.availableModels.includes(spec))) return;
     throw new Error(
       `model ${JSON.stringify(model)} configured for the ${id} tier `
-      + `is unavailable on provider revision ${JSON.stringify(provider.revision)}; `
+      + `is unavailable on provider revision ${JSON.stringify(provider.revision)}`
+      + `${fallbacks.length > 0 ? ', as is each of its fallbacks' : ''}; `
       + 'configure a different model for the tier or pick another tier',
     );
   };
@@ -248,18 +254,19 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     assignment = envelope.catalog.tiers.default;
   }
 
-  requireAvailable(assignment.model, tierId);
+  const tierFallbacks = assignment.fallbacks ?? [];
+  requireAvailable(assignment.model, tierFallbacks, tierId);
 
   let model = assignment.model;
 
   if (input.workspaceModel !== undefined && input.workspaceModel !== null) {
-    requireAvailable(input.workspaceModel, tierId);
+    requireAvailable(input.workspaceModel, tierFallbacks, tierId);
     model = input.workspaceModel;
     source = 'workspace';
   }
 
   if (input.actorModel !== undefined && input.actorModel !== null) {
-    requireAvailable(input.actorModel, tierId);
+    requireAvailable(input.actorModel, tierFallbacks, tierId);
     model = input.actorModel;
     source = 'actor';
   }
@@ -276,18 +283,20 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   if (!defaultAssignment) throw new Error('profile catalog has no default tier assignment');
 
-  const tierSlot = (id: TierId): { model: string; reasoningEffort: ReasoningEffort } => {
+  const tierSlot = (id: TierId): TierRoute => {
     const slot = id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment);
-    requireAvailable(slot.model, id);
+    const fallbacks = slot.fallbacks ?? [];
+    requireAvailable(slot.model, fallbacks, id);
 
     return Object.freeze({
       model: slot.model,
       reasoningEffort: slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,
+      fallbacks: Object.freeze([...fallbacks]),
     });
   };
 
   const tierIds = tierIdsOf(envelope.catalog);
-  const tiers: Record<TierId, { model: string; reasoningEffort: ReasoningEffort }> = {};
+  const tiers: Record<TierId, TierRoute> = {};
 
   for (const id of tierIds) tiers[id] = tierSlot(id);
   Object.freeze(tiers);
@@ -304,6 +313,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       source,
       model,
       reasoningEffort: input.explicitEffort ?? assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,
+      fallbacks: Object.freeze(tierFallbacks.filter((spec) => spec !== model)),
     }),
     workMode,
     skills: Object.freeze(skills),

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-23",
-  "files": 2561,
-  "functions": 63328,
+  "files": 2562,
+  "functions": 63415,
   "ceiling": 108,
   "line": 33,
   "inventory": [
@@ -158,10 +158,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
-      "complexity": 36
-    },
-    {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 36
     },
@@ -218,6 +214,10 @@
       "complexity": 35
     },
     {
+      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
+      "complexity": 34
+    },
+    {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
       "complexity": 34
     },
@@ -255,10 +255,6 @@
     },
     {
       "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
-      "complexity": 33
-    },
-    {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 33
     },
     {

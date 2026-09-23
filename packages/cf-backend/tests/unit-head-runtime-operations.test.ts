@@ -79,7 +79,7 @@ function runtimeWith(text: string) {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });
 
-        return { model: mergeModel(text, calls), providerOptions: undefined };
+        return { model: mergeModel(text, calls), provider: 'mock', providerOptions: undefined };
       },
     },
     profile: async () => mergePolicyProfile(),

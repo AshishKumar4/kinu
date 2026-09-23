@@ -671,6 +671,7 @@ function activityDelta(event: RunEvent): Partial<CaseActivity> | undefined {
     case 'head_split':
     case 'memory_write':
     case 'model_call':
+    case 'model_fallback':
     case 'model_operation':
     case 'profile_resolution':
     case 'provider_wait':

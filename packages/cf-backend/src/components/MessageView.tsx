@@ -6,7 +6,7 @@ import {
   ClockCounterClockwiseIcon, LightningIcon,
   ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
   TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
-  ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon,
+  ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon, ArrowsLeftRightIcon,
   ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
@@ -534,6 +534,16 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
   );
 }
 
+export function ModelFallbackRows({ notices }: { notices: readonly string[] }) {
+  return notices.map((notice, index) => (
+    <div key={`${String(index)}:${notice}`} className="flex justify-center animate-fade-in py-1">
+      <div className={SYSTEM_PILL} role="status">
+        <ArrowsLeftRightIcon size={13} className="p-warning" />
+        <span>{notice}</span>
+      </div>
+    </div>
+  ));
+}
 
 function SystemEventCard({ event, text, state }: {
   event: string; text: string; state: CardState;

@@ -92,6 +92,7 @@ export const RunEventSchema = v.variant('type', [
     waitMs: v.number(), attempt: v.number(),
     status: v.optional(v.number()),
     source: v.picklist(['header', 'backoff', 'cooldown']) }),
+  v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),

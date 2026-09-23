@@ -416,7 +416,7 @@ export {
 // Chat engine
 export {
   runChat, INTERRUPTED_TURN, isRateLimitedTurnError,
-  type ChatEvent, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
+  type ChatEvent, type ChatFallback, type ChatOptions, type ChatToolOutput, type ObservedCall, type ObserveStream,
 } from './chat';
 
 // Extension seam (public plugin API)

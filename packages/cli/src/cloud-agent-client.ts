@@ -297,8 +297,13 @@ const BranchStatusEventSchema = v.variant('status', [
   }),
   v.object({
     type: v.literal('branch_status'), status: v.literal('error'), branchId: v.string(), task: v.string(),
-    message: v.optional(v.string()),
+    message: v.optional(v.string(), 'branch failed'),
   }),
+]);
+
+const BroadcastFrameSchema = v.union([
+  BranchStatusEventSchema,
+  v.object({ type: v.literal('model_fallback'), message: v.string() }),
 ]);
 
 export interface CloudAgentClientOptions {
@@ -918,10 +923,10 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    if (payload.type === 'branch_status') {
-      const branchStatus = parseBranchStatusEvent(payload);
+    const broadcast = v.safeParse(BroadcastFrameSchema, payload);
 
-      if (branchStatus) this.emit({ type: 'broadcast', event: branchStatus });
+    if (broadcast.success) {
+      this.emit({ type: 'broadcast', event: broadcast.output });
 
       return;
     }
@@ -1061,17 +1066,6 @@ export class CloudAgentClient implements AgentClient {
   private requestStreamResume(): void {
     this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_REQUEST }));
   }
-}
-
-function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null {
-  const result = v.safeParse(BranchStatusEventSchema, payload);
-
-  if (!result.success) return null;
-  const event = result.output;
-
-  if (event.status !== 'error') return event;
-
-  return { ...event, message: event.message ?? 'branch failed' };
 }
 
 function frameText(

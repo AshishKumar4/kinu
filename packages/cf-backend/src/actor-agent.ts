@@ -4022,6 +4022,12 @@ export abstract class ActorAgent extends Agent<Env> {
     }
 
     if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
+
+    liveTurn.fallbacks = assembled.profile.tier.fallbacks.map((spec) => ({
+      spec,
+      bind: () => this.ownedModelServices.resolveModelWithEffort(spec, assembled.profile.tier.reasoningEffort),
+    }));
+
     const runtime = this.rt;
     this.acc.composition.openTurn({ system: assembled.system, tools: assembled.tools });
 

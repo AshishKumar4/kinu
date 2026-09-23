@@ -524,7 +524,9 @@ export class ActorSession {
           case 'tool-result': this.recordToolResult(pending, event); break;
 
           // Reasoning is never the turn's answer.
-          case 'reasoning-delta': break;
+          case 'reasoning-delta':
+          case 'model-fallback':
+            break;
 
           case 'step-finish':
             steps += 1;

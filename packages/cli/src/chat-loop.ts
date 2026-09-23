@@ -695,6 +695,11 @@ function renderClientEvent({ event, agentName, status, getHeader, setHeader }: C
         console.log(`\n${renderPlanReview(event.event.plan)}\n`);
       }
 
+      if (event.event.type === 'model_fallback') {
+        status.clear();
+        console.log(`\n${DIM(event.event.message ?? '')}`);
+      }
+
       break;
     case 'turn-end':
     case 'run-event':

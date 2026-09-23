@@ -24,6 +24,7 @@ export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(
 export interface TierAssignment {
   model: string;
   reasoningEffort?: ReasoningEffort | undefined;
+  fallbacks?: readonly string[] | undefined;
 }
 
 export interface TierAssignments {

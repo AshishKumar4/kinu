@@ -321,6 +321,7 @@ const SocketMessageSchema = v.variant("type", [
     devices: v.array(v.object({ id: v.string(), label: v.string(), lastSeenAt: v.nullable(v.number()) })),
   }),
   v.object({ type: v.literal("device_available"), deviceId: v.string(), label: v.string() }),
+  v.object({ type: v.literal("model_fallback"), message: v.string() }),
   // Waiting on the provider (429/529 sleep, backoff, sibling cooldown), not thinking. `attempt`
   // is 0 when the wait precedes the first attempt.
   v.object({
@@ -856,6 +857,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   /** A connect clears it. */
   const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
+  const [modelFallbacks, setModelFallbacks] = useState<string[]>([]);
   // One read behind both the Work queue and the strip's accent badge, so they cannot disagree.
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
   // Unknown until the first read: an optimistic absence would flip the strip to Files first.
@@ -1025,7 +1027,11 @@ export function useKinu(target?: string | KinuActorAddress) {
   const sendLatch = useRef(newSendLatch());
 
   const startTurn = useCallback(
-    (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, begin),
+    (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, () => {
+      setModelFallbacks([]);
+
+      return begin();
+    }),
     [],
   );
 
@@ -1303,6 +1309,15 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     if (!agent) return;
 
+    // The server pushes the fact, not the rows; one re-read updates every open tab.
+    const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
+      try {
+        await refresh();
+      } catch (cause) {
+        diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
+      }
+    };
+
     const handler = async (event: MessageEvent) => {
       const msg = paneFrame(event.data, { isSubordinate, ownActorId: ownActorIdRef.current });
 
@@ -1335,29 +1350,13 @@ export function useKinu(target?: string | KinuActorAddress) {
           setUnavailableDevices(msg.devices);
         } else if (msg.type === "device_available") {
           setUnavailableDevices(null);
+        } else if (msg.type === "model_fallback") {
+          setModelFallbacks((prev) => [...prev, msg.message]);
         } else if (msg.type === "work_cancelled") {
           forgetDeltas();
-
-          try {
-            await refreshBackgroundJobs();
-          } catch (cause) {
-            diagnostics.failure('workspace.cancelled_work_refresh_failed', toKinuError({
-              doing: 'refreshing live workspace data',
-              cause,
-              otherwise: 'io',
-            }));
-          }
+          await reread('background_jobs', refreshBackgroundJobs);
         } else if (msg.type === "pending_actions_changed") {
-          // The server pushes the fact, not the rows; one re-read updates every open tab.
-          try {
-            await refreshPendingActions();
-          } catch (cause) {
-            diagnostics.failure('workspace.pending_actions_refresh_failed', toKinuError({
-              doing: 'refreshing live workspace data',
-              cause,
-              otherwise: 'io',
-            }));
-          }
+          await reread('pending_actions', refreshPendingActions);
         } else if (msg.type === SLATES_CHANGED_EVENT) {
           // Re-list now and remount changed tabs so their preview URLs re-read.
           setSlateReloads((previous) => {
@@ -1368,15 +1367,7 @@ export function useKinu(target?: string | KinuActorAddress) {
             return next;
           });
 
-          try {
-            await refreshSlates();
-          } catch (cause) {
-            diagnostics.failure("workspace.slates_refresh_failed", toKinuError({
-              doing: "refreshing live workspace data",
-              cause,
-              otherwise: "io",
-            }));
-          }
+          await reread('slates', refreshSlates);
         } else if (msg.type === "branch_status") {
           const settledOrRunning = msg.status === "error" ? "error" : "running";
           const status = msg.status === "settled" ? "settled" : settledOrRunning;
@@ -1785,6 +1776,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setChangelogUnseen(0);
     setBranchRuns([]);
     setChatError(null);
+    setModelFallbacks([]);
     setSubordinates([]);
     setSubordinateEvents([]);
     setSignalCards([]);
@@ -2059,6 +2051,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     pendingConsents,
     resolveConsent,
     unavailableDevices,
+    modelFallbacks,
     /** Work marks self-changes seen server-side, then calls the clear. */
     changelogUnseen,
     clearChangelogUnseen,

@@ -945,5 +945,10 @@ describe('swarm profile snapshot codec', () => {
     expect(readBack.sources.presetSource).toBe('role_default');
     expect(() => validateSwarmProfileSnapshot({ value: { ...frozen, sources: { ...frozen.sources, tierSource: 'bogus' } } }))
       .toThrow(/snapshot/);
+
+    // A swarm frozen before tiers had fallbacks re-drives with none, not as a refused snapshot.
+    const { fallbacks: _omitted, ...tierBefore } = frozen.profile.tier;
+    const before = { ...frozen, profile: { ...frozen.profile, tier: tierBefore } };
+    expect(validateSwarmProfileSnapshot({ value: before }).profile.tier.fallbacks).toEqual([]);
   });
 });

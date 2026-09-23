@@ -11,7 +11,7 @@ import { chatCommand } from './chat';
 import { ensureLocalDaemonRunning } from './daemon';
 import { resolvePromptAttachments } from '../attachments';
 import { watchHeadlessConsents, watchTerminalConsents, type ConsentWatcher } from '../consent-watch';
-import { ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
+import { DIM, ERR, formatFailure, printFailure, printToolCall, printToolResult } from '../display';
 import { normalizeWebhookAuthMode, numberField, stringField } from '../options';
 import { guideFailure } from '../provider-guidance';
 import {
@@ -539,11 +539,13 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'turn-end':
       console.log('');
       break;
+    case 'broadcast':
+      if (event.event.type === 'model_fallback') console.log(`\n${DIM(event.event.message ?? '')}`);
+      break;
     case 'turn-start':
     case 'step-finish':
     case 'evolution':
     case 'background':
-    case 'broadcast':
     case 'run-event':
       break;
   }

@@ -830,6 +830,11 @@ export class ChatSession {
     return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
   }
 
+  private recordModelFallback(event: Extract<ChatEvent, { type: 'model-fallback' }>): void {
+    if (this.runId !== null) this.eventRecorder.emit(this.runId, { type: 'model_fallback', from: event.from, to: event.to, reason: event.reason });
+    this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
+  }
+
   /** Everything here may throw; processTurn owns what that means. */
   /** `step_finish` supersedes it; indices count from the steps a continuation already carries. */
   private partialLedger(continuation: TurnContinuation | undefined) {
@@ -873,6 +878,7 @@ export class ChatSession {
 
             return;
           case 'reasoning-delta':
+          case 'model-fallback':
           case 'done':
           case 'error':
             return;
@@ -904,6 +910,8 @@ export class ChatSession {
       ...prepared.execution,
     }, (event) => {
       partial.observe(event);
+
+      if (event.type === 'model-fallback') this.recordModelFallback(event);
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
 

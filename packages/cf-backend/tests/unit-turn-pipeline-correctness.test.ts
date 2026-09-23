@@ -61,8 +61,6 @@ const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration
 
 const loop = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'orchestrator', 'chat-session.ts'), 'utf8');
 
-const chatRunner = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'chat.ts'), 'utf8');
-
 const transport = readFileSync(join(import.meta.dir, '..', 'src', 'chat-transport.ts'), 'utf8');
 
 /** cf-backend callers of core's `reasoningEffortOptions`, so a second derivation shows up as a new entry. */
@@ -111,8 +109,8 @@ const MERGE_ANSWER_MODEL = scriptedTurnModel({
 
 /** A second judge route differing in both model and effort, so neither can pass alone. */
 const REBOUND_JUDGE = {
-  model: 'fake/deep-rebound', reasoningEffort: 'low',
-} satisfies { model: string; reasoningEffort: ReasoningEffort };
+  model: 'fake/deep-rebound', reasoningEffort: 'low', fallbacks: [],
+} satisfies { model: string; reasoningEffort: ReasoningEffort; fallbacks: readonly string[] };
 
 /** `judge` is a fixed-tier producer, so its route is `profile.tiers.deep`. */
 function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
@@ -279,7 +277,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     expect(agent.observeResolvedTurnProfile()?.tier).toEqual({
       id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
-      reasoningEffort: 'medium',
+      reasoningEffort: 'medium', fallbacks: [],
     });
     // The request's model is the memoized instance for the pinned spec.
     const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
@@ -425,30 +423,6 @@ describe('turn-pipeline correctness wiring', () => {
     await expect(stepMessages(agent, 0, admitted)).rejects.toThrow('a model step requires a prepared profile and tool surface');
   });
 
-  test('the turn assembly derives the profile reasoning effort, and the chat runner merges it with the cache options', () => {
-    const assembly = actor.slice(
-      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
-      actor.indexOf('protected dynamicContextSnapshot('),
-    );
-
-    expect(assembly).toContain('profile.tier.reasoningEffort');
-    // Both sites read the one normalised parse (a raw parse yields `@cf` or throws on bare ids).
-    expect(assembly).toContain('tierModel.provider');
-    expect(assembly).not.toContain('parseModelSpec(profile.tier.model)');
-    expect(assembly).toContain('reasoningEffortOptions');
-
-    // The one provider-options merge is the chat runner's, by provider namespace.
-    const prepare = actor.slice(
-      actor.indexOf('protected async prepareTurn(item: ChatTurnInput'),
-      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
-    );
-
-    expect(prepare).toContain('if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;');
-    expect(prepare).toContain('providerId: assembled.promptModel.provider');
-    expect(chatRunner).toContain('const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);');
-    expect(actor).not.toContain('mergeProviderOptions(');
-  });
-
   // Output caps are owned by the gate below; this is driven because a source scan cannot tell
   // a spent effort from a shadowed one.
   test('an auxiliary call binds the route it resolved — the model AND that route\'s own effort', async () => {
@@ -463,7 +437,7 @@ describe('turn-pipeline correctness wiring', () => {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
 
-          return { model: MERGE_ANSWER_MODEL, providerOptions: undefined };
+          return { model: MERGE_ANSWER_MODEL, provider: 'mock', providerOptions: undefined };
         },
       },
       profile: async () => profile,

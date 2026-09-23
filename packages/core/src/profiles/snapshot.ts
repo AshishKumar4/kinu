@@ -25,10 +25,14 @@ const ProvenanceSchema = v.strictObject({
   presetSource: v.picklist(['explicit', 'role_default']),
 });
 
+/** Frozen before fallbacks existed: none. */
+const FallbacksSchema = v.optional(v.array(v.string()), () => []);
+
 /** Declared, not derived from {@link ResolvedTurnProfile}, so it keeps checking the frozen shape. */
 const TierSlotSchema = v.strictObject({
   model: v.string(),
   reasoningEffort: v.picklist(REASONING_EFFORTS),
+  fallbacks: FallbacksSchema,
 });
 
 const ResolvedTurnProfileSchema = v.strictObject({
@@ -43,6 +47,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
     source: v.picklist(['explicit', 'role', 'default', 'workspace', 'actor']),
     model: v.string(),
     reasoningEffort: v.picklist(REASONING_EFFORTS),
+    fallbacks: FallbacksSchema,
   }),
   /** Per slot, so a snapshot missing one fails here rather than at a producer (model-route.ts). */
   tiers: v.strictObject({
@@ -66,7 +71,7 @@ export interface SwarmProfileSnapshot {
   readonly sources: ProfileProvenance;
 }
 
-const SwarmProfileSnapshotSchema: v.GenericSchema<SwarmProfileSnapshot> = v.strictObject({
+const SwarmProfileSnapshotSchema: v.GenericSchema<unknown, SwarmProfileSnapshot> = v.strictObject({
   profile: ResolvedTurnProfileSchema,
   sources: ProvenanceSchema,
 });

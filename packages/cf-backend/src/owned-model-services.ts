@@ -110,10 +110,12 @@ export class OwnedModelServices<Id = DurableObjectId> {
   resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
+    const { provider } = parseModelSpec(normalized);
 
     return {
       model: this.resolveModel(normalized),
-      providerOptions: reasoningEffortOptions(effort, parseModelSpec(normalized).provider),
+      provider,
+      providerOptions: reasoningEffortOptions(effort, provider),
     };
   }
 

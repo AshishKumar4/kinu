@@ -17,6 +17,8 @@ import { runTuiInPty, type PtyStep } from './helpers/pty-screen';
 
 const cliBin = resolve(import.meta.dir, '../bin/cli.ts');
 
+const repoRoot = resolve(import.meta.dir, '../../..');
+
 const endpointFixture = resolve(import.meta.dir, 'fixtures/mock-llm-server.ts');
 
 /** Credentials a developer shell may export; any of them would outrank the endpoint under test. */
@@ -48,7 +50,7 @@ afterEach(() => {
   for (const endpoint of running.splice(0)) endpoint.stop();
 });
 
-async function startEndpoint(models: readonly string[]): Promise<Endpoint> {
+async function startEndpoint(models: readonly string[], refuse: readonly string[] = []): Promise<Endpoint> {
   const logs = scratchDir('workspace-model-requests');
   const log = join(logs, 'requests.jsonl');
   const blackholeLog = join(logs, 'blackhole.log');
@@ -62,6 +64,7 @@ async function startEndpoint(models: readonly string[]): Promise<Endpoint> {
       MOCK_LLM_REQUEST_LOG: log,
       MOCK_LLM_BLACKHOLE_LOG: blackholeLog,
       MOCK_LLM_ANSWER: REPLY,
+      MOCK_LLM_REFUSE: refuse.join(','),
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -337,5 +340,49 @@ describe('a reopened workspace', () => {
       { wait: 'remember the fixture', timeout: 10 },
       { wait: REPLY, timeout: 10 },
     ]);
+  });
+});
+
+/** The default tier's fallbacks, written through the profile store as the settings page's save writes a tier. */
+function setDefaultFallbacks(machine: Machine, fallbacks: readonly string[]): void {
+  const script = `
+    const { loadActiveProfile } = await import('./packages/cli/src/default-model.ts');
+    const { writeLocalProfile } = await import('./packages/cli/src/profiles.ts');
+    const { catalog } = await loadActiveProfile();
+    writeLocalProfile({ ...catalog, tiers: { ...catalog.tiers, default: { ...catalog.tiers.default, fallbacks: ${JSON.stringify(fallbacks)} } } });
+  `;
+
+  const run = Bun.spawnSync([process.execPath, '-e', script], {
+    cwd: repoRoot, env: { ...process.env, ...cliEnv(machine) }, stdout: 'pipe', stderr: 'pipe',
+  });
+
+  expect(run.exitCode, run.stderr.toString()).toBe(0);
+}
+
+const TimelineRowSchema = v.looseObject({ kind: v.string(), payload: v.unknown() });
+
+describe("a tier's fallback chain", () => {
+  test('a refused model hands its turn to the fallback, and the run says which model answered and why', async () => {
+    const endpoint = await startEndpoint(['alpha-model', 'beta-model'], ['alpha-model']);
+    const home = scratchDir('workspace-model-fallback-home');
+
+    writeFileSync(join(home, 'config.json'), `${JSON.stringify({
+      providers: { openaiCompat: { default: { baseURL: endpoint.baseURL, apiKey: 'mock' } } },
+    })}\n`, { mode: 0o600 });
+
+    const machine = { home, endpoint };
+    mustRun(machine, ['create', 'chained', '--mode', 'local']);
+    setDefaultFallbacks(machine, ['openai-compat/beta-model']);
+
+    const printed = mustRun(machine, ['run', 'chained', 'hello']);
+
+    expect(requestedModels(machine, true)).toEqual(['alpha-model', 'beta-model']);
+    expect(printed).toContain(REPLY);
+    expect(printed).toContain('openai-compat/beta-model took over from openai-compat/alpha-model');
+    expect(printed).toContain('the provider refused the request (HTTP 402');
+
+    const timeline = v.parse(v.array(TimelineRowSchema), JSON.parse(mustRun(machine, ['timeline', 'chained', '--json'])));
+    expect(timeline.find((row) => row.kind === 'run:model_fallback')?.payload)
+      .toMatchObject({ from: 'openai-compat/alpha-model', to: 'openai-compat/beta-model' });
   });
 });

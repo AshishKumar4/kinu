@@ -4,7 +4,7 @@
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
 import type { ReasoningEffort } from '../strategy/effort';
 import type { TierId } from './catalog';
-import type { ResolvedTurnProfile } from './resolve';
+import type { ResolvedTurnProfile, TierRoute } from './resolve';
 
 export type ModelRoutePolicy =
   | { readonly kind: 'invocation' }
@@ -48,12 +48,10 @@ export interface ModelRouteResolution {
   readonly tier: TierId;
   readonly model: string;
   readonly reasoningEffort: ReasoningEffort;
+  readonly fallbacks: readonly string[];
 }
 
-function tierResolution(
-  profile: ResolvedTurnProfile,
-  tier: TierId,
-): { model: string; reasoningEffort: ReasoningEffort } {
+function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
   const assignment = profile.tiers[tier];
 
   if (!assignment) {
@@ -86,6 +84,7 @@ export function resolveModelRoute(
       tier: profile.tier.id,
       model: profile.tier.model,
       reasoningEffort: profile.tier.reasoningEffort,
+      fallbacks: profile.tier.fallbacks,
     });
   }
 

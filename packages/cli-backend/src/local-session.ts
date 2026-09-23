@@ -1758,6 +1758,19 @@ export class LocalAgentSession implements BackendHost {
     if (resolver) {
       liveTurn.countInputTokens = (request: CountableRequest) =>
         resolver.countInputTokens(this.effectiveModelSpec(), request);
+
+      liveTurn.fallbacks = profile.tier.fallbacks.map((spec) => ({
+        spec,
+        bind: () => {
+          const { provider } = parseModelSpec(this.profiles().normalizeSpec(spec));
+
+          return {
+            model: resolver.resolveModel(spec),
+            provider,
+            providerOptions: reasoningEffortOptions(profile.tier.reasoningEffort, provider),
+          };
+        },
+      }));
     }
 
     return {

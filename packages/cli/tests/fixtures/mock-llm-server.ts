@@ -4,6 +4,7 @@
  * `MOCK_LLM_MODELS` (comma-separated) is the `/models` list; `MOCK_LLM_REQUEST_LOG` gets one JSON line per
  * completion request: the model it asked for and whether it streamed (a chat turn does). Under `/blackhole/` nothing
  * answers; `MOCK_LLM_BLACKHOLE_LOG` records each such request as `opened`, then `aborted` when its client hangs up.
+ * A completion naming a model in `MOCK_LLM_REFUSE` (comma-separated) is refused with 402, as a spent account is.
  */
 import { appendFileSync } from 'node:fs';
 import * as v from 'valibot';
@@ -15,6 +16,8 @@ const models = (Bun.env.MOCK_LLM_MODELS ?? 'mock-model').split(',');
 const requestLog = Bun.env.MOCK_LLM_REQUEST_LOG;
 
 const blackholeLog = Bun.env.MOCK_LLM_BLACKHOLE_LOG;
+
+const refused = new Set((Bun.env.MOCK_LLM_REFUSE ?? '').split(',').filter(Boolean));
 
 const CompletionRequestSchema = v.object({ stream: v.optional(v.boolean()), model: v.optional(v.string()) });
 
@@ -79,6 +82,10 @@ const server = Bun.serve({
     const body = v.parse(CompletionRequestSchema, await request.json());
 
     if (requestLog !== undefined) appendFileSync(requestLog, `${JSON.stringify({ model: body.model, stream: body.stream === true })}\n`);
+
+    if (body.model !== undefined && refused.has(body.model)) {
+      return Response.json({ error: { message: `insufficient credits for ${body.model}` } }, { status: 402 });
+    }
 
     if (!body.stream) {
       return Response.json({
