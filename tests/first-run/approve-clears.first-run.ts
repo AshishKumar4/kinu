@@ -247,8 +247,6 @@ async function approveThroughTheButton(
   const empty = { boxesBefore: 0, checkedBefore: 0, boxesAfter: 0, checkedAfter: 0 };
   const page = await signedInPage(browser, plan.identity);
 
-  page.setDefaultTimeout(PAINT_MS);
-
   try {
     return await drive({ page, origin: plan.origin, workspace, command, empty });
   } finally {
