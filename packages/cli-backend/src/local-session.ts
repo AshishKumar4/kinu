@@ -161,7 +161,7 @@ import { localActorDirectory, registerLocalActor, retireLocalActor, registerLoca
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
-import { createCLIHeadRuntime, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
+import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
@@ -2521,6 +2521,8 @@ export class LocalAgentSession implements BackendHost {
       reportNodeDelta: () => this.publishHeadStream,
       model: this.cachedModel ?? this.defaultModel("an agents swarm"),
       reportModelCall: this.modelCallSink,
+      nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
+      webSearch: this.getWebSearchProvider(),
       originContext: () => this.actorSession.history,
       costModel: () => ({
         spec: this.effectiveModelSpec(),

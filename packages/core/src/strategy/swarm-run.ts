@@ -22,7 +22,7 @@ import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { SwarmBudget } from './swarm-budget';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
-import type { HostedNodeSeat } from './node-agent';
+import type { HostedNodeSeat, NodeCodemode } from './node-agent';
 import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import type { ResolvedVerifier } from './verifier-registry';
@@ -90,8 +90,7 @@ export interface SwarmRunDeps {
   readonly provisionHome?: NodeWorkspaceProvisioner;
   /** See {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  /** Absent narrows the agent node's surface; it does not break it. */
-  readonly codemodeTool?: unknown;
+  readonly nodeCodemode?: NodeCodemode;
   readonly webSearch?: WebSearchProvider;
   /**
    * Compaction seam over *Inherited context*: rewrite a parent's context once for all its children.
@@ -302,7 +301,7 @@ export async function runSwarm(
     signal: deps.signal, clock: deps.clock, reportModelCall: deps.reportModelCall,
     maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
-    codemodeTool: deps.codemodeTool, webSearch: deps.webSearch,
+    nodeCodemode: deps.nodeCodemode, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });
 

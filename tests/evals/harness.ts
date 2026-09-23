@@ -76,6 +76,7 @@ import {
   makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
+import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
   budgetRow, hardTaskFor, ledgerTotalsFromEvents, measuredToolErrorRate,
@@ -186,6 +187,9 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     rt,
     model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
+    // A node's eval and web as the CLI session builds them.
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, [createWebCodemodeProvider(webSearch)]),
+    webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '
       + 'drive the rung through a target that implements hostNode',

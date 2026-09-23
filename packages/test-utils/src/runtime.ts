@@ -4,8 +4,10 @@
  */
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
-  CraftStore, AgentStores,
+  CraftStore, AgentStores, AgentsSwarmDeps,
 } from '@kinu.run/core';
+import { tool } from 'ai';
+import { codemodeInputSchema } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
 import {
   WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable,
@@ -41,6 +43,25 @@ export class UnsupportedTestCapability extends Error {
 const refuse = (capability: string, option: string): never => {
   throw new UnsupportedTestCapability(capability, option);
 };
+
+/**
+ * A search backend's seams for a suite that observes none of them: spend is dropped, and a node's code or
+ * web call refuses by name.
+ */
+export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall' | 'nodeCodemode' | 'webSearch'> {
+  return {
+    reportModelCall: () => undefined,
+    nodeCodemode: () => () => tool<{ code: string }, string>({
+      description: 'Runs no code in this suite.',
+      inputSchema: codemodeInputSchema(),
+      execute: async () => refuse("a node's code", 'nodeCodemode'),
+    }),
+    webSearch: {
+      search: async () => refuse('a web search', 'webSearch'),
+      fetch: async () => refuse('a web fetch', 'webSearch'),
+    },
+  };
+}
 
 function unscriptedLLM(): LLM {
   return {

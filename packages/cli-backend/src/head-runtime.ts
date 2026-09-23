@@ -108,6 +108,26 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
   }
 }
 
+/**
+ * `eval` over one hosted actor: `state.*` and `db` bind off the actor's own handle and stores, never the
+ * parent's (a fork must not move its parent's program state), and code routes through its own runtime.
+ */
+export function hostedCodemodeTool(actor: HostedActor, extras: readonly CodemodeProvider[]): (finished: ToolSet) => ToolSet[string] {
+  const sandbox = createNodeCodemodeToolFactory({
+    extraProviders: [
+      ...extras,
+      createStateCodemodeProvider(actor.handle.programState),
+      createDbCodemodeProvider(actor.stores.appData),
+    ],
+  });
+
+  return (finished) => sandbox({
+    native: finished,
+    craftedTools: () => ({}),
+    providers: actor.runtime.executionRouter?.getProviders() ?? [],
+  });
+}
+
 /** Run one head in-process on a seat from the root's host; release keeps its rows. */
 async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: AbortSignal): Promise<HeadReport> {
   const capture = new HeadCapture();
@@ -117,28 +137,12 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
   try {
     const rt = seat.actor.runtime;
 
-    // `state.*` binds off the head's own actor handle, never the parent's: a fork
-    // must not move its parent's program state.
-    const sandbox = createNodeCodemodeToolFactory({
-      extraProviders: [
-        ...deps.codemodeExtras(),
-        createStateCodemodeProvider(seat.actor.handle.programState),
-        createDbCodemodeProvider(seat.actor.stores.appData),
-      ],
-    });
-
-    const codemodeTool = (finished: ToolSet) => sandbox({
-      native: finished,
-      craftedTools: () => ({}),
-      providers: rt.executionRouter?.getProviders() ?? [],
-    });
-
     const tools = buildHeadToolSet({
       input,
       capture,
       rt,
       history: seat.actor.stores.history,
-      codemodeTool,
+      codemodeTool: hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),
     });

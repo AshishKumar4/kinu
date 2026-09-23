@@ -221,7 +221,7 @@ describe('node proposal merges after the eval finish', () => {
       journal,
       logger: createRecordingLogger(),
       maxWallClockMs: 60_000,
-      codemodeTool,
+      nodeCodemode: () => codemodeTool,
     };
 
     const run = await runNodeAgent(input, deps);

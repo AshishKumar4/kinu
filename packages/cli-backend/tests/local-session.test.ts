@@ -1,7 +1,7 @@
 // LocalAgentSession loop over the real createCLIRuntime and a fake streaming model: turns stream and persist,
 // programmatic turns serialize, broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
-import { createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow } from '@kinu.run/test-utils';
+import { createTestActorsOver, createTestSql, present, readTranscriptRows, scratchDir, scratchPath, toolExecute, scriptedTurnModel, type TranscriptRow, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -470,6 +470,51 @@ function searchingModel(): LanguageModel {
       };
     },
   });
+}
+
+/** The owner's words that start a search, and the task its nodes get: kept apart so a node's request is told apart. */
+const SEARCH_ASK = 'Find two ways to speed up the parser.';
+
+const SEARCH_TASK = 'Name one way to make tokenizing faster.';
+
+/** A single-part tool call, streamed as the provider streams one. */
+function toolCallStream(toolName: string, input: JsonObject, usage: LanguageModelV2Usage): ReadableStream<LanguageModelV2StreamPart> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      controller.enqueue({ type: 'tool-call', toolCallId: `${toolName}-0`, toolName, input: JSON.stringify(input) });
+      controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+      controller.close();
+    },
+  });
+}
+
+/** The owner's turn starts a two-node search; each node runs `return 6 * 7;`, then answers. Records what nodes were sent. */
+function codingSearchModel() {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const nodeCalls: LanguageModelV2CallOptions[] = [];
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake-model',
+    doStream: async (options) => {
+      const step = options.prompt.filter((message) => message.role === 'tool').length;
+
+      if (JSON.stringify(options.prompt).includes(SEARCH_ASK)) {
+        const stream = step === 0
+          ? toolCallStream('agents', { action: 'swarm', task: SEARCH_TASK, preset: 'ideate', branches: 2, depth: 1 }, usage)
+          : textStream('Searching.', usage);
+
+        return { stream, response: { headers: {} } };
+      }
+
+      nodeCalls.push(options);
+      const stream = step === 0 ? toolCallStream('eval', { code: 'return 6 * 7;' }, usage) : textStream('Computed.', usage);
+
+      return { stream, response: { headers: {} } };
+    },
+  });
+
+  return { model, nodeCalls };
 }
 
 function setupWithResolver(
@@ -4151,6 +4196,22 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.end();
   });
 
+  test('a search node runs code and is offered the web', async () => {
+    // Defends: a node offered an `eval` that refuses as unconfigured, and no `web`, because the swarm was built without either.
+    const { model, nodeCalls } = codingSearchModel();
+    const { session } = setup('unused', model);
+    await session.send(SEARCH_ASK);
+    await session.settleBackgroundWork();
+
+    const opening = nodeCalls.find((call) => !call.prompt.some((message) => message.role === 'tool'));
+    const answered = nodeCalls.find((call) => call.prompt.some((message) => message.role === 'tool'));
+
+    expect(opening?.tools?.map((offered) => offered.name)).toEqual(expect.arrayContaining(['eval', 'web']));
+    expect(JSON.stringify(answered?.prompt.filter((message) => message.role === 'tool'))).toContain('42');
+
+    await session.end();
+  });
+
   test('a turn that dies before its stream exists still terminates: error, turn-end, run_end', async () => {
     // A throw in per-turn setup (model resolution, skills, system prompt) must fail the opened run, not exit 0 silently.
     const { db, rt } = workspaceRuntime();
@@ -4554,7 +4615,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
 
-    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), reportModelCall: () => undefined } }, calls };
+    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), ...unobservedSearchSeams() } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {

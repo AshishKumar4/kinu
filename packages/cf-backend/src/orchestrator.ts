@@ -41,7 +41,7 @@ import {
   createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  hostNodeSeat, reclaimSettledExplorationActors,
+  hostNodeSeat, nodeCodemodeTool, reclaimSettledExplorationActors,
   type ExplorationHostSeams,
 } from "./exploration-hosting";
 import {
@@ -729,6 +729,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       rt: turn.runtime,
       model: turn.model,
       reportModelCall: (report) => { this.reportModelCall(report); },
+      nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
+      webSearch: seams.webSearch(),
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session as the mission ledger, so a search's estimate and its debit read one rate.
       costModel: () => ({

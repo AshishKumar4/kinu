@@ -43,7 +43,7 @@ import type { WebSearchProvider } from '../web/index';
 import type { NodeAgentDeps } from './node-agent';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from './node-workspace';
-import type { HostedNodeSeat } from './node-agent';
+import type { HostedNodeSeat, NodeCodemode } from './node-agent';
 import type { MissionScope } from '../mission-budget';
 import type { SwarmCandidate } from './swarm';
 import type { PublicationState } from './objective';
@@ -868,7 +868,7 @@ export function buildNodeDeps(input: {
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  readonly codemodeTool?: unknown;
+  readonly nodeCodemode?: NodeCodemode;
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
   const deps = input;
@@ -894,7 +894,7 @@ export function buildNodeDeps(input: {
 
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
 
-  if (deps.codemodeTool !== undefined) nodeDeps.codemodeTool = deps.codemodeTool;
+  if (deps.nodeCodemode !== undefined) nodeDeps.nodeCodemode = deps.nodeCodemode;
 
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 

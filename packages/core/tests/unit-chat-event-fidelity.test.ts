@@ -1,4 +1,5 @@
 // Every field the ChatEvent seam drops is unrecoverable downstream; a reported zero must stay distinct from unreported.
+import { unobservedSearchSeams } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { stepCountIs, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -131,7 +132,7 @@ describe('ChatEvent tool success/error fidelity', () => {
     // A production seat per node, so the refusal is the run's and not the fixture's.
     const deps = {
       mode: 'build',
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3(), reportModelCall: () => undefined },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3(), ...unobservedSearchSeams() },
     } satisfies Parameters<typeof createAgentsTool>[0];
 
     const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
