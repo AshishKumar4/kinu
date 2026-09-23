@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-22",
-  "total": 226,
+  "measuredAt": "2026-09-23",
+  "total": 205,
   "files": {
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
@@ -123,8 +123,7 @@
     },
     "packages/cli/tests/device-connect.test.ts": {
       "clock-compare": 3,
-      "sleep": 9,
-      "test-timeout": 20
+      "sleep": 9
     },
     "packages/cli/tests/exec-process-lifecycle.test.ts": {
       "sleep": 2,
@@ -132,9 +131,6 @@
     },
     "packages/cli/tests/fixtures/pty-connect-card.tsx": {
       "sleep": 2
-    },
-    "packages/cli/tests/helpers/chat-app-fixture.tsx": {
-      "sleep": 1
     },
     "packages/cli/tests/helpers/update-hub.ts": {
       "clock-compare": 1,

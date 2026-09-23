@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { join } from 'node:path';
+import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
 
 /** A deployment that runs the device flow and approves it only for one secret. */
 function deployment(secret: string) {
@@ -20,7 +21,7 @@ function deployment(secret: string) {
         return Response.json({ deviceToken: 'dt', userCode: 'CODE', verificationUrl: '/cli/auth', expiresAt: '', intervalSeconds: 1 });
       }
 
-      if (pathname === '/cli/auth' && request.headers.get('x-kinu-dev-identity') !== secret) {
+      if (pathname === '/cli/auth' && request.headers.get(DEV_IDENTITY_HEADER) !== secret) {
         return new Response('who?', { status: 401 });
       }
 

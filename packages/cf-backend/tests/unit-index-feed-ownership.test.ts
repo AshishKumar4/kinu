@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { workerContext } from './helpers/bindings';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
-import type { UserCaller } from '@kinu.run/core';
+import { DEV_IDENTITY_HEADER, type UserCaller } from '@kinu.run/core';
 
 mockAgentsSdk();
 
@@ -27,7 +27,7 @@ const DEV_IDENTITY_SECRET = 'index-feed-dev-identity-secret';
 
 function appRequest(path: string): Request {
   return new Request(`https://${APP_HOST}${path}`, {
-    headers: { 'x-kinu-dev-identity': DEV_IDENTITY_SECRET },
+    headers: { [DEV_IDENTITY_HEADER]: DEV_IDENTITY_SECRET },
   });
 }
 

@@ -402,7 +402,7 @@ describe('device-connect daemon lifecycle', () => {
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
     expect(await waitForPidExit(status.daemonPid ?? 0)).toBe(true);
-  }, 20_000);
+  });
 
   test('linking this machine again names the registration it replaces, only to the hub that issued it', async () => {
     const bodies: Array<{ label?: string; replaces?: string }> = [];
@@ -468,7 +468,7 @@ describe('the agent-home root the daemon reports', () => {
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
     await connect(stub, home);
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
-  }, 20_000);
+  });
 
   test('a root an earlier build left group-readable is tightened', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -481,7 +481,7 @@ describe('the agent-home root the daemon reports', () => {
     await connect(stub, home);
 
     expect(statSync(root).mode & 0o777).toBe(0o700);
-  }, 20_000);
+  });
 });
 
 describe('the sandbox state the machine reported', () => {
@@ -620,7 +620,7 @@ describe('device-connect install hardening', () => {
     }
 
     expect(existsSync(join(home, POISON_MARKER))).toBe(false);
-  }, 20_000);
+  });
 
   test('a tampered daemon on disk is replaced by the bytes this CLI ships', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -642,7 +642,7 @@ describe('device-connect install hardening', () => {
       .toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin, root: repoRoot });
     expect(statSync(join(home, 'pc-agent.js')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
-  }, 20_000);
+  });
 
   test('publishes neither install file when the daemon cannot be replaced', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -664,7 +664,7 @@ describe('device-connect install hardening', () => {
     expect(failure).not.toContain('device-token');
     expect(existsSync(join(home, 'device.json'))).toBe(false);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
-  }, 20_000);
+  });
 
   test('classifies a duplicate device name without installing anything', async () => {
     const stub = startStubCloud({
@@ -719,7 +719,7 @@ describe('device-connect install hardening', () => {
     expect(result).toEqual(connectedResult());
     expect(command).toContain(runtime);
     expect(command).toContain(join(home, 'pc-agent.js'));
-  }, 20_000);
+  });
 
   test('runs the daemon on the CLI Bun even when a WebSocket-less node sits on PATH', async () => {
     // A PATH node lacking a global WebSocket must never be chosen; the daemon runs on this CLI's Bun.
@@ -746,7 +746,7 @@ describe('device-connect install hardening', () => {
     expect(calls).toBe('');
     expect(command).toContain(runtime);
     expect(command).toContain(join(home, 'pc-agent.js'));
-  }, 20_000);
+  });
 
   test('reports a device-log permission failure without exposing the device token', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -787,7 +787,7 @@ describe('device-connect install hardening', () => {
     `, { KINU_INFLIGHT_ROOT: inflight });
 
     expect(failure).toContain('exited before it could connect');
-  }, 20_000);
+  });
 
   test('the connect wait ends on the daemon exiting, not on a clock', async () => {
     // 404 then 401: the daemon exits 4 about 1.2 s in, and the wait must end on that exit, not the 20 s bound.
@@ -807,7 +807,7 @@ describe('device-connect install hardening', () => {
 
     expect(failure).toContain('exited before it could connect (exit code 4)');
     expect(stub.hits.list).toBeLessThan(5);
-  }, 30_000);
+  });
 
   test('a caller ends the wait through its signal and the result says so', async () => {
     // Tickets keep failing with 404, so only the caller's signal ends this wait.
@@ -829,7 +829,7 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual({ result: { kind: 'cancelled', deviceId: 'dev_1' }, polls: 2 });
-  }, 20_000);
+  });
 
   test('never signals an unrelated live process named by a stale pidfile', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
@@ -892,7 +892,7 @@ describe('device-connect install hardening', () => {
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(live[0]);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
     deviceDaemonPids.push(...live);
-  }, 30_000);
+  });
 });
 
 describe('device daemon single-instance lock', () => {
@@ -953,7 +953,7 @@ describe('device daemon single-instance lock', () => {
     expect(exited).toBe(3);
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(owner.proc.pid);
     expect(owner.proc.killed).toBe(false);
-  }, 30_000);
+  });
 
   test('a self-update hands the machine to exactly one successor; a third daemon still exits', async () => {
     // Handover: the successor takes the pidfile over and the old daemon exits.
@@ -981,7 +981,7 @@ describe('device daemon single-instance lock', () => {
     await Promise.race([third.drained, Bun.sleep(100)]);
     expect(third.output()).toContain('already running');
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(successorPid);
-  }, 45_000);
+  });
 });
 
 describe('classic cloud chat connect prompt', () => {
@@ -1061,7 +1061,7 @@ describe('classic cloud chat connect prompt', () => {
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
 
     expect(await waitForPidExit(daemonPid)).toBe(true);
-  }, 20_000);
+  });
 
   test('non-interactive stdin prints the kinu connect instruction instead', async () => {
     const stub = startStubCloud({ devices: () => [] });
@@ -1185,7 +1185,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     const daemonPid = await waitForDaemonPid(home);
     process.kill(daemonPid, 'SIGTERM');
     expect(await waitForPidExit(daemonPid)).toBe(true);
-  }, 30_000);
+  });
 
   test('the stub daemon exiting ends the wait with its tail', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [401] });
@@ -1200,7 +1200,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     await connect.drained;
 
     expect(connect.output()).not.toContain('✓ Connected as');
-  }, 30_000);
+  });
 
   test('a stub alive and never connecting leaves the command waiting', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404] });
@@ -1229,7 +1229,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     const daemonPid = await waitForDaemonPid(home);
     process.kill(daemonPid, 'SIGTERM');
     expect(await waitForPidExit(daemonPid)).toBe(true);
-  }, 30_000);
+  });
 
   test('answering no installs nothing at all', async () => {
     const stub = startStubCloud({ devices: () => [] });
@@ -1249,7 +1249,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
     expect(existsSync(join(home, 'device.json'))).toBe(false);
     expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false);
-  }, 30_000);
+  });
 
   test('the suggested name is the hostname, nothing else', async () => {
     const home = makeHome({ origin: 'https://example.invalid', accessToken: 'ptc_test' });
@@ -1275,7 +1275,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     await fast.waitFor('✓ Connected as hub-names-it');
     await fast.proc.exited;
     await fast.drained;
-  }, 30_000);
+  });
 });
 
 describe('/connect slash command', () => {
