@@ -281,7 +281,7 @@ mint the other.
 the slate tab, `SharedLibrary` inside the Drive's `/blueprints` folder,
 `BlueprintPage` and `ForkDialog`, `UnmappedBindingsPanel`.
 
-**CLI.** The CLI backend hosts no slates: `workspace.slate` exists only when a
+**CLI.** The CLI backend hosts no slates: `workspace.slates` exists only when a
 backend supplies a host (`packages/core/src/execution/inline.ts`). There is no
 local sharing; the CLI shares through a cloud workspace.
 

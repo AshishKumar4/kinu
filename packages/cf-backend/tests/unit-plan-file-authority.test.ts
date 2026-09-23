@@ -58,7 +58,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   expect(await workspace.tools.writeFile.execute(path, 'forbidden')).toMatchObject({ reason: 'denied' });
   expect(await workspace.tools.exec.execute('printf forbidden')).toMatchObject({ reason: 'denied' });
   expect(await workspace.tools.createTool.execute('forbidden', 'not research', '() => 1')).toMatchObject({ reason: 'denied' });
-  expect(await workspace.tools.slate.execute({ op: 'restore', id: 'app', version: version.id })).toMatchObject({ reason: 'denied' });
+  expect(await workspace.tools.slates.execute({ op: 'restore', id: 'app', version: version.id })).toMatchObject({ reason: 'denied' });
   const planCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' } satisfies typeof ROOT_SLATE_CALLER;
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await agent.slateAs(planCaller, { op: 'call', id: 'app', method: 'shell' })).toMatchObject({ ok: false, reason: 'denied' });

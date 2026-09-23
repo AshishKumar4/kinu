@@ -149,11 +149,12 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
-  
+        const bound = providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers);
+
         const built = createCodeTool({
-          // `{{types}}` is the token createCodeTool substitutes namespace declarations into.
-          description: renderCodemodeDescription('{{types}}'),
-          tools: providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers),
+          // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.
+          description: renderCodemodeDescription(bound.map((provider) => provider.types)),
+          tools: bound,
           executor: {
             // Per call: crafted set and prelude are rebuilt; native fns were frozen at build time.
             execute: (code, resolved) => {

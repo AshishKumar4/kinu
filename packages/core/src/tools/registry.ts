@@ -514,15 +514,15 @@ const SANDBOX_FACTS = {
 export const CODEMODE_CODE_DESCRIPTION = 'The JavaScript program: top-level statements, `await` allowed, `return` (or a trailing expression) hands back the result.';
 
 /**
- * The `eval` docstring: tool doctrine, sandbox facts, then the namespace declarations
- * (`typeBlock`, assembled per backend). Both backends compose it here.
+ * The `eval` docstring: tool doctrine, sandbox facts, then every namespace declaration in order.
+ * Both backends compose it here, never through a template token: a `$` in a declaration is text.
  */
-export function renderCodemodeDescription(typeBlock: string, substrate: SandboxSubstrate = 'hosted'): string {
+export function renderCodemodeDescription(declarations: readonly (string | undefined)[], substrate: SandboxSubstrate = 'hosted'): string {
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     SANDBOX_FACTS[substrate],
     'Every native tool is `tools.<name>(input)` here with the same input object. Tools saved with `workspace.createTool` are callable as `tools.<name>(...)`; their current declarations are in dynamic_context. The declaration below lists the native tools. Variables do not survive between programs; `state.set`/`state.get` do.',
     'Start every program with exactly one `//` comment on the first nonblank line. State the operation and target in plain language, for example `// Read package.json to inspect its scripts`. The interface shows this line to the user as the call intent.',
-    `Namespaces bound in this sandbox:\n${typeBlock}`,
+    `Namespaces bound in this sandbox:\n${declarations.filter((types) => types !== undefined && types !== '').join('\n\n')}`,
   ].join('\n\n');
 }

@@ -201,6 +201,20 @@ describe('the eval docstring the model receives', () => {
     expect(description).not.toContain('type SearchInput = unknown');
   });
 
+  test('a declaration reaches the model verbatim, `$` sequences included', () => {
+    // `workspace.slates` names lifecycle members with `$`; a string `.replace` read "$`" as the text before the token.
+    const types = "export declare const probe: {\n  /** Members named with `$` are lifecycle: $' and $& and $$ too. */\n  $preview(): Promise<unknown>;\n};";
+    const { rt, testSql } = createTestRuntime();
+    initCraftedToolsTables(testSql.sql);
+
+    const built = createCodemodeToolFactory({
+      loader: workerLoader(), egress: null, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(),
+      extraProviders: () => [{ name: 'probe', tools: {}, types, positionalArgs: true }],
+    }).toolFor({});
+
+    expect(built.description).toContain(types);
+  });
+
   test('the code field is labelled as the script body it actually is', () => {
     // The inputSchema is core's (codemodeInputSchema), so the field and the docstring cannot disagree.
     const built = buildCodemode();

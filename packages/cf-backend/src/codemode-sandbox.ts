@@ -1,6 +1,6 @@
 /**
   * The `eval` sandbox: codemode's DynamicWorkerExecutor plus `kinu-node.js`, a `tools` prelude
-  * (process, require, env, crafted tools) and loopback egress (server.ts `CodemodeEgress`).
+  * (process, require, workspace.slates, env, crafted tools) and loopback egress (server.ts `CodemodeEgress`).
   */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
@@ -42,6 +42,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
   return [
     `    const __kinu = await import(${JSON.stringify(`./${KINU_NODE_MODULE_NAME}`)});`,
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
+    '    __kinu.bindSlates(__kinuWorkspace);',
     '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
     `    const process = __kinu.createProcess(${JSON.stringify(WORKSPACE_ROOT)});`,

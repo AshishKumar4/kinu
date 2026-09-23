@@ -48,7 +48,7 @@
 <tspan x="68" dy="0">Request a preview</tspan>
 </text>
 <text x="68" y="641" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">workspace.slate({ op: &quot;preview&quot;, id })</tspan>
+<tspan x="68" dy="0">workspace.slates[id].$preview()</tspan>
 <tspan x="68" dy="30">Compile source; boot the matching</tspan>
 <tspan x="68" dy="30">caller-scoped resident process.</tspan>
 </text>

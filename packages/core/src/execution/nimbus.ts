@@ -202,7 +202,7 @@ const WORKSPACE_NODE_UNAVAILABLE_MARK = 'cannot run JavaScript in this workspace
 const WORKSPACE_NODE_REFUSAL =
   `workspace node cannot run programs on this host: the runtime forbids code compilation from strings, so no node server starts here. `
   + `Run Node/Vite programs in an available capable executor, such as sandbox. `
-  + `Worker slates compile separately; use the declared slate preview operation when available, without a node precheck.`;
+  + `Worker slates compile separately: call workspace.slates.<id>.$preview(), without a node precheck.`;
 
 function invokesWorkspaceNode(command: string): boolean {
   return /(^|[;&|(\s])node(\s|$)/m.test(command);

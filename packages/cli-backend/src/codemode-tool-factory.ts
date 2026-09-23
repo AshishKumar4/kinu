@@ -32,7 +32,7 @@ const FIXED_NAMESPACES: readonly string[] = [
   'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require', 'process',
 ];
 
-const KinuNodeSchema = v.object({ createRequire: v.function(), createProcess: v.function(), loadBuiltins: v.function() });
+const KinuNodeSchema = v.object({ createRequire: v.function(), createProcess: v.function(), bindSlates: v.function(), loadBuiltins: v.function() });
 
 const BuiltinsSchema = v.object({ loaded: v.looseObject({}) });
 
@@ -80,13 +80,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
     return withCraftedToolDeclarations(tool({
       // Every provider's `types` must be read into the description, or the model
       // gets callables it was never told about.
-      description: renderCodemodeDescription(
-        [
-          toolsDeclaration,
-          ...providers.map((provider) => provider.types).filter((types) => types !== undefined && types !== ''),
-        ].join('\n\n'),
-        'local',
-      ),
+      description: renderCodemodeDescription([toolsDeclaration, ...providers.map((provider) => provider.types)], 'local'),
       inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
@@ -128,6 +122,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
 
           const workspace = providerBindings['workspace'] ?? {};
           const node = await loadKinuNode();
+          node.bindSlates(workspace);
 
           // Fixed names excluded: a duplicate `new Function` parameter crashes.
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));

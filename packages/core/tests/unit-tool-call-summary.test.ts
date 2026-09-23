@@ -110,7 +110,7 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('the codemode prompt requires the intent line the interface reads', () => {
-    const description = renderCodemodeDescription('declare const workspace: unknown;');
+    const description = renderCodemodeDescription(['declare const workspace: unknown;']);
     expect(description).toContain('Start every program with exactly one `//` comment');
     expect(description).toContain('The interface shows this line to the user as the call intent.');
   });

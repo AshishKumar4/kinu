@@ -386,18 +386,19 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const slate = deps.slate;
 
   if (slate !== undefined) {
-    tools.slate = {
+    // Captured and shadowed by `bindSlates`.
+    tools.slates = {
       planAllowed: true,
-      description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
+      description: 'The slate operations behind the workspace.slates members.',
       execute: async (...args: unknown[]): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, args[0]);
 
-        if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
-          'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
+        if (!parsed.success) return { success: false, ...refusalOf(new KinuError('bad_input',
+          'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) })) };
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
 
-        return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
+        return result.ok ? result.value : { success: false, reason: result.reason, error: result.error };
       },
     };
   }
@@ -454,17 +455,42 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
   ${slate === undefined ? '' : `/**
-   * A slate is an authored class with a React client, previewed and called through this operation. Read /skills/slates/SKILL.md before authoring one. Commit freezes source; fork copies a committed version; restore changes source, not history.
+   * Every slate in this workspace; read /skills/slates/SKILL.md before authoring one.
+   * \`workspace.slates.<id>\` is the slate's server class, the stub its own client gets:
+   * \`await workspace.slates.whiteboard.addStroke(stroke)\` runs \`addStroke\` and answers its result.
+   * Members named with \`$\` are the slate's lifecycle; no class method can take such a name.
    */
   type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
-  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number; inline: { height: number } } } | Refusal>;
-  function slate(input:
-    | { op: 'list' }
-    | { op: 'commit' | 'history'; id: string }
-    | { op: 'call'; id: string; method: string; args?: SlateValue[] }
-    | { op: 'fork'; version: string }
-    | { op: 'restore'; id: string; version: string }
-  ): Promise<{ ok: true; value: SlateValue } | Refusal>;
+  interface Slate {
+    /** Any method its class exports. */
+    [method: string]: (...args: SlateValue[]) => Promise<SlateValue | Refusal>;
+    /** Compile and boot it: the durable URL the chat and the work surface load. A compile error is \`bad_input\` naming file and line. */
+    $preview(): Promise<{ url: string; port: number; inline: { height: number } } | Refusal>;
+    /** The methods its class exports. */
+    $methods(): Promise<string[] | Refusal>;
+    /** Freeze its source as a version; \`$history()\` lists them, \`$restore(version)\` puts one's source back. */
+    $commit(): Promise<SlateValue | Refusal>;
+    $history(): Promise<SlateValue | Refusal>;
+    $restore(version: string): Promise<SlateValue | Refusal>;
+    /** End its process, URL, storage and files; committed versions stay. */
+    $remove(): Promise<SlateValue | Refusal>;
+    /** Sharing, the workspace root only: blueprints and live shares. */
+    $inspect(version: string, include?: string[]): Promise<SlateValue | Refusal>;
+    $publish(version: string, include?: string[]): Promise<SlateValue | Refusal>;
+    $share(options: { visibility: 'users' | 'public'; approved: Array<{ slate: string; binding: string; member: string }>; fork?: boolean }): Promise<SlateValue | Refusal>;
+    $graph(): Promise<SlateValue | Refusal>;
+  }
+  const slates: { readonly [id: string]: Slate } & {
+    /** Every slate, and why any failed to load. */
+    $list(): Promise<{ slates: Array<{ id: string; title: string; bindings: string[] }>; problems: Array<{ id: string; reason: string; error: string }> } | Refusal>;
+    /** Copy a committed version into a new slate. */
+    $fork(version: string): Promise<SlateValue | Refusal>;
+    /** Sharing, the workspace root only. */
+    $shares(): Promise<SlateValue | Refusal>;
+    $liveShares(): Promise<SlateValue | Refusal>;
+    $unshare(share: string): Promise<SlateValue | Refusal>;
+    $viewerRequests(share: string): Promise<SlateValue | Refusal>;
+  };
 `}
 }`;
 
@@ -489,7 +515,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         reason:
           `workspace executor runs in the Worker and cannot expose inbound ports. ` +
           `Use an available preview-capable executor for a Node/Vite server (port ${port}). ` +
-          `For an authored Worker slate, use its declared slate preview operation when available.`,
+          `For an authored Worker slate, call workspace.slates.<id>.$preview().`,
       };
     },
     async unexposePort() { /* nothing to do */ },
