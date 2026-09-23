@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { buildBuiltinTools, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName } from '@kinu.run/core';
+import { buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import {
@@ -227,6 +227,17 @@ describe('addressing the bound directory', () => {
 
     await rt.storage.vfs.writeFile('..hidden/file.txt', 'still inside');
     expect(readFileSync(join(project, '..hidden/file.txt'), 'utf8')).toBe('still inside');
+  });
+
+  test('a skill in the bound directory is discovered: the shared Drive this runtime lacks is absent, not an escape', async () => {
+    const { state, project } = roots('cwd-plane-skills');
+    mkdirSync(join(project, 'skills'), { recursive: true });
+    writeFileSync(join(project, 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
+    const rt = agentRuntime(state, 'solo', project);
+
+    const found = await discoverSkills(rt.storage.vfs, { admissionTokens: 100_000 });
+
+    expect(found.skills.find((skill) => skill.name === 'review')?.source).toBe('vfs');
   });
 });
 

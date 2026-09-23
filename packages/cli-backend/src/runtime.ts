@@ -23,7 +23,7 @@ import {
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, standardMounts, readTailWithVfsOps,
+  withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount,
@@ -518,6 +518,7 @@ export function createCLIRuntime(
 
   const agentVfs = withMountTable(fileVfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
@@ -795,6 +796,7 @@ async function buildCLIHeadRuntime(
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     }),
