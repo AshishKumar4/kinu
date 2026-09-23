@@ -1,8 +1,9 @@
 /** Credential-free checks for the first-run corpus, gating, and record admission. */
 import { describe, expect, test } from 'bun:test';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import * as v from 'valibot';
 
 import { assessAdmissibility, outcomeRow, scratchDir, subgoalOutcome, TASK_OUTCOME,
   type EvalObservation } from '@kinu.run/test-utils';
@@ -10,7 +11,7 @@ import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
 import {
   CI_EXEMPT, LADDER, packageScripts,
 } from '../../scripts/ladder';
-import firstRunConfig, { FIRST_RUN_INCLUDE } from '../../vitest.first-run.config';
+import firstRunConfig, { FIRST_RUN_INCLUDE, FIRST_RUN_PROJECTS, FLEET_MODULE, fleetCases } from '../../vitest.first-run.config';
 import {
   FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
 } from './first-run';
@@ -25,7 +26,7 @@ const RUNNER = 'scripts/first-run-tier.sh';
  *  the predicate `scripts/sources.ts` exports for it. */
 const onDisk = trackedFiles().filter(isFirstRunSuite).sort();
 
-test('a failed first-run process still reports spend and leaves its reports readable', () => {
+test('a red in either project reds the tier, which still reports spend and keeps its reports', () => {
   const root = scratchDir('first-run-shell-retention');
   const scripts = join(root, 'scripts');
   const bin = join(root, 'bin');
@@ -34,13 +35,19 @@ test('a failed first-run process still reports spend and leaves its reports read
   mkdirSync(join(root, 'tests/first-run'), { recursive: true });
   writeFileSync(join(root, 'tests/first-run/probe.first-run.ts'), '');
   copyFileSync(join(import.meta.dirname, '../../scripts/first-run-tier.sh'), join(scripts, 'first-run-tier.sh'));
+  // The fleet project fails and the cases project passes: the other
+  // project's green must not become the tier's verdict.
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
 case "$1" in
-  scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\n' "$REPORT_FIXTURE" ;;
+  scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\\n' "$REPORT_FIXTURE" ;;
   scripts/eval-session-mint.ts) ;;
-  scripts/eval-credentials.ts) printf '%s\n' 'https://kinu.run' 'fixture-token' ;;
-  --bun) printf '<testsuite failures="1"/>\n' > "$REPORT_FIXTURE/junit-first-run.xml"; printf 'measured-spend\n' > "$KINU_EVAL_SPEND_FILE"; exit 42 ;;
-  scripts/eval-spend.ts) printf 'reported\n' > "$REPORT_FIXTURE/spend-reported" ;;
+  scripts/eval-credentials.ts) printf '%s\\n' 'https://kinu.run' 'fixture-token' ;;
+  --bun) project="$(printf '%s\\n' "$@" | grep -A1 -x -- --project | tail -1)"
+    printf '%s\\n' "$project" >> "$REPORT_FIXTURE/projects"
+    printf 'measured-spend\\n' >> "$KINU_EVAL_SPEND_FILE"
+    if [[ "$project" == first-run-fleet ]]; then exit 42; fi
+    exit 0 ;;
+  scripts/eval-spend.ts) printf 'reported\\n' > "$REPORT_FIXTURE/spend-reported" ;;
   *) exit 99 ;;
 esac
 `, { mode: 0o755 });
@@ -51,8 +58,8 @@ esac
   });
 
   expect(run.status).toBe(42);
-  expect(existsSync(join(reports, 'junit-first-run.xml'))).toBe(true);
-  expect(readFileSync(join(reports, 'spend-first-run.jsonl'), 'utf8')).toBe('measured-spend\n');
+  expect(readFileSync(join(reports, 'projects'), 'utf8').trim().split('\n').sort()).toEqual(['first-run-cases', 'first-run-fleet']);
+  expect(readFileSync(join(reports, 'spend-first-run.jsonl'), 'utf8')).toBe('measured-spend\nmeasured-spend\n');
   expect(readFileSync(join(reports, 'spend-reported'), 'utf8')).toBe('reported\n');
 });
 
@@ -86,11 +93,46 @@ describe('the first-run corpus is the set this tier runs', () => {
     }
   });
 
-  test('the tier runs every case in one process, serially, with no wall clock', () => {
-    // Two cases attach machines to ONE account's device fleet, and one of them
-    // is measuring what happens when two machines are live. Running the files
-    // concurrently would have a sibling's daemons inside that measurement.
-    expect(firstRunConfig.test?.fileParallelism).toBe(false);
+  test('a case that attaches machines is derived into the fleet, however many hops out', () => {
+    const fleet = fleetCases(new Map([
+      [FLEET_MODULE, 'export const attachMachine = 1;'],
+      ['tests/first-run/helper.ts', "export { attachMachine } from './daemon';"],
+      ['tests/first-run/direct.first-run.ts', "import { attachMachine } from './daemon';"],
+      ['tests/first-run/indirect.first-run.ts', "import { attachMachine } from './helper';"],
+      ['tests/first-run/alone.first-run.ts', "import { firstRunCasePlan } from './first-run';"],
+    ]));
+
+    expect(fleet).toEqual(['tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts']);
+  });
+
+  test('the fleet cases run one at a time, the rest beside them, and together they are the corpus', () => {
+    // The account's device fleet is the one thing cases share: two-machines
+    // measures what happens when exactly two machines are live, so a sibling's
+    // daemon beside it is a third machine in the measurement. Asked of vitest
+    // itself, per project, so the partition is what the runner selects.
+    const selected = (project: string): string[] => {
+      const listed = spawnSync('bun', ['--bun', './node_modules/.bin/vitest', 'list', '--config', 'vitest.first-run.config.ts',
+        '--project', project, '--filesOnly', '--json'], { cwd: join(import.meta.dirname, '../..'), encoding: 'utf8' });
+
+      expect(listed.status, listed.stderr).toBe(0);
+
+      return v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout))
+        .map(({ file }) => relative(join(import.meta.dirname, '../..'), file)).sort();
+    };
+
+    const fleet = selected(FIRST_RUN_PROJECTS.fleet);
+    const cases = selected(FIRST_RUN_PROJECTS.cases);
+    expect(fleet).toEqual(fleetCases());
+    expect(fleet.length).toBeGreaterThan(0);
+    expect(cases.filter((file) => fleet.includes(file))).toEqual([]);
+    expect([...fleet, ...cases].sort()).toEqual(onDisk);
+
+    const projects = v.parse(
+      v.array(v.object({ test: v.object({ name: v.string(), maxWorkers: v.optional(v.number()) }) })),
+      firstRunConfig.test?.projects,
+    );
+
+    expect(projects.find((project) => project.test.name === FIRST_RUN_PROJECTS.fleet)?.test.maxWorkers).toBe(1);
     // A deployed episode's completion is decided by the episode. An elapsed
     // deadline here would report a slow model as a product defect.
     expect(firstRunConfig.test?.testTimeout).toBe(0);

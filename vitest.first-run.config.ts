@@ -25,17 +25,49 @@
  * than by an ignore list somebody has to keep in step, which is the same
  * argument the eval config makes about `.eval.ts`.
  *
+ * TWO PROJECTS, RUN SIDE BY SIDE by `scripts/first-run-tier.sh`. Every case
+ * opens its own fresh workspace, so cases do not share a workspace, a chat or a
+ * file. They share one ACCOUNT, and the account's device fleet is the one piece
+ * of it a case asserts on: the fleet is every machine live on the account
+ * (docs/EXECUTION-LAYER-SPEC.md), and two-machines measures what happens when
+ * exactly two are live, so a sibling's daemon inside that window is a third
+ * machine in the measurement. The cases that attach machines — derived, never
+ * listed: the ones that reach `tests/first-run/daemon.ts` — run one at a time in
+ * `first-run-fleet`; every other case runs concurrently in `first-run-cases`.
+ * Measured on the b2c60d09f deploy: 959 s of case time in series; the three
+ * fleet cases hold 320 s of it and the longest other case 130 s.
+ *
  * The credential-free half of the tier is `tests/first-run/wiring.test.ts` — a
  * `.test.ts` deliberately, so the existing `bun test ./tests/` gate runs it at
  * ci and at deploy, before anything is deployed and at no cost.
  */
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import { promptText } from './packages/cf-backend/vite-prompt-text';
+import { modulesReaching } from './scripts/import-closure';
+import { isFirstRunSuite, isParseable, readMatching, trackedFiles } from './scripts/sources';
 
 /** The one glob that decides what this tier runs. `wiring.test.ts` holds it
  *  equal to the corpus on disk, so a case file that lands outside it is a
  *  failure rather than a suite nobody runs. */
 export const FIRST_RUN_INCLUDE = 'tests/first-run/**/*.first-run.ts';
+
+/** The module that attaches a real machine to the account. */
+export const FLEET_MODULE = 'tests/first-run/daemon.ts';
+
+/** The two projects, by the names `scripts/first-run-tier.sh` selects. */
+export const FIRST_RUN_PROJECTS = { fleet: 'first-run-fleet', cases: 'first-run-cases' } as const;
+
+/** The case files that attach machines to the account's device fleet: every
+ *  case whose import closure reaches {@link FLEET_MODULE}. */
+export function fleetCases(
+  sources: ReadonlyMap<string, string> = readMatching((file) => file.startsWith('tests/first-run/') && isParseable(file)),
+): string[] {
+  return [...modulesReaching(sources, (file) => file === FLEET_MODULE)].filter(isFirstRunSuite).sort();
+}
+
+const fleet = fleetCases();
+
+const others = trackedFiles().filter((file) => isFirstRunSuite(file) && !fleet.includes(file));
 
 export default defineConfig({
   plugins: [promptText()],
@@ -53,15 +85,17 @@ export default defineConfig({
     // is Vitest's documented disabled-timeout value.
     testTimeout: 0,
     hookTimeout: 0,
-    // One account, one deployment, and two cases that attach machines to it.
-    // Concurrency here would have two cases racing each other's device fleet,
-    // which is the very state the fleet case is measuring.
-    fileParallelism: false,
     env: {
       // No replay, for the reason the eval tier states: a recording serialises
       // tool input and output verbatim, which for this tier is where a device
       // token lands.
       VITEST_EVALS_REPLAY_MODE: 'off',
     },
+    // Each project is the whole include minus the other's cases: an extending
+    // project's `include` is merged with the root's rather than replacing it.
+    projects: [
+      { extends: true, test: { name: FIRST_RUN_PROJECTS.fleet, maxWorkers: 1, exclude: [...configDefaults.exclude, ...others] } },
+      { extends: true, test: { name: FIRST_RUN_PROJECTS.cases, exclude: [...configDefaults.exclude, ...fleet] } },
+    ],
   },
 });

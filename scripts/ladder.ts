@@ -51,6 +51,7 @@ import {
   trackedFiles,
 } from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
+import { modulesReaching } from './import-closure';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCosts } from './gate-cost';
 
@@ -1255,8 +1256,10 @@ export const LADDER: readonly Gate[] = [
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
     // `unit-codemode-sandbox.test.ts` imports the node shim it wrote to scratch
-    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's.
-    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
+    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's. Measured by
+    // `--audit-closure` 2026-09-23: the suite opens 247 tracked files off its
+    // graph, across docs/, public/ and src/components/, so it reads the tree.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
   },
 
   {
@@ -1311,7 +1314,10 @@ export const LADDER: readonly Gate[] = [
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23: 14 tracked files off its graph
+    // in five packages and the repository root (git's ignore files, AGENTS.md,
+    // spawned workers, sibling manifests), so it reads the tree.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     // Measured 2026-08-23: 40.0s. `behavior.test.ts` alone took 23.36s and
@@ -2353,9 +2359,13 @@ export interface PlanRow {
 
 /**
  * The deploy plan: every deploy-tier gate with its phase, label, measured cost
- * and deadline, in phase order and, within a phase, in ladder order. This is
- * what `bash scripts/deploy.sh` schedules from — the single source of what
- * blocks a publish.
+ * and deadline, in phase order. This is what `bash scripts/deploy.sh`
+ * schedules from — the single source of what blocks a publish.
+ *
+ * LONGEST FIRST inside the concurrent `source` wave, by the row's measured
+ * solo wall: the runner launches the first row that fits, so a long row
+ * listed late starts late and the wave waits on its tail. Every other phase
+ * keeps ladder order; its rows run alone or are the two post-publish tiers.
  *
  * REFUSES rather than defaults. A `source` row is admitted CONCURRENTLY, so a
  * row there with no measurement is a row the wave would schedule against a
@@ -2368,7 +2378,7 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
   const tracked = trackedTestFiles();
   const browsers = sharedBrowserModules();
 
-  return deployOrder().map((gate) => {
+  const rows = deployOrder().map((gate): PlanRow => {
     const phase = gate.phase ?? 'source';
     const cost = costs.rows[gate.run];
 
@@ -2390,6 +2400,14 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
       shared: sharedOf(gate, tracked, browsers) ?? 'none',
       run: gate.run,
     };
+  });
+
+  const wall = (row: PlanRow): number => costs.rows[row.run]?.wallSeconds ?? 0;
+
+  return DEPLOY_PHASES.flatMap((phase) => {
+    const inPhase = rows.filter((row) => row.phase === phase);
+
+    return phase === 'source' ? inPhase.sort((left, right) => wall(right) - wall(left)) : inPhase;
   });
 }
 
@@ -2452,24 +2470,6 @@ export const SHARED_POOL = /(?:vitest|workerd|vite )/u;
  *  `computed-style.ts` → `gallery-harness.ts` → puppeteer). */
 const BROWSER_IMPORT = /from ['"]puppeteer['"]/u;
 
-/** A relative module edge, as this repository spells one: extensionless, so
- *  the resolution below appends `.ts` and keeps only what the corpus holds. */
-const RELATIVE_IMPORT = /(?:from|import)\s*\(?\s*['"](\.[^'"]+)['"]/gu;
-
-function collapseRelative(from: string, specifier: string): string {
-  const parts = `${from.slice(0, from.lastIndexOf('/'))}/${specifier}`.split('/');
-  const out: string[] = [];
-
-  for (const part of parts) {
-    if (part === '.' || part === '') continue;
-
-    if (part === '..') out.pop();
-    else out.push(part);
-  }
-
-  return out.join('/');
-}
-
 /**
  * Every module in `sources` that reaches a headless browser: one that imports
  * puppeteer, or one that imports — however many hops out — a module that does.
@@ -2482,48 +2482,9 @@ function collapseRelative(from: string, specifier: string): string {
  * import a harness that imports another one. A row whose browser cost is
  * invisible to the derivation is a row the wave admits beside another browser
  * row, which is the 2026-09-18 failure.
- *
- * Pure over the map it is given, so the fixture in `ladder.test.ts` proves
- * both directions without the tree.
  */
 export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
-  const reaching = new Set<string>();
-  const importers = new Map<string, string[]>();
-
-  for (const [file, text] of sources) {
-    if (BROWSER_IMPORT.test(text)) reaching.add(file);
-
-    for (const [, specifier] of text.matchAll(RELATIVE_IMPORT)) {
-      if (specifier === undefined) continue;
-      const base = collapseRelative(file, specifier);
-
-      for (const target of [base, `${base}.ts`]) {
-        if (!sources.has(target)) continue;
-        const seen = importers.get(target);
-
-        if (seen === undefined) importers.set(target, [file]);
-        else seen.push(file);
-      }
-    }
-  }
-
-  // Reverse edges, so the walk is over importers of what already reaches a
-  // browser: one pass per newly reached module, never a re-scan of the corpus.
-  const pending = [...reaching];
-
-  while (pending.length > 0) {
-    const next = pending.pop();
-
-    if (next === undefined) continue;
-
-    for (const importer of importers.get(next) ?? []) {
-      if (reaching.has(importer)) continue;
-      reaching.add(importer);
-      pending.push(importer);
-    }
-  }
-
-  return reaching;
+  return modulesReaching(sources, (_file, text) => BROWSER_IMPORT.test(text));
 }
 
 /** The corpus the closure reads: every parseable tracked file. Measured

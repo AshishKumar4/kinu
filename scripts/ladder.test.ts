@@ -139,6 +139,28 @@ describe('the ladder measures something', () => {
     expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
   });
 
+  test('the concurrent wave starts its longest measured rows first, and every alone phase keeps ladder order', () => {
+    // Walls assigned against ladder order, so a plan that kept ladder order
+    // inside the wave, or sorted the other way, reads the wrong row first.
+    const real = readCosts();
+    const ladderOrder = LADDER.map((gate) => gate.run);
+
+    const costs = {
+      ...real,
+      rows: Object.fromEntries(Object.entries(real.rows).map(([run, cost]) => [run, { ...cost, wallSeconds: ladderOrder.indexOf(run) }])),
+    };
+
+    const plan = deployPlan(costs);
+    const source = plan.filter((row) => row.phase === 'source').map((row) => costs.rows[row.run]?.wallSeconds ?? -1);
+
+    expect(source.length).toBeGreaterThan(10);
+    expect(source).toEqual([...source].sort((left, right) => right - left));
+
+    const alone = plan.filter((row) => row.phase !== 'source').map((row) => ladderOrder.indexOf(row.run));
+    expect(alone).toEqual(DEPLOY_PHASES.flatMap((phase) => LADDER.filter((gate) => gate.tier !== 'evals' && gate.phase === phase))
+      .map((gate) => ladderOrder.indexOf(gate.run)));
+  });
+
   // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, and a figure for a row
   // that no longer exists is the same defect as a row with no figure: both are
   // a scheduler deciding from something nobody measured. `deployPlan()`
