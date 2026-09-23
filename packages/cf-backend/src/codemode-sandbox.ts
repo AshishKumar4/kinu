@@ -1,6 +1,6 @@
 /**
-  * The `eval` sandbox: codemode's DynamicWorkerExecutor plus the `kinu-node.js` module, a `tools`
-  * prelude (require, env, crafted tools) and loopback egress (server.ts `CodemodeEgress`).
+  * The `eval` sandbox: codemode's DynamicWorkerExecutor plus `kinu-node.js`, a `tools` prelude
+  * (process, require, env, crafted tools) and loopback egress (server.ts `CodemodeEgress`).
   */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
@@ -11,7 +11,7 @@ import {
   type CraftedToolSource,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
 import { EGRESS_FAILURE_HEADER } from './codemode-egress';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
@@ -44,7 +44,8 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
     '    const __kinuState = typeof state === "undefined" ? null : state;',
     '    const __kinuBuiltins = await __kinu.loadBuiltins();',
-    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded });',
+    `    const process = __kinu.createProcess(${JSON.stringify(WORKSPACE_ROOT)});`,
+    '    const require = __kinu.createRequire({ workspace: __kinuWorkspace, builtins: __kinuBuiltins.loaded, cwd: process.cwd() });',
     `    const fetch = __kinu.createFetch(${JSON.stringify(EGRESS_FAILURE_HEADER)});`,
     `    const env = Object.freeze({ workspace: ${JSON.stringify(identity.workspace)}, state: __kinuState, missingBuiltins: __kinuBuiltins.missing });`,
     '    Object.assign(tools, {',

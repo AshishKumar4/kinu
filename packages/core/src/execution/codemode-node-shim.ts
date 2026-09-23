@@ -1,7 +1,8 @@
 /**
  * Source of the Node-convenience module loaded beside an `eval` program; plain JS because it runs inside the
- * sandbox isolate. `fs`/`child_process` are shimmed over `workspace`; `createFetch` turns the egress entrypoint's
- * marked 502 back into a rejection; `defineCrafted` isolates each crafted tool (`[crafted:<name>]` marker).
+ * sandbox isolate. `fs`/`child_process` are shimmed over `workspace`, and `process.cwd()` answers the working
+ * root the host resolves relative paths against; `createFetch` turns the egress entrypoint's marked 502 back
+ * into a rejection; `defineCrafted` isolates each crafted tool (`[crafted:<name>]` marker).
  */
 
 export const KINU_NODE_MODULE_NAME = 'kinu-node.js';
@@ -28,18 +29,37 @@ export async function loadBuiltins() {
 }
 
 function refusalOf(result) {
-  if (result && typeof result === 'object' && typeof result.error === 'string' && typeof result.reason === 'string') {
-    return result.error;
-  }
+  const refused = (value) => value && typeof value === 'object' && typeof value.error === 'string'
+    && (value.success === false || typeof value.reason === 'string');
+  if (refused(result)) return result.error;
   if (typeof result === 'string' && result.startsWith('{')) {
     try {
       const parsed = JSON.parse(result);
-      if (parsed && typeof parsed.error === 'string' && typeof parsed.reason === 'string') return parsed.error;
+      if (refused(parsed)) return parsed.error;
     } catch {
       return null;
     }
   }
   return null;
+}
+
+/** A relative path joined onto the working root, as the host would resolve it; an absolute or empty one as given. */
+function resolveAt(cwd, path) {
+  const text = String(path);
+  if (text === '' || text.startsWith('/')) return text;
+  const segments = [];
+  for (const segment of (cwd + '/' + text).split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') segments.pop();
+    else segments.push(segment);
+  }
+  return '/' + segments.join('/');
+}
+
+/** The platform's process object plus a working directory: the root relative paths resolve against. */
+export function createProcess(cwd) {
+  const own = { cwd: () => cwd };
+  return globalThis.process ? Object.setPrototypeOf(own, globalThis.process) : own;
 }
 
 function fsError(code, message, path, syscall) {
@@ -79,23 +99,25 @@ function parseExec(rendered) {
   return { exitCode: exit ? Number(exit[1]) : 0, stdout, stderr };
 }
 
-function makeFs(workspace) {
+function makeFs(workspace, cwd) {
   const toText = (data) => typeof data === 'string' ? data : new TextDecoder().decode(data);
   const encodingOf = (options) => typeof options === 'string' ? options : options && options.encoding;
 
   async function readFile(path, options) {
-    const raw = await workspace.readFile(String(path));
+    const target = resolveAt(cwd, path);
+    const raw = await workspace.readFile(target);
     const refused = refusalOf(raw);
-    if (refused) throw fsError('ENOENT', refused, String(path), 'open');
+    if (refused) throw fsError('ENOENT', refused, target, 'open');
     const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
     const encoding = encodingOf(options);
     if (encoding === undefined || encoding === null) return new TextEncoder().encode(text);
     return text;
   }
   async function writeFile(path, data) {
-    const result = await workspace.writeFile(String(path), toText(data));
+    const target = resolveAt(cwd, path);
+    const result = await workspace.writeFile(target, toText(data));
     const refused = refusalOf(result);
-    if (refused) throw fsError('EACCES', refused, String(path), 'open');
+    if (refused) throw fsError('EACCES', refused, target, 'open');
   }
   async function appendFile(path, data) {
     let current = '';
@@ -107,19 +129,20 @@ function makeFs(workspace) {
     await writeFile(path, current + toText(data));
   }
   async function readdir(path, options) {
-    const entries = await workspace.readdir(String(path));
+    const target = resolveAt(cwd, path);
+    const entries = await workspace.readdir(target);
     const refused = refusalOf(entries);
-    if (refused) throw fsError('ENOENT', refused, String(path), 'scandir');
+    if (refused) throw fsError('ENOENT', refused, target, 'scandir');
     const names = Array.isArray(entries) ? entries.map(String) : [];
     if (!(options && options.withFileTypes)) return names;
-    const base = String(path).replace(/\/+$/, '');
+    const base = target.replace(/\/+$/, '');
     return await Promise.all(names.map(async (name) => {
       const info = await stat(base + '/' + name);
       return { name, isFile: () => info.isFile(), isDirectory: () => info.isDirectory() };
     }));
   }
   async function stat(path) {
-    const target = String(path);
+    const target = resolveAt(cwd, path);
     let directory = false;
     let size = 0;
     try {
@@ -145,20 +168,29 @@ function makeFs(workspace) {
     const outcome = parseExec(await workspace.exec(command));
     if (outcome.exitCode !== 0) throw fsError('EIO', outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode), path, syscall);
   }
-  const mkdir = (path, options) => run('mkdir ' + (options && options.recursive ? '-p ' : '') + '-- ' + shellQuote(path), String(path), 'mkdir');
-  const rm = (path, options) => run('rm ' + (options && options.recursive ? '-r ' : '') + (options && options.force ? '-f ' : '') + '-- ' + shellQuote(path), String(path), 'rm');
-  const unlink = (path) => run('rm -- ' + shellQuote(path), String(path), 'unlink');
-  const rmdir = (path) => run('rmdir -- ' + shellQuote(path), String(path), 'rmdir');
-  const copyFile = (from, to) => run('cp -- ' + shellQuote(from) + ' ' + shellQuote(to), String(from), 'copyfile');
-  const rename = (from, to) => run('mv -- ' + shellQuote(from) + ' ' + shellQuote(to), String(from), 'rename');
+  const onPath = (path, command, syscall) => {
+    const target = resolveAt(cwd, path);
+    return run(command + shellQuote(target), target, syscall);
+  };
+  const mkdir = (path, options) => onPath(path, 'mkdir ' + (options && options.recursive ? '-p ' : '') + '-- ', 'mkdir');
+  const rm = (path, options) => onPath(path, 'rm ' + (options && options.recursive ? '-r ' : '') + (options && options.force ? '-f ' : '') + '-- ', 'rm');
+  const unlink = (path) => onPath(path, 'rm -- ', 'unlink');
+  const rmdir = (path) => onPath(path, 'rmdir -- ', 'rmdir');
+  const carry = (from, to, command, syscall) => {
+    const source = resolveAt(cwd, from);
+    return run(command + shellQuote(source) + ' ' + shellQuote(resolveAt(cwd, to)), source, syscall);
+  };
+  const copyFile = (from, to) => carry(from, to, 'cp -- ', 'copyfile');
+  const rename = (from, to) => carry(from, to, 'mv -- ', 'rename');
   async function access(path) {
-    const present = await workspace.exists(String(path));
-    if (present !== true) throw fsError('ENOENT', 'no such file or directory', String(path), 'access');
+    const target = resolveAt(cwd, path);
+    const present = await workspace.exists(target);
+    if (present !== true) throw fsError('ENOENT', 'no such file or directory', target, 'access');
   }
   const promises = {
     readFile, writeFile, appendFile, readdir, stat, lstat: stat, mkdir, rm, unlink, rmdir,
     copyFile, rename, access,
-    exists: async (path) => (await workspace.exists(String(path))) === true,
+    exists: async (path) => (await workspace.exists(resolveAt(cwd, path))) === true,
   };
   const unavailable = (name) => () => {
     throw new Error('fs.' + name + ' is not available in this sandbox: use await require("fs/promises").' + name.replace(/Sync$/, '') + '(...)');
@@ -207,8 +239,8 @@ function makeChildProcess(workspace) {
   return { exec, execFile, spawn: unavailable('spawn'), execSync: unavailable('execSync'), spawnSync: unavailable('spawnSync'), fork: unavailable('fork') };
 }
 
-export function createRequire({ workspace, builtins }) {
-  const { fs, promises } = makeFs(workspace);
+export function createRequire({ workspace, builtins, cwd }) {
+  const { fs, promises } = makeFs(workspace, cwd);
   const childProcess = makeChildProcess(workspace);
   const table = {
     fs, 'fs/promises': promises, child_process: childProcess,
