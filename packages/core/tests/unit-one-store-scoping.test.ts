@@ -34,7 +34,7 @@ import {
 } from '../src/identity/effect-tombstones';
 import { initTerminalEffectTable, TerminalEffectLedger } from '../src/orchestrator/terminal-effects';
 import {
-  initToolEffectClaimTable, claimToolEffect, settleToolEffect, releaseTurnEffectClaims,
+  initToolEffectClaimTable, claimToolEffect, settleToolEffect,
 } from '../src/tools/effect-claim';
 import { initDeferredApprovalsTable, DeferredApprovalStore } from '../src/safety/deferred-approval';
 import {
@@ -480,10 +480,6 @@ describe('two actors, one database: tool_effect_claims', () => {
     const a = claimToolEffect(w.sql, w.a, key);
     expect(a.kind === 'settled' ? a.result : null).toBe('done-by-a');
     // B's own attempt is unsettled, not settled by A's result.
-    expect(claimToolEffect(w.sql, w.b, key).kind).toBe('indeterminate');
-
-    releaseTurnEffectClaims(w.sql, w.a, 'turn-1');
-    expect(w.count('tool_effect_claims')).toBe(1);
     expect(claimToolEffect(w.sql, w.b, key).kind).toBe('indeterminate');
     w.close();
   });

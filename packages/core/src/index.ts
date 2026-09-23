@@ -735,7 +735,7 @@ export {
 
 // Applied inside buildActorTools; backends never wrap tools themselves.
 export {
-  initToolEffectClaimTable, claimToolEffect, settleToolEffect, releaseTurnEffectClaims,
+  initToolEffectClaimTable, claimToolEffect, settleToolEffect,
   withEffectClaims,
   type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
@@ -1099,7 +1099,6 @@ export {
 // Auto-judge shadow evaluation
 export {
   runAutoShadowEval,
-  createStructuredJudge,
   JudgeOutputSchema,
   DEFAULT_AUTO_JUDGE_CONFIG,
   type AutoJudgeConfig,
@@ -1301,7 +1300,7 @@ export {
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
-  parseJsonValue, parseJsonObject, parseJsonArray, decodeJsonValue, projectJsonValue, nonEmptyString,
+  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, projectJsonValue, nonEmptyString,
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
@@ -1906,7 +1905,7 @@ export type {
 
 // Read models
 export {
-  classifyEvolutionType, getRunTimeline, runEventToSpan, safeJsonParse, toolKindFor,
+  classifyEvolutionType, getRunTimeline, runEventToSpan, toolKindFor,
   RUN_TIMELINE_DEFAULT, RUN_TIMELINE_MAX,
 } from './read-models/timeline';
 
@@ -1944,7 +1943,7 @@ export {
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
 
 export {
-  computeWorkspaceDiff, diffLines, fileDiff, parseGitDiff, MAX_LINES_PER_FILE,
+  diffLines, fileDiff, parseGitDiff, MAX_LINES_PER_FILE,
 } from './vfs/diff';
 
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';

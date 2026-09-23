@@ -172,10 +172,6 @@ export class ActorClaimStore {
       workingRevision: request.source.revision, workingContextId: request.source.contextId, stepIndex: request.step, messageCount: request.messages.length }));
   }
 
-  async contextRevision(requestId: string): Promise<ContextRevision | null> {
-    return this.history.requests.read(requestId) === null ? null : this.materialize(requestId);
-  }
-
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
     this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET status='settled',outcome=${outcome},settled_at=${nowMs()} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
   }
