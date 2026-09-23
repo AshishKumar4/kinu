@@ -4,12 +4,13 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { VFS, VfsRevision } from '../src/types/primitives';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
-import { isVfsError } from '../src/vfs/errno';
+import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 
-/** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it. */
+/** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it; a miss throws the
+ *  VfsError the real backends throw. */
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
 	const dirs = new Set<string>();
@@ -24,13 +25,13 @@ function fakeTree(entries: Record<string, string>): VFS {
 		readFile: async (path) => {
 			const content = files.get(path);
 
-			if (content === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+			if (content === undefined) throw makeVfsError('ENOENT', 'no such file or directory', path);
 
 			return content;
 		},
 		writeFile: async (path, data) => { files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
 		readdir: async (path) => {
-			if (path !== '/' && !dirs.has(path)) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+			if (path !== '/' && !dirs.has(path)) throw makeVfsError('ENOENT', 'no such directory', path);
 			const names = new Set<string>();
 			const prefix = path === '/' ? '/' : `${path}/`;
 

@@ -7,8 +7,8 @@ import { DurableObject } from 'cloudflare:workers';
 import { nimbusSessionFiles } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { workspaceBoxFiles } from '@kinu.run/core/workspace';
 
 export interface RangeReadReport {
   readonly execs: readonly string[];
@@ -16,79 +16,23 @@ export interface RangeReadReport {
   readonly content: string | null;
 }
 
-/** The SDK file contract answers `null` for ENOENT, and nothing else. */
-function absentAsNull<T>(read: () => T): T | null {
-  try {
-    return read();
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('ENOENT')) return null;
-    throw error;
-  }
-}
-
 export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
-  private _session: Promise<CredentialedVfs> | undefined;
+  private _workspace: Promise<SqliteVFS> | undefined;
 
-  private session(): Promise<CredentialedVfs> {
-    this._session ??= (async () => {
-      const workspace = await NimbusWorkspace.create({
-        sql: this.ctx.storage.sql,
-        transactions: { storage: this.ctx.storage },
-      });
+  private workspace(): Promise<SqliteVFS> {
+    this._workspace ??= NimbusWorkspace.create({
+      sql: this.ctx.storage.sql,
+      transactions: { storage: this.ctx.storage },
+    }).then((workspace) => workspace.vfs);
 
-      return workspace.vfs.as(CRED_SESSION_USER);
-    })();
-
-    return this._session;
+    return this._workspace;
   }
 
-  /** The orchestrator's file-plane handle, except `exec` refuses and records: a read reaching it
-   *  failed. */
-  private async box(): Promise<NimbusSandboxHandle> {
-    const vfs = await this.session();
-
-    const files: NimbusSandboxHandle['files'] = {
-      read: async (path) => absentAsNull(() => vfs.readFileString(path)),
-      readBytes: async (path) => absentAsNull(() => vfs.readFile(path)),
-      write: async (path, content) => { vfs.writeFile(path, content); },
-      list: async (path) =>
-        vfs.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
-      stat: async (path) => absentAsNull(() => {
-        const s = vfs.stat(path);
-
-        return { type: s.type, size: s.size, mtime: s.mtime };
-      }),
-      lstat: async (path) => absentAsNull(() => {
-        const s = vfs.lstat(path);
-
-        return { type: s.type, size: s.size, mtime: s.mtime, mode: s.mode };
-      }),
-      rename: async (from, to) => { vfs.rename(from, to); },
-      chmod: async (path, mode) => { vfs.chmod(path, mode); },
-      exists: async (path) => vfs.exists(path),
-      mkdir: async (path) => { vfs.mkdir(path, { recursive: true }); },
-      // Mirrors workspace-host.ts's workspaceBoxFiles; the typecheck holds the shape, this probe
-      // the behavior.
-      readRange: async (path, offset, length) => absentAsNull(() => vfs.readRange(path, offset, length)),
-      delete: async (path, options) => {
-        if (options?.recursive) {
-          vfs.removeRecursive(path);
-
-          return;
-        }
-
-        if (vfs.stat(path).type === 'directory') {
-          vfs.rmdir(path);
-
-          return;
-        }
-
-        vfs.unlink(path);
-      },
-    };
-
+  /** The orchestrator's file-plane handle over production's box files, except `exec` refuses and
+   *  records: a read reaching it failed. */
+  private box(): NimbusSandboxHandle {
     return {
-      files,
+      files: workspaceBoxFiles(() => this.workspace()),
       ready: async () => undefined,
       exec: async (command) => {
         this.execs.push(command);
@@ -102,7 +46,7 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
   /** The box plane's `readRange` is `readNimbusOriginRange`, the `node -e` reader. */
   async readRange(path: string, offset: number, length: number): Promise<RangeReadReport> {
     this.execs = [];
-    const plane = nimbusSessionFiles(await this.box());
+    const plane = nimbusSessionFiles(this.box());
 
     try {
       const bytes = await plane.readRange(path, offset, length);

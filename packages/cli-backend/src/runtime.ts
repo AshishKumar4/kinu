@@ -4,13 +4,13 @@
  * AGENTS.md) binds to `config.cwd` when set, else shares the in-SQLite tree.
  */
 
-import type { Database, SQLQueryBindings } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
 import type {
-  AgentRuntime, ActorHandle, ActorReference, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
+  AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell,
 } from '@kinu.run/core';
 import type {
-  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
+  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
@@ -47,12 +47,13 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { MemoryStore } from '@kinu.run/agent-utils';
-import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils';
+import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils';
 import { createSandboxedExecutor } from './executor';
 import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
+import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
 import { createBranchSpawner } from './branch-process';
 import {
@@ -135,45 +136,8 @@ export interface CLIRuntime extends AgentRuntime {
 
 export type LocalDb = Database;
 
-type WorkspaceSql = Parameters<typeof createWorkspaceFilesystem>[0]['sql'];
-
-type WorkspaceTransactions = Parameters<typeof createWorkspaceFilesystem>[0]['transactions'];
-
-interface NimbusSqlRow {
-  [column: string]: string | number | bigint | null | ArrayBuffer | ArrayBufferView;
-}
-
-interface LocalSqlRow {
-  [column: string]: string | number | boolean | null | ArrayBuffer | Uint8Array;
-}
-
-const sqlBindingSchema = v.union([
-  v.string(), v.number(), v.bigint(), v.boolean(), v.null(),
-  v.instance(ArrayBuffer), v.instance(Uint8Array),
-]);
-
-function bunSqlBinding(input: { value: unknown }): SQLQueryBindings {
-  const value = v.parse(sqlBindingSchema, input.value);
-
-  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
-}
-
 export function makeSql(db: Database): SqlExecutor {
-  const sql: SqlExecutor = function <T = unknown>(
-    strings: TemplateStringsArray,
-    ...values: SqlValue[]
-  ): T[] {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
-    // native type); bun:sqlite only binds TypedArrays, so coerce.
-    const bound = values.map((value) => bunSqlBinding({ value }));
-
-    // `all()` for every statement, as DO `storage.sql` does: `UPDATE … RETURNING`
-    // is a write that produces rows, so sniffing the verb would return `[]`.
-    return db.prepare<T, SQLQueryBindings[]>(query).all(...bound);
-  };
-
-  return sql;
+  return wrapDatabase(db).sql;
 }
 
 export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
@@ -184,32 +148,10 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  *  Nimbus filesystem read as the kernel. */
 export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 'readFile'> {
   if (cwd !== null) return createCwdPlaneVFS(cwd, undefined);
-  const vfs = new SqliteVFS(nimbusSql(db), localTransactions(db)).as(CRED_KERNEL);
+  const storage = inlineWorkspaceStorage(db);
+  const vfs = new SqliteVFS(storage.sql, storage.transactions).as(CRED_KERNEL);
 
   return { readFile: (path, opts) => Promise.resolve(opts?.encoding === undefined ? vfs.readFile(path) : vfs.readFileString(path)) };
-}
-
-export function nimbusSql(db: Database): WorkspaceSql {
-  const exec: WorkspaceSql['exec'] = (query, ...bindings) => {
-    const bound = bindings.map((value) => bunSqlBinding({ value }));
-    const stmt = db.prepare<NimbusSqlRow, SQLQueryBindings[]>(query);
-
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
-    stmt.run(...bound);
-
-    return [];
-  };
-
-  return { exec };
-}
-
-/** `bun:sqlite` transactions; a database without one runs non-atomically, stated rather than pretended. */
-export function localTransactions(db: Database): WorkspaceTransactions {
-  return {
-    storage: {
-      transactionSync: <T,>(callback: () => T): T => db.transaction(callback)(),
-    },
-  };
 }
 
 /**
@@ -221,27 +163,7 @@ const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRunti
 
 /** Positional-binding SQL; a Durable Object's `ctx.storage.sql` is this natively. */
 export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
-  const exec: SqlExec['exec'] = (query, ...bindings) => {
-    const bound = bindings.map((value) => bunSqlBinding({ value }));
-    // Eager and `all()` regardless of verb, like `storage.sql.exec`.
-    const rows = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query).all(...bound).map(toSqlRow);
-
-    return { toArray: () => rows };
-  };
-
-  return { exec };
-}
-
-function toSqlRow(row: LocalSqlRow) {
-  const output: Record<string, SqlValue> = {};
-
-  for (const [column, value] of Object.entries(row)) {
-    output[column] = value instanceof Uint8Array
-      ? new Uint8Array(value).buffer
-      : value;
-  }
-
-  return output;
+  return sqlStorageOver(db);
 }
 
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
@@ -265,24 +187,6 @@ function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRa
     },
     read: (path) => store.readFile(path),
     tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
-  };
-}
-
-/** The concrete store returns null for a miss; core uses undefined. */
-function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
-  return {
-    create(tool) {
-      store.create(tool);
-    },
-    update(name, patch) {
-      store.update(name, patch);
-    },
-    get(name) {
-      return store.get(name) ?? undefined;
-    },
-    delete(name) { store.delete(name); },
-    list() { return store.list(); },
-    search(query, limit = 10) { return store.search(query, limit); },
   };
 }
 
@@ -439,12 +343,11 @@ export function createCLIRuntime(
     codexConfigPath: config.codexConfigPath,
   });
 
-  const workspaceSql = nimbusSql(db);
+  const storage = inlineWorkspaceStorage(db);
 
   const workspace = createWorkspaceFilesystem({
-    sql: workspaceSql,
-    transactions: localTransactions(db),
-    generation: workspaceGenerationStorage(workspaceSql),
+    ...storage,
+    generation: workspaceGenerationStorage(storage.sql),
     runtimes: WORKSPACE_RUNTIMES,
     runtimeFacets: localFacetHost(),
   } satisfies WorkspaceOptions);
@@ -460,7 +363,7 @@ export function createCLIRuntime(
 
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
-  const craftStore = adaptCraftStore(craftStoreImpl);
+  const craftStore = craftStoreView(craftStoreImpl);
   let approvalChannel: RequestShellApproval | null = null;
   let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
@@ -504,7 +407,7 @@ export function createCLIRuntime(
       return { vfs: fileVfs, artifactDirectory };
     }
 
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: workspaceSql }))(), () => target.assertCurrent())(actorFacetName(record));
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
 
     if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
     const plane = await workspace.asAgent(home);
@@ -587,7 +490,7 @@ export function createCLIRuntime(
   if (facetShell) {
     runtime.facetShell = facetShell;
   } else {
-    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
+    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: storage.sql });
   }
 
   runtime.nodeRuntime = localNodeRuntime({

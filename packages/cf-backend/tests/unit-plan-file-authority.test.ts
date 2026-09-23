@@ -1,18 +1,18 @@
 import { expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { providersInWorkMode, type JsonValue } from '@kinu.run/core';
-import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
+import type { JsonValue } from '@kinu.run/core';
+import { orchestratorHarness, chatSessionTurns, workspaceFiles } from './helpers/actor-harness';
 import * as v from 'valibot';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 
 test('a real Plan turn reads files but cannot edit them, even after a Build turn starts', async () => {
   const { agent } = orchestratorHarness();
-  const files = agent.observeRuntime().storage.vfs;
+  const files = workspaceFiles(agent);
   const path = '/home/user/source.txt';
   await files.writeFile(path, 'original');
   agent.harnessDrivingUserMessage('Inspect only.', { kinuMode: 'plan' });
-  const planTools = agent.observeRawTools();
-  await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect only.' }], tools: planTools });
+  // The tools each turn's model call carries.
+  const planTools = (await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect only.' }] })).tools;
   const planFile = planTools.file;
 
   if (planFile === undefined) throw new Error('Plan has no file inspection tool');
@@ -23,7 +23,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
   expect(await files.readFile(path, { encoding: 'utf8' })).toBe('original');
   await chatSessionTurns(agent).settle({ messageId: 'plan-answer', text: 'Inspection done.', requestId: 'plan-answer' });
   agent.harnessDrivingUserMessage('Now implement.', { kinuMode: 'build' });
-  const buildTools = agent.observeRawTools();
+  const buildTools = (await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Now implement.' }] })).tools;
   const buildFile = buildTools.file;
 
   if (buildFile === undefined) throw new Error('Build has no file tool');
@@ -37,7 +37,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
 
 test('Plan blocks slate source restoration and authored calls without converting an existing Build app', async () => {
   const { agent } = orchestratorHarness();
-  const files = agent.observeRuntime().storage.vfs;
+  const files = workspaceFiles(agent);
   const path = '/home/user/slates/app/server.ts';
   await files.mkdir('/home/user/slates/app', { recursive: true });
   await files.writeFile('/home/user/slates/app/package.json', JSON.stringify({ main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'app' } } } }));
@@ -48,17 +48,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   const version = v.parse(v.object({ id: v.string() }), committed.value);
   await files.writeFile(path, 'second');
   agent.harnessDrivingUserMessage('Plan only.', { kinuMode: 'plan' });
-  const native = agent.observeRawTools();
-  await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Plan only.' }], tools: native });
-  const providers = providersInWorkMode('plan', agent.observeRuntime().executionRouter?.getProviders() ?? []);
-  const workspace = providers.find((provider) => provider.name === 'workspace');
-
-  if (workspace === undefined) throw new Error('No workspace provider');
-  expect(await workspace.tools.readFile.execute(path)).toBe('second');
-  expect(await workspace.tools.writeFile.execute(path, 'forbidden')).toMatchObject({ reason: 'denied' });
-  expect(await workspace.tools.exec.execute('printf forbidden')).toMatchObject({ reason: 'denied' });
-  expect(await workspace.tools.createTool.execute('forbidden', 'not research', '() => 1')).toMatchObject({ reason: 'denied' });
-  expect(await workspace.tools.slate.execute({ op: 'restore', id: 'app', version: version.id })).toMatchObject({ reason: 'denied' });
+  await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Plan only.' }] });
   const planCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' } satisfies typeof ROOT_SLATE_CALLER;
   expect(await agent.slateAs(planCaller, { op: 'restore', id: 'app', version: version.id })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await agent.slateAs(planCaller, { op: 'call', id: 'app', method: 'shell' })).toMatchObject({ ok: false, reason: 'denied' });
@@ -78,8 +68,7 @@ test('a planner role records Plan authority for deferred work even when the mess
   const { agent } = orchestratorHarness();
   await agent.setRole('planner');
   agent.harnessDrivingUserMessage('Inspect the project.', { kinuMode: 'build' });
-  const requested = agent.observeRawTools();
-  const configured = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect the project.' }], tools: requested });
+  const configured = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'Inspect the project.' }] });
   const submitted = configured.tools.submit_plan;
 
   if (submitted === undefined) throw new Error('Role-imposed Plan has no plan submission operation');

@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import {
   BlueprintBundleSchema, BlueprintForkSchema, BlueprintInspectionSchema, PublishedBlueprintSchema, SlateShareRecordSchema, type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
@@ -54,7 +54,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     const vaultSecret = 'owner-vault-secret-' + '9f8e7d6c';
     const vault = await user.userDO.putEgressSecret(caller, { id: 'vault-1', label: 'Stripe', host: 'api.stripe.com', secret: vaultSecret });
 
-    const files = owner.agent.observeRuntime().storage.vfs;
+    const files = workspaceFiles(owner.agent);
     await authorIssuesSlate(files);
     const committed = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
 
@@ -98,7 +98,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     expect(fork.bindings.map((binding) => [binding.name, binding.kind, binding.credentialed])).toEqual([
       ['GITHUB', 'mcp', true], ['FILES', 'namespace', true], ['NOTES', 'memory', true], ['PEER', 'app', false],
     ]);
-    const forkerFiles = forker.agent.observeRuntime().storage.vfs;
+    const forkerFiles = workspaceFiles(forker.agent);
     const landed = '/home/user/slates/' + fork.slate;
     expect(await forkerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' })).toContain('"issues"');
     expect(await forkerFiles.stat(landed + '/scratch')).toBeNull();
@@ -128,7 +128,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
 
 test('the export warns about secret-shaped text and stays silent on a clean tree', async () => {
   const owner = orchestratorHarness();
-  const files = owner.agent.observeRuntime().storage.vfs;
+  const files = workspaceFiles(owner.agent);
   const pasted = ['AKIA', 'QRSTUVWXYZABCDEF'].join('');
   await authorIssuesSlate(files, { 'src/config.ts': `export const AWS = "${pasted}";\n` });
   const committed = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
@@ -147,7 +147,7 @@ test('the export warns about secret-shaped text and stays silent on a clean tree
 
 test('a hosted actor cannot publish, and plan mode may inspect but not publish', async () => {
   const owner = orchestratorHarness();
-  await authorIssuesSlate(owner.agent.observeRuntime().storage.vfs);
+  await authorIssuesSlate(workspaceFiles(owner.agent));
   const committed = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
   const root: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
   expect(await owner.agent.slateAs(root, { op: 'inspect', id: 'issues', version: committed.id })).toMatchObject({ ok: true });
@@ -166,7 +166,7 @@ test('naming users on a blueprint records them with the owner and projects the r
     const capability = await provisionTestWorkspace(user, 'issues-owner');
     const owner = orchestratorHarness(undefined, { userDO: user.userDO, workspace: 'issues-owner', ownerUserId });
     await owner.agent.installWorkspaceCapability(capability);
-    await authorIssuesSlate(owner.agent.observeRuntime().storage.vfs);
+    await authorIssuesSlate(workspaceFiles(owner.agent));
     const committed = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
     const published = answered(await owner.agent.slate({ op: 'publish', id: 'issues', version: committed.id }), PublishedBlueprintSchema);
 

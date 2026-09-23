@@ -1,11 +1,10 @@
 // Head containment, asserted on buildHeadToolSet's real output: a head forks its parent's exec planes and
 // files but never its authority to create actors; `split_subheads` (depth-budgeted) is the only spawn route.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
-import { hostedExplorationHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedExplorationHarness, orchestratorHarness, rpcReachableFrom, workspaceMainActor } from './helpers/actor-harness';
+import { isAgentRpcMethod } from '../src/cli/rpc-gate';
 import { hostBranch } from '../src/exploration-hosting';
 import {
   HeadCapture,
@@ -232,7 +231,7 @@ describe('exploration actors write the workspace journal and acquire only their 
   test("a head's step trace lands in the workspace's journal, under the workspace's own actor", async () => {
     const workspace = orchestratorHarness();
     const head = await hostedExplorationHarness(workspace, 'head', 'head-1');
-    const root = workspace.agent.observeRuntime().actor.actorId;
+    const root = workspaceMainActor(workspace.db).actorId;
     // Distinct actors: a step filed under the head's own id would be invisible to the subtree's journal readers.
     expect(head.actor.handle.actorId).not.toBe(root);
 
@@ -341,8 +340,6 @@ describe('recursive split budget', () => {
 
 describe('the mission ledger bounds a hosted head', () => {
   // A head has no execution cap of its own, so the mission budget is the only bound on a fork.
-  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
-  const surface = readFileSync(join(import.meta.dir, '..', 'src', 'rpc-surface.ts'), 'utf8');
 
   test('an unbudgeted head is given no ledger at all, and a budgeted one is given its own labels', () => {
     const seams = orchestratorHarness().agent.observeExplorationSeams();
@@ -367,18 +364,14 @@ describe('the mission ledger bounds a hosted head', () => {
     expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
   });
 
-  test('a subtree charges the mission its root does', () => {
-    // Otherwise a head escapes its budget by splitting again. Read at the source: the recursive split needs a live head.
-    const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-    expect(orchestrator).toContain('controllerInput.missionLabels = parent.missionLabels');
-  });
+  test('the two ledger members serve a sibling object and never a public transport', () => {
+    // A spend ledger must not become writable over the public WS/HTTP transport, yet a hosted head's
+    // object charges it over the DO stub.
+    const { agent } = orchestratorHarness();
 
-  test('the two ledger members are cross-DO only, never public transport', () => {
-    const guard = actor.slice(actor.indexOf('async missionGuard('), actor.indexOf('async missionDebit('));
-    expect(guard).not.toContain('@callable');
-    expect(actor).not.toContain("@callable()\n  async missionDebit(");
-    // Still allowlisted: a spend ledger must not become writable over the public WS/HTTP transport.
-    expect(surface).toContain("'missionGuard'");
-    expect(surface).toContain("'missionDebit'");
+    for (const method of ['missionGuard', 'missionDebit']) {
+      expect(rpcReachableFrom(agent)).toContain(method);
+      expect(isAgentRpcMethod(method)).toBe(false);
+    }
   });
 });

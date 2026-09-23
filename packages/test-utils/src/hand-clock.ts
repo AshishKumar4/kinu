@@ -1,7 +1,13 @@
-/** A `Clock` a test advances; `whenArmed(n)` lets a test wait for a subject to reach its wait. */
-import type { Clock } from '@kinu.run/core';
+/** A clock a test advances; `whenArmed(n)` lets a test wait for a subject to reach its wait. It imports
+ *  nothing, so a package that must not reach core (devbox) drives its subjects with the same clock. */
 
-export interface HandClock extends Clock {
+/** The shape core's `Clock` and devbox's `StartClock` share (D19, docs/DEVBOX-DECISIONS.md). */
+interface ArmableClock {
+  now(): number;
+  after(ms: number, fire: () => void): () => void;
+}
+
+export interface HandClock extends ArmableClock {
   /** Move the clock forward, firing every timer due inside the step. */
   advance(ms: number): void;
   /** Move to the earliest armed timer and fire it alone. */

@@ -33,8 +33,6 @@
   "packages/cli-backend/src/config-lock.ts#procStartTicks (unreached-export)",
   "packages/cli-backend/src/model-resolver.ts#LocalModelResolverConfig.fetch (unsupplied-field)",
   "packages/cli-backend/src/opencode-provider.ts#rewriteOpenCodeResponsesBody (unreached-export)",
-  "packages/cli-backend/src/runtime.ts#localTransactions (unreached-export)",
-  "packages/cli-backend/src/runtime.ts#nimbusSql (unreached-export)",
   "packages/cli/src/agent-create.ts#CreateCloudAgentFromMissionOptions.generate (unsupplied-field)",
   "packages/cli/src/agent-create.ts#CreateCloudAgentFromMissionOptions.id (unsupplied-field)",
   "packages/cli/src/agent-create.ts#createCloudAgentFromMission (unreached-export)",

@@ -7,14 +7,14 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { SKILLS_DIR } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 
 const SKILL = '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n';
 
 describe('the instruction desk on a Durable Object', () => {
   test('an approval binds the bytes the owner read, and refuses bytes changed since', async () => {
     const { agent } = orchestratorHarness();
-    const vfs = agent.observeRuntime().storage.vfs;
+    const vfs = workspaceFiles(agent);
     const path = `${SKILLS_DIR}/focused.md`;
     await vfs.mkdir(SKILLS_DIR, { recursive: true });
     await vfs.writeFile(path, SKILL);

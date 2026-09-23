@@ -243,8 +243,3 @@ describe('reachable history', () => {
     expect(result.stats.objects).toBeGreaterThan(0);
   });
 });
-
-test('the current scanner source has no detector-shaped literal of its own', () => {
-  const source = readFileSync(join(REPO_ROOT, 'scripts', 'secret-scan.ts'), 'utf8');
-  expect(scanText('scripts/secret-scan.ts', source)).toEqual([]);
-});

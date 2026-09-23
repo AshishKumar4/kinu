@@ -9,7 +9,7 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
@@ -128,7 +128,7 @@ async function twoUserWorld(): Promise<World> {
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
-  await authorIssuesSlate(ownerSide.agent.agent.observeRuntime().storage.vfs);
+  await authorIssuesSlate(workspaceFiles(ownerSide.agent.agent));
 
   return {
     env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user,
@@ -278,7 +278,7 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
   world.ownerUser.sql.exec(`UPDATE user_mcp_servers SET headers = ? WHERE id = 'connection-id'`, JSON.stringify({ authorization: mcpHeader }));
   const providerKey = ['sk-ant-', 'owner-provider-key-0123456789'].join('');
   await world.ownerUser.userDO.setCredential(await testOwner(), 'anthropic', { kind: 'bearer', token: providerKey });
-  const viewerFiles = world.viewer.agent.observeRuntime().storage.vfs;
+  const viewerFiles = workspaceFiles(world.viewer.agent);
   const landed = '/home/user/slates/' + result.slate;
 
   const admittedTree = JSON.stringify(await viewerFiles.readFile(landed + '/package.json', { encoding: 'utf8' }))

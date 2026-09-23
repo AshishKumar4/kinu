@@ -12,9 +12,9 @@ import {
   landedSurface,
   surfaceHasContent,
 } from '../src/components/surfaces/presence';
-import { appendMemoryNote, BackgroundJobStore, openWorkspaceMainActor, PlanReviewStore, TaskListStore } from '@kinu.run/core';
+import { BackgroundJobStore, openWorkspaceMainActor, PlanReviewStore, TaskListStore } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
@@ -239,7 +239,10 @@ describe('the presence read over real ledgers', () => {
     const { agent } = orchestratorHarness();
     await agent.activateActor();
 
-    await appendMemoryNote(agent.observeRuntime().memory, 'the checkout coupons need a kind');
+    // Saved through the workspace's file plane, in the dated-note shape the save primitive writes.
+    const files = workspaceFiles(agent);
+    await files.mkdir('memory', { recursive: true });
+    await files.writeFile('memory/MEMORY.md', '\n### Note (2026-09-23)\nthe checkout coupons need a kind\n');
 
     expect((await agent.getWorkspaceTabPresence()).work).toBe(true);
   });

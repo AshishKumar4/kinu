@@ -30,6 +30,8 @@ export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runt
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 
+export { workspaceBoxFiles } from './workspace-box-files';
+
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),

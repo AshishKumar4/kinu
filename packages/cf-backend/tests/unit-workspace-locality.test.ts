@@ -6,13 +6,12 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
-import { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import { sqlOver } from '@kinu.run/test-utils';
 import type { JsonValue } from '@kinu.run/core';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage } from './helpers/programmatic-host';
+import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
 
 const databases: Database[] = [];
 
@@ -48,7 +47,7 @@ function actorObject(): ActorObject {
     }),
     waitUntil: (promise: Promise<unknown>) => { held.push(promise); },
     getWebSockets: () => [],
-    exports: { SupervisorRPC },
+    exports: SCRIPT_EXPORTS,
   });
 
   return {

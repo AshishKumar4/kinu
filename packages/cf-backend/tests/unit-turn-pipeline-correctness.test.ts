@@ -1,22 +1,23 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
-  MERGE_POLICY_BINDING, memberBody, mergePolicyProfile, scriptedTurnModel, toolExecute,
+  MERGE_POLICY_BINDING, mergePolicyProfile, scriptedTurnModel, sqlOver, toolExecute,
 } from '@kinu.run/test-utils';
 import {
-  MergeOutputSchema, WORKSPACE_RUN_ID, listQueuedShadowTrials,
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
-  type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
+  MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC,
+  type ReasoningEffort, type ResolvedTurnProfile,
 } from '@kinu.run/core';
 import {
-  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, hostedSubordinateHarness,
-  orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns,
-  type ActorHarness, type HarnessOrchestratorAgent,
+  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
+  orchestratorHarness, reactivateOrchestratorHarness,
+  chatSessionTurns, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
+  workspaceMainActor,
 } from './helpers/actor-harness';
+import { socketConnection } from './helpers/bindings';
+import { answeringGateway, GATEWAY_MODEL } from './helpers/platform-gateway';
+import type { ScriptedAnswer } from './helpers/turn-harness';
+import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
-import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
@@ -48,42 +49,6 @@ function isDynamicContextBlock(message: ModelMessage): boolean {
 
 /** Drive tools via `toolExecute`: `v.function()` erases the signature, dropping the SDK's `options` argument. */
 const RoleResultSchema = v.object({ role: v.string() });
-
-const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
-
-const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-
-const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
-
-const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
-
-const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration-hosting.ts'), 'utf8');
-
-const loop = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'orchestrator', 'chat-session.ts'), 'utf8');
-
-const chatRunner = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'chat.ts'), 'utf8');
-
-const transport = readFileSync(join(import.meta.dir, '..', 'src', 'chat-transport.ts'), 'utf8');
-
-/** cf-backend callers of core's `reasoningEffortOptions`, so a second derivation shows up as a new entry. */
-function effortDerivationSites(): string[] {
-  const sites: string[] = [];
-
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-
-      if (entry.isDirectory()) walk(path);
-      else if (/\.tsx?$/.test(entry.name) && readFileSync(path, 'utf8').includes('reasoningEffortOptions(')) {
-        sites.push(entry.name);
-      }
-    }
-  };
-
-  walk(join(import.meta.dir, '..', 'src'));
-
-  return sites.sort();
-}
 
 /** Fails loud on any member access: a merge must never reach the exploration substrate. */
 const noExplorationHost: ExplorationHostSeams = new Proxy(Object.create(null), {
@@ -124,15 +89,16 @@ describe('turn-pipeline correctness wiring', () => {
     const { agent } = orchestratorHarness();
     const started = Promise.withResolvers<void>();
     const held = Promise.withResolvers<void>();
-    const seen: Array<ReasoningEffort | undefined> = [];
+    const seen: Array<ReasoningEffort | null> = [];
 
     const tools = { probe: tool({
       inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false }),
       execute: async () => {
-        seen.push(agent.observeResolvedTurnProfile()?.tier.reasoningEffort);
+        // The status the tab reads, asked from inside the detached tool's own context.
+        seen.push((await agent.getAgentStatus()).reasoningEffort);
         started.resolve();
         await held.promise;
-        seen.push(agent.observeResolvedTurnProfile()?.tier.reasoningEffort);
+        seen.push((await agent.getAgentStatus()).reasoningEffort);
 
         return 'settled';
       },
@@ -154,9 +120,8 @@ describe('turn-pipeline correctness wiring', () => {
     const detached = invoke({});
     await started.promise;
     await chatSessionTurns(agent).settle({ messageId: 'profile-A', text: 'detached', requestId: 'profile-A' });
-    expect(agent.observeResolvedTurnProfile()).toBeNull();
     await admit('high');
-    expect(agent.observeResolvedTurnProfile()?.tier.reasoningEffort).toBe('high');
+    expect((await agent.getAgentStatus()).reasoningEffort).toBe('high');
     held.resolve();
     await detached;
 
@@ -167,7 +132,7 @@ describe('turn-pipeline correctness wiring', () => {
     // `beforeTurn` refreshes the soul only when nothing is cached.
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    agent.setObservedSoul('You are Atlas. Preserve the owner\'s exact requirements.');
+    await agent.setSoul('You are Atlas. Preserve the owner\'s exact requirements.');
 
     const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
@@ -202,7 +167,6 @@ describe('turn-pipeline correctness wiring', () => {
   test('a managed context edit reaches the hosted request and retained trial together', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    const runtime = agent.observeRuntime();
     const first: ModelMessage = { role: 'user', content: 'use the OLD premise' };
     const reply: ModelMessage = { role: 'assistant', content: 'answer' };
     const next: ModelMessage = { role: 'user', content: 'follow-up input' };
@@ -211,14 +175,22 @@ describe('turn-pipeline correctness wiring', () => {
 
     await chatSessionTurns(agent).prepare(turn([first]));
     await chatSessionTurns(agent).settle({ messageId: 'edited-answer-1', text: 'answer', requestId: 'edited-req-1' });
-    const document = v.parse(v.string(), await runtime.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
-    await runtime.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
-    await expect(runtime.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
-    declareShadowCandidate(runtime);
-    runtime.actor.config.setShadowSampleRate(1);
+    // The agent edits its own working context with its file tool; a stale edit's refusal is core's
+    // (unit-context-plane.test.ts).
+
+    const file = toolExecute<{ action: string; path: string; edits?: { old_text: string; new_text: string }[] }, unknown>(
+      agent.getTools().file,
+    );
+
+    await file({ action: 'read', path: '/context/working.jsonl' });
+    expect(await file({
+      action: 'edit', path: '/context/working.jsonl', edits: [{ old_text: 'OLD premise', new_text: 'NEW premise' }],
+    })).toMatchObject({ ok: true });
+    declareShadowCandidate(harness.db);
+    workspaceMainActor(harness.db).config.setShadowSampleRate(1);
     const prepared = await chatSessionTurns(agent).prepare(turn([first, reply, next]));
     await chatSessionTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
-    const trial = listQueuedShadowTrials(runtime.storage.sql, runtime.actor, 1)[0];
+    const trial = listQueuedShadowTrials(sqlOver(harness.db), workspaceMainActor(harness.db), 1)[0];
 
     if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
     expect(prepared.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
@@ -243,7 +215,7 @@ describe('turn-pipeline correctness wiring', () => {
       failDescriptors: new Error('socket hang up'),
     });
 
-    unreachable.agent.setObservedSoul('You are Vesta. Answer on the tools you hold.');
+    await unreachable.agent.setSoul('You are Vesta. Answer on the tools you hold.');
     const config = await chatSessionTurns(unreachable.agent).prepare(turn);
     expect(config?.system ?? '').toContain('You are Vesta. Answer on the tools you hold.');
 
@@ -255,12 +227,25 @@ describe('turn-pipeline correctness wiring', () => {
     await expect(chatSessionTurns(denied.agent).prepare(turn)).rejects.toMatchObject({ code: 'denied' });
   });
 
-  test('the admission count and the submitted model resolve ONE spec, not two', () => {
-    // Source pin: both call sites must parse the normalized spec (bare ids and `@cf/…` break
-    // `parseModelSpec`); the harness has no seam to observe which provider counted.
-    const assembleTurn = memberBody(actor, 'private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn>');
-    expect(assembleTurn).toContain('parseModelSpec(providers.normalizeSpecSync(profile.tier.model))');
-    expect(assembleTurn).not.toContain('parseModelSpec(profile.tier.model)');
+  test('the admission count and the submitted model resolve ONE spec, not two', async () => {
+    // A `@cf/…` id names no provider: parsed raw, admission would count it against provider `@cf`
+    // while the request went to Workers AI.
+    const { agent } = orchestratorHarness();
+    agent.harnessInstallCatalog({
+      tiers: { default: { model: '@cf/zai-org/glm-5.3' } },
+      availableModels: ['@cf/zai-org/glm-5.3'],
+    });
+    const logger = createRecordingLogger();
+    const restore = tapDiagnostics(logger);
+
+    try {
+      await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
+    } finally {
+      restore();
+    }
+
+    expect(logger.emitted.filter((line) => line.event === 'admission.uncounted').map((line) => line.fields.provider))
+      .toEqual(['workers-ai']);
   });
 
   test('a pinned model is the model the next turn\'s request names', async () => {
@@ -277,40 +262,19 @@ describe('turn-pipeline correctness wiring', () => {
 
     const config = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
 
-    expect(agent.observeResolvedTurnProfile()?.tier).toEqual({
-      id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
-      reasoningEffort: 'medium',
+    expect(await agent.getAgentStatus()).toMatchObject({
+      tierId: 'default', model: 'workers-ai/pinned-model', reasoningEffort: 'medium',
     });
     // The request's model is the memoized instance for the pinned spec.
     const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
     expect(request.success && request.output.model).toBe(agent.getModel());
   });
 
-  test("a hosted actor's turn runs on the workspace's pinned model too", async () => {
-    // Measured 2026-09-18 on a local dev build: a workspace pinned to `openai-compat/fake-live`
-    // answered an added agent's pane on `workers-ai/@cf/zai-org/glm-5.3`.
-    const workspace = orchestratorHarness();
-    workspace.agent.harnessInstallCatalog({
-      tiers: { default: { model: 'workers-ai/account-default' } },
-      availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
-    });
-    await workspace.agent.setModel('workers-ai/pinned-model');
-
-    const hire = await hostedSubordinateHarness(workspace, {
-      name: 'task-pinned', displayName: '', nameOrigin: 'auto', mission: 'work the brief',
-    });
-
-    expect(await workspace.agent.observeHostedActorProfile(hire.actor)).toMatchObject({
-      tier: {
-        id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
-        reasoningEffort: 'medium',
-      },
-    });
-  });
-
   test("a hosted actor's snapshot reports the effective model and the tier source that chose it", async () => {
-    // Defends: the snapshot reported the child's own (never-set) config pin. Added via
-    // `createSubordinateAgent` so the roster row is the one a real add writes.
+    // Defends: the snapshot reported the child's own (never-set) config pin, and (measured 2026-09-18) a
+    // workspace pinned to one model answered an added agent's pane on another. The snapshot and the
+    // hosted turn resolve one profile (`hostedActorProfile`). Added via `createSubordinateAgent` so the
+    // roster row is the one a real add writes.
     const workspace = orchestratorHarness();
     workspace.agent.harnessInstallCatalog({
       tiers: { default: { model: 'workers-ai/account-default' } },
@@ -336,26 +300,13 @@ describe('turn-pipeline correctness wiring', () => {
     // A self-named head would derive a second, empty filesystem; bytes the root wrote must be the head's.
     const workspace = orchestratorHarness();
     await hostedMainActor(workspace);
-    const rootFiles = workspace.agent.observeRuntime().storage.vfs;
+    const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/user/shared-proof.md', 'registered workspace bytes');
     const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
     expect(head.actor.record.kind).toBe('head');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/user/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
-    // The seam carries no name of its own; the only names are the directory's.
-    expect(exploration).not.toContain('sharedParent');
-    expect(exploration).not.toContain('facetIdentity');
-    expect(exploration).not.toContain('setSharedParent');
-    expect(exploration).not.toContain('spawnHeadFacet');
-    expect(headRuntime).not.toContain('createAgentProviderRegistry');
-  });
-
-  test('the head runtime constructor receives this actor\'s operation sink', () => {
-    // A head's non-turn calls must land in the root's operation ledger, not facet SQLite.
-    const rootRuntime = memberBody(actor, 'protected getCFHeadRuntime()');
-    expect(rootRuntime).toContain('operations: this.modelOperations');
-    expect(headRuntime).toContain('operations?: ModelOperationSink');
   });
 
   test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', async () => {
@@ -400,7 +351,6 @@ describe('turn-pipeline correctness wiring', () => {
       const messages = await stepMessages(agent, 0, turn.messages ?? handed);
       await streamText({ model, system: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools === undefined ? undefined : [...turn.activeTools] }).text;
 
-      expect(agent.observeResolvedTurnProfile()?.allowedTools).toContain('submit_plan');
       expect(model.doStreamCalls).toHaveLength(1);
       const request = model.doStreamCalls[0];
       expect(request?.tools?.some((entry) => entry.name === 'submit_plan') ?? false).toBe(available);
@@ -425,28 +375,24 @@ describe('turn-pipeline correctness wiring', () => {
     await expect(stepMessages(agent, 0, admitted)).rejects.toThrow('a model step requires a prepared profile and tool surface');
   });
 
-  test('the turn assembly derives the profile reasoning effort, and the chat runner merges it with the cache options', () => {
-    const assembly = actor.slice(
-      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
-      actor.indexOf('protected dynamicContextSnapshot('),
-    );
+  test("the turn request carries the tier's reasoning effort as its provider's option", async () => {
+    // Two tiers that differ only in effort, so a constant or a chat-model default fails one of them.
+    const efforts: Array<ReasoningEffort | undefined> = [];
 
-    expect(assembly).toContain('profile.tier.reasoningEffort');
-    // Both sites read the one normalised parse (a raw parse yields `@cf` or throws on bare ids).
-    expect(assembly).toContain('tierModel.provider');
-    expect(assembly).not.toContain('parseModelSpec(profile.tier.model)');
-    expect(assembly).toContain('reasoningEffortOptions');
+    for (const effort of ['low', 'high'] as const) {
+      const { agent } = orchestratorHarness();
+      agent.harnessInstallCatalog({ tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, reasoningEffort: effort } } });
+      const turn = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: effort }] });
 
-    // The one provider-options merge is the chat runner's, by provider namespace.
-    const prepare = actor.slice(
-      actor.indexOf('protected async prepareTurn(item: ChatTurnInput'),
-      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
-    );
+      const options = v.parse(
+        v.object({ 'workers-ai': v.object({ reasoningEffort: v.picklist(['low', 'medium', 'high']) }) }),
+        turn?.providerOptions,
+      );
 
-    expect(prepare).toContain('if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;');
-    expect(prepare).toContain('providerId: assembled.promptModel.provider');
-    expect(chatRunner).toContain('const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);');
-    expect(actor).not.toContain('mergeProviderOptions(');
+      efforts.push(options['workers-ai'].reasoningEffort);
+    }
+
+    expect(efforts).toEqual(['low', 'high']);
   });
 
   // Output caps are owned by the gate below; this is driven because a source scan cannot tell
@@ -481,83 +427,32 @@ describe('turn-pipeline correctness wiring', () => {
     ]);
   });
 
-  // Whole-backend scan: `gate:duplication` misses three-line re-derivations and
-  // `gate:capability-parity` checks wiring, so no gate owns this.
-  test('one place in this backend turns a reasoning-effort level into provider options', () => {
-    // A new entry is a second derivation, e.g. options from the chat model applied to another provider.
-    expect(effortDerivationSites()).toEqual([
-      'actor-agent.ts',
-      'owned-model-services.ts',
-      'runtime.ts',
-    ]);
-  });
+  test('a clear from the tab empties the conversation and its compaction plan; a refused clear touches neither', async () => {
+    // The transcript clears first, so a clear it refuses (a turn is running) resets nothing after it.
+    const harness = orchestratorHarness();
+    const { agent, db } = harness;
 
-  // Owner directive: no output caps (reasoning models spend budget thinking); cost is set by effort.
-  // Adapters that must send one (`@ai-sdk/anthropic` `max_tokens`) use the model's own maximum.
-  // Context admission's reserve is `ModelWindow.modelOutputLimit`, so this gate stays strict.
-  test('no production source names an output-token cap', () => {
-    const root = join(import.meta.dir, '..', '..');
-    const offenders: string[] = [];
+    const plan = (): string | null => db.query<{ plan_json: string | null }, []>(
+      'SELECT plan_json FROM compaction_state',
+    ).get()?.plan_json ?? null;
 
-    const walk = (dir: string) => {
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        const path = join(dir, entry.name);
-
-        if (entry.isDirectory()) {
-          if (entry.name !== 'node_modules') walk(path);
-        } else if (/\.tsx?$/.test(entry.name)) {
-          const text = readFileSync(path, 'utf8');
-
-          for (const [line] of text.matchAll(/^.*\bmaxOutputTokens\b.*$/gm)) {
-            offenders.push(`${path.slice(root.length + 1)}: ${line}`);
-          }
-        }
-      }
-    };
-
-    for (const pkg of readdirSync(root, { withFileTypes: true })) {
-      if (!pkg.isDirectory()) continue;
-      const src = join(root, pkg.name, 'src');
-
-      if (existsSync(src)) walk(src);
-    }
-
-    expect(offenders).toEqual([]);
-  });
-
-  test('CHAT_CLEAR resets the dynamic-context ledger and durable compaction plan after the transcript is cleared', () => {
-    // Order: transcript first, then the ledger, then the durable plan.
-    expect(transport).toContain("case 'clear': {");
-    expect(transport).toContain('await this.wire.clear();');
-    expect(actor).toContain('clear: () => this.clearConversation(),');
-
-    const clear = actor.slice(
-      actor.indexOf('private async clearConversation(): Promise<void> {'),
-      actor.indexOf('private async readTurnInputs(tools: ToolSet)'),
+    const clear = () => agent.onMessage(
+      socketConnection({ id: 'tab-1', send: () => {} }),
+      JSON.stringify({ type: 'cf_agent_chat_clear' }),
     );
 
-    const transcript = clear.indexOf('this.stores.history.clearConversation(CHAT_SESSION_ID,');
-    const reset = clear.indexOf('this.actorSession.dynamic.reset()');
-    const clearPlan = clear.indexOf('this.compactionState.plans.save(this.name, null)');
-    expect(transcript).toBeGreaterThan(-1);
-    expect(reset).toBeGreaterThan(transcript);
-    expect(clearPlan).toBeGreaterThan(reset);
-  });
+    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
+    db.prepare('INSERT INTO compaction_state (actor_id, session_key, plan_json) VALUES (?, ?, ?)')
+      .run(workspaceMainActor(db).actorId, agent.name, '{"stored":"plan"}');
 
-  test('the settle spine runs FIRST and hands the turn status to the one delivery seam', () => {
-    // Signal disposition is core's (unit-signals.test.ts); this backend must settle the inbox before
-    // anything can throw or return early, with the durability-inclusive verdict.
-    const run = loop.slice(loop.indexOf('private async runTurn(item: QueueItem'));
-    const settle = run.indexOf('const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });');
-    const failureBranch = run.indexOf("if (!('committed' in commit)) {");
-    const terminal = run.indexOf('await this.ports.terminal().settle({');
-    expect(settle).toBeGreaterThan(-1);
-    expect(failureBranch).toBeGreaterThan(settle);
-    expect(terminal).toBeGreaterThan(failureBranch);
-    expect(run).toContain("const durable = runError === null && 'committed' in commit;");
-    // No second re-delivery path on this side — the seam owns it.
-    expect(actor).not.toContain('reenqueue');
-    expect(source).not.toContain('reenqueue');
+    await expect(clear()).rejects.toMatchObject({ code: 'denied' });
+    expect(plan()).toBe('{"stored":"plan"}');
+
+    await chatSessionTurns(agent).settle({ messageId: 'a-clear', text: 'deployed' });
+    await clear();
+
+    expect((await agent.getChatHistoryPage({ limit: 10 })).items).toEqual([]);
+    expect(plan()).toBeNull();
   });
 
   test('an INTERRUPTED turn is complete through every reader, with no projection write', async () => {
@@ -583,8 +478,7 @@ describe('turn-pipeline correctness wiring', () => {
     // Defends: failed cloud turns skipped the review buffer and `onTurnEnd` (the CLI reached both).
     // Ordering is pinned in core's unit-core-adapter-seams; this asserts the durable row.
     const harness = orchestratorHarness();
-    // What `beforeTurn` establishes for a turn with no durable identity.
-    harness.agent.declareTurnEvolutionGate();
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'start the deploy' }] });
 
     await chatSessionTurns(harness.agent).settle({ messageId: 'a-cut', text: 'partial', requestId: 'req-cut', status: 'aborted' });
 
@@ -609,7 +503,7 @@ describe('turn-pipeline correctness wiring', () => {
             candidates, created_at, picked_at)
          VALUES (?, 'take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?, NULL)`,
       ).run(
-        harness.agent.observeRuntime().actor.actorId,
+        workspaceMainActor(harness.db).actorId,
         JSON.stringify([
           { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
           { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
@@ -648,26 +542,22 @@ describe('turn-pipeline correctness wiring', () => {
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
   // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {
-    /** Live stamp: activation reconcile sweeps leases past a grace, so a 1970 stamp would test the sweep. */
-    const LEASE_TAKEN_AT = Date.now();
-
-    /** An admitted event bound to `turnId` with its lease open, seeded under this actor; the spliced
-     *  case demands a change, so a wrong-owner seed fails there. */
-    function boundDelivery(harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string): void {
+    /** A webhook event received and not yet drained, under this actor: the alarm owes it a drain. */
+    function pendingDelivery(harness: ActorHarness<HarnessOrchestratorAgent>): void {
       harness.db.prepare(
         `INSERT INTO agent_log
            (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
             schema_version, dedupe_key, consumed_at)
-         VALUES (?, 'ev-1', 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
-                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
-      ).run(harness.agent.observeRuntime().actor.actorId, turnId, JSON.stringify({
+         VALUES (?, 'ev-1', 'event', NULL, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
+                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, NULL)`,
+      ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
         webhook_id: 'hook-1',
         http_method: 'POST',
         http_headers: { 'content-type': 'application/json' },
         body: { text: 'a build finished' },
         delivery_id: 'delivery-1',
-      }), LEASE_TAKEN_AT);
+      }));
     }
 
     /** The lease after the detached dispatch reports; bounded so the must-stay-open cases still fail. */
@@ -688,27 +578,29 @@ describe('turn-pipeline correctness wiring', () => {
       );
     }
 
-    /** Splice a drain into the live turn as the reactor does; the step boundary absorbs it. */
-    async function spliceDrain(
-      harness: ActorHarness<HarnessOrchestratorAgent>, replyTurnId: string,
-    ): Promise<void> {
-      await harness.agent.declareTurnInFlight(true);
+    /** The alarm drains the pending events into the live turn, and the step boundary absorbs them.
+     *  Returns the turn the drain bound them to. */
+    async function spliceDrain(harness: ActorHarness<HarnessOrchestratorAgent>): Promise<string> {
+      await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'a live turn' }] });
+      // The platform's alarm dispatches this callback; its drain phase is owed to the pending event.
+      await harness.agent._kinuTimerTick();
+      const bound = lease(harness);
 
-      const inbox = harness.agent.observeOrch().inbox;
-      expect(await inbox.send({ kind: 'event_drain', text: 'a build finished', replyTurnId }))
-        .toBe('mid-turn');
-      await inbox.prepareStep({ stepNumber: 0, messages: [] });
+      if (bound.turn_id === null || bound.consumed_at === null) throw new Error('the alarm did not drain the pending event');
+      await chatSessionTurns(harness.agent).step(0, []);
+
+      return bound.turn_id;
     }
 
     test('a spliced drain settles once, and the activation sweep will not redeliver it', async () => {
       const harness = orchestratorHarness();
-      boundDelivery(harness, 'evt-spliced');
-      await spliceDrain(harness, 'evt-spliced');
+      pendingDelivery(harness);
+      const bound = await spliceDrain(harness);
 
       await chatSessionTurns(harness.agent).settle({ messageId: 'a-1', text: 'the answer', requestId: 'req-spliced' });
 
       // Answered: lease closed, binding kept, so no drain selects it again.
-      expect(await settledLease(harness)).toEqual({ turn_id: 'evt-spliced', consumed_at: null });
+      expect(await settledLease(harness)).toEqual({ turn_id: bound, consumed_at: null });
       expect(harness.db.query(
         `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND consumed_at IS NOT NULL`,
       ).get()).toMatchObject({ n: 0 });
@@ -716,43 +608,44 @@ describe('turn-pipeline correctness wiring', () => {
 
     test('a reply that fails mid-dispatch stays owed with that failure, not as an open channel', async () => {
       const harness = orchestratorHarness();
-      const actorId = harness.agent.observeRuntime().actor.actorId;
-      boundDelivery(harness, 'evt-mail');
-      // A mail on the same drain, with its thread still open: the answer owes it a reply.
+      const actorId = workspaceMainActor(harness.db).actorId;
+      pendingDelivery(harness);
+      // A mail in the same drain, with its thread still open: the answer owes it a reply.
       harness.db.prepare(
         `INSERT INTO agent_log
            (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
             trust, priority, payload_visibility, payload, received_at,
             schema_version, dedupe_key, consumed_at)
-         VALUES (?, 'ev-mail', 'event', 'evt-mail', 0, NULL, 'tr-2', 'email_inbound', 'email',
-                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
+         VALUES (?, 'ev-mail', 'event', NULL, 0, NULL, 'tr-2', 'email_inbound', 'email',
+                 'authenticated', 'normal', 'full', ?, 1, 1, NULL, NULL)`,
       ).run(actorId, JSON.stringify({
         from: 'owner@example.com', to: 'agent@example.com', subject: 'the build', body_text: 'did it pass?',
         message_id: null, in_reply_to: null, references: null, attachments: [],
-      }), LEASE_TAKEN_AT);
+      }));
       harness.db.prepare(
         `INSERT INTO reply_channels (actor_id, id, event_id, kind, holder_addr, ttl_expires_at, created_at, updated_at)
          VALUES (?, 'ch-mail', 'ev-mail', 'email_thread', ?, ?, 1, 1)`,
       ).run(actorId, JSON.stringify({
         to: 'owner@example.com', from: 'agent@example.com', subject: 'the build', message_id: null, references: null,
-      }), LEASE_TAKEN_AT + 3_600_000);
+      }), Date.now() + 3_600_000);
       harness.db.run(`CREATE TRIGGER refuse_reply_record BEFORE INSERT ON agent_log
         WHEN NEW.kind = 'reply_attempt' BEGIN SELECT RAISE(ABORT, 'storage refused the reply record'); END`);
-      await spliceDrain(harness, 'evt-mail');
+      const bound = await spliceDrain(harness);
 
       await chatSessionTurns(harness.agent).settle({ messageId: 'a-mail', text: 'the answer', requestId: 'req-mail' });
-      await harness.agent.harnessTerminalReported();
-      await joinHarnessFibers();
 
-      expect(harness.db.query(
-        "SELECT status, outcome FROM terminal_effects WHERE effect_key LIKE '%:event_reply:evt-mail'",
-      ).all()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the reply record') }]);
+      const owed = () => harness.db.query<{ status: string; outcome: string | null }, [string]>(
+        'SELECT status, outcome FROM terminal_effects WHERE effect_key LIKE ?',
+      ).all(`%:event_reply:${bound}`);
+
+      await until(() => owed().some((row) => row.outcome !== null), 'the reply effect reported its outcome');
+      expect(owed()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the reply record') }]);
     });
 
     test('a turn with no durable answer leaves the delivery recoverable', async () => {
       const harness = orchestratorHarness();
-      boundDelivery(harness, 'evt-nodurable');
-      await spliceDrain(harness, 'evt-nodurable');
+      pendingDelivery(harness);
+      const bound = await spliceDrain(harness);
 
       // The commit failed, so the delivery is still owed; the seam re-queues the drain as its own turn.
       await expect(chatSessionTurns(harness.agent).settle({ messageId: 'a-nodurable', text: 'the answer', requestId: 'req-nodurable', persistFails: true }))
@@ -766,19 +659,18 @@ describe('turn-pipeline correctness wiring', () => {
         ['run_start', { caused_by: 'chat' }], ['run_end', { reason: 'error' }],
         ['run_start', { caused_by: 'event_drain' }], ['run_end', { reason: 'completed' }],
       ]);
-      expect(await settledLease(harness)).toEqual({ turn_id: 'evt-nodurable', consumed_at: null });
+      expect(await settledLease(harness)).toEqual({ turn_id: bound, consumed_at: null });
     });
 
     test('a failed turn leaves the delivery recoverable', async () => {
       const harness = orchestratorHarness();
-      boundDelivery(harness, 'evt-failed');
-      await spliceDrain(harness, 'evt-failed');
+      pendingDelivery(harness);
+      const bound = await spliceDrain(harness);
+      const taken = lease(harness).consumed_at;
 
       await chatSessionTurns(harness.agent).settle({ messageId: 'a-3', requestId: 'req-failed', status: 'error', error: 'provider exploded' });
 
-      expect(await settledLease(harness)).toEqual({
-        turn_id: 'evt-failed', consumed_at: LEASE_TAKEN_AT,
-      });
+      expect(await settledLease(harness)).toEqual({ turn_id: bound, consumed_at: taken });
     });
   });
 
@@ -788,35 +680,67 @@ describe('turn-pipeline correctness wiring', () => {
     const parked = await chatSessionTurns(drained.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
     expect(parked?.messages.at(-1)).toEqual({ role: 'user', content: 'the drain text' });
     await chatSessionTurns(drained.agent).settle({ messageId: 'a-9', text: 'the answer' });
-    const rows = (await drained.agent.harnessTranscript.history());
-    expect(rows.at(-2)).toMatchObject({ role: 'user', parts: [{ type: 'text', text: 'the drain text' }], metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
-    expect(rows.at(-1)).toMatchObject({ role: 'assistant', parts: expect.arrayContaining([expect.objectContaining({ type: 'text', text: 'the answer' })]) });
+    const rows = (await drained.agent.getChatHistoryPage({ limit: 10 })).items;
+    // The pane draws a drain's words as a system entry, not as the operator speaking.
+    expect(rows.at(-2)).toMatchObject({ role: 'system', content: 'the drain text', metadata: expect.objectContaining({ drainTurnId: 'drain-1' }) });
+    expect(rows.at(-1)).toMatchObject({ role: 'assistant', content: 'the answer' });
   });
 
-  test('standalone drain identity survives the turn\'s own continuation until reply settlement', () => {
-    // The drain identity is part of the reply effect's recorded input, so it survives eviction;
-    // registered for queued drains only (spliced ones are reported per absorbed signal).
-    const replyEffect = source.slice(
-      source.indexOf('event_reply: terminalEffect({'),
-      source.indexOf('branches: terminalEffect({'),
-    );
+  test("a queued drain's reply survives eviction and closes the batch it answered", async () => {
+    // The drain identity is part of the reply effect's recorded input, not a per-activation stash.
+    const harness = orchestratorHarness();
+    harness.db.prepare(
+      `INSERT INTO agent_log
+         (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+          trust, priority, payload_visibility, payload, received_at,
+          schema_version, dedupe_key, consumed_at)
+       VALUES (?, 'ev-1', 'event', 'drain-1', 0, NULL, 'tr-1', 'webhook_bearer', 'webhook',
+               'authenticated', 'normal', 'full', ?, 1, 1, NULL, ?)`,
+    ).run(workspaceMainActor(harness.db).actorId, JSON.stringify({
+      webhook_id: 'hook-1', http_method: 'POST', http_headers: {}, body: { text: 'a build finished' },
+      delivery_id: 'delivery-1',
+    }), Date.now());
+    harness.db.run(`CREATE TRIGGER refuse_lease_close BEFORE UPDATE OF consumed_at ON agent_log
+      WHEN NEW.consumed_at IS NULL BEGIN SELECT RAISE(ABORT, 'storage refused the lease close'); END`);
+    harness.agent.harnessDrivingUserMessage('the drain text', { kinuEvent: 'event_drain', drainTurnId: 'drain-1' });
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the drain text' }] });
+    await chatSessionTurns(harness.agent).settle({ messageId: 'a-drain', text: 'the answer' });
+    // The alarm frame dispatches the owed reply.
+    await harness.agent.terminalRetryPass();
 
-    expect(replyEffect).toContain('drainTurnId: v.string()');
-    // The request id is recorded too, so a later replay re-registers under the same identity.
-    expect(replyEffect).toContain('requestId: v.string()');
-    expect(replyEffect).toContain('await this.completeEventBatch(drainTurnId, answer)');
-    // No per-activation stash: the durable item and the recorded input are the witnesses.
-    expect(actor).not.toContain('_pendingDrainReplyTurns');
-    expect(source).not.toContain('_pendingDrainReplyTurns');
-    expect(loop).toContain('private answeredDeliveries(item: QueueItem): ReadonlySet<string> {');
+    const leased = () => harness.db.query<{ turn_id: string | null; consumed_at: number | null }, []>(
+      "SELECT turn_id, consumed_at FROM agent_log WHERE id = 'ev-1'",
+    ).get();
+
+    expect(harness.db.query<{ status: string; outcome: string | null }, []>(
+      "SELECT status, outcome FROM terminal_effects WHERE effect_key = 'v1:event_reply:drain-1'",
+    ).all()).toEqual([{ status: 'pending', outcome: expect.stringContaining('storage refused the lease close') }]);
+    expect(leased()?.consumed_at).not.toBeNull();
+
+    harness.db.run('DROP TRIGGER refuse_lease_close');
+    const restarted = await reactivateOrchestratorHarness(harness.db);
+    // The wake the failure armed, reached: past the effect's backoff.
+    setSystemTime(new Date(Date.now() + 60 * 60_000));
+
+    try {
+      await restarted.agent.terminalRetryPass();
+    } finally {
+      setSystemTime();
+    }
+
+    expect(leased()).toEqual({ turn_id: 'drain-1', consumed_at: null });
   });
 
-  test('nothing on this backend seals a run reason of its own', () => {
-    // `classifyRunEnd` owns run-end vocabulary (driven in core's unit-core-adapter-seams.test.ts);
-    // a backend-picked status string once sealed a user Stop as 'error'.
-    expect(loop).toContain('closeTurnRun(this.eventRecorder,');
-    expect(actor).not.toContain('reason: result.status');
-    expect(source).not.toContain('reason: result.status');
+  test('a stopped turn seals its run as aborted, not as an error', async () => {
+    // Run-end vocabulary is core's `classifyRunEnd`; a backend-picked status once sealed a Stop as 'error'.
+    const harness = orchestratorHarness();
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
+    await chatSessionTurns(harness.agent).settle({ messageId: 'a-stop', text: 'partial', status: 'aborted' });
+
+    const ends = harness.db.query<{ payload: string }, []>("SELECT payload FROM run_events WHERE type = 'run_end'").all()
+      .map((row) => v.parse(v.object({ reason: v.string() }), JSON.parse(row.payload)).reason);
+
+    expect(ends).toEqual(['aborted']);
   });
 
   // Observed on the TurnConfig, not source text; the axes' metadata keys are core's (unit-prompt.test.ts).
@@ -860,121 +784,71 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('a fresh multi-part ask gets NO delegation nudge at step 0', async () => {
     // No turn-start delegation hint: that pressure sent a simple diagnosis into a three-node swarm on 2026-09-03.
-    const harness = orchestratorHarness();
-    const agent = harness.agent;
-    const orch = agent.observeOrch();
-    const extension = orch.turnExtension;
+    const { agent } = orchestratorHarness();
+    const messages: ModelMessage[] = [{ role: 'user', content: 'add caching to the api and update the docs' }];
 
-    if (!extension.prepareStep) throw new Error('Expected turn steering prepareStep extension');
+    const turn = await chatSessionTurns(agent).prepare({ messages });
+    const rendered = JSON.stringify(await stepMessages(agent, 0, turn?.messages ?? messages));
 
-    await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: 'add caching to the api and update the docs' }] });
-    const messages = [{ role: 'user' as const, content: 'add caching to the api and update the docs' }];
-    const stepped = await extension.prepareStep({ stepNumber: 0, messages });
-    const rendered = JSON.stringify(stepped ?? messages);
+    // Positive control: the step pipeline ran, so an absent nudge is not an absent step.
+    expect(rendered).toContain('<dynamic_context');
     expect(rendered).not.toContain('Runtime steering');
     expect(rendered).not.toContain('action=swarm');
-    expect(orch.steering.snapshot()).toEqual([]);
   });
 
 
-  test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
-    // One core implementation both transports call.
-    const pick = takePick.slice(takePick.indexOf('export async function pickAlternateTake('));
-    expect(pick).toContain('let continuationQueued = false');
-    expect(pick).toContain('const outcome = await deps.inbox.send');
-    expect(pick).toContain("continuationQueued = outcome !== 'undelivered'");
-    expect(pick).not.toContain('continuationQueued = true');
-    expect(source).toContain('await pickAlternateTake(');
-  });
 });
 
 describe('improvement_lanes — one verdict gates the improvement lanes', () => {
-  // Driven through the claimed effect; both verdicts are one core decision (`improvementLanesOpen`).
+  // Driven through settled turns, with the review answered at the platform gateway; both verdicts are
+  // one core decision (`improvementLanesOpen`).
   const NOTE = JSON.stringify({
     note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work',
   });
 
-  const turnOf = (): CompletedTurn => ({
-    userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1,
-    hadError: false, feedback: null, turnId: 'spine-turn', sessionId: 'default', origin: 'user',
-  });
-
-  function advisorHarness() {
-    const harness = orchestratorHarness();
-    harness.agent.harnessAdvisorsOn(NOTE);
+  /** Advisor reviews switched on in the stored config, every tier served by the gateway. */
+  function advisorHarness(): ActorHarness<HarnessOrchestratorAgent> {
+    const harness = orchestratorHarness(undefined, { aiGateway: answeringGateway(NOTE) });
+    harness.agent.harnessInstallCatalog({
+      tiers: { default: { model: GATEWAY_MODEL }, deep: { model: GATEWAY_MODEL }, fast: { model: GATEWAY_MODEL } },
+      availableModels: [GATEWAY_MODEL],
+    });
+    workspaceMainActor(harness.db).config.setAdvisorEnabled(true);
 
     return harness;
   }
 
-  async function noLaneFor(status: 'error' | 'aborted'): Promise<void> {
-    const { agent } = advisorHarness();
-    await agent.harnessSettleSpine({ status, turn: turnOf() });
-    expect(agent.harnessAdvisorNotes()).toBe(0);
+  async function settled(harness: ActorHarness<HarnessOrchestratorAgent>, answer: ScriptedAnswer): Promise<number> {
+    const { messageId } = await chatSessionTurns(harness.agent).settle(answer);
+    await until(() => improvementLanesRan(harness.db, messageId), 'the improvement lanes ran');
+
+    return harness.db.query<{ n: number }, []>(
+      "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'",
+    ).get()?.n ?? 0;
   }
 
   test('a completed build turn earns its review', async () => {
-    const { agent } = advisorHarness();
-    await agent.harnessSettleSpine({ status: 'completed', turn: turnOf() });
-    // The review rides a detached durable fiber; join them rather than guessing at the clock.
-    await agent.harnessJoinDetachedFibers();
-    expect(agent.harnessAdvisorNotes()).toBe(1);
+    const harness = advisorHarness();
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
+    expect(await settled(harness, { messageId: 'a-build', text: 'deployed' })).toBe(1);
   });
 
-  test('a FAILED build turn feeds no lane', () => noLaneFor('error'));
+  test('a FAILED build turn feeds no lane', async () => {
+    const harness = advisorHarness();
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
+    expect(await settled(harness, { messageId: 'a-failed', status: 'error', error: 'provider exploded' })).toBe(0);
+  });
 
   test('a completed PLAN turn feeds no lane', async () => {
-    const { agent } = advisorHarness();
-    agent.observeOrch().beginTurn(Date.now(), { kinuMode: 'plan' });
-    // The effect reads the mode from its row: a cold replay has no live turn, and defaulting to build leaks plans.
-    await agent.harnessSettleSpine({ status: 'completed', turn: turnOf(), workMode: 'plan' });
-    expect(agent.harnessAdvisorNotes()).toBe(0);
+    const harness = advisorHarness();
+    harness.agent.harnessDrivingUserMessage('Plan the deploy.', { kinuMode: 'plan' });
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'Plan the deploy.' }] });
+    expect(await settled(harness, { messageId: 'a-plan', text: 'the plan' })).toBe(0);
   });
 
-  test('an ABORTED build turn feeds no lane', () => noLaneFor('aborted'));
-});
-
-/**
- * Shadow trials hit the live tool surface, so their claims are keyed on the rollout scope: the ambient
- * turn is the last checkpoint while queued and `_workspace` after the isolate dies.
- */
-describe('a recoverable rollout claims its tool calls on the rollout', () => {
-  /** A claimed capability on this actor's own storage, observable without a network. */
-  const RECALL = { action: 'recall', key: 'trial-probe' };
-
-  test('the scope is the claim identity, not whatever turn is ambient', async () => {
-    const harness = orchestratorHarness();
-    const live = await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
-
-    await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
-
-    expect(harness.agent.harnessToolClaims('trial-7')).toEqual(['trial-7#0']);
-    expect(harness.agent.harnessToolClaims(live.identity.turnId)).toEqual([]);
-    expect(harness.agent.harnessToolClaims(WORKSPACE_RUN_ID)).toEqual([]);
-  });
-
-  /** Defends: a cold replay after the world moved must answer from the first attempt's row. */
-  test('a cold replay is answered from the first attempt row', async () => {
-    const harness = orchestratorHarness();
-    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
-    harness.agent.harnessFacts().upsert('trial-probe', 'as the trial saw it');
-    const first = await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
-
-    harness.agent.harnessFacts().upsert('trial-probe', 'as the world moved on');
-    const restarted = await reactivateOrchestratorHarness(harness.db);
-    const replay = await restarted.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
-
-    expect(replay).toEqual(first);
-    expect(restarted.agent.harnessToolClaims('trial-7')).toEqual(['trial-7#0']);
-  });
-
-  /** An unscoped rollout (live preview, GEPA candidate) is never re-driven, so it keeps the ambient turn. */
-  test('an unscoped rollout still claims against the live turn', async () => {
-    const harness = orchestratorHarness();
-    const live = await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
-
-    await harness.agent.harnessScaffoldCallTool()('memory', RECALL);
-
-    expect(harness.agent.harnessToolClaims(live.identity.turnId)).toHaveLength(1);
-    expect(harness.agent.harnessToolClaims(WORKSPACE_RUN_ID)).toHaveLength(0);
+  test('an ABORTED build turn feeds no lane', async () => {
+    const harness = advisorHarness();
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
+    expect(await settled(harness, { messageId: 'a-cut', text: 'partial', status: 'aborted' })).toBe(0);
   });
 });

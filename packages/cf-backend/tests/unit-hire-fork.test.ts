@@ -1,27 +1,22 @@
+// Every model call, the main actor's and its hire's, reaches the shared hire-fork fixture through the platform gateway.
 import { expect, test } from 'bun:test';
-import { createProviderRegistry } from '@kinu.run/core';
 import {
   HIRE_FORK_PARENT, HIRE_FORK_REQUEST, HIRE_FORK_PREFIX, HIRE_FORK_MISSION,
   hireForkModel, hireConversation,
   hireRetentionModel, HIRE_FORK_FOLLOWUP_REQUEST, HIRE_FORK_FOLLOWUP, HIRE_CHILD_CONTEXT,
 } from '../../test-utils/src/hire-fork';
-import { orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness } from './helpers/actor-harness';
+import { catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, reactivateOrchestratorHarness } from './helpers/actor-harness';
+import { modelGateway } from './helpers/platform-gateway';
 
 for (const context of ['inherit', 'fresh', undefined] as const) {
   test(`a cf hire context=${String(context)} starts from its birth-time conversation`, async () => {
-    const { agent } = orchestratorHarness();
     const { model, childRequests } = hireForkModel(context);
-    agent.modelFactory = () => model;
+    const { agent } = gatewayWorkspace(modelGateway(model));
     await agent.onStart();
-    agent.overrideProviderRegistry({
-      registry: createProviderRegistry(),
-      deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
-      resolveModel: () => model,
-      normalizeSpecSync: (spec) => spec ?? 'test/model',
-    });
-    await chatSessionTurns(agent).run(HIRE_FORK_PARENT);
-    await chatSessionTurns(agent).run(HIRE_FORK_REQUEST);
-    expect(model.doStreamCalls.flatMap(hireConversation)).toContainEqual(HIRE_FORK_PREFIX[2]);
+
+    await catalogTurn(agent, HIRE_FORK_PARENT);
+    await catalogTurn(agent, HIRE_FORK_REQUEST);
+    expect(model.doGenerateCalls.flatMap(hireConversation)).toContainEqual(HIRE_FORK_PREFIX[2]);
     await agent.terminalRetryPass();
     expect(childRequests).toHaveLength(1);
     const first = childRequests[0];
@@ -41,24 +36,13 @@ for (const context of ['inherit', 'fresh', undefined] as const) {
 
 for (const cold of [false, true]) {
   test(`a cf durable hire retains its working conversation on a later assignment, cold=${cold}`, async () => {
-    const initial = orchestratorHarness();
     const { model, childRequests } = hireRetentionModel();
-
-    const configure = (agent: typeof initial.agent) => {
-      agent.modelFactory = () => model;
-      agent.overrideProviderRegistry({
-        registry: createProviderRegistry(),
-        deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
-        resolveModel: () => model,
-        normalizeSpecSync: (spec) => spec ?? 'test/model',
-      });
-    };
-
-    initial.agent.modelFactory = () => model;
+    const gateway = modelGateway(model);
+    const initial = gatewayWorkspace(gateway);
     await initial.agent.onStart();
-    configure(initial.agent);
-    await chatSessionTurns(initial.agent).run(HIRE_FORK_PARENT);
-    await chatSessionTurns(initial.agent).run(HIRE_FORK_REQUEST);
+
+    await catalogTurn(initial.agent, HIRE_FORK_PARENT);
+    await catalogTurn(initial.agent, HIRE_FORK_REQUEST);
     await initial.agent.terminalRetryPass();
     expect(childRequests).toHaveLength(2);
     const first = childRequests[1];
@@ -72,11 +56,14 @@ for (const cold of [false, true]) {
     } }] });
 
     const { agent } = cold
-      ? await reactivateOrchestratorHarness(initial.db, undefined, { beforeStart: configure })
+      ? await reactivateOrchestratorHarness(initial.db, undefined, {
+        world: { aiGateway: gateway },
+        beforeStart: (restarted) => { restarted.harnessInstallCatalog(GATEWAY_CATALOG); },
+      })
       : initial;
 
     if (cold) await agent.onStart();
-    await chatSessionTurns(agent).run(HIRE_FORK_FOLLOWUP_REQUEST);
+    await catalogTurn(agent, HIRE_FORK_FOLLOWUP_REQUEST);
     await agent.terminalRetryPass();
     const followup = childRequests[2];
 

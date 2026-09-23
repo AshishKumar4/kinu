@@ -126,10 +126,6 @@ interface Observed {
   readonly envCapabilityChips: number;
   readonly envCapabilityAbsences: number;
   readonly envFilesJumpLandsOnDrive: boolean;
-  /** The line terminal's rendered rows after one typed command and one pasted
-   *  two-line command. Rows, not a string: the defect was which row a
-   *  character lands on. */
-  readonly terminalRows: string[];
   /** Every `input` frame the pane sent the workspace shell, in order. */
   readonly terminalInput: string[];
   /** Exploration's run-node rows on the mixed-status run, by node id. */
@@ -581,12 +577,11 @@ async function run(): Promise<Observed> {
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
     const envCapabilityAbsences = await env.$$eval('[data-capability-absences]', (els) => els.length);
 
-    // The workspace shell, as the browser lays it out: the pane sends what is
-    // typed as `input` frames over the terminal socket and paints what comes
-    // back. Two commands: one typed, one pasted with a newline in it. What is
-    // read back is the rendered rows, because the whole defect class is which
-    // row a character lands on, and the frames the pane sent, because a paste
-    // that reaches the shell as one frame cannot lose its second line.
+    // The workspace shell: the pane sends what is typed as `input` frames over
+    // the terminal socket. Two commands: one typed, one pasted with a newline in
+    // it. What is read back is the frames the pane sent, because a paste that
+    // reaches the shell as one frame cannot lose its second line; what the shell
+    // prints is the fixture's own echo and proves nothing about the pane.
     await env.waitForSelector('.xterm-rows');
     await terminalSettled(env, '$ ');
     await env.click('.xterm-screen');
@@ -595,11 +590,6 @@ async function run(): Promise<Observed> {
     await terminalSettled(env, 'ran: one');
     await pasteIntoTerminal(env, 'two\nthree\n');
     await terminalSettled(env, 'ran: three');
-
-    const terminalRows = await env.$$eval(
-      '.xterm-rows > div',
-      (rows) => rows.map((line) => (line.textContent ?? '').replace(/\u00a0/gu, ' ').trimEnd()).filter((line) => line !== ''),
-    );
 
     const terminalInput = await env.evaluate(() => window.__kinuTerminalInput ?? []);
 
@@ -625,7 +615,7 @@ async function run(): Promise<Observed> {
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
       envCards, envCapabilityChips, envCapabilityAbsences, envFilesJumpLandsOnDrive,
-      terminalRows, terminalInput,
+      terminalInput,
       runNodes,
     };
   });
@@ -934,25 +924,11 @@ describe('the Environment tab, as a user reads it', () => {
     expect(observed.envFilesJumpLandsOnDrive).toBe(true);
   });
 
-  // Measured in the same browser against a live workspace executor before the
-  // fix (2026-09-01): `printf 'a\nb\nc\n'` drew `a`, ` b`, `  c` — one column
-  // further right per line, because a program's LF moves down without
-  // returning to column 0 and xterm writes what it is handed.
-  test('every line of a command output starts at column zero', () => {
-    expect(observed.terminalRows).toContain('ran: one');
-    expect(observed.terminalRows).toContain('ran: two');
-    expect(observed.terminalRows).toContain('ran: three');
-  });
-
-  // The same session: a pasted `echo first-line\necho second-line\n` ran the
-  // first line and dropped the second with no echo and no error.
-  test('a pasted two-line command reaches the shell as one frame and runs whole', () => {
-    const echoed = observed.terminalRows.filter((line) => line.startsWith('ran: '));
-    expect(echoed).toEqual(['ran: one', 'ran: two', 'ran: three']);
+  // A pasted `echo first-line\necho second-line\n` once ran the first line and dropped the second.
+  test('a pasted two-line command reaches the shell as one frame', () => {
     // One frame carries the whole paste, its newlines as the CR the shell
     // runs at; the pane never re-submits the second line as its own keys.
     expect(observed.terminalInput).toContain('two\rthree\r');
-    expect(observed.terminalRows).toContain('$ three');
   });
 });
 

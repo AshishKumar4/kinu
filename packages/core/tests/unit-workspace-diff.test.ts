@@ -14,7 +14,7 @@ import {
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import type { SqlValue } from '../src/types/primitives';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
-import { collectWorkspaceTextFiles, createTestRuntime, makeAgentDatabase } from './helpers';
+import { collectWorkspaceTextFiles, createTestRuntime } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
@@ -23,7 +23,7 @@ describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
     const db = new Database(':memory:');
 
-    const rt = await createWorkspace(makeAgentDatabase(db), {
+    const rt = await createWorkspace(db, {
       name: 'atlas', purpose: 'Test output lifecycle.', llm: TEST_LLM,
     });
 
