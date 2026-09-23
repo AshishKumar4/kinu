@@ -110,7 +110,7 @@ import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from 
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
   absorbingRunId, compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
-  infraBoundary, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
+  INFRA_FAILURE_MARKER, infraBoundary, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
   EVAL_BACKEND_ENV,
   type EvalScoreRow,
 } from '@kinu.run/test-utils';
@@ -1053,6 +1053,8 @@ export class KinuPublicSession {
     readonly recorder: PublicTurnRecorder;
     readonly resolve: (turn: PublicTurn) => void;
     readonly reject: (error: Error) => void;
+    /** When it was sent: the run open at this instant is the turn's own, read back after a redial. */
+    readonly sentAt: string;
   }>();
 
   /** Callers waiting on one response chunk of a request: settled by the
@@ -1136,7 +1138,9 @@ export class KinuPublicSession {
     // frame without an error and leaves its caller waiting forever.
     socket.addEventListener('close', (event: CloseEvent) => {
       if (this.socket === socket) this.socket = null;
-      this.failInFlight(`the workspace socket closed (code ${String(event.code)}${event.reason ? `, ${event.reason}` : ''})`);
+      const reason = `the workspace socket closed (code ${String(event.code)}${event.reason ? `, ${event.reason}` : ''})`;
+
+      this.survive(reason).catch(this.unrecoverable);
     });
     await infraBoundary(`ws ${url.host}${url.pathname}`, () => new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true });
@@ -1192,7 +1196,7 @@ export class KinuPublicSession {
     const recorder = recordPublicTurn();
 
     const admitted = new Promise<PublicTurn>((resolve, reject) => {
-      this.turns.set(requestId, { recorder, resolve, reject });
+      this.turns.set(requestId, { recorder, resolve, reject, sentAt: new Date().toISOString() });
       this.send(encodeChatRequest({ requestId, text })).catch(reject);
     });
 
@@ -2012,6 +2016,51 @@ export class KinuPublicSession {
       if (this.programmaticTurns > watcher.after) watcher.resolve();
       else this.programmaticWatchers.push(watcher);
     }
+  }
+
+  /**
+   * A dropped socket, survived as the browser survives it: rpcs in flight are lost with it and fail
+   * now, but a turn is durable up there, so the socket is redialled at once and the DO's
+   * stream-resume frames finish it (`resuming` in handleFrame). A turn whose run ended while no
+   * socket was open has no stream left to resume; the run ledger says when that run ended, and a turn
+   * still unsettled then fails under the infrastructure marker, not as the agent's.
+   */
+  private async survive(reason: string): Promise<void> {
+    this.failRequests(reason);
+
+    if (this.turns.size === 0) return;
+
+    try {
+      await this.connect();
+    } catch (error) {
+      this.failInFlight(`${reason}; redialling failed: ${error instanceof Error ? error.message : String(error)}`);
+
+      return;
+    }
+
+    await Promise.all([...this.turns].map(async ([requestId, turn]) => {
+      await this.awaitAbsorbingRunEnd(turn.sentAt);
+      // One more round trip: a resumed stream's last frames may still be in flight behind the run's end.
+      await this.runEvents();
+
+      if (this.turns.get(requestId) !== turn) return;
+      this.turns.delete(requestId);
+      turn.reject(new Error(`${INFRA_FAILURE_MARKER} — ${reason}, and the turn's run ended before its stream `
+        + 'could be resumed, so its answer was never observed'));
+    }));
+  }
+
+  /** A drop the session could not survive: the ledger read that settles a turn failed too. */
+  private readonly unrecoverable = (error: Error): void => {
+    this.failInFlight(`the workspace socket closed and could not be recovered: ${error.message}`);
+  };
+
+  /** Fail what a dropped socket cannot carry over: rpc replies. Turns survive it. */
+  private failRequests(reason: string): void {
+    const rpcs = [...this.rpcs.values()];
+    this.rpcs.clear();
+
+    for (const rpc of rpcs) rpc.reject(new Error(reason));
   }
 
   /** Reject what the dead socket was carrying. A turn is durable up there and
