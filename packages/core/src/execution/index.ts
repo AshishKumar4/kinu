@@ -22,6 +22,8 @@ export {
   type CommandOutputLimits, type OutputSpill, type SpillOutcome,
 } from './bounded-output';
 
+export { unsandboxedCommandEnvironment } from './command-env';
+
 export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,

@@ -32,7 +32,7 @@ import {
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
-  BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS,
+  BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -56,9 +56,10 @@ import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
 import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
-import { createBranchSpawner } from './branch-process';
+import { BRANCH_CREDENTIAL_ENV, createBranchSpawner } from './branch-process';
+import { dotenvLoadedNames } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM,
+  createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
   type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
 import {
@@ -70,6 +71,12 @@ import type { FileCheckpoints } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
+
+const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
+
+function harnessCommandEnvironment() {
+  return unsandboxedCommandEnvironment(process.env, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), process.env)]));
+}
 
 interface CLIRuntimeOptions {
   dbPath: string;
@@ -478,7 +485,7 @@ export function createCLIRuntime(
   // in-SQLite shell touches no host file.
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
-      createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
+      createHostShell(cwd, facet === undefined ? harnessCommandEnvironment() : facetShellEnv(cwd, facet)),
       checkpoints,
       cwd,
     ),
@@ -638,7 +645,7 @@ function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
   const tmp = join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
 
-  return { ...process.env, HOME: home, TMPDIR: tmp };
+  return { ...harnessCommandEnvironment(), HOME: home, TMPDIR: tmp };
 }
 
 /** Remove one facet's scratch root, and only that root. */
@@ -845,7 +852,7 @@ const shellOptionsSchema = v.object({
   signal: v.optional(v.instance(AbortSignal)),
 });
 
-export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
+export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = harnessCommandEnvironment()): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       const { promise, resolve } = Promise.withResolvers<ShellExecResult>();

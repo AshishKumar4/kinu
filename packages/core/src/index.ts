@@ -1174,6 +1174,7 @@ export {
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
   commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type CommandOutputLimits, type OutputSpill, type SpillOutcome,
+  unsandboxedCommandEnvironment,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
