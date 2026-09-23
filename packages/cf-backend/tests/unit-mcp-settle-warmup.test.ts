@@ -3,7 +3,7 @@
 // real settled turns; observed at the UserDO binding the object calls.
 import { describe, expect, test } from 'bun:test';
 import {
-  chatSessionTurns, improvementLanesRan, orchestratorHarness, tapDiagnostics, until,
+  chatSessionTurns, improvementLanesRan, nextTurn, orchestratorHarness, tapDiagnostics, until,
   type ActorHarness, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import type { ScriptedAnswer } from './helpers/turn-harness';
@@ -32,8 +32,8 @@ async function settleTurn(
 ): Promise<void> {
   const { messageId } = await chatSessionTurns(harness.agent).settle(answer);
   await until(() => improvementLanesRan(harness.db, messageId), `the improvement lanes of ${messageId} ran`);
-  // A rejected warm reports from its catch, a macrotask after the fiber body settles.
-  await Bun.sleep(0);
+  // A rejected warm reports from its catch, a turn after the fiber body settles.
+  await nextTurn();
 }
 
 /** Records diagnostics across `body`; `endsOn` names an event whose arrival ends the recording. */

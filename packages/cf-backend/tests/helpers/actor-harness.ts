@@ -914,6 +914,11 @@ export function workspaceFiles(agent: HarnessOrchestratorAgent): VFS {
   });
 }
 
+/** One event-loop turn, with no duration: queued I/O callbacks and detached continuations run first. */
+export function nextTurn(): Promise<void> {
+  return new Promise((resolve) => { setImmediate(resolve); });
+}
+
 /**
  * Yields to the event loop, joining fibers each lap, until `holds()` reads true in what the object
  * stored. Detached work is observed by its effect, the way an operator would see it; a condition
@@ -928,7 +933,7 @@ export async function until(holds: () => boolean, what: string): Promise<void> {
     }
 
     await joinHarnessFibers();
-    await Bun.sleep(0);
+    await nextTurn();
   }
 
   throw new Error(`${what}: never held after 1000 event-loop laps`);
