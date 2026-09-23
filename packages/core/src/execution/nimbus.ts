@@ -5,7 +5,7 @@ import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { Shell, VFS } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
-import { makeVfsError } from '../vfs/errno';
+import { atVfsPath, makeVfsError } from '../vfs/errno';
 import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
@@ -980,16 +980,16 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
       const absolute = workspacePath(path);
 
       if (opts?.encoding !== 'utf8' && files.readBytes) {
-        const bytes = await files.readBytes(absolute);
+        const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
 
-        if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+        if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${absolute}'`, absolute);
 
         return bytes;
       }
 
-      const content = await files.read(absolute);
+      const content = await atVfsPath(absolute, 'open', () => files.read(absolute));
 
-      if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+      if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${absolute}'`, absolute);
 
       return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
     },
@@ -997,10 +997,18 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     async readRange(path, offset, length) {
       return readNimbusOriginRange({ box, files, path, offset, length, cred });
     },
-    async writeFile(path, data) { await files.write(workspacePath(path), data); },
+    async writeFile(path, data) {
+      const absolute = workspacePath(path);
+
+      await atVfsPath(absolute, 'open', () => files.write(absolute, data));
+    },
     // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
     // `writeExecutorFileOp` answers `unsupported`.
-    async readdir(path) { return (await files.list(workspacePath(path))).map((e) => e.name); },
+    async readdir(path) {
+      const absolute = workspacePath(path);
+
+      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((e) => e.name);
+    },
     async stat(path) {
       if (files.stat) {
         const st = await files.stat(workspacePath(path));

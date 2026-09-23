@@ -27,6 +27,7 @@ import {
   provisionAgentHome,
 } from '../src/vfs/agent-home';
 import { withMountTable } from '../src/vfs/mounts';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 /** NUL, a UTF-8 BOM, high bytes, and invalid-UTF-8 0x80 (forces the base64 transport). */
 const BINARY = new Uint8Array([0xef, 0xbb, 0xbf, 0x00, 0x01, 0x80, 0xff, 0xfe, 0x00, 0x42]);
@@ -403,6 +404,13 @@ for (const c of cases) {
     });
   });
 }
+
+test('the workspace filesystem names the absolute path, never the storage key, when a relative listing fails', async () => {
+  // The 2048 transcript: `readdir('skills')` failed as `ENOENT: home/user/skills`, a path no tool can address.
+  const vfs = createWorkspaceBundle(new Database(':memory:')).vfs;
+
+  await expect(vfs.readdir('skills')).rejects.toThrow(`${WORKSPACE_ROOT}/skills`);
+});
 
 describe('the global workspace namespace', () => {
   test('registers private tmp by storage key while retaining one logical path', () => {
