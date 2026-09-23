@@ -496,14 +496,18 @@ async function runEpisode(evalCase: EvalCase): Promise<string[]> {
     });
   }
 
+  // `kinu exec` exits 1 whenever its stream carried an error event, including a turn that recovered and
+  // closed normally (commands/run.ts `runOneShot`), so the exit code is reported beside the verdict
+  // rather than read as "never completed". An answer file on disk after a closed turn is gradable.
+  const exit = child.exitCode === 0 ? '' : `; exit ${String(child.exitCode)}: ${[...child.errors, child.stderr.trim()]
+    .filter((line) => line.length > 0).join(' | ').slice(0, 300)}`;
+
   console.log(`    [math] ${problem.id}: ${environment !== null && !solved ? environment : outcome.detail} — `
-    + `${String(totals.turns)} turn(s), ${String(totals.toolCalls)} call(s), ${(ms / 1000).toFixed(0)}s`);
+    + `${String(totals.turns)} turn(s), ${String(totals.toolCalls)} call(s), ${(ms / 1000).toFixed(0)}s${exit}`);
 
   if (child.timedOut) ungraded.push(`${problem.id}: the child was killed at ${String(EPISODE_TIMEOUT_MS)}ms`);
 
-  if (child.exitCode !== 0) ungraded.push(`${problem.id}: the child exited ${String(child.exitCode)}; stderr: ${child.stderr.trim()}`);
-
-  if (totals.turns === 0) ungraded.push(`${problem.id}: the episode closed no turn`);
+  if (totals.turns === 0) ungraded.push(`${problem.id}: the episode closed no turn${exit}`);
 
   return ungraded;
 }
