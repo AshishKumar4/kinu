@@ -67,7 +67,7 @@ is now proved:
 | Requirement | Module | What the model settled |
 |---|---|---|
 | `PR-MCTS-004`, UCT bonus monotonicity | `MCTS/Uct.lean` | The bonus order is the order of natural powers. It falls with a node's own visits and rises with its parent's, off two plateaus. At the root it rises from two visits to three (`the_root_bonus_rises_from_two_visits_to_three`) |
-| `PR-MCTS-005`, search convergence | `MCTS/Convergence.lean` | A unique best unexpanded candidate always wins. The shipped search expands its best candidate and can then converge on a worse sibling (`the_search_expands_its_best_candidate_then_converges_past_it`). With refinements that never score worse, the winner's reward is the best and stabilizes |
+| `PR-MCTS-005`, search convergence | `MCTS/Convergence.lean` | A candidate ranks by its own reward, so every winner carries the best reward and it stabilizes (`the_winner_carries_the_best_reward`). Ranking by the subtree mean let the search converge past its best candidate; the fixture keeps that case |
 | `PR-DISCRIM-003`, the verifier counterfactual | `Exploration/Counterfactual.lean` | B1 implies the counterfactual for a deterministic verifier and not for a nondeterministic one (`b1_passes_input_blind_noise`) |
 | `PR-PUBLISH-004`, the seal under concurrent runs | `Exploration/Concurrent.lean` | The best never falls under any interleaving. The seal is per run, so one run's breach leaves a concurrent run writing (`a_breach_in_one_run_does_not_seal_another`) |
 | `PR-EXPL-002`, eventual improvement | `Exploration/Improvement.lean` | With a per-round improvement floor `a/b`, `n` rounds without gain have probability at most `(1 - a/b)ⁿ`. The engine has no gain stop to report `gain-decayed` |

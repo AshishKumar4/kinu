@@ -1,10 +1,7 @@
 /**
- * Refinement of `MCTS/Convergence.lean — outcomeOf` and `Backpropagation.lean — sum_invariant` by
- * the deployed search: each tree in `lean/fixtures/convergence.json` is built the way `runMCTS`
- * builds one, every candidate recorded then backpropagated in order through the deployed
- * `backpropagate`. Every row must hold the model's visit count and mean, and the deployed
- * `converge` must answer what the model answers, naming one of the model's winners. Plan mode, so
- * no judge or executor runs. `bash scripts/verify-lean.sh` regenerates the fixture from the model.
+ * Refinement of `MCTS/Convergence.lean — outcomeOf` and `Backpropagation.lean — sum_invariant`: each
+ * tree in `lean/fixtures/convergence.json` is built as `runMCTS` builds one, and the deployed
+ * `backpropagate` and plan-mode `converge` must give the model's visits, means, winners and outcome.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -60,9 +57,9 @@ describe('converge refines Convergence.outcomeOf', () => {
       VALUES (${actorId}, ${ROOT}, NULL, ${ROOT}, 'task', 'task', 0)`;
 
     for (const candidate of c.candidates) {
-      void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth)
+      void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, observation, depth, evaluation_json)
         VALUES (${actorId}, ${candidate.id}, ${candidate.path.at(-1) ?? null}, ${ROOT}, 'task',
-          ${candidate.text}, ${candidate.path.length})`;
+          ${candidate.text}, ${candidate.path.length}, ${JSON.stringify({ score: candidate.reward / rewardScale })})`;
       backpropagate(sql, rt.actor, candidate.id, candidate.reward / rewardScale);
     }
 

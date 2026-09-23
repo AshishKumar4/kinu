@@ -4,9 +4,8 @@
  * CodeMonkeys, arXiv:2501.14723.
  */
 
-import type { SearchNode } from '../types/mcts';
 import type { LLM, Executor } from '../types/primitives';
-import { findNearTiedRivals } from './takes';
+import { findNearTiedRivals, type ScoredSearchNode } from './takes';
 import { checkFraction, generateAssertionSuite, runForVerdict } from './evaluation';
 import { diagnostics, toKinuError } from '../obs/index';
 
@@ -18,8 +17,8 @@ export interface TestSelectionDeps {
 
 /** The converged winner among near-tied candidates; `winner` unchanged when tests cannot break the tie. */
 export async function selectWinnerByTest(
-  nodes: readonly SearchNode[],
-  winner: SearchNode,
+  nodes: readonly ScoredSearchNode[],
+  winner: ScoredSearchNode,
   epsilon: number,
   deps: TestSelectionDeps,
 ): Promise<string> {

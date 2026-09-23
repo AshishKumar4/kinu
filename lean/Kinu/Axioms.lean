@@ -116,12 +116,11 @@ import Kinu
 
 #print axioms Kinu.MCTS.Convergence.backprop_accumulates_the_evaluations_through_a_node
 #print axioms Kinu.MCTS.Convergence.the_winner_has_the_greatest_value
-#print axioms Kinu.MCTS.Convergence.a_unique_best_leaf_is_the_only_winner
-#print axioms Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_then_converges_past_it
-#print axioms Kinu.MCTS.Convergence.the_winner_is_optimal_when_refinements_never_score_worse
 #print axioms Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
+#print axioms Kinu.MCTS.Convergence.the_winner_carries_the_best_reward
+#print axioms Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_and_converges_on_it
+#print axioms Kinu.MCTS.Convergence.an_ancestor_is_never_a_rival
 #print axioms Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
-#print axioms Kinu.MCTS.Convergence.a_pruned_parent_splits_a_lineage
 
 /-! ## Kinu/MCTS/StorageIsolation.lean -/
 

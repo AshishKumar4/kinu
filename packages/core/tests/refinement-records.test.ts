@@ -1,9 +1,7 @@
 /**
- * Refinement of `Exploration/Concurrent.lean — runC` by the deployed records store: each case in
- * `lean/fixtures/records.json` interleaves the steps of one to three runs over one cell, each run
- * holding its own `PublicationState` as a swarm run does, and the deployed `recordExploration`
- * must give every write the model's verdict and leave the model's rows. One run is
- * `RecordsStore.lean`'s single-run store. `bash scripts/verify-lean.sh` regenerates the fixture.
+ * Refinement of `Exploration/Concurrent.lean — runC`: each case in `lean/fixtures/records.json`
+ * interleaves one to three runs, each with its own `PublicationState`, over one cell, and the
+ * deployed `recordExploration` must give every write the model's verdict and leave its rows.
  */
 
 import { describe, expect, test } from 'bun:test';

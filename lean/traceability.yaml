@@ -274,17 +274,16 @@ requirements:
     refinement:
       - lean/fixtures/uct-select.json :: packages/core/tests/refinement-uct.test.ts
   PR-MCTS-005:
-    statement: Convergence returns a row no population row outranks, a unique best candidate nothing was expanded from is its only possible winner, the shipped search can expand its best candidate and then converge on a worse sibling, and when refinements never score below their parent every winner carries the best reward and that reward stabilizes.
+    statement: Convergence ranks a candidate by its own reward, so every winner carries the best reward a population candidate reached and the search keeps its best candidate through weak refinements, no ancestor is a rival of its descendant whatever lies between them, a converged winner is undisputed and acceptable, and the winner's reward stabilizes.
     status: proved-and-refined
     theorems:
       - Kinu.MCTS.Convergence.backprop_accumulates_the_evaluations_through_a_node
       - Kinu.MCTS.Convergence.the_winner_has_the_greatest_value
-      - Kinu.MCTS.Convergence.a_unique_best_leaf_is_the_only_winner
-      - Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_then_converges_past_it
-      - Kinu.MCTS.Convergence.the_winner_is_optimal_when_refinements_never_score_worse
       - Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
       - Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
-      - Kinu.MCTS.Convergence.a_pruned_parent_splits_a_lineage
+      - Kinu.MCTS.Convergence.the_winner_carries_the_best_reward
+      - Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_and_converges_on_it
+      - Kinu.MCTS.Convergence.an_ancestor_is_never_a_rival
     tsRefs:
       - packages/core/src/mcts/convergence.ts#converge
       - packages/core/src/mcts/engine.ts#runMCTS
@@ -292,11 +291,9 @@ requirements:
       - packages/core/src/mcts/uct.ts#selectNode
       - packages/core/src/mcts/takes.ts#findNearTiedRivals
     remainingEvidence:
-      - A node's value is a subtree mean while converge returns the winner's own proposal, so the search does not stabilize on its best evaluated candidate in general, and the counterexample is reachable by the shipped selection
-      - findNearTiedRivals walks the lineage through population rows only, so a pruned parent makes a tied grandparent a rival; the model and the fixture follow the shipped walk
+      - Until the fix that accompanies this model, converge ranked by the subtree mean and walked lineage through population rows only; the fixture's expands-then-converges and pruned-parent cases are those regressions
       - The fixture runs converge in plan mode; build mode adds the near-tie test selection, the memory writes and the task history, which it does not exercise
       - Rewards are exact scaled integers while the stored value is a floating-point running mean; the fixture keeps only trees where the doubles give the exact model's answer
-      - Pruning enters only through population membership: the optimality theorem assumes a best candidate is still open or terminal
     refinement:
       - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
   PR-CRED-001:

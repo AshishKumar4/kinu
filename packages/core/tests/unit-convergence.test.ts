@@ -84,10 +84,10 @@ describe('Convergence', () => {
 
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
         VALUES (${rt.actor.actorId}, 'r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES (${rt.actor.actorId}, 'r', 'a', 'r', 'test task', 0.6, 1, 'open', 1, 'approach A')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation, evaluation_json)
+        VALUES (${rt.actor.actorId}, 'r', 'a', 'r', 'test task', 0.6, 1, 'open', 1, 'approach A', '{"score":0.6}')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation, evaluation_json)
+        VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.6, 1, 'open', 1, 'approach B', '{"score":0.6}')`;
 
     const result = await converge(rt, session, 'r', { minAcceptable: 0.3, takesEpsilon: 0.1, mode: 'plan' });
     // 0.6 clears minAcceptableScore, so the score alone would ship it.
@@ -112,10 +112,10 @@ describe('Convergence', () => {
 
     void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
         VALUES (${rt.actor.actorId}, 'r', 'r', ${null}, 'test task', 0.6, 2, 'open', 0, 'test task')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES (${rt.actor.actorId}, 'r', 'a', 'r', 'test task', 0.61, 1, 'open', 1, 'approach A')`;
-    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation)
-        VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.60, 1, 'open', 1, 'approach B')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation, evaluation_json)
+        VALUES (${rt.actor.actorId}, 'r', 'a', 'r', 'test task', 0.61, 1, 'open', 1, 'approach A', '{"score":0.61}')`;
+    void rt.storage.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth, observation, evaluation_json)
+        VALUES (${rt.actor.actorId}, 'r', 'b', 'r', 'test task', 0.60, 1, 'open', 1, 'approach B', '{"score":0.60}')`;
 
     const result = await converge(rt, session, 'r', { minAcceptable: 0.3, takesEpsilon: 0.1, mode: 'plan' });
     expect(result.converged).toBe(true);

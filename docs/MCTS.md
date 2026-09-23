@@ -248,7 +248,9 @@ writes a reflection. `pruneLowValueBranches` (`mcts/pruning.ts`) then takes open
 nodes with `value < pruneThreshold` (0.25) and `visits >= minVisitsForPrune` (2),
 marks them `status = 'pruned'`, clears `branch_agent_key`, and aborts the branch.
 
-`mcts/convergence.ts` takes the argmax over `terminal` and `open` values.
+`mcts/convergence.ts` takes the argmax over the `terminal` and `open` candidates'
+own scores, the score each one's evaluation measured, never the subtree mean in
+`value`.
 Rivals within `takesEpsilon` (0.1) run one shared suite and compare the share of checks
 each satisfies. The measured share decides, not the pass bit, so two of four beats
 none of four. Value order stands when no candidate carries runnable code,
@@ -309,13 +311,12 @@ uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 | The bonus rises with the parent's visits from two on | `Uct.lean` | `bonus_rises_with_parent_visits` | proved-in-abstract-model |
 | The root's bonus rises from two visits to three | `Uct.lean` | `the_root_bonus_rises_from_two_visits_to_three` | proved-in-abstract-model |
 | The selected row is eligible and no eligible row outranks it | `Uct.lean` | `select_is_eligible`, `select_is_maximal` | proved-in-abstract-model |
-| A unique best unexpanded candidate is the only winner | `Convergence.lean` | `a_unique_best_leaf_is_the_only_winner` | proved-in-abstract-model |
-| The search can expand its best candidate and converge past it | `Convergence.lean` | `the_search_expands_its_best_candidate_then_converges_past_it` | proved-in-abstract-model |
+| Every winner carries the best reward a candidate reached | `Convergence.lean` | `the_winner_carries_the_best_reward` | proved-and-refined |
+| The search keeps its best candidate through weak refinements | `Convergence.lean` | `the_search_expands_its_best_candidate_and_converges_on_it` | proved-and-refined |
 
 The bonus order is exact: for W > 0, `W·√(ln M₁ / N₁) < W·√(ln M₂ / N₂)` exactly
 when `M₁^N₂ < M₂^N₁` (`bonus_order_is_power_order`), so every monotonicity claim
-is about natural powers. `converge` ranks by `value`, a subtree mean, and
-returns the winner's own proposal. Expanding a candidate into weaker
-refinements lowers its mean, so the search does not in general converge on its
-best evaluated candidate. It does when refinements never score below their
-parent (`the_winner_is_optimal_when_refinements_never_score_worse`).
+is about natural powers. `converge` ranks a candidate by its own score, not by
+the subtree mean `value` holds after its refinements backpropagate, so weak
+refinements cannot bury the best answer the search evaluated
+(`the_winner_carries_the_best_reward`).

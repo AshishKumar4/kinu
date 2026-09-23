@@ -132,6 +132,8 @@ describe("the settle path's egress is classified, not discovered", () => {
     // Declared so a new import cannot arrive unclassified.
     isCraftable: 'disclosure: predicate, writes nothing',
     findNearTiedRivals: 'disclosure: read over the population',
+    searchTree: 'disclosure: read of the search tree, writes nothing',
+    inPopulation: 'disclosure: predicate, writes nothing',
     selectWinnerByTest: 'disclosure: selection, writes nothing durable',
     DEFAULT_CONFIG: 'disclosure: constants',
     EVIDENCE_BUDGETS: 'disclosure: constants',
