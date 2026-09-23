@@ -6,16 +6,19 @@ permissions:
 
 # NO `paths:` FILTER, and its absence is the gate.
 #
-# `scripts/verify-lean.sh` runs four things, and only two of them read `lean/`:
+# `scripts/verify-lean.sh` runs six things, and only three of them read `lean/`
+# alone:
 #
 #   lake build              lean/**
 #   check-no-false.sh       lean/**
+#   RefinementFixtures      lean/** and lean/fixtures/
 #   check-traceability.mjs  lean/traceability.yaml, lean/**, AND every `.ts` file
-#                           a tsRef names — measured 143 cited declarations,
-#                           including packages/core/tests/ and
+#                           a tsRef or a refinement entry names — measured 143
+#                           cited declarations, including packages/core/tests/ and
 #                           scripts/fixtures/storage-matrix/
 #   lean-citations.ts       EVERY tracked text source. Measured: 1,987 files, 95
 #                           module / 47 theorem / 1 line citations.
+#   bun test                the refinement tests and the deployed code they import
 #
 # Any filter narrow enough to write down is a strict SUBSET of what the gates
 # read, and the gap is not hypothetical: Lean citations live in `docs/` (3

@@ -622,8 +622,11 @@ The machine-checked contracts live in `lean/Kinu/Exploration/`:
 | `Settle.lean` | `settle` is a total function of (score, advance) | 11 |
 | `Arbitration.lean` | a proposal cannot exceed the arbiter; depth stays bounded | 11 |
 | `Isolation.lean` | why the existing proof does not reach an agent node | 4 |
+| `Concurrent.lean` | under any interleaving of runs the best never falls; the seal is per run | 6 |
+| `Counterfactual.lean` | B1 witnesses that a deterministic verifier could have failed | 4 |
+| `Improvement.lean` | rounds without gain become improbable under a discrimination floor | 4 |
 
-Counted 2026-09-22 at `ad61dea6c` as top-level `theorem` declarations per module.
+Counted 2026-09-23 as top-level `theorem` declarations per module.
 `lean/traceability.yaml` is canonical.
 
 The descriptor property depends on an unspecified descriptor producer. Isolation
