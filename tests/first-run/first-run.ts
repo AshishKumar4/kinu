@@ -99,6 +99,14 @@ export const FIRST_RUN_CASES = [
   'agent-tab',
   'agent-chats-persist',
   'agent-dismissed-chat',
+  'agent-confined',
+  'web-search',
+  'account-settings',
+  'workspace-settings',
+  'machine-consent',
+  'workspace-panes',
+  'delegation-tree',
+  'exploration',
   'deploy-door',
 ] as const;
 
@@ -413,6 +421,100 @@ export const FIRST_RUN_DEFECTS = {
       + 'loopback (the Worker the deploy ships, with local state): `kept-chat-reads` misses on '
       + 'the refusal above. Green on e29da7f01 served the same way.',
   },
+  'agent-confined': {
+    id: 'agent-confined',
+    found: 'Subagents were meant to be "other agents confined to the workspace itself" (the owner, '
+      + '2026-07-13), and no deployed row asked any workspace but the one that made an agent about it.',
+    missedBecause: 'every subagent row reads the agent from the workspace that made it, so a roster, '
+      + 'a pager or a hosted room that answered another workspace\'s agent passes all of them.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a pager that falls back to '
+      + 'the calling workspace\'s own chat for an actor id it never issued answers the other '
+      + 'workspace, and `unreadable-elsewhere` misses. Not re-run against a deployed build: '
+      + 'confinement has held on every deployed build this row could name.',
+  },
+  'web-search': {
+    id: 'web-search',
+    found: 'The owner asked for an end-to-end pass of the web search capability, and no deployed row '
+      + 'ever asked the agent to search: `every-tool` fetches the product\'s own health route.',
+    missedBecause: 'the search provider (Tavily with a key, DuckDuckGo without) is unit-tested over '
+      + 'fixture pages, so a provider the deployment cannot reach, or a layout it no longer parses, '
+      + 'is invisible until a user asks the agent to look something up.',
+    provedRedAt: '41494531d',
+    redDirection: 'RED on the deployed build: DuckDuckGo answers the Worker 522 or rate-limits it, so every '
+      + 'search fails; it stays red until the search provider serves Worker egress. Also planted on '
+      + 'loopback `vite dev`: an endpoint that does not answer leaves `searched` and `results-returned` missed.',
+  },
+  'account-settings': {
+    id: 'account-settings',
+    found: 'The welcome flow and the account settings page read and write the account itself, and no '
+      + 'deployed row read or wrote it: every row opens a workspace.',
+    missedBecause: 'a profile route that stopped answering, a rename that did not persist or an onboarding '
+      + 'stamp that did not stick strands a person on /welcome or shows a stale name, and passed '
+      + 'every workspace row.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a rename the account object '
+      + 'acknowledges and does not write leaves `rename-persisted` missed.',
+  },
+  'workspace-settings': {
+    id: 'workspace-settings',
+    found: 'A workspace\'s settings page writes its name, SOUL.md, shell approval mode and advisor '
+      + 'setting and exports the workspace, and no deployed row wrote a setting.',
+    missedBecause: 'the chat rows read what a turn left, so a write the workspace acknowledged and then '
+      + 'dropped, or a snapshot that stopped carrying the soul the page shows, passed them all.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a soul write that is acknowledged '
+      + 'and never stored leaves `soul-persisted` missed.',
+  },
+  'machine-consent': {
+    id: 'machine-consent',
+    found: 'MA-041 asked for both consent branches of a cloud workspace\'s first use of the owner\'s '
+      + 'machine, and no deployed row let the agent reach for a machine that was not connected, '
+      + 'or let its own call raise the consent card.',
+    missedBecause: 'device-link drives the Environment pane\'s RPC against a machine already attached, and '
+      + 'approve-clears and two-machines grant consent before their first command, so a card that '
+      + 'never showed, or a connect prompt that never came, passed them all.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a device call that skips the '
+      + 'owner\'s consent leaves `consent-requested` missed.',
+  },
+  'workspace-panes': {
+    id: 'workspace-panes',
+    found: 'The Diffs, Supervise and Releases panes read a workspace\'s review baseline, run list, '
+      + 'triggers and release board, and no deployed row asked any of them anything.',
+    missedBecause: 'the rows that write files read them back through the Files pane and the ledger, so a '
+      + 'baseline that stopped seeing a write, a run list that lost a settled turn or a board '
+      + 'that stopped answering passed them all.',
+    provedRedAt: null,
+    redDirection: 'Planted on a loopback `vite dev` build of this tree: a review diff that reports no files '
+      + 'leaves `diff-shows-the-write` missed.',
+  },
+  'delegation-tree': {
+    id: 'delegation-tree',
+    found: 'Hosted subordinates that delegate in turn, settling a tree whose branches end at '
+      + 'different depths, had no deployed row: `delegation` hires at one level only.',
+    missedBecause: 'a nested hire runs in a subordinate the same workspace object hosts, one delegation '
+      + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
+      + 'none of which a one-level hire exercises.',
+    provedRedAt: '41494531d',
+    redDirection: 'RED on the deployed build: a task hire settles at its helper\'s first turn end, so a helper '
+      + 'that hires its own and waits for the wake reports "has been hired" upward and the nested answer never '
+      + 'climbs; it stays red until a task hire waits for its helper\'s own delegated work. Also planted on '
+      + 'loopback `vite dev`: a delegation budget that refuses the nested hire leaves `nested-hire-settled` missed.',
+  },
+  'exploration': {
+    id: 'exploration',
+    found: 'Exploration on the deployed product had no row that read the Swarms pane or asked '
+      + 'whether a swarm\'s nodes, which run as agents of the workspace, settled.',
+    missedBecause: 'the eval tier\'s swarm arm asserts a search row exists on the cloud target and reads '
+      + 'neither the pane nor the nodes\' settlement, so a canvas that lost the node transcripts, '
+      + 'or a node left running, passed it.',
+    provedRedAt: '41494531d',
+    redDirection: 'RED on the deployed build: every node errored at its 60 s budget while waiting out the '
+      + 'provider\'s rate-limit backoff, which the budget counts; it stays red until a node\'s budget '
+      + 'stops counting provider-mandated waits. Also planted on loopback `vite dev`: a canvas read that '
+      + 'drops the node transcripts leaves `pane-shows-the-run` and `every-node-an-agent-that-settled` missed.',
+  },
   'deploy-door': {
     id: 'deploy-door',
     found: 'The Cloudflare door is new surface, so no owner has driven it by hand yet. What the '
@@ -542,6 +644,14 @@ const SHORT_SUBJECT = {
   'agent-tab': 'tab',
   'agent-chats-persist': 'chats',
   'agent-dismissed-chat': 'kept',
+  'agent-confined': 'confined',
+  'web-search': 'search',
+  'account-settings': 'account',
+  'workspace-settings': 'settings',
+  'machine-consent': 'consent',
+  'workspace-panes': 'panes',
+  'delegation-tree': 'tree',
+  'exploration': 'swarm',
   'deploy-door': 'door',
 } satisfies Record<FirstRunCase, string>;
 

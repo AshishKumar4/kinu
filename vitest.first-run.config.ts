@@ -68,6 +68,7 @@ export const EXECUTOR_READERS = {
   'background-settle': 'the detached job the row waits on runs on an executor the agent picks',
   'files-outside-tree': 'the row reads an executor\'s file plane',
   'command-refusal': 'the row reads an executor\'s refusal and its approval queue',
+  'workspace-panes': 'the row diffs the file the agent wrote, which a live machine could have taken',
 } as const;
 
 /** The two projects, by the names `scripts/first-run-tier.sh` selects. */
