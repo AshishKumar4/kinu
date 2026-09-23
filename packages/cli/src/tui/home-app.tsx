@@ -113,11 +113,10 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     };
   }, []);
 
-  const [mode, setMode] = useState<AgentMode>(() => defaultCreateMode());
+  const [mode, setMode] = useState<AgentMode>(() => (isLocalModelConfigured() ? 'local' : defaultCreateMode()));
   const [defaultModel, setDefaultModelState] = useState(initialDefaults.model);
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort);
   const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
-  // Effort-row catalog (#9), refreshed when the picker opens.
   const [catalog, setCatalog] = useState<AgentModelMenu>(EMPTY_MODEL_MENU);
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -174,7 +173,6 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     initialFocusApplied.current = true;
     setFocusArea('agents');
   }, [sidebarFocusable]);
-  // A hidden sidebar cannot hold focus; hand it back to the mission field.
   useEffect(() => {
     if (focusArea === 'agents' && !sidebarFocusable) setFocusArea('mission');
   }, [focusArea, sidebarFocusable]);

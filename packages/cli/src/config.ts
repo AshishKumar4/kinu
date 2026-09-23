@@ -1,5 +1,5 @@
 import {
-  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync,
+  chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
 } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
@@ -303,6 +303,21 @@ function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
 
 export function localWorkspaceMembers(workspaceId: string, cwd = process.cwd()): LocalAgentRef[] {
   return listLocalRefs(cwd).filter((ref) => ref.workspaceId === workspaceId);
+}
+
+/** The workspace placed here whose database was written last. */
+export function lastUsedLocalRef(cwd = process.cwd()): LocalAgentRef | null {
+  let latest: { readonly ref: LocalAgentRef; readonly writtenAt: number } | null = null;
+
+  for (const ref of listLocalRefs(cwd)) {
+    // WAL writes land in -wal until a checkpoint.
+    const writtenAt = Math.max(...[ref.dbPath, `${ref.dbPath}-wal`]
+      .map((path) => statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0));
+
+    if (latest === null || writtenAt > latest.writtenAt) latest = { ref, writtenAt };
+  }
+
+  return latest?.ref ?? null;
 }
 
 export function listAgentDirs(cwd = process.cwd()): string[] {
