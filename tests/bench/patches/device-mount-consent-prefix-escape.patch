@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/execution/device-tunnel-executor.ts b/packages/core/src/execution/device-tunnel-executor.ts
-index f0a2e77de..cc46d9dda 100644
+index db9ffd67a..90799438c 100644
 --- a/packages/core/src/execution/device-tunnel-executor.ts
 +++ b/packages/core/src/execution/device-tunnel-executor.ts
-@@ -585,7 +585,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
+@@ -602,7 +602,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
      const root = await effectiveRoot();
  
      // A device that named no directory threw above rather than widening to `/`.
@@ -10,4 +10,4 @@ index f0a2e77de..cc46d9dda 100644
 +    if (!(path === root || path.startsWith(root))) {
        throw makeVfsError(
          'EACCES',
-         `'${path}' is outside the consented device directory '${root}' — `
+         `'${path}' is outside the consented device directory '${root}' — the agent sees the folder the owner `

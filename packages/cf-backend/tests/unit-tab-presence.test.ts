@@ -1,6 +1,7 @@
 /**
- * Gated right-pane tabs appear only with content (`surfaceHasContent`), and a reader on one that just
- * emptied lands on the default surface (`landedSurface`). The rendered strip is proved in the browser.
+ * Gated right-pane tabs appear only with content (`surfaceHasContent`). The panel's first landing picks a tab
+ * with content, and after that the selected tab stays where the reader put it (`landedSurface`). The rendered
+ * strip is proved in the browser.
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
@@ -11,7 +12,7 @@ import { WorkSurface } from '../src/components/surfaces/WorkSurface';
 import {
   landedSurface,
   surfaceHasContent,
-} from '../src/components/surfaces/presence';
+} from '@kinu.run/core';
 import { BackgroundJobStore, openWorkspaceMainActor, PlanReviewStore, TaskListStore } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
@@ -137,39 +138,44 @@ describe('the first frame marks the tab a request lands on', () => {
 describe('Slate tab presence', () => {
   const slates = [{ id: 'overview', title: 'Overview', bindings: [] }];
 
-  test('a listed Slate stays open and an unlisted one falls back', () => {
+  test('a listed Slate stays open and an unlisted one falls back, settled or not', () => {
     expect(surfaceHasContent('slate:overview', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates })).toBe(true);
-    expect(landedSurface('slate:overview', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates }, [])).toBe('slate:overview');
-    expect(landedSurface('slate:removed', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates }, [])).toBe('Files');
+
+    for (const settled of [false, true]) {
+      expect(landedSurface('slate:overview', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates }, [], settled)).toBe('slate:overview');
+      expect(landedSurface('slate:removed', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates }, [], settled)).toBe('Files');
+    }
   });
 });
 
-describe('an active tab whose content vanishes falls back', () => {
-  test('the fallback lands on the first surface that still has content', () => {
-    expect(landedSurface('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Files');
-    expect(landedSurface('Releases', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Work');
-    expect(landedSurface('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Files');
+describe('the first landing yields a gated tab with no content', () => {
+  test('it lands on the first surface that has content', () => {
+    expect(landedSurface('Releases', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Files');
+    expect(landedSurface('Releases', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Work');
+    expect(landedSurface('Swarms', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Files');
+    expect(landedSurface('Work', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Files');
   });
 
-  test('a live tree keeps an active Swarms tab exactly where it is', () => {
-    expect(landedSurface('Swarms', { tabPresence: FRESH, mctsTrees: oneTree(), slates: [] }, [])).toBe('Swarms');
-  });
+  test('a gated tab with content, and every ungated one, lands where it was asked', () => {
+    expect(landedSurface('Swarms', { tabPresence: FRESH, mctsTrees: oneTree(), slates: [] }, [], false)).toBe('Swarms');
+    expect(landedSurface('Work', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Work');
+    expect(landedSurface('Releases', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Releases');
 
-  test('ungated surfaces are never moved', () => {
     // Diffs renders only while a mounted diff tree exists (`hasDiffs`), a gate lane counts cannot carry.
     for (const surface of ['Files', 'Agent', 'Environment'] as const) {
-      expect(landedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe(surface);
+      expect(landedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe(surface);
     }
   });
+});
 
-  test('an empty Work tab resolves away and a live one stays', () => {
-    expect(landedSurface('Work', { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Files');
-    expect(landedSurface('Work', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Work');
-  });
-
-  test('content present means no move, even on a gated tab', () => {
-    expect(landedSurface('Releases', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Releases');
-    expect(landedSurface('Swarms', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] }, [])).toBe('Swarms');
+describe('after the first landing the selection never moves on its own', () => {
+  // The owner's report, 2026-09-23: a new workspace's inspector jumped to Files
+  // by itself once its first turn settled, because Work had content mid-turn
+  // and none at the end, and every render re-ran the first landing's gate.
+  test('a tab whose content emptied stays selected', () => {
+    for (const surface of ['Work', 'Releases', 'Swarms'] as const) {
+      expect(landedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], true)).toBe(surface);
+    }
   });
 });
 

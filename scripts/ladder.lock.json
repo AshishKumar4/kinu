@@ -1,9 +1,9 @@
 {
-  "reason": "gate:bloat-budget joins the commit tier at 0.6s; the gate self-test row now names scripts/bloat-budget.test.ts, re-keyed with its figure unchanged",
+  "reason": "gate:bench-corpus joins the commit tier at 0.34s: held at push, comment-only commits broke 37 seeded patches and committed cleanly",
   "tiers": {
     "commit": {
-      "seconds": 79.44,
-      "measuredAt": "2026-09-22",
+      "seconds": 79.78,
+      "measuredAt": "2026-09-23",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -21,6 +21,7 @@
         "bun run gate:commit-message": 0.1,
         "bun run gate:install-scripts": 0.05,
         "bun run gate:patch-parity": 0.16,
+        "bun run gate:bench-corpus": 0.34,
         "bun run gate:dead-code": 15,
         "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
@@ -36,8 +37,8 @@
       }
     },
     "push": {
-      "seconds": 399.85,
-      "measuredAt": "2026-09-22",
+      "seconds": 399.88,
+      "measuredAt": "2026-09-23",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -58,7 +59,7 @@
         "bun run gate:install-scripts": 0.05,
         "bun run gate:patch-parity": 0.16,
         "bun run gate:ladder-budget": 0.2,
-        "bun run gate:bench-corpus": 0.31,
+        "bun run gate:bench-corpus": 0.34,
         "bun run gate:skip-ratchet": 12,
         "bun run gate:dead-code": 15,
         "bun run gate:undeclared-imports": 2,

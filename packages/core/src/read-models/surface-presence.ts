@@ -1,12 +1,17 @@
-import type { PinnedPreviewPort, SlateSummary } from "@kinu.run/core";
-import type { ForkNode, TabPresence } from "@kinu.run/core";
-import type { SurfaceKind } from "./WorkSurface";
+import type { PinnedPreviewPort } from "../preview/preview-ports";
+import type { ForkNode, TabPresence } from "../protocol";
+import type { SlateSummary } from "../slates/rpc";
 
 export const SLATE_PREFIX = "slate:";
 
 export const SURFACES = ["Work", "Diffs", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
 
-/** `hasDiffs` is absent where no change-set is mounted. */
+export const ACTIVITY_SURFACE = "Activity";
+
+export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
+
+export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | `preview:${string}`;
+
 export interface SurfaceContent {
 	tabPresence: TabPresence | undefined;
 	mctsTrees: ReadonlyMap<string, ForkNode>;
@@ -14,7 +19,7 @@ export interface SurfaceContent {
 	hasDiffs?: boolean;
 }
 
-/** Diffs answers off the strip's mounted tree count, the only gate not carried by `TabPresence`. */
+/** Diffs gates on the mounted tree count, not `TabPresence`. */
 export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent): boolean {
 	if (surface === "Work") return content.tabPresence?.work ?? true;
 
@@ -37,21 +42,25 @@ function firstVisibleSurface(content: SurfaceContent): SurfaceKind {
 	return SURFACES.find((surface) => surfaceHasContent(surface, content)) ?? "Files";
 }
 
-function resolveGatedSurface(surface: SurfaceKind, content: SurfaceContent): SurfaceKind {
-	return surfaceHasContent(surface, content) ? surface : firstVisibleSurface(content);
-}
-
+/** Before the panel settles, an empty gated tab yields to the first with content; after, the tab asked for
+ *  stays. A gone preview or Slate always yields. */
 export function landedSurface(
 	requested: SurfaceKind,
 	content: SurfaceContent,
 	ports: readonly PinnedPreviewPort[],
+	settled: boolean,
 ): SurfaceKind {
-	if (!requested.startsWith("preview:")) return resolveGatedSurface(requested, content);
-	const fronted = content.slates?.find((slate) => `preview:workspace:${slate.port}` === requested);
+	if (requested.startsWith("preview:")) {
+		const fronted = content.slates?.find((slate) => `preview:workspace:${slate.port}` === requested);
 
-	if (fronted !== undefined) return `${SLATE_PREFIX}${fronted.id}`;
+		if (fronted !== undefined) return `${SLATE_PREFIX}${fronted.id}`;
 
-	return openPortOf(requested, ports) === undefined ? firstVisibleSurface(content) : requested;
+		return openPortOf(requested, ports) === undefined ? firstVisibleSurface(content) : requested;
+	}
+
+	if (settled && !requested.startsWith(SLATE_PREFIX)) return requested;
+
+	return surfaceHasContent(requested, content) ? requested : firstVisibleSurface(content);
 }
 
 export function openPortOf(surface: SurfaceKind, ports: readonly PinnedPreviewPort[]): PinnedPreviewPort | undefined {

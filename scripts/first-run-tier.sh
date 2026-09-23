@@ -50,7 +50,6 @@ export KINU_EVAL_LIVE=1
 
 REPORT_DIR="$(bun scripts/bench-retention.ts --family first-run --backend cloud)"
 echo "retained reports: $REPORT_DIR"
-JUNIT="$REPORT_DIR/junit-first-run.xml"
 SPEND="$REPORT_DIR/spend-first-run.jsonl"
 : > "$SPEND"
 export KINU_EVAL_SPEND_FILE="$SPEND"
@@ -98,14 +97,40 @@ echo "Operator-only checks need their explicit target and authority; skipped cas
 # `bun --bun` is REQUIRED, not stylistic: the pty case spawns through
 # `Bun.spawnSync` and the public session opens a header-carrying WebSocket,
 # neither of which exists under node-hosted vitest.
+#
+# TWO PROCESSES, SIDE BY SIDE (vitest.first-run.config.ts states why): the
+# cases that read the account's device fleet run one at a time in
+# `first-run-fleet`, and every other case runs concurrently in
+# `first-run-cases`. Two processes because vitest runs its projects one after
+# another inside one; each writes its own JUnit, and a red in either is the
+# tier's red.
+#
 # Positional arguments are case file filters, passed straight to vitest — a
 # targeted re-drive of a named subset needs no second runner, and the spend
-# and JUnit assertions below apply to it the same way.
+# and JUnit assertions below apply to it the same way. A filter may name cases
+# of one project only, so a filtered run lets the other select nothing; the
+# whole tier passes no filter, and there each project must select its cases.
 # A failing suite must still report the spend it incurred.
+EMPTY_SELECTION=()
+if [[ $# -gt 0 ]]; then EMPTY_SELECTION=(--passWithNoTests); fi
+run_project() {
+  local project="$1"
+  shift
+  bun --bun vitest run --config vitest.first-run.config.ts --project "$project" \
+    --reporter=default --reporter=junit --outputFile="$REPORT_DIR/junit-$project.xml" \
+    "${EMPTY_SELECTION[@]}" "$@"
+}
 set +e
-bun --bun vitest run --config vitest.first-run.config.ts \
-  --reporter=default --reporter=junit --outputFile="$JUNIT" "$@"
-STATUS=$?
+run_project first-run-fleet "$@" &
+FLEET_PID=$!
+run_project first-run-cases "$@" &
+CASES_PID=$!
+wait "$FLEET_PID"
+FLEET_STATUS=$?
+wait "$CASES_PID"
+CASES_STATUS=$?
+STATUS=$FLEET_STATUS
+if [[ $STATUS -eq 0 ]]; then STATUS=$CASES_STATUS; fi
 
 # WHAT IT SPENT, and the assertion that it spent anything. Two of the five cases
 # call a model; a run reporting no model call at all measured no agent, whatever

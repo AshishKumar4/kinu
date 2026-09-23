@@ -3,6 +3,8 @@
 // Bun loads the install scanner before it installs anything, so the scanner
 // cannot import a dependency; this bundle carries its decoder inlined.
 
+import { join as join2 } from "path";
+
 var store$4;
 var DEFAULT_CONFIG = {
   lang: undefined,
@@ -370,6 +372,35 @@ function safeParse(schema, input, config$1) {
   };
 }
 
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "fs";
+import { join, resolve } from "path";
+function linkedOutside(root) {
+  const modules = join(root, "node_modules");
+  if (!existsSync(modules))
+    return [];
+  const inside = `${realpathSync(root)}/`;
+  return readdirSync(modules).filter((name) => lstatSync(join(modules, name)).isSymbolicLink()).map((name) => {
+    const literal = resolve(modules, readlinkSync(join(modules, name)));
+    return { name, target: existsSync(literal) ? realpathSync(literal) : literal };
+  }).filter(({ target }) => !target.startsWith(inside));
+}
+function parentCommand() {
+  const ps = Bun.spawnSync(["ps", "-o", "args=", "-p", String(process.ppid)], { stdout: "pipe", stderr: "pipe" });
+  return ps.exitCode === 0 ? ps.stdout.toString().trim().split(/\s+/) : [];
+}
+function installRefusal(root, command = parentCommand) {
+  const leaked = linkedOutside(root);
+  const [first] = leaked;
+  if (first === undefined)
+    return;
+  const words = command();
+  if (words[1] === "pm" && words[2] === "scan")
+    return;
+  return `refuse-linked-install: ${String(leaked.length)} node_modules entr${leaked.length === 1 ? "y" : "ies"} link outside this checkout ` + `(${first.name} -> ${first.target}), so \`${words.length > 0 ? words.join(" ") : "an unreadable bun command"}\` ` + `here would write through them into another tree. Nothing was written.
+` + `  fix: rm -rf node_modules && bun install   (a real install for this worktree)
+` + "  or:  leave node_modules alone; the links already resolve to the primary's pinned set";
+}
+
 var ADVISORY_ENDPOINT = "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk";
 var FEED_TIMEOUT_MS = 20000;
 var REPORT_ENV = "KINU_ADVISORY_REPORT";
@@ -536,6 +567,9 @@ function advisoriesFor(scan) {
 var scanner = {
   version: "1",
   async scan({ packages }) {
+    const refusal = installRefusal(join2(import.meta.dir, ".."));
+    if (refusal !== undefined)
+      throw new Error(refusal);
     const scan = await queryAdvisories(packages);
     if ((process.env[REPORT_ENV] ?? "").trim().length > 0) {
       console.log(REPORT_SENTINEL + JSON.stringify(scan));

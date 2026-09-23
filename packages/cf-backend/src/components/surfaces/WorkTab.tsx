@@ -21,7 +21,7 @@ import { Section } from "./shared";
 import { isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
-import type { SurfaceKind } from "./WorkSurface";
+import type { SurfaceKind } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 
