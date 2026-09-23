@@ -235,10 +235,6 @@ export async function mountChat(
       hubData={options.hubData}
       readHub={options.readHub ?? (async (target) => options.hubData ?? soloHub(target))}
       onNewAgent={options.onNewAgent}
-      profileMutations={{
-        setModel: (spec) => client.setModel(spec),
-        setReasoningEffort: (effort) => client.setReasoningEffort(effort),
-      }}
     />,
   );
   const frame = () => testRenderer.captureCharFrame();

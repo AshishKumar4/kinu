@@ -12,12 +12,21 @@ import { runTuiInPty, type PtyStep } from './helpers/pty-screen';
 
 const cliBin = resolve(import.meta.dir, '../bin/cli.ts');
 
+const repoRoot = resolve(import.meta.dir, '../../..');
+
 function kinuHome(): string {
   const home = scratchDir('dir-workspace-home');
-  // Creation needs a configured provider; nothing here sends a turn, so the endpoint is never called.
+  // Creation needs a provider and a default model; nothing here sends a turn, so the endpoint is never called.
   writeFileSync(join(home, 'config.json'), `${JSON.stringify({
     providers: { openaiCompat: { default: { baseURL: 'http://127.0.0.1:9/v1', apiKey: 'unused' } } },
   })}\n`, { mode: 0o600 });
+
+  const tier = Bun.spawnSync([process.execPath, '-e', `
+    const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
+    await updateDefaultTier({ model: 'openai-compat/fixture-model' });
+  `], { cwd: repoRoot, env: { ...process.env, KINU_HOME: home }, stdout: 'pipe', stderr: 'pipe' });
+
+  expect(tier.exitCode, tier.stderr.toString()).toBe(0);
 
   return home;
 }

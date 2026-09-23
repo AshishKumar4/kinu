@@ -14,12 +14,12 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
-  JsonObjectSchema, openWorkspaceMainActor,
+  JsonObjectSchema, openWorkspaceMainActor, discoverOpenAICompatibleModels,
   ProfileCatalogEnvelopeSchema,
   type JsonObject,
   type LLMProviderConfig,
+  type ModelInfo,
   type ProfileCatalogEnvelope,
-  type ReasoningEffort,
   shellQuote,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
@@ -107,8 +107,6 @@ export interface KinuConfig {
   user?: { id: string; email: string; displayName?: string | null };
   agents?: Record<string, KinuAgentConfig>;
   aliases?: Record<string, string>;
-  model?: string;
-  reasoningEffort?: ReasoningEffort;
   updateCheck?: boolean;
   updateCheckedAt?: number;
   updateLatestSeen?: string;
@@ -191,8 +189,6 @@ const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   })),
   agents: v.optional(v.record(v.string(), KinuAgentConfigSchema)),
   aliases: v.optional(StringMapSchema),
-  model: v.optional(v.string()),
-  reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
   updateCheck: v.optional(v.boolean()),
   updateCheckedAt: v.optional(v.number()),
   updateLatestSeen: v.optional(v.string()),
@@ -484,13 +480,6 @@ export function loadConfigFile(): KinuConfig {
   }
 }
 
-export function setDefaultModel(spec: string): void {
-  const normalized = spec.trim();
-
-  if (!normalized) throw new Error('model spec required');
-  updateConfigFile((config) => { config.model = normalized; });
-}
-
 function writeConfigFileUnlocked(config: KinuConfig): void {
   ensureAgentHome();
   writeSecretFile(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
@@ -723,11 +712,12 @@ function validateAliasName(alias: string): void {
   }
 }
 
-/** Default endpoint for bare model ids; null when nothing derives one. Use {@link requireLLMConfig} where core needs an endpoint. */
+/** Default endpoint for bare model ids, null when nothing derives one; see {@link requireLLMConfig}. */
 export function resolveLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  defaultModel?: string;
 }): LLMProviderConfig | null {
   const file = loadConfigFile();
 
@@ -742,7 +732,7 @@ export function resolveLLMConfig(opts?: {
   const model = opts?.model
     ?? process.env.KINU_MODEL
     ?? process.env.AI_GATEWAY_MODEL
-    ?? file.model;
+    ?? opts?.defaultModel;
 
   if (baseURL && auth) {
     return {
@@ -794,6 +784,7 @@ export function requireLLMConfig(opts?: {
   model?: string;
   baseUrl?: string;
   auth?: string;
+  defaultModel?: string;
 }): LLMProviderConfig {
   const config = resolveLLMConfig(opts);
 
@@ -884,21 +875,44 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   const compat = file.providers?.openaiCompat?.default;
 
   // A local Ollama accepts `@cf/deepseek-ai/…` as a model name and serves something else.
-  if (compat && !(providerModel && isNativeCloudSpec(providerModel))) {
-    const headers = { ...compat.headers };
-
-    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-    Object.assign(headers, compat.extraHeaders);
-
+  if (compat && providerModel && !isNativeCloudSpec(providerModel)) {
     return {
       name: 'openai-compat',
       baseURL: compat.baseURL,
-      headers,
-      model: stripProvider(providerModel ?? 'gpt-4o-mini', 'openai-compat'),
+      headers: openAiCompatHeaders(compat),
+      model: stripProvider(providerModel, 'openai-compat'),
     };
   }
 
   return null;
+}
+
+function openAiCompatHeaders(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>): Record<string, string> {
+  const headers = { ...compat.headers };
+
+  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
+
+  return Object.assign(headers, compat.extraHeaders);
+}
+
+export async function firstOpenAiCompatModel(): Promise<string | null> {
+  const compat = loadConfigFile().providers?.openaiCompat?.default;
+
+  if (compat === undefined) return null;
+
+  let first: ModelInfo | undefined;
+
+  try {
+    [first] = await discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: openAiCompatHeaders(compat) });
+  } catch (cause) {
+    throw new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause });
+  }
+
+  if (first === undefined) {
+    throw new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
+  }
+
+  return `openai-compat/${first.id}`;
 }
 
 /** Families served by their own auth seams (claude binary login, opencode auth.json); the endpoint is only a marker. */
@@ -917,8 +931,6 @@ function registryFamilyMarker(model: string | undefined): LLMProviderConfig | nu
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {
-  if (file.model) return file.model;
-
   if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
 
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;

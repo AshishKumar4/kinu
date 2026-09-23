@@ -34,7 +34,6 @@ import {
 } from '../local-inspection';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { installTurnDiagnostics } from '../turn-log';
-import { loadActiveProfile, updateDefaultTier } from '../profiles';
 
 /** `--no-transcript` arrives as `transcript: false`, not `noTranscript: true`. */
 interface TranscriptFlags {
@@ -341,17 +340,6 @@ async function runRpc(
   }
 }
 
-/** Edits the canonical profile tier; per-agent `setModel` is only a bootstrap hint that turn profile resolution overrides. */
-async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
-  const spec = stringField(cmd, 'spec');
-
-  const envelope = spec
-    ? await updateDefaultTier({ model: spec })
-    : await loadActiveProfile();
-
-  return decodeJsonValue({ value: { spec: envelope.catalog.tiers.default.model } });
-}
-
 const commandType = (cmd: JsonObject): string => stringField(cmd, 'type') ?? '';
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
@@ -368,8 +356,12 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('getAgentStatus');
     case 'tools':
       return rpc('getToolDescriptions');
-    case 'model':
-      return runModelProfileCommand(cmd);
+    case 'model': {
+      const spec = stringField(cmd, 'spec');
+
+      return spec ? rpc('setModel', [spec]) : rpc('getStoredModelSpec');
+    }
+
     case 'triggers':
       return rpc('listTriggers');
     case 'jobs':
@@ -472,8 +464,12 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: getLocalAgentState(name) });
     case 'tools':
       return decodeJsonValue({ value: await client.describeTools() });
-    case 'model':
-      return runModelProfileCommand(cmd);
+    case 'model': {
+      const spec = stringField(cmd, 'spec');
+
+      return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
+    }
+
     case 'triggers':
       return decodeJsonValue({ value: listLocalTriggers(name) });
     case 'jobs':

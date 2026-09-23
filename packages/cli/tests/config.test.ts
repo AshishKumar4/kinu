@@ -4,8 +4,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema,
-  ProfileCatalogEnvelopeSchema, parseJsonValue,
+  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
 } from "@kinu.run/core";
 import { Database } from "bun:sqlite";
@@ -74,22 +73,8 @@ describe("CLI config safety", () => {
     expect(result.stdout.toString().trim()).toBe(`ok ${ciToken}`);
   });
 
-  test("model and effort selections update the account-wide default tier", () => {
-    const out = runPreferenceWrite();
-    expect(out.modelResult).toEqual({ kind: "model-set", spec: "openai/gpt-5.5" });
-    const profile = v.parse(ProfileCatalogEnvelopeSchema, out.config.localProfile);
-    expect(profile.catalog.tiers.default).toEqual({
-      model: 'openai/gpt-5.5',
-      reasoningEffort: 'high',
-    });
-    expect(out.effortShow).toMatchObject({
-      kind: 'text',
-      text: expect.stringContaining('Default-tier reasoning effort: medium'),
-    });
-    expect(out.effortSet).toEqual({ kind: "effort-set", effort: "high" });
-    expect(out.invalid).toMatchObject({ kind: "text", text: expect.stringContaining("Usage") });
-    // One invalid field is reported, not replaced by defaults that would read as a first run.
-    expect(out.invalidRejection).toContain('is not a valid Kinu config');
+  test("one invalid field is reported, not replaced by defaults that would read as a first run", () => {
+    expect(runInvalidFieldLoad()).toContain('is not a valid Kinu config');
   });
 
   test("a published workspace is readable once its WAL sidecars are gone", () => {
@@ -128,13 +113,13 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   });
 
   test("honors a configured workers-ai model; non-workers-ai specs keep the default endpoint model", () => {
-    const pinned = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model: "workers-ai/@cf/meta/llama-4" });
+    const pinned = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/@cf/meta/llama-4" });
     expect(pinned).toMatchObject({ name: "workers-ai", model: "@cf/meta/llama-4" });
 
-    const partner = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model: "workers-ai/minimax/m3" });
+    const partner = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "workers-ai/minimax/m3" });
     expect(partner).toMatchObject({ name: "workers-ai", model: "minimax/m3" });
 
-    const gateway = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model: "my-gateway/openai/gpt-4.1" });
+    const gateway = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN }, { defaultModel: "my-gateway/openai/gpt-4.1" });
     expect(gateway).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
   });
 
@@ -181,27 +166,25 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       "my-gateway/openai/gpt-4.1",
     ]) {
       const out = runResolveLLM({
-        origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model, providers: { openaiCompat: compat },
-      });
+        origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
+      }, { defaultModel: model });
 
       expect(out).toMatchObject({ name: "workers-ai", baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1` });
     }
 
     const local = runResolveLLM({
-      origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN,
-      model: "openai-compat/gpt-oss:20b", providers: { openaiCompat: compat },
-    });
+      origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, providers: { openaiCompat: compat },
+    }, { defaultModel: "openai-compat/gpt-oss:20b" });
 
     expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
   });
 
-  test("an explicit model selection still overrides the signed-in default", () => {
+  test("a default tier on a BYO provider overrides the signed-in proxy", () => {
     const out = runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
-      model: "openai/gpt-5.5",
       providers: { openai: { apiKey: "sk-test" } },
-    });
+    }, { defaultModel: "openai/gpt-5.5" });
 
     expect(out).toMatchObject({ name: "openai", model: "gpt-5.5" });
   });
@@ -209,7 +192,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   test("an explicit direct endpoint keeps precedence over the signed-in proxy", () => {
     const out = runResolveLLM(
       { origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN },
-      { KINU_BASE_URL: "https://gateway.example/v1", KINU_AUTH: "Bearer direct" },
+      { env: { KINU_BASE_URL: "https://gateway.example/v1", KINU_AUTH: "Bearer direct" } },
     );
 
     expect(out).toMatchObject({ name: "openai-compat", baseURL: "https://gateway.example/v1" });
@@ -231,7 +214,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
 
   for (const registry of registryOnly) {
     test(registry.name, () => {
-      const out = runResolveLLM({}, { KINU_MODEL: registry.spec });
+      const out = runResolveLLM({}, { env: { KINU_MODEL: registry.spec } });
       expect(out).toEqual({ name: registry.provider, baseURL: "", headers: {}, model: registry.model });
     });
   }
@@ -281,14 +264,17 @@ describe("resolveLLMConfig — registry-only providers", () => {
   });
 });
 
-/** resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at import). */
-function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}): JsonValue {
+/** resolveLLMConfig in a clean subprocess (config.ts binds KINU_HOME at import); `defaultModel` is the default tier's. */
+function runResolveLLM(
+  config: JsonObject,
+  { env: extraEnv = {}, defaultModel }: { env?: Record<string, string>; defaultModel?: string } = {},
+): JsonValue {
   const kinuHome = scratchDir("cli-llm");
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
 
   const script = `
     import { resolveLLMConfig } from './packages/cli/src/config.ts';
-    try { console.log(JSON.stringify(resolveLLMConfig())); }
+    try { console.log(JSON.stringify(resolveLLMConfig(${JSON.stringify(defaultModel === undefined ? {} : { defaultModel })}))); }
     catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
   `;
 
@@ -385,41 +371,14 @@ function runNameChecks(): NameCheck[] {
   return JSON.parse(proc.stdout.toString());
 }
 
-interface PreferenceWriteResult {
-  modelResult: JsonValue;
-  effortShow: JsonValue;
-  effortSet: JsonValue;
-  invalid: JsonValue;
-  config: JsonObject;
-  invalidRejection: string | null;
-}
-
-const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.object({
-  modelResult: JsonValueSchema,
-  effortShow: JsonValueSchema,
-  effortSet: JsonValueSchema,
-  invalid: JsonValueSchema,
-  config: JsonObjectSchema,
-  invalidRejection: v.nullable(v.string()),
-});
-
-function runPreferenceWrite(): PreferenceWriteResult {
-  const kinuHome = scratchDir("cli-preferences");
+/** Loads a config.json whose one field has the wrong type; answers the rejection. */
+function runInvalidFieldLoad(): string {
+  const kinuHome = scratchDir("cli-invalid-field");
+  writeFileSync(join(kinuHome, "config.json"), JSON.stringify({ updateCheck: "sometimes" }), { mode: 0o600 });
 
   const script = `
-    import { writeFileSync } from 'node:fs';
-    import { CONFIG_PATH, loadConfigFile } from './packages/cli/src/config.ts';
-    import { executeSlashCommand } from './packages/cli/src/slash-commands.ts';
-    const client = {};
-    const modelResult = await executeSlashCommand(client, '/model openai/gpt-5.5');
-    const effortShow = await executeSlashCommand(client, '/effort');
-    const effortSet = await executeSlashCommand(client, '/effort high');
-    const invalid = await executeSlashCommand(client, '/effort extreme');
-    const config = loadConfigFile();
-    writeFileSync(CONFIG_PATH, JSON.stringify({ ...config, reasoningEffort: 'extreme' }));
-    let invalidRejection: string | null = null;
-    try { loadConfigFile(); } catch (error) { invalidRejection = error instanceof Error ? error.message : String(error); }
-    console.log(JSON.stringify({ modelResult, effortShow, effortSet, invalid, config, invalidRejection }));
+    import { loadConfigFile } from './packages/cli/src/config.ts';
+    try { loadConfigFile(); console.log('loaded'); } catch (error) { console.log(error instanceof Error ? error.message : String(error)); }
   `;
 
   const proc = Bun.spawnSync({
@@ -432,7 +391,7 @@ function runPreferenceWrite(): PreferenceWriteResult {
 
   expect(proc.exitCode).toBe(0);
 
-  return v.parse(PreferenceWriteResultSchema, JSON.parse(proc.stdout.toString()));
+  return proc.stdout.toString();
 }
 
 // The raw CLI token is the only copy (the server stores a hash), so a failed revoke must keep it.

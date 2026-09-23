@@ -266,7 +266,7 @@ function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
           </box>
         );
       })}
-      <text><span fg={colors.text.muted}>A tier is a model and an effort you named. /model and /effort change the default tier.</span></text>
+      <text><span fg={colors.text.muted}>A tier is a model and an effort you named. /model and /effort set this workspace's own.</span></text>
     </box>
   );
 }

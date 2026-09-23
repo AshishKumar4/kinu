@@ -2,7 +2,7 @@
  * Prompt input via blocking canonical-mode reads on the terminal fd; never readline or raw mode: macOS kqueue cannot
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { ACCENT, DIM } from './display';
 
@@ -115,6 +115,27 @@ export async function askSecret(label: string, fallback = ''): Promise<string> {
 
     return (read.stdout?.toString('utf8') ?? '').trim() || fallback;
   } finally {
+    tty.close();
+  }
+}
+
+/** Enter skips; a `sh` child waits for the key. */
+export async function skippableOnEnter<T>(label: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
+  const controller = new AbortController();
+  const tty = openTerminal();
+
+  if (!tty) return work(controller.signal);
+  process.stdout.write(`${DIM(`${label} Enter skips.`)}\n`);
+  const reader = spawn('/bin/sh', ['-c', 'IFS= read -r line'], { stdio: [tty.fd, 'ignore', 'ignore'] });
+  reader.on('exit', () => controller.abort());
+
+  try {
+    return await work(controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) return null;
+    throw error;
+  } finally {
+    reader.kill();
     tty.close();
   }
 }

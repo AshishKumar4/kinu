@@ -72,11 +72,13 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
 export async function discoverOpenAICompatibleModels(
   auth: AuthResolution | null,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<ModelInfo[]> {
   if (!auth?.baseURL) return [];
 
   const response = await fetchImpl(`${auth.baseURL.replace(/\/+$/, '')}/models`, {
     headers: { ...auth.headers, accept: 'application/json' },
+    signal,
   });
 
   if (!response.ok) return [];

@@ -35,8 +35,6 @@ import {
   renderPlanReview,
   performUndo,
   resolveCommandDraft,
-  setModelPreference,
-  setReasoningEffortPreference,
   type SlashOutcome,
 } from '../slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
@@ -44,7 +42,7 @@ import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
 import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
-import { loadActiveProfile } from '../profiles';
+import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
 import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
@@ -120,10 +118,6 @@ export interface ChatAppOpts {
   onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
   /** Host-wired: creation is a host concern. */
   onNewAgent?: (client: AgentClient) => Promise<TuiCreatedAgent>;
-  profileMutations?: {
-    setModel(spec: string): Promise<{ spec: string }>;
-    setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
-  };
   tui?: TuiRuntimeOptions;
   hubData?: TuiHubData;
   /** A host that supplies `hubData` must supply this too. */
@@ -205,7 +199,6 @@ function ChatScene({
   workspaceSource: workspaceSourceInput,
   onWorkspaceSelect,
   onNewAgent,
-  profileMutations: suppliedProfileMutations,
   hubData,
   readHub,
 }: ChatAppOpts) {
@@ -272,12 +265,6 @@ function ChatScene({
   const [composerRows, setComposerRows] = useState(1);
   const draftsRef = useRef(new Map<string, string>());
   const [inputState, setInputState] = useState(initialInputState);
-
-  const profileMutations = suppliedProfileMutations ?? {
-    setModel: (spec: string) => setModelPreference(client, spec),
-    setReasoningEffort: (effort: ReasoningEffort) =>
-      setReasoningEffortPreference(client, effort),
-  };
 
   const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
   const [toolDetailsExpanded, setToolDetailsExpanded] = useState(false);
@@ -801,7 +788,7 @@ function ChatScene({
     setActiveSurface(null);
 
     try {
-      const result = await profileMutations.setModel(model.spec);
+      const result = await client.setModel(model.spec);
       setModelSpec(result.spec);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
@@ -861,12 +848,12 @@ function ChatScene({
 
   const selectReasoningEffort = useCallback(async (chosen: ReasoningEffort) => {
     try {
-      await profileMutations.setReasoningEffort(chosen);
+      await client.setReasoningEffort(chosen);
       setStatus((value) => value === null ? value : { ...value, reasoningEffort: chosen });
     } catch (cause) {
       addError({ cause });
     }
-  }, [addError, profileMutations]);
+  }, [addError, client]);
 
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {

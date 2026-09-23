@@ -230,12 +230,11 @@ pending version missing a live capability would be judged at a handicap.
 ## Reasoning-effort budgets
 
 Levels come from `REASONING_EFFORTS`: `none`, `minimal`, `low`, `medium`,
-`high`, `xhigh`, `max`. `/effort` sets `tiers.default.reasoningEffort` in the
+`high`, `xhigh`, `max`. `/effort` in chat and `kinu effort <name> [level]` set
+that one workspace's `agent_config.reasoning_effort`, on either backend. A
+workspace without its own setting runs `tiers.default.reasoningEffort` from the
 active profile (the account catalog when signed in, the local profile
-otherwise), so it moves every workspace without its own setting.
-`kinu effort <name> [level]` on a cloud workspace sets that one workspace's
-`agent_config.reasoning_effort`. On a local workspace it edits the active
-profile's default tier, the same as `/effort`.
+otherwise), which the TUI home screen's Defaults and the web's Model tiers card change.
 `reasoningEffortOptions(effort, providerFamily)` in
 `packages/core/src/strategy/effort.ts` translates the level to each provider's
 native option.

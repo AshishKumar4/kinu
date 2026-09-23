@@ -26,13 +26,8 @@ import { installTurnDiagnostics } from '../turn-log';
 import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { VERSION } from '../display';
-import {
-  loadActiveProfile,
-  loadCachedAccountProfile,
-  loadLocalProfileAuthority,
-  resolveProfileAuthority,
-  updateDefaultTier,
-} from '../profiles';
+import { loadActiveProfile, updateDefaultTier } from '../default-model';
+import { readDefaultTier } from '../profiles';
 import { createKeyDispatcher, openTuiKeyBindings, type KeyScope, type TuiActionId } from './actions';
 import { GuidedOnboarding, type OnboardingRoleChoice, type TuiOnboardingOperations } from './onboarding';
 import { createFileTuiPreferenceStore, type WorkspaceLocationChoice } from './preferences';
@@ -100,17 +95,9 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const [navigationOpen, setNavigationOpen] = useState(false);
 
   const initialDefaults = useMemo(() => {
-    const config = loadConfigFile();
-    const authority = resolveProfileAuthority();
+    const tier = readDefaultTier();
 
-    const profile = authority.kind === 'local'
-      ? loadLocalProfileAuthority()
-      : loadCachedAccountProfile(authority.accountId);
-
-    return {
-      model: profile?.catalog.tiers.default.model ?? config.model ?? '',
-      reasoningEffort: profile?.catalog.tiers.default.reasoningEffort ?? config.reasoningEffort ?? 'medium',
-    };
+    return { model: tier?.model ?? '', reasoningEffort: tier?.reasoningEffort ?? 'medium' };
   }, []);
 
   const [mode, setMode] = useState<AgentMode>(() => (isLocalModelConfigured() ? 'local' : defaultCreateMode()));

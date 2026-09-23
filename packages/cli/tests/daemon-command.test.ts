@@ -176,8 +176,8 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
       const { createCliAgent } = await import('./packages/cli/src/agent-create.ts');
       const { triggersCommand } = await import('./packages/cli/src/commands/control.ts');
       const { daemonCommand } = await import('./packages/cli/src/commands/daemon.ts');
-      const { createProfileAuthorityReader, updateDefaultTier } =
-        await import('./packages/cli/src/profiles.ts');
+      const { createProfileAuthorityReader } = await import('./packages/cli/src/profiles.ts');
+      const { updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
 
       const printed = [];
       const realLog = console.log;
@@ -193,8 +193,8 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
           apiKey: process.env.KINU_AUTH,
           model: process.env.KINU_MODEL,
         });
-        // The catalog the daemon must resolve: what \`/model\` writes.
-        await updateDefaultTier({ model: 'daemon-catalog-model' });
+        // The catalog the daemon must resolve: what Defaults on the home screen write.
+        await updateDefaultTier({ model: 'workers-ai/daemon-catalog-model' });
         // \`kinu triggers daemonbot at <now>\` — already due, so the next pass
         // converts it into a turn.
         await triggersCommand('daemonbot', 'at', String(Date.now()), {});
@@ -254,6 +254,6 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
     // An empty list means the session fell back to the bootstrap envelope, where account roles fail on a schedule.
     expect(run.authorityReads).toEqual([{ source: 'local' }]);
 
-    expect(run.interactive).toEqual({ model: 'daemon-catalog-model', version: 1 });
+    expect(run.interactive).toEqual({ model: 'workers-ai/daemon-catalog-model', version: 1 });
   });
 });
