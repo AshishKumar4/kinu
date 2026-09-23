@@ -194,7 +194,7 @@ function lcg(seed: number): () => number {
 }
 
 describe('Math evals — seeded instances, exact answers', () => {
-  test('every fast solver agrees with an independent brute force on small instances', () => {
+  test('the recurrence solver agrees with the sequence it defines', () => {
     for (let trial = 0; trial < 20; trial++) {
       const c = [BigInt(1 + trial % 7), BigInt(3 + trial % 5), BigInt(2 + trial % 11)] as const;
       const a = [BigInt(trial % 13), BigInt(trial % 17), BigInt(trial % 19)] as const;
@@ -206,7 +206,9 @@ describe('Math evals — seeded instances, exact answers', () => {
 
       for (let n = 0; n <= 40; n++) expect(solveRecurrence(c, a, BigInt(n), P)).toBe(sequence[n]);
     }
+  });
 
+  test('the divisor-sum solver agrees with summed divisors', () => {
     let divisorTotal = 0n;
 
     for (let k = 1; k <= 1500; k++) {
@@ -214,7 +216,9 @@ describe('Math evals — seeded instances, exact answers', () => {
 
       if (k % 37 === 0 || k < 30) expect(solveSigmaSum(BigInt(k))).toBe(divisorTotal);
     }
+  });
 
+  test('the Pell solver finds the fundamental solution', () => {
     // Known fundamental solutions, then a search over y wherever one is within reach.
     expect(solvePell(61n).x).toBe(1_766_319_049n);
     expect(solvePell(991n).x).toBe(379_516_400_906_811_930_638_014_896_080n);
@@ -234,7 +238,9 @@ describe('Math evals — seeded instances, exact answers', () => {
         }
       }
     }
+  });
 
+  test('the spanning-tree count agrees with enumeration', () => {
     const next = lcg(20_260_923);
 
     for (let trial = 0; trial < 25; trial++) {
@@ -252,7 +258,9 @@ describe('Math evals — seeded instances, exact answers', () => {
       const normal = edges.map(([p, q]): [number, number] => (p < q ? [p, q] : [q, p]));
       expect(countSpanningTrees(n, normal)).toBe(bruteSpanningTrees(n, normal));
     }
+  });
 
+  test('the dice probability agrees with enumerating every roll', () => {
     for (const [count, sides] of [[1, 6], [3, 6], [3, 8], [4, 6]] as const) {
       for (let target = 0; target <= count * sides + 1; target++) {
         let hits = 0n;
@@ -274,6 +282,10 @@ describe('Math evals — seeded instances, exact answers', () => {
         expect(`${String(num)}/${String(den)}`).toBe(`${String(hits / g)}/${String(total / g)}`);
       }
     }
+  });
+
+  test('the lattice-path count agrees with the grid recurrence', () => {
+    const next = lcg(20_260_924);
 
     for (let trial = 0; trial < 40; trial++) {
       const w = 1 + Math.floor(next() * 10);
@@ -305,7 +317,9 @@ describe('Math evals — seeded instances, exact answers', () => {
 
       expect(latticePaths(w, h, blocked, P)).toBe(grid[w][h]);
     }
+  });
 
+  test('the sublinear sums agree with a sieve and with published values', () => {
     // The sublinear kinds, against one sieve of everything up to a bound, at every checkpoint.
     const bound = 200_000;
     const sieved = new Uint8Array(bound + 1);

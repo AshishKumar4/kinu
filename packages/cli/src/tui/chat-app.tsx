@@ -1603,7 +1603,7 @@ function ChatScene({
     rememberScroll: scrollAnchor.remember,
     createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
     bumpModelRequest: () => { modelRequestRef.current += 1; },
-    hubAgents: hubView === 'agents' ? (hubLive?.agents ?? []) : [],
+    hubAgents: hubLive?.agents ?? [],
     hubSelectedId: () => hubSelectedRef.current,
     setHubSelectedId,
     openSubagent,
@@ -1695,11 +1695,7 @@ function ChatScene({
     return handleSubmit(expandPastes(value));
   }, [draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
 
-  const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
-    && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
-    && !isProcessing && !/\s/.test(draft.trimStart())
-    ? filterCommands(commands, draft)
-    : [];
+  const commandHints = !overlayOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
 
   const inputFocused = ready && !overlayOpen;
   const contextTokens = estimateContextTokens(messages);

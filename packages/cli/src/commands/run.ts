@@ -228,13 +228,21 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
   });
 }
 
+/** Both backends answer `model` through the AgentClient contract. */
+async function modelRpcCommand(cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
+  const spec = stringField(cmd, 'spec');
+
+  return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
+}
+
 async function respondToRpcCommand(
   cmd: JsonObject,
+  client: AgentClient,
   output: (input: { value: unknown }) => void,
   run: () => Promise<JsonValue>,
 ): Promise<void> {
   try {
-    const data = await run();
+    const data = await (cmd.type === 'model' ? modelRpcCommand(cmd, client) : run());
     output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: true, data } });
   } catch (err) {
     output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: false, error: renderThrownChain({ cause: err }) } });
@@ -265,7 +273,7 @@ async function runRpc(
         if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
 
         if (cmd.value.type !== 'prompt') {
-          await respondToRpcCommand(cmd.value, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
+          await respondToRpcCommand(cmd.value, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
           continue;
         }
 
@@ -316,7 +324,7 @@ async function runRpc(
       if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
 
       if (cmd.value.type !== 'prompt') {
-        await respondToRpcCommand(cmd.value, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
+        await respondToRpcCommand(cmd.value, client, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
         continue;
       }
 
@@ -356,12 +364,6 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('getAgentStatus');
     case 'tools':
       return rpc('getToolDescriptions');
-    case 'model': {
-      const spec = stringField(cmd, 'spec');
-
-      return spec ? rpc('setModel', [spec]) : rpc('getStoredModelSpec');
-    }
-
     case 'triggers':
       return rpc('listTriggers');
     case 'jobs':
@@ -464,12 +466,6 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: getLocalAgentState(name) });
     case 'tools':
       return decodeJsonValue({ value: await client.describeTools() });
-    case 'model': {
-      const spec = stringField(cmd, 'spec');
-
-      return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
-    }
-
     case 'triggers':
       return decodeJsonValue({ value: listLocalTriggers(name) });
     case 'jobs':

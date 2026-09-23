@@ -20,7 +20,6 @@ import {
   CloudTriggerListSchema,
   createCloudWebhookTrigger,
   listCloudAvailableModels,
-  type CloudModelMenu,
   type CloudWebhookTrigger,
   type CloudWebhookTriggerInput,
 } from '../cloud-api';
@@ -32,6 +31,7 @@ import {
   normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
+  type AgentModelMenu,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -164,7 +164,7 @@ export async function effortCommand(name: string, level: string | undefined): Pr
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */
 type ModelCatalog = { readonly models: readonly AgentModelEntry[] } | { readonly unreadable: string };
 
-async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>): Promise<ModelCatalog> {
+async function loadModelCatalog(load: () => Promise<ModelMenu | AgentModelMenu>): Promise<ModelCatalog> {
   try {
     return { models: normalizeModelMenu({ payload: await load() }).models };
   } catch (error) {
