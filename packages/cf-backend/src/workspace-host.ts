@@ -19,7 +19,7 @@ import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/works
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
-import { clearPortCapability, readPortExposure, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
+import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
 
@@ -420,21 +420,24 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       };
 
       // Checked against the durable record: a port never handed a URL is a 404 even if something listens.
-      const exposure = await readPortExposure(deps.ctx, port);
+      const exposure = await readPortReservation(deps.ctx, port);
+      const capability = exposure?.capability ?? null;
 
-      if (exposure === null) {
+      if (exposure === null || capability === null) {
         refused('no-exposure', null);
 
         return previewNotFound();
       }
 
-      if (exposure.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+      if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
         refused('handle-mismatch', exposure.owner);
 
         return previewNotFound();
       }
 
-      if (exposure.owner !== null) {
+      const namesSlate = exposure.owner !== null && exposure.kind === 'explicit';
+
+      if (namesSlate) {
         const refusal = await deps.ensureSlate?.(exposure.owner) ?? null;
 
         if (refusal !== null) {
@@ -448,7 +451,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
       if (listener === undefined) {
         refused('no-listener', exposure.owner);
-      } else if (listener.capability !== exposure.capability) {
+      } else if (listener.capability !== capability) {
         const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
 
         refused('capability-mismatch', exposure.owner, `pid=${String(listener.pid)} state=${state}`);
@@ -465,7 +468,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       const { facets } = await compose();
 
       try {
-        const response = await facets.apps.routeCapabilityPort(port, exposure.capability, publicRequest, pathname);
+        const response = await facets.apps.routeCapabilityPort(port, capability, publicRequest, pathname);
 
         // A 101 only opens the socket: the process's close listener releases the invocation.
         if (response.status !== 101) invocation?.release();
