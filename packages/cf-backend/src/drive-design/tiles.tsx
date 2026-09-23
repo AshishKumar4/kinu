@@ -18,6 +18,8 @@ export type Access =
 
 export type ShareKind = "live" | "blueprint" | "workspace";
 
+export const LIST = new Intl.ListFormat("en-GB", { type: "conjunction" });
+
 export const GRID = "grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))] sm:gap-4";
 
 export interface MenuItem {

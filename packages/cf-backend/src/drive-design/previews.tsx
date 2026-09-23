@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 import { FileIcon } from "@phosphor-icons/react";
 
-export type SlateArt = "coupons" | "perf" | "ledger" | "release" | "palette" | "issues" | "inbox";
+export type SlateArt = "coupons" | "perf" | "ledger" | "release" | "palette" | "issues" | "inbox" | "game";
 
 export type Preview =
   | { readonly kind: "slate"; readonly art: SlateArt }
@@ -237,8 +237,46 @@ function Inbox() {
   );
 }
 
+type GameTile = 0 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 512;
+
+const BOARD: readonly (readonly GameTile[])[] = [
+  [0, 2, 0, 4],
+  [2, 8, 16, 2],
+  [4, 32, 64, 8],
+  [8, 128, 256, 512],
+];
+
+const TILE_FILL: Record<Exclude<GameTile, 0>, string> = {
+  2: "#EEE4DA", 4: "#EDE0C8", 8: "#F2B179", 16: "#F59563", 32: "#F67C5F", 64: "#F65E3B",
+  128: "#EDCF72", 256: "#EDCC61", 512: "#EDC850",
+};
+
+function Game() {
+  return (
+    <Frame>
+      <Title text="2048" caption="Score 3,412 · Best 4,096" />
+      <rect x="92" y="48" width="136" height="136" rx="6" style={ink("border-strong")} />
+      {BOARD.flatMap((row, y) => row.map((value, x) => {
+        const left = 96 + x * 33;
+        const top = 52 + y * 33;
+        const size = value < 100 ? 13 : 10.5;
+
+        return (
+          <g key={`${String(y)}-${String(x)}`}>
+            <rect x={left} y={top} width="29" height="29" rx="4" style={value === 0 ? ink("recessed") : { fill: TILE_FILL[value] }} />
+            {value > 0 && (
+              <text x={left + 14.5} y={top + 14.5 + size * 0.36} fontSize={size} fontWeight="700" textAnchor="middle"
+                fill={value <= 4 ? "#776E65" : "#F9F6F2"}>{value}</text>
+            )}
+          </g>
+        );
+      }))}
+    </Frame>
+  );
+}
+
 const ART: Record<SlateArt, () => ReactNode> = {
-  coupons: Coupons, perf: Perf, ledger: Ledger, release: Release, palette: Palette, issues: Issues, inbox: Inbox,
+  coupons: Coupons, perf: Perf, ledger: Ledger, release: Release, palette: Palette, issues: Issues, inbox: Inbox, game: Game,
 };
 
 function Cover({ hue, letter }: { hue: number; letter: string }) {

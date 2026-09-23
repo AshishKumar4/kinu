@@ -19,6 +19,7 @@ const DESIGN_VIEWS: readonly DesignView[] = [
   { id: "shared", group: "Places", label: "Shared", query: "&path=/drive/shared" },
   { id: "tile-menu", group: "Places", label: "A share's menu", query: "&path=/drive/shared&menu=given:coupon-board" },
   { id: "share-live", group: "Sharing", label: "Share a slate", query: "&path=/drive/slates&dialog=share" },
+  { id: "share-new", group: "Sharing", label: "A first share, no bindings (#25)", query: "&path=/drive/slates&dialog=share-new" },
   { id: "share-access", group: "Sharing", label: "Who can open it", query: "&path=/drive/slates&dialog=share-access" },
   { id: "share-reach", group: "Sharing", label: "What people can reach", query: "&path=/drive/slates&dialog=share-reach" },
   { id: "share-limits", group: "Sharing", label: "Limits", query: "&path=/drive/slates&dialog=share-limits" },

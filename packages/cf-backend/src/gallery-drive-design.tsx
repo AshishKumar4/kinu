@@ -1,10 +1,10 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "@/components/layout";
 import {
-  DriveDesignPage, SKILLS_FOLDER, type Dialog, type DriveData, type DriveEntry, type GivenItem, type ReceivedItem,
-  type SlateItem,
+  DriveDesignPage, SKILLS_FOLDER, slateSubject, type Dialog, type DriveData, type DriveEntry, type GivenItem,
+  type ReceivedItem, type SlateItem,
 } from "@/drive-design/DriveDesignPage";
-import type { ShareSubject } from "@/drive-design/ShareDialog";
+import type { ReachGroup } from "@/drive-design/ShareDialog";
 import { SharedWorkspaceView } from "@/drive-design/SharedWorkspaceView";
 import { ReviewBar } from "@/drive-design/ReviewBar";
 import type { Preview } from "@/drive-design/previews";
@@ -20,11 +20,41 @@ const coupons: Preview = { kind: "slate", art: "coupons" };
 
 const issues: Preview = { kind: "slate", art: "issues" };
 
-const SLATES: readonly SlateItem[] = [
+const COUPON_REACH: readonly ReachGroup[] = [
   {
-    id: "coupon-board", title: "Coupon board", workspace: "checkout-fixes", workspaceTitle: "Checkout coupon bug",
-    updated: "12m", preview: coupons, access: { kind: "people", people: [SAM, LEE] },
+    binding: "GitHub", kind: "MCP server", members: [
+      { name: "read_issue", what: "Reads issues", change: false, allowed: true },
+      { name: "create_issue", what: "Opens issues in your repositories", change: true, allowed: false },
+    ],
   },
+  {
+    binding: "Notes", kind: "workspace memory", members: [
+      { name: "recall", what: "Reads your notes", change: false, allowed: true },
+      { name: "remember", what: "Writes to your notes", change: true, allowed: false },
+    ],
+  },
+  {
+    binding: "Files", kind: "Checkout coupon bug", members: [
+      { name: "readFile", what: "Reads files in the workspace", change: false, allowed: true },
+      { name: "writeFile", what: "Changes files in the workspace", change: true, allowed: true },
+    ],
+  },
+];
+
+const GAME_SLATE: SlateItem = {
+  id: "2048", title: "2048", workspace: "handwrought-walnut-4166c321", workspaceTitle: "Untitled workspace",
+  updated: "now", preview: { kind: "slate", art: "game" },
+};
+
+const COUPON_SLATE: SlateItem = {
+  id: "coupon-board", title: "Coupon board", workspace: "checkout-fixes", workspaceTitle: "Checkout coupon bug",
+  updated: "12m", preview: coupons, access: { kind: "people", people: [SAM, LEE] }, reach: COUPON_REACH,
+  keyAt: "src/config.ts, line 4",
+};
+
+const SLATES: readonly SlateItem[] = [
+  GAME_SLATE,
+  COUPON_SLATE,
   {
     id: "landing-perf", title: "Landing perf report", workspace: "perf-audit", workspaceTitle: "Perf audit — landing",
     updated: "2h", preview: { kind: "slate", art: "perf" },
@@ -43,7 +73,7 @@ const SLATES: readonly SlateItem[] = [
   },
   {
     id: "issue-board", title: "Issue board", workspace: "checkout-fixes", workspaceTitle: "Checkout coupon bug",
-    updated: "1w", preview: issues, access: { kind: "link" },
+    updated: "1w", preview: issues, access: { kind: "link" }, reach: COUPON_REACH.filter((group) => group.binding === "GitHub"),
   },
 ];
 
@@ -150,10 +180,11 @@ const DATA = {
   "files-only": { ...FULL, slates: [], received: [], given: [] },
 } satisfies Record<string, DriveData>;
 
-const COUPON_BOARD: ShareSubject = { kind: "slate", title: "Coupon board", owner: ME, access: { kind: "people", people: [SAM, LEE] } };
+const COUPON_BOARD = slateSubject(COUPON_SLATE, ME);
 
 const DIALOGS = {
   share: { kind: "share", subject: COUPON_BOARD, pane: "live" },
+  "share-new": { kind: "share", subject: slateSubject(GAME_SLATE, ME), pane: "live" },
   "share-access": { kind: "share", subject: COUPON_BOARD, pane: "live", accessOpen: true },
   "share-reach": { kind: "share", subject: COUPON_BOARD, pane: "reach" },
   "share-limits": { kind: "share", subject: COUPON_BOARD, pane: "limits" },

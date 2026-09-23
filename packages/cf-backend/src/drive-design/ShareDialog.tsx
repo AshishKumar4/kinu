@@ -8,16 +8,21 @@ import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
-import type { Access, Person } from "./tiles";
+import { LIST, type Access, type Person } from "./tiles";
 
 export type SharePane = "live" | "blueprint" | "reach" | "limits" | "activity" | "workspace";
 
-export interface ShareSubject {
-  readonly kind: "slate" | "workspace";
-  readonly title: string;
-  readonly owner: Person;
-  readonly access: Access;
+export interface ReachGroup {
+  readonly binding: string;
+  readonly kind: string;
+  readonly members: readonly { readonly name: string; readonly what: string; readonly change: boolean; readonly allowed: boolean }[];
 }
+
+export type ShareSubject =
+  | { readonly kind: "slate"; readonly title: string; readonly owner: Person; readonly access: Access; readonly reach: readonly ReachGroup[]; readonly keyAt?: string }
+  | { readonly kind: "workspace"; readonly title: string; readonly owner: Person; readonly access: Access };
+
+type SlateSubject = Extract<ShareSubject, { kind: "slate" }>;
 
 export function namedPeople(access: Access): readonly Person[] {
   return access.kind === "people" ? access.people : [];
@@ -98,7 +103,7 @@ function AccessPicker({ options, initial, initiallyOpen = false }: {
         <span className="block p-meta p-text-3">{chosen.detail}</span>
       </span>
       {open && (
-        <div role="listbox" aria-label="Who can open it" className="absolute left-8 top-12 z-10 w-[21rem] max-w-[calc(100%-2rem)] p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
+        <div role="listbox" aria-label="Who can open it" className="absolute left-0 top-12 z-10 w-[21rem] max-w-full p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
           {options.map((option) => (
             <button key={option.id} type="button" role="option" aria-selected={option.id === value}
               onClick={() => { setValue(option.id); setOpen(false); }}
@@ -150,8 +155,22 @@ function DoneButton({ onClose }: { onClose: () => void }) {
   return <FilledButton className="h-8 px-4 text-sm" onClick={onClose}>Done</FilledButton>;
 }
 
+function ForkToggle({ detail }: { detail: string }) {
+  return (
+    <label className="flex items-start gap-3">
+      <span className="flex w-7 shrink-0 justify-center pt-1">
+        <input type="checkbox" defaultChecked className="size-4 accent-[var(--c-accent)]" />
+      </span>
+      <span>
+        <span className="block p-row-text font-medium p-text">Let them fork it</span>
+        <span className="block p-meta p-text-3">{detail}</span>
+      </span>
+    </label>
+  );
+}
+
 function LivePane({ subject, go, onClose, onStop, accessOpen }: {
-  subject: ShareSubject;
+  subject: SlateSubject;
   go: (pane: SharePane) => void;
   onClose: () => void;
   onStop: () => void;
@@ -159,6 +178,11 @@ function LivePane({ subject, go, onClose, onStop, accessOpen }: {
 }) {
   const people = namedPeople(subject.access);
   const shared = subject.access.kind !== "people" || people.length > 0;
+  const reaches = subject.reach.length > 0;
+  const changes = subject.reach.flatMap((group) => group.members).filter((member) => member.change && member.allowed).length;
+  let allowed = "reading only";
+
+  if (changes > 0) allowed = `${String(changes)} ${changes === 1 ? "change" : "changes"} allowed`;
 
   return (
     <>
@@ -169,9 +193,10 @@ function LivePane({ subject, go, onClose, onStop, accessOpen }: {
         {people.map((person) => <PersonRow key={person.email} person={person} role="Can use" />)}
       </ul>
       <AccessPicker options={LIVE_ACCESS} initial={subject.access.kind} initiallyOpen={accessOpen} />
+      <ForkToggle detail={reaches ? "A fork is their own copy, on their own connections." : "A fork is their own copy, in a workspace of theirs."} />
       <div className="p-group">
-        <SummaryRow label="Reach" value="GitHub, notes, files · 1 change allowed" onOpen={() => go("reach")} />
-        <SummaryRow label="Limits" value="120 a minute each · $2 a day" onOpen={() => go("limits")} />
+        {reaches && <SummaryRow label="Reach" value={`${subject.reach.map((group) => group.binding).join(", ")} · ${allowed}`} onOpen={() => go("reach")} />}
+        <SummaryRow label="Limits" value={reaches ? "120 a minute each · $2 a day" : "120 requests a minute each"} onOpen={() => go("limits")} />
         {shared && <SummaryRow label="Activity" value="14 opens by 2 people this week" onOpen={() => go("activity")} />}
       </div>
       <Footer left={COPY_LINK}>
@@ -189,7 +214,7 @@ const PATHS = [
   { name: "scratch", on: false, fixed: false },
 ];
 
-function BlueprintPane({ onClose }: { onClose: () => void }) {
+function BlueprintPane({ subject, onClose }: { subject: SlateSubject; onClose: () => void }) {
   return (
     <>
       <p className="p-row-text p-text-2">People get their own copy to fork. Nothing of yours comes with it: no connections, chats or data.</p>
@@ -214,15 +239,19 @@ function BlueprintPane({ onClose }: { onClose: () => void }) {
             ))}
           </dd>
         </div>
-        <div className="flex items-start gap-3">
-          <dt className="w-20 shrink-0 p-meta p-text-3">They connect</dt>
-          <dd className="min-w-0 flex-1 p-meta p-text-2">Their own GitHub, notes and files, when they fork it.</dd>
-        </div>
+        {subject.reach.length > 0 && (
+          <div className="flex items-start gap-3">
+            <dt className="w-20 shrink-0 p-meta p-text-3">They connect</dt>
+            <dd className="min-w-0 flex-1 p-meta p-text-2">Their own {LIST.format(subject.reach.map((group) => group.binding))}, when they fork it.</dd>
+          </div>
+        )}
       </dl>
-      <div className="p-notice-warning flex items-start gap-2 px-3 py-2 text-xs">
-        <WarningIcon size={14} className="mt-px shrink-0" />
-        <span><span className="font-medium">Looks like a key in src/config.ts, line 4.</span> A blueprint carries its source as written. Remove it before you publish.</span>
-      </div>
+      {subject.keyAt !== undefined && (
+        <div className="p-notice-warning flex items-start gap-2 px-3 py-2 text-xs">
+          <WarningIcon size={14} className="mt-px shrink-0" />
+          <span><span className="font-medium">Looks like a key in {subject.keyAt}.</span> A blueprint carries its source as written. Remove it before you publish.</span>
+        </div>
+      )}
       <AccessPicker options={BLUEPRINT_ACCESS} initial="link" />
       <Footer>
         <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
@@ -232,33 +261,12 @@ function BlueprintPane({ onClose }: { onClose: () => void }) {
   );
 }
 
-const REACH = [
-  {
-    binding: "GitHub", kind: "MCP server", members: [
-      { name: "read_issue", what: "Reads issues", change: false, allowed: true },
-      { name: "create_issue", what: "Opens issues in your repositories", change: true, allowed: false },
-    ],
-  },
-  {
-    binding: "Notes", kind: "workspace memory", members: [
-      { name: "recall", what: "Reads your notes", change: false, allowed: true },
-      { name: "remember", what: "Writes to your notes", change: true, allowed: false },
-    ],
-  },
-  {
-    binding: "Files", kind: "Checkout coupon bug", members: [
-      { name: "readFile", what: "Reads files in the workspace", change: false, allowed: true },
-      { name: "writeFile", what: "Changes files in the workspace", change: true, allowed: true },
-    ],
-  },
-];
-
-function ReachPane({ go }: { go: (pane: SharePane) => void }) {
+function ReachPane({ reach, go }: { reach: readonly ReachGroup[]; go: (pane: SharePane) => void }) {
   return (
     <>
       <p className="p-row-text p-text-2">Everything here uses your connections. Reading is on. Each change stays off until you allow it.</p>
       <div className="space-y-3">
-        {REACH.map((group) => (
+        {reach.map((group) => (
           <section key={group.binding} className="p-group">
             <header className="flex items-baseline gap-2 px-3.5 py-2">
               <span className="p-row-text font-medium p-text">{group.binding}</span>
@@ -300,13 +308,17 @@ function LimitField({ label, detail, value, unit }: { label: string; detail: str
   );
 }
 
-function LimitsPane({ go }: { go: (pane: SharePane) => void }) {
+function LimitsPane({ spends, go }: { spends: boolean; go: (pane: SharePane) => void }) {
   return (
     <>
-      <p className="p-row-text p-text-2">Every call someone makes runs on your account. These keep a busy link from running up a bill.</p>
+      <p className="p-row-text p-text-2">
+        {spends
+          ? "Every call someone makes runs on your account. These keep a busy link from running up a bill."
+          : "Every request runs in your workspace. This keeps a busy link from slowing it down."}
+      </p>
       <div className="space-y-4">
         <LimitField label="Requests" detail="For each person, every minute" value="120" unit="a minute" />
-        <LimitField label="Model spend" detail="For everyone together, each day (UTC)" value="$2.00" unit="a day" />
+        {spends && <LimitField label="Model spend" detail="For everyone together, each day (UTC)" value="$2.00" unit="a day" />}
       </div>
       <p className="p-meta p-text-3">At a limit, people see a short pause page until it resets. You are never paused.</p>
       <Footer>
@@ -382,13 +394,7 @@ function WorkspacePane({ subject, go, onClose, onStop }: {
         <PersonRow person={subject.owner} role="Owner" />
         {people.map((person) => <PersonRow key={person.email} person={person} role="Can view" />)}
       </ul>
-      <label className="flex items-start gap-3">
-        <input type="checkbox" defaultChecked className="mt-1 size-4 shrink-0 accent-[var(--c-accent)]" />
-        <span>
-          <span className="block p-row-text font-medium p-text">Let them fork it</span>
-          <span className="block p-meta p-text-3">A fork copies the chat and files into a workspace of their own, on their own models and connections.</span>
-        </span>
-      </label>
+      <ForkToggle detail="A fork copies the chat and files into a workspace of their own, on their own models and connections." />
       {first !== undefined && (
         <div className="p-group">
           <SummaryRow label="Activity" value={`${first.name} viewed it 2h ago`} onOpen={() => go("activity")} />
@@ -439,10 +445,10 @@ export function ShareDialog({ subject, initialPane, accessOpen = false, onClose,
             segments={[{ id: "live", label: "Live" }, { id: "blueprint", label: "Blueprint" }]} />
         </div>
       )}
-      {pane === "live" && <LivePane subject={subject} go={setPane} onClose={onClose} onStop={onStop} accessOpen={accessOpen} />}
-      {pane === "blueprint" && <BlueprintPane onClose={onClose} />}
-      {pane === "reach" && <ReachPane go={setPane} />}
-      {pane === "limits" && <LimitsPane go={setPane} />}
+      {subject.kind === "slate" && pane === "live" && <LivePane subject={subject} go={setPane} onClose={onClose} onStop={onStop} accessOpen={accessOpen} />}
+      {subject.kind === "slate" && pane === "blueprint" && <BlueprintPane subject={subject} onClose={onClose} />}
+      {subject.kind === "slate" && pane === "reach" && <ReachPane reach={subject.reach} go={setPane} />}
+      {pane === "limits" && <LimitsPane spends={subject.kind === "slate" && subject.reach.length > 0} go={setPane} />}
       {pane === "activity" && <ActivityPane go={setPane} workspace={workspace} people={namedPeople(subject.access)} />}
       {pane === "workspace" && <WorkspacePane subject={subject} go={setPane} onClose={onClose} onStop={onStop} />}
     </Modal>

@@ -10,10 +10,10 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { PreviewPicture, SkillPicture, type Preview } from "./previews";
 import {
-  AccessGlyph, fileIcon, FOLDER_ICON, FolderTile, GRID, KIND, SKILLS_ICON, SLATE_ICON, Tile,
+  AccessGlyph, fileIcon, FOLDER_ICON, FolderTile, GRID, KIND, LIST, SKILLS_ICON, SLATE_ICON, Tile,
   type Access, type MenuItem, type Person, type ShareKind,
 } from "./tiles";
-import { namedPeople, ShareDialog, StopSharingDialog, type SharePane, type ShareSubject } from "./ShareDialog";
+import { namedPeople, ShareDialog, StopSharingDialog, type ReachGroup, type SharePane, type ShareSubject } from "./ShareDialog";
 
 export interface SlateItem {
   readonly id: string;
@@ -23,6 +23,8 @@ export interface SlateItem {
   readonly updated: string;
   readonly preview: Preview;
   readonly access?: Access;
+  readonly reach?: readonly ReachGroup[];
+  readonly keyAt?: string;
 }
 
 export interface ReceivedItem {
@@ -121,7 +123,14 @@ function accessLabel(access: Access): string {
 function whoLoses(access: Access): string {
   if (access.kind === "link") return "Everyone with the link";
 
-  return new Intl.ListFormat("en", { type: "conjunction" }).format(namedPeople(access).map((person) => person.name));
+  return LIST.format(namedPeople(access).map((person) => person.name));
+}
+
+export function slateSubject(slate: SlateItem, owner: Person): ShareSubject {
+  return {
+    kind: "slate", title: slate.title, owner, access: slate.access ?? { kind: "people", people: [] },
+    reach: slate.reach ?? [], keyAt: slate.keyAt,
+  };
 }
 
 const PLACE_ICON: Record<Place, ReactNode> = {
@@ -322,10 +331,7 @@ function SlatesPlace({ data, onOpen, onShare, menuFor }: {
           meta={<><span className="truncate">{slate.workspaceTitle}</span><AccessGlyph access={slate.access} /></>}
           menu={[
             { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => onOpen(`Opens ${slate.title} in ${slate.workspaceTitle}.`) },
-            {
-              label: "Share…", icon: <ShareNetworkIcon size={15} />,
-              onSelect: () => onShare({ kind: "slate", title: slate.title, owner: data.me, access: slate.access ?? { kind: "people", people: [] } }),
-            },
+            { label: "Share…", icon: <ShareNetworkIcon size={15} />, onSelect: () => onShare(slateSubject(slate, data.me)) },
             { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => onOpen(`Opens ${slate.workspaceTitle}.`) },
           ]} />
       ))}
@@ -423,7 +429,12 @@ function SharedPlace({ data, onOpen, onDialog, menuFor }: {
   };
 
   const manage = (item: GivenItem): Dialog => {
-    const subject: ShareSubject = { kind: item.kind === "workspace" ? "workspace" : "slate", title: item.title, owner: data.me, access: item.access };
+    const base = { title: item.title, owner: data.me, access: item.access };
+    const slate = data.slates.find((each) => each.id === item.id);
+
+    const subject: ShareSubject = item.kind === "workspace"
+      ? { kind: "workspace", ...base }
+      : { kind: "slate", ...base, reach: slate?.reach ?? [], keyAt: slate?.keyAt };
 
     return { kind: "share", subject, pane: SHARE_PANE[item.kind] };
   };
