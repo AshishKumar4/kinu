@@ -114,6 +114,7 @@ function world(): World {
 /** For stores whose entry point is an `AgentRuntime`. */
 function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().vfs): AgentRuntime {
   return {
+    workspaceIsMachine: false,
     actor,
     storage: {
       vfs,

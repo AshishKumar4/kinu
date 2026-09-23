@@ -51,10 +51,7 @@ hostname label; [WORKSPACES.md](WORKSPACES.md) has that rule.
 
 ## Models
 
-| Field | Type | What it is |
-| --- | --- | --- |
-| `model` | string | Default model spec for new work, e.g. `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`. `KINU_MODEL` and `--model` override it. |
-| `reasoningEffort` | `"low"` \| `"medium"` \| `"high"` | Default reasoning effort. |
+There is no top-level `model` or `reasoningEffort`. The default model and reasoning effort are the profile's default tier: `localProfile.catalog.tiers.default` on a signed-out machine, the account catalog when signed in. `kinu setup` and the first `kinu provider connect` set it while it is unset, a later connect leaves it, and Defaults on the home screen change it. `KINU_MODEL` and `--model` override it. A workspace's own model and effort, set with `/model`, `/effort`, `kinu model` or `kinu effort`, live in its database and win over the tier.
 
 ## Providers
 

@@ -298,7 +298,6 @@
   "packages/core/src/providers/judge-model.ts#SelectEnsembleJudgesOpts.count (unsupplied-field)",
   "packages/core/src/providers/judge-model.ts#modelVendorFamily (unreached-export)",
   "packages/core/src/providers/openai-compat.ts#OPENAI_COMPAT_KEY_PREFIX (unreached-export)",
-  "packages/core/src/providers/openai-compat.ts#discoverOpenAICompatibleModels (unreached-export)",
   "packages/core/src/providers/openai.ts#OPENAI_FAST_MODEL (unreached-export)",
   "packages/core/src/providers/proxy.ts#ProviderProxyFetchOptions.headers (unsupplied-field)",
   "packages/core/src/providers/registry.ts#CATALOG_SOURCE_ID (unreached-export)",

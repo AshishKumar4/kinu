@@ -40,6 +40,7 @@ describe('role, tier, and agent hubs', () => {
           workspace: 'jarvis',
         },
       ],
+      subordinates: [],
       profile: {
         envelope: {
           authority: { kind: 'local' },

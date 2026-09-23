@@ -245,7 +245,7 @@ describe('local workspace creation publishes or leaves nothing', () => {
     expect(state).toEqual({ db: true, partial: false, wal: false, shm: false, ref: true });
   });
 
-  test('the published database is a complete, openable workspace', () => {
+  test('the published database is a complete, openable workspace, pinned to no model it was not given', () => {
     const result = run(`
       ${PRELUDE}
       await createCliAgent({
@@ -267,8 +267,8 @@ describe('local workspace creation publishes or leaves nothing', () => {
       result.stdout, v.object({ identity: v.string(), model: v.boolean() }),
     );
 
-    // `workspace_identity.name` is the address (slug), not the title.
-    expect(contents).toEqual({ identity: 'published-ws', model: true });
+    // `workspace_identity.name` is the address (slug), not the title; unpinned, it runs the default tier.
+    expect(contents).toEqual({ identity: 'published-ws', model: false });
     expect(state).toEqual({ db: true, partial: false, wal: false, shm: false, ref: true });
   });
 });

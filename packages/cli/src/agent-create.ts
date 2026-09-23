@@ -11,14 +11,14 @@ import {
   parseWorkspaceTitle,
   readMission,
   workspaceSlug,
-  type LLMProviderConfig,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
 } from '@kinu.run/core';
-import { loadActiveProfile } from './profiles';
+import { ensureDefaultTier, loadActiveProfile } from './default-model';
+import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
-import { defaultSpecForEndpoint, makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
+import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -158,7 +158,9 @@ export function isCloudAuthConfigured(): boolean {
 /** An unparseable config.json propagates rather than reading as a fresh install. */
 export function isLocalModelConfigured(): boolean {
   try {
-    return resolveLLMConfig({}) !== null;
+    // An OpenAI-compatible endpoint counts before it names a model.
+    return resolveLLMConfig({ defaultModel: readDefaultTier()?.model }) !== null
+      || loadConfigFile().providers?.openaiCompat?.default !== undefined;
   } catch (error) {
     // Only the half-set-override diagnostic means "not usable yet".
     if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
@@ -178,14 +180,9 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
   if (input.mode === 'cloud') {
     const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-    const defaults = loadConfigFile();
 
-    const agent = await createCloudAgentFromMission({
-      ...input,
-      purpose,
-      model: input.model ?? defaults.model,
-      reasoningEffort: input.reasoningEffort ?? defaults.reasoningEffort,
-    }, {
+    // Pins only what was named, as the web creates it.
+    const agent = await createCloudAgentFromMission({ ...input, purpose }, {
       create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
     });
 
@@ -219,7 +216,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   if (existsSync(dbPath)) throw new Error(nameTaken(name, dbPath, claimed));
   // Read before the workspace exists, so it reports who this agent JOINS.
   const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
-  const llmConfig = requireLLMConfig(input);
+  const tier = input.model === undefined ? await ensureDefaultTier() : readDefaultTier();
+  const llmConfig = requireLLMConfig({ ...input, defaultModel: tier?.model });
   mkdirSync(agentDir(name), { recursive: true });
 
   // Built under a partial name and published by the rename (as `kinu import` does). `agent.db` existing is what
@@ -234,10 +232,10 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
     const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = rt.actor.config;
-    agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
-    const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;
 
-    if (reasoningEffort) agentConfig.setReasoningEffort(reasoningEffort);
+    if (input.model) agentConfig.setModel(input.model);
+
+    if (input.reasoningEffort) agentConfig.setReasoningEffort(input.reasoningEffort);
     // The origin decides whether the title policy may ever rename this agent.
     agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
 
@@ -288,7 +286,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   ensureLocalDaemonRunning();
 
   return {
-    name, displayName, mode: 'local', purpose, model: llmConfig.model,
+    name, displayName, mode: 'local', purpose, model: input.model ?? tier?.model,
     dbPath, aliasPath, cwd, workspaceId, peers,
   };
 }
@@ -372,7 +370,6 @@ export function renameLocalAgent(name: string, displayName: string): RenamedLoca
   return { name, displayName: title };
 }
 
-/** Deliberately intolerant of a failed removal: see its call site. */
 function discardPartialWorkspace(partial: string): void {
   for (const path of [partial, `${partial}-wal`, `${partial}-shm`]) {
     rmSync(path, { force: true });
@@ -411,16 +408,4 @@ async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth
 
     return requireAuthConfig();
   }
-}
-
-/** Explicit model, then configured default, then the endpoint's spec via cli-backend's `defaultProviderFor`,
- * the single table; a local copy drifts and resolves the wrong provider. */
-function modelSpecForAgentConfig(llm: LLMProviderConfig, rawModel: string | undefined): string {
-  const configured = rawModel ?? loadConfigFile().model;
-
-  if (configured) return configured;
-  const derived = defaultSpecForEndpoint(llm);
-
-  if (derived) return derived;
-  throw new Error(`No model for "${llm.name}": name one with --model, or run kinu setup.`);
 }

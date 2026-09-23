@@ -20,6 +20,11 @@ export function composerHelp(registry: KeybindingRegistry): string {
     ['consent.once', 'Approval: allow once'],
     ['consent.always', 'Approval: remember grant'],
     ['consent.deny', 'Approval: deny'],
+    ['palette.toggle', 'Command palette'],
+    ['workspace.toggle', 'Show or hide workspaces'],
+    ['model.open', 'Model picker'],
+    ['hub.agents', 'Agent Hub'],
+    ['settings.toggle', 'Settings'],
   ];
 
   return ['Keyboard', ...actions.map(([action, label]) => `  ${registry.bindingsFor(action).join(' / ')}  ${label}`)].join('\n');

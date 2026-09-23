@@ -1,4 +1,4 @@
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, observeWrites, withApprovalGatedShell, withMountTable, standardMounts } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, observeWrites, withApprovalGatedShell, withMountTable, standardMounts, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
@@ -46,7 +46,11 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       shell = withApprovalGatedShell(plane.shell, deps.approvalPolicy);
       const ownRouter = new DefaultExecutionRouter(deps.approvalPolicy);
       const files = observer ? observeWrites(plane.vfs, observer) : plane.vfs;
-      vfs = withMountTable(files, [...standardMounts((name) => ownRouter.getProvider(name)), ownContext]);
+      vfs = withMountTable(files, [
+        ...standardMounts((name) => ownRouter.getProvider(name)),
+        sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
+        ownContext,
+      ]);
       ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
@@ -66,6 +70,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       actor,
       storage: { ...origin.storage, vfs },
       agentStateVfs: origin.agentStateVfs,
+      workspaceIsMachine: origin.workspaceIsMachine,
       memory: origin.memory,
       executor: origin.executor,
       llm: origin.llm,

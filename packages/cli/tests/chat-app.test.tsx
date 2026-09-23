@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
-import type { AgentModelMenu } from '@kinu.run/core';
+import { missingSubordinateHistory, type AgentModelMenu, type SubordinateRosterEntry } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -261,6 +261,29 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).toContain('Send a message');
   });
 
+  test('a model picker row starts with the model, not an empty field and a separator', async () => {
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client);
+    screen.mockInput.pressKey('l', { ctrl: true });
+    await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
+    const row = screen.frame().split('\n').find((line) => line.includes('openai/gpt-5.5')) ?? '';
+
+    expect(row).toMatch(/GPT 5\.5 · openai · openai\/gpt-5\.5/u);
+    expect(row).not.toMatch(/· GPT 5\.5/u);
+  });
+
+  test('in a wide chat the workspace key is named in /help, not drawn over the header', async () => {
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, { width: 140 });
+    await screen.waitFor('the header', () => screen.frame().includes('alpha'));
+    // Drawn over the rule, the hint's spaces show the rule through: `Alt+W─hide─workspaces`.
+    expect(screen.frame()).not.toMatch(/Alt\+W.{1,6}workspaces/u);
+
+    await screen.mockInput.typeText('/help');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the keyboard help', () => screen.frame().includes('Show or hide workspaces'));
+
+    for (const label of ['Command palette', 'Model picker', 'Agent Hub', 'Settings']) expect(screen.frame()).toContain(label);
+  });
+
 
   test('a slow model selection blocks newer surfaces until it settles', async () => {
     const pending = Promise.withResolvers<{ spec: string }>();
@@ -491,6 +514,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       id: 'agent-main', label: 'Checkout', kind: 'main', status: 'idle',
       roleId: 'task', tierId: 'default', workspace: 'shop',
     }],
+    subordinates: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -621,6 +645,69 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     // n is not a hub action here.
     expect(screen.frame()).toContain('Agent Hub');
     screen.mockInput.pressEscape();
+  });
+
+  test('the Agent Hub lists the subagents the open agent hired, and Enter opens one\'s conversation', async () => {
+    const scout: SubordinateRosterEntry = {
+      name: 'scout',
+      actorReference: null,
+      birth: {
+        creationId: 'birth-scout',
+        seed: { name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', tier: 'default', mission: 'Survey the logs', lifetime: 'durable' },
+        assignment: null,
+      },
+      deleteRequested: false,
+      createdBy: 'orchestrator',
+      status: 'working',
+      currentTask: 'Survey the logs',
+      createdAt: 1,
+      dismissedAt: null,
+      lifetime: 'durable',
+      taskEventId: null,
+    };
+
+    const dismissed: SubordinateRosterEntry = {
+      ...scout,
+      name: 'retired-helper',
+      birth: null,
+      status: 'dismissed',
+      dismissedAt: 2,
+    };
+
+    const main = fakeClient({
+      name: 'checkout',
+      inspectSubordinate: async (request) => {
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed] } };
+
+        if (request.view !== 'history' || request.path.join('/') !== 'scout') return missingSubordinateHistory(request.path);
+
+        return {
+          view: 'history',
+          path: request.path,
+          page: {
+            status: 'end',
+            items: [
+              { id: 'h1', role: 'user', content: 'Look through app.log for errors', createdAt: 1 },
+              { id: 'h2', role: 'assistant', content: 'Found 3 errors in app.log', createdAt: 2 },
+            ],
+          },
+        };
+      },
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout · agent · task/default'));
+    expect(screen.frame()).toContain('Survey the logs');
+    expect(screen.frame()).not.toContain('retired-helper');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the subagent conversation', () => screen.frame().includes('Found 3 errors in app.log'));
+    expect(screen.frame()).toContain('Look through app.log for errors');
+    screen.mockInput.pressEscape();
+    await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Agent Hub'));
+    expect(screen.frame()).not.toContain('Found 3 errors in app.log');
   });
 
   test('drafts stay with their conversation across a workspace switch', async () => {

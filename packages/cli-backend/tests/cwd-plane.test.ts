@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
 import {
-  buildBuiltinTools, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName,
+  buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, WORKSPACE_ROOT, subordinateAgentName,
 } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/identity';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
@@ -241,6 +241,17 @@ describe('addressing the bound directory', () => {
     await rt.storage.vfs.writeFile('..hidden/file.txt', 'still inside');
     expect(readFileSync(join(project, '..hidden/file.txt'), 'utf8')).toBe('still inside');
   });
+
+  test('a skill in the bound directory is discovered: the shared Drive this runtime lacks is absent, not an escape', async () => {
+    const { state, project } = roots('cwd-plane-skills');
+    mkdirSync(join(project, 'skills'), { recursive: true });
+    writeFileSync(join(project, 'skills', 'review.md'), '---\nname: review\ndescription: Review a change\n---\nName every risk.\n');
+    const rt = agentRuntime(state, 'solo', project);
+
+    const found = await discoverSkills(rt.storage.vfs, { admissionTokens: 100_000 });
+
+    expect(found.skills.find((skill) => skill.name === 'review')?.source).toBe('vfs');
+  });
 });
 
 describe('the shell over the bound directory', () => {
@@ -325,6 +336,23 @@ describe('the shell over the bound directory', () => {
     const entries = await checkpoints.list({ limit: 10 });
     expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
   });
+
+  test('a file write snapshots the bound directory, never a marked directory above it', async () => {
+    const { state, project } = roots('cwd-plane-file-checkpoint');
+    // A marker above the workspace: snapshotting there would stage every file beside the workspace too.
+    writeFileSync(join(dirname(project), 'package.json'), '{}\n');
+    const rt = agentRuntime(state, `file-checkpointer-${basename(dirname(state))}`, project);
+    const checkpoints = rt.checkpoints;
+
+    if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
+
+    if (!(await checkpoints.status()).available) return; // no git on this box
+
+    await rt.storage.vfs.writeFile('notes/plan.md', 'ship it\n');
+
+    const entries = await checkpoints.list({ limit: 10 });
+    expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
+  });
 });
 
 describe('what an opened workspace puts where', () => {
@@ -402,4 +430,20 @@ test('local Plan file inspection remains useful without granting native project 
   await build({ action: 'read', path: 'inspect.txt' });
   expect(await build({ action: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ ok: true });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('built');
+});
+
+test('a file the agent writes is named local:// when the directory is the workspace, vfs:// when it is not', async () => {
+  const { state, project } = roots('cwd-plane-reference');
+
+  const write = (rt: CLIRuntime) => {
+    const file = buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file;
+
+    if (file === undefined) throw new Error('No Build file tool');
+
+    return toolExecute(file)({ action: 'write', path: 'notes/plan.md', content: 'ship it' });
+  };
+
+  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
+  expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
+  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://notes/plan.md' });
 });

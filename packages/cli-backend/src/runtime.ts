@@ -24,7 +24,7 @@ import {
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor,
-  withMountTable, standardMounts, readTailWithVfsOps,
+  withMountTable, standardMounts, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount,
@@ -426,6 +426,7 @@ export function createCLIRuntime(
 
   const agentVfs = withMountTable(fileVfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
@@ -456,6 +457,7 @@ export function createCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => db.transaction(write)(),
+    workspaceIsMachine: cwd !== null,
     actor, sql,
     execRaw,
     vfs: agentVfs,
@@ -702,6 +704,7 @@ async function buildCLIHeadRuntime(
   // `/context` is this head's own history, not the parent's.
   const agentVfs = withMountTable(vfs, [
     ...standardMounts((name) => executionRouter.getProvider(name)),
+    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
     contextMount({
       stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
     }),
@@ -715,6 +718,7 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, agentStateVfs,
+    workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,

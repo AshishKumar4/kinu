@@ -563,7 +563,7 @@ Two policies apply to every provider:
 
 Reasoning effort is set by the user. `/effort` in chat or
 `kinu effort <name> [level]` stores `reasoning_effort` in the workspace
-`agent_config`; `~/.kinu/config.json` holds the CLI-side default.
+`agent_config`; a workspace without its own runs the profile's default tier.
 `packages/core/src/strategy/effort.ts` maps the level onto each family's native
 option: `reasoningEffort` for Workers AI, OpenAI-shaped providers, and
 OpenRouter, and `effort` for Anthropic (levels Anthropic does not take are not

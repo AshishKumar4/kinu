@@ -5034,3 +5034,30 @@ test('the actual local turn executes its selected version instead of the mutable
     db.close();
   }
 });
+
+describe('LocalAgentSession — a workspace bound to a directory', () => {
+  test('tells the model its files are local:// in a system prompt that stays byte-identical across turns', async () => {
+    const root = scratchDir('local-session-bound-prefix');
+    const db = new Database(scratchPath('local-session-bound-prefix', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM, cwd: root });
+    const systems: string[] = [];
+
+    const session = new LocalAgentSession({
+      rt, db, model: systemCapturingModel('ok', (system) => { systems.push(system); }),
+      onEvent: () => {}, noAutoEvolve: true, cwd: root,
+    });
+
+    try {
+      await session.send('first');
+      await session.send('second');
+    } finally {
+      await session.end();
+      db.close();
+    }
+
+    expect(systems.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(systems).size).toBe(1);
+    expect(systems[0]).toContain('`local://` for this workspace');
+  });
+});

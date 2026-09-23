@@ -61,6 +61,7 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   }
 
   const rt: AgentRuntime = {
+    workspaceIsMachine: false,
     actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory, executor, llm, schedule,

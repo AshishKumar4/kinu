@@ -110,6 +110,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
 
   const rt: AgentRuntime = {
     actor,
+    workspaceIsMachine: false,
     storage: {
       vfs: workspace.vfs,
       sql: testSql.sql,

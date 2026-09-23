@@ -38,9 +38,11 @@ function throwVfsError(input: { error: unknown; syscall: string; path: string })
   throw input.error;
 }
 
-function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VFS {
+function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
   const snapshot = async (path: string, reason: string): Promise<void> => {
-    await checkpoints?.ensureCheckpoint(checkpoints.workdirForPath(path), reason);
+    if (!checkpoints) return;
+    const workdir = checkpoints.workdirForPath(path);
+    await checkpoints.ensureCheckpoint(withinRoot(root, workdir) ? workdir : root, reason);
   };
 
   return {
@@ -94,7 +96,7 @@ function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VFS {
  */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
   const root = resolve(cwd);
-  const host = createHostMountVFS(checkpoints);
+  const host = createHostMountVFS(root, checkpoints);
 
   const hostPath = (path: string): string => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');

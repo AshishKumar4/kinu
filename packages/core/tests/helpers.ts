@@ -253,6 +253,7 @@ export function createTestRuntime(opts?: {
   };
 
   const rt: AgentRuntime = {
+    workspaceIsMachine: false,
     actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory,
