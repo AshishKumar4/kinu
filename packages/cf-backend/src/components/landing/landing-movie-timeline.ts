@@ -7,13 +7,10 @@ import type { UIMessage } from 'ai';
 import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/core';
 import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
+import { SLATE_PREFIX, type SlateSurfaceKind } from '@kinu.run/core';
 
-/** Structurally the product `SurfaceKind` subset, restated rather than imported: the scripts
- *  gate typechecks this file under its own JSX runtime, and any component import drags in DOM. */
-export type MovieSurface = 'Work' | `slate:${string}`;
-
-/** `SLATE_PREFIX` in `components/surfaces/presence.ts`, restated for the same reason. */
-const SLATE_PREFIX = 'slate:';
+/** The two surfaces the walkthrough shows. */
+export type MovieSurface = 'Work' | SlateSurfaceKind;
 
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';
 

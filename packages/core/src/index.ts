@@ -2340,6 +2340,19 @@ export {
 } from './read-models/tool-call-grouping';
 
 export {
+  type SlateSurfaceKind,
+  type SurfaceContent,
+  type SurfaceKind,
+  ACTIVITY_SURFACE,
+  SLATE_PREFIX,
+  SURFACES,
+  landedSurface,
+  openPortOf,
+  pruneSlateReloads,
+  surfaceHasContent,
+} from './read-models/surface-presence';
+
+export {
   ACCESS_TOKEN_SCOPES,
   type AccessTokenScope,
   type AccessTokenRecord,

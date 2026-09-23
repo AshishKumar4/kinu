@@ -27,17 +27,12 @@ import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import { SLATE_PREFIX, SURFACES, landedSurface, openPortOf, surfaceHasContent } from "./presence";
+import {
+  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, surfaceHasContent,
+  type SlateSurfaceKind, type SurfaceKind,
+} from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
-
-/** Activity sits apart at the right of the strip, unlabelled. */
-export const ACTIVITY_SURFACE = "Activity";
-
-/** Namespaced so a Slate can never collide with a host surface id. */
-export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
-
-export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | `preview:${string}`;
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
 
@@ -109,7 +104,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const [hasDiffs, setHasDiffs] = useState(false);
   const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasDiffs };
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
-  const surface = landedSurface(requested, content, ports);
+  // Settled once this workspace's presence has picked the first tab; from then
+  // on the tab asked for is the tab shown.
+  const [settledFor, setSettledFor] = useState<string | null>(null);
+  const workspaceKey = props.workspace ?? "";
+  const settled = settledFor === workspaceKey;
+  const surface = landedSurface(requested, content, ports, settled);
 
   const focus = useSurfaceFocus({
     surface,
@@ -129,6 +129,10 @@ export function WorkSurface(props: WorkSurfaceProps) {
   useEffect(() => {
     if (surface !== requested) focus.navigate(surface);
   }, [surface, requested, focus.navigate]);
+
+  useEffect(() => {
+    if (!settled && props.tabPresence !== undefined) setSettledFor(workspaceKey);
+  }, [settled, props.tabPresence, workspaceKey]);
 
   const openPort = openPortOf(surface, ports);
   const previewSelected = surface.startsWith(SLATE_PREFIX) || surface.startsWith("preview:");
@@ -205,7 +209,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
           })}
-          {SURFACES.filter(s => surfaceHasContent(s, content)).map(s => (
+          {SURFACES.filter(s => s === surface || surfaceHasContent(s, content)).map(s => (
             <button key={s} onClick={() => focus.navigate(s)} title={s} aria-label={s}
               aria-current={surface === s ? "true" : undefined}
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>

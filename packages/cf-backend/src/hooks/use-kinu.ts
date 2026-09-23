@@ -44,7 +44,7 @@ import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.
 import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, type TurnClaimState } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
-import { pruneSlateReloads } from "../components/surfaces/presence";
+import { pruneSlateReloads } from "@kinu.run/core";
 
 export type { ExecutorInfo };
 
