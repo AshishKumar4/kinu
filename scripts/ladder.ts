@@ -2142,7 +2142,9 @@ export const LADDER: readonly Gate[] = [
     run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
     label: 'Product flows in a browser, on the local dev server',
     tier: 'deploy',
-    seconds: 0,
+    // 133.3s alone on 2026-09-23 (gate-cost-measure, load 1.1 at start): the dev
+    // server's boot, then ten rows, three of them waiting on a real model turn.
+    seconds: 133,
     catches: 'a flow a person runs in the page that breaks while every API, socket and '
       + 'fixture-backed browser gate stays green: the owner\'s #13, where every agent a '
       + 'workspace held was present over the API and the reloaded page showed none of them. '
@@ -2265,7 +2267,8 @@ export const LADDER: readonly Gate[] = [
       + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
       + 'so it stands outside the device fleet the first-run tier counts.',
     tier: 'deploy',
-    seconds: 0,
+    // 66s and 67s against 41494531d on 2026-09-23, ten rows over the public edge.
+    seconds: 67,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
       + 'as the eval identity, asserting only what the page shows. The first-run tier reads '

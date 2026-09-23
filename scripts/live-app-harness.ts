@@ -18,6 +18,7 @@
  * `.wrangler/state` (`statePath` below).
  */
 
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from '@kinu.run/test-utils';
@@ -271,6 +272,12 @@ function liveAppEnv() {
   // file). The flag is how the loaded vars become bindings without copying
   // .dev.vars into the worktree.
   env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
+
+  // The Drive signs its listing cursors with JWT_SECRET and is unbound without
+  // one (drive/tenant.ts `driveBound`: every Drive route answers 503). .dev.vars
+  // carries none, and nothing durable is sealed with it (infra-manifest.ts), so
+  // a boot on its own state gets its own.
+  env.JWT_SECRET ??= randomBytes(32).toString('base64');
 
   return env;
 }
