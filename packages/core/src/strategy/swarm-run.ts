@@ -27,7 +27,6 @@ import { missionMeter, type MissionScope } from '../mission-budget';
 import type { WebSearchProvider } from '../web/index';
 import type { ResolvedVerifier } from './verifier-registry';
 import { PUBLISHING_CARRIES } from './objective';
-import { sealRecords } from './records';
 import type {
   MeasurementContext, MeasuredObjective, ObjectiveDirection, ObjectiveIdentity,
   PublishingCarry,
@@ -245,10 +244,6 @@ export async function runSwarm(
   const spentBy = new Map<string, number | null>();
   const seeded = seedResumedSearch({ reentry, nodes, rankDirection, spentBy });
   candidates.push(...seeded.candidates);
-
-  if (seeded.publication.kind === 'sealed' && identity !== null) {
-    sealRecords(sql, deps.rt.actor, { identity, breach: seeded.publication.breach, at: Date.now() });
-  }
 
   /** The state `scoreExpansion` moves, seeded from the re-entry. */
   const scoringState = {
