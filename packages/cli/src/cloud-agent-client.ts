@@ -17,10 +17,9 @@ import {
   type StagedSkillResult,
 } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
-import type {
-  CheckpointAvailability, FileCheckpointEntry, FileCheckpointListing,
-  FileRestorePlan, FileRestoreResult,
-  PlanReviewResult,
+import {
+  AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
+  FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult,
 } from '@kinu.run/core';
 import {
   callAgentRpc,
@@ -87,38 +86,6 @@ const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.obje
 });
 
 const ResolveDeviceConsentSchema = v.object({ ok: v.boolean() });
-
-const FileRestoreChangeSchema = v.object({
-  path: v.string(),
-  kind: v.picklist(['modify', 'create', 'delete']),
-});
-
-const FileCheckpointEntrySchema: v.GenericSchema<FileCheckpointEntry> = v.object({
-  id: v.string(),
-  dir: v.string(),
-  at: v.number(),
-  turnId: v.nullable(v.string()),
-  sessionId: v.nullable(v.string()),
-  reason: v.string(),
-});
-
-const FileRestorePlanSchema: v.GenericSchema<FileRestorePlan> = v.object({
-  dir: v.string(),
-  id: v.string(),
-  files: v.array(FileRestoreChangeSchema),
-});
-
-const FileRestoreResultSchema: v.GenericSchema<FileRestoreResult> = v.object({
-  dir: v.string(),
-  id: v.string(),
-  files: v.array(FileRestoreChangeSchema),
-  preRestoreId: v.nullable(v.string()),
-});
-
-const CheckpointAvailabilitySchema: v.GenericSchema<CheckpointAvailability> = v.object({
-  available: v.boolean(),
-  reason: v.optional(v.string()),
-});
 
 const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.object({
   availability: CheckpointAvailabilitySchema,
@@ -225,15 +192,6 @@ const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.ob
   ok: v.boolean(),
   detail: v.optional(v.string()),
   error: v.optional(v.string()),
-});
-
-const AlternateTakeCandidateSchema = v.object({
-  nodeId: v.string(),
-  text: v.string(),
-  score: v.number(),
-  visits: v.number(),
-  depth: v.number(),
-  origin: v.optional(v.picklist(['live', 'branch'])),
 });
 
 const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({

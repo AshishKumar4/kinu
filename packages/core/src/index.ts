@@ -984,7 +984,7 @@ export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
-  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence,
+  recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';

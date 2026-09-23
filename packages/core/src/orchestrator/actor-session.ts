@@ -581,12 +581,15 @@ export class ActorSession {
     const output = await this.canonical.outputForTurn(lease.turnId);
     const outputReferences = output.messages;
     const finalTextReference = await this.matchTranscriptText(text, outputReferences);
-    const admitted = active.claim === null ? null : (await this.options.claims.consumedContext(lease.turnId, 0)) ?? (await this.options.claims.admittedFor(active.claim));
+
+    const admittedMessages = active.claim === null
+      ? []
+      : ((await this.options.claims.consumedContext(lease.turnId, 0)) ?? (await this.options.claims.admittedFor(active.claim))).messages;
 
     return {
       text, answer, steps, failure, program, claim: active.claim,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
-      admittedMessages: admitted?.messages ?? [],
+      admittedMessages,
       outputReferences, finalTextReference,
       outputPartReferences: output.parts,
     };

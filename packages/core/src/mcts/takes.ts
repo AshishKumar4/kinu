@@ -36,14 +36,14 @@ export interface AlternateTakeCandidate {
   origin?: 'live' | 'branch';
 }
 
-const AlternateTakeCandidatesSchema: v.GenericSchema<AlternateTakeCandidate[]> = v.array(v.object({
+export const AlternateTakeCandidateSchema: v.GenericSchema<AlternateTakeCandidate> = v.object({
   nodeId: v.string(),
   text: v.string(),
   score: v.number(),
   visits: v.number(),
   depth: v.number(),
   origin: v.optional(v.picklist(['live', 'branch'])),
-}));
+});
 
 export interface AlternateTakeSet {
   id: string;
@@ -324,7 +324,7 @@ function toTakeSet(r: RawTakeRow): AlternateTakeSet {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
     source: readTakeSource(r.source),
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
-    candidates: v.parse(AlternateTakeCandidatesSchema, JSON.parse(r.candidates)),
+    candidates: v.parse(v.array(AlternateTakeCandidateSchema), JSON.parse(r.candidates)),
     createdAt: r.created_at, pickedAt: r.picked_at,
   };
 }
