@@ -34,6 +34,7 @@ import {
   DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
   isDeviceUnknownMethodError,
+  isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createExperienceLibrary,
@@ -105,7 +106,7 @@ import {
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
   credentialToHeaders, codexAccessTokenExpiring,
   validateCredential, validateCredentialKey, validateWorkspaceName,
-  createCredentialCipher, type CredentialCipher,
+  createCredentialCipher, isSealedCredential, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
@@ -138,7 +139,7 @@ import {
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause,
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
-  type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
   type McpPresetId, mcpPresetById,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
@@ -221,12 +222,27 @@ const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
+const MINTED_DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
+
+
 /** Owner-facing checkpoint reads do not execute or write on the device. Every
  * other workspace call, including restore, crosses the consent chokepoint. */
 const CONSENT_FREE_DEVICE_METHODS = {
   checkpointStatus: true,
   checkpointList: true,
   checkpointPlan: true,
+} as const satisfies Record<string, true>;
+
+const CHECKPOINT_STORE_METHODS = {
+  checkpointList: true, checkpointPlan: true, checkpointRestore: true,
+} as const satisfies Record<string, true>;
+
+/** Frames the daemon refuses without the owner's Sandbox switch. */
+const DEVICE_VIEW_METHODS = {
+  exec: true, [DEVICE_PTY_OPEN_METHOD]: true,
+  readFile: true, readRange: true, writeFile: true, listFiles: true,
+  statPath: true, unlinkPath: true, mkdirPath: true, exists: true,
+  checkpointPlan: true, checkpointRestore: true,
 } as const satisfies Record<string, true>;
 
 /** The agent a device call's consent is keyed on, or undefined when the call is not gated
@@ -311,6 +327,9 @@ const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
  * Every field past `type` is optional so older daemons still connect. Absent means absent:
  * a daemon that says nothing about sandboxing is refused commands rather than run unconfined.
  */
+/** RFC 1035: a name is at most 255 octets. */
+const HOSTNAME_MAX_LENGTH = 255;
+
 const DeviceHelloSchema = v.object({
   type: v.literal('HELLO'),
   os: v.optional(v.string()),
@@ -387,14 +406,15 @@ function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & P
   };
 }
 
-const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\/.+/));
+/** Past PATH_MAX a path names no directory. */
+const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\//), v.maxLength(4096));
 
 function absolutePathOrNull(value: string | undefined): string | null {
   const parsed = v.safeParse(AbsolutePathSchema, value);
 
   if (!parsed.success) return null;
 
-  return parsed.output.length > 1 ? parsed.output.replace(/\/+$/, '') : parsed.output;
+  return parsed.output.replace(/\/+$/, '') || '/';
 }
 
 const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_TOKEN_ROTATION_ACK) });
@@ -1913,24 +1933,60 @@ export class UserDO extends Agent<Env> {
     return new Response(null, init);
   }
 
-  /**
-   * Keep the superseded hash only when the machine used the current secret; a machine on the grace gets
-   * none, so two copies of `device.json` cannot alternate. The absolute window restarts either way.
-   */
+  /** A grace is kept only when the machine used the current secret, so two copies of `device.json`
+   *  cannot alternate. The absolute window restarts either way. */
   private async rotateDeviceToken(deviceId: string, keepGrace: boolean): Promise<string> {
     const token = `pdt_${randomToken(32)}`;
-    // One statement: SQLite evaluates right-hand sides against the old row, so `token_hash` is the
-    // prior secret.
+    const tokenHash = await sha256Hex(token);
+    const now = Date.now();
+
+    // Spending the grace retires the secret it replaced.
+    if (!keepGrace) {
+      const [dropped] = this.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_devices WHERE id = ?`, deviceId);
+      this.retireDeviceTokens(deviceId, [dropped?.token_hash ?? null], now);
+    }
+
+    // One statement: right-hand sides read the old row, so `token_hash` is the prior secret.
     this.sqlx(
       `UPDATE user_devices
           SET prev_token_hash = CASE WHEN ? THEN token_hash ELSE NULL END,
               token_hash = ?,
               expires_at = ?
         WHERE id = ?`,
-      keepGrace ? 1 : 0, await sha256Hex(token), Date.now() + DEVICE_TOKEN_TTL_MS, deviceId,
+      keepGrace ? 1 : 0, tokenHash, now + DEVICE_TOKEN_TTL_MS, deviceId,
     );
 
     return token;
+  }
+
+  /** Kept for the token lifetime; an incident stays until the owner acknowledges it. */
+  private retireDeviceTokens(deviceId: string, hashes: ReadonlyArray<string | null>, now: number): void {
+    this.sqlx(
+      `DELETE FROM user_device_retired_tokens WHERE retired_at <= ? AND reuse_detected_at IS NULL`,
+      now - DEVICE_TOKEN_TTL_MS,
+    );
+
+    for (const hash of hashes) {
+      if (hash === null) continue;
+      this.sqlx(
+        `INSERT OR IGNORE INTO user_device_retired_tokens (token_hash, device_id, retired_at) VALUES (?, ?, ?)`,
+        hash, deviceId, now,
+      );
+    }
+  }
+
+  /** Two copies of `device.json` exist and the hub cannot tell the owner's (RFC 9700 §4.14.2). */
+  private async revokeOnTokenReuse(caller: UserCaller, tokenHash: string): Promise<void> {
+    const [reused] = this.sqlx<{ device_id: string }>(
+      `UPDATE user_device_retired_tokens SET reuse_detected_at = COALESCE(reuse_detected_at, ?)
+        WHERE token_hash = ? AND device_id IN (SELECT id FROM user_devices WHERE revoked_at IS NULL)
+        RETURNING device_id`,
+      Date.now(), tokenHash,
+    );
+
+    if (!reused) return;
+    diagnostics.event('device.token_reuse_revoked', { device: reused.device_id });
+    await this.revokeDevice(caller, reused.device_id);
   }
 
   /* These hibernation handlers are declared here, so `Lifecycle.installHandlers` skips them and there
@@ -1987,9 +2043,14 @@ export class UserDO extends Agent<Env> {
     const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
 
     if (acknowledged.success) {
-      // New secret is on disk; drop the superseded one so a stale `device.json` copy cannot use it.
-      this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`,
-        Date.now(), deviceId);
+      const now = Date.now();
+
+      const [grace] = this.sqlx<{ prev_token_hash: string | null }>(
+        `SELECT prev_token_hash FROM user_devices WHERE id = ?`, deviceId,
+      );
+
+      this.retireDeviceTokens(deviceId, [grace?.prev_token_hash ?? null], now);
+      this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`, now, deviceId);
 
       return;
     }
@@ -2030,12 +2091,10 @@ export class UserDO extends Agent<Env> {
       Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
     );
 
-    // Gate before any device state is read: a refused caller must not learn whether a machine
-    // is connected.
+    // Gate first: a refused caller must not learn whether a machine is connected.
     await this.requireTier(caller, 'device.rpc');
     const session = `pty-${nanoid(16)}`;
-    // Resolved before a session is minted: several live devices and none named is an error,
-    // not a coin toss.
+    // Resolved before minting: several live devices and none named is an error.
     const target = await this.resolveDeviceForCall(deviceId, undefined);
 
     try {
@@ -2046,8 +2105,7 @@ export class UserDO extends Agent<Env> {
         { agentName, deviceId: target, timeoutMs: TERMINAL_OPEN_TIMEOUT_MS },
       );
     } catch (cause) {
-      // An install too old to hold terminals gets an actionable message; every other failure
-      // already carries its own words and is passed through with the chain intact.
+      // An install too old for terminals gets an actionable message; other failures pass through.
       if (isDeviceUnknownMethodError({ cause })) {
         throw new Error(`${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
       }
@@ -2057,8 +2115,7 @@ export class UserDO extends Agent<Env> {
 
     this._terminals.register(session, target, agentName);
 
-    // Unattached sessions are swept on the next open, not on a timer: this object's one alarm
-    // belongs to other work.
+    // Unattached sessions are swept on the next open: this object's one alarm belongs to other work.
     for (const stale of this._terminals.expired()) this.closeDeviceTerminal(stale.session, stale.device);
 
     return { session };
@@ -2088,7 +2145,9 @@ export class UserDO extends Agent<Env> {
               agent_root = COALESCE(?, agent_root),
               sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?
         WHERE id = ?`,
-      hello.os ?? null, hello.hostname ?? null, Date.now(),
+      hello.os ?? null,
+      hello.hostname !== undefined && hello.hostname.length <= HOSTNAME_MAX_LENGTH ? hello.hostname : null,
+      Date.now(),
       absolutePathOrNull(hello.root),
       absolutePathOrNull(hello.home),
       agentRoot,
@@ -2141,8 +2200,7 @@ export class UserDO extends Agent<Env> {
     const tarball = cliArtifactPath(hello.os, hello.arch);
 
     if (tarball === null) return null;
-    // The signed manifest is the whole authority: no signature over this artifact means no push,
-    // since the daemon would refuse it.
+    // No signature over this artifact means no push: the daemon would refuse it.
     const sha256 = stamp.checksums?.[tarball];
 
     if (stamp.signature === undefined || stamp.checksums === undefined || sha256 === undefined || !/^[0-9a-f]{64}$/i.test(sha256)) return null;
@@ -2189,9 +2247,10 @@ export class UserDO extends Agent<Env> {
   }
 
   /** The raw token is returned once to the CLI; only its hash is stored. 'Your PC' is the default
-   * label when the caller sends none. */
-  async registerDevice(caller: UserCaller, label?: string): Promise<{ deviceId: string; token: string }> {
+   * label. `replaces` is the machine's previous token, whose registration this one replaces. */
+  async registerDevice(caller: UserCaller, label?: string, replaces?: string): Promise<{ deviceId: string; token: string }> {
     await this.requireTier(caller, 'device.manage');
+    const replaced = replaces === undefined ? null : await this.deviceHoldingToken(caller, replaces);
     const deviceId = `dev-${nanoid(10)}`;
     const token = `pdt_${randomToken(32)}`;
     const tokenHash = await sha256Hex(token);
@@ -2202,7 +2261,25 @@ export class UserDO extends Agent<Env> {
       deviceId, tokenHash, trimmedLabel === '' ? 'Your PC' : trimmedLabel, now, now + DEVICE_TOKEN_TTL_MS,
     );
 
+    if (replaced !== null) await this.revokeDevice(caller, replaced);
+
     return { deviceId, token };
+  }
+
+  /** Expired or not, holding the token proves the caller had that machine's `device.json`. */
+  private async deviceHoldingToken(caller: UserCaller, token: string): Promise<string | null> {
+    if (!MINTED_DEVICE_TOKEN.test(token)) return null;
+    const tokenHash = await sha256Hex(token);
+
+    const [held] = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices WHERE (token_hash = ? OR prev_token_hash = ?) AND revoked_at IS NULL LIMIT 1`,
+      tokenHash, tokenHash,
+    );
+
+    if (held) return held.id;
+    await this.revokeOnTokenReuse(caller, tokenHash);
+
+    return null;
   }
 
   async renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
@@ -2219,27 +2296,32 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /**
-   * Window is absolute from last rotation; verification does not extend it. The superseded secret
-   * is a one-shot grace (see {@link acceptDeviceSocket}); `current` says which hash matched.
-   */
+  /** The window is absolute from the last rotation; the superseded secret is a one-shot grace
+   *  (see {@link acceptDeviceSocket}); `current` says which hash matched. */
   async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string; current?: boolean }> {
     await this.requireTier(caller, 'device.manage');
 
-    if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
+    if (!MINTED_DEVICE_TOKEN.test(token)) return { ok: false };
     const tokenHash = await sha256Hex(token);
 
-    const row = this.sqlx<{ id: string; expires_at: number | null; current: number }>(
-      `SELECT id, expires_at, (token_hash = ?) AS current
+    const row = this.sqlx<{ id: string; expires_at: number | null; current: number; prev_token_hash: string | null }>(
+      `SELECT id, expires_at, (token_hash = ?) AS current, prev_token_hash
          FROM user_devices
         WHERE (token_hash = ? OR prev_token_hash = ?) AND revoked_at IS NULL
         LIMIT 1`,
       tokenHash, tokenHash, tokenHash,
     )[0];
 
-    if (!row) return { ok: false };
+    if (!row) {
+      await this.revokeOnTokenReuse(caller, tokenHash);
+
+      return { ok: false };
+    }
 
     if (row.expires_at !== null && row.expires_at <= Date.now()) return { ok: false };
+
+    // Spent on the ticket it buys: a machine whose connect then fails is refused, not revoked.
+    if (row.current === 1) this.retireDeviceTokens(row.id, [row.prev_token_hash], Date.now());
     this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
 
     return { ok: true, deviceId: row.id, current: row.current === 1 };
@@ -2388,6 +2470,12 @@ export class UserDO extends Agent<Env> {
     },
   ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+    const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
+
+    if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
+      throw new Error(`workspace ${proven} reads and restores only its own device checkpoints`);
+    }
+
     // Cancellation is never consent-gated: it only ends a command already allowed, and
     // gating it could leave a live process waiting on an unanswered card.
     const stopping = method === DEVICE_CANCEL_METHOD;
@@ -2410,33 +2498,7 @@ export class UserDO extends Agent<Env> {
       if (!consent.allowed) throw new Error(consent.reason);
     }
 
-    // Commands and terminals run things, so both get the same sandbox frame; a terminal
-    // must not bypass the owner's Sandbox switch. `agentHome` is empty only under the raw tier.
-    let execSandbox: JsonObject | null = null;
-
-    if (method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) {
-      const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
-      const sandbox = this.deviceSandboxFor(deviceId, workspace);
-      const mode = effectiveDeviceMode(sandbox);
-
-      // Refused before the frame leaves; the daemon refuses again on its own probe. Neither end
-      // ever downgrades a sandboxed command to raw.
-      if (mode === 'files_only') {
-        throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
-      }
-
-      if (mode === 'sandboxed' && sandbox.agentHome === null) {
-        throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
-          ? 'an agent home belongs to a workspace, and this call has none'
-          : 'the daemon did not report where agent homes live'));
-      }
-
-      execSandbox = {
-        tier: sandbox.tier,
-        agentHome: sandbox.agentHome ?? '',
-        roots: [...sandbox.roots],
-      };
-    }
+    const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
 
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
@@ -2448,7 +2510,7 @@ export class UserDO extends Agent<Env> {
       rpcOptions.extra = {
         ...rpcOptions.extra,
         checkpoint: {
-          agent: opts.checkpoint.agent,
+          agent: proven ?? opts.checkpoint.agent,
           turnId: opts.checkpoint.turnId,
           sessionId: opts.checkpoint.sessionId,
           dir: opts.checkpoint.dir,
@@ -2456,7 +2518,7 @@ export class UserDO extends Agent<Env> {
       };
     }
 
-    if (execSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: execSandbox };
+    if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
 
     if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
 
@@ -2495,11 +2557,28 @@ export class UserDO extends Agent<Env> {
 
     const result = await tunnel.rpc(method, params, rpcOptions);
 
-    // A tool's own cancel is recorded where a durable sweep would put it; first answer wins,
-    // so a later sweep reports it instead of killing again.
+    // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
     if (stopping) this.recordToolPathCancellation(params, result);
 
     return result === undefined ? undefined : JSON.stringify(result);
+  }
+
+  /** `agentHome` is empty only under the raw tier. */
+  private frameSandboxFor(method: string, deviceId: string, workspace: string | null): JsonObject {
+    const sandbox = this.deviceSandboxFor(deviceId, workspace);
+
+    // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
+    if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
+      throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
+    }
+
+    if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
+      throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
+        ? 'an agent home belongs to a workspace, and this call has none'
+        : 'the daemon did not report where agent homes live'));
+    }
+
+    return { tier: sandbox.tier, agentHome: sandbox.agentHome ?? '', roots: [...sandbox.roots] };
   }
 
   /** Store the answer from a forwarded cancellation so the durable authority holds one outcome per request.
@@ -2656,10 +2735,7 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  /**
-   * Agent home is composed per call from the root the daemon reported, never stored.
-   * `.` and `..` workspace names are refused so the home cannot resolve above the agent root.
-   */
+  /** Agent home is composed per call from the root the daemon reported, for one workspace segment. */
   private deviceSandboxFor(deviceId: string, workspace: string | null): DeviceSandboxStatus & { deviceHome: string | null } {
     const row = this.sqlx<SandboxColumns & { tier: string | null; agent_root: string | null; consented_root: string | null; device_home: string | null }>(
       `SELECT tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu, agent_root, consented_root, device_home
@@ -2667,11 +2743,12 @@ export class UserDO extends Agent<Env> {
     )[0];
 
     const agentRoot = row?.agent_root ?? null;
-    const named = workspace !== null && workspace !== '.' && workspace !== '..' && workspace !== '';
+    const named = workspace !== null && isWorkspaceName(workspace) && workspace !== '.' && workspace !== '..';
     const consented = row?.consented_root ?? null;
 
     return {
-      tier: parseDeviceTier(row?.tier),
+      // Consent to `/` is the whole machine: the switch off.
+      tier: consented === '/' ? 'raw' : parseDeviceTier(row?.tier),
       ...readSandboxColumns(row),
       agentHome: agentRoot !== null && named ? `${agentRoot}/${workspace}/home` : null,
       roots: consented === null ? [] : [consented],
@@ -2826,28 +2903,30 @@ export class UserDO extends Agent<Env> {
    *  both the daemon and the hub-side path scope so shell and file views cannot drift. */
   async getDeviceFileView(
     caller: UserCaller, agentName: string, device?: string,
-  ): Promise<{ unconfined: boolean }> {
+  ): Promise<{ scope: DeviceFileScope }> {
     const resolved = await this.requireTier(caller, 'device.consent.read_self');
     // Per machine. Unnamed resolves the only live machine; several with none named is "confined".
     const deviceId = this._devices.connectedDeviceId(device);
 
-    if (!deviceId) return { unconfined: false };
+    if (!deviceId) return { scope: 'root' };
     // A workspace caller's identity is its token, never its argument, so a facet cannot read a
     // sibling's answer.
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+    const { tier } = this.deviceSandboxFor(deviceId, workspace);
 
-    if (this.getDeviceBinding(workspace, deviceId) !== 'allow') return { unconfined: false };
+    if (tier === 'sandboxed') return { scope: 'sandboxed' };
 
-    return { unconfined: this.deviceSandboxFor(deviceId, workspace).tier === 'raw' };
+    return { scope: this.getDeviceBinding(workspace, deviceId) === 'allow' ? 'unconfined' : 'root' };
   }
 
-  /** Revoked rows are hidden, except those with `unstopped_at`, which stay visible until the owner
-   *  acknowledges them; `revokedAt` tells the UI not to offer connect/rename controls. */
+  /** Revoked rows are hidden, except those with an incident, visible until the owner acknowledges
+   *  them; `revokedAt` tells the UI not to offer connect/rename controls. */
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
     connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
     lastIp: string | null; lastAgent: string | null; replacedAt: number | null;
-    revokedAt: number | null; unstoppedAt: number | null;
+    revokedAt: number | null; unstoppedAt: number | null; reuseDetectedAt: number | null;
+    wholeMachine: boolean;
     /** No home or roots here: those are per workspace, and this is the account's device registry. */
     sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
     version: string | null;
@@ -2861,22 +2940,27 @@ export class UserDO extends Agent<Env> {
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
       last_ip: string | null; last_agent: string | null; replaced_at: number | null;
-      revoked_at: number | null; unstopped_at: number | null;
-      tier: string | null; version: string | null; update_check: number | null;
+      revoked_at: number | null; unstopped_at: number | null; reuse_detected_at: number | null;
+      tier: string | null; version: string | null; update_check: number | null; consented_root: string | null;
     }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
-               d.last_ip, d.last_agent, d.replaced_at, d.revoked_at, d.unstopped_at,
+               d.last_ip, d.last_agent, d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
+               d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
                b.version, b.update_check
           FROM user_devices d
           LEFT JOIN user_device_builds b ON b.device_id = d.id
-         WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL
+          LEFT JOIN (SELECT device_id, MAX(reuse_detected_at) AS reuse_detected_at
+                       FROM user_device_retired_tokens WHERE reuse_detected_at IS NOT NULL
+                      GROUP BY device_id) x ON x.device_id = d.id
+         WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL OR x.reuse_detected_at IS NOT NULL
          ORDER BY d.created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
         connected: r.revoked_at === null && this._devices.isConnected(r.id),
         createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
         lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
-        revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at,
+        revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at, reuseDetectedAt: r.reuse_detected_at,
+        wholeMachine: r.consented_root === '/',
         sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
         version: r.version,
         servedVersion: served,
@@ -3055,27 +3139,42 @@ export class UserDO extends Agent<Env> {
     // permissions.
     this.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
     this._devices.close(deviceId, 'device revoked');
+    this.deleteRevokedDeviceWithoutIncident(deviceId);
 
     return { ok: true, unstoppedCommands };
   }
 
-  /**
-   * Owner acknowledges the revocation incident; only this or deleting the device row may clear it.
-   * Refused while unsettled request rows remain, since the sweep has not finished deciding.
-   */
+  private deleteRevokedDeviceWithoutIncident(deviceId: string): boolean {
+    return this.sqlx<{ id: string }>(
+      `DELETE FROM user_devices
+        WHERE id = ? AND revoked_at IS NOT NULL AND unstopped_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM user_device_retired_tokens
+                           WHERE device_id = user_devices.id AND reuse_detected_at IS NOT NULL)
+        RETURNING id`,
+      deviceId,
+    ).length === 1;
+  }
+
+  /** Clears a revoked device's incidents, removing its row. Refused while request rows remain: the
+   *  sweep has not decided. */
   async acknowledgeUnstoppedDevice(caller: UserCaller, deviceId: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.manage');
 
     if (this._inflight.hasRequestsFor(deviceId)) return { ok: false };
 
-    const cleared = this.sqlx<{ id: string }>(
-      `UPDATE user_devices SET unstopped_at = NULL
-        WHERE id = ? AND revoked_at IS NOT NULL AND unstopped_at IS NOT NULL
-        RETURNING id`,
+    const [incident] = this.sqlx<{ id: string }>(
+      `SELECT id FROM user_devices d
+        WHERE id = ? AND revoked_at IS NOT NULL
+          AND (unstopped_at IS NOT NULL OR EXISTS (SELECT 1 FROM user_device_retired_tokens r
+                                                    WHERE r.device_id = d.id AND r.reuse_detected_at IS NOT NULL))`,
       deviceId,
     );
 
-    return { ok: cleared.length === 1 };
+    if (!incident) return { ok: false };
+    this.sqlx(`DELETE FROM user_device_retired_tokens WHERE device_id = ?`, deviceId);
+    this.sqlx(`UPDATE user_devices SET unstopped_at = NULL WHERE id = ?`, deviceId);
+
+    return { ok: this.deleteRevokedDeviceWithoutIncident(deviceId) };
   }
 
   async upsertReleaseSource(caller: UserCaller, input: ReleaseSourceInput & { id?: string }): Promise<ReleaseSource> {
@@ -3398,10 +3497,8 @@ export class UserDO extends Agent<Env> {
     this.dropCredential(key);
   }
 
-  /**
-   * Re-seals unenveloped or retired-key rows under the current key once per instance; skipped when
-   * the `user_schema_meta` marker matches. Unopenable rows are left so only that credential fails.
-   */
+  /** Re-seals retired-key rows and a never-sealed store's plaintext once per instance, unless the
+   *  marker matches. Unopenable rows are left so only that credential fails. */
   private rewrapCredentials(): Promise<void> {
     this._credentialsRewrapped ??= (async () => {
       const cipher = await this.cipher();
@@ -3413,13 +3510,18 @@ export class UserDO extends Agent<Env> {
       if (marker?.value === cipher.keyId) return;
       let clean = true;
 
+      // Only a never-sealed store holds pre-encryption rows.
+      const reopen = (aad: string, stored: string): Promise<string> => (
+        marker === undefined && !isSealedCredential(stored) ? Promise.resolve(stored) : cipher.open(aad, stored)
+      );
+
       for (const row of this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
         const aad = this.credentialAad(row.key);
 
         try {
           this.sqlx(
             `UPDATE user_credentials SET value = ? WHERE key = ?`,
-            await cipher.seal(aad, await cipher.open(aad, row.value)), row.key,
+            await cipher.seal(aad, await reopen(aad, row.value)), row.key,
           );
         } catch (err) {
           clean = false;
@@ -3439,7 +3541,7 @@ export class UserDO extends Agent<Env> {
         try {
           this.sqlx(
             `UPDATE user_mcp_servers SET headers = ? WHERE id = ?`,
-            await cipher.seal(aad, await cipher.open(aad, row.headers)), row.id,
+            await cipher.seal(aad, await reopen(aad, row.headers)), row.id,
           );
         } catch (err) {
           clean = false;

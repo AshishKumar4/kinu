@@ -7,6 +7,8 @@ export const DEFAULT_CHECKPOINT_KEEP = 50;
 
 export const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
 
+export const CHECKPOINTS_NO_DEVICE = 'no device connected — connect one with `kinu connect`';
+
 export interface CheckpointTurnMeta {
   turnId: string;
   sessionId: string;
@@ -67,6 +69,18 @@ export const CHECKPOINTS_UNCONFIGURED = 'checkpoints are not configured for this
 
 export function checkpointAvailability(reads: FileCheckpointReads | null): Promise<CheckpointAvailability> {
   return reads === null ? Promise.resolve({ available: false, reason: CHECKPOINTS_UNCONFIGURED }) : reads.status();
+}
+
+export function deviceHistoryNote(listing: FileCheckpointListing): string | null {
+  const { availability, entries } = listing;
+
+  if (!availability.available) {
+    if (availability.reason === CHECKPOINTS_NO_DEVICE) return null;
+
+    return `Your device keeps no file history for this turn (${availability.reason ?? 'unavailable'}), so its files cannot be restored.`;
+  }
+
+  return entries.length === 0 ? 'This turn changed no files on your devices, so there is nothing to restore.' : null;
 }
 
 export async function fileCheckpointListing(

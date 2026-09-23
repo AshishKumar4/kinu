@@ -205,7 +205,7 @@ const COMMANDS = Object.freeze([
   // Merely quotes a dangerous command; never gated (the binary is `grep`).
   'grep -rn "rm -rf" scripts/',
   // …unless an interpreter is the one being handed the program.
-  'bash -c "rm -rf /home/user/work"',
+  'bash -c "rm -rf /home/main/work"',
 ]);
 
 /** Safety-gate probes run every command against both; the pair must disagree where it should. */

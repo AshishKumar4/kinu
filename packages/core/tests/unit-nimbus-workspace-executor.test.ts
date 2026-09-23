@@ -115,13 +115,13 @@ describe('hosted Nimbus workspace provider', () => {
 
     const plane = present(provider.files, 'the workspace file plane');
 
-    await plane.writeFile('/home/user/proof.txt', 'same bytes');
-    expect(await plane.stat('/home/user/proof.txt')).toEqual({
+    await plane.writeFile('/home/main/proof.txt', 'same bytes');
+    expect(await plane.stat('/home/main/proof.txt')).toEqual({
       size: 10,
       mtimeMs: 1,
       isDir: false,
     });
-    expect(await provider.tools.exec.execute('cat /home/user/proof.txt')).toBe('same bytes');
+    expect(await provider.tools.exec.execute('cat /home/main/proof.txt')).toBe('same bytes');
 
     const started = toolText(await provider.tools.startProcess.execute('node server.js'));
     expect(started).toContain('pid=41');
@@ -153,13 +153,13 @@ describe('hosted Nimbus workspace provider', () => {
       };
     };
 
-    const bytes = await nimbusSessionFiles(box).readRange('/home/user/large.png', 0, 512 * 1024);
+    const bytes = await nimbusSessionFiles(box).readRange('/home/main/large.png', 0, 512 * 1024);
 
     expect(bytes).toEqual(expected);
     // Path/offset/length travel only in the reader's JSON env, never interpolated into shell text.
     expect(requestEnv).toBeDefined();
     const payload = Object.values(requestEnv ?? {})[0] ?? '';
-    expect(payload).toContain('"path":"/home/user/large.png"');
+    expect(payload).toContain('"path":"/home/main/large.png"');
     expect(payload).toContain('"offset":0');
     expect(payload).toContain('"length":524288');
   });
@@ -414,17 +414,17 @@ describe('the embedded workspace removes a tree natively', () => {
 
     try {
       // `/home` is outside the kernel's in-memory nodes.
-      await bundle.vfs.mkdir('home/user/tree/a/b', { recursive: true });
-      await bundle.vfs.writeFile('home/user/tree/a/b/leaf.txt', 'leaf');
-      await bundle.vfs.writeFile('home/user/tree/top.txt', 'top');
-      await bundle.vfs.writeFile('home/user/keep.txt', 'keep');
+      await bundle.vfs.mkdir('home/main/tree/a/b', { recursive: true });
+      await bundle.vfs.writeFile('home/main/tree/a/b/leaf.txt', 'leaf');
+      await bundle.vfs.writeFile('home/main/tree/top.txt', 'top');
+      await bundle.vfs.writeFile('home/main/keep.txt', 'keep');
 
-      await bundle.vfs.removeRecursive('home/user/tree');
+      await bundle.vfs.removeRecursive('home/main/tree');
 
-      expect(await bundle.vfs.exists('home/user/tree')).toBe(false);
-      expect(await bundle.vfs.exists('home/user/tree/a/b/leaf.txt')).toBe(false);
-      expect(await bundle.vfs.readFile('home/user/keep.txt', { encoding: 'utf8' })).toBe('keep');
-      await expect(bundle.vfs.removeRecursive('home/user/tree')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(await bundle.vfs.exists('home/main/tree')).toBe(false);
+      expect(await bundle.vfs.exists('home/main/tree/a/b/leaf.txt')).toBe(false);
+      expect(await bundle.vfs.readFile('home/main/keep.txt', { encoding: 'utf8' })).toBe('keep');
+      await expect(bundle.vfs.removeRecursive('home/main/tree')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
     } finally {
       await bundle.destroy();
       database.close();
@@ -436,10 +436,10 @@ describe('the workspace generation is fabric\u2019s counter over one row', () =>
   test('each open of the same database adopts the next generation, and the pid floor follows it', async () => {
     const database = new Database(':memory:');
     const first = createWorkspaceBundle(database);
-    const firstPid = (await first.session()).processes.spawn('probe', [], '/home/user').pid;
+    const firstPid = (await first.session()).processes.spawn('probe', [], '/home/main').pid;
     // A second open models eviction and restart: pids must not repeat.
     const second = createWorkspaceBundle(database);
-    const secondPid = (await second.session()).processes.spawn('probe', [], '/home/user').pid;
+    const secondPid = (await second.session()).processes.spawn('probe', [], '/home/main').pid;
 
     expect(firstPid).toBeGreaterThan(1_000_000);
     expect(secondPid).toBeGreaterThan(firstPid + 1_000_000 - 1);

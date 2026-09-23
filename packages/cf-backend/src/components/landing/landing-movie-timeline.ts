@@ -215,9 +215,9 @@ function messagesAt(t: number): UIMessage[] {
   if (t >= MOVIE_CUES.approvedText) build.push({ type: 'text', text: APPROVED_TEXT });
 
   for (const [id, path, startAt, doneAt] of [
-    ['movie-manifest', '/home/user/slates/support-queue/package.json', MOVIE_CUES.manifestStart, MOVIE_CUES.manifestDone],
-    ['movie-server', '/home/user/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
-    ['movie-client', '/home/user/slates/support-queue/client.tsx', MOVIE_CUES.clientStart, MOVIE_CUES.clientDone],
+    ['movie-manifest', '/home/main/slates/support-queue/package.json', MOVIE_CUES.manifestStart, MOVIE_CUES.manifestDone],
+    ['movie-server', '/home/main/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
+    ['movie-client', '/home/main/slates/support-queue/client.tsx', MOVIE_CUES.clientStart, MOVIE_CUES.clientDone],
   ] as const) {
     const write = toolPart(t, {
       tool: 'file', id, startAt, doneAt,

@@ -322,7 +322,7 @@ through `LOADER` (`@cloudflare/codemode`). The CLI evaluates in-process through
 
 ### Slates
 
-A slate is an authored project under `/home/user/slates/<id>/`. For the default
+A slate is an authored project under `/home/main/slates/<id>/`. For the default
 `worker` runtime, `package.json` `main` names the module that exports
 `class Slate extends SlateObject` from `kinu:slate`; every public method is
 callable from the client. A `node` runtime instead names a server `slate.port`
@@ -456,7 +456,7 @@ what hosted execution can do. Local execution uses the workspace process.
 prompt lists, and defaults to `workspace`. `sandbox` and each device have
 separate files; each device mounts at `/pc/<name>`. `ExecutionRouter` has no
 fallback: an absent runtime returns `runtime_not_provisioned`. Relative paths
-resolve against `WORKSPACE_ROOT`, `/home/user`. Containers receive
+resolve against `WORKSPACE_ROOT`, `/home/main`. Containers receive
 `/workspace`.
 
 `shell`, `eval`, and resumable `agents` spawns can run in the background.

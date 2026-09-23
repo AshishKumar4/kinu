@@ -120,4 +120,4 @@ export { sandboxFiles } from './sandbox';
 export { nimbusSessionFiles } from './nimbus';
 
 
-export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor';
+export { deviceFiles, type DeviceFileConsent, type DeviceFileScope } from './device-tunnel-executor';

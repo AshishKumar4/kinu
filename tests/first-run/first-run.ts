@@ -99,6 +99,7 @@ export const FIRST_RUN_CASES = [
   'agent-tab',
   'agent-chats-persist',
   'deploy-door',
+  'capability-isolation',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -224,7 +225,9 @@ export const FIRST_RUN_DEFECTS = {
     found: 'A public live share under a cut admitting one read member answered the read, refused the mutation with the grant code, left no owner-side effect, and refused an agent-namespace call outright.',
     missedBecause: 'Unit and harness proofs cover the grant cut and the agent refusal in isolation; nothing drove the share origin signed out and read the owner tree plus the audit row for the same episode.',
     provedRedAt: null,
-    redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation.',
+    redDirection: 'Green requires the share op to answer a URL a signed-out fetch serves, probe() to answer, mutate() to refuse denied with no mark file on the owner side, ctrl() on an agents-namespace slate to refuse denied, and the audit to record the admitted read and the refused mutation. '
+      + 'No deployed build carried a hole and there is no staging, so the red direction is proved at the grant itself: '
+      + '`grantAdmits` admitting every member lets the viewer\'s mutate() run in packages/cf-backend/tests/workerd/slate-share.test.ts.',
   },
   'blueprint-fork': {
     id: 'blueprint-fork',
@@ -414,6 +417,21 @@ export const FIRST_RUN_DEFECTS = {
       + 'row fails on the shape while the page still renders. The first deployed run of this '
       + 'tier is what turns that into a measurement.',
   },
+  'capability-isolation': {
+    id: 'capability-isolation',
+    found: 'The owner asked for an object-capability model and a security verdict on it: one forbidden '
+      + 'operation, tried through native tools, codemode, a child agent and a slate, refused on all four '
+      + 'paths. No run had tried the same operation through all four on the product.',
+    missedBecause: 'each path is proved on its own tier: bun drives the web tool and a hired child\'s, '
+      + 'workerd drives `eval` and a slate\'s global fetch. A deployment whose eval sandbox or slate '
+      + 'loader was composed without the egress binding would pass every one of them.',
+    provedRedAt: null,
+    redDirection: 'A planted hole cannot be deployed, and there is no staging. The red direction is '
+      + 'proved at each enforcement point on the tier that hosts it: `assertSafeUrl` skipped in '
+      + '`web/provider.ts` turns packages/cf-backend/tests/unit-capability-isolation.test.ts red on '
+      + 'both web paths, and `refusedHostname` skipped in `codemode-egress.ts` turns the workerd '
+      + 'codemode-sandbox and slate-egress rows red.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -526,6 +544,7 @@ const SHORT_SUBJECT = {
   'agent-tab': 'tab',
   'agent-chats-persist': 'chats',
   'deploy-door': 'door',
+  'capability-isolation': 'isolation',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

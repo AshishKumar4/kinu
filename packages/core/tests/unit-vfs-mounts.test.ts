@@ -6,7 +6,7 @@ import type { VFS, VfsRevision } from '../src/types/primitives';
 import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
-import { deviceFiles, type DeviceTransport } from '../src/execution/device-tunnel-executor';
+import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 
 /** readdir returns entry names and stat distinguishes dirs, so walkRecursive crosses it; a miss throws the
@@ -191,24 +191,22 @@ describe('the workspace plane mount table', () => {
 		const machine = {
 			'/home/dev/notes.txt': 'consented',
 			'/etc/secrets.key': 'outside',
+			'/tmp/kinu-tool-output/device-rpc-1.stdout.log': 'spilled',
 		};
 
-		let unconfined = false;
+		let scope: DeviceFileScope = 'root';
 
 		const transport: DeviceTransport = {
 			status: () => ({ connected: true, registered: true, toolchain: null }),
 			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
 			rpc: async (method, params) => {
 				const path = v.parse(v.string(), params[0]);
-				let content: string | undefined;
+				const content = Object.entries(machine).find(([file]) => file === path)?.[1];
 
-				if (path === '/home/dev/notes.txt') content = machine['/home/dev/notes.txt'];
-				else if (path === '/etc/secrets.key') content = machine['/etc/secrets.key'];
-
-				if (method === 'readFile') {
+				if (method === 'readRange') {
 					if (content === undefined) throw new Error(`ENOENT: ${path}`);
 
-					return content;
+					return { encoding: 'base64', content: Buffer.from(content).toString('base64') };
 				}
 
 				if (method === 'listFiles') return Object.keys(machine).filter((p) => p.startsWith(`${path}/`));
@@ -221,21 +219,29 @@ describe('the workspace plane mount table', () => {
 		const view = deviceFiles(transport, {
 			consentedRoot: async () => '/home/dev',
 			deviceHome: async () => '/home/dev',
-			unconfined: async () => unconfined,
+			scope: async () => scope,
 		});
 
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', view)]);
+		const spill = '/pc/tmp/kinu-tool-output/device-rpc-1.stdout.log';
 
 		expect(await mounted.readFile('/pc/home/dev/notes.txt', { encoding: 'utf8' })).toBe('consented');
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toMatchObject({
 			code: 'EACCES',
 			path: '/etc/secrets.key',
 		});
+		await expect(mounted.readFile(spill)).rejects.toMatchObject({ code: 'EACCES' });
 
-		unconfined = true;
+		// Sandboxed, the daemon maps /tmp to the agent's own temp directory, where a long command's
+		// whole output is saved, so the view reaches it too; nothing else outside the folder.
+		scope = 'sandboxed';
+		expect(await mounted.readFile(spill, { encoding: 'utf8' })).toBe('spilled');
+		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(/outside the consented device directory/);
+
+		scope = 'unconfined';
 		expect(await mounted.readFile('/pc/etc/secrets.key', { encoding: 'utf8' })).toBe('outside');
 
-		unconfined = false;
+		scope = 'root';
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(
 			/outside the consented device directory/,
 		);

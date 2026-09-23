@@ -516,7 +516,7 @@ refusal, shared reads, binary transfer, and reset recovery.
 0 failures. It covers local dispatch, absent-host behavior, and a runtime
 reset that retains the node home and private temporary files.
 
-The main agent keeps `HOME=/home/user` and uses `TMPDIR=/tmp/main`.
+The main agent keeps `HOME=/home/main` and uses `TMPDIR=/tmp/main`.
 Workspace boot provisions its temporary directory before commands run.
 A bare `/tmp` resolves to each agent's own temporary directory on both
 backends. Hosted actors ask the workspace owner to register their mappings.

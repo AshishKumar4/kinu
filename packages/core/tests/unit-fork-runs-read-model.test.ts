@@ -103,7 +103,7 @@ describe('a run carries a name', () => {
   test('the name the caller gave is what the run is called', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearchRun(db, actorId, {
-      rootId: 'r-named', task: 'Security and code audit of the repo at /home/user/kinu — a self-evolving agent runtime',
+      rootId: 'r-named', task: 'Security and code audit of the repo at /home/main/kinu — a self-evolving agent runtime',
       at: 1000, branches: 3, name: 'repo audit', ledger: 'converged',
     });
     expect(readForkRun(sql, actor, 'r-named')?.name).toBe('repo audit');

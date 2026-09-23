@@ -83,7 +83,11 @@ A workspace holds the state. Agents are the actors that work inside it.
   the directory on the agent's ref (`CLIRuntimeConfig.cwd`, never
   `process.cwd()`). With no directory bound, both planes are the one in-SQLite
   tree an isolated fixture or eval episode gets. Relative paths resolve at
-  `/home/user` (`WORKSPACE_ROOT`, `packages/core/src/vfs/workspace-path.ts:2`).
+  `/home/main` (`WORKSPACE_ROOT`, `packages/core/src/vfs/workspace-path.ts:2`). A
+  workspace made when the root was `/home/user` has its tree moved there on its
+  first boot, and `/home/user` stays a link to `/home/main`, so a path written
+  before still reaches its file (`settleWorkspaceRoot`, `core/src/vfs/agent-home.ts`).
+  `git clone` refuses a destination reached through that link; name `/home/main`.
   The mount table adds each connected device at `/pc/<name>`, a container at
   `/sandbox`, and each actor's own working context at `/context`.
 
@@ -186,7 +190,7 @@ A workspace holds the state. Agents are the actors that work inside it.
     the spec for the six axes, presets, report contract and isolation states.
 
     Only the workspace tree is one view. A path under the workspace root,
-    relative or under `/home/user`, names the same file on every surface
+    relative or under `/home/main`, names the same file on every surface
     (measured 2026-09-05 in both directions). A path at the filesystem root
     outside it does not: the shell and the file surface keep separate roots
     there, and each hides the other's root writes.

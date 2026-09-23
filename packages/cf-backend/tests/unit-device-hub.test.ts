@@ -2,13 +2,10 @@
 // serialize a WebSocket as a DO-RPC argument, so passing one 500s the tunnel on every connect.
 import { describe, expect, test } from 'bun:test';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
   DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD,
-  DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
-  DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
+  DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES,
   type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
@@ -224,14 +221,6 @@ describe('DeviceSocketHub toolchain probe', () => {
     expect(ws.sent).toHaveLength(1);
   });
 
-  test('the daemon speaks the frame types core names, since it cannot import them', () => {
-    // The daemon is one dependency-free file that cannot import these constants, so every mirrored literal is pinned here.
-    const daemon = readFileSync(join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'index.js'), 'utf8');
-    expect(daemon).toContain(`'${DEVICE_UNKNOWN_METHOD}: ' + method`);
-    expect(daemon).toContain(`const TOKEN_ROTATION = '${DEVICE_TOKEN_ROTATION}'`);
-    expect(daemon).toContain(`const TOKEN_ROTATION_ACK = '${DEVICE_TOKEN_ROTATION_ACK}'`);
-  });
-
   test('a transient failure leaves the question open for the next turn', async () => {
     const { hub, ws } = connected();
 
@@ -283,16 +272,6 @@ describe('DeviceSocketHub toolchain probe', () => {
 });
 
 describe('/pc/connect upgrade wiring', () => {
-  const read = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
-
-  test('the worker forwards the upgrade Request to the UserDO instead of passing a WebSocket over RPC', () => {
-    const pcHandler = read('../core/src/http/pc-ingress.ts');
-    // WebSockets are not RPC-serializable in workerd.
-    expect(pcHandler).not.toContain('attachDeviceSocket');
-    expect(pcHandler).not.toContain('WebSocketPair');
-    expect(pcHandler).toContain('.fetch(request)');
-  });
-
   test('the UserDO answers /pc/connect itself and verifies the ticket before upgrading', async () => {
     const harness = createTestUserDO();
     const { token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');

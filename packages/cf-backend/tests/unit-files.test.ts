@@ -55,7 +55,7 @@ describe("writeExecutorFileOp", () => {
       exists: async (path) => written.has(path),
     };
 
-    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
+    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
 
     return { deps, written };
   }
@@ -75,8 +75,8 @@ describe("writeExecutorFileOp", () => {
     expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", { bytes: bin })).toEqual({ ok: true });
     expect(written.get("/workspace/logo.png")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", { bytes: bin })).toEqual({ ok: true });
-    expect(written.get("/home/user/a.bin")).toEqual(bin);
+    expect(await writeExecutorFileOp(deps, "nimbus", "/home/main/a.bin", { bytes: bin })).toEqual({ ok: true });
+    expect(written.get("/home/main/a.bin")).toEqual(bin);
 
     expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", { bytes: bin })).toEqual({ ok: true });
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
@@ -179,103 +179,103 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
     }
     : {};
 
-  const deps = { getProvider: () => ({ files: { ...vfs, ...native }, homeDir: async () => "/home/user" }) };
+  const deps = { getProvider: () => ({ files: { ...vfs, ...native }, homeDir: async () => "/home/main" }) };
 
   return { deps, files, dirs, renames, removed };
 }
 
 describe("renameExecutorPathOp", () => {
   test("uses the plane's native rename where it declares one", async () => {
-    const { deps, renames } = makeTree({ "/home/user/a.txt": "x" }, { native: true });
-    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    const { deps, renames } = makeTree({ "/home/main/a.txt": "x" }, { native: true });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/main/a.txt", "/home/main/b.txt");
     expect(out).toEqual({ ok: true });
-    expect(renames).toEqual([["/home/user/a.txt", "/home/user/b.txt"]]);
+    expect(renames).toEqual([["/home/main/a.txt", "/home/main/b.txt"]]);
   });
 
   test("carries a file's bytes on a plane with no native rename", async () => {
-    const { deps, files } = makeTree({ "/home/user/a.txt": "carried" });
-    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    const { deps, files } = makeTree({ "/home/main/a.txt": "carried" });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/main/a.txt", "/home/main/b.txt");
     expect(out).toEqual({ ok: true });
-    expect(files.get("/home/user/b.txt")).toBe("carried");
-    expect(files.has("/home/user/a.txt")).toBe(false);
+    expect(files.get("/home/main/b.txt")).toBe("carried");
+    expect(files.has("/home/main/a.txt")).toBe(false);
   });
 
   test("refuses a directory where only bytes could carry it", async () => {
-    const { deps, files } = makeTree({ "/home/user/src/app.ts": "export {};" });
-    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/src", "/home/user/moved");
+    const { deps, files } = makeTree({ "/home/main/src/app.ts": "export {};" });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/main/src", "/home/main/moved");
     expect("error" in out && out.error).toContain("directory");
-    expect(files.has("/home/user/src/app.ts")).toBe(true);
+    expect(files.has("/home/main/src/app.ts")).toBe(true);
   });
 
   test("never overwrites: an existing target is a stated refusal", async () => {
-    const { deps, files } = makeTree({ "/home/user/a.txt": "keep me", "/home/user/b.txt": "target" }, { native: true });
-    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    const { deps, files } = makeTree({ "/home/main/a.txt": "keep me", "/home/main/b.txt": "target" }, { native: true });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/main/a.txt", "/home/main/b.txt");
     expect("error" in out && out.error).toContain("already exists");
-    expect(files.get("/home/user/b.txt")).toBe("target");
+    expect(files.get("/home/main/b.txt")).toBe("target");
   });
 
   test("a missing source is a typed error, not a throw", async () => {
     const { deps } = makeTree({});
-    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/gone.txt", "/home/user/b.txt");
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/main/gone.txt", "/home/main/b.txt");
     expect("error" in out).toBe(true);
   });
 
   test("a carry that cannot destroy the source leaves ONE name, not two", async () => {
     // KINU-013: a rename either happened or did not; a failed unlink removes the carry's copy.
-    const { deps, files } = makeTree({ "/home/user/a.txt": "carried" }, { unlinkFails: /a\.txt$/ });
-    const out = await renameExecutorPathOp(deps, "workspace", "/home/user/a.txt", "/home/user/b.txt");
+    const { deps, files } = makeTree({ "/home/main/a.txt": "carried" }, { unlinkFails: /a\.txt$/ });
+    const out = await renameExecutorPathOp(deps, "workspace", "/home/main/a.txt", "/home/main/b.txt");
     expect("error" in out).toBe(true);
-    expect(files.get("/home/user/a.txt")).toBe("carried");
-    expect(files.has("/home/user/b.txt")).toBe(false);
+    expect(files.get("/home/main/a.txt")).toBe("carried");
+    expect(files.has("/home/main/b.txt")).toBe(false);
   });
 });
 
 describe("deleteExecutorPathOp", () => {
   test("a file is one unlink", async () => {
-    const { deps, files } = makeTree({ "/home/user/a.txt": "x" });
-    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/a.txt");
+    const { deps, files } = makeTree({ "/home/main/a.txt": "x" });
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/main/a.txt");
     expect(out).toEqual({ ok: true });
-    expect(files.has("/home/user/a.txt")).toBe(false);
+    expect(files.has("/home/main/a.txt")).toBe(false);
   });
 
   test("a directory uses the native tree removal where one exists", async () => {
-    const { deps, removed } = makeTree({ "/home/user/build/out.js": "x" }, { native: true });
-    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
+    const { deps, removed } = makeTree({ "/home/main/build/out.js": "x" }, { native: true });
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/main/build");
     expect(out).toEqual({ ok: true });
-    expect(removed).toEqual(["/home/user/build"]);
+    expect(removed).toEqual(["/home/main/build"]);
   });
 
   test("a directory on a plane without native removal goes entry by entry", async () => {
     const { deps, files, dirs } = makeTree({
-      "/home/user/build/out.js": "x",
-      "/home/user/build/deep/two.js": "y",
+      "/home/main/build/out.js": "x",
+      "/home/main/build/deep/two.js": "y",
     });
 
-    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/main/build");
     expect(out).toEqual({ ok: true });
     expect(files.size).toBe(0);
-    expect(dirs.has("/home/user/build")).toBe(false);
+    expect(dirs.has("/home/main/build")).toBe(false);
   });
 
   test("a tree removal that fails mid-tree reports what was removed and what remains", async () => {
     // KINU-013: removal fails closed and the refusal carries both entry sets.
     const { deps, files, dirs } = makeTree({
-      "/home/user/build/out.js": "x",
-      "/home/user/build/deep/two.js": "y",
+      "/home/main/build/out.js": "x",
+      "/home/main/build/deep/two.js": "y",
     }, { unlinkFails: /deep$/ });
 
-    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/main/build");
 
     expect("ok" in out).toBe(false);
-    expect("error" in out && out.error).toContain("/home/user/build/deep");
+    expect("error" in out && out.error).toContain("/home/main/build/deep");
     expect("error" in out && out.error).toContain("still present");
     expect(out).toMatchObject({
-      removed: ["/home/user/build/deep/two.js"],
-      remaining: ["/home/user/build/deep", "/home/user/build/out.js", "/home/user/build"],
+      removed: ["/home/main/build/deep/two.js"],
+      remaining: ["/home/main/build/deep", "/home/main/build/out.js", "/home/main/build"],
     });
-    expect(files.has("/home/user/build/deep/two.js")).toBe(false);
-    expect(dirs.has("/home/user/build/deep")).toBe(true);
-    expect(files.has("/home/user/build/out.js")).toBe(true);
+    expect(files.has("/home/main/build/deep/two.js")).toBe(false);
+    expect(dirs.has("/home/main/build/deep")).toBe(true);
+    expect(files.has("/home/main/build/out.js")).toBe(true);
   });
 
   test("a missing path and the root both refuse", async () => {
@@ -289,32 +289,32 @@ describe("readExecutorFileBytes", () => {
   test("binary bytes round-trip untouched — the text viewer's refusal does not apply here", async () => {
     const { deps } = makeTree({});
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]);
-    await writeExecutorFileOp(deps, "workspace", "/home/user/blob.bin", { bytes: bytes });
-    const out = await readExecutorFileBytes(deps, "workspace", "/home/user/blob.bin");
+    await writeExecutorFileOp(deps, "workspace", "/home/main/blob.bin", { bytes: bytes });
+    const out = await readExecutorFileBytes(deps, "workspace", "/home/main/blob.bin");
 
     if ("error" in out) throw new Error(out.error);
     expect([...out.bytes]).toEqual([...bytes]);
   });
 
   test("a string-answering plane still yields bytes", async () => {
-    const { deps } = makeTree({ "/home/user/notes.md": "text" });
-    const out = await readExecutorFileBytes(deps, "workspace", "/home/user/notes.md");
+    const { deps } = makeTree({ "/home/main/notes.md": "text" });
+    const out = await readExecutorFileBytes(deps, "workspace", "/home/main/notes.md");
 
     if ("error" in out) throw new Error(out.error);
     expect(new TextDecoder().decode(out.bytes)).toBe("text");
   });
 
   test("a directory refuses instead of answering garbage", async () => {
-    const { deps } = makeTree({ "/home/user/src/app.ts": "x" });
-    expect("error" in await readExecutorFileBytes(deps, "workspace", "/home/user/src")).toBe(true);
+    const { deps } = makeTree({ "/home/main/src/app.ts": "x" });
+    expect("error" in await readExecutorFileBytes(deps, "workspace", "/home/main/src")).toBe(true);
   });
 });
 
 describe("getExecutorFiles", () => {
   test("entries carry the stat they were typed from: kind, size and mtime", async () => {
-    const { deps } = makeTree({ "/home/user/notes.md": "12345" });
-    const out = await getExecutorFiles(deps, "workspace", "/home/user");
-    expect(out.path).toBe("/home/user");
+    const { deps } = makeTree({ "/home/main/notes.md": "12345" });
+    const out = await getExecutorFiles(deps, "workspace", "/home/main");
+    expect(out.path).toBe("/home/main");
     expect(out.entries).toEqual([
       { name: "notes.md", type: "file", size: 5, mtimeMs: 1_724_500_000_000 },
     ]);
@@ -326,23 +326,23 @@ describe("getExecutorFiles", () => {
     const root = await getExecutorFiles(deps, "workspace", "/");
     expect(root.entries).toEqual([{ name: "home", type: "dir" }]);
     const mid = await getExecutorFiles(deps, "workspace", "/home");
-    expect(mid.entries).toEqual([{ name: "user", type: "dir" }]);
-    const seeded = await getExecutorFiles(deps, "workspace", "/home/user");
+    expect(mid.entries).toEqual([{ name: "main", type: "dir" }]);
+    const seeded = await getExecutorFiles(deps, "workspace", "/home/main");
     expect(seeded.entries).toEqual([]);
   });
 });
 
 describe("inlineFileType", () => {
   test("the Files surface and HTTP route share image and PDF classification", () => {
-    expect(inlineFileType("/home/user/shot.PNG")).toBe("image/png");
-    expect(inlineFileType("/home/user/report.pdf")).toBe("application/pdf");
-    expect(inlineFileType("/home/user/readme.txt")).toBeUndefined();
+    expect(inlineFileType("/home/main/shot.PNG")).toBe("image/png");
+    expect(inlineFileType("/home/main/report.pdf")).toBe("application/pdf");
+    expect(inlineFileType("/home/main/readme.txt")).toBeUndefined();
   });
 });
 
 describe("fileResponseHeaders — the download route's security posture", () => {
   test("an image previews inline, nosniffed, under a sandbox CSP", () => {
-    const h = fileResponseHeaders("/home/user/shot.PNG", false);
+    const h = fileResponseHeaders("/home/main/shot.PNG", false);
     expect(h.get("content-type")).toBe("image/png");
     expect(h.get("content-disposition")).toContain("inline");
     expect(h.get("x-content-type-options")).toBe("nosniff");
@@ -350,20 +350,20 @@ describe("fileResponseHeaders — the download route's security posture", () => 
   });
 
   test("a PDF previews inline in the platform viewer without the sandbox CSP", () => {
-    const h = fileResponseHeaders("/home/user/report.pdf", false);
+    const h = fileResponseHeaders("/home/main/report.pdf", false);
     expect(h.get("content-type")).toBe("application/pdf");
     expect(h.get("content-disposition")).toContain("inline");
     expect(h.get("content-security-policy")).toBeNull();
   });
 
   test("anything else downloads as opaque bytes — html never renders on this origin", () => {
-    const h = fileResponseHeaders("/home/user/index.html", false);
+    const h = fileResponseHeaders("/home/main/index.html", false);
     expect(h.get("content-type")).toBe("application/octet-stream");
     expect(h.get("content-disposition")).toContain("attachment");
   });
 
   test("download=1 forces attachment even for an image, and the filename is carried encoded", () => {
-    const h = fileResponseHeaders("/home/user/résumé shot.png", true);
+    const h = fileResponseHeaders("/home/main/résumé shot.png", true);
     expect(h.get("content-type")).toBe("application/octet-stream");
     expect(h.get("content-disposition")).toContain("attachment");
     expect(h.get("content-disposition")).toContain(encodeURIComponent("résumé shot.png"));
@@ -447,17 +447,17 @@ describe("the file viewer's dispatch", () => {
     {
       name: "an image type opens in the image pane, whatever its extension case",
       kind: "image",
-      paths: ["/home/user/shot.png", "/home/user/SHOT.PNG", "/home/user/diagram.svg"],
+      paths: ["/home/main/shot.png", "/home/main/SHOT.PNG", "/home/main/diagram.svg"],
     },
     {
       name: "a PDF opens in the PDF pane",
       kind: "pdf",
-      paths: ["/home/user/paper.pdf"],
+      paths: ["/home/main/paper.pdf"],
     },
     {
       name: "everything else is read as text — including a file with no extension",
       kind: "text",
-      paths: ["/home/user/notes.md", "/home/user/Makefile", "/home/user/archive.tar.gz"],
+      paths: ["/home/main/notes.md", "/home/main/Makefile", "/home/main/archive.tar.gz"],
     },
   ] as const;
 
@@ -542,7 +542,7 @@ function makeCountingPlane(
     }
     : base;
 
-  return { deps: { getProvider: () => ({ files, homeDir: async () => "/home/user" }) }, asked };
+  return { deps: { getProvider: () => ({ files, homeDir: async () => "/home/main" }) }, asked };
 }
 
 const VIEW_CAP = 512 * 1024;
@@ -550,8 +550,8 @@ const VIEW_CAP = 512 * 1024;
 describe("readExecutorFile bounds the preview before it reads", () => {
   test("a text file under the cap carries its unsupported edit reason", async () => {
     const bytes = new TextEncoder().encode("# notes\nline two\n");
-    const { deps } = makeCountingPlane("/home/user/notes.md", bytes);
-    const result = await readExecutorFile(deps, "workspace", "/home/user/notes.md");
+    const { deps } = makeCountingPlane("/home/main/notes.md", bytes);
+    const result = await readExecutorFile(deps, "workspace", "/home/main/notes.md");
     expect(result).toMatchObject({
       content: "# notes\nline two\n",
       readOnlyReason: expect.stringContaining("cannot protect an in-place edit"),
@@ -560,8 +560,8 @@ describe("readExecutorFile bounds the preview before it reads", () => {
 
   test("a plane with a ranged read is asked for the cap, never the file", async () => {
     const big = new Uint8Array(VIEW_CAP * 4).fill(0x61);
-    const { deps, asked } = makeCountingPlane("/home/user/huge.log", big, { ranged: true });
-    const out = await readExecutorFile(deps, "workspace", "/home/user/huge.log");
+    const { deps, asked } = makeCountingPlane("/home/main/huge.log", big, { ranged: true });
+    const out = await readExecutorFile(deps, "workspace", "/home/main/huge.log");
     expect(out.truncated).toBe(true);
     expect(out.content?.length).toBe(VIEW_CAP);
     expect(asked).toEqual([{ op: "readRange", length: VIEW_CAP }]);
@@ -569,8 +569,8 @@ describe("readExecutorFile bounds the preview before it reads", () => {
 
   test("a plane WITHOUT one refuses an over-budget preview instead of fetching it", async () => {
     const big = new Uint8Array(VIEW_CAP * 4).fill(0x61);
-    const { deps, asked } = makeCountingPlane("/home/user/huge.log", big);
-    const out = await readExecutorFile(deps, "workspace", "/home/user/huge.log");
+    const { deps, asked } = makeCountingPlane("/home/main/huge.log", big);
+    const out = await readExecutorFile(deps, "workspace", "/home/main/huge.log");
     // Negative control: a plane with no prefix read refuses before any byte moves.
     expect(out.content).toBeUndefined();
     expect(out.error).toContain("no ranged read");
@@ -580,8 +580,8 @@ describe("readExecutorFile bounds the preview before it reads", () => {
 
   test("a plane WITHOUT one still previews a file its stat proved fits, read-only", async () => {
     const small = new TextEncoder().encode("small enough\n");
-    const { deps, asked } = makeCountingPlane("/home/user/small.txt", small);
-    const result = await readExecutorFile(deps, "workspace", "/home/user/small.txt");
+    const { deps, asked } = makeCountingPlane("/home/main/small.txt", small);
+    const result = await readExecutorFile(deps, "workspace", "/home/main/small.txt");
     expect(result).toMatchObject({
       content: "small enough\n",
       readOnlyReason: expect.stringContaining("cannot protect an in-place edit"),
@@ -590,8 +590,8 @@ describe("readExecutorFile bounds the preview before it reads", () => {
   });
 
   test("an unstatable file on a plane with no ranged read is refused, never guessed", async () => {
-    const { deps, asked } = makeCountingPlane("/home/user/opaque", new TextEncoder().encode("x"), { unstatable: true });
-    expect((await readExecutorFile(deps, "workspace", "/home/user/opaque")).error)
+    const { deps, asked } = makeCountingPlane("/home/main/opaque", new TextEncoder().encode("x"), { unstatable: true });
+    expect((await readExecutorFile(deps, "workspace", "/home/main/opaque")).error)
       .toContain("unknown size");
     expect(asked).toEqual([]);
   });
@@ -599,23 +599,23 @@ describe("readExecutorFile bounds the preview before it reads", () => {
   test("a binary file is refused off its BYTES, before any decode", async () => {
     const bin = new Uint8Array(VIEW_CAP * 2);
     bin.set([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d], 0);
-    const { deps, asked } = makeCountingPlane("/home/user/blob.dat", bin, { ranged: true });
-    expect(await readExecutorFile(deps, "workspace", "/home/user/blob.dat"))
+    const { deps, asked } = makeCountingPlane("/home/main/blob.dat", bin, { ranged: true });
+    expect(await readExecutorFile(deps, "workspace", "/home/main/blob.dat"))
       .toEqual({ error: "binary file — not previewable" });
     expect(asked).toEqual([{ op: "readRange", length: VIEW_CAP }]);
   });
 
   test("an image is refused by REPRESENTATION, with no read at all", async () => {
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const { deps, asked } = makeCountingPlane("/home/user/shot.PNG", png, { ranged: true });
-    const out = await readExecutorFile(deps, "workspace", "/home/user/shot.PNG");
+    const { deps, asked } = makeCountingPlane("/home/main/shot.PNG", png, { ranged: true });
+    const out = await readExecutorFile(deps, "workspace", "/home/main/shot.PNG");
     expect(out.error).toContain("image/png");
     expect(asked).toEqual([]);
   });
 
   test("a PDF takes the same representation refusal", async () => {
-    const { deps, asked } = makeCountingPlane("/home/user/report.pdf", new Uint8Array([0x25, 0x50]));
-    expect((await readExecutorFile(deps, "workspace", "/home/user/report.pdf")).error)
+    const { deps, asked } = makeCountingPlane("/home/main/report.pdf", new Uint8Array([0x25, 0x50]));
+    expect((await readExecutorFile(deps, "workspace", "/home/main/report.pdf")).error)
       .toContain("application/pdf");
     expect(asked).toEqual([]);
   });
@@ -624,18 +624,18 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     const text = "é".repeat(VIEW_CAP / 2);
     const bytes = new TextEncoder().encode(text);
     expect(bytes.byteLength).toBe(VIEW_CAP);
-    const { deps } = makeCountingPlane("/home/user/accents.txt", bytes, { ranged: true });
-    const out = await readExecutorFile(deps, "workspace", "/home/user/accents.txt");
+    const { deps } = makeCountingPlane("/home/main/accents.txt", bytes, { ranged: true });
+    const out = await readExecutorFile(deps, "workspace", "/home/main/accents.txt");
     expect(out.truncated).toBeUndefined();
     expect(out.content).toBe(text);
   });
 
   test("a directory is refused, and a missing path reports the plane's own failure", async () => {
-    const { deps } = makeTree({ "/home/user/src/app.ts": "x" });
-    expect((await readExecutorFile(deps, "workspace", "/home/user/src")).error)
+    const { deps } = makeTree({ "/home/main/src/app.ts": "x" });
+    expect((await readExecutorFile(deps, "workspace", "/home/main/src")).error)
       .toBe("path is a directory");
     // No proven size: a plane with no ranged read refuses rather than reading to find out.
-    expect((await readExecutorFile(deps, "workspace", "/home/user/gone.txt")).error)
+    expect((await readExecutorFile(deps, "workspace", "/home/main/gone.txt")).error)
       .toContain("unknown size");
   });
 });
@@ -649,13 +649,13 @@ describe("getExecutorFiles isolates one child's failure", () => {
       writeFile: async () => undefined,
       readdir: async () => names,
       stat: async (path) => {
-        if (path === `/home/user/${poisoned}`) {
+        if (path === `/home/main/${poisoned}`) {
           throw Object.assign(new Error(`${code}: the plane said so`), { code });
         }
 
-        if (path === "/home/user/alpha") return { size: 0, mtimeMs: 0, isDir: true };
+        if (path === "/home/main/alpha") return { size: 0, mtimeMs: 0, isDir: true };
 
-        if (path === "/home/user") return { size: 0, mtimeMs: 0, isDir: true };
+        if (path === "/home/main") return { size: 0, mtimeMs: 0, isDir: true };
 
         return { size: 7, mtimeMs: 42, isDir: false };
       },
@@ -664,11 +664,11 @@ describe("getExecutorFiles isolates one child's failure", () => {
       exists: async () => true,
     };
 
-    return { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
+    return { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
   }
 
   test("a child that VANISHED is a gap in the listing, not a failure of it", async () => {
-    const out = await getExecutorFiles(makePoisonedDir("ghost.txt"), "workspace", "/home/user");
+    const out = await getExecutorFiles(makePoisonedDir("ghost.txt"), "workspace", "/home/main");
     expect(out.error).toBeUndefined();
     expect(out.entries?.map((e) => e.name).sort())
       .toEqual(["alpha", "beta.txt", "ghost.txt"]);
@@ -682,7 +682,7 @@ describe("getExecutorFiles isolates one child's failure", () => {
   test("a child the plane REFUSED propagates — an outage is not a sizeless file", async () => {
     // A permission or I/O fault is an outage, not an entry with no metadata.
     for (const code of ["EACCES", "EIO"]) {
-      const out = await getExecutorFiles(makePoisonedDir("locked", code), "workspace", "/home/user");
+      const out = await getExecutorFiles(makePoisonedDir("locked", code), "workspace", "/home/main");
       expect(out.entries).toBeUndefined();
       expect(out.error).toContain(code);
     }
@@ -718,8 +718,8 @@ describe("getExecutorFiles isolates one child's failure", () => {
       exists: async () => true,
     };
 
-    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/user" }) };
-    const out = await getExecutorFiles(deps, "workspace", "/home/user");
+    const deps = { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
+    const out = await getExecutorFiles(deps, "workspace", "/home/main");
     expect(out.entries?.map((e) => e.name).sort()).toEqual(["a.txt", "b.txt", "c.txt", "d"]);
     expect(listings).toBe(1);
     // No per-child stat: on the container plane each one costs a full relisting of the parent.
@@ -731,42 +731,42 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
   const dirEntry = (name: string, mtimeMs: number) => ({ name, type: "dir" as const, size: 0, mtimeMs });
 
   test("a fresh listing installs itself", () => {
-    const next = nextTreeCache(new Map(), "/home/user", [dirEntry("src", 1)]);
-    expect(next.get("/home/user")?.entries).toEqual([dirEntry("src", 1)]);
+    const next = nextTreeCache(new Map(), "/home/main", [dirEntry("src", 1)]);
+    expect(next.get("/home/main")?.entries).toEqual([dirEntry("src", 1)]);
   });
 
   test("a child listed at a NEW revision is dropped with its whole subtree", () => {
     const before = new Map([
-      ["/home/user", { entries: [dirEntry("src", 1)], revision: "" }],
-      ["/home/user/src", { entries: [dirEntry("deep", 5)], revision: entryRevision(dirEntry("src", 1)) }],
-      ["/home/user/src/deep", { entries: [], revision: entryRevision(dirEntry("deep", 5)) }],
+      ["/home/main", { entries: [dirEntry("src", 1)], revision: "" }],
+      ["/home/main/src", { entries: [dirEntry("deep", 5)], revision: entryRevision(dirEntry("src", 1)) }],
+      ["/home/main/src/deep", { entries: [], revision: entryRevision(dirEntry("deep", 5)) }],
     ]);
 
-    const next = nextTreeCache(before, "/home/user", [dirEntry("src", 2)]);
-    expect(next.has("/home/user/src")).toBe(false);
-    expect(next.has("/home/user/src/deep")).toBe(false);
+    const next = nextTreeCache(before, "/home/main", [dirEntry("src", 2)]);
+    expect(next.has("/home/main/src")).toBe(false);
+    expect(next.has("/home/main/src/deep")).toBe(false);
   });
 
   test("NEGATIVE CONTROL: an unchanged child keeps its cached listing", () => {
     const src = dirEntry("src", 1);
 
     const before = new Map([
-      ["/home/user", { entries: [src], revision: "" }],
-      ["/home/user/src", { entries: [dirEntry("deep", 5)], revision: entryRevision(src) }],
+      ["/home/main", { entries: [src], revision: "" }],
+      ["/home/main/src", { entries: [dirEntry("deep", 5)], revision: entryRevision(src) }],
     ]);
 
-    const next = nextTreeCache(before, "/home/user", [src]);
-    expect(next.get("/home/user/src")?.entries).toEqual([dirEntry("deep", 5)]);
+    const next = nextTreeCache(before, "/home/main", [src]);
+    expect(next.get("/home/main/src")?.entries).toEqual([dirEntry("deep", 5)]);
   });
 
   test("a child the fresh listing no longer names is gone", () => {
     const before = new Map([
-      ["/home/user", { entries: [dirEntry("old", 1)], revision: "" }],
-      ["/home/user/old", { entries: [], revision: entryRevision(dirEntry("old", 1)) }],
+      ["/home/main", { entries: [dirEntry("old", 1)], revision: "" }],
+      ["/home/main/old", { entries: [], revision: entryRevision(dirEntry("old", 1)) }],
     ]);
 
-    const next = nextTreeCache(before, "/home/user", [dirEntry("new", 1)]);
-    expect(next.has("/home/user/old")).toBe(false);
+    const next = nextTreeCache(before, "/home/main", [dirEntry("new", 1)]);
+    expect(next.has("/home/main/old")).toBe(false);
   });
 
   test("an unrelated branch is untouched", () => {
@@ -774,7 +774,7 @@ describe("the tree cache is revalidated, not just keyed by path", () => {
       ["/other", { entries: [dirEntry("keep", 1)], revision: "" }],
     ]);
 
-    const next = nextTreeCache(before, "/home/user", []);
+    const next = nextTreeCache(before, "/home/main", []);
     expect(next.get("/other")?.entries).toEqual([dirEntry("keep", 1)]);
   });
 

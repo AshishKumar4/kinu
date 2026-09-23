@@ -497,8 +497,8 @@ describe('executor file plane', () => {
   /** Includes where the executor starts, which only the environment knows. */
   function router(files?: VFS) {
     const provider = files === undefined
-      ? { homeDir: async () => '/home/user' }
-      : { homeDir: async () => '/home/user', files };
+      ? { homeDir: async () => '/home/main' }
+      : { homeDir: async () => '/home/main', files };
 
     return { getProvider: (name: string) => (name === 'workspace' ? provider : undefined) };
   }
@@ -516,21 +516,21 @@ describe('executor file plane', () => {
 
   test('an empty path lists where the environment itself says it starts', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
 
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '');
-    expect(listed.path).toBe('/home/user');
+    expect(listed.path).toBe('/home/main');
     expect(listed.entries?.map((e) => e.name)).toContain('SOUL.md');
     db.close();
   });
 
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');
+    await rt.storage.vfs.writeFile('/home/main/SOUL.md', 'me');
     await rt.storage.vfs.writeFile('/home/SHARED', 's');
 
     // `..` from the agent's home is /home, not the filesystem root.
-    const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/user/..');
+    const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');
     expect(up.path).toBe('/home');
     expect(up.entries?.map((e) => e.name)).toContain('SHARED');
     db.close();
@@ -566,7 +566,7 @@ describe('executor file plane', () => {
     // A plane that can serve a prefix previews and truncates.
     const ranged = {
       getProvider: (name: string) => (name === 'workspace' ? {
-        homeDir: async () => '/home/user',
+        homeDir: async () => '/home/main',
         files: {
           ...rt.storage.vfs,
           readRange: async (path: string, offset: number, length: number) => {

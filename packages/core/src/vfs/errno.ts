@@ -33,8 +33,9 @@ export class VfsError extends Error {
     readonly code: VfsErrorCode,
     message: string,
     readonly path: string | undefined,
+    options?: ErrorOptions,
   ) {
-    super(`${code}: ${message}`);
+    super(`${code}: ${message}`, options);
     this.name = 'VfsError';
     this.errno = ERRNO[code];
   }
@@ -65,4 +66,23 @@ export function isVfsError<T>(error: T): error is T & VfsErrorLike {
   return error instanceof Error
     && 'code' in error
     && v.is(VfsErrorCodeSchema, error.code);
+}
+
+/** Node's wording per code. */
+const ERRNO_TEXT = {
+  EPERM: 'operation not permitted', ENOENT: 'no such file or directory', EIO: 'i/o error',
+  ENXIO: 'no such device or address', EACCES: 'permission denied', EEXIST: 'file already exists',
+  ENOTDIR: 'not a directory', EISDIR: 'illegal operation on a directory', ENOTEMPTY: 'directory not empty',
+  EROFS: 'read-only file system', ENOTSUP: 'operation not supported',
+} satisfies Readonly<Record<VfsErrorCode, string>>;
+
+/** Rethrows a vendor failure naming `absolute`: Nimbus names its storage key. */
+export async function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (!isVfsError(error)) throw error;
+
+    throw new VfsError(error.code, `${ERRNO_TEXT[error.code]}, ${syscall} '${absolute}'`, absolute, { cause: error });
+  }
 }

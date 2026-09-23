@@ -78,7 +78,7 @@ function workspaceBindings(): HostedWorkspaceEnv<string> {
   };
 }
 
-const SLATE_CWD = '/home/user/slates/a';
+const SLATE_CWD = '/home/main/slates/a';
 
 async function listen(workspace: HostedWorkspace, port: number, argv: string[], target: RouteableFacetTarget): Promise<number> {
   const session = await workspace.bundle.session();
@@ -151,8 +151,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await workspace.bundle.vfs.readFile('proof/from-shell.txt', { encoding: 'utf8' }))
       .toBe('from the shell');
 
-    expect(await box.files.read('/home/user/proof/from-shell.txt')).toBe('from the shell');
-    expect(await box.files.exists('/home/user/proof/from-vfs.txt')).toBe(true);
+    expect(await box.files.read('/home/main/proof/from-shell.txt')).toBe('from the shell');
+    expect(await box.files.exists('/home/main/proof/from-vfs.txt')).toBe(true);
   });
 
   test('a named durable shell keeps its own cwd, and siblings do not see it', async () => {
@@ -175,9 +175,9 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const alpha = workspace.box('subordinate:alpha');
     const beta = workspace.box('head:beta');
-    expect(await alpha.exec('cd /home/user/alpha')).toMatchObject({ exitCode: 0 });
-    expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/user/alpha\n' });
-    expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/user\n' });
+    expect(await alpha.exec('cd /home/main/alpha')).toMatchObject({ exitCode: 0 });
+    expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
+    expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/main\n' });
   });
 
   test('the workspace never reads a session binding out of env', async () => {
@@ -431,7 +431,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     kv.set('resident-launch:41', {
       pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
       recipe: {
-        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/home/user/slates/keeper', mainModule: 'runner.js',
+        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/home/main/slates/keeper', mainModule: 'runner.js',
         image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'],
       },
     });

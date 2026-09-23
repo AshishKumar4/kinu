@@ -182,13 +182,13 @@ describe('hosted workspace facets', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    await expect(hosted.box('red').exec('git clone https://example.invalid/hello.git /home/user/hello'))
+    await expect(hosted.box('red').exec('git clone https://example.invalid/hello.git /home/main/hello'))
       .rejects.toThrow('supervisor entrypoint');
   });
 
   test('git clone spawns one facet and lands bytes through supervisorOp', async () => {
     const actor = hostActor();
-    const clone = await actor.hosted.box('green').exec('git clone https://example.invalid/hello.git /home/user/hello');
+    const clone = await actor.hosted.box('green').exec('git clone https://example.invalid/hello.git /home/main/hello');
     const output = `${clone.stdout}${clone.stderr}`;
     expect(output).not.toContain(REFUSAL);
     expect(clone.exitCode).toBe(0);
@@ -216,8 +216,8 @@ describe('hosted workspace facets', () => {
 
     const session = await actor.hosted.bundle.session();
     const vfs = session.vfs.as(CRED_SESSION_USER);
-    expect(vfs.readFile('home/user/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
-    expect(vfs.readFile('home/user/hello/README.md')).toEqual(new TextEncoder().encode('# hello from the facet\n'));
+    expect(vfs.readFile('home/main/hello/.git/HEAD')).toEqual(new TextEncoder().encode('ref: refs/heads/main\n'));
+    expect(vfs.readFile('home/main/hello/README.md')).toEqual(new TextEncoder().encode('# hello from the facet\n'));
   });
 });
 

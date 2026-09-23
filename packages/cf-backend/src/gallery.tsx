@@ -22,6 +22,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -158,7 +159,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
       expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
-      replacedAt: null, revokedAt: null, unstoppedAt: null,
+      replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
   ],
@@ -170,7 +171,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -471,17 +472,19 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   }
 
   if (path === "/api/user/devices") {
+    if (frame === "devices-empty") return fixtureJson([]);
     const incident = localStorage.getItem("gallery-device-incident");
 
     if (incident === "acknowledged") return fixtureJson([]);
-    const revoked = incident === "revoked";
+    const revoked = incident === "revoked" || incident === "reused";
 
     return fixtureJson([
       {
         id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
-        revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+        revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
+        reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
         sandbox: {
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
@@ -491,7 +494,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
         lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
-        revokedAt: null, unstoppedAt: null,
+        revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
       }] : []),
     ]);
@@ -575,7 +578,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       connected: connectFixtureMode !== "stall",
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
       lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
-      revokedAt: null, unstoppedAt: null,
+      revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
   }
@@ -1417,7 +1420,7 @@ const REVERT_THREAD: UIMessage[] = [
   }),
 ];
 
-const REVERT_DEVICE_CONNECTED = new URLSearchParams(location.search).get("checkpoints") === "1";
+const REVERT_CHECKPOINTS = new URLSearchParams(location.search).get("checkpoints");
 
 const REVERT_CHECKPOINT: FileCheckpointEntry = {
   id: "c0ffee1", dir: "/pc/ashish-device/work/shop", at: NOW - 6 * 60e3,
@@ -1425,9 +1428,14 @@ const REVERT_CHECKPOINT: FileCheckpointEntry = {
 };
 
 /** Separate facts: an unreachable store says nothing about what a turn changed. */
-const REVERT_LISTING: FileCheckpointListing = REVERT_DEVICE_CONNECTED
-  ? { availability: { available: true }, entries: [REVERT_CHECKPOINT] }
-  : { availability: { available: false, reason: "no device connected — connect one with `kinu connect`" }, entries: [] };
+const REVERT_LISTINGS = new Map<string | null, FileCheckpointListing>([
+  ["1", { availability: { available: true }, entries: [REVERT_CHECKPOINT] }],
+  ["none", { availability: { available: true }, entries: [] }],
+  ["nogit", { availability: { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT }, entries: [] }],
+]);
+
+const REVERT_LISTING: FileCheckpointListing = REVERT_LISTINGS.get(REVERT_CHECKPOINTS)
+  ?? { availability: { available: false, reason: CHECKPOINTS_NO_DEVICE }, entries: [] };
 
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
@@ -4463,8 +4471,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
       { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
-    ["/home", [{ name: "user", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
-    ["/home/user", [
+    ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
+    ["/home/main", [
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
       { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
@@ -4472,8 +4480,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       { name: "notes.md", type: "file", size: 4_402, mtimeMs: NOW - 42e5 },
       { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
     ]],
-    ["/home/user/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
-    ["/home/user/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
     ["/sandbox", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/sandbox/workspace", [
       { name: "build.log", type: "file", size: 18_211, mtimeMs: NOW - 31 * 60e3 },
@@ -4504,9 +4512,9 @@ const PC_MOUNT = `/pc/${PC_SEGMENT}`;
 const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
-  "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
-  "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
-  "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
+  "/home/main/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
+  "/home/main/SOUL.md": "I keep this workspace's changes small and proven.\n",
+  "/home/main/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
   [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
   [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
@@ -4671,9 +4679,9 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
         {deferPreview && (
           <div className="absolute z-20 flex gap-2 p-2">
             <button data-files-fixture-mutate type="button" onClick={() => {
-              const path = "/home/user/notes.md";
+              const path = "/home/main/notes.md";
               contents.set(path, "# Fresh after refresh\n\nThe older reply must not reclaim this preview.\n");
-              store.set("/home/user", (store.get("/home/user") ?? []).map((entry) => (
+              store.set("/home/main", (store.get("/home/main") ?? []).map((entry) => (
                 entry.name === "notes.md" ? { ...entry, mtimeMs: Date.now() } : entry
               )));
             }}>Mutate preview source</button>
@@ -5743,7 +5751,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null,
+    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };
@@ -6123,6 +6131,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
     ["couponboard", { node: <CouponBoardSlate />, entries: ["/"] }],
   ]);
 

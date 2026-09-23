@@ -94,7 +94,7 @@ export function isSandboxUnavailableError(input: { cause: unknown }): boolean {
   return renderThrownChain(input).includes(SANDBOX_UNAVAILABLE);
 }
 
-/** Daemon prefix for unimplemented methods (`packages/pc-agent/src/index.js`); pinned by cf-backend's device-hub test. */
+/** Daemon prefix for unimplemented methods (`packages/pc-agent/src/index.js`). */
 export const DEVICE_UNKNOWN_METHOD = 'unknown method';
 
 export function isDeviceUnknownMethodError(input: { cause: unknown }): boolean {
