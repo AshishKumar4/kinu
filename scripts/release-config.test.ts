@@ -81,7 +81,7 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  * held below against the dependency that actually ships. The image itself is the
  * block layer built on that upstream base: `packages/devbox/block-lower/Dockerfile`
  * compiles `devbox-block-lower` and `devbox-squashfuse` into the upstream
- * `docker.io/cloudflare/sandbox@sha256:822501de…` base and the result is pushed
+ * `docker.io/cloudflare/sandbox@sha256:4a56a37a…` base and the result is pushed
  * to this account's registry, so `digest` is the pushed manifest's digest — the
  * same sha256 both wrangler blocks carry — rather than a tag resolution.
  *

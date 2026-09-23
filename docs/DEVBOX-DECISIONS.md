@@ -1031,7 +1031,7 @@ never completed were measured as recycles. `requireConfirmedStop` in
 `scripts/bench-devbox-strategies.ts` refuses a wake after an unconfirmed stop.
 
 D26. Restore runs inside the SDK start block again (2026-09-23,
-`lane/devbox`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
+`5d3197bfe` and `61aa55ef7`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
 (hook after the block) and restores R1: no event reaches the object until
 the restore settles. Two platform facts made the in-block hook deadlock, and
 the patched SDK isolates the hook from both.
@@ -1138,7 +1138,7 @@ better (D5's table). A new design reopens the search only with a comparison
 run under that contract; none is scheduled (O3).
 
 D28. The Durable Object batches the container calls it keeps (DBX-7,
-2026-09-23; asked in m712: "combine multiple exec api calls to single ones
+`b60c5d873`, 2026-09-23; asked in m712: "combine multiple exec api calls to single ones
 wherever possible, as the DO <> container I/O can be flaky"). Measured
 first with `scripts/bench-devbox-exec-census.ts` over the deployed `kinu`
 Worker, 6 h to 2026-09-23T03:44Z: 509 `sandbox.exec` events in 303 Durable
