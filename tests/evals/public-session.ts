@@ -63,7 +63,7 @@
  * operator arm. Every surface above except the socket's frames sits behind the
  * BROWSER auth gate: `authenticateRequest` (auth/session.ts:136) takes a session
  * cookie or, on a deployment that sets `DEV_USER_EMAIL`, a request presenting
- * `DEV_IDENTITY_SECRET` in `x-kinu-dev-identity` (:124, :162-177). The eval
+ * `DEV_IDENTITY_SECRET` in core's `DEV_IDENTITY_HEADER`. The eval
  * tier's own credential is a CLI bearer, and `handleCliRequest` returns null for
  * anything outside `/api/cli` (cli/routes.ts:87) — so the bearer cannot reach
  * one of these routes and this harness cannot borrow it. It therefore resolves
@@ -98,7 +98,7 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY, initRunEventTables,
+  DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY, initRunEventTables,
   parseJsonValue, renderSoulMarkdown, CommandResultSchema,
   PlanReviewSchema, SubordinateInspectionResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PlanReview,
@@ -211,7 +211,7 @@ export function resolveWebIdentity(
       + '`/api/workspaces/:name/runs` or the files route this session reads. Export the '
       + `deployment's synthetic-identity secret as ${PUBLIC_IDENTITY_ENV} — the value installed `
       + 'with `wrangler secret put DEV_IDENTITY_SECRET`, which is what '
-      + '`authenticateRequest` accepts in `x-kinu-dev-identity` (auth/session.ts:162-177). '
+      + `\`authenticateRequest\` accepts in \`${DEV_IDENTITY_HEADER}\` (auth/session.ts). `
       + 'A loopback `wrangler dev` origin needs no secret at all.',
   };
 }
@@ -1012,7 +1012,7 @@ async function* sseMessages(body: ReadableStream<Uint8Array>): AsyncGenerator<{ 
 }
 
 export function webHeaders(identity: PublicWebIdentity): Record<string, string> {
-  return identity.kind === 'secret' ? { 'x-kinu-dev-identity': identity.secret } : {};
+  return identity.kind === 'secret' ? { [DEV_IDENTITY_HEADER]: identity.secret } : {};
 }
 
 /** One response body, or the deployment's own words on a failure. The body is

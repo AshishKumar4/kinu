@@ -154,13 +154,14 @@ export function WorkspaceBar({
 }
 
 /** `textClass` carries the row's type scale and colour; none is set here because a utility-layer role would outrank the row. */
-export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold p-text" }: {
+export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold p-text", pencil = true }: {
   title: string;
   /** Stored title to edit from; pre-filling the shown label would persist "Untitled workspace". Defaults to `title`. */
   editValue?: string;
   onRename: (displayName: string) => Promise<string>;
   subject: string;
   textClass?: string;
+  pencil?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(editValue ?? title);
@@ -228,7 +229,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
       title={`Rename ${subject}`}
     >
       <span className={`truncate ${textClass}`}>{title}</span>
-      <PencilSimpleIcon size={11} className="shrink-0 p-text-4 opacity-0 transition-opacity group-hover/title:opacity-100" />
+      {pencil && <PencilSimpleIcon size={11} className="shrink-0 p-text-4 opacity-0 transition-opacity group-hover/title:opacity-100" />}
     </button>
   );
 }

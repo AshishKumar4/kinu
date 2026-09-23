@@ -48,6 +48,8 @@ The owner is a Cloudflare employee; Workers, DOs, R2, Containers, Sandboxes, Wor
 
 ## Delegation
 The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a loop with an `expert`, splits it into lanes, and briefs each with full context, an output contract and its own worktree. `expert` and `task` lanes implement and fix; `scout` researches; `sidekick` pairs. One dependent chain stays in one lane; independent problems run in parallel. A lane's result is a claim: main reads the diff and reruns the proof before merging, and only main deploys.
+- Few lanes, reused. New work goes to the lane already holding that area, with its context; a new lane only for a genuinely new area. Each lane owns an area, not a single bug: chat pane and roster; deploy ladder and first-run tier; Nimbus and preview routing; skills, codemode and prompts; providers and tool schemas; devices and secrets; CLI and TUI; test honesty; evals; Lean proofs; devbox.
+- Main does risky and small work itself: merges, prunes, branch and history operations, secrets, deploys, and any task a few steps finish. Lanes get substantial coherent work; a delegated classification is a claim Main checks before acting on it.
 
 ## Owner Preferences
 - Short commit subjects; no comment that restates code or narrates an edit.
@@ -77,6 +79,11 @@ The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a l
 - `SOUL.md` in VFS is the workspace identity; scaffold versioned in VFS; MCTS in `search_nodes`; crafted tools in `crafted_tools` (workspace-wide, no `actor_id`) with EMA scores; evolution runs async and never blocks the turn queue.
 - The AI SDK (`ai`) is required by the core chat driver and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
+
+## Every Fix
+- A bug has two root causes: the defect, and why the code let it exist (sloppy or unreadable code, a duplicated path, an anti-pattern, a noisy or source-coupled test that could not catch it). Name both in the commit body and fix both.
+- Each fix leaves its area smaller or clearer: delete the duplicate path, dead code or wrapper it touches, with no lost behaviour. A fix that only adds lines names why nothing could be cut.
+- 2026-09-23 example: the provider pacer applied a per-invocation platform limit as an isolate-wide lane budget; the parked request looked hung and was cancelled (1101). The cut deleted the budget, not the symptom.
 
 ## Waste
 Over-engineering that cost CPU, storage or latency and delivered nothing is named here as it is found, with the date and the measurement, so the next design is checked against the list. Add a line when you find one; remove it when the code is gone.

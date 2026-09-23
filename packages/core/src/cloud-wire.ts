@@ -7,6 +7,12 @@ export const DEVICE_CONNECT_PATH = '/pc/connect';
 // Browser terminal socket for a device, forwarded into the same UserDO as the device socket.
 export const DEVICE_TERMINAL_PATH = '/pc/terminal';
 
+// Workers Logs stores a header's value unless its name holds one of these (Tail Handler docs, header redaction).
+type PlatformRedactedHeader = `${string}${'auth' | 'key' | 'secret' | 'token' | 'jwt'}${string}`;
+
+// Carries DEV_IDENTITY_SECRET; a cookie would make it ambient.
+export const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity-secret' satisfies PlatformRedactedHeader;
+
 // Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the
 // SDK's 1.8 MB row guard. 1 MiB raw is ~1.4 MB base64; unit-files.test.ts asserts it against the catalog.
 export const CLOUD_MAX_INLINE_ATTACHMENT_BYTES = 1024 * 1024;

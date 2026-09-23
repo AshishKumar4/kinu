@@ -26,6 +26,12 @@
  * held. A workspace that answers only while the tab stays open is the exact
  * shape of the report.
  *
+ * AND WHAT THE PAGE DRAWS. The issue came back with the socket answering the
+ * full roster: the page's reset effect bumped the roster read's generation after
+ * its sibling effect had sent that read, so a reopened workspace drew Main alone
+ * until a new agent's broadcast arrived. So the last subgoal loads the deployed
+ * page and reads its tab strip and sidebar once every read the page sent has answered.
+ *
  * NO WALL CLOCK. A read that never answers is bounded by the case's own BUDGET
  * (the `budgetMs` the harness aborts on), so each verdict is "answered" or
  * "never answered before the budget" — never a duration this row compares.
@@ -34,14 +40,17 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, type JsonValue,
+  ChatHistoryEntrySchema, hostedActorSocketPath, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue,
 } from '../../packages/core/src/index';
+import { tolerate } from '../../packages/core/src/obs/index';
+import type { Browser, Page } from 'puppeteer';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { ask, openPublicSocket, rpcDetail, type PublicSocket } from './public-socket';
-import { webHeaders } from '../evals/public-session';
+import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
+import { openBrowser, signedInPage } from './browser';
 
 const SUITE = 'First-run · agent-chats-persist';
 
@@ -95,6 +104,91 @@ function historyText(value: JsonValue): string {
   return parsed.success ? parsed.output.items.map((entry) => entry.content).join(' ') : '';
 }
 
+/** A request the page sends, and the reply its socket gets: the agents SDK's
+ *  own frames, told apart by `success`, which only a reply carries. */
+const RpcSentSchema = v.object({ type: v.literal('rpc'), id: v.string(), method: v.string() });
+
+const RpcReplySchema = v.object({ type: v.literal('rpc'), id: v.string(), success: v.boolean(), done: v.optional(v.boolean()) });
+
+type RpcFrame =
+  | { readonly kind: 'sent'; readonly id: string; readonly method: string }
+  | { readonly kind: 'reply'; readonly id: string; readonly final: boolean };
+
+/** One frame off the page's socket in the SDK's rpc vocabulary; null for every other frame. */
+function rpcFrame(payload: string): RpcFrame | null {
+  const value = tolerate(() => parseJsonValue(payload), 'malformed-input');
+  const reply = v.safeParse(RpcReplySchema, value);
+
+  if (reply.success) return { kind: 'reply', id: reply.output.id, final: reply.output.done !== false };
+  const sent = v.safeParse(RpcSentSchema, value);
+
+  return sent.success ? { kind: 'sent', id: sent.output.id, method: sent.output.method } : null;
+}
+
+/** What the page drew for the roster: agent tabs in the strip, agent links in the sidebar. */
+interface DrawnRoster { readonly tabs: string[]; readonly links: string[] }
+
+/**
+ * Load the workspace in Chrome and read the agents it draws once the page is
+ * settled: its workspace snapshot has answered and every rpc it sent has
+ * answered, and still none is outstanding after two frames. Read off the page's
+ * own socket through CDP, so it holds whichever reads the page makes, and a
+ * page that never settles is bounded by the case budget.
+ */
+async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: string, budget: AbortSignal): Promise<DrawnRoster> {
+  const cdp = await page.createCDPSession();
+  const pending = new Set<string>();
+  let snapshot: { id: string; answered: boolean } | null = null;
+  let quiet = Promise.withResolvers<void>();
+
+  const check = () => { if (snapshot?.answered === true && pending.size === 0) quiet.resolve(); };
+
+  cdp.on('Network.webSocketFrameSent', ({ response }) => {
+    const frame = rpcFrame(response.payloadData);
+
+    if (frame?.kind !== 'sent') return;
+    pending.add(frame.id);
+
+    if (frame.method === 'getWorkspaceSnapshot') snapshot = { id: frame.id, answered: false };
+  });
+  cdp.on('Network.webSocketFrameReceived', ({ response }) => {
+    const frame = rpcFrame(response.payloadData);
+
+    if (frame?.kind !== 'reply' || !frame.final) return;
+    pending.delete(frame.id);
+
+    if (snapshot?.id === frame.id) snapshot.answered = true;
+    check();
+  });
+  await cdp.send('Network.enable');
+
+  const aborted = new Promise<never>((_, reject) => {
+    budget.addEventListener('abort', () => reject(new Error('the page never settled inside the case budget')), { once: true });
+  });
+
+  await page.goto(`${plan.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'domcontentloaded' });
+
+  for (;;) {
+    await Promise.race([quiet.promise, aborted]);
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+
+    if (pending.size === 0) break;
+    quiet = Promise.withResolvers<void>();
+    check();
+  }
+
+  return page.evaluate((path: string) => ({
+    tabs: [...document.querySelectorAll<HTMLElement>('nav[aria-label="Workspace agents"] [data-agent-tab]')]
+      .map((tab) => tab.dataset.agentTab ?? '').filter((name) => name !== 'main'),
+    links: [...document.querySelectorAll<HTMLAnchorElement>('aside a[href]')]
+      .map((link) => new URL(link.href).pathname)
+      .filter((href) => href.startsWith(path))
+      .map((href) => decodeURIComponent(href.slice(path.length))),
+  }), `/workspace/${encodeURIComponent(workspace)}/agents/`);
+}
+
 describe(SUITE, () => {
   // THE ROW MUST TERMINATE: the tier runs with testTimeout 0, so a read the
   // product never answers would hold the tier open with it. The case BUDGET
@@ -112,6 +206,8 @@ describe(SUITE, () => {
         const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(session.workspace)}`;
         const open = (path: string): PublicSocket => openPublicSocket(plan.origin, plan.identity, path, budget);
         const live: PublicSocket[] = [];
+
+        let browser: Browser | null = null;
 
         try {
           // ── Two agents, created the way "+" creates one. ────────────────
@@ -276,9 +372,23 @@ describe(SUITE, () => {
               : `conversations that did not come back whole — ${lost.join('; ').slice(0, 400)}`,
           });
 
+          // ── The page, loaded from nothing, draws both agents with no new
+          //    event: a tab in the strip and a link in the sidebar. ─────────
+          browser = await openBrowser();
+          const drawn = await drawnRoster(await signedInPage(browser, plan.identity), plan, session.workspace, budget);
+          const undrawn = names.filter((name) => !drawn.tabs.includes(name) || !drawn.links.includes(name));
+
+          subgoals.push({
+            what: 'page-shows-agents',
+            reached: undrawn.length === 0,
+            detail: `with every read answered the strip drew ${JSON.stringify(drawn.tabs)} and the sidebar `
+              + `${JSON.stringify(drawn.links)} for created ${JSON.stringify(names)}`,
+          });
+
           return announce(subgoals);
         } finally {
           for (const socket of live) socket.close('the row is done');
+          await browser?.close();
         }
       },
     }, observations);

@@ -35,8 +35,9 @@ import {
   type ControlAttempt,
 } from './product-flows';
 import {
-  FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  keptTabProbe, planWalkthrough, registerScriptedModel, startScriptedModel,
+  FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_SILENCE_MS, PACED_TURN_ANSWER, PACED_TURN_ASK,
+  SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  keptTabProbe, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
 } from './scripted-model';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
@@ -191,6 +192,18 @@ function readsBetween(
   return delta;
 }
 
+/** What the chat column drew while the paced turn ran, read every 20 ms. */
+interface LiveIndicatorVerdict {
+  /** How long Stop was offered, first sample to last. */
+  readonly runningMs: number;
+  /** Samples under Stop that drew no live state: a pane saying a turn runs and showing nothing of it. */
+  readonly blank: number;
+  /** The longest unbroken blank stretch, in ms. */
+  readonly longestBlankMs: number;
+  /** Samples under Stop that drew more than one live state. */
+  readonly doubled: number;
+}
+
 interface PanelVerdict {
   readonly nodeSurvives: boolean;
   readonly scrollSurvives: boolean;
@@ -262,6 +275,7 @@ interface KeptTabVerdict {
 
 interface TierVerdicts {
   bootFailure: string | null;
+  liveIndicator: LiveIndicatorVerdict | null;
   panel: PanelVerdict | null;
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
@@ -279,6 +293,7 @@ const StripGeometrySchema = v.object({
 });
 
 const observed: TierVerdicts = {
+  liveIndicator: null,
   bootFailure: null, panel: null, planTabs: null, geometry: null,
   controls: null, stamped: null, walkthrough: null, keptTab: null, state: null,
 };
@@ -351,6 +366,80 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
 const RAIL_SHUT_PX = 64;
 
 const SHUT_NAMES = 'hide|collapse|close';
+
+/** Every 20 ms from install: whether the chat column offers Stop, and how many live states it draws. A Thinking
+ *  row, a live reasoning label, a caret on text that shows, and running call rows (one state however many run)
+ *  are live states; a hook on an element that draws nothing is none. Held on `window` until read back. On the
+ *  page's own clock: the defect is what the pane draws through a real silence on the model's socket, which no
+ *  fake clock reaches. */
+const INSTALL_LIVE_SAMPLER = `(() => {
+  const samples = [];
+  const started = performance.now();
+  const shown = (el) => el.getClientRects().length > 0;
+  window.__liveSamples = samples;
+  window.__liveSampler = setInterval(() => {
+    const chat = document.querySelector('#chat');
+    if (chat === null) return;
+    const drawn = (kind) => [...chat.querySelectorAll('[data-live-indicator="' + kind + '"]')].filter(shown);
+    const carets = drawn('text').filter((el) => el.innerText.trim() !== '').length;
+    const running = [...chat.querySelectorAll('[data-tool-state="running"]')].some(shown) ? 1 : 0;
+    samples.push({
+      t: Math.round(performance.now() - started),
+      stop: [...chat.querySelectorAll('button[aria-label="Stop this turn"]')].some(shown),
+      states: drawn('thinking').length + drawn('reasoning').length + carets + running,
+    });
+  }, 20);
+})()`;
+
+const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
+
+const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number() });
+
+const STOP_OFFERED = `document.querySelector('#chat button[aria-label="Stop this turn"]') !== null`;
+
+/** Row 0: a running turn draws exactly one live state, through the silences a thinking model leaves in its
+ *  stream (`pacedTurn`). */
+async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string): Promise<LiveIndicatorVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-indicator-${RUN_ID}`, purpose: 'live indicator probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await openWorkspace(newPage, origin, workspace);
+
+  // The create's own first turn ends first, so the paced turn is a turn of its own rather than words steered
+  // into that one.
+  await page.waitForFunction(
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)}) && !(${STOP_OFFERED})`,
+    { polling: 100 },
+  );
+  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await page.evaluate(INSTALL_LIVE_SAMPLER);
+  await sendInChat(page, PACED_TURN_ASK);
+  await page.waitForFunction(
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PACED_TURN_ANSWER)}) && !(${STOP_OFFERED})`,
+    { polling: 100 },
+  );
+
+  const samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
+
+  await shoot(page, 'live-indicator-settled');
+  await page.close();
+
+  const running = samples.filter((sample) => sample.stop);
+  let longestBlankMs = 0;
+  let blankSince: number | null = null;
+
+  for (const sample of samples) {
+    blankSince = sample.stop && sample.states === 0 ? (blankSince ?? sample.t) : null;
+    longestBlankMs = Math.max(longestBlankMs, blankSince === null ? 0 : sample.t - blankSince);
+  }
+
+  return {
+    runningMs: (running.at(-1)?.t ?? 0) - (running[0]?.t ?? 0),
+    blank: running.filter((sample) => sample.states === 0).length,
+    longestBlankMs,
+    doubled: running.filter((sample) => sample.states > 1).length,
+  };
+}
 
 /** Row 1 (B6): the right panel keeps its Work, Files and Env state across a
  *  chat-tab switch — the same DOM node, the same scroll offset, and no
@@ -898,15 +987,18 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 async function run(): Promise<void> {
   const progress = (row: string): void => { process.stderr.write(`live-app-tier: ${row}\n`); };
 
-  // The script answers every row's throwaway turn with prose and the
+  // The script answers the live-indicator row's paced turn, the kept-tab
+  // row's two asks, every row's throwaway turn with prose and the
   // walkthrough's turns with the plan and the slate — one server, decided per
   // request.
-  const model = await startScriptedModel((request) => keptTabProbe(request) ?? planWalkthrough(request));
+  const model = await startScriptedModel((request) => pacedTurn(request) ?? keptTabProbe(request) ?? planWalkthrough(request));
 
   await withLiveApp(async (app) => {
     const { newPage, origin } = app;
 
     await registerScriptedModel(origin, model.port);
+    observed.liveIndicator = await measureLiveIndicator(newPage, origin);
+    progress('live-indicator done');
     progress('panel start');
     observed.panel = await measurePanel(newPage, origin);
     progress('panel done');
@@ -970,6 +1062,20 @@ describe('the right panel keeps its Work, Files and Env state when the chat tab 
 
   test("the '+' tab's own actor socket answered its pane", () => {
     expect(verdictOf(observed.panel, 'panel').agentSocketFrames).toBeGreaterThan(0);
+  });
+});
+
+describe('a running turn draws exactly one live state', () => {
+  test("the pane was sampled through the paced turn's four silences", () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').runningMs).toBeGreaterThanOrEqual(4 * PACED_SILENCE_MS);
+  });
+
+  test('Stop never stands over a pane that draws nothing happening', () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').blank).toBe(0);
+  });
+
+  test('Thinking never stands beside a part that draws itself live', () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').doubled).toBe(0);
   });
 });
 

@@ -32,6 +32,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { EVAL_DEPLOYMENT_ORIGIN, UNCONFIGURED_LLM } from '@kinu.run/test-utils';
+import { DEV_IDENTITY_HEADER } from '../../packages/core/src/index';
 import { AGENT_HOME } from '../../packages/cli/src/config';
 import evalsConfig from '../../vitest.evals.config';
 import { resolvePublicSessionPlan, type PublicExecutorResult } from './public-session';
@@ -294,7 +295,7 @@ describe('the client speaks the routes the product\'s own surfaces speak', () =>
           method: request.method,
           path: new URL(request.url).pathname,
           authorization: request.headers.get('authorization'),
-          identity: request.headers.get('x-kinu-dev-identity'),
+          identity: request.headers.get(DEV_IDENTITY_HEADER),
           body: await request.text(),
         });
 

@@ -383,20 +383,20 @@ export const FIRST_RUN_DEFECTS = {
     id: 'agent-chats-persist',
     found: 'Two subagents were told to build a chess app; coming back to the workspace, the chat '
       + 'had been cleared and only the original message remained, and after visiting another '
-      + 'workspace every subagent chat had disappeared.',
+      + 'workspace every subagent chat had disappeared. Reopened: back in the workspace only Main '
+      + 'showed, in the tabs and the sidebar, until creating another agent brought the old one back.',
     missedBecause: 'reachability was derived from employability — the roster read every chat '
       + "surface makes filtered `status != 'dismissed'`, so a child's only route to a conversation "
       + 'the dismiss copy promises to keep went with its employment — and `newestId()` returned a '
-      + 'stored `conversation_heads` row without asking whether it still named an entry. Both are '
-      + 'store-level facts no suite asked of a DEPLOYED workspace after the tab was closed: every '
-      + 'other roster and transcript test reads through a handle it never let go of.',
-    provedRedAt: null,
+      + 'stored `conversation_heads` row without asking whether it still named an entry. Reopened '
+      + 'because this row read the roster over the socket, which answered in full, while the page '
+      + 'threw that answer away: its reset effect bumped the roster read\'s generation after the '
+      + 'sibling effect had sent it.',
+    provedRedAt: 'a39effc66',
     redDirection: 'the row drops EVERY socket between the sends and the reads, so the answers come '
-      + 'from durable rows rather than a live activation. Red in either direction the report '
-      + 'describes: the roster coming back without a child, or a re-opened room answering a '
-      + 'conversation that no longer holds what was said in it. Not re-run against an older '
-      + 'deployed build \u2014 the unit reds are recorded in packages/cf-backend/tests/'
-      + 'unit-subordinates.test.ts and packages/core/tests/unit-transcript-head.test.ts.',
+      + 'from durable rows rather than a live activation, then loads the page. RED by reading on '
+      + 'build a39effc66, measured 2026-09-23: roster-survives and chats-reachable green, and with '
+      + 'every read the page sent answered its strip and sidebar drew no agent at all.',
   },
   'agent-dismissed-chat': {
     id: 'agent-dismissed-chat',
