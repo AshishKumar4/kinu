@@ -3477,6 +3477,7 @@ if (import.meta.main) {
     const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
+      // deploy.sh reads the `skip  ` prefix to mark the gate's line cached.
       console.log(
         `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
         + `(${String(plan.entry.closureSize)} files in the closure, ${plan.entry.seconds.toFixed(1)}s then)`,
