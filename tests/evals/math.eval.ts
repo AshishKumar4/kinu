@@ -37,7 +37,7 @@ import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index'
 import { openWorkspaceMainActor, REASONING_EFFORTS } from '../../packages/core/src/index';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
 import { childProjectRoot, cliWorkspaceDbPath, createCliWorkspace, execCliTask, setCliEffort } from './cli-driver';
-import { environmentFailure } from './episode-failure';
+import { DegenerateRunError, disposeFailedCase, environmentFailure } from './episode-failure';
 import { readLedgerTotals, readRunEvents } from './harness';
 import {
   EVAL_MODELS, FULL_TOOL_SURFACE, TASK_OUTCOME, UNCONFIGURED_LLM,
@@ -486,37 +486,39 @@ async function runEpisode(evalCase: EvalCase): Promise<string[]> {
     },
   });
 
-  // A turn the ENVIRONMENT ended (a provider 5xx after retries, a rate limit, an auth failure) produced
-  // no verdict unless the answer was already right: recorded `incomplete` under the infrastructure
-  // marker, the same classification the behaviour tier uses, never as the agent's miss.
-  const environment = environmentFailure(totals.failures);
-  const solved = outcome.passed === outcome.eligible;
-  const ungraded: string[] = [];
-
-  if (environment !== null && !solved) {
-    observations.push({ taskId: problem.id, repetition: 0, outcome: 'incomplete', reason: environment });
-    ungraded.push(`${problem.id}: ${environment}`);
-  } else {
-    // The observation first: a miss is exactly what the record must keep.
-    observations.push({
-      taskId: problem.id, repetition: 0, outcome: 'scored', scores: [outcome, cap],
-      turns: totals.turns, toolCalls: totals.toolCalls, toolNames: totals.toolNames,
-      tokensIn: totals.tokensIn, tokensOut: totals.tokensOut, reasoningOut: totals.reasoningOut, ms,
-    });
-  }
-
   // `kinu exec` exits 1 whenever its stream carried an error event, including a turn that recovered and
   // closed normally (commands/run.ts `runOneShot`), so the exit code is reported beside the verdict
   // rather than read as "never completed". An answer file on disk after a closed turn is gradable.
   const exit = child.exitCode === 0 ? '' : `; exit ${String(child.exitCode)}: ${[...child.errors, child.stderr.trim()]
     .filter((line) => line.length > 0).join(' | ').slice(0, 300)}`;
 
-  console.log(`    [math] ${problem.id}: ${environment !== null && !solved ? environment : outcome.detail} — `
+  // One classifier with the behaviour tier (episode-failure.ts): no closed turn or no tool call is a
+  // degenerate episode, `inert` or the environment's; a turn the environment ended before the answer
+  // was right is `incomplete`. Only what is left is a verdict, and a miss there is the measurement.
+  const environment = environmentFailure(totals.failures);
+  const solved = outcome.passed === outcome.eligible;
+
+  let failure: Error | null = environment !== null && !solved ? new Error(environment) : null;
+
+  if (totals.turns === 0 || totals.toolCalls === 0) {
+    failure = new DegenerateRunError(problem.id, totals.turns, totals.toolCalls, totals.failures);
+  }
+
+  if (failure === null) {
+    observations.push({
+      taskId: problem.id, repetition: 0, outcome: 'scored', scores: [outcome, cap],
+      turns: totals.turns, toolCalls: totals.toolCalls, toolNames: totals.toolNames,
+      tokensIn: totals.tokensIn, tokensOut: totals.tokensOut, reasoningOut: totals.reasoningOut, ms,
+    });
+  } else {
+    observations.push({ taskId: problem.id, repetition: 0, outcome: disposeFailedCase(failure).outcome, reason: failure.message });
+  }
+
+  console.log(`    [math] ${problem.id}: ${failure?.message ?? outcome.detail} — `
     + `${String(totals.turns)} turn(s), ${String(totals.toolCalls)} call(s), ${(ms / 1000).toFixed(0)}s${exit}`);
+  const ungraded = failure === null ? [] : [`${problem.id}: ${failure.message}${exit}`];
 
   if (child.timedOut) ungraded.push(`${problem.id}: the child was killed at ${String(EPISODE_TIMEOUT_MS)}ms`);
-
-  if (totals.turns === 0) ungraded.push(`${problem.id}: the episode closed no turn${exit}`);
 
   return ungraded;
 }
