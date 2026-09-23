@@ -616,7 +616,6 @@ export class LocalAgentSession implements BackendHost {
         driverGate: () => this.driverGate?.() ?? null,
         // No durable wake: this process is the wake, and a crashed turn re-arms from the ledger on restart.
         armTurnWake: async () => {},
-        modelWindow: () => this.modelCatalog.window(),
         steerSkills: (text) => steerSkillsBlock({
           vfs: this.rt.storage.vfs,
           config: this.config,
