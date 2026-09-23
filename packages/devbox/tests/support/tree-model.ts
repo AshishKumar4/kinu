@@ -2,6 +2,7 @@
  *  Sparse files stay as runs (never expanded), so a 1 GiB cell runs in a few MiB. */
 
 import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 import { Seeded } from '../../bench/seeded';
 
 export { Seeded } from '../../bench/seeded';
@@ -286,11 +287,11 @@ export function sortedByPath(entries: readonly NodeEntry[]): NodeEntry[] {
   return [...entries].sort((a, b) => (a.path < b.path ? -1 : Number(a.path > b.path)));
 }
 
+/** Walked up with `dirname`, not the product's split: an oracle sharing the product's code shares its bugs. */
 export function ancestorsOf(path: string): string[] {
-  const parts = path.split('/');
   const out: string[] = [];
 
-  for (let depth = 1; depth < parts.length; depth += 1) out.push(parts.slice(0, depth).join('/'));
+  for (let dir = posix.dirname(path); dir !== '.' && dir !== '/'; dir = posix.dirname(dir)) out.unshift(dir);
 
   return out;
 }

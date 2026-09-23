@@ -7,7 +7,6 @@ import * as v from 'valibot';
 import {
   CHAIN_SERVED_WORDS,
   type ChainServedWord,
-  DELTA_BLOCK_BYTES,
   DELTA_MANIFEST_NAME,
   DELTA_OPS_PER_COMMAND,
   DELTA_TREE_DIR,
@@ -21,6 +20,7 @@ import {
   buildDeltaStageOps,
   deltaBaseStatCommand,
   deltaBlockHashCommand,
+  deltaBlockHashPlan,
   deltaHashCandidates,
   deltaProbeCommand,
   parseDeltaBaseStat,
@@ -1562,23 +1562,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     let hashes = new Map<number, DeltaFileHashes>();
 
     if (hashFiles.length > 0) {
-      const sizes = new Map(upperProbe.map((entry) => [entry.path, entry.size] as const));
-
-      const files = hashFiles.map((path, index) => {
-        const fact = baseFacts.get(path);
-
-        return { index, upperPath: `${upperDir}/${path}`, basePath: fact?.kind === 'file' ? `${lowerBase}/${path}` : null };
-      });
-
-      const wanted = new Map(hashFiles.map((path, index) => {
-        const fact = baseFacts.get(path);
-
-        return [index, {
-          upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
-          baseBlocks: fact?.kind === 'file' ? Math.ceil(fact.size / DELTA_BLOCK_BYTES) : null,
-        }] as const;
-      }));
-
+      const { files, wanted } = deltaBlockHashPlan({ hashFiles, probe: upperProbe, baseFacts, upperDir, lowerBase });
       const hashed = await ports.exec(deltaBlockHashCommand({ workDir: `${stageRoot}/hash`, files }));
 
       try {

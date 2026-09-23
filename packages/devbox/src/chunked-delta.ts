@@ -388,6 +388,33 @@ export function deltaHashCandidates(probe: readonly DeltaProbeEntry[]): string[]
     .sort();
 }
 
+export function deltaBlockHashPlan(input: {
+  readonly hashFiles: readonly string[];
+  readonly probe: readonly DeltaProbeEntry[];
+  readonly baseFacts: ReadonlyMap<string, DeltaBaseFact | null>;
+  readonly upperDir: string;
+  readonly lowerBase: string;
+}) {
+  const sizes = new Map(input.probe.map((entry) => [entry.path, entry.size] as const));
+
+  const files = input.hashFiles.map((path, index) => {
+    const fact = input.baseFacts.get(path);
+
+    return { index, upperPath: `${input.upperDir}/${path}`, basePath: fact?.kind === 'file' ? `${input.lowerBase}/${path}` : null };
+  });
+
+  const wanted = new Map(input.hashFiles.map((path, index) => {
+    const fact = input.baseFacts.get(path);
+
+    return [index, {
+      upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
+      baseBlocks: fact?.kind === 'file' ? Math.ceil(fact.size / DELTA_BLOCK_BYTES) : null,
+    }] as const;
+  }));
+
+  return { files, wanted };
+}
+
 /** Pure. Throws when probe facts disagree: a hash count that does not match the probed size
  *  means the file changed mid-checkpoint. */
 export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
