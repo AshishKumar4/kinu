@@ -80,6 +80,8 @@ export interface CommonOptions {
   budget: AttemptBudget;
   /** Attempts per task per variant. */
   repeats: number;
+  /** Attempts in flight at once where attempts are independent; a stateful pass is always one walk. */
+  concurrency: number;
   validateRetries: number;
   limit: number | null;
   out: string | null;
@@ -148,6 +150,7 @@ export function parseCommon(args: Map<string, string>): CommonOptions {
       maxTokens: num('max-tokens', DEFAULT_ATTEMPT_BUDGET.maxTokens),
     },
     repeats: count('repeats', 1, 1),
+    concurrency: count('concurrency', 1, 1),
     validateRetries: count('validate-retries', DEFAULT_VALIDATE_RETRIES, 0),
     limit: limitRaw === undefined ? null : Number(limitRaw),
     out: args.get('out') ?? null,
@@ -913,6 +916,24 @@ function pilotEvidence(pilot: PilotReport | null): null | {
   } : null;
 }
 
+/** Run `jobs` with at most `width` in flight; results in job order, the first rejection rejects. */
+export async function inPool<T>(jobs: readonly (() => Promise<T>)[], width: number): Promise<T[]> {
+  const results: T[] = [];
+  let next = 0;
+
+  const lane = async (): Promise<void> => {
+    while (next < jobs.length) {
+      const index = next;
+      next += 1;
+      results[index] = await jobs[index]();
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(width, jobs.length) }, lane));
+
+  return results;
+}
+
 async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promise<number> {
   const spec = args.get('variant');
 
@@ -942,29 +963,16 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
     model: llm.model, providerHash: benchProviderHash(llm),
   });
 
-  const outcomes: AttemptOutcome[] = [];
-  console.error(`stability pilot: ${tasks.length} tasks × 1 variant × ${common.repeats} repeats`);
+  console.error(`stability pilot: ${tasks.length} tasks × 1 variant × ${common.repeats} repeats, `
+    + `${common.concurrency} at a time`);
 
-  for (const task of tasks) {
-    const repeated: AttemptOutcome[] = [];
+  // One fresh arm, so every attempt is independent and the pool changes only how long the pilot takes.
+  const outcomes = await inPool(tasks.flatMap((task) => Array.from({ length: common.repeats }, (_, repeat) => () =>
+    runAttempt({ task, solver, slot: 'a', repeat, family, common, retention, attemptId: `pilot-${task.id}-r${repeat}` }))),
+  common.concurrency);
 
-    for (let repeat = 0; repeat < common.repeats; repeat++) {
-      const outcome = await runAttempt({
-        task,
-        solver,
-        slot: 'a',
-        repeat,
-        family,
-        common,
-        retention,
-        attemptId: `pilot-${task.id}-r${repeat}`,
-      });
-
-      repeated.push(outcome);
-      outcomes.push(outcome);
-    }
-
-    console.error(`  ${task.id.padEnd(28)} ${solver.id}=${tally(repeated)}`);
+  for (const [index, task] of tasks.entries()) {
+    console.error(`  ${task.id.padEnd(28)} ${solver.id}=${tally(outcomes.slice(index * common.repeats, (index + 1) * common.repeats))}`);
   }
 
   const report = buildPilotReport({
@@ -1032,35 +1040,40 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   // One score row per position in the sequence: every arm of every pass walks
   // that sequence in that order, so the position it is on is the row it adds to.
   const scores = sequence.map(() => ({ stateful: 0, stateless: 0 }));
-  const attempts: AttemptOutcome[] = [];
 
-  for (let pass = 0; pass < common.repeats; pass++) {
-    const stateful = statefulPasses[pass];
+  const attempt = async (key: 'stateful' | 'stateless', solver: Solver, pass: number, index: number) => {
+    const task = sequence[index];
 
-    // Both arms see the identical sequence in the identical order — that is the
-    // whole design. Which arm runs first is randomized from the seed so any host
-    // drift over the run does not systematically favour one of them.
-    const statefulFirst = runOrder('arm-order', common.seed, pass) === 'ab';
+    const outcome = await runAttempt({
+      task, solver, slot: key === 'stateful' ? 'b' : 'a', repeat: pass, family, common, retention,
+      attemptId: `gain-${key}-p${pass}-${index}-${task.id}`,
+    });
 
-    const arms: Array<{ solver: Solver; key: 'stateful' | 'stateless' }> = statefulFirst
-      ? [{ solver: stateful, key: 'stateful' }, { solver: stateless, key: 'stateless' }]
-      : [{ solver: stateless, key: 'stateless' }, { solver: stateful, key: 'stateful' }];
+    scores[index][key] += (outcome.passed ? 1 : 0) / common.repeats;
+    console.error(`  ${key} p${pass} ${String(index).padStart(2)} ${task.id.padEnd(28)} ${outcome.passed ? 'pass' : 'fail'}`);
 
-    for (const arm of arms) {
-      console.error(`${arm.key} arm, pass ${pass + 1}/${common.repeats}: ${sequence.length} tasks in sequence`);
+    return [outcome];
+  };
 
-      for (const [index, task] of sequence.entries()) {
-        const outcome = await runAttempt({
-          task, solver: arm.solver, slot: arm.key === 'stateful' ? 'b' : 'a', repeat: pass, family, common, retention,
-          attemptId: `gain-${arm.key}-p${pass}-${index}-${task.id}`,
-        });
+  // Both arms see the identical sequence in the identical order — that is the whole design. A stateful
+  // pass is ONE job that walks it in order, because its state accumulates along it; each stateless
+  // attempt is its own job. Which arm is queued first is randomized from the seed so any host drift
+  // does not systematically favour one of them; at --concurrency 1 this is the sequential order.
+  const jobs = Array.from({ length: common.repeats }, (_, pass) => {
+    const statefulJob = async () => {
+      const walked: AttemptOutcome[] = [];
 
-        attempts.push(outcome);
-        scores[index][arm.key] += (outcome.passed ? 1 : 0) / common.repeats;
-        console.error(`  ${String(index).padStart(2)} ${task.id.padEnd(28)} ${outcome.passed ? 'pass' : 'fail'}`);
-      }
-    }
-  }
+      for (const index of sequence.keys()) walked.push(...await attempt('stateful', statefulPasses[pass], pass, index));
+
+      return walked;
+    };
+
+    const statelessJobs = [...sequence.keys()].map((index) => () => attempt('stateless', stateless, pass, index));
+
+    return runOrder('arm-order', common.seed, pass) === 'ab' ? [statefulJob, ...statelessJobs] : [...statelessJobs, statefulJob];
+  }).flat();
+
+  const attempts = (await inPool(jobs, common.concurrency)).flat();
 
   const perTask: GainTaskScore[] = sequence.map((task, index) => ({
     taskId: task.id,
@@ -1118,6 +1131,9 @@ Options:
   --seed <n>           Run seed: pairing order, bootstrap, noisy draws (default 1)
   --wall-clock-ms <n>  Per-attempt wall-clock budget (default ${DEFAULT_ATTEMPT_BUDGET.wallClockMs})
   --max-tokens <n>     Per-attempt token budget (default ${DEFAULT_ATTEMPT_BUDGET.maxTokens})
+  --concurrency <n>    pilot, gain: attempts in flight at once (default 1). Only
+                       independent attempts overlap; a stateful pass stays one
+                       ordered walk of the sequence.
   --repeats <n>        compare: attempts per task per variant; gain: passes over
                        the sequence (default 1). Reports pass^n alongside pass@1
                        and surfaces tasks whose repeats disagree. The pairing

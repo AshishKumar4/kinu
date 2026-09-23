@@ -14,7 +14,7 @@ import {
   type AttemptOutcome, type BenchTask, type JsonValue,
 } from '../packages/core/src/index';
 import { manifestHash } from '../packages/core/src/bench/split';
-import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon, parseShard, shardTaskIds } from './bench';
+import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, inPool, panelArm, panelProviders, parseArgv, parseCommon, parseShard, shardTaskIds } from './bench';
 import { BENCH_SUITES, benchPatchFiles, corpusMembership, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
@@ -287,6 +287,32 @@ describe('stability pilot gate', () => {
       expect(result.exitCode).toBe(1);
       expect(result.stderr.toString()).toContain('model-backed runs need --pilot-report');
     }
+  });
+});
+
+describe('inPool — how --concurrency runs independent attempts', () => {
+  test('results keep job order whatever order the jobs finish in, never more than the width in flight', async () => {
+    const gates = Array.from({ length: 6 }, () => Promise.withResolvers<void>());
+    let inFlight = 0;
+    let widest = 0;
+
+    const pooled = inPool(gates.map((gate, index) => async () => {
+      inFlight += 1;
+      widest = Math.max(widest, inFlight);
+      await gate.promise;
+      inFlight -= 1;
+
+      return index;
+    }), 3);
+
+    // Finish in reverse, one gate per turn of the queue, so later jobs complete before earlier ones.
+    for (const gate of [...gates].reverse()) {
+      gate.resolve();
+      await Promise.resolve();
+    }
+
+    expect(await pooled).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(widest).toBe(3);
   });
 });
 
