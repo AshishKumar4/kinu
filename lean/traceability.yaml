@@ -199,7 +199,7 @@ requirements:
       - Integration coverage of provider assembly and privileged-operation denial
   PR-MCTS-001:
     statement: Exact scaled-integer backpropagation preserves reward bounds and the reward-sum and visit-count invariants in the abstract model.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.MCTS.Backpropagation.update_preserves_range
       - Kinu.MCTS.Backpropagation.applyRewards_preserves_range
@@ -209,8 +209,9 @@ requirements:
       - packages/core/src/mcts/backpropagation.ts#backpropagate
       - packages/core/src/mcts/schemas.ts#initSearchTables
     remainingEvidence:
-      - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers
-      - WP-F4 differential fixtures against the recursive SQL update
+      - TypeScript and SQLite compute IEEE-754 REAL values rather than exact scaled integers; the fixture holds the deployed running mean to the exact mean within 12 decimal places, a tolerance rather than a proved rounding bound
+    refinement:
+      - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
   PR-MCTS-002:
     statement: Initial-value erasure, numerator shape, zero-state range, and identifier preservation follow directly from the abstract backpropagation constructors.
     status: by-construction-witness
@@ -239,7 +240,7 @@ requirements:
       - Integration assertion that branch storage identity differs from orchestrator storage identity
   PR-MCTS-004:
     statement: The exploration bonus selectNode ranks by is ordered exactly as natural powers, falls strictly with a node's own visits from one visit on and rises strictly with its parent's visits from two on, ties on the max(1) and max(2) plateaus, rises at the self-parenting root from two visits to three, and the argmax returns an eligible row that no eligible row outranks.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.MCTS.Uct.bonusOf_well_formed
       - Kinu.MCTS.Uct.bonus_lt_irrefl
@@ -265,13 +266,16 @@ requirements:
       - packages/core/src/mcts/frontier.ts#selectFrontierNode
       - packages/core/src/config.ts#DEFAULT_CONFIG
     remainingEvidence:
-      - The order is exact in real arithmetic; SQLite evaluates the score in IEEE-754 doubles, so two bonuses the model orders strictly can round to one score
+      - The order is exact in real arithmetic; SQLite evaluates the score in IEEE-754 doubles, so two bonuses the model orders strictly can round to one score, and the fixture accepts either row of such a tie
       - bonus_order_is_power_order takes the real-number facts it rests on (increasing square root and logarithm, the logarithm of a power, clearing denominators) as premises rather than proving them
       - SQLite's order among rows with equal scores is unspecified, so the theorems claim only what every tie-break gives
       - The rise at the root from two visits to three follows from the shipped floor max(2, visits) and no decision records it as intended
+      - The fixture runs the query on bun:sqlite; the Durable Object's SQLite build is not exercised by it
+    refinement:
+      - lean/fixtures/uct-select.json :: packages/core/tests/refinement-uct.test.ts
   PR-MCTS-005:
     statement: Convergence returns a row no population row outranks, a unique best candidate nothing was expanded from is its only possible winner, the shipped search can expand its best candidate and then converge on a worse sibling, and when refinements never score below their parent every winner carries the best reward and that reward stabilizes.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.MCTS.Convergence.backprop_accumulates_the_evaluations_through_a_node
       - Kinu.MCTS.Convergence.the_winner_has_the_greatest_value
@@ -279,6 +283,8 @@ requirements:
       - Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_then_converges_past_it
       - Kinu.MCTS.Convergence.the_winner_is_optimal_when_refinements_never_score_worse
       - Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
+      - Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
+      - Kinu.MCTS.Convergence.a_pruned_parent_splits_a_lineage
     tsRefs:
       - packages/core/src/mcts/convergence.ts#converge
       - packages/core/src/mcts/engine.ts#runMCTS
@@ -287,9 +293,36 @@ requirements:
       - packages/core/src/mcts/takes.ts#findNearTiedRivals
     remainingEvidence:
       - A node's value is a subtree mean while converge returns the winner's own proposal, so the search does not stabilize on its best evaluated candidate in general, and the counterexample is reachable by the shipped selection
-      - The near-tie test selection in selectWinnerByTest is outside the model; it reorders rivals within takesEpsilon, and only in build mode
-      - Rewards are exact scaled integers while the stored value is a floating-point running mean
+      - findNearTiedRivals walks the lineage through population rows only, so a pruned parent makes a tied grandparent a rival; the model and the fixture follow the shipped walk
+      - The fixture runs converge in plan mode; build mode adds the near-tie test selection, the memory writes and the task history, which it does not exercise
+      - Rewards are exact scaled integers while the stored value is a floating-point running mean; the fixture keeps only trees where the doubles give the exact model's answer
       - Pruning enters only through population membership: the optimality theorem assumes a best candidate is still open or terminal
+    refinement:
+      - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
+  PR-CRED-001:
+    statement: No client operation on the credential store answers anything that depends on a stored secret, an envelope opens only under the store and key it was sealed for, credential and MCP header contexts never meet, a deleted credential yields no headers, rotation keeps every readable secret, and a row without the envelope prefix opens under every context.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Safety.Credentials.an_envelope_opens_only_where_it_was_sealed
+      - Kinu.Safety.Credentials.a_plain_row_opens_under_every_context
+      - Kinu.Safety.Credentials.one_context_per_store_and_key
+      - Kinu.Safety.Credentials.credential_contexts_never_meet_mcp_contexts
+      - Kinu.Safety.Credentials.clients_cannot_tell_two_stores_apart_by_their_secrets
+      - Kinu.Safety.Credentials.a_deleted_credential_yields_no_headers
+      - Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
+      - Kinu.Safety.Credentials.rewrap_seals_a_plain_row
+    tsRefs:
+      - packages/core/src/credentials/envelope.ts#createCredentialCipher
+      - packages/core/src/credentials/validate.ts#validateCredentialKey
+      - packages/cf-backend/src/user/user-do.ts#UserDO.listCredentials
+      - packages/cf-backend/src/user/user-do.ts#UserDO.setCredential
+      - packages/cf-backend/src/user/user-do.ts#UserDO.deleteCredential
+      - packages/cf-backend/src/user/user-do.ts#UserDO.getAuthHeaders
+    remainingEvidence:
+      - The cipher's guarantees are premises satisfied by the transparent cipher; AES-GCM's confidentiality and the key id's freedom from HMAC collisions are assumed, not proved
+      - CredentialCipher.open passes an unprefixed value through as plaintext, contrary to the envelope module's no-plaintext-fallback claim, so the binding theorem holds only for sealed rows
+      - The model's client operations are list, set and delete; getAuthHeaders answers a Worker-internal caller with the secret by design and is modelled as egress
+      - No fixture yet runs the deployed envelope or the UserDO against the model
   PR-STORE-001:
     statement: The abstract memory index preserves new and unrelated chunks and bounds modeled search result length and score sign by construction.
     status: by-construction-witness
@@ -704,7 +737,7 @@ requirements:
       - The implication assumes the verifier is a function of the artifact; a verifier reporting a unit such as ms is not one, and for it B1 is no evidence that it could have failed
   PR-PUBLISH-004:
     statement: Under every interleaving of runs sharing one records cell, each recordExploration call one atomic step, the cell's best never falls and a sealed run's writes are invisible, but the seal is run-scoped, so a breach in one run does not stop a concurrent run writing under the same floor, and splitting the check from the write would lower the best.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.Exploration.Concurrent.runC_cons
       - Kinu.Exploration.Concurrent.the_best_never_falls_under_any_interleaving
@@ -719,8 +752,10 @@ requirements:
       - packages/core/src/strategy/swarm-scoring.ts#scoreExpansion
       - packages/core/src/strategy/swarm-setup.ts#seedResumedSearch
     remainingEvidence:
-      - Atomicity is read off the shipped body, which checks the seal, reads and writes synchronously inside one isolate; the model does not prove that the event loop and SQLite serialise it
+      - Atomicity is read off the shipped body, which checks the seal, reads and writes synchronously inside one isolate; the fixture interleaves whole recordExploration calls and cannot observe an interleaving inside one
       - Whether a breach should seal every run on its objective and floor is a design decision the specification has not taken; the shipped seal is per run
+    refinement:
+      - lean/fixtures/records.json :: packages/core/tests/refinement-records.test.ts
   PR-EXPL-002:
     statement: When every round improves the incumbent with probability at least a/b whatever came before, n rounds pass without an improvement with probability at most (1 - a/b)^n, which falls below any positive bound, and a stop after G gainless rounds fires with probability at most (1 - a/b)^G, so such a stop is evidence of decayed gain rather than of an exhausted space.
     status: proved-in-abstract-model
@@ -737,7 +772,7 @@ requirements:
       - The shipped engine has no gain stop: SwarmSettleReport.stop is settled, budget or aborted, so the gain-decayed report the specification requires of such a stop has nothing to attach to
   PR-RECORDS-003:
     statement: The shipped records store keeps a cell's best from ever falling, as a consequence of never deleting a row and refusing a lowering write rather than as a rule of its own.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.Exploration.RecordsStore.runOf_nil
       - Kinu.Exploration.RecordsStore.runOf_cons
@@ -768,7 +803,9 @@ requirements:
       - packages/core/src/types/objective.ts#InstancedObjective
     remainingEvidence:
       - Current recordExploration performs SELECT and UPDATE synchronously with no intervening await; the sequential model does not prove SQL atomicity or scheduling against external writers
-      - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here
+      - No theorem separates the strict comparison from <=, which is equally monotone; the fixture's refused tie is what fails if the comparison is relaxed
+    refinement:
+      - lean/fixtures/records.json :: packages/core/tests/refinement-records.test.ts
   PR-ARCHIVE-002:
     statement: Archive admission keeps a cell's occupants pairwise at least the novelty floor apart over every finite write sequence, which bounds their similarity and provably does not bound their number.
     status: proved-in-abstract-model

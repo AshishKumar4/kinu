@@ -120,6 +120,8 @@ import Kinu
 #print axioms Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_then_converges_past_it
 #print axioms Kinu.MCTS.Convergence.the_winner_is_optimal_when_refinements_never_score_worse
 #print axioms Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
+#print axioms Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
+#print axioms Kinu.MCTS.Convergence.a_pruned_parent_splits_a_lineage
 
 /-! ## Kinu/MCTS/StorageIsolation.lean -/
 
@@ -157,6 +159,17 @@ import Kinu
 #print axioms Kinu.Safety.CapabilitySafety.scaffoldwrite_not_grantable
 #print axioms Kinu.Safety.CapabilitySafety.spawnsubagent_not_grantable
 #print axioms Kinu.Safety.CapabilitySafety.networkfetch_not_grantable
+
+/-! ## Kinu/Safety/Credentials.lean -/
+
+#print axioms Kinu.Safety.Credentials.an_envelope_opens_only_where_it_was_sealed
+#print axioms Kinu.Safety.Credentials.a_plain_row_opens_under_every_context
+#print axioms Kinu.Safety.Credentials.one_context_per_store_and_key
+#print axioms Kinu.Safety.Credentials.credential_contexts_never_meet_mcp_contexts
+#print axioms Kinu.Safety.Credentials.clients_cannot_tell_two_stores_apart_by_their_secrets
+#print axioms Kinu.Safety.Credentials.a_deleted_credential_yields_no_headers
+#print axioms Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
+#print axioms Kinu.Safety.Credentials.rewrap_seals_a_plain_row
 
 /-! ## Kinu/Storage/FTS5Search.lean -/
 

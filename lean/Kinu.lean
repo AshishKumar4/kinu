@@ -1,23 +1,19 @@
 /-
-  Kinu — Formal specification of the self-evolving agent architecture.
-
-  28 modules across 8 categories, plus `Kinu.Axioms`. 0 sorry. No Float
-  axioms — the backprop model is exact scaled-integer arithmetic (see
-  MCTS/Backpropagation.lean); the only remaining axiom is the FTS5 trusted
-  assumption (Storage/FTS5Search.lean).
+  Kinu — formal models of the self-evolving agent architecture. 0 sorry. The
+  one axiom is the trusted FTS5 assumption (Storage/FTS5Search.lean); no
+  published theorem depends on it. `lean/traceability.yaml` is the inventory.
 
   Core: Types
-  Safety: CapabilitySafety
-  MCTS: StorageIsolation, Backpropagation
+  Safety: CapabilitySafety, Credentials
+  MCTS: StorageIsolation, Backpropagation, Uct, Convergence
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
-  Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain
-  Execution: Capabilities (subsumption chain + router correctness), ToolSystem (5-tool model)
-  Exploration: Objective, Publication (S7/S6/S4/S1 as reachability over traces),
-    Settle (settleOf's fibres), Archive (S5), Records (S2 scalar + the Pareto
-    weakening), Arbitration (S8, with S3 as its consequence), Isolation (why the
-    toolless proof does NOT reach an agent node), RecordsStore, ArchiveAdmission,
-    FanIn, Rebase
+  Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain, BlockLayer, LossWindow
+  Execution: Capabilities, ToolSystem
+  Exploration: Objective, Publication, Settle, Archive, Records, Arbitration,
+    Isolation, RecordsStore, ArchiveAdmission, FanIn, Rebase, Concurrent,
+    Counterfactual, Improvement
+  Refine (a separate root): the generators of `lean/fixtures/`
 -/
 
 -- Core types
@@ -25,6 +21,7 @@ import Kinu.Types
 
 -- Safety proofs
 import Kinu.Safety.CapabilitySafety
+import Kinu.Safety.Credentials
 
 -- MCTS proofs
 import Kinu.MCTS.StorageIsolation

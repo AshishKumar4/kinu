@@ -86,8 +86,9 @@ structure Member where
 def memberOf (es : List Cand) (c : Cand) : Member :=
   ⟨c.id, c.depth, (through es c.id).sum, (through es c.id).length, c.path, c.text⟩
 
+/-- The root row. Its proposal is the task text `runMCTS` records it with. -/
 def rootMember (es : List Cand) (rootId : String) : Member :=
-  ⟨rootId, 0, (through es rootId).sum, (through es rootId).length, [], ""⟩
+  ⟨rootId, 0, (through es rootId).sum, (through es rootId).length, [], "task"⟩
 
 /-- `status IN ('terminal', 'open')`. -/
 def inPopulation (s : NodeStatus) : Bool := s == .open_ || s == .terminal
@@ -124,6 +125,61 @@ instance (pop : List Member) (w : Member) : Decidable (IsWinner pop w) :=
 theorem the_winner_has_the_greatest_value (pop : List Member) (w : Member) (h : IsWinner pop w) :
     ∀ x ∈ pop, ¬ valueLt w x :=
   fun x hx hlt => h.2 x hx (Or.inl hlt)
+
+/-! ## What `converge` answers -/
+
+/-- The lineage `findNearTiedRivals` sees: the row, then its ancestors upward for as
+    long as each is itself in the population. Its parent-link walk runs over
+    population rows only, so it stops at the first pruned or failed ancestor. -/
+def lineage (pop : List Member) (m : Member) : List String :=
+  m.id :: m.path.reverse.takeWhile (fun a => pop.any (·.id == a))
+
+/-- `findNearTiedRivals(population, winner, 0)` kept to exact ties: another row,
+    off depth 0, off the winner's lineage and the winner off its own, with a
+    non-empty proposal the winner's differs from, and the winner's value. -/
+def tiedRival (pop : List Member) (w x : Member) : Bool :=
+  x.id != w.id && x.depth != 0 && decide (valueEq x w) &&
+    !((lineage pop w).contains x.id) && !((lineage pop x).contains w.id) &&
+    x.text != "" && x.text != w.text
+
+inductive Outcome where
+  | converged (winner : String)
+  | undifferentiated (winner : String)
+  | noAcceptable (winner : String)
+  deriving Repr, DecidableEq
+
+/-- `converge` in plan mode once `w` heads the population. Rewards are on the scale
+    `scale`, and `minNum / minDen` is `minAcceptableScore`. -/
+def outcomeOf (pop : List Member) (scale minNum minDen : Nat) (w : Member) : Outcome :=
+  if pop.any (tiedRival pop w) then .undifferentiated w.id
+  else if w.sum * minDen < minNum * scale * w.den then .noAcceptable w.id
+  else .converged w.id
+
+/-- A search converges only on a winner with no exact tie among unrelated rows and
+    a value at or above the bar. -/
+theorem a_converged_winner_is_undisputed_and_acceptable (pop : List Member)
+    (scale minNum minDen : Nat) (w : Member)
+    (h : outcomeOf pop scale minNum minDen w = .converged w.id) :
+    (∀ x ∈ pop, tiedRival pop w x = false) ∧ ¬ (w.sum * minDen < minNum * scale * w.den) := by
+  unfold outcomeOf at h
+  by_cases ht : pop.any (tiedRival pop w) = true
+  · rw [if_pos ht] at h; cases h
+  · rw [if_neg ht] at h
+    refine ⟨fun x hx => ?_, fun hlt => ?_⟩
+    · cases hx' : tiedRival pop w x with
+      | false => rfl
+      | true => exact absurd (List.any_eq_true.mpr ⟨x, hx, hx'⟩) ht
+    · rw [if_pos hlt] at h; cases h
+
+/-- **A pruned parent splits a lineage.** A grandparent and its grandchild that
+    tie exactly are one approach refined, yet with the parent between them pruned,
+    the walk stops at the parent, so the grandparent counts as a distinct rival
+    and `converge` reports an undifferentiated search. -/
+theorem a_pruned_parent_splits_a_lineage :
+    let pop := [⟨"g", 1, 5, 1, ["R"], "grandparent"⟩, ⟨"c", 3, 10, 2, ["R", "g", "p"], "grandchild"⟩]
+    ("g" ∈ (⟨"c", 3, 10, 2, ["R", "g", "p"], "grandchild"⟩ : Member).path) ∧
+      tiedRival pop ⟨"c", 3, 10, 2, ["R", "g", "p"], "grandchild"⟩ ⟨"g", 1, 5, 1, ["R"], "grandparent"⟩ = true := by
+  decide
 
 /-! ## Means over lists -/
 
