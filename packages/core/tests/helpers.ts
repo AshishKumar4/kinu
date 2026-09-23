@@ -29,7 +29,6 @@ import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
-import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 import { WORKSPACE_IDENTITY_DDL, tableExists, initActorTables } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
@@ -302,14 +301,6 @@ export function createMockSession(): import('../src/mcts/record-node').SessionWr
       return result;
     },
   };
-}
-
-/** Collect the workspace text-file walk into a map; production never holds every body at once. */
-export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  await walkWorkspaceTextFiles(rt, (path, content) => { out[path] = content; });
-
-  return out;
 }
 
 /** Both console channels for one awaited call; stdout is the CLI's machine stream. */

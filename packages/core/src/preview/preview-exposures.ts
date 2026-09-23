@@ -57,6 +57,8 @@ export interface SandboxPreviewExposures {
   /** Writes only when missing or past half-life, never under a withdrawing watermark. */
   refresh(port: number, token: string): Promise<void>;
   withdraw(port: number): Promise<void>;
+  /** What the edge answers for this sandbox's label: {@link sandboxPreviewExposed}. */
+  exposed(port: number, token: string): Promise<boolean>;
   /** Watermark outranking every earlier record; used on workspace destruction. */
   revokeAll(): Promise<void>;
 }
@@ -111,6 +113,7 @@ export function sandboxPreviewExposures(
     async withdraw(port) {
       await kv.delete(exposureKey(sandboxId, port));
     },
+    exposed: (port, token) => sandboxPreviewExposed(kv, { sandboxId, port, token }),
     async revokeAll() {
       const now = Date.now();
       await writeKvJson(

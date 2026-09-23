@@ -331,7 +331,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('registerDurableWebhook'),
       cli: { absent: NO_LOCAL_INGRESS },
     },
-    vfs_baseline: EVERYWHERE,
+    vfs_baseline_manifest: EVERYWHERE,
+    vfs_baseline_blob: EVERYWHERE,
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,
