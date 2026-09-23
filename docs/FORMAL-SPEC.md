@@ -20,7 +20,7 @@ evidence.
 | Area | Theorems | What is modeled | Boundary |
 |------|---------:|-----------------|----------|
 | Exploration | 258 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds, the records store under concurrent runs, the verifier counterfactual, eventual improvement under a discrimination floor | Two modules are conditional by their own headers: the descriptor partition depends on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation, not a bound. `Improvement.lean` models the engine's rounds, not its code |
-| Storage | 77 | index/list properties, byte-chunk reassembly, a list-backed filesystem, the SQLite filesystem's own correctness obligations, snapshot-chain attach, tick, rebase, generation and crash-loss cost, read-only block-layer composition, and the wall-clock loss window of a periodic sync | SQLite tokenization, ranking, concurrency and table-to-model correspondence remain external evidence obligations. Every chain independence claim is checked against a cost definition, not against the algorithm. Alarm lateness and tick duration are parameters, not measurements |
+| Storage | 78 | index/list properties, byte-chunk reassembly, a list-backed filesystem, the SQLite filesystem's own correctness obligations, snapshot-chain attach, tick, rebase, generation and crash-loss cost, read-only block-layer composition, and the wall-clock loss window of a periodic sync | SQLite tokenization, ranking, concurrency and table-to-model correspondence remain external evidence obligations. Every chain independence claim is checked against a cost definition, not against the algorithm. Alarm lateness and tick duration are parameters, not measurements |
 | MCTS | 39 | the UCT bonus order and the selection argmax, convergence over the tree the search leaves, exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite scores and backpropagates in IEEE-754 `REAL` values, and the storage-isolation transitions are maintained by hand |
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
@@ -28,8 +28,8 @@ evidence.
 | Safety | 8 | the credential store's client view, envelope binding and rotation | The cipher's guarantees are premises. The device connection is not yet modelled |
 
 Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
-reports 428 named declarations, and the traceability map enrolls all 428: 64
-under `proved-and-refined` requirements, 304 under `proved-in-abstract-model`
+reports 429 named declarations, and the traceability map enrolls all 429: 64
+under `proved-and-refined` requirements, 305 under `proved-in-abstract-model`
 and 60 under `by-construction-witness`.
 
 Status is declared on a requirement and inherited by every theorem it claims,

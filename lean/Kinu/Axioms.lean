@@ -170,8 +170,9 @@ import Kinu
 #print axioms Kinu.Storage.LossWindow.ticks_lose_at_most_one_period_and_two_ticks
 #print axioms Kinu.Storage.LossWindow.worstTicks_periodic
 #print axioms Kinu.Storage.LossWindow.the_tick_bound_is_tight
-#print axioms Kinu.Storage.LossWindow.a_refused_stop_stretches_the_window
-#print axioms Kinu.Storage.LossWindow.the_gate_skips_at_most_one_tick
+#print axioms Kinu.Storage.LossWindow.the_gate_never_skips_a_periodic_tick
+#print axioms Kinu.Storage.LossWindow.another_commit_never_loses_a_write
+#print axioms Kinu.Storage.LossWindow.a_refused_stop_keeps_the_window
 
 /-! ## Kinu/Storage/SnapshotChain.lean -/
 

@@ -291,7 +291,7 @@ Primary key `(actor_id, id)`.
 
 ## Formal properties (Lean 4)
 
-39 of the corpus's 428 named declarations live in `lean/Kinu/MCTS/`
+39 of the corpus's 429 named declarations live in `lean/Kinu/MCTS/`
 (measured 2026-09-23 with `node lean/check-traceability.mjs --list-declarations`). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 

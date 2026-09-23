@@ -974,7 +974,7 @@ requirements:
       - The wall-clock width is checkpoint cadence plus one in-flight operation, a scheduling fact the counter models do not see
       - A write is one unit; the models bound lost writes, and bytes follow from the implementation's whole-file fingerprints and fixed-size chunks
   PR-DEVBOX-006:
-    statement: A crash loses no write at least P + J + 2D - 1 old while every periodic tick commits, a schedule loses one P + J + 2D - 2 old, each missed tick adds P + J + D, and a quiesce commit whose stop is refused makes the minimum-interval gate skip the next tick, stretching the window past P + J + 2D.
+    statement: A crash loses no write P + J + 2D - 1 old while every periodic tick commits, a schedule loses one P + J + 2D - 2 old, each missed tick adds P + J + D, and because the minimum-interval gate is clocked by tick commits alone it never skips a periodic tick, so a quiesce commit whose stop is refused leaves the window at P + J + 2D.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Storage.LossWindow.a_covered_write_survives
@@ -982,8 +982,9 @@ requirements:
       - Kinu.Storage.LossWindow.ticks_lose_at_most_one_period_and_two_ticks
       - Kinu.Storage.LossWindow.worstTicks_periodic
       - Kinu.Storage.LossWindow.the_tick_bound_is_tight
-      - Kinu.Storage.LossWindow.a_refused_stop_stretches_the_window
-      - Kinu.Storage.LossWindow.the_gate_skips_at_most_one_tick
+      - Kinu.Storage.LossWindow.the_gate_never_skips_a_periodic_tick
+      - Kinu.Storage.LossWindow.another_commit_never_loses_a_write
+      - Kinu.Storage.LossWindow.a_refused_stop_keeps_the_window
     tsRefs:
       - packages/devbox/src/devbox.ts#Devbox.devboxCheckpoint
       - packages/devbox/src/devbox.ts#Devbox.quiesce
@@ -991,6 +992,7 @@ requirements:
       - packages/devbox/src/lifecycle.ts#DEFAULT_DEVBOX_POLICY
     remainingEvidence:
       - P is the shipped checkpointIntervalMs of 300000 ms; J, the alarm lateness, and D, the longest tick, are parameters with no recorded measurement
+      - The gate is modelled as lane/devbox 1c68a65b3 ships it, clocked by tick commits alone (tickClock); this branch's shouldCheckpoint predates that commit, and the refinement against it follows once it is on main
       - A background sync that replaces the periodic tick instantiates Tick with its own period and upload bound
       - A tick is modelled from its start to its commit; interruption inside one storage operation is PR-DEVBOX-002's scope
   PR-DEVBOX-004:
