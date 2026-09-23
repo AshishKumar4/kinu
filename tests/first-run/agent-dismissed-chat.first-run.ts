@@ -14,7 +14,7 @@
  *
  * NO WALL CLOCK. Every wait is settled by the product or by the case's own
  * BUDGET abort, so each verdict is "answered" or "never answered before the
- * budget"; the one pause spaces the pager reads and decides nothing.
+ * budget".
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -74,21 +74,6 @@ function historyEntries(value: JsonValue) {
   const of = (role: string): string => items.filter((entry) => entry.role === role).map((entry) => entry.content).join(' ');
 
   return { said: of('user'), answered: of('assistant') };
-}
-
-/** The agent's answer once its own pager holds it, or '' when the budget ends
- *  first. The pager is the product's own word on what the turn persisted; the
- *  pause between reads only spaces them, and the budget bounds the wait. */
-async function durableAnswer(socket: PublicSocket, actor: string, budget: AbortSignal): Promise<string> {
-  while (!budget.aborted) {
-    const page = await ask(socket, 'getChatHistoryPage', [{ actor, limit: 50 }]);
-    const { answered } = page.ok ? historyEntries(page.value) : { answered: '' };
-
-    if (answered.trim().length > 0) return answered;
-    await new Promise<void>((resolve) => setTimeout(resolve, 250));
-  }
-
-  return '';
 }
 
 async function roster(socket: PublicSocket): Promise<{ readonly rows: v.InferOutput<typeof RosterSchema> | null; readonly detail: string }> {
@@ -169,16 +154,17 @@ describe(SUITE, () => {
             return announce(subgoals);
           }
 
-          // The answer is durable before the agent is dismissed: a dismissal
-          // lands on a settled conversation, the one the dialog promises to
-          // keep, never on a turn still writing its answer.
-          const answered = await durableAnswer(own, actorId, budget);
+          // `chat` resolved on the DO's `done` frame, sent once the answer is
+          // durable, so the dismissal lands on a settled conversation — the one
+          // the dialog promises to keep — and its own pager already holds it.
+          const ownPage = await ask(own, 'getChatHistoryPage', [{ actor: actorId, limit: 50 }]);
+          const { answered } = ownPage.ok ? historyEntries(ownPage.value) : { answered: '' };
           subgoals.push({
             what: 'chat-answered',
             reached: answered.length > 0,
             detail: answered.length > 0
               ? `its own pager holds the answer ${JSON.stringify(answered.slice(0, 120))}${relay}`
-              : `no answer reached its own pager before the budget${relay}`,
+              : `its own pager holds no answer${ownPage.ok ? '' : `: ${ownPage.failure.slice(0, 200)}`}${relay}`,
           });
 
           if (answered.length === 0) return announce(subgoals);

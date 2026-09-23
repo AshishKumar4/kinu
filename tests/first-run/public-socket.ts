@@ -101,11 +101,14 @@ export function openPublicSocket(
     turn.recorder.apply(frame.frame);
     const settled = turn.recorder.settled();
 
-    if (settled === null) return;
+    // The turn is over on the DO's `done` frame, sent once its answer is
+    // durable (`closeTurn`, packages/cf-backend/src/chat-transport.ts). An error
+    // frame can come first — the relay to this socket broke, the turn did not —
+    // and a row that moved on at it would act on a turn still writing.
+    if (settled === null || frame.frame.done !== true) return;
     turns.delete(frame.frame.id);
-    // The recorder settles on the wire's own word. A mid-turn landing carries
-    // no absorbing run id here: this row sends one message per socket, so
-    // there is no second send whose close would name one.
+    // A mid-turn landing carries no absorbing run id here: this row sends one
+    // message per socket, so there is no second send whose close would name one.
     turn.resolve(settled.landed === 'mid-turn' ? { landed: 'mid-turn', absorbedBy: null } : settled);
   });
 
