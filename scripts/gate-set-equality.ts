@@ -120,6 +120,11 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     + 'point is to see what git never will.',
   ],
   [
+    'scripts/test-scratch-home.ts',
+    'reads the OS temp directory for scratch roots whose recorded owner process has ended. Not a '
+    + 'repository path: the roots are the test runs\' own, minted outside the tree.',
+  ],
+  [
     'scripts/bench-sandbox.ts',
     'copies the tree into a solver sandbox and re-points `node_modules/@kinu.run/*` symlinks. '
     + '`git ls-files` does not list `node_modules`, so the set it needs is exactly the set no '
