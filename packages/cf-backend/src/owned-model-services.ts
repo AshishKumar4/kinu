@@ -50,6 +50,7 @@ export interface OwnedModelServicesOptions<Id> {
   readonly getCredentialsRevision: () => Promise<number>;
   /** Invoked at wait time, so the callback may read live turn state. */
   readonly onProviderWait?: (info: ProviderWaitInfo) => void;
+  readonly accountFor?: (providerId: string) => string | undefined;
 }
 
 export class OwnedModelServices<Id = DurableObjectId> {
@@ -90,6 +91,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
       appTitle: this.options.appTitle,
       sessionAffinity: this.affinityKey,
       onProviderWait: this.options.onProviderWait,
+      accountFor: this.options.accountFor,
     });
 
     return this.providerRegistryCache;

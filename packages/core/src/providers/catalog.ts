@@ -1,4 +1,4 @@
-// Dynamic models.dev source for providers usable with a stored `<id>.bearer` key; bespoke providers take precedence.
+// Dynamic models.dev source for providers usable with a stored `<id>.bearer` key.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
@@ -7,6 +7,7 @@ import type { DynamicProviderSource } from './registry';
 import type { ModelProvider, ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { KINU_USER_AGENT } from '../utils/user-agent';
+import { baseCredentialKey } from '../credentials/accounts';
 import {
   getModelsDevProvider,
   getModelsDevModelEndpoint,
@@ -22,6 +23,10 @@ export function catalogCredKey(providerId: string): string {
 }
 
 const CRED_KEY_PATTERN = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
+
+export function catalogProviderOfKey(key: string): string | null {
+  return CRED_KEY_PATTERN.exec(baseCredentialKey(key))?.[1] ?? null;
+}
 
 export interface ModelsDevCatalogSourceOptions {
   /** Catalog ids never served dynamically (aliases of bespoke providers, e.g. `cloudflare-workers-ai`). */
@@ -50,7 +55,7 @@ export function createModelsDevCatalogSource(opts: ModelsDevCatalogSourceOptions
       const ids: string[] = [];
 
       for (const key of keys) {
-        const id = CRED_KEY_PATTERN.exec(key)?.[1];
+        const id = catalogProviderOfKey(key);
 
         if (!id || excluded.has(id) || ids.includes(id)) continue;
         const info = await getModelsDevProvider(id, deps);

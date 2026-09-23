@@ -53,6 +53,8 @@ export type RoleCatalog = Readonly<Record<RoleId, RoleDefinition>>;
 export interface ProfileCatalog {
   roles: RoleCatalog;
   tiers: TierAssignments;
+  /** Per provider: the default account. */
+  accounts?: Readonly<Record<string, string>> | undefined;
 }
 
 export type ProfileAuthority =

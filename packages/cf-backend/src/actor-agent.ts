@@ -143,7 +143,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
   ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
@@ -964,6 +964,8 @@ export abstract class ActorAgent extends Agent<Env> {
       return stub.getCredentialsRevision(caller);
     },
     onProviderWait: (info) => { this.noteProviderWait(info); },
+    accountFor: (provider) => this.config.getProviderAccounts()[provider]
+      ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider],
   });
 
   constructor(ctx: AgentContext, env: Env) {
@@ -3913,10 +3915,10 @@ export abstract class ActorAgent extends Agent<Env> {
     effectiveSpec: () => this.effectiveModelSpec(),
     lookup: async (spec) => {
       if (!spec) return null;
-      const { provider, modelId } = parseModelSpec(spec);
+      const { provider, modelId, account } = parseModelSpec(spec);
       const reg = this.providerRegistry();
 
-      return catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
+      return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
     },
   });
 
@@ -4285,7 +4287,8 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
 
     const countInputTokens = (request: CountableRequest): Promise<InputTokenCount> => countRequestInputTokens(
-      providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
+      providers.registry.get(tierModel.provider), tierModel.modelId,
+      accountDeps(providers.deps, tierModel.provider, tierModel.account), request,
     );
 
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan() });

@@ -481,7 +481,8 @@ export class LocalAgentSession implements BackendHost {
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.fallbackModel = opts.model ?? null;
-    this.modelResolver = opts.modelResolver ?? null;
+    this.modelResolver = opts.modelResolver?.withAccountChoice?.((provider) => this.accountChoice(provider))
+      ?? opts.modelResolver ?? null;
     this.rt.setModelForRoute?.((resolution) => this.localRouteLlm(resolution));
 
     if (!opts.model && !this.modelResolver) {
@@ -901,6 +902,10 @@ export class LocalAgentSession implements BackendHost {
 
   listModelProviders() {
     return this.modelResolver?.listProviders() ?? Promise.resolve([]);
+  }
+
+  private accountChoice(provider: string): string | undefined {
+    return this.config.getProviderAccounts()[provider] ?? this.actorSession.profileInputs?.envelope.catalog.accounts?.[provider];
   }
 
   listAvailableModels() {

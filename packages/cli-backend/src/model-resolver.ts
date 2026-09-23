@@ -7,6 +7,7 @@ import {
   createAnthropicProvider,
   createCodexProvider,
   availableJudgeSpecs,
+  accountDeps,
   catalogModelInfo,
   createModelsDevCatalogSource,
   createOpenAICompatProvider,
@@ -17,8 +18,10 @@ import {
   listModelsDevProviderModels,
   normalizeUsage,
   parseModelSpec,
+  specProvider,
   workersAiSpec, WORKERS_AI_MODEL_ID_PREFIX,
-  PROXY_DENIED_CRED_KEYS,
+  catalogProviderOfKey,
+  isProxyDeniedCredentialKey,
   providerProxyCredentialsURL,
   providerProxyForwardURL,
   proxyAuthResolution,
@@ -126,6 +129,7 @@ export interface LocalModelResolver {
    * shared across sessions, so the last install wins. Unset leaves waits unreported.
    */
   setProviderWaitSink?(sink: ((info: ProviderWaitInfo) => void) | undefined): void;
+  withAccountChoice?(choice: (providerId: string) => string | undefined): LocalModelResolver;
 }
 
 export interface LocalModelResolverConfig {
@@ -313,7 +317,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const proxied = cloud ? proxyCredentialSourceFor(cloud, opts.fetch) : null;
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
-  const deps: ProviderDeps = {
+  const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
     env: {},
     sessionAffinity: opts.sessionAffinity,
     fetch: cloud ? proxyFetchFor(cloud, opts.fetch) : opts.fetch,
@@ -331,7 +335,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       if (authStore.has(key)) return true;
 
       // A credential the proxy never fronts: the local answer is complete.
-      if (PROXY_DENIED_CRED_KEYS.includes(key)) return false;
+      if (isProxyDeniedCredentialKey(key)) return false;
       const remote = await proxied?.load();
 
       if (!remote) return false;
@@ -355,7 +359,10 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       return [...keys];
     },
     onProviderWait: (info) => { opts.onProviderWait?.(info); },
-  };
+    accountFor,
+  });
+
+  const deps = depsFor();
 
   /** Null endpoint = no default; fixes live in `noDefaultModelMessage`. */
   const fallback: { provider: string; model: string } | null = localEndpoint
@@ -376,11 +383,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
     if (s.startsWith(WORKERS_AI_MODEL_ID_PREFIX)) return workersAiSpec(s);
 
-    const slash = s.indexOf('/');
+    const first = specProvider(s);
 
-    if (slash > 0) {
-      const first = s.slice(0, slash);
-
+    if (first !== null) {
       if (registry.get(first)) return s;
 
       // Account-connected models.dev providers count here. The snapshot is empty
@@ -399,37 +404,42 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     return `${fallback.provider}/${s}`;
   }
 
-  return {
+  const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
     resolveModel(specOrNull) {
-      return registry.resolve(normalizeSpecSync(specOrNull), deps);
+      return registry.resolve(normalizeSpecSync(specOrNull), own);
     },
     listProviders() {
-      return registry.listProviders(deps);
+      return registry.listProviders(own);
     },
     judgeCandidates() {
-      return availableJudgeSpecs(registry, deps);
+      return availableJudgeSpecs(registry, own);
     },
     listModels() {
-      return registry.listAllModels(deps);
+      return registry.listAllModels(own);
     },
     async modelInfo(specOrNull) {
       const spec = normalizeSpecSync(specOrNull);
-      const { provider, modelId } = parseModelSpec(spec);
+      const { provider, modelId, account } = parseModelSpec(spec);
 
-      return catalogModelInfo(registry.get(provider), deps, modelId);
+      return catalogModelInfo(registry.get(provider), accountDeps(own, provider, account), modelId);
     },
     async countInputTokens(specOrNull, request) {
       const spec = normalizeSpecSync(specOrNull);
-      const { provider, modelId } = parseModelSpec(spec);
+      const { provider, modelId, account } = parseModelSpec(spec);
 
-      return countRequestInputTokens(registry.get(provider), modelId, deps, request);
+      return countRequestInputTokens(registry.get(provider), modelId, accountDeps(own, provider, account), request);
     },
     getAuth: deps.getAuth,
     setProviderWaitSink(sink) {
       opts.onProviderWait = sink;
     },
-  };
+    withAccountChoice(choice) {
+      return resolverWith(depsFor(choice));
+    },
+  });
+
+  return resolverWith(deps);
 }
 
 function withAffinity(llm: LLMProviderConfig, sessionAffinity: string | undefined): LLMProviderConfig {
@@ -548,8 +558,6 @@ interface ProxiedCredentials {
 
 const PROXIED_CREDENTIALS_TTL_MS = 60_000;
 
-const CATALOG_CRED_KEY = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
-
 interface ProxyCredentialSource {
   load(): Promise<ProxiedCredentials>;
   /** Synchronous: `normalizeSpecSync` must decide whether `groq/llama-3.3` starts
@@ -609,7 +617,7 @@ function createProxyCredentialSource(
 
       const value: ProxiedCredentials = { byKey, error: null };
       cached = { at: Date.now(), value };
-      providerIds = new Set([...byKey.keys()].flatMap((key) => CATALOG_CRED_KEY.exec(key)?.[1] ?? []));
+      providerIds = new Set([...byKey.keys()].flatMap((key) => catalogProviderOfKey(key) ?? []));
 
       return value;
     } catch (err) {

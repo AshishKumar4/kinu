@@ -1413,6 +1413,15 @@ export {
   validateCredentialKey,
 } from './credentials/validate';
 
+export {
+  MAIN_ACCOUNT,
+  accountCredentialKey,
+  baseCredentialKey,
+  isAccountName,
+  splitAccount,
+  storedAccounts,
+} from './credentials/accounts';
+
 // Plan review
 export {
   MAX_PLAN_ANNOTATIONS_BYTES,

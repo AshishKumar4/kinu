@@ -3,7 +3,7 @@
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
 import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
 import { type ProviderFailure } from './registry';
-import { MODEL_CAPABILITIES, type ModelCapability } from './types';
+import { MODEL_CAPABILITIES, specProvider, specWithoutAccount, type ModelCapability } from './types';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 
@@ -65,10 +65,11 @@ export type ModelSpecValidation =
   | { status: 'unknown-provider'; provider: string; providers: string[] };
 
 export function validateModelSpec(models: readonly AgentModelEntry[], spec: string): ModelSpecValidation {
-  if (models.some((model) => model.spec === spec)) return { status: 'known' };
+  const listed = specWithoutAccount(spec);
 
-  const slash = spec.indexOf('/');
-  const provider = slash > 0 ? spec.slice(0, slash) : '';
+  if (models.some((model) => model.spec === listed)) return { status: 'known' };
+
+  const provider = specProvider(spec) ?? '';
   const providers = [...new Set(models.map((model) => model.provider))].sort();
 
   if (!provider || !providers.includes(provider)) {
@@ -77,7 +78,7 @@ export function validateModelSpec(models: readonly AgentModelEntry[], spec: stri
 
   const suggestions = models
     .filter((model) => model.provider === provider)
-    .sort((a, b) => sharedPrefixLength(spec, b.spec) - sharedPrefixLength(spec, a.spec)
+    .sort((a, b) => sharedPrefixLength(listed, b.spec) - sharedPrefixLength(listed, a.spec)
       || a.spec.localeCompare(b.spec))
     .slice(0, 3)
     .map((model) => model.spec);

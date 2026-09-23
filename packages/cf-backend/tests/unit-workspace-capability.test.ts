@@ -204,4 +204,14 @@ describe('model-inference credential keys', () => {
       expect(isModelInferenceCredentialKey(key)).toBe(false);
     }
   });
+
+  test('an account carries its base key\'s standing: a model account stays one, a suffix makes nothing a model key', () => {
+    for (const key of ['codex.oauth@work', 'anthropic.bearer@work', 'openai-compat.mybox@lab']) {
+      expect(isModelInferenceCredentialKey(key)).toBe(true);
+    }
+
+    for (const key of ['github@work', 'gateway-admin@x.bearer', 'tavily@bearer']) {
+      expect(isModelInferenceCredentialKey(key)).toBe(false);
+    }
+  });
 });

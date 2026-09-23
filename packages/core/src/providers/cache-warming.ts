@@ -3,7 +3,7 @@
  * expires (docs/research/harness/anthropic-sources.md §2). Armed only after a read with no write.
  */
 
-import type { ModelSpec, CacheRetention } from './types';
+import { formatModelSpec, modelSpecHead, parseModelSpec, type ModelSpec, type CacheRetention } from './types';
 import type { Usage } from '../usage';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
@@ -183,11 +183,11 @@ export class CacheWarmStore {
     if (body.length > CACHE_WARM_MAX_BODY_BYTES) return false;
     void this.sql`
       INSERT INTO cache_warm (actor_id, requests, refreshes, due_at, armed_requests, spec, model_id, retention, body)
-      VALUES (${this.actor.actorId}, 1, 0, ${input.at}, 1, ${input.modelSpec.provider}, ${input.modelSpec.modelId},
+      VALUES (${this.actor.actorId}, 1, 0, ${input.at}, 1, ${modelSpecHead(input.modelSpec)}, ${input.modelSpec.modelId},
               ${input.retention}, ${body})
       ON CONFLICT(actor_id) DO UPDATE SET
         refreshes = 0, due_at = ${input.at}, armed_requests = cache_warm.requests,
-        spec = ${input.modelSpec.provider}, model_id = ${input.modelSpec.modelId},
+        spec = ${modelSpecHead(input.modelSpec)}, model_id = ${input.modelSpec.modelId},
         retention = ${input.retention}, body = ${body}`;
 
     return true;
@@ -216,7 +216,7 @@ export class CacheWarmStore {
     if (retention !== 'short' && retention !== 'long' && retention !== 'none') return null;
 
     return {
-      modelSpec: { provider: row.spec, modelId: row.model_id },
+      modelSpec: parseModelSpec(`${row.spec}/${row.model_id}`),
       retention,
       body: parseJsonObject(row.body),
       refreshes: row.refreshes,
@@ -348,7 +348,7 @@ export class CacheWarmingLane {
       return null;
     }
 
-    const spec = `${due.modelSpec.provider}/${due.modelSpec.modelId}`;
+    const spec = formatModelSpec(due.modelSpec);
     this.seams.spend({ source: 'warming', usage: outcome.usage, spec, modelId: due.modelSpec.modelId });
     const refreshes = due.refreshes + 1;
 

@@ -15,6 +15,7 @@ import { TierIdSchema, tierIdsOf,
 } from './catalog';
 import type { RunEventInput } from '../events/types';
 import { diagnostics, toKinuError } from '../obs/index';
+import { specWithoutAccount } from '../providers/types';
 import { currentOperationProfile } from './operation';
 import type { ActorReference } from '../identity/actor-handle';
 
@@ -219,7 +220,9 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   // Refused only when no model of the chain is listed.
   const requireAvailable = (model: string, fallbacks: readonly string[], id: TierId): void => {
-    if (!listingComplete || [model, ...fallbacks].some((spec) => provider.availableModels.includes(spec))) return;
+    const listed = (spec: string): boolean => provider.availableModels.includes(specWithoutAccount(spec));
+
+    if (!listingComplete || [model, ...fallbacks].some(listed)) return;
     throw new Error(
       `model ${JSON.stringify(model)} configured for the ${id} tier `
       + `is unavailable on provider revision ${JSON.stringify(provider.revision)}`

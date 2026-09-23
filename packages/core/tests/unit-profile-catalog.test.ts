@@ -82,6 +82,18 @@ describe('catalog validation', () => {
     }
   });
 
+  test('a chain may run one model on two accounts, and a default account is a well-formed name per provider', () => {
+    const spread = { ...VALID_CATALOG, tiers: { default: { model: 'anthropic@work/m', fallbacks: ['anthropic@home/m'] } } };
+    expect(validateProfileCatalog({ value: spread }).tiers.default.fallbacks).toEqual(['anthropic@home/m']);
+
+    const defaults = { ...VALID_CATALOG, accounts: { anthropic: 'work', 'openai-compat:box': 'lab' } };
+    expect(validateProfileCatalog({ value: defaults }).accounts).toEqual({ anthropic: 'work', 'openai-compat:box': 'lab' });
+
+    for (const accounts of [{ anthropic: 'Work' }, { anthropic: '' }, { '': 'work' }]) {
+      expect(() => validateProfileCatalog({ value: { ...VALID_CATALOG, accounts } })).toThrow(/invalid profile catalog/);
+    }
+  });
+
   test('an owner-added tier is a tier: roles may name it, and a role naming one the catalog lacks is refused', () => {
     // Tiers are open like roles; a role naming an unconfigured tier is refused at write, not aliased to
     // default.

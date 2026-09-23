@@ -63,7 +63,7 @@ import type { ActivitySnapshot, TabPresence, TurnClaimState } from "@kinu.run/co
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
-import { CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
+import { accountDeps, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
@@ -1183,7 +1183,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (provider?.warmCache === undefined) return null;
 
-        return { usage: await provider.warmCache(modelSpec.modelId, providers.deps, body) };
+        const deps = accountDeps(providers.deps, modelSpec.provider, modelSpec.account);
+
+        return { usage: await provider.warmCache(modelSpec.modelId, deps, body) };
       },
       spend: (report) => { this.reportModelCall(report); },
       now: () => Date.now(),

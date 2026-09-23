@@ -11,6 +11,7 @@ import { definePromptSection } from '../prompting/template';
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
 import { REASONING_EFFORTS } from '../strategy/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
+import { isAccountName } from '../credentials/accounts';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import {
@@ -93,6 +94,10 @@ const RoleDefinitionSchema = v.strictObject({
 const ProfileCatalogObjectSchema = v.strictObject({
   roles: v.record(RoleIdSchema, RoleDefinitionSchema),
   tiers: TierAssignmentsSchema,
+  accounts: v.optional(v.record(
+    v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9._:-]*$/)),
+    v.pipe(v.string(), v.check(isAccountName, 'an account name is a-z, 0-9 and dashes')),
+  )),
 });
 
 function allSpawnReferencesExist(

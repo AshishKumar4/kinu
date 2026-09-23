@@ -1,6 +1,8 @@
 /** General provider proxy: a client without the key sends a secret-free marker and the
  *  server attaches the key, only for targets under that provider's own base URL. */
+import { baseCredentialKey } from '../credentials/accounts';
 import { ANTHROPIC_BASE_URL, ANTHROPIC_CRED_KEY } from './anthropic';
+import { catalogProviderOfKey } from './catalog';
 import { getModelsDevProvider, modelsDevCompatBaseURL } from './models-dev';
 import { OPENAI_BASE_URL, OPENAI_CRED_KEY } from './openai';
 import { OPENROUTER_BASE_URL, OPENROUTER_CRED_KEY } from './openrouter';
@@ -40,9 +42,13 @@ export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
 
 /** Cloudflare keys also drive the AI Gateway management API, so only pinned endpoints
  *  get them; Codex rejects Workers egress as bot traffic (403). */
-export const PROXY_DENIED_CRED_KEYS: readonly string[] = [
+const PROXY_DENIED_CRED_KEYS: readonly string[] = [
   'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth',
 ];
+
+export function isProxyDeniedCredentialKey(key: string): boolean {
+  return PROXY_DENIED_CRED_KEYS.includes(baseCredentialKey(key));
+}
 
 /** Static provider base URLs; they win over the models.dev catalog. */
 interface StaticProviderBaseUrls {
@@ -55,19 +61,17 @@ const STATIC_PROVIDER_BASE_URLS: StaticProviderBaseUrls = {
   [OPENROUTER_CRED_KEY]: OPENROUTER_BASE_URL,
 };
 
-const CATALOG_CRED_KEY_PATTERN = /^([a-z0-9][a-z0-9._-]*)\.bearer$/;
-
 /** Base URL a credential may be spent under; null for `openai-compat.*`, whose base URL
  *  lives in the stored credential. */
 export async function providerProxyBaseURL(
   credKey: string,
   deps: Pick<ProviderDeps, 'fetch'>,
 ): Promise<string | null> {
-  if (PROXY_DENIED_CRED_KEYS.includes(credKey)) return null;
-  const staticBase = STATIC_PROVIDER_BASE_URLS[credKey];
+  if (isProxyDeniedCredentialKey(credKey)) return null;
+  const staticBase = STATIC_PROVIDER_BASE_URLS[baseCredentialKey(credKey)];
 
   if (staticBase) return staticBase;
-  const catalogId = CATALOG_CRED_KEY_PATTERN.exec(credKey)?.[1];
+  const catalogId = catalogProviderOfKey(credKey);
 
   if (!catalogId) return null;
   const info = await getModelsDevProvider(catalogId, deps);
