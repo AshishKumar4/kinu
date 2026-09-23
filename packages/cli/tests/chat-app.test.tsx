@@ -261,6 +261,29 @@ describe('ChatApp terminal interaction', () => {
     expect(screen.frame()).toContain('Send a message');
   });
 
+  test('a model picker row starts with the model, not an empty field and a separator', async () => {
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client);
+    screen.mockInput.pressKey('l', { ctrl: true });
+    await screen.waitFor('the model row', () => screen.frame().includes('openai/gpt-5.5'));
+    const row = screen.frame().split('\n').find((line) => line.includes('openai/gpt-5.5')) ?? '';
+
+    expect(row).toMatch(/GPT 5\.5 · openai · openai\/gpt-5\.5/u);
+    expect(row).not.toMatch(/· GPT 5\.5/u);
+  });
+
+  test('in a wide chat the workspace key is named in /help, not drawn over the header', async () => {
+    const screen = await mountChat(fakeClient({ name: 'alpha' }).client, { width: 140 });
+    await screen.waitFor('the header', () => screen.frame().includes('alpha'));
+    // Drawn over the rule, the hint's spaces show the rule through: `Alt+W─hide─workspaces`.
+    expect(screen.frame()).not.toMatch(/Alt\+W.{1,6}workspaces/u);
+
+    await screen.mockInput.typeText('/help');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the keyboard help', () => screen.frame().includes('Show or hide workspaces'));
+
+    for (const label of ['Command palette', 'Model picker', 'Agent Hub', 'Settings']) expect(screen.frame()).toContain(label);
+  });
+
 
   test('a slow model selection blocks newer surfaces until it settles', async () => {
     const pending = Promise.withResolvers<{ spec: string }>();
