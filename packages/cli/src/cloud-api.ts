@@ -5,9 +5,11 @@ import {
   DEVICE_SANDBOX_REASONS,
   DEVICE_TIERS,
   JsonValueSchema,
+  normalizeModelMenu,
   ProfileCatalogEnvelopeSchema,
   SPEND_SOURCES,
   UsageSchema,
+  type AgentModelMenu,
   type DeviceSandboxStatus,
   type JsonValue,
   type MissionBudgetSnapshot,
@@ -116,21 +118,6 @@ export interface CloudBackgroundJob {
   error?: string | null;
 }
 
-export interface CloudModelMenuEntry {
-  spec: string;
-  label: string;
-  provider: string;
-  capabilities?: string[];
-  contextWindow?: number;
-}
-
-/** `/api/cli/models` — pickable models plus the providers the server could
- *  not reach while building them. */
-export interface CloudModelMenu {
-  models: CloudModelMenuEntry[];
-  failures: Array<{ provider: string; label?: string; reason: string }>;
-}
-
 export interface CloudWebhookTriggerInput {
   label: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
@@ -220,14 +207,6 @@ export const CloudTriggerListSchema: v.GenericSchema<CloudTriggerList> = v.objec
 export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.object({
   id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),
-});
-
-const CloudModelMenuSchema: v.GenericSchema<CloudModelMenu> = v.object({
-  models: v.array(v.object({
-    spec: v.string(), label: v.string(), provider: v.string(),
-    capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
-  })),
-  failures: v.array(v.object({ provider: v.string(), label: v.optional(v.string()), reason: v.string() })),
 });
 
 const CloudCredentialSummarySchema: v.GenericSchema<CloudCredentialSummary> = v.object({
@@ -369,8 +348,10 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
   return cloudJson(v.array(CloudAgentSchema), origin, '/api/cli/workspaces', { token });
 }
 
-export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenu> {
-  return cloudJson(CloudModelMenuSchema, origin, '/api/cli/models', { token });
+/** Admitted by the rule both backends share, so every field the hub sends (each model's reasoning levels
+ *  included) reaches the TUI. */
+export async function listCloudAvailableModels(origin: string, token: string): Promise<AgentModelMenu> {
+  return normalizeModelMenu({ payload: await cloudJson(v.unknown(), origin, '/api/cli/models', { token }) });
 }
 
 /** Always an envelope: an uncustomized account gets version 0 over the builtin catalog. */

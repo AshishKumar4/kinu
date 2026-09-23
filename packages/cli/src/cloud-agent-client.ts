@@ -37,7 +37,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
+import type { AgentModelMenu } from '@kinu.run/core';
 import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -790,7 +790,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async listModels(): Promise<AgentModelMenu> {
-    const menu = normalizeModelMenu({ payload: await listCloudAvailableModels(this.origin, this.token) });
+    const menu = await listCloudAvailableModels(this.origin, this.token);
 
     // Only an empty menu with no failures is an error; provider failures are reported to the picker.
     if (menu.models.length === 0 && menu.failures.length === 0) {
