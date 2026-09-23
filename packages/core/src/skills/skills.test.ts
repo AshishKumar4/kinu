@@ -5,18 +5,22 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { present } from '@kinu.run/test-utils';
+import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../prompting/step-prune';
 import { estimateTokens } from '../llm';
 import {
   parseSkillFile, stringifySkillFile,
-  discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_HEADERS,
+  discoverSkills, BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS,
   resolveActiveSkills, extractExplicitInvocations,
   admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
-  SKILLS_DIR,
+  WORKSPACE_SKILLS_DIR, skillViewPath, skillsMount, workspaceSkillIndexLine,
   type SkillsVfs, type ActiveSkill, type DiscoveredSkill,
 } from './index';
+import { withMountTable } from '../vfs/mounts';
+import type { VFS } from '../types/primitives';
+import { resolveTurnSkills, type TurnSkillSurface } from '../orchestrator/turn-surface';
+import { buildSystemPromptSync } from '../prompt';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { makeVfsError } from '../vfs/errno';
 import type { InstructionTrustResolver } from '../safety/instruction-trust';
@@ -92,11 +96,8 @@ function fakeSkill(name: string, opts: Partial<ActiveSkill> = {}): DiscoveredSki
     name,
     description: opts.description ?? `desc ${name}`,
     allowed_tools: opts.allowed_tools ?? [],
-    keywords: opts.keywords ?? [],
-    auto_activate: opts.auto_activate ?? false,
-    disable_model_invocation: opts.disable_model_invocation ?? false,
     user_invocable: opts.user_invocable ?? true,
-    bodyRef: opts.bodyRef ?? { kind: 'file', path: `${SKILLS_DIR}/${name}.md`, chars: body.length },
+    bodyRef: opts.bodyRef ?? { kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/${name}.md`, chars: body.length },
     ext: {},
     source: 'vfs',
   };
@@ -127,8 +128,6 @@ Do the thing.
     expect(r.skill.name).toBe('hello-world');
     expect(r.skill.description).toBe('A trivial workflow.');
     expect(r.skill.allowed_tools).toEqual([]);
-    expect(r.skill.keywords).toEqual([]);
-    expect(r.skill.auto_activate).toBe(false);
     expect(r.skill.body).toContain('# Hello');
     expect(r.skill.source).toBe('vfs');
   });
@@ -263,25 +262,6 @@ body
     expect(r.ok).toBe(false);
   });
 
-  test('parses disable-model-invocation and coerces auto_activate to false', () => {
-    const r = parseSkillFile(`---
-name: locked
-description: x
-keywords: [foo]
-auto_activate: true
-disable-model-invocation: true
----
-body
-`);
-
-    expect(r.ok).toBe(true);
-
-    if (!r.ok) return;
-    expect(r.skill.disable_model_invocation).toBe(true);
-    // Coerced false because disable_model_invocation overrides.
-    expect(r.skill.auto_activate).toBe(false);
-  });
-
   // Only a real `false` closes the skill to `/skill-name`.
   for (const c of [
     { name: 'parses user-invocable: false', frontmatter: 'name: ops-only\ndescription: x\nuser-invocable: false', invocable: false },
@@ -296,13 +276,10 @@ body
     });
   }
 
-  test('only a real boolean opts in or out: a quoted "false" is a string, not a flag', () => {
+  test('only a real boolean closes a skill: a quoted "false" is a string, not a flag', () => {
     const quoted = parseSkillFile(`---
 name: quoted
 description: x
-keywords: [foo]
-auto_activate: "false"
-disable-model-invocation: "false"
 user-invocable: "false"
 ---
 body
@@ -310,10 +287,7 @@ body
 
     expect(quoted.ok).toBe(true);
 
-    if (!quoted.ok) return;
-    expect(quoted.skill.auto_activate).toBe(false);
-    expect(quoted.skill.disable_model_invocation).toBe(false);
-    expect(quoted.skill.user_invocable).toBe(true);
+    if (quoted.ok) expect(quoted.skill.user_invocable).toBe(true);
   });
 
   test('preserves unknown front-matter keys in ext (forward-compat)', () => {
@@ -333,27 +307,12 @@ body
     expect(r.skill.ext.also_custom).toBe(42);
   });
 
-  test('lowercases keywords for case-insensitive matching', () => {
-    const r = parseSkillFile(`---
-name: x
-description: x
-keywords: [Audit, REVIEW, refactor]
----
-body
-`);
-
-    expect(r.ok).toBe(true);
-
-    if (r.ok) expect(r.skill.keywords).toEqual(['audit', 'review', 'refactor']);
-  });
-
   test('round-trips parse → stringify → parse', () => {
     const original = parseSkillFile(`---
 name: round-trip
 description: A skill that survives serialization.
 allowed-tools: [run, memory]
-keywords: [round, trip]
-auto_activate: true
+user-invocable: false
 ---
 
 # Round trip
@@ -372,8 +331,7 @@ Body content with **markdown**.
     expect(reparsed.skill.name).toBe(original.skill.name);
     expect(reparsed.skill.description).toBe(original.skill.description);
     expect(reparsed.skill.allowed_tools).toEqual(original.skill.allowed_tools);
-    expect(reparsed.skill.keywords).toEqual(original.skill.keywords);
-    expect(reparsed.skill.auto_activate).toBe(original.skill.auto_activate);
+    expect(reparsed.skill.user_invocable).toBe(original.skill.user_invocable);
     expect(reparsed.skill.body.trim()).toBe(original.skill.body.trim());
   });
 
@@ -443,7 +401,7 @@ describe('extractExplicitInvocations', () => {
 describe('resolveActiveSkills', () => {
   test('explicit invocation activates', () => {
     const set = resolveActiveSkills({
-      available: [fakeSkill('a')], explicit: ['a'], userMessage: '', alwaysActive: [],
+      available: [fakeSkill('a')], explicit: ['a'], alwaysActive: [],
     });
 
     expect(set.map(a => a.skill.name)).toEqual(['a']);
@@ -452,30 +410,7 @@ describe('resolveActiveSkills', () => {
 
   test('explicit invocation that does not match any skill is silently dropped', () => {
     const set = resolveActiveSkills({
-      available: [fakeSkill('a')], explicit: ['nonexistent'], userMessage: '', alwaysActive: [],
-    });
-
-    expect(set).toEqual([]);
-  });
-
-  test('keyword auto-activation requires auto_activate: true', () => {
-    const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
-    const b = fakeSkill('b', { keywords: ['audit'], auto_activate: false });
-
-    const set = resolveActiveSkills({
-      available: [a, b], explicit: [], userMessage: 'please audit my code', alwaysActive: [],
-    });
-
-    const names = set.map(s => s.skill.name);
-    expect(names).toContain('a');
-    expect(names).not.toContain('b');
-  });
-
-  test('keyword match is whole-word (no substring traps)', () => {
-    const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
-
-    const set = resolveActiveSkills({
-      available: [a], explicit: [], userMessage: 'auditorium', alwaysActive: [],
+      available: [fakeSkill('a')], explicit: ['nonexistent'], alwaysActive: [],
     });
 
     expect(set).toEqual([]);
@@ -483,53 +418,19 @@ describe('resolveActiveSkills', () => {
 
   test('always_active activates when the skill exists', () => {
     const set = resolveActiveSkills({
-      available: [fakeSkill('a')], explicit: [], userMessage: '', alwaysActive: ['a'],
+      available: [fakeSkill('a')], explicit: [], alwaysActive: ['a'],
     });
 
     expect(set.map(a => a.skill.name)).toEqual(['a']);
     expect(set[0]?.reason.kind).toBe('always_active');
   });
 
-  test('explicit overrides keyword and always_active reasons', () => {
-    const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
-
+  test('explicit overrides always_active, and the same skill is activated once', () => {
     const set = resolveActiveSkills({
-      available: [a], explicit: ['a'], userMessage: 'audit please', alwaysActive: ['a'],
+      available: [fakeSkill('a')], explicit: ['a'], alwaysActive: ['a'],
     });
 
-    expect(set[0]?.reason.kind).toBe('explicit');
-  });
-
-  test('the same skill cannot be activated twice', () => {
-    const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
-
-    const set = resolveActiveSkills({
-      available: [a], explicit: ['a'], userMessage: 'audit', alwaysActive: ['a'],
-    });
-
-    expect(set.length).toBe(1);
-  });
-
-  test('disable_model_invocation blocks keyword auto-fire even when keywords match', () => {
-    const a = fakeSkill('a', {
-      keywords: ['audit'], auto_activate: true, disable_model_invocation: true,
-    });
-
-    const set = resolveActiveSkills({
-      available: [a], explicit: [], userMessage: 'please audit my code', alwaysActive: [],
-    });
-
-    expect(set).toEqual([]);
-  });
-
-  test('disable_model_invocation does NOT block explicit user invocation', () => {
-    const a = fakeSkill('a', { disable_model_invocation: true });
-
-    const set = resolveActiveSkills({
-      available: [a], explicit: ['a'], userMessage: '/a', alwaysActive: [],
-    });
-
-    expect(set.map(s => s.skill.name)).toEqual(['a']);
+    expect(set).toHaveLength(1);
     expect(set[0]?.reason.kind).toBe('explicit');
   });
 
@@ -537,7 +438,7 @@ describe('resolveActiveSkills', () => {
     const a = fakeSkill('a', { user_invocable: false });
 
     const set = resolveActiveSkills({
-      available: [a], explicit: ['a'], userMessage: '/a', alwaysActive: [],
+      available: [a], explicit: ['a'], alwaysActive: [],
     });
 
     expect(set).toEqual([]);
@@ -547,38 +448,36 @@ describe('resolveActiveSkills', () => {
     const a = fakeSkill('a', { user_invocable: false });
 
     const set = resolveActiveSkills({
-      available: [a], explicit: [], userMessage: '', alwaysActive: ['a'],
+      available: [a], explicit: [], alwaysActive: ['a'],
     });
 
     expect(set.map(s => s.skill.name)).toEqual(['a']);
     expect(set[0]?.reason.kind).toBe('always_active');
   });
 
-  test('activation ORDER is explicit, then keyword, then always-active — the order the admission spends in', () => {
+  test('activation ORDER is explicit, then always-active — the order the admission spends in', () => {
     const pinned = fakeSkill('aaa-pinned');
-    const keyword = fakeSkill('bbb-keyword', { keywords: ['ship'], auto_activate: true });
     const invoked = fakeSkill('zzz-invoked');
 
     const set = resolveActiveSkills({
-      available: [pinned, keyword, invoked],
+      available: [pinned, invoked],
       explicit: ['zzz-invoked'],
-      userMessage: '/zzz-invoked time to ship',
       alwaysActive: ['aaa-pinned'],
     });
 
     // Alphabetically the pinned skill leads; by priority it comes last.
-    expect(set.map(s => s.skill.name)).toEqual(['zzz-invoked', 'bbb-keyword', 'aaa-pinned']);
+    expect(set.map(s => s.skill.name)).toEqual(['zzz-invoked', 'aaa-pinned']);
   });
 
   test('inside one tier the order is by name, whatever order the tier arrived in', () => {
     const available = [fakeSkill('m'), fakeSkill('a'), fakeSkill('z')];
 
     const forward = resolveActiveSkills({
-      available, explicit: [], userMessage: '', alwaysActive: ['z', 'a', 'm'],
+      available, explicit: [], alwaysActive: ['z', 'a', 'm'],
     });
 
     const reversed = resolveActiveSkills({
-      available: [...available].reverse(), explicit: [], userMessage: '', alwaysActive: ['m', 'a', 'z'],
+      available: [...available].reverse(), explicit: [], alwaysActive: ['m', 'a', 'z'],
     });
 
     expect(forward.map(s => s.skill.name)).toEqual(['a', 'm', 'z']);
@@ -627,7 +526,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
 
   test('a deferred body renders its header, its cost and a pointer — never half a workflow', () => {
     const deferred: ActiveSkill = {
-      ...fakeSkill('giant', { bodyRef: { kind: 'file', path: `${SKILLS_DIR}/giant.md`, chars: 50_000 } }),
+      ...fakeSkill('giant', { bodyRef: { kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/giant.md`, chars: 50_000 } }),
       // An unread body has no bytes to approve, so its pointer is reference material.
       trust: 'unverified',
       body: null,
@@ -640,20 +539,9 @@ describe('renderActiveSkillsSection + tool gating', () => {
 
     expect(out).toContain('### giant (explicit /giant)');
     expect(out).toContain('(50000 chars)');
-    expect(out).toContain(`read it with workspace.readFile("${SKILLS_DIR}/giant.md")`);
+    // The pointer is the one load path every skill has, whichever root holds it.
+    expect(out).toContain(skillViewPath('giant'));
     expect(out).not.toContain('[truncated:');
-  });
-
-  test('a deferred BUILT-IN body says there is no path rather than naming a file that does not exist', () => {
-    const builtin: ActiveSkill = {
-      ...fakeSkill('shipped', { bodyRef: { kind: 'builtin', text: 'B'.repeat(400) } }),
-      trust: 'builtin',
-      body: null,
-    };
-
-    const out = renderActiveSkillsSection({ active: [builtin], reasons: [] }, 'system');
-    expect(out).toContain('built in and has no VFS path');
-    expect(out).not.toContain('workspace.readFile');
   });
 
   test('render order is name order, so the same active set is byte-identical however it was activated', () => {
@@ -692,8 +580,8 @@ describe('renderSkillsIndexSection', () => {
 
     expect(out).toContain('## Skills');
     // Descriptions are agent-writable; the system index never embeds them before approval.
-    expect(out).toContain('**alpha** (workspace skill; contents are reference material until the owner approves them)');
-    expect(out).toContain('**zeta** (workspace skill; contents are reference material until the owner approves them)');
+    expect(out).toContain(`**alpha** \`${skillViewPath('alpha')}\``);
+    expect(out).toContain(`**zeta** \`${skillViewPath('zeta')}\``);
     expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('zeta'));
     expect(out).not.toContain('desc alpha');
     expect(out).not.toContain('desc zeta');
@@ -704,12 +592,12 @@ describe('renderSkillsIndexSection', () => {
   test('a file too big to open is still named, with its size and its path', () => {
     const out = renderSkillsIndexSection(admitSkillsIndex({
       skills: [],
-      unread: [{ name: 'huge', path: `${SKILLS_DIR}/huge.md`, bytes: 4_000_000 }], omitted: 0,
+      unread: [{ name: 'huge', path: `${WORKSPACE_SKILLS_DIR}/huge.md`, bytes: 4_000_000 }], omitted: 0,
     }, ROOMY_TOKENS));
 
     expect(out).toContain('**huge**');
     expect(out).toContain('4000000 bytes');
-    expect(out).toContain(`workspace.readFile("${SKILLS_DIR}/huge.md")`);
+    expect(out).toContain(skillViewPath('huge'));
   });
 
   test('elides under allocation pressure with an honest count and where to look, never a silent cut', () => {
@@ -722,7 +610,7 @@ describe('renderSkillsIndexSection', () => {
 
     const out = renderSkillsIndexSection(index);
     expect(out).toMatch(/… and \d+ more skills? this turn's skills allocation did not reach/);
-    expect(out).toContain(`workspace.readdir("${SKILLS_DIR}")`);
+    expect(out).toContain('`/skills`');
     // At least one entry survives, and the omitted count is honest.
     const shown = (out.match(/^- \*\*/gm) ?? []).length;
     expect(shown).toBeGreaterThan(0);
@@ -748,11 +636,14 @@ describe('unionAllowedTools', () => {
 });
 
 describe('discoverSkills', () => {
-  test('a shared Drive skill is discovered in folder form and the workspace wins a name clash', async () => {
+  test('one precedence decides a name: a built-in is reserved, the workspace beats the Drive, a folder beats a flat file', async () => {
     const errors: string[] = [];
 
     const v = memoryVfs({
-      [`${SKILLS_DIR}/deploy.md`]: skillFile('deploy', 'workspace body'),
+      [`${WORKSPACE_SKILLS_DIR}/deploy.md`]: skillFile('deploy', 'workspace body'),
+      [`${WORKSPACE_SKILLS_DIR}/lint.md`]: skillFile('lint', 'flat lint'),
+      [`${WORKSPACE_SKILLS_DIR}/lint/SKILL.md`]: skillFile('lint', 'folder lint'),
+      [`${WORKSPACE_SKILLS_DIR}/slates/SKILL.md`]: skillFile('slates', 'a shadow of the built-in'),
       [`${SHARED_SKILLS_DIR}/deploy/SKILL.md`]: skillFile('deploy', 'shared body'),
       [`${SHARED_SKILLS_DIR}/review/SKILL.md`]: skillFile('review', 'shared review'),
       [`${SHARED_SKILLS_DIR}/review/scripts/run.sh`]: 'echo hi',
@@ -762,20 +653,26 @@ describe('discoverSkills', () => {
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, onParseError: (_f, e) => errors.push(e) });
     const byName = new Map(found.skills.map(s => [s.name, s]));
 
-    expect(byName.get('deploy')?.source).toBe('vfs');
-    expect(byName.get('deploy')?.bodyRef).toMatchObject({ kind: 'file', path: `${SKILLS_DIR}/deploy.md` });
+    expect(byName.get('deploy')?.bodyRef).toMatchObject({ kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/deploy.md` });
+    expect(byName.get('lint')?.bodyRef).toMatchObject({ kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/lint/SKILL.md` });
+    expect(byName.get('slates')?.bodyRef.kind).toBe('builtin');
     expect(byName.get('review')?.source).toBe('shared');
     expect(byName.get('review')?.bodyRef).toMatchObject({ kind: 'file', path: `${SHARED_SKILLS_DIR}/review/SKILL.md` });
     expect(byName.get('notes')?.source).toBe('shared');
-    expect(errors).toEqual(['"deploy" is shadowed by the workspace skill of the same name']);
+    expect(errors.sort()).toEqual([
+      `"deploy" is shadowed by ${WORKSPACE_SKILLS_DIR}/deploy.md`,
+      `"lint" is shadowed by ${WORKSPACE_SKILLS_DIR}/lint/SKILL.md`,
+      '"slates" is a built-in skill name and cannot be overridden by a file',
+    ]);
 
-    // The shadowed shared body was never opened.
+    // No losing body was opened.
     expect(v.calls.readFile).not.toContain(`${SHARED_SKILLS_DIR}/deploy/SKILL.md`);
-    expect(renderSkillsIndexSection(admitSkillsIndex(found, ROOMY_TOKENS))).toContain('**review** (shared drive skill;');
+    expect(v.calls.readFile).not.toContain(`${WORKSPACE_SKILLS_DIR}/lint.md`);
+    expect(renderSkillsIndexSection(admitSkillsIndex(found, ROOMY_TOKENS))).toContain(workspaceSkillIndexLine('review', 'shared'));
   });
 
   test('an absent /shared mount is no shared skills, not a failed discovery', async () => {
-    const v = memoryVfs({ [`${SKILLS_DIR}/own.md`]: skillFile('own', 'O') });
+    const v = memoryVfs({ [`${WORKSPACE_SKILLS_DIR}/own.md`]: skillFile('own', 'O') });
     const listed = v.readdir;
 
     v.readdir = async (p) => {
@@ -804,9 +701,6 @@ describe('discoverSkills', () => {
   test('the slates built-in ships the authoring doctrine', () => {
     const skill = present(BUILTIN_SKILLS.find((s) => s.name === 'slates'), 'the slates built-in skill');
 
-    expect(skill.auto_activate).toBe(true);
-    expect(skill.keywords).toEqual(expect.arrayContaining(['slate', 'dashboard']));
-
     for (const fragment of [
       'class Slate extends SlateObject', 'this.storage', 'this.sql',
       'kinu:slate', 'slate://', 'env.agent.send', 'env.ai.run',
@@ -820,8 +714,8 @@ describe('discoverSkills', () => {
     const errors: Array<{ path: string; err: string }> = [];
 
     const v = memoryVfs({
-      [`${SKILLS_DIR}/good.md`]: skillFile('good', 'body'),
-      [`${SKILLS_DIR}/bad.md`]: `not a valid skill file at all`,
+      [`${WORKSPACE_SKILLS_DIR}/good.md`]: skillFile('good', 'body'),
+      [`${WORKSPACE_SKILLS_DIR}/bad.md`]: `not a valid skill file at all`,
     });
 
     const found = await discoverSkills(v, {
@@ -835,7 +729,7 @@ describe('discoverSkills', () => {
 
   test('mismatched filename vs frontmatter name is rejected', async () => {
     const v = memoryVfs({
-      [`${SKILLS_DIR}/wrong-filename.md`]: `---\nname: actual-name\ndescription: ok\n---\nbody`,
+      [`${WORKSPACE_SKILLS_DIR}/wrong-filename.md`]: `---\nname: actual-name\ndescription: ok\n---\nbody`,
     });
 
     const errors: string[] = [];
@@ -849,7 +743,7 @@ describe('discoverSkills', () => {
   });
 
   test('an illegal filename stem is rejected without opening the file', async () => {
-    const v = memoryVfs({ [`${SKILLS_DIR}/Not_A_Skill.md`]: skillFile('x', 'body') });
+    const v = memoryVfs({ [`${WORKSPACE_SKILLS_DIR}/Not_A_Skill.md`]: skillFile('x', 'body') });
     const errors: string[] = [];
 
     const found = await discoverSkills(v, {
@@ -863,9 +757,9 @@ describe('discoverSkills', () => {
 
   test('ORDER is the same whatever order readdir returns entries in — and so is the rendered index', async () => {
     const files = {
-      [`${SKILLS_DIR}/mid.md`]: skillFile('mid', 'M'),
-      [`${SKILLS_DIR}/apex.md`]: skillFile('apex', 'A'),
-      [`${SKILLS_DIR}/zulu.md`]: skillFile('zulu', 'Z'),
+      [`${WORKSPACE_SKILLS_DIR}/mid.md`]: skillFile('mid', 'M'),
+      [`${WORKSPACE_SKILLS_DIR}/apex.md`]: skillFile('apex', 'A'),
+      [`${WORKSPACE_SKILLS_DIR}/zulu.md`]: skillFile('zulu', 'Z'),
     };
 
     const views = [
@@ -894,25 +788,25 @@ describe('discoverSkills', () => {
 
   test('holds front matter only: no discovered skill carries a body, and the catalogue costs one read per file', async () => {
     const v = memoryVfs({
-      [`${SKILLS_DIR}/one.md`]: skillFile('one', 'BODY-ONE'),
-      [`${SKILLS_DIR}/two.md`]: skillFile('two', 'BODY-TWO'),
+      [`${WORKSPACE_SKILLS_DIR}/one.md`]: skillFile('one', 'BODY-ONE'),
+      [`${WORKSPACE_SKILLS_DIR}/two.md`]: skillFile('two', 'BODY-TWO'),
     });
 
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
 
     for (const skill of found.skills) expect('body' in skill).toBe(false);
-    expect(v.calls.readFile.sort()).toEqual([`${SKILLS_DIR}/one.md`, `${SKILLS_DIR}/two.md`]);
+    expect(v.calls.readFile.sort()).toEqual([`${WORKSPACE_SKILLS_DIR}/one.md`, `${WORKSPACE_SKILLS_DIR}/two.md`]);
     // Size is consulted before bytes, for every candidate.
-    expect(v.calls.stat.sort()).toEqual([`${SKILLS_DIR}/one.md`, `${SKILLS_DIR}/two.md`]);
+    expect(v.calls.stat.sort()).toEqual([`${WORKSPACE_SKILLS_DIR}/one.md`, `${WORKSPACE_SKILLS_DIR}/two.md`]);
     const one = found.skills.find(s => s.name === 'one');
-    expect(one?.bodyRef).toEqual({ kind: 'file', path: `${SKILLS_DIR}/one.md`, chars: 'BODY-ONE'.length });
+    expect(one?.bodyRef).toEqual({ kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/one.md`, chars: 'BODY-ONE'.length });
   });
 
   test('a file whose reported size alone exceeds the allocation is named from its filename and never opened', async () => {
-    const path = `${SKILLS_DIR}/whale.md`;
+    const path = `${WORKSPACE_SKILLS_DIR}/whale.md`;
 
     const v = memoryVfs(
-      { [path]: skillFile('whale', 'W'), [`${SKILLS_DIR}/minnow.md`]: skillFile('minnow', 'm') },
+      { [path]: skillFile('whale', 'W'), [`${WORKSPACE_SKILLS_DIR}/minnow.md`]: skillFile('minnow', 'm') },
       { sizes: { [path]: 40_000_000 } },
     );
 
@@ -922,7 +816,7 @@ describe('discoverSkills', () => {
     expect(v.calls.stat).toContain(path);
     expect(v.calls.readFile).not.toContain(path);
     // The small one beside it was read normally.
-    expect(v.calls.readFile).toContain(`${SKILLS_DIR}/minnow.md`);
+    expect(v.calls.readFile).toContain(`${WORKSPACE_SKILLS_DIR}/minnow.md`);
   });
 
   // KINU-047: without stat, the read is bounded by the same byte ceiling and admitted truncated.
@@ -930,7 +824,7 @@ describe('discoverSkills', () => {
     const admissionTokens = 100; // ceiling: 400 chars
     const ceiling = admissionTokens * 4;
     const body = 'B'.repeat(ceiling * 4);
-    const path = `${SKILLS_DIR}/whale.md`;
+    const path = `${WORKSPACE_SKILLS_DIR}/whale.md`;
 
     const v = memoryVfs({ [path]: skillFile('whale', body) });
     delete v.stat; // a file view with no size answer
@@ -948,12 +842,11 @@ describe('discoverSkills', () => {
   test('discovery admits at most as many file skills as the prompt budget can carry, in sorted order', async () => {
     const admissionTokens = 500;
     // The bound derives from the cheapest workspace header line.
-    const cheapest = `- **a** (workspace skill; contents are reference material until the owner approves them)`;
-    const bound = Math.floor(admissionTokens / estimateTokens(cheapest.length + 1));
+    const bound = Math.floor(admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1));
     const files: Record<string, string> = {};
 
     for (let i = bound + 5; i >= 1; i -= 1) {
-      files[`${SKILLS_DIR}/skill-${String(i).padStart(3, '0')}.md`] = skillFile(`skill-${String(i).padStart(3, '0')}`, 'x');
+      files[`${WORKSPACE_SKILLS_DIR}/skill-${String(i).padStart(3, '0')}.md`] = skillFile(`skill-${String(i).padStart(3, '0')}`, 'x');
     }
 
     const v = memoryVfs(files);
@@ -975,7 +868,7 @@ describe('skills admission', () => {
       const name = `skill-${String(i).padStart(2, '0')}`;
 
       return fakeSkill(name, {
-        bodyRef: { kind: 'file', path: `${SKILLS_DIR}/${name}.md`, chars: bodyChars },
+        bodyRef: { kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/${name}.md`, chars: bodyChars },
       });
     });
   }
@@ -995,7 +888,7 @@ describe('skills admission', () => {
     const index = admitSkillsIndex({ skills, unread: [], omitted: 0 }, admissionTokens);
 
     const activated = resolveActiveSkills({
-      available: skills, explicit: [], userMessage: '', alwaysActive: skills.map(s => s.name),
+      available: skills, explicit: [], alwaysActive: skills.map(s => s.name),
     });
 
     const set = await admitActiveSkills({
@@ -1058,22 +951,21 @@ describe('skills admission', () => {
 
   test('the bodies are spent in activation priority order: an explicitly invoked skill keeps its body when a pinned giant cannot', async () => {
     const giant = fakeSkill('aaa-pinned-giant', {
-      bodyRef: { kind: 'file', path: `${SKILLS_DIR}/aaa-pinned-giant.md`, chars: 30_000 },
+      bodyRef: { kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/aaa-pinned-giant.md`, chars: 30_000 },
     });
 
     const invoked = fakeSkill('zzz-invoked', {
-      bodyRef: { kind: 'file', path: `${SKILLS_DIR}/zzz-invoked.md`, chars: 400 },
+      bodyRef: { kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/zzz-invoked.md`, chars: 400 },
     });
 
     const vfs = memoryVfs({
-      [`${SKILLS_DIR}/aaa-pinned-giant.md`]: skillFile('aaa-pinned-giant', 'G'.repeat(30_000)),
-      [`${SKILLS_DIR}/zzz-invoked.md`]: skillFile('zzz-invoked', 'I'.repeat(400)),
+      [`${WORKSPACE_SKILLS_DIR}/aaa-pinned-giant.md`]: skillFile('aaa-pinned-giant', 'G'.repeat(30_000)),
+      [`${WORKSPACE_SKILLS_DIR}/zzz-invoked.md`]: skillFile('zzz-invoked', 'I'.repeat(400)),
     });
 
     const activated = resolveActiveSkills({
       available: [giant, invoked],
       explicit: ['zzz-invoked'],
-      userMessage: '/zzz-invoked',
       alwaysActive: ['aaa-pinned-giant'],
     });
 
@@ -1085,19 +977,18 @@ describe('skills admission', () => {
     const byName = new Map(set.active.map(s => [s.name, s]));
     expect(byName.get('zzz-invoked')?.body).toContain('I');
     expect(byName.get('aaa-pinned-giant')?.body).toBeNull();
-    expect(vfs.calls.readFile).toEqual([`${SKILLS_DIR}/zzz-invoked.md`]);
+    expect(vfs.calls.readFile).toEqual([`${WORKSPACE_SKILLS_DIR}/zzz-invoked.md`]);
     // The giant stays visible as a reference-tier pointer.
-    expect(renderActiveSkillsSection(set, 'unverified'))
-      .toContain(`read it with workspace.readFile("${SKILLS_DIR}/aaa-pinned-giant.md")`);
+    expect(renderActiveSkillsSection(set, 'unverified')).toContain(skillViewPath('aaa-pinned-giant'));
   });
 
   test('every discovered skill is rendered, named in the index, or reachable through a pointer — nothing is lost silently', async () => {
-    const whale = `${SKILLS_DIR}/whale.md`;
+    const whale = `${WORKSPACE_SKILLS_DIR}/whale.md`;
     const files: Record<string, string> = {};
     files[whale] = skillFile('whale', 'W');
 
     for (let i = 0; i < 12; i++) {
-      files[`${SKILLS_DIR}/skill-${i}.md`] = skillFile(`skill-${i}`, 'b'.repeat(2_000));
+      files[`${WORKSPACE_SKILLS_DIR}/skill-${i}.md`] = skillFile(`skill-${i}`, 'b'.repeat(2_000));
     }
 
     const vfs = memoryVfs(files, { sizes: { [whale]: 90_000_000 } });
@@ -1106,7 +997,7 @@ describe('skills admission', () => {
     const index = admitSkillsIndex(discovery, admissionTokens);
 
     const activated = resolveActiveSkills({
-      available: discovery.skills, explicit: [], userMessage: '',
+      available: discovery.skills, explicit: [],
       alwaysActive: discovery.skills.map(s => s.name),
     });
 
@@ -1132,10 +1023,7 @@ describe('skills admission', () => {
 
     // Every body that missed the cut still says where it is.
     for (const skill of set.active) {
-      if (skill.body !== null) continue;
-      expect(activeText).toContain(skill.bodyRef.kind === 'file'
-        ? `workspace.readFile("${skill.bodyRef.path}")`
-        : 'has no VFS path');
+      if (skill.body === null) expect(activeText).toContain(skillViewPath(skill.name));
     }
   });
 
@@ -1145,7 +1033,6 @@ describe('skills admission', () => {
     const activated = resolveActiveSkills({
       available: [...BUILTIN_SKILL_HEADERS],
       explicit: [],
-      userMessage: '',
       alwaysActive: BUILTIN_SKILL_HEADERS.map(s => s.name),
     });
 
@@ -1168,7 +1055,6 @@ describe('skills admission', () => {
     const activated = resolveActiveSkills({
       available: [builtin],
       explicit: [],
-      userMessage: '',
       alwaysActive: [builtin.name],
     });
 
@@ -1202,13 +1088,13 @@ describe('skills admission', () => {
       const vfs: SkillsVfs = {
         async exists() { return true; },
         async readFile(p) {
-          if (p === `${SKILLS_DIR}/bad-read.md`) throw new Error('boom-read');
+          if (p === `${WORKSPACE_SKILLS_DIR}/bad-read.md`) throw new Error('boom-read');
 
           return skillFile(p.includes('good') ? 'good' : 'bad-stat', 'hello body');
         },
         async writeFile() {},
         async stat(p) {
-          if (p === `${SKILLS_DIR}/bad-stat.md`) throw new Error('boom-stat');
+          if (p === `${WORKSPACE_SKILLS_DIR}/bad-stat.md`) throw new Error('boom-stat');
 
           return { size: 60, mtimeMs: 0, isDir: false };
         },
@@ -1233,5 +1119,96 @@ describe('skills admission', () => {
     } finally {
       restore();
     }
+  });
+});
+
+/** The agent's file plane as a backend composes it: a memory tree extended by the `/skills` mount. */
+function skillsPlane(files: Record<string, string>): VFS {
+  const tree = memoryVfs(files);
+
+  const base: VFS = {
+    readFile: (path, opts) => tree.readFile(path, opts),
+    writeFile: (path, data) => tree.writeFile(path, data),
+    readdir: (path) => tree.readdir(path),
+    stat: async (path) => (await tree.stat?.(path)) ?? null,
+    exists: (path) => tree.exists(path),
+    unlink: async (path) => { await tree.unlink?.(path); },
+    mkdir: async () => {},
+  };
+
+  const plane: VFS = withMountTable(base, [skillsMount(() => plane)]);
+
+  return plane;
+}
+
+describe('the /skills view', () => {
+  const files = {
+    [`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]: skillFile('deploy', 'workspace deploy'),
+    [`${WORKSPACE_SKILLS_DIR}/deploy/scripts/run.sh`]: 'echo deploy',
+    [`${WORKSPACE_SKILLS_DIR}/slates/SKILL.md`]: skillFile('slates', 'a shadow of the built-in'),
+    [`${SHARED_SKILLS_DIR}/deploy/SKILL.md`]: skillFile('deploy', 'drive deploy'),
+    [`${SHARED_SKILLS_DIR}/review.md`]: skillFile('review', 'drive review'),
+  };
+
+  test('lists one folder per loadable name and serves each from the root the precedence picks', async () => {
+    const plane = skillsPlane(files);
+
+    expect(await plane.readdir('/')).toContain('skills');
+    expect(await plane.readdir('/skills')).toEqual(['audit-implementation', 'deploy', 'review', 'slates']);
+    // A built-in outranks the workspace file that claims its name.
+    expect(await plane.readFile(skillViewPath('slates'), { encoding: 'utf8' })).toBe(BUILTIN_SKILL_FILES.slates);
+    expect(await plane.readFile(skillViewPath('deploy'), { encoding: 'utf8' })).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);
+    expect(await plane.readFile('/skills/deploy/scripts/run.sh', { encoding: 'utf8' })).toBe('echo deploy');
+    expect(await plane.readFile(skillViewPath('review'), { encoding: 'utf8' })).toBe(files[`${SHARED_SKILLS_DIR}/review.md`]);
+    expect(await plane.readdir('/skills/review')).toEqual(['SKILL.md']);
+  });
+
+  test('a skill written a moment ago is already there, and a name no root holds is absent by its full path', async () => {
+    const plane = skillsPlane(files);
+    await plane.writeFile(`${WORKSPACE_SKILLS_DIR}/fresh/SKILL.md`, skillFile('fresh', 'new'));
+
+    expect(await plane.readFile(skillViewPath('fresh'), { encoding: 'utf8' })).toBe(skillFile('fresh', 'new'));
+    expect(await plane.exists(skillViewPath('nope'))).toBe(false);
+    await expect(plane.readFile(skillViewPath('nope'))).rejects.toThrow(`'${skillViewPath('nope')}'`);
+  });
+
+  test('every write is refused and names where a skill is written instead', async () => {
+    const plane = skillsPlane(files);
+
+    for (const write of [
+      () => plane.writeFile(skillViewPath('deploy'), 'replaced'),
+      () => plane.writeFile(skillViewPath('slates'), 'replaced'),
+      () => plane.unlink(skillViewPath('review')),
+    ]) {
+      await expect(write()).rejects.toMatchObject({ code: 'EROFS' });
+      await expect(write()).rejects.toThrow(`${WORKSPACE_SKILLS_DIR}/<name>/SKILL.md`);
+    }
+
+    expect(await plane.readFile(skillViewPath('deploy'), { encoding: 'utf8' })).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);
+  });
+});
+
+describe('a turn\'s skills in its system prompt', () => {
+  test('words in a user message load no body, so two turns with no skill change render one system prompt', async () => {
+    const vfs = memoryVfs({ [`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]: skillFile('deploy', 'ship it') });
+
+    const turn = (userText: string) => resolveTurnSkills({
+      vfs, userText, trust: APPROVED,
+      config: { getAlwaysActiveSkills: () => [] },
+      limits: { contextWindow: 200_000, modelOutputLimit: 8_000 },
+    });
+
+    const { rt } = createTestRuntime();
+
+    const prompt = (surface: TurnSkillSurface) => buildSystemPromptSync(rt, surface.activeSkills === undefined
+      ? { availableSkills: surface.available }
+      : { availableSkills: surface.available, activeSkills: surface.activeSkills });
+
+    const quiet = await turn('hello');
+    const loud = await turn('build me a dashboard, a form and a live view over the slate data');
+
+    expect(loud.activeSkills).toBeUndefined();
+    expect(prompt(loud)).toBe(prompt(quiet));
+    expect(prompt(quiet)).toContain(skillViewPath('slates'));
   });
 });

@@ -454,7 +454,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
   ${slate === undefined ? '' : `/**
-   * A slate is an authored class with a React client, previewed and called through this operation. Read the built-in skill \`slates\` before authoring one. Commit freezes source; fork copies a committed version; restore changes source, not history.
+   * A slate is an authored class with a React client, previewed and called through this operation. Read /skills/slates/SKILL.md before authoring one. Commit freezes source; fork copies a committed version; restore changes source, not history.
    */
   type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
   function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number; inline: { height: number } } } | Refusal>;

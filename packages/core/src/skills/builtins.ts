@@ -1,5 +1,5 @@
 /**
- * Built-in skills, merged with `/workspace/skills/`. Their names are reserved
+ * Built-in skills, served read-only under `/skills`. Their names are reserved
  * (KINU-N028): an agent-writable file must not shadow shipped doctrine.
  */
 
@@ -12,8 +12,6 @@ description: Multi-head audit of your own recent implementation — correctness,
 allowed-tools:
   - agents
   - memory
-keywords: [audit, review, verify, double-check, audit-this, validate-implementation]
-auto_activate: false
 ---
 
 # Audit your implementation
@@ -67,14 +65,12 @@ a recap of what you implemented.
 
 const SLATES_SRC = `---
 name: slates
-description: Build a slate — a small live app with a server class and a React client — for a dashboard, a form, a control panel, a choice card or any interface a user asks for. Read this before writing one.
-keywords: [slate, slates, dashboard, interface, widget, control panel, form, card, live view]
-auto_activate: true
+description: Build a slate — a small live app with a server class and a React client — for any app, game, dashboard, form or other interface a user asks for. Read this before writing one.
 ---
 
 # Slates
 
-A slate is a small application that lives in this workspace: a server class with its own storage, a React client in a sandboxed iframe, and an RPC link between them. Users rarely ask for "a slate". They ask for a tracker, a dashboard, a picker, a form, a live view over workspace data. Each of those is a slate.
+A slate is a small application that lives in this workspace: a server class with its own storage, a React client in a sandboxed iframe, and an RPC link between them. Users rarely ask for "a slate". They ask for a game, a tracker, a dashboard, a picker, a form, a live view over workspace data. Each of those is a slate.
 
 A slate is a directory \`/home/main/slates/<id>/\` with a \`package.json\`:
 
@@ -206,7 +202,10 @@ function parseBuiltin(src: string): ParsedSkill {
   return r.skill;
 }
 
-export const BUILTIN_SKILLS: ReadonlyArray<ParsedSkill> = Object.freeze([
-  parseBuiltin(AUDIT_IMPLEMENTATION_SRC),
-  parseBuiltin(SLATES_SRC),
-]);
+const PARSED = [AUDIT_IMPLEMENTATION_SRC, SLATES_SRC].map((source) => ({ source, skill: parseBuiltin(source) }));
+
+export const BUILTIN_SKILLS: ReadonlyArray<ParsedSkill> = Object.freeze(PARSED.map((entry) => entry.skill));
+
+export const BUILTIN_SKILL_FILES: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(PARSED.map((entry) => [entry.skill.name, entry.source])),
+);

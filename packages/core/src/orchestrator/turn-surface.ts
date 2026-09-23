@@ -90,7 +90,6 @@ async function admitTurnSkills(
   const activated = resolveActiveSkills({
     available: discovery.skills,
     explicit: extractExplicitInvocations(opts.userText),
-    userMessage: opts.userText,
     alwaysActive: [...opts.config.getAlwaysActiveSkills(), ...(opts.roleSkills ?? [])],
   });
 

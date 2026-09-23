@@ -1806,18 +1806,18 @@ export {
 // Skills
 export {
   parseSkillFile, stringifySkillFile, skillNameProblem,
-  discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames, skillBodyChars,
-  BUILTIN_SKILLS, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
+  discoverSkills, readSkillFile, readSkillBody, workspaceSkillPath, compareSkillNames, skillBodyChars,
+  BUILTIN_SKILLS, BUILTIN_SKILL_FILES, BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES, skillsMount,
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, skillIndexLine, unreadSkillLine,
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
-  SkillError, SKILLS_DIR, SKILL_FOLDER_FILE,
+  SKILLS_VIEW, WORKSPACE_SKILLS_DIR, SKILL_FOLDER_FILE, skillViewPath,
 } from './skills/index';
 
 export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
-  SkillParseResult, SkillErrorCode,
+  SkillParseResult,
   SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';

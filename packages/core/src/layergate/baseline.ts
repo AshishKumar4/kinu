@@ -16,7 +16,7 @@ export const LOCKED_BASELINE: Baseline = {
   'compaction/latest-ask-is-verbatim': 'f92c9f20bfaeabc5',
   'context-assembly/agents-md-budget': 'f6b044dc7259be93',
   'context-assembly/prefix-stable-under-activation-reason': '6a6bfd790324c337',
-  'context-assembly/skill-activation-precedence': '87c755889e1ef511',
+  'context-assembly/skill-activation-precedence': 'b594b88880bf3188',
   'context-assembly/skill-tool-restriction': 'b0619fb621e18276',
   'context-assembly/surface-compilation': '638b69401b2cebcc',
   'context-assembly/system-prefix': '03c2c63f63479650',
@@ -95,5 +95,5 @@ export const LOCKED_BASELINE: Baseline = {
   'volatile-context/live-rosters-are-bounded': '7adbf5207787b2c8',
   'volatile-context/system-state-block': 'c3baf2de253420a4',
   'volatile-context/turn-local-empty-is-null': '5b9bc4ba528108e4',
-  'volatile-context/turn-local-tail': 'ba85455f6e19b22f',
+  'volatile-context/turn-local-tail': '418c87882c7f75e2',
 };

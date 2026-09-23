@@ -30,7 +30,8 @@ import {
 } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
-import type { ActiveSkillSet, ActivationReason } from '../skills/types';
+import type { ActiveSkillSet } from '../skills/types';
+import { describeActivationReason } from '../skills/render';
 import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 import { renderToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
@@ -293,14 +294,6 @@ function formatBytes(bytes: number): string {
 
 function trimZero(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function describeActivationReason(r: ActivationReason): string {
-  switch (r.kind) {
-    case 'explicit':      return `explicit /${r.matched_token}`;
-    case 'keyword':       return `keyword "${r.matched_keyword}"`;
-    case 'always_active': return `pinned via ${r.via}`;
-  }
 }
 
 /** What a command on the user's machine gets (sandboxing, persistent directory):

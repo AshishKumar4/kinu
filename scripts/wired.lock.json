@@ -351,7 +351,6 @@
   "packages/core/src/skills/discover.ts#DiscoverOpts.onParseError (unsupplied-field)",
   "packages/core/src/skills/discover.ts#readSkillBody (unreached-export)",
   "packages/core/src/skills/parse.ts#stringifySkillFile (unreached-export)",
-  "packages/core/src/skills/types.ts#SkillError (unreached-export)",
   "packages/core/src/steer-branch.ts#BRANCH_HEAD_BUDGET (unreached-export)",
   "packages/core/src/steer-branch.ts#BRANCH_RATIONALE (unreached-export)",
   "packages/core/src/steer-branch.ts#BranchStartInput.model (unsupplied-field)",

@@ -579,7 +579,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(2);
     expect(result.rate).toBeCloseTo(2 / 3);
-    expect(result.measured).toEqual({ succeeded: 2, failed: 1, unmeasured: 0 });
+    expect(result.measured).toEqual({ succeeded: 2, failed: 1, unmeasured: 0, refused: 0, workFailed: 1, runtimeAbsent: 0, broke: 0 });
     store.close();
   });
 
@@ -592,7 +592,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
     expect(result.rate).toBeNull();
-    expect(result.measured).toEqual({ succeeded: 0, failed: 1, unmeasured: 2 });
+    expect(result.measured).toEqual({ succeeded: 0, failed: 1, unmeasured: 2, refused: 0, workFailed: 0, runtimeAbsent: 0, broke: 1 });
     store.close();
   });
 
@@ -610,6 +610,23 @@ describe('toolOutcomes — structural attribution with an observed denominator',
     expect(result.passed).toBe(0);
     expect(result.rate).toBe(0);
     expect(parseFailureMix(result.detail)).toEqual([['file·edit·not_found', 2], ['shell·exit_1', 1]]);
+    store.close();
+  });
+
+  test('an eval whose inner call broke is a failed call, and the break is counted as unexpected', () => {
+    const store = eventStore();
+    // The owner's 2048 transcript: the program recovered, but `fs.readdir('skills')` failed inside it.
+    emit(store, 'run-a', 'tool_call_end', {
+      name: 'eval', toolCallId: 't1', outcome: {
+        success: true,
+        failures: [{ success: false, tool: 'file', action: null, reason: 'missing', error: 'ENOENT: no such directory, home/user/skills' }],
+      },
+    });
+    emit(store, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', outcome: { success: true } });
+    const result = toolOutcomes.score(store.sql, store.actor);
+    expect(result.rate).toBe(0.5);
+    expect(result.measured).toEqual({ succeeded: 1, failed: 1, unmeasured: 0, refused: 0, workFailed: 0, runtimeAbsent: 0, broke: 1 });
+    expect(parseFailureMix(result.detail)).toEqual([['file·missing', 1]]);
     store.close();
   });
 });

@@ -2,12 +2,13 @@
  * The owner's instruction desk on the hosted backend, driven through the
  * actor's own RPCs over its real workspace plane. The rule is core's
  * (InstructionApprovalDesk); what this pins is the Durable Object's wiring of
- * it: the skill file the agent can write is the one the owner reads, and an
- * approval binds exactly the bytes the owner was shown.
+ * it: the skill file the agent can write is the one the owner reads and the one
+ * `/skills` serves, and an approval binds exactly the bytes the owner was shown.
  */
 import { describe, expect, test } from 'bun:test';
-import { SKILLS_DIR } from '@kinu.run/core';
-import { orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
+import { BUILTIN_SKILL_FILES, skillViewPath, workspaceSkillPath } from '@kinu.run/core';
+import { catalogTurn, gatewayWorkspace, orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
+import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const SKILL = '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n';
 
@@ -15,9 +16,9 @@ describe('the instruction desk on a Durable Object', () => {
   test('an approval binds the bytes the owner read, and refuses bytes changed since', async () => {
     const { agent } = orchestratorHarness();
     const vfs = workspaceFiles(agent);
-    const path = `${SKILLS_DIR}/focused.md`;
-    await vfs.mkdir(SKILLS_DIR, { recursive: true });
+    const path = workspaceSkillPath('focused');
     await vfs.writeFile(path, SKILL);
+
 
     const reviewed = await agent.readInstructionApproval(path);
 
@@ -35,5 +36,32 @@ describe('the instruction desk on a Durable Object', () => {
     expect((await agent.listInstructionApprovals()).items).toContainEqual(
       expect.objectContaining({ path, kind: 'skill', decision: 'approved' }),
     );
+  });
+
+  test("the agent's own file tool reads the skill it wrote, and a built-in, under /skills", async () => {
+    const toolResults: string[] = [];
+    const reads = [skillViewPath('focused'), skillViewPath('slates')];
+
+    const gateway = stubAiBinding((run) => {
+      const messages = requestOf(run).messages;
+      const results = messages.filter((message) => message.role === 'tool');
+
+      toolResults.splice(0, toolResults.length, ...results.map((message) => JSON.stringify(message.content)));
+
+      const next = reads[results.length];
+
+      return next === undefined
+        ? chatCompletion(run, 'Read both.')
+        : toolCallCompletion(run, { tool: 'file', args: { action: 'read', path: next } }, `read_${results.length}`);
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+
+    await workspaceFiles(workspace.agent).writeFile(workspaceSkillPath('focused'), SKILL);
+    await catalogTurn(workspace.agent, 'Read the focused skill and the slates skill.');
+
+    expect(toolResults).toHaveLength(2);
+    expect(toolResults[0]).toContain('Focus on memory only.');
+    expect(toolResults[1]).toContain(JSON.stringify(BUILTIN_SKILL_FILES.slates.slice(0, 40)).slice(1, -1));
   });
 });

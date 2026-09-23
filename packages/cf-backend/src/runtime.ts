@@ -21,7 +21,7 @@ import {
   observeWrites,
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
-  withMountTable, standardMounts, contextMount,
+  withMountTable, standardMounts, contextMount, skillsMount,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
   withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
@@ -326,7 +326,7 @@ export function createCFRuntime(
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
   // the only per-actor entry.
-  const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
+  const mounts = [...standardMounts((name) => executionRouter.getProvider(name)), skillsMount((): CoreVFS => agentFileVfs)];
 
   // `/shared`: the owner's Drive, resolved at every call, never captured, so a later claim mounts it.
   let drive: { tenant: string; files: MossaicVfs } | null = null;
