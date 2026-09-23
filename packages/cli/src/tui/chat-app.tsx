@@ -1472,32 +1472,39 @@ function ChatScene({
   useEffect(() => {
     if (!rendererInstance?.root) return;
     let copied = false;
+
+    const copySelection = () => {
+      if (!rendererInstance.hasSelection) {
+        copied = false;
+
+        return;
+      }
+
+      if (copied) return;
+      const selection = rendererInstance.getSelection();
+
+      if (!selection) return;
+      const parts: string[] = [];
+
+      for (const r of selection.selectedRenderables ?? []) {
+        const text = r.getSelectedText();
+
+        if (text) parts.push(text);
+      }
+
+      const text = parts.join('\n').trim();
+
+      if (text) {
+        rendererInstance.copyToClipboardOSC52(text);
+        copied = true;
+      }
+    };
+
     rendererInstance.root.onMouseUp = () => {
       setTimeout(() => {
-        if (!rendererInstance.hasSelection) { copied = false;
+        copySelection();
 
- return; }
-
-        if (copied) return;
-        const selection = rendererInstance.getSelection();
-
-        if (!selection) return;
-        const parts: string[] = [];
-
-        for (const r of selection.selectedRenderables ?? []) {
-          const text = r.getSelectedText();
-
-          if (text) parts.push(text);
-        }
-
-        const text = parts.join('\n').trim();
-
-        if (text) {
-          rendererInstance.copyToClipboardOSC52(text);
-          copied = true;
-        }
-
-        // A click moves native focus off the input; reclaim it.
+        // Any click moves native focus off the input, a plain one too; reclaim it.
         if (inputShouldFocusRef.current) inputRef.current?.focus();
       }, 10);
     };
