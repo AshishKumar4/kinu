@@ -70,6 +70,7 @@ import { AddServerCard } from "@/components/account/McpServersPanel";
 import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
+import { driveDesignFrame } from "@/gallery-drive-design";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
@@ -6139,6 +6140,7 @@ async function mount() {
     ["settings", settingsFrame],
     ["control", controlFrame],
     ["home", homeFrame],
+    ["drive-design", () => Promise.resolve(driveDesignFrame())],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
