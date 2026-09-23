@@ -6,12 +6,14 @@
 import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
-  admitMcpDescriptors, McpToolSurfaceSchema,
+  admitMcpDescriptors, describeMcpTool, listMcpToolsLeniently, McpToolSurfaceSchema,
   mcpPresetById, MCP_PRESETS,
-  type JsonObject, type JsonValue, type McpPreset, type McpPresetId,
+  type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { diagnostics, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { SseError } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -364,6 +366,32 @@ export function isMcpTransportUnauthorized(input: { cause: unknown }): boolean {
   }
 
   return false;
+}
+
+export type McpToolListing = { readonly listed: ListedMcpTools } | { readonly failure: string };
+
+export async function readUndiscoveredToolList(server: { readonly name: string }, client: Pick<Client, 'request'>): Promise<McpToolListing> {
+  try {
+    return {
+      listed: await listMcpToolsLeniently(server, (cursor) => client.request(
+        { method: 'tools/list', params: cursor === undefined ? {} : { cursor } },
+        ResultSchema,
+      )),
+    };
+  } catch (cause) {
+    const error = toKinuError({ doing: `reading the tool list of MCP server ${server.name}`, cause, otherwise: 'unavailable' });
+    diagnostics.failure('mcp.tool_list_unreadable', error, { server: server.name });
+
+    return { failure: renderCauseChain(error) };
+  }
+}
+
+export function mcpListingRefusals(server: { readonly id: string; readonly name: string }, listed: ListedMcpTools): McpToolRefusal[] {
+  return [...listed.refused, ...listed.tools.flatMap((tool) => {
+    const described = describeMcpTool(server, tool);
+
+    return 'refused' in described ? [described.refused] : [];
+  })];
 }
 
 /** Avoids importing the SDK enum so this module doesn't pull the agents SDK transitively. */

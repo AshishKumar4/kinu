@@ -145,8 +145,9 @@ import {
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized,
-  storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability,
-  type McpPresetAvailability, type McpServerSummary, type McpTransport,
+  storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList,
+  mcpListingRefusals,
+  type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
 } from './mcp';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
@@ -679,6 +680,8 @@ export class UserDO extends Agent<Env> {
   /** Calls interleave at every await; joining this keeps reconciliation one credential-safe sequence.
    * Cleared after either settlement so a later caller can retry. */
   private _hydratingUserMcp: Promise<void> | null = null;
+
+  private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
 
   /** Once per activation. Claims live in isolate memory, so any claim in storage at activation start
@@ -4457,8 +4460,11 @@ export class UserDO extends Agent<Env> {
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     const servers = rows?.n ?? 0;
 
-    try { await this.hydrateUserMcp(); }
-    catch (err) {
+    try {
+      await this.hydrateUserMcp();
+      await this.userMcp().waitForConnections();
+      await this.readMcpToolLists();
+    } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
         doing: 'restoring the user MCP connections on warmup',
         cause: err,
@@ -4487,14 +4493,28 @@ export class UserDO extends Agent<Env> {
     // Hydrate unconditionally: an orphaned SDK row can outlive the last config row. Idempotent.
     // A failure here is a storage failure, not per-server; it must not report every server disconnected.
     await this.hydrateUserMcp();
+    await this.readMcpToolLists();
     const connections = this.mcp.mcpConnections;
 
     return rows.map((r): McpServerSummary => {
       const conn = connections[r.id];
       const status = mapConnectionStatus(conn?.connectionState);
       const allowed = parseAllowedTools(r.allowed_tools);
+      const listing = conn?.connectionState === 'connected' ? this._mcpToolLists.get(r.id) : undefined;
+      const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
 
-      const tools = conn?.tools ?? [];
+      const tools = lenient === null
+        ? conn?.tools ?? []
+        : lenient.tools.filter((tool) => 'admitted' in describeMcpTool({ id: r.id, name: r.name }, tool));
+
+      let problems: string[] = [];
+
+      if (listing !== undefined) {
+        problems = 'failure' in listing
+          ? [listing.failure]
+          : mcpListingRefusals({ id: r.id, name: r.name }, listing.listed).map((refusal) => refusal.reason);
+      }
+
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
       // authUrl is exposed only while pending, so the UI knows whether to render the authorize link.
@@ -4508,7 +4528,7 @@ export class UserDO extends Agent<Env> {
         serverUrl: r.server_url,
         transport: r.transport,
         status,
-        error: conn?.connectionError ?? null,
+        error: conn?.connectionError ?? (problems.length === 0 ? null : problems.join('; ')),
         toolsCount,
         presetId: r.preset_id,
         authUrl,
@@ -4630,6 +4650,7 @@ export class UserDO extends Agent<Env> {
         // Awaited, not detached: waitUntil is a no-op in a DO (`do.wait_until.no_op`) and in-flight
         // promises are cancelled on reset (`do.background_task.cancelled_on_reset`).
         await mgr.discoverIfConnected(id);
+        await this.readMcpToolList(id);
       }
     } catch (err) {
       // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
@@ -4656,6 +4677,7 @@ export class UserDO extends Agent<Env> {
     }
 
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
+    this._mcpToolLists.delete(id);
   }
 
   /** Patch-update editable fields; nothing reconnects. Rotated `headers` apply on the next request
@@ -4745,6 +4767,30 @@ export class UserDO extends Agent<Env> {
   }
 
 
+  private async readMcpToolList(id: string): Promise<void> {
+    const conn = this.userMcp().mcpConnections[id];
+
+    if (conn?.connectionState !== 'connected') {
+      this._mcpToolLists.delete(id);
+
+      return;
+    }
+
+    const name = this.sqlx<{ name: string }>(`SELECT name FROM user_mcp_servers WHERE id = ?`, id)[0]?.name ?? id;
+    const listing = await readUndiscoveredToolList({ name }, conn.client);
+    this._mcpToolLists.set(id, listing);
+
+    for (const refusal of 'listed' in listing ? mcpListingRefusals({ id, name }, listing.listed) : []) {
+      diagnostics.failure('mcp.tool_refused', new KinuError('bad_input', refusal.reason), { server: name });
+    }
+  }
+
+  private async readMcpToolLists(): Promise<void> {
+    const ids = new Set([...Object.keys(this.userMcp().mcpConnections), ...this._mcpToolLists.keys()]);
+
+    for (const id of ids) await this.readMcpToolList(id);
+  }
+
   /** Descriptors for already-connected MCP servers, filtered by `allowed_tools`. On the turn's
    *  critical path: starts and awaits no network work; `unavailable` lists servers not yet ready. */
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
@@ -4764,6 +4810,7 @@ export class UserDO extends Agent<Env> {
     }
 
     const out: SerializableToolDescriptor[] = [];
+    const refused: McpToolSurface['unavailable'] = [];
     const connections = this.mcp.mcpConnections;
 
     // Readiness comes from the SDK connection, not descriptors: a ready server may expose zero tools.
@@ -4773,31 +4820,54 @@ export class UserDO extends Agent<Env> {
         .map(([id]) => id),
     );
 
+    const listingFor = (id: string): McpToolListing | undefined => (connections[id]?.connectionState === 'connected'
+      ? this._mcpToolLists.get(id)
+      : undefined);
+
+    const offered = new Set<string>();
+
     for (const [id, conn] of Object.entries(connections)) {
       // Disjoint with `unavailable` by construction: a non-ready connection contributes no descriptors,
       // so a server whose SDK kept cached tools after a 401 is disclaimed once and offered nowhere.
-      if (!connected.has(id)) continue;
+      const listing = listingFor(id);
+      const lenient = listing !== undefined && 'listed' in listing ? listing.listed : null;
+
+      if (!connected.has(id) && lenient === null) continue;
       const allowed = allowedById.get(id);
 
       if (allowed === undefined) continue;
       const meta = rows.find((r) => r.id === id);
 
       if (!meta) continue;
+      offered.add(id);
 
-      for (const tool of conn.tools) {
+      for (const tool of lenient?.tools ?? conn.tools) {
         if (allowed && !allowed.has(tool.name)) continue;
-        out.push(describeMcpTool({ id, name: meta.name }, tool));
+        const described = describeMcpTool({ id, name: meta.name }, tool);
+
+        if ('admitted' in described) out.push(described.admitted);
+        else refused.push(described.refused);
       }
+
+      refused.push(...(lenient?.refused ?? []));
     }
 
-    const unavailable = rows
-      .filter((r) => !connected.has(r.id))
-      .map((r) => ({
-        server: r.name,
-        reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
-          + `installed by the next turn once the connection completes — a turn's tool set is fixed `
-          + `when the turn opens.`,
-      }));
+    const unavailable = [...rows
+      .filter((r) => !offered.has(r.id))
+      .map((r) => {
+        const listing = listingFor(r.id);
+
+        if (listing !== undefined && 'failure' in listing) {
+          return { server: r.name, reason: `connected, but its tool list could not be read, so it offers no tools: ${listing.failure}` };
+        }
+
+        return {
+          server: r.name,
+          reason: `not connected when this turn opened, so its tools are absent from this turn. They are `
+            + `installed by the next turn once the connection completes — a turn's tool set is fixed `
+            + `when the turn opens.`,
+        };
+      }), ...refused];
 
     // Sorted because the orchestrator's cache hashes this JSON; SDK map order is unstable and would
     // force needless rebuilds of every tool closure.
@@ -4838,7 +4908,9 @@ export class UserDO extends Agent<Env> {
     const params = parsedParams.success ? parsedParams.output : {};
     // Clients send untouched optional fields as ""; drop only keys the tool's inputSchema marks optional,
     // never required or undeclared keys (KINU-052).
-    const tool = this.mcp.mcpConnections[serverId]?.tools.find((t) => t.name === name);
+    const listing = this._mcpToolLists.get(serverId);
+    const listed = listing !== undefined && 'listed' in listing ? listing.listed.tools : [];
+    const tool = [...(this.mcp.mcpConnections[serverId]?.tools ?? []), ...listed].find((t) => t.name === name);
     const parsedSchema = v.safeParse(JsonObjectSchema, tool?.inputSchema);
 
     const callArgs = omitEmptyOptionalArgs(
@@ -4886,6 +4958,8 @@ export class UserDO extends Agent<Env> {
         // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
         try { await this.userMcp().establishConnection(result.serverId); }
         catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${renderThrownChain({ cause: err })}` }; }
+
+        await this.readMcpToolList(result.serverId);
 
         return { ok: true, serverId: result.serverId, error: null };
       }

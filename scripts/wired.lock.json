@@ -418,8 +418,6 @@
   "packages/core/src/tools/clamp.ts#TOOL_OUTPUT_DIR (unreached-export)",
   "packages/core/src/tools/crafted-executor.ts#toCraftedToolSource (unreached-export)",
   "packages/core/src/tools/effect-claim.ts#releaseTurnEffectClaims (unreached-export)",
-  "packages/core/src/tools/mcp-surface.ts#RemoteMcpTool.outputSchema (unsupplied-field)",
-  "packages/core/src/tools/mcp-surface.ts#RemoteMcpTool.title (unsupplied-field)",
   "packages/core/src/tools/mcp-surface.ts#SerializableToolDescriptorSchema (unreached-export)",
   "packages/core/src/tools/registry.ts#DEPS_GATED_TOOLS (unreached-export)",
   "packages/core/src/tools/sandbox-contract.ts#firstSentence (unreached-export)",

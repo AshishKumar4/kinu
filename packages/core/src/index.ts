@@ -638,11 +638,13 @@ export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } f
 
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 
+export { toolSchemaDialect, withToolSchemaDialect, type ToolSchemaDialect } from './tools/tool-schema';
+
 export {
   describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
-  buildMcpToolSet,
+  buildMcpToolSet, listMcpToolsLeniently,
   SerializableToolDescriptorSchema, McpToolSurfaceSchema,
-  type SerializableToolDescriptor, type RemoteMcpTool,
+  type SerializableToolDescriptor, type RemoteMcpTool, type McpToolRefusal, type ListedMcpTools,
   type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
 } from './tools/mcp-surface';
 

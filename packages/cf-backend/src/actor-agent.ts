@@ -61,7 +61,7 @@ import {
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   advisorWorkspaceGuidance,
   buildActorTools, buildBuiltinTools,
-  buildMcpToolSet,
+  buildMcpToolSet, toolSchemaDialect, withToolSchemaDialect,
   type WebSearchProvider,
   buildSystemPromptSync,
   type PromptIdentity,
@@ -3847,7 +3847,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }));
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
 
-      return tools;
+      return withToolSchemaDialect(tools, toolSchemaDialect(this.effectiveModelSpec()));
     } catch (err) {
       const failure = toKinuError({
         doing: 'building the user MCP tool adapters for this turn',
