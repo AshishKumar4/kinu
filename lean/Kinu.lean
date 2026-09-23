@@ -4,12 +4,12 @@
   published theorem depends on it. `lean/traceability.yaml` is the inventory.
 
   Core: Types
-  Safety: CapabilitySafety, Credentials
+  Safety: Credentials
   MCTS: StorageIsolation, Backpropagation, Uct, Convergence
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
   Storage: FTS5Search, SqliteFSCorrectness, CostModel, SnapshotChain, BlockLayer, LossWindow
-  Execution: Capabilities, ToolSystem
+  Execution: Capabilities
   Exploration: Objective, Publication, Settle, Archive, Records, Arbitration,
     Isolation, RecordsStore, ArchiveAdmission, FanIn, Rebase, Concurrent,
     Counterfactual, Improvement
@@ -20,7 +20,6 @@
 import Kinu.Types
 
 -- Safety proofs
-import Kinu.Safety.CapabilitySafety
 import Kinu.Safety.Credentials
 
 -- MCTS proofs
@@ -50,7 +49,6 @@ import Kinu.Storage.LossWindow
 
 -- Execution layer proofs (5-tool architecture + capability routing)
 import Kinu.Execution.Capabilities
-import Kinu.Execution.ToolSystem
 
 -- Exploration proofs (docs/EXPLORATION.md — "The Lean invariants")
 import Kinu.Exploration.Objective

@@ -21,27 +21,27 @@ evidence.
 |------|---------:|-----------------|----------|
 | Exploration | 265 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds, the records store under concurrent runs, the verifier counterfactual, eventual improvement under a discrimination floor | Two modules are conditional by their own headers: the descriptor partition depends on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation, not a bound. `Improvement.lean` models the engine's rounds, not its code |
 | Storage | 77 | index/list properties, byte-chunk reassembly, a list-backed filesystem, the SQLite filesystem's own correctness obligations, snapshot-chain attach, tick, rebase, generation and crash-loss cost, read-only block-layer composition, and the wall-clock loss window of a periodic sync | SQLite tokenization, ranking, concurrency and table-to-model correspondence remain external evidence obligations. Every chain independence claim is checked against a cost definition, not against the algorithm. Alarm lateness and tick duration are parameters, not measurements |
-| MCTS | 38 | the UCT bonus order and the selection argmax, convergence over the tree the search leaves, exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite scores and backpropagates in IEEE-754 `REAL` values, and the storage-isolation transitions are maintained by hand |
+| MCTS | 37 | the UCT bonus order and the selection argmax, convergence over the tree the search leaves, exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite scores and backpropagates in IEEE-754 `REAL` values, and the storage-isolation transitions are maintained by hand |
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
-| Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale against the current provider and the eight tools in `BUILTIN_TOOLS` |
-| Safety | 14 | the shape of operations constructible from modeled provider names; the credential store's client view, envelope binding and rotation | The constructor witnesses are not a proof of the deployed sandbox boundary. The cipher's guarantees are premises. The device connection is not yet modelled |
+| Execution | 10 | an executor capability lattice and its router | The lattice names executors the product no longer ships; see *Minimality review* |
+| Safety | 8 | the credential store's client view, envelope binding and rotation | The cipher's guarantees are premises. The device connection is not yet modelled |
 
 Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
-reports 452 named declarations, and the traceability map enrolls all 452: 67
+reports 437 named declarations, and the traceability map enrolls all 437: 66
 under `proved-and-refined` requirements, 311 under `proved-in-abstract-model`
-and 74 under `by-construction-witness`.
+and 60 under `by-construction-witness`.
 
 Status is declared on a requirement and inherited by every theorem it claims,
 so the same status words count over two totals: theorems and requirements. Name
 the denominator every time.
 
-Near-definitional statements (nonnegativity of a `Nat` EMA score; a constructor
-that never produces `SQLWrite`) count as witnesses. They are not deep safety
+Near-definitional statements, such as the nonnegativity of a `Nat` EMA score,
+count as witnesses. They are not deep safety
 proofs.
 
-By requirement, over 49: 6 `proved-and-refined`, 30 `proved-in-abstract-model`,
-12 `by-construction-witness`, 1 `trusted-model-assumption`. The last status
+By requirement, over 46: 6 `proved-and-refined`, 30 `proved-in-abstract-model`,
+9 `by-construction-witness`, 1 `trusted-model-assumption`. The last status
 appears only in this total, because that requirement claims no theorem.
 
 ## Statuses
@@ -77,13 +77,11 @@ is now proved:
 Reviewed 2026-09-23 against `main` at b2c60d09f. A model stays when a
 requirement enrolls it and the shipped code has the thing it models.
 
-- To remove, with its requirements: `Execution/ToolSystem.lean` (`PR-EXEC-002`,
-  `PR-EXEC-003`), an action classifier and a five-tool vocabulary the product
-  does not have, and `Safety/CapabilitySafety.lean` (`PR-SAFETY-001`) with
-  `Types.Op` and `grantableOps`, an operation taxonomy the product does not
-  have. Both are cited from source this lane does not own
-  (`packages/core/src/execution/types.ts`, `packages/core/src/scaffold/modify.ts`),
-  so the removal waits for those owners.
+- Removed 2026-09-23: the ToolSystem model (`PR-EXEC-002`, `PR-EXEC-003`), an
+  action classifier and a five-tool vocabulary the product does not have, and
+  the CapabilitySafety model (`PR-SAFETY-001`) with `Types.Op` and
+  `grantableOps`, an operation taxonomy the product does not have. Their two
+  citations in `packages/core/src` went with them.
 - To realign, not remove: `Execution/Capabilities.lean` names executors the
   product no longer ships, and it carries the `Capability` state mirror.
   `MCTS/StorageIsolation.lean` models one store per branch, while branches now

@@ -920,13 +920,7 @@ for (const name of declarations.axioms) {
 // `open`).
 //
 // Enrolled rather than discovered: a mirror nobody declared cannot be checked, so
-// adding one is a reviewable edit. Two mirrors are deliberately absent because
-// they hold in neither direction today and the model, not the gate, is what has
-// to move: `Execution.Capabilities.ExecutorKind` still names `container` and `ssh`
-// against `ExecutorKind`'s `sandbox`, `laptop` and `parent`, and
-// `Execution.ToolSystem.TopLevelTool` still names five tools against
-// `BUILTIN_TOOLS`. Both are recorded as remaining evidence on PR-EXEC-001 and
-// PR-EXEC-002.
+// adding one is a reviewable edit.
 const STATE_MIRRORS = [
   { lean: "Kinu.Exploration.Settle.Unit", ts: "packages/core/src/types/swarm.ts#SWARM_UNITS" },
   { lean: "Kinu.Exploration.Settle.Expand", ts: "packages/core/src/types/swarm.ts#SWARM_EXPANDS" },

@@ -24,25 +24,6 @@ structure NodeData where
   action   : String
   deriving Repr, BEq, Inhabited
 
-/-! ## Capability model -/
-
-inductive Op where
-  | ToolCall : String → String → Op
-  | SQLWrite
-  | SQLRead
-  | NetworkFetch
-  | ScaffoldWrite
-  | SpawnSubAgent
-  deriving Repr, BEq
-
-structure ResolvedProvider where
-  ns        : String
-  toolNames : List String
-  deriving Repr, BEq
-
-def grantableOps (providers : List ResolvedProvider) : List Op :=
-  providers.flatMap fun p => p.toolNames.map fun n => Op.ToolCall p.ns n
-
 /-! ## CraftStore types -/
 
 structure CraftedTool where

@@ -1,6 +1,6 @@
 /**
  * Execution layer types: executors are codemode ToolProviders. docs/EXECUTION-LAYER-SPEC.md
- * Lean formalization: lean/Kinu/Execution/{Capabilities,ToolSystem}.lean
+ * Lean formalization: lean/Kinu/Execution/Capabilities.lean
  */
 
 import type { VFS } from '../types/primitives';

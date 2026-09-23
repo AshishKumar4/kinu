@@ -90,17 +90,6 @@ import Kinu
 #print axioms Kinu.Execution.Capabilities.subsumes_refl
 #print axioms Kinu.Execution.Capabilities.subsumes_trans
 
-/-! ## Kinu/Execution/ToolSystem.lean -/
-
-#print axioms Kinu.Execution.ToolSystem.action_routes_to_valid_tool
-#print axioms Kinu.Execution.ToolSystem.only_mcts_uses_explore
-#print axioms Kinu.Execution.ToolSystem.shell_uses_run
-#print axioms Kinu.Execution.ToolSystem.memory_search_uses_search
-#print axioms Kinu.Execution.ToolSystem.memory_save_uses_note
-#print axioms Kinu.Execution.ToolSystem.file_ops_use_codemode
-#print axioms Kinu.Execution.ToolSystem.empty_is_isolated
-#print axioms Kinu.Execution.ToolSystem.append_workspace_preserves
-
 /-! ## Kinu/MCTS/Backpropagation.lean -/
 
 #print axioms Kinu.MCTS.Backpropagation.init_values_equal_at_first_step
@@ -149,15 +138,6 @@ import Kinu
 #print axioms Kinu.MCTS.Uct.select_none_iff
 #print axioms Kinu.MCTS.Uct.an_outranked_row_is_never_selected
 #print axioms Kinu.MCTS.Uct.the_more_visited_of_two_equal_siblings_is_never_selected
-
-/-! ## Kinu/Safety/CapabilitySafety.lean -/
-
-#print axioms Kinu.Safety.CapabilitySafety.grantableOps_only_toolcalls
-#print axioms Kinu.Safety.CapabilitySafety.sqlwrite_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.sqlread_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.scaffoldwrite_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.spawnsubagent_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.networkfetch_not_grantable
 
 /-! ## Kinu/Safety/Credentials.lean -/
 
