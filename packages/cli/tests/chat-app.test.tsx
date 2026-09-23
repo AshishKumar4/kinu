@@ -591,6 +591,26 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(renamed).toEqual(['Research partner']);
   });
 
+  test('a conversation the Agent Hub opens takes keys at once, while the previous client still closes', async () => {
+    const parent = fakeClient({ name: 'shop-cloud', mode: 'cloud' });
+    const closing = Promise.withResolvers<void>();
+    parent.client.close = () => closing.promise;
+    const child = fakeClient({ name: 'sub-2', mode: 'cloud' });
+
+    const screen = await mountChat(parent.client, {
+      hubData: HUB_FIXTURE,
+      onNewAgent: async () => ({ name: 'sub-2', displayName: '', kind: 'cloud-additional', client: child.client }),
+    });
+
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
+    screen.mockInput.pressKey('n');
+    await screen.waitFor('the new conversation', () => screen.frame().includes('Connected to sub-2'));
+    await screen.mockInput.typeText('typed while closing');
+    await screen.waitFor('the draft in the new conversation', () => screen.frame().includes('typed while closing'));
+    closing.resolve();
+  });
+
   test('a hub with no wired creator offers no new-agent key', async () => {
     const local = fakeClient({ name: 'solo' });
     const screen = await mountChat(local.client, { hubData: HUB_FIXTURE });

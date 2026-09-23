@@ -1,4 +1,4 @@
-import type { SlateSummary } from "@kinu.run/core";
+import type { PinnedPreviewPort, SlateSummary } from "@kinu.run/core";
 import type { ForkNode, TabPresence } from "@kinu.run/core";
 import type { SurfaceKind } from "./WorkSurface";
 
@@ -33,12 +33,29 @@ export function surfaceHasContent(surface: SurfaceKind, content: SurfaceContent)
 	return true;
 }
 
-export function firstVisibleSurface(content: SurfaceContent): SurfaceKind {
+function firstVisibleSurface(content: SurfaceContent): SurfaceKind {
 	return SURFACES.find((surface) => surfaceHasContent(surface, content)) ?? "Files";
 }
 
-export function resolveGatedSurface(surface: SurfaceKind, content: SurfaceContent): SurfaceKind {
+function resolveGatedSurface(surface: SurfaceKind, content: SurfaceContent): SurfaceKind {
 	return surfaceHasContent(surface, content) ? surface : firstVisibleSurface(content);
+}
+
+export function landedSurface(
+	requested: SurfaceKind,
+	content: SurfaceContent,
+	ports: readonly PinnedPreviewPort[],
+): SurfaceKind {
+	if (!requested.startsWith("preview:")) return resolveGatedSurface(requested, content);
+	const fronted = content.slates?.find((slate) => `preview:workspace:${slate.port}` === requested);
+
+	if (fronted !== undefined) return `${SLATE_PREFIX}${fronted.id}`;
+
+	return openPortOf(requested, ports) === undefined ? firstVisibleSurface(content) : requested;
+}
+
+export function openPortOf(surface: SurfaceKind, ports: readonly PinnedPreviewPort[]): PinnedPreviewPort | undefined {
+	return ports.find((port) => surface === `preview:${port.executor}:${port.port}`);
 }
 
 export function pruneSlateReloads(

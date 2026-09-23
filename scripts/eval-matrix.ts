@@ -100,6 +100,7 @@ import {
   EPISODE_TRANSCRIPT_FILES, LIVE_MODEL_ENV, readRunRecord, TASK_OUTCOME,
   type EvalRunRecord, type EvalSubgoal,
 } from '@kinu.run/test-utils';
+import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import { tolerate } from '../packages/core/src/obs/index';
 
 /** The OpenAI model-listing shape both provider doors answer. */
@@ -326,7 +327,7 @@ function resolveIdentity(): { origin: string; token: string } | null {
  *  model menu itself uses. A precondition, reported and never rewritten. */
 async function accountServes(origin: string, identity: string, modelId: string): Promise<string> {
   const response = await fetch(`${origin}/api/user/models`, {
-    headers: { 'x-kinu-dev-identity': identity },
+    headers: { [DEV_IDENTITY_HEADER]: identity },
   });
 
   if (!response.ok) return `GET /api/user/models → HTTP ${String(response.status)}`;

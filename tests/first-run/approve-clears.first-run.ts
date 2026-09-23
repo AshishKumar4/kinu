@@ -236,7 +236,7 @@ interface ButtonRun {
  * Load the deployed workspace in Chrome, click Approve, and count the boxes.
  *
  * THE HEADER IS THE SIGN-IN. The deployment accepts the synthetic identity in
- * `x-kinu-dev-identity` and nowhere else — never as a cookie, deliberately — so
+ * core's `DEV_IDENTITY_HEADER` and nowhere else — never as a cookie, deliberately — so
  * `setExtraHTTPHeaders` is what makes this page the same user the RPC half
  * acted as. Everything else is the product: its own bundle, its own socket, its
  * own render.
