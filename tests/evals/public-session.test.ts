@@ -28,6 +28,7 @@
  *                 number incomparable with a local one, silently.
  */
 import { describe, expect, test } from 'bun:test';
+import type { ServerWebSocket } from 'bun';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -105,6 +106,16 @@ function replay(frames: readonly string[]): PublicTurnRecorder {
   return recorder;
 }
 
+/** A fixture socket's rpc handler: answers each request with `answer(request)`, or leaves it pending when that is undefined. */
+function answerRpcs(answer: (request: v.InferOutput<typeof RpcRequestFrameSchema>) => JsonValue | undefined) {
+  return (socket: ServerWebSocket, message: string | Buffer): void => {
+    const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+    const result = answer(request);
+
+    if (result !== undefined) socket.send(rpcReplyFrame({ requestId: request.id, result }));
+  };
+}
+
 test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
   let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
     refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
@@ -117,10 +128,7 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
 
       return new Response('not found', { status: 404 });
     },
-    websocket: { message(socket, message) {
-      const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
-      socket.send(rpcReplyFrame({ requestId: request.id, result: response }));
-    } },
+    websocket: { message: answerRpcs(() => response) },
   });
 
   const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
@@ -133,6 +141,119 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
     expect(await session.execute('device', 'work')).toEqual(response);
     response = { stdout: '{"reason":"denied","error":"historical incident"}', stderr: '', exitCode: 0 };
     expect(await session.execute('device', 'read')).toEqual(response);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('an rpc after the platform closed the idle socket redials and answers, never hangs', async () => {
+  // The incident: the runtime deactivated the instance and closed the idle socket (1006); the next
+  // rpc was written into the CLOSED socket, which discards a frame without an error, and waited
+  // until the tier's deadline killed it. Unfixed, this test hangs to its timeout.
+  let upgrades = 0;
+  let firstServerSocket: ServerWebSocket | undefined;
+  const response: JsonValue = { stdout: 'ok', stderr: '', exitCode: 0 };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request)) {
+        upgrades += 1;
+
+        return;
+      }
+
+      return new Response('not found', { status: 404 });
+    },
+    websocket: {
+      open(socket) { firstServerSocket ??= socket; },
+      // A request naming `hold` is never answered: its rejection is the signal that the close landed.
+      message: answerRpcs((request) => (JSON.stringify(request.args).includes('hold') ? undefined : response)),
+    },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'idle close probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const held = session.execute('device', 'hold');
+    firstServerSocket?.close(1012, 'instance no longer active');
+    await expect(held).rejects.toThrow('the workspace socket closed (code 1012, instance no longer active)');
+
+    expect(await session.execute('device', 'after the close')).toEqual(response);
+    expect(upgrades).toBe(2);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('a turn survives a dropped socket: the redial resumes its stream and the answer lands', async () => {
+  // Browser parity: the socket drops mid-turn (1006 at the edge), the turn is durable up there, and
+  // the redial's stream-resume frames finish it. Unfixed, the close rejected the turn and cost the trial.
+  let upgrades = 0;
+  let requestId = '';
+  const replayed = Promise.withResolvers<void>();
+
+  const start: RunEvent = {
+    type: 'run_start', runId: 'turn-run', eventIndex: 0, timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
+  };
+
+  const end: RunEvent = {
+    type: 'run_end', runId: 'turn-run', eventIndex: 1, timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
+  };
+
+  const server = Bun.serve<{ connection: number }>({ port: 0, hostname: '127.0.0.1',
+    async fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      // Numbered at the upgrade: Bun opens the socket inside `upgrade`, before a counter bumped after it.
+      if (upgrading.upgrade(request, { data: { connection: upgrades + 1 } })) {
+        upgrades += 1;
+
+        return;
+      }
+
+      // The ledger answers only after the resumed stream went out, so the turn settles from the stream.
+      await replayed.promise;
+      const path = new URL(request.url).pathname;
+
+      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'turn-run' }] });
+
+      if (path.endsWith('/events')) return Response.json([start, end]);
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: {
+      open(socket) {
+        if (socket.data.connection === 2) socket.send(streamResumingFrame(requestId));
+      },
+      message(socket, message) {
+        if (socket.data.connection === 1) {
+          requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
+          socket.close(1012, 'dropped mid-turn');
+
+          return;
+        }
+
+        // The resume ack: replay the whole stream, terminal frame included.
+        for (const frame of chatTurnFrames({ requestId, chunks: FILE_TURN_CHUNKS, replay: true })) socket.send(frame);
+        replayed.resolve();
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'dropped socket',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const result = await session.submit('Write note.txt.').settled;
+
+    if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
+    expect(result.text).toBe('Wrote note.txt.');
+    expect(upgrades).toBe(2);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

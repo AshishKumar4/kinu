@@ -504,6 +504,30 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
   });
 });
 
+describe('the arm is applied to the episode, not only recorded', () => {
+  // The defect this pins: the run record carried `arm.tools` while every arm ran the full surface,
+  // so an A/B over tools compared two identical agents and reported the noise as a treatment.
+  const offered = async (name: string, tools: readonly string[]): Promise<readonly string[]> => {
+    const recorder = recordRequestSurface(scripted([{ tool: 'eval', input: { code: 'return 1' } }]));
+    await runBehaviourTask({ id: `arm-${name}`, task: 'do the task' }, {
+      dir, model: recorder.model, llm: LLM, arm: { ...ARM, tools }, opened,
+    });
+
+    return recorder.evidence().toolsOffered;
+  };
+
+  test('solo withholds agents, and with it the swarm; codemode leaves eval as the only native tool', async () => {
+    const full = await offered('full', ARM.tools);
+    const solo = await offered('solo', ARM.tools.filter((tool) => tool !== 'agents'));
+    const codemode = await offered('codemode', ['eval']);
+
+    expect(full).toContain('agents');
+    expect(solo).not.toContain('agents');
+    expect(solo).toEqual(full.filter((tool) => tool !== 'agents'));
+    expect(codemode.filter((tool) => ARM.tools.includes(tool))).toEqual(['eval']);
+  });
+});
+
 describe('published run-event provenance', () => {
   test('it is bounded, ordered, useful, and carries no prompt or secret content', async () => {
     const secret = 'sk-provenance-canary-0123456789';

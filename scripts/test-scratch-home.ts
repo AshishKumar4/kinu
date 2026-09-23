@@ -25,11 +25,14 @@
 // vitest into every `bun test` process or sniff an environment variable that
 // vitest is free to rename, and a teardown that silently registers with the
 // wrong runner is the failure this module exists to prevent.
-import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tolerate } from '@kinu.run/core/obs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { releaseOnSignals, releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
+import * as v from 'valibot';
+import { releaseOnSignals, releaseScratch, SCRATCH_ROOT_PREFIX, scratchDir } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
+import { currentOwner, ownerAlive, ProcessOwnerSchema } from './process-owner';
 
 const tmp = tmpdir();
 
@@ -37,6 +40,13 @@ const tmp = tmpdir();
 // lifecycle of its own: `releaseScratch` removes this root along with
 // everything else this process owns, and a partial failure stays owned.
 const scratchRoot = scratchDir('test-home', tmp);
+
+/** Who minted a root, so a later run judges it by whether that process still runs (below). */
+const OWNER_RECORD = 'owner.json';
+
+const owner = currentOwner();
+
+if (owner !== null) writeFileSync(join(scratchRoot, OWNER_RECORD), JSON.stringify(owner));
 
 const home = join(scratchRoot, 'home');
 
@@ -115,23 +125,35 @@ releaseOnSignals();
 // before collecting a single test — an environment fault that reads as a code
 // defect in whatever change happened to be under test.
 //
-// The bound is 30 minutes against a `timeout 600` ceiling, which is 3x headroom;
-// the cost is one readdir plus a stat per entry. It covers the suite-minted
-// `kinu-scratch-*` namespace too, for the same reason and by the same rule.
-const STALE_HOME_MS = 30 * 60 * 1000;
+// A root is abandoned when the process that minted it no longer runs, which its
+// owner record says (process-owner.ts: boot, pid and start tick, so a reused pid
+// is not the owner). Age said nothing: an eval episode runs 30 minutes by design
+// and an eval tier for hours, and the 30-minute bound this replaced reaped live
+// roots out from under them. A root with no readable record (minted before
+// records existed, or killed mid-write) is left to `scripts/preflight.ts
+// --reclaim` rather than guessed at.
+/** Remove every scratch root under `parent` whose recorded owner has ended; `keep` is this run's own. */
+export function reapAbandonedRoots(parent: string, keep: string): string[] {
+  const reaped: string[] = [];
 
-const cutoff = Date.now() - STALE_HOME_MS;
+  for (const name of readdirSync(parent)) {
+    const path = join(parent, name);
 
-const ABANDONED = ['kinu-test-home-', 'kinu-scratch-'] as const;
+    if (!name.startsWith(SCRATCH_ROOT_PREFIX) || path === keep) continue;
 
-for (const name of readdirSync(tmp)) {
-  if (!ABANDONED.some((prefix) => name.startsWith(prefix)) || join(tmp, name) === scratchRoot) continue;
-  const path = join(tmp, name);
-  // A racing peer may remove it between the stat and the rm; `force` covers
-  // that. Anything else — a permission fault, a path that is not ours — must
-  // surface rather than be swallowed into a silently growing directory.
-  const stat = statSync(path, { throwIfNoEntry: false });
+    // A root is a directory; `kinu-scratch-held.json`, the release report, shares the prefix.
+    if (statSync(path, { throwIfNoEntry: false })?.isDirectory() !== true) continue;
+    // Absent, or taken by a racing peer: nothing to judge.
+    const text = tolerate(() => readFileSync(join(path, OWNER_RECORD), 'utf8'), 'enoent');
+    const recorded = text === undefined ? undefined : v.safeParse(v.pipe(v.string(), v.parseJson(), ProcessOwnerSchema), text);
 
-  if (stat === undefined || stat.mtimeMs >= cutoff) continue;
-  rmSync(path, { recursive: true, force: true });
+    if (!recorded?.success || ownerAlive(recorded.output)) continue;
+    // A racing peer may remove it between the read and the rm; `force` covers that.
+    rmSync(path, { recursive: true, force: true });
+    reaped.push(path);
+  }
+
+  return reaped;
 }
+
+reapAbandonedRoots(tmp, scratchRoot);

@@ -98,10 +98,10 @@ export const SKIP_RATCHET_TARGETS: readonly string[] = [
  *
  * ONE ENTRY PER ARM, because `unmatchedTargets` proves a target non-empty and an arm
  * is what can go missing: `eval-tier.sh` runs the behaviour eval, the live swarm
- * eval, the research eval, the optimization eval, the trajectory eval, the
- * device eval and the kinu-tasks eval as separate invocations with separate
- * spend files, so a target naming only the first would be satisfied while any
- * of the others produced no report at all.
+ * eval, the research eval, the optimization eval, the math eval, the trajectory
+ * eval, the device eval and the kinu-tasks eval as separate invocations with
+ * separate spend files, so a target naming only the first would be satisfied
+ * while any of the others produced no report at all.
  *
  * A target here is a target this file may be asked to prove non-empty, never a
  * claim that every backend runs it: the trajectory arm is CLOUD ONLY, and
@@ -116,6 +116,7 @@ export const SKIP_RATCHET_VITEST_TARGETS: readonly string[] = [
   './tests/evals/swarm.eval.ts',
   './tests/evals/research.eval.ts',
   './tests/evals/optimization.eval.ts',
+  './tests/evals/math.eval.ts',
   './tests/evals/trajectory.eval.ts',
   './tests/evals/device.eval.ts',
   './tests/evals/kinu-tasks.eval.ts',

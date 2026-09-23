@@ -59,10 +59,10 @@ import {
   RunEventRecorder, activePromptSectionOverrides, agentsActionsFor, buildActorTools,
   buildSystemPromptSync, createFactsStore,
   createAgentsCodemodeProvider, createMemoryCodemodeProvider, createTasksCodemodeProvider,
-  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, isVfsError, JsonObjectSchema,
+  currentDateForPrompt, initWorkspaceSchema, isBuiltinToolName, JsonObjectSchema,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
-  WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID, BUILTIN_ROLE_DEFINITIONS, BUILTIN_TOOLS, DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, TOOL_REACH,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
@@ -71,6 +71,7 @@ import {
 import { createWorkspace } from '../../packages/core/src/identity/index';
 import { openWorkspaceMainActor } from '../../packages/core/src/identity/workspace-actors';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
+import { STATIC_MODEL_SPEC, type ProfileEnvelopeSource } from '../../packages/cli-backend/src/profile-authority';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
@@ -83,8 +84,8 @@ import {
   scoreTrajectory, seedHardTask, stepBoundEvidence, verifyHardTask, walkRunEvents,
   type EvalArmState, type EvalScoreRow, type HardTask, type LedgerTotals,
 } from '@kinu.run/test-utils';
-import { probeFor, seedProbe, verifyProbe, type BehaviourProbe } from './behaviour-probes';
 import { DegenerateRunError } from './episode-failure';
+import { promptFor } from './prompt-style';
 
 export type { LedgerTotals };
 
@@ -575,6 +576,31 @@ function toScoreJson(rows: readonly EvalScoreRow[]): BehaviourScoreJson[] {
 }
 
 /**
+ * The arm's tool surface as the session's own profile authority: a catalog whose default role
+ * allows every capability except the native tools the arm leaves out. Through the role allowlist
+ * rather than a filter on the eval side, so the native surface, the codemode namespaces and the
+ * system prompt all narrow together, as they do for a production role. Absent for the full surface,
+ * so the baseline runs the bootstrap catalog untouched.
+ */
+export function armProfileEnvelope(arm: EvalArmState): ProfileEnvelopeSource | undefined {
+  const withheld = new Set<string>(BUILTIN_TOOLS.filter((tool) => !arm.tools.includes(tool)));
+
+  if (withheld.size === 0) return undefined;
+  const allowedTools = [...Object.keys(TOOL_REACH), SUBMIT_PLAN_TOOL].filter((tool) => !withheld.has(tool));
+
+  const catalog: ProfileCatalog = {
+    roles: { [DEFAULT_ROLE_ID]: { ...BUILTIN_ROLE_DEFINITIONS[DEFAULT_ROLE_ID], allowedTools } },
+    tiers: { default: { model: STATIC_MODEL_SPEC } },
+  };
+
+  const envelope: ProfileCatalogEnvelope = {
+    authority: { kind: 'local' }, version: 0, digest: profileCatalogDigest(catalog), catalog,
+  };
+
+  return () => envelope;
+}
+
+/**
  * A small source tree in the agent's VFS, so a task has somewhere to act.
  *
  * `broken.ts` is wrong on purpose and `broken.test.ts` fails against it:
@@ -999,15 +1025,9 @@ export async function runBehaviourTask(
   // Seeded through the OPENED runtime's filesystem: the workspace the agent
   // reads is the one this runtime owns, not the inline VFS birth returned.
   const hard: HardTask | undefined = hardTaskFor(task);
-  // A case belongs to at most one ground-truth family: `env` names it, and the
-  // two lookups below key on different env values, so both undefined is a
-  // mechanism-only corpus row and both defined is impossible by construction.
-  const probe: BehaviourProbe | undefined = probeFor(task);
   const shell = hard === undefined ? undefined : requireVerifierShell(task.id, rt);
 
   if (hard !== undefined) await seedHardTask(hard, rt.storage.vfs);
-
-  if (probe !== undefined) await seedProbe(probe, rt.storage.vfs);
 
   if (task.tags?.includes('workspace')) await seedWorkspaceTree(rt);
 
@@ -1017,6 +1037,7 @@ export async function runBehaviourTask(
     // measurement of evolution, and the run record says which it was.
     noAutoEvolve: !opts.arm.evolution,
     oneShot: true,
+    profileAuthority: armProfileEnvelope(opts.arm),
   });
 
   // The episode's wall clock, send to settled. The verifier below runs commands
@@ -1024,7 +1045,7 @@ export async function runBehaviourTask(
   // the instrument's cost, not the agent's, and charging it to the episode
   // would make the budget a property of the machine it ran on.
   const episodeStartedAt = Date.now();
-  await session.send(task.task);
+  await session.send(promptFor(task.task, opts.arm.prompt));
   await session.settleBackgroundWork();
   const episodeWallMs = Date.now() - episodeStartedAt;
 
@@ -1061,35 +1082,10 @@ export async function runBehaviourTask(
   // Measured AFTER `readLedgerTotals` on purpose: the verifier runs commands
   // through `rt.shell`, and reading the ledger first keeps the turn and tool-call
   // counts a property of the agent's episode rather than of its grading.
-  const probeFiles = {
-    readText: async (path: string): Promise<string | null> => {
-      let content: string | Uint8Array;
-
-      try {
-        content = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-      } catch (error) {
-        // Absence is the probe's miss, not the harness failing: only the
-        // missing-file errno becomes null, everything else rethrows.
-        if (isVfsError(error) && error.code === 'ENOENT') return null;
-        throw error;
-      }
-
-      // A file whose bytes are not text cannot be the exact text the probe
-      // asked for — also a miss, measured rather than thrown.
-      const text = v.safeParse(v.string(), content);
-
-      return text.success ? text.output : null;
-    },
-  };
-
   const measureOutcome = async (): Promise<EvalScoreRow[]> => {
-    if (hard !== undefined && shell !== undefined) {
-      return [await verifyHardTask(hard, { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) })];
-    }
+    if (hard === undefined || shell === undefined) return [];
 
-    if (probe === undefined) return [];
-
-    return [await verifyProbe(probe, { files: probeFiles, events })];
+    return [await verifyHardTask(hard, { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) })];
   };
 
   const outcome: EvalScoreRow[] = await measureOutcome();
