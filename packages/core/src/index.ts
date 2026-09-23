@@ -1233,7 +1233,7 @@ export {
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
-  type VfsMount, type MountableProvider,
+  type VfsMount, type MountableProvider, type MountedVfs,
   type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
 } from './vfs/mounts';
 

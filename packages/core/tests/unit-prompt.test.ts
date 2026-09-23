@@ -523,7 +523,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/separate machines/i);
     expect(prompt).toContain('/pc');
     expect(prompt).toContain('/sandbox');
-    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('teaches the preview workflow for the executor that actually exposes inbound ports', () => {
@@ -578,7 +577,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/separate machines/i);
     expect(prompt).not.toContain('the same machine and see the same files');
     expect(prompt).toContain('/pc');
-    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -719,7 +717,6 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/paths native to each machine/);
     expect(prompt).toContain('/pc');
     expect(prompt).toContain('/sandbox');
-    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('the doctrine follows the executor list, not the backend', () => {

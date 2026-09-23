@@ -322,7 +322,6 @@ export function createCFRuntime(
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
 
-  // Never receives the VFS-only `/pc` or `/sandbox` mounts.
   const shell = withApprovalGatedShell(nimbusSessionShell(executionBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   // State services keep `baseWorkspaceVfs` and never index foreign bytes. The context mount is last:
@@ -360,6 +359,8 @@ export function createCFRuntime(
   }
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
+  // The shell this actor runs as serves its file tool's mount points.
+  workspaceBox.mountTable?.(agentFileVfs, hooks.workspaceExecution?.cred);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.

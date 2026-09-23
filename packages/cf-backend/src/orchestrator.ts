@@ -914,7 +914,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   protected override async terminalFor(connection: Pick<Connection, 'tags'>): Promise<WorkspaceTerminal | null> {
-    return isWorkspaceTerminal(connection.tags) ? await this.hostedWorkspace().terminal() : null;
+    if (!isWorkspaceTerminal(connection.tags)) return null;
+    // Building the root runtime registers the mount table this shell serves.
+    void this.rt;
+
+    return await this.hostedWorkspace().terminal();
   }
 
   protected override workModeForMetadata(metadata: JsonObject | undefined): WorkMode {

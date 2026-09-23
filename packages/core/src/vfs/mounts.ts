@@ -25,7 +25,6 @@ export const EXECUTOR_MOUNTS = {
 /** Never a machine's mount segment, so `local` and the fixed planes cannot be shadowed by a device name. */
 export const RESERVED_REFERENCE_ROOTS: readonly string[] = ['vfs', 'sandbox', 'local'];
 
-/** The mount table inverted: mount point → executor. */
 export const MOUNT_EXECUTORS: Record<string, string> = Object.fromEntries(
 	Object.entries(EXECUTOR_MOUNTS).map(([executor, mount]) => [mount, executor]),
 );
@@ -84,7 +83,6 @@ export interface VfsNativeReads {
 	readdirStats(path: string): Promise<VfsListedEntry[]>;
 }
 
-/** A widening assignment, not a cast: the extras are optional. */
 function nativeOps(files: VFS): Partial<VfsNativeMutations & VfsNativeReads> {
 	const probed: VFS & Partial<VfsNativeMutations & VfsNativeReads> = files;
 
@@ -315,14 +313,19 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 	return `${parent}.${name}.kinu-${purpose}-${nonce}`;
 }
 
+/** What the workspace shell reads to serve this table. */
+export interface VfsMountRouting {
+	mountOf(path: string): string | null;
+	mountPoints(): readonly string[];
+}
+
+export type MountedVfs = VFS & VfsNativeMutations & VfsNativeReads & VfsMountRouting;
 
 /**
  * `base` extended by `mounts`. Mount routes delegate with the prefix stripped; an absent mount refuses with
  * ENXIO (`exists` false, `stat` null). Rename stays within one namespace; mount points reject every mutation.
  */
-export function withMountTable(
-	base: VFS, mounts: readonly VfsMount[],
-): VFS & VfsNativeMutations & VfsNativeReads {
+export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedVfs {
 	const byName = new Map<string, VfsMount>();
 
 	for (const mount of mounts) {
@@ -342,14 +345,21 @@ export function withMountTable(
 		byName.set(mount.name, mount);
 	}
 
-	/** Only a whole first segment matches; `..` may never climb out of a mounted tree's root. */
-	const routeOf = (path: string): { mount: VfsMount; native: string } | { base: string } => {
-		if (!path.startsWith('/')) return { base: path };
+	const mountNamed = (path: string): VfsMount | undefined => {
+		if (!path.startsWith('/')) return undefined;
 		const slash = path.indexOf('/', 1);
-		const head = slash === -1 ? path.slice(1) : path.slice(1, slash);
-		const mount = byName.get(head);
+
+		return byName.get(slash === -1 ? path.slice(1) : path.slice(1, slash));
+	};
+
+	const mountPoints = (): string[] => [...byName.values()].filter((m) => m.files() !== null).map((m) => m.name);
+
+	/** `..` may never climb out of a mounted tree's root. */
+	const routeOf = (path: string): { mount: VfsMount; native: string } | { base: string } => {
+		const mount = mountNamed(path);
 
 		if (!mount) return { base: path };
+		const slash = path.indexOf('/', 1);
 
 		if (slash === -1) return { mount, native: '/' };
 
@@ -416,6 +426,8 @@ export function withMountTable(
 	};
 
 	return {
+		mountOf: (path) => mountNamed(path)?.name ?? null,
+		mountPoints,
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
 		},
@@ -447,10 +459,7 @@ export function withMountTable(
 				const entries = await files.readdir(native);
 
 				// Only the true root lists mount points, and only live ones.
-				if (path !== '/') return entries;
-				const mounted = [...byName.values()].filter((m) => m.files() !== null).map((m) => m.name);
-
-				return [...new Set([...entries, ...mounted])];
+				return path === '/' ? [...new Set([...entries, ...mountPoints()])] : entries;
 			});
 		},
 		async stat(path) {
@@ -471,8 +480,7 @@ export function withMountTable(
 			return mutate(path, 'unlinked', (files, native) => files.unlink(native));
 		},
 		async mkdir(path, opts) {
-			// `mkdir -p` on a live mount point succeeds (file-tool calls `ensureDir` on the parent);
-			// a non-recursive mkdir of one is still EPERM.
+			// `mkdir -p` of a live mount point succeeds (`ensureDir`); plain mkdir stays EPERM.
 			const routed = routeOf(path);
 
 			if ('mount' in routed && routed.native === '/' && opts?.recursive === true) {
@@ -581,14 +589,11 @@ export function withMountTable(
 
 				return [
 					...listed,
-					...[...byName.values()]
-						.filter((mount) => mount.files() !== null && !named.has(mount.name))
-						.map((mount) => ({ name: mount.name, stat: MOUNT_POINT_STAT })),
+					...mountPoints().filter((name) => !named.has(name)).map((name) => ({ name, stat: MOUNT_POINT_STAT })),
 				];
 			});
 		},
 	};
 }
 
-/** Some trees cannot stat their own root. */
 const MOUNT_POINT_STAT: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };
