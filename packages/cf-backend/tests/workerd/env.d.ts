@@ -175,7 +175,7 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   snapshot(): Promise<DeploySnapshot>;
   start(inputs: DeployInputs): Promise<DeploySnapshot>;
   retry(stepId: string): Promise<DeploySnapshot>;
-  heldSecretNames(): Promise<readonly string[]>;
+  heldCredentials(): Promise<readonly string[]>;
   forget(): Promise<void>;
   alarmAt(): Promise<number>;
   armedAt(): Promise<number>;

@@ -37,7 +37,7 @@ export interface ProbeCut {
 }
 
 export interface ProbeSettleOpts {
-  readonly cutAt?: ProbeCut;
+  readonly cut?: ProbeCut;
   readonly holdReply?: boolean;
 }
 
@@ -212,7 +212,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       void this.sql`INSERT OR IGNORE INTO probe_held_scope (scope) VALUES (${messageId})`;
     }
 
-    const cut = opts?.cutAt;
+    const cut = opts?.cut;
     this.fault = cut === undefined
       ? null
       : (phase, name, scope) => {

@@ -2,17 +2,18 @@
 // two-machines grant: an unnamed raise was refused locally and parsed as success, so no card was raised
 // (docs/EXECUTION-LAYER-SPEC.md "The user's account is a fleet").
 import { describe, expect, test } from 'bun:test';
-import { createDeviceTunnelExecutor, type JsonValue } from '@kinu.run/core';
+import type { JsonValue } from '@kinu.run/core';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { createHubDeviceTransport, REAL_CLOCK } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
 const WORKSPACE = 'workspace-exec-device';
+
+const OWNER_USER_ID = '0123456789abcdef0123456789abcdef';
 
 /** The answer names the machine that ran it, so routing is read off the answer, not the frame log. */
 function daemonOn(frame: DeviceFrame): JsonValue {
@@ -24,6 +25,8 @@ function daemonOn(frame: DeviceFrame): JsonValue {
 interface Fleet extends TestUserDO {
   readonly owner: UserCaller;
   readonly workspace: UserCaller;
+  /** The workspace's capability, as the actor holds it. */
+  readonly token: string;
   readonly mac: FakeDaemon;
   readonly rig: FakeDaemon;
   readonly macId: string;
@@ -32,7 +35,7 @@ interface Fleet extends TestUserDO {
 }
 
 async function twoDaemons(): Promise<Fleet> {
-  const harness = createTestUserDO({ deviceResponder: daemonOn });
+  const harness = createTestUserDO({ deviceResponder: daemonOn, durableObjectId: OWNER_USER_ID });
   const owner = await testOwner();
   const { deviceId: macId } = await harness.userDO.registerDevice(owner, 'ashish@mac');
   const { deviceId: rigId } = await harness.userDO.registerDevice(owner, 'mrwhite@rig');
@@ -53,28 +56,23 @@ async function twoDaemons(): Promise<Fleet> {
   return Object.assign(harness, {
     owner,
     workspace: { workspaceToken: token } satisfies UserCaller,
+    token,
     mac, rig, macId, rigId,
     end: async () => { await harness.joinFibers(); harness.close(); },
   });
 }
 
+/** The workspace's own actor over the fleet's hub, wired as production wires it. */
 async function orchestratorOnFleet(fleet: Fleet) {
-  const transport = createHubDeviceTransport({
-    hub: () => fleet.userDO,
-    caller: async () => fleet.workspace,
-    agentName: WORKSPACE,
-    cliCwd: () => null,
-    clock: REAL_CLOCK,
+  const harness = orchestratorHarness(undefined, {
+    userDO: fleet.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID,
   });
 
-  await transport.refreshStatus();
-  const harness = orchestratorHarness();
-  const router = harness.agent.observeRuntime().executionRouter;
+  harness.agent.harnessHoldsCapability(fleet.token);
+  // A turn's start reads the device hub, which makes both machines visible to the router.
+  await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'run it on my machine' }] });
 
-  if (!router) throw new Error('the harness runtime has no execution router');
-  router.register(createDeviceTunnelExecutor(transport));
-
-  // Let the harness activation's DDL land before the RPC writes its row.
+  // Let the activation's DDL land before the RPC writes its row.
   for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
 
   return harness.agent;

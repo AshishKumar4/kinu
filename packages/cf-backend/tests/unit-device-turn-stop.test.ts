@@ -57,8 +57,7 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   });
 
   actor.agent.harnessHoldsCapability(token);
-  // Awaited here though production detaches it: it makes the connected device visible to the device runtime.
-  await actor.agent.harnessRefreshDeviceStatus();
+  // The turn reads the hub before its first model call, which makes the connected device visible.
   await chatSessionTurns(actor.agent).openInFlight(TURN);
   const broadcasts: string[] = [];
   Reflect.set(actor.agent, 'broadcast', (payload: string) => { broadcasts.push(payload); });

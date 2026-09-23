@@ -37,13 +37,12 @@ import {
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
-  type AgentOrchestrator, type AgentRuntime, type DynamicContext,
+  type AgentRuntime, type DynamicContext,
   type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
   type RoleCatalog, type ResolvedTurnProfile, type SqlValue,
   type TierAssignments,
   composePrepareStep,
   BackgroundJobStore, type JsonValue,
-  type DeviceStatus,
   type WorkMode, type JsonObject,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
@@ -187,13 +186,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observePublishHeadStreamFrame(frame: HeadStreamFrame): void { this.publishHeadStreamFrame(frame); }
   /** The child substrate, for lifecycle verbs without a roster row. */
   observeSubordinateRuntime() { return this.subordinateRuntime(); }
-  /** The per-turn logic, for asserting what the steering + opportunity ledger saw. */
-  observeOrch(): AgentOrchestrator { return this.orch; }
   observeRuntime(): AgentRuntime { return this.rt; }
   /** The slate host, so a suite can arm its one launch seam (`ensure`) as a tripwire. */
   observeSlateHost(): SlateHost { return this.slates; }
-  /** The turn-start device-status refresh, awaited; production detaches it. */
-  harnessRefreshDeviceStatus(): Promise<DeviceStatus> { return this.rt.deviceTransport.refreshStatus(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
   declareScaffoldPresent(): void { this._scaffoldReady = true; }
   /** The webhook signing secret, absent from the harness env by default. */

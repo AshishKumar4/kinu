@@ -3,48 +3,29 @@
  * absent-directory refusal that would send the owner to reconnect a healthy machine.
  */
 import { describe, expect, test } from 'bun:test';
-import { KinuError } from '@kinu.run/core/obs';
 import { orchestratorHarness } from './helpers/actor-harness';
 
-function deviceFiles() {
-  const harness = orchestratorHarness();
-  const provider = harness.agent.observeRuntime().executionRouter?.getProvider('device');
-
-  if (!provider?.files) throw new Error('the runtime registered no device file view');
-
-  return provider.files;
-}
-
-async function closedWith<Result>(work: () => Promise<Result>): Promise<KinuError> {
-  try {
-    await work();
-  } catch (caught) {
-    if (caught instanceof KinuError) return caught;
-    throw new Error('the operation failed, but not with a classified error', { cause: caught });
-  }
-
-  throw new Error('the operation was expected to fail closed');
-}
+const SCOPE_READ = "reading the device's file-view scope";
 
 describe('a device file operation whose hub read fails', () => {
   test('fails closed with the hub failure as its cause, never as "no consented directory"', async () => {
-    const files = deviceFiles();
-    const caught = await closedWith(() => files.readFile('/home/me/proj/notes.md'));
+    const { agent } = orchestratorHarness();
+    const { error } = await agent.readExecutorFile('device', '/home/me/proj/notes.md');
 
-    expect(caught.code).toBe('unavailable');
-    expect(caught.message).toBe("reading the device's file-view scope");
-    expect(caught.cause).toBeInstanceOf(Error);
-    expect(caught.cause instanceof Error ? caught.cause.message : '')
-      .toContain('getDeviceFileView is not reachable');
-    expect(caught.message).not.toContain('no consented directory');
+    expect(error).toStartWith(`${SCOPE_READ}: `);
+    expect(error).toContain('getDeviceFileView is not reachable');
+    expect(error).not.toContain('no consented directory');
   });
 
   test('every operation is closed the same way', async () => {
-    const files = deviceFiles();
-    const scopeRead = "reading the device's file-view scope";
-    expect((await closedWith(() => files.writeFile('/home/me/proj/x', 'bytes'))).message).toBe(scopeRead);
-    expect((await closedWith(() => files.readdir('/home/me/proj'))).message).toBe(scopeRead);
-    expect((await closedWith(() => files.stat('/home/me/proj/x'))).message).toBe(scopeRead);
-    expect((await closedWith(() => files.exists('/home/me/proj/x'))).message).toBe(scopeRead);
+    const { agent } = orchestratorHarness();
+
+    const answers = [
+      await agent.getExecutorFiles('device', '/home/me/proj'),
+      await agent.deleteExecutorFile('device', '/home/me/proj/x'),
+      await agent.renameExecutorFile('device', '/home/me/proj/x', '/home/me/proj/y'),
+    ];
+
+    for (const answer of answers) expect(answer).toMatchObject({ error: expect.stringMatching(new RegExp(`^${SCOPE_READ}: `)) });
   });
 });
