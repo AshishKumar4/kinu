@@ -6770,7 +6770,7 @@ export function benchmarkExitCode(failure: string | null, admission: AdmissionVe
 
 /** Updated as each step completes, not returned at the end: teardown can fire at any instant
  *  while arms run concurrently, finding some live, some never deployed, some already swept. */
-interface ArmLaneState {
+export interface ArmLaneState {
   readonly fixture: ArmFixture;
   readonly box: string;
   /** Every box this arm raised, including any the run added after the first. */
@@ -6783,6 +6783,118 @@ interface ArmLaneState {
   rollouts: readonly ApplicationRollout[];
   /** Why this arm never reached its measured pipeline, if it did not. */
   refusal: string | null;
+}
+
+/** One lane per planned arm, each raising only its own box until the run adds more. */
+export function armLanes(runId: string, fixtures: FixtureResources): ArmLaneState[] {
+  return fixtures.arms.map((fixture) => ({
+    fixture,
+    box: boxName(runId, fixture.strategy),
+    boxes: new Set([boxName(runId, fixture.strategy)]),
+    live: null,
+    stop: null,
+    workerStopped: false,
+    workerVersion: '',
+    rollouts: [],
+    refusal: null,
+  }));
+}
+
+export interface LaneTeardown {
+  readonly report: CleanupReport | null;
+  readonly errors: readonly string[];
+  /** The first failure in teardown order; null once every resource is observed gone. */
+  readonly failure: string | null;
+}
+
+/** Tears a run down through its manifest: each arm's boxes on its own Worker, then every recorded
+ *  resource, then a check that observes each one gone. */
+export async function teardownLanes(
+  fixtures: FixtureResources,
+  lanes: readonly ArmLaneState[],
+  residue: R2ResiduePlane | null,
+): Promise<LaneTeardown> {
+  const errors: string[] = [];
+  let failure: string | null = null;
+
+  // Each arm's boxes are swept through that arm's own Worker: an arm answers only on its own
+  // deployment, and an arm that never deployed has nothing to sweep.
+  for (const lane of lanes) {
+    if (lane.live === null) continue;
+    const liveTeardownErrors = await teardownLiveArms(lane.live, lane.boxes);
+    errors.push(...liveTeardownErrors);
+
+    if (liveTeardownErrors.length > 0) {
+      failure ??= `live teardown failed: ${liveTeardownErrors.join('; ')}`;
+    }
+  }
+
+  // Container applications, buckets and the config directory go by name, as an abandoned run's do;
+  // only the Worker and what it serves need this run's lane state.
+  const byName = orphanTeardownExecutor(residue);
+
+  const replay = await replayTeardown(REPO_ROOT, fixtures.manifest, async (entry): Promise<DeleteOutcome> => {
+    if (entry.kind === 'worker') {
+      const lane = lanes.find((candidate) => candidate.fixture.worker === entry.name);
+
+      if (lane === undefined) return { ok: false, error: `no arm owns Worker ${entry.name}` };
+      const statuses = (lane.stop ?? (() => deleteFixtureResources(lane.fixture)))();
+
+      if (statuses.length > 0) log(`${lane.fixture.strategy} fixture resources: ${statuses.join(', ')}`);
+      const failed = statuses.find((status) => /failed/i.test(status));
+      // Set only from observed statuses: `do-state`, `alarm` and `mount` entries answer `ok` on it,
+      // and done entries are never revisited by the startup sweep; C4/C5 read it too.
+      lane.workerStopped = failed === undefined;
+
+      return failed === undefined ? { ok: true } : { ok: false, error: failed };
+    }
+
+    if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
+      // Gated on THIS box's own Worker. An arm whose Worker is still up has
+      // durable state nothing has proved gone, however many siblings are.
+      const lane = lanes.find((candidate) => candidate.box === entry.name);
+
+      return lane?.workerStopped === true
+        ? { ok: true }
+        : { ok: false, error: 'Worker must be deleted before its durable state' };
+    }
+
+    return await byName(entry);
+  });
+
+  if (replay.failures.length > 0) {
+    errors.push(...replay.failures);
+    failure ??= `cleanup failed: ${replay.failures.join('; ')}`;
+  }
+
+  let cleanupCheck: CleanupReport | null = null;
+
+  try {
+    cleanupCheck = await checkCleanup(REPO_ROOT, fixtures.manifest, {
+      ...cleanupObservationProbes({ wrangler, residue }),
+      containerAppAbsent: async (name) => containerAppIds(REPO_ROOT, [name], log).length === 0,
+      boxStateEmpty: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
+      alarmAbsent: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
+      mountAbsent: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
+      localPathAbsent: async (path) => !existsSync(path),
+      processAbsent: async () => true,
+      counters: async () => ({ ...fixtures.manifest.counters }),
+    }, R2_OP_VOCABULARY);
+  } catch (cause) {
+    // A verifier that could not OBSERVE proves nothing either way; the
+    // artifact then carries no cleanup evidence and admission refuses it.
+    errors.push(`cleanup verification failed: ${describeThrown({ cause })}`);
+    failure ??= 'cleanup verification failed';
+  }
+
+  if (cleanupCheck !== null && !cleanupCheck.passed) {
+    errors.push(...cleanupCheck.checks.filter((row) => !row.ok).map((row) => `${row.gate}: ${row.detail}`));
+    failure ??= 'cleanup admission checks failed';
+  }
+
+  if (!lanes.every((lane) => lane.workerStopped)) fixtures.disposeConfig();
+
+  return { report: cleanupCheck, errors, failure };
 }
 
 /** Deletes by resource name only: a recovered manifest's process is gone, so no lane state.
@@ -7107,18 +7219,7 @@ async function main(): Promise<number> {
   const fixtures = createFixtureResources(options.runId, options.arms);
   const teardownManifest = fixtures.manifest;
 
-  const lanes = fixtures.arms.map((fixture): ArmLaneState => ({
-    fixture,
-    box: boxName(options.runId, fixture.strategy),
-    boxes: new Set([boxName(options.runId, fixture.strategy)]),
-    live: null,
-    stop: null,
-    workerStopped: false,
-    workerVersion: '',
-    rollouts: [],
-    refusal: null,
-  }));
-
+  const lanes = armLanes(options.runId, fixtures);
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
   let cleanupReport: CleanupReport | null = null;
@@ -7133,112 +7234,10 @@ async function main(): Promise<number> {
       return;
     }
 
-    // Each arm's boxes are swept through that arm's own Worker: an arm answers only on its own
-    // deployment, and an arm that never deployed has nothing to sweep.
-    for (const lane of lanes) {
-      if (lane.live === null) continue;
-      const liveTeardownErrors = await teardownLiveArms(lane.live, lane.boxes);
-      cleanupErrors.push(...liveTeardownErrors);
-
-      if (liveTeardownErrors.length > 0) {
-        failure ??= `live teardown failed: ${liveTeardownErrors.join('; ')}`;
-      }
-    }
-
-    const replay = await replayTeardown(REPO_ROOT, teardownManifest, async (entry): Promise<DeleteOutcome> => {
-      if (entry.kind === 'worker') {
-        const lane = lanes.find((candidate) => candidate.fixture.worker === entry.name);
-
-        if (lane === undefined) return { ok: false, error: `no arm owns Worker ${entry.name}` };
-        const statuses = (lane.stop ?? (() => deleteFixtureResources(lane.fixture)))();
-
-        if (statuses.length > 0) log(`${lane.fixture.strategy} fixture resources: ${statuses.join(', ')}`);
-        const failed = statuses.find((status) => /failed/i.test(status));
-        // Set only from observed statuses: `do-state`, `alarm` and `mount` entries answer `ok` on it,
-        // and done entries are never revisited by the startup sweep; C4/C5 read it too.
-        lane.workerStopped = failed === undefined;
-
-        return failed === undefined ? { ok: true } : { ok: false, error: failed };
-      }
-
-      if (entry.kind === 'container-app') {
-        if (containerAppIds(REPO_ROOT, [entry.name], log).length === 0) return { ok: true, absent: true };
-        const statuses = deleteContainerApps(REPO_ROOT, [entry.name], log);
-        const failed = statuses.find((status) => /failed/i.test(status));
-
-        return failed === undefined ? { ok: true } : { ok: false, error: failed };
-      }
-
-      if (entry.kind === 'r2-bucket') {
-        let deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
-
-        if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
-          // An interrupted run leaves objects its arm never drained and open
-          // multipart uploads no listing shows; drain both, then ask once more.
-          const drained = await drainBucketResidue(residue, entry.name);
-          log(`${entry.name}: drained ${String(drained.objects)} object(s), aborted ${String(drained.uploads)} upload(s)`);
-          deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
-        }
-
-        if (!deleted.startsWith(WRANGLER_FAILED)) return { ok: true };
-
-        if (/not found|does not exist/i.test(deleted)) return { ok: true, absent: true };
-
-        return { ok: false, error: deleted.slice(0, 240) };
-      }
-
-      if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
-        // Gated on THIS box's own Worker. An arm whose Worker is still up has
-        // durable state nothing has proved gone, however many siblings are.
-        const lane = lanes.find((candidate) => candidate.box === entry.name);
-
-        return lane?.workerStopped === true
-          ? { ok: true }
-          : { ok: false, error: 'Worker must be deleted before its durable state' };
-      }
-
-      if (entry.kind === 'local-path') {
-        fixtures.disposeConfig();
-
-        return { ok: true };
-      }
-
-      return { ok: false, error: `unsupported teardown resource ${entry.kind}` };
-    });
-
-    if (replay.failures.length > 0) {
-      cleanupErrors.push(...replay.failures);
-      failure ??= `cleanup failed: ${replay.failures.join('; ')}`;
-    }
-
-    let cleanupCheck: CleanupReport | null = null;
-
-    try {
-      cleanupCheck = await checkCleanup(REPO_ROOT, teardownManifest, {
-        ...cleanupObservationProbes({ wrangler, residue }),
-        containerAppAbsent: async (name) => containerAppIds(REPO_ROOT, [name], log).length === 0,
-        boxStateEmpty: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
-        alarmAbsent: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
-        mountAbsent: async (name) => lanes.find((lane) => lane.box === name)?.workerStopped === true,
-        localPathAbsent: async (path) => !existsSync(path),
-        processAbsent: async () => true,
-        counters: async () => ({ ...teardownManifest.counters }),
-      }, R2_OP_VOCABULARY);
-    } catch (cause) {
-      // A verifier that could not OBSERVE proves nothing either way; the
-      // artifact then carries no cleanup evidence and admission refuses it.
-      cleanupErrors.push(`cleanup verification failed: ${describeThrown({ cause })}`);
-      failure ??= 'cleanup verification failed';
-    }
-
-    cleanupReport = cleanupCheck;
-
-    if (cleanupCheck !== null && !cleanupCheck.passed) {
-      cleanupErrors.push(...cleanupCheck.checks.filter((row) => !row.ok).map((row) => `${row.gate}: ${row.detail}`));
-      failure ??= 'cleanup admission checks failed';
-    }
-
-    if (!lanes.every((lane) => lane.workerStopped)) fixtures.disposeConfig();
+    const torn = await teardownLanes(fixtures, lanes, residue);
+    cleanupReport = torn.report;
+    cleanupErrors.push(...torn.errors);
+    failure ??= torn.failure;
   });
 
   try {
