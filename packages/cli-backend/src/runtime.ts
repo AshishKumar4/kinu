@@ -74,10 +74,6 @@ import * as v from 'valibot';
 
 const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV];
 
-function harnessCommandEnvironment() {
-  return unsandboxedCommandEnvironment(process.env, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), process.env)]));
-}
-
 interface CLIRuntimeOptions {
   dbPath: string;
   /**
@@ -485,7 +481,7 @@ export function createCLIRuntime(
   // in-SQLite shell touches no host file.
   const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
     withCheckpointedShell(
-      createHostShell(cwd, facet === undefined ? harnessCommandEnvironment() : facetShellEnv(cwd, facet)),
+      createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
       checkpoints,
       cwd,
     ),
@@ -645,7 +641,7 @@ function facetShellEnv(cwd: string, facet: string): NodeJS.ProcessEnv {
   const tmp = join(home, 'tmp');
   mkdirSync(tmp, { recursive: true });
 
-  return { ...harnessCommandEnvironment(), HOME: home, TMPDIR: tmp };
+  return { ...process.env, HOME: home, TMPDIR: tmp };
 }
 
 /** Remove one facet's scratch root, and only that root. */
@@ -852,7 +848,9 @@ const shellOptionsSchema = v.object({
   signal: v.optional(v.instance(AbortSignal)),
 });
 
-export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = harnessCommandEnvironment()): Shell {
+export function createHostShell(cwd: string, source: NodeJS.ProcessEnv = process.env): Shell {
+  const env = unsandboxedCommandEnvironment(source, new Set([...HARNESS_CREDENTIAL_ENV, ...dotenvLoadedNames(process.cwd(), source)]));
+
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       const { promise, resolve } = Promise.withResolvers<ShellExecResult>();

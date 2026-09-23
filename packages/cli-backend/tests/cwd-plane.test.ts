@@ -29,21 +29,6 @@ const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
 
 const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });
 
-/** Runs `body` with `vars` in the process environment, as `kinu` holds them when launched, then restores it. */
-async function withEnvironment<T>(vars: Readonly<Record<string, string>>, body: () => Promise<T>): Promise<T> {
-  const saved = Object.fromEntries(Object.keys(vars).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, vars);
-
-  try {
-    return await body();
-  } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
-}
-
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
@@ -281,27 +266,7 @@ describe('the shell over the bound directory', () => {
     expect(await readText(rt, 'shell-wrote.txt')).toBe('from-the-shell\n');
   });
 
-  test('a command sees none of the credentials the harness reads, and keeps the rest of its environment', async () => {
-    const { state, project } = roots('cwd-plane-env');
-    // Every credential name the rule derives, each planted with a canary; the user's own tool settings must pass.
-    const planted = Object.fromEntries(HARNESS_CREDENTIAL_NAMES.map((name) => [name, `planted:${name}`]));
-    const passthrough = { SSH_AUTH_SOCK: `/run/agent-${crypto.randomUUID()}.sock`, HTTPS_PROXY: 'http://proxy.test:3128' };
-
-    // The shell takes its environment when the runtime is built, as a process inherits it at launch.
-    const dumped = await withEnvironment({ ...planted, ...passthrough }, async () => {
-      const rt = agentRuntime(state, 'solo', project);
-      rt.actor.config.setShellApprovalMode('allow_all');
-
-      return rt.shell?.exec('env');
-    });
-
-    expect(dumped?.exitCode).toBe(0);
-    expect(dumped?.stdout.split('\n').filter((line) => line.includes('planted:'))).toEqual([]);
-    expect(Object.entries(passthrough).filter(([name, value]) => !dumped?.stdout.includes(`${name}=${value}`))).toEqual([]);
-    expect(dumped?.stdout).toContain(`HOME=${process.env.HOME ?? ''}`);
-  });
-
-  test('a planted credential reaches no backend, tier by tier', async () => {
+  test('no tier passes on a planted credential; the host shell keeps the user\'s own settings', async () => {
     const { project } = roots('cwd-plane-env-backends');
     const [home, agentHome, agentTmp] = ['home', 'agents/ws/home', 'agents/ws/tmp'].map((dir) => join(project, dir));
 
@@ -312,19 +277,24 @@ describe('the shell over the bound directory', () => {
       createRequire(import.meta.url)(join(import.meta.dir, '../../pc-agent/src/sandbox.js')),
     );
 
-    // Unsandboxed tiers, host shell and raw device: candidates from both backends and the live environment,
-    // each derived credential among them carrying a canary.
+    // Candidates from both backends and the live environment, each derived credential carrying a canary. Every
+    // tier is handed this source; this process's env is never written, since a planted proxy reroutes other tests.
     const candidates = new Set([...HARNESS_CREDENTIAL_NAMES, ...daemon.ENV_ALLOWLIST, ...Object.keys(process.env)]);
+    const userSettings = { SSH_AUTH_SOCK: `/run/agent-${crypto.randomUUID()}.sock`, HTTPS_PROXY: 'http://proxy.test:3128' };
 
-    const source = Object.fromEntries([...candidates].map((name) => [
-      name, HARNESS_CREDENTIAL_NAMES.includes(name) ? `planted:${name}` : process.env[name] ?? `probe:${name}`,
-    ]));
+    const source = {
+      ...Object.fromEntries([...candidates].map((name) => [
+        name, HARNESS_CREDENTIAL_NAMES.includes(name) ? `planted:${name}` : process.env[name] ?? `probe:${name}`,
+      ])),
+      ...userSettings,
+    };
 
-    const hostShell = await withEnvironment(source, () => createHostShell(project).exec('env'));
+    const hostShell = await createHostShell(project, source).exec('env');
     const rawDevice = v.parse(DevicePlanSchema, daemon.plan({ tier: 'raw', deviceHome: project, command: 'env', cwd: project, source })).env;
 
     expect(hostShell.stdout.split('\n').filter((line) => line.includes('planted:'))).toEqual([]);
     expect(Object.entries(rawDevice).filter(([, value]) => value.startsWith('planted:'))).toEqual([]);
+    expect(Object.entries(userSettings).filter(([name, value]) => !hostShell.stdout.includes(`${name}=${value}\n`))).toEqual([]);
 
     // The sandboxed device tier passes named variables only, so a secret no rule names stays out as well.
     const secret = `npm_${crypto.randomUUID().replaceAll('-', '')}`;
