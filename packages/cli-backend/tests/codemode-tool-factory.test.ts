@@ -434,3 +434,25 @@ test('a program writes only into the workspace it was given, and Plan refuses be
     rmSync(machinePath, { force: true });
   }
 });
+
+test('a failed fs call keeps the code and path the workspace names, once', async () => {
+  const workspace: CodemodeProvider = {
+    name: 'workspace',
+    tools: {
+      readdir: {
+        description: 'list',
+        execute: async (path) => ({ success: false, reason: 'io', error: `ENOTDIR: not a directory, scandir '${String(path)}'` }),
+      },
+    },
+  };
+
+  const execute = toolExecute<{ code: string }, ExecuteToolResult>(
+    createNodeCodemodeToolFactory({ extraProviders: [workspace] })({ native: {}, craftedTools: () => ({}), providers: [] }),
+  );
+
+  const out = await execute({
+    code: "// List a file as if it were a directory\nreturn await require('fs/promises').readdir('notes.md').then(() => 'listed', (error) => [error.code, error.message]);",
+  });
+
+  expect(out.result).toEqual(['ENOTDIR', `ENOTDIR: not a directory, scandir '${WORKSPACE_ROOT}/notes.md'`]);
+});

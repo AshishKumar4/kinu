@@ -62,8 +62,12 @@ export function createProcess(cwd) {
   return globalThis.process ? Object.setPrototypeOf(own, globalThis.process) : own;
 }
 
-function fsError(code, message, path, syscall) {
-  const error = new Error(code + ': ' + message + (path === undefined ? '' : ", '" + path + "'"));
+/** A Node-shaped error from a host refusal: the errno code the refusal names (else the fallback), and the path. */
+function fsError(fallback, refusal, path, syscall) {
+  const named = /^(E[A-Z]+): /.exec(refusal);
+  const code = named ? named[1] : fallback;
+  const text = named ? refusal.slice(named[0].length) : refusal;
+  const error = new Error(code + ': ' + text + (path === undefined || text.includes("'" + path + "'") ? '' : ", '" + path + "'"));
   error.code = code;
   error.errno = -1;
   error.syscall = syscall;
