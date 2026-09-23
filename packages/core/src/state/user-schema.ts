@@ -257,6 +257,20 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  // Superseded device secrets, kept for the token lifetime: one presented again revokes the device.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_device_retired_tokens (
+      token_hash        TEXT PRIMARY KEY,
+      device_id         TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE,
+      retired_at        INTEGER NOT NULL,
+      -- When the secret was presented again and the device revoked for it:
+      -- the incident the owner reads on the Devices page until acknowledged.
+      reuse_detected_at INTEGER
+    )
+  `);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_device_retired_tokens_retired_at
+            ON user_device_retired_tokens (retired_at)`);
+
   initDeviceInflightTable(sql);
 
   // The authority on whether a session cookie is live: KV is only a projection and its writes

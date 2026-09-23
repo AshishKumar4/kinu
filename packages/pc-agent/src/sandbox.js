@@ -293,9 +293,8 @@ const INSIDE_KINU = 'inside Kinu\'s own directory, which the tunnel never serves
  *
  * `roots` are the directories the owner named, writable, and decided BEFORE
  * the home swap: a root inside the real home (~/work/thing, the common case)
- * is re-bound over the swapped home and is reachable inside. A root of `/` is
- * the Sandbox switch turned off under another name, and the owner's switch is
- * how the whole machine is given, so `/` shares nothing here.
+ * is re-bound over the swapped home and is reachable inside. A root of `/`
+ * never reaches here: the daemon runs that frame raw, as the owner consented.
  *
  * Every path is judged by where it LANDS on the host, after it is named the
  * way a command in the namespace names it: `~/x` is the agent's own `x`, and a
@@ -313,7 +312,6 @@ function viewFor(options) {
   // Longest first, so a root nested inside another root answers for itself.
   const roots = (Array.isArray(options.roots) ? options.roots : [])
     .map(realTarget)
-    .filter((root) => root !== '/')
     .sort((left, right) => right.length - left.length);
 
   const linux = platform !== 'darwin';

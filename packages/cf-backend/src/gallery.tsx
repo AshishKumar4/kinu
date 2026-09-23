@@ -158,7 +158,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
       connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
       expiresAt: NOW + 50 * 864e5, lastIp: "192.0.2.2", lastAgent: "kinu-device",
-      replacedAt: null, revokedAt: null, unstoppedAt: null,
+      replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     },
   ],
@@ -474,14 +474,15 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
     const incident = localStorage.getItem("gallery-device-incident");
 
     if (incident === "acknowledged") return fixtureJson([]);
-    const revoked = incident === "revoked";
+    const revoked = incident === "revoked" || incident === "reused";
 
     return fixtureJson([
       {
         id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
         connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
         lastIp: "192.0.2.1", lastAgent: "kinu-device", replacedAt: null,
-        revokedAt: revoked ? NOW : null, unstoppedAt: revoked ? NOW : null,
+        revokedAt: revoked ? NOW : null, unstoppedAt: incident === "revoked" ? NOW : null,
+        reuseDetectedAt: incident === "reused" ? NOW : null, wholeMachine: false,
         sandbox: {
           tier: parseDeviceTier(localStorage.getItem("gallery-device-tier")),
           capability: "sandboxed", reason: null, gpu: ["/dev/nvidia0"],
@@ -491,7 +492,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
         id: "dev-2", label: "Owner laptop", os: "darwin", hostname: "ashish-mbp.local",
         connected: false, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 7200e3, expiresAt: NOW + 50 * 864e5,
         lastIp: "192.0.2.2", lastAgent: "kinu-device", replacedAt: null,
-        revokedAt: null, unstoppedAt: null,
+        revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: true,
         sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
       }] : []),
     ]);
@@ -575,7 +576,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       connected: connectFixtureMode !== "stall",
       createdAt: NOW, lastSeenAt: NOW, expiresAt: NOW + 864e5,
       lastIp: "192.0.2.7", lastAgent: "kinu-device", replacedAt: null,
-      revokedAt: null, unstoppedAt: null,
+      revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
   }
@@ -5743,7 +5744,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
   return {
     id, label, os: "linux", hostname: label, connected: true,
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
-    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null,
+    lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };

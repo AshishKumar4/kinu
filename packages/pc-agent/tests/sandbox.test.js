@@ -331,24 +331,6 @@ describe('a sandboxed command reads only the system and what the owner shared', 
     }
   });
 
-  test('a consented root of / is not the whole machine', () => {
-    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
-    const planted = plantOutsideEveryHome('root');
-    const secret = path.join(os.homedir(), '.kinu-sandbox-root-secret');
-    fs.writeFileSync(secret, 'owner-private-material', { mode: 0o600 });
-
-    try {
-      const run = runSandboxed(`cat ${JSON.stringify(planted)} ${JSON.stringify(secret)} 2>&1; echo done`, { roots: ['/'] });
-
-      expect(run.stdout).not.toContain('outside-every-root');
-      expect(run.stdout).not.toContain('owner-private-material');
-      expect(run.stdout).toContain('done');
-    } finally {
-      fs.rmSync(planted, { force: true });
-      fs.rmSync(secret, { force: true });
-    }
-  });
-
   test('Kinu\'s own directory stays hidden inside a consented directory that holds it', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
     // `kinu connect` run in the home makes the home the consented directory,

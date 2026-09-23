@@ -40,8 +40,6 @@ afterAll(() => {
 
 const {
   CONFIG_PATH,
-  FILE_READ_MAX_BYTES,
-  LIST_MAX_ENTRIES,
   handle,
   createCheckpoints,
   getConnectTicket,
@@ -580,31 +578,65 @@ describe('daemon device path confinement', () => {
     }
   });
 
-  test('a read larger than one frame can carry is refused, not answered', async () => {
-    const root = scratchDir('daemon-large');
-    const large = path.join(root, 'large.bin');
-    // Sparse: 33 MiB of length, no bytes on disk.
-    fs.writeFileSync(large, '');
-    fs.truncateSync(large, 33 * 1024 * 1024);
-    const wide = path.join(root, 'wide');
-    fs.mkdirSync(wide);
-
-    for (let entry = 0; entry <= LIST_MAX_ENTRIES; entry += 1) fs.writeFileSync(path.join(wide, `f${entry}`), '');
+  test('a consented root of / is the whole machine, as with the Sandbox switch off', async () => {
+    const outside = plantOutside('whole-machine');
+    fs.writeFileSync(path.join(DEVICE_HOME, 'whole-machine-device.json'), '{"token":"machine-secret"}', { mode: 0o600 });
+    const whole = { tier: 'sandboxed', agentHome: path.join(DEVICE_HOME, 'agents', 'ws-1', 'home'), roots: ['/'] };
     const ws = fakeWs();
 
-    handle({ id: 'large-file', method: 'readFile', sandbox: scoped([root]), params: [large, { encoding: 'base64' }] }, ws, {});
-    handle({ id: 'large-range', method: 'readRange', sandbox: scoped([root]), params: [large, 0, 64 * 1024 * 1024 + 1] }, ws, {});
-    handle({ id: 'wide-list', method: 'listFiles', sandbox: scoped([root]), params: [wide] }, ws, {});
+    try {
+      handle({ id: 'rpc-wholemach0-1', method: 'exec', sandbox: whole, params: [`cat ${JSON.stringify(outside)}`] }, ws, {});
+      handle({ id: 'whole-read', method: 'readFile', sandbox: whole, params: [outside] }, ws, {});
+      handle({
+        id: 'whole-kinu', method: 'readFile', sandbox: whole, params: [path.join(DEVICE_HOME, 'whole-machine-device.json')],
+      }, ws, {});
 
-    for (const id of ['large-file', 'large-range', 'wide-list']) {
-      const frame = await ws.response(id);
-      expect(frame.result).toBeUndefined();
-      expect(frame.error).toContain('at most');
+      expect((await ws.response('rpc-wholemach0-1')).result.stdout).toBe('secret');
+      expect((await ws.response('whole-read')).result).toBe('secret');
+      // Kinu's own directory is the one thing no tier serves.
+      expect((await ws.response('whole-kinu')).error).toContain("inside Kinu's own directory");
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  test('a range answers what the file holds, however long a range was asked for', async () => {
+    const root = scratchDir('daemon-range');
+    const small = path.join(root, 'small.txt');
+    fs.writeFileSync(small, 'twelve bytes');
+    const ws = fakeWs();
+
+    // Allocating the asked length would be a terabyte before the first byte is read.
+    handle({ id: 'long-range', method: 'readRange', sandbox: scoped([root]), params: [small, 7, 2 ** 40] }, ws, {});
+    const frame = await ws.response('long-range');
+
+    expect(frame.error).toBeUndefined();
+    expect(Buffer.from(frame.result.content, 'base64').toString('utf8')).toBe('bytes');
+  });
+
+  test('a directory lists completely, one page at a time', async () => {
+    const root = scratchDir('daemon-pages');
+    const names = Array.from({ length: 25 }, (_, index) => `f${String(index)}`);
+
+    for (const name of names) fs.writeFileSync(path.join(root, name), '');
+    const ws = fakeWs();
+    const listed = [];
+    let offset = 0;
+
+    for (let page = 0; offset !== null; page += 1) {
+      handle({ id: `page-${String(page)}`, method: 'listFiles', sandbox: scoped([root]), params: [root, { offset, limit: 10 }] }, ws, {});
+      const frame = await ws.response(`page-${String(page)}`);
+      expect(frame.result.entries.length).toBeLessThanOrEqual(10);
+      listed.push(...frame.result.entries.map((entry) => entry.name));
+      offset = frame.result.next;
     }
 
-    // Within the bound, the same file answers by range.
-    handle({ id: 'bounded-range', method: 'readRange', sandbox: scoped([root]), params: [large, 0, FILE_READ_MAX_BYTES] }, ws, {});
-    expect((await ws.response('bounded-range')).error).toBeUndefined();
+    const byName = (left, right) => left.localeCompare(right);
+    expect(listed.sort(byName)).toEqual(names.sort(byName));
+
+    // A hub from before paging names no page and still gets every entry.
+    handle({ id: 'unpaged', method: 'listFiles', sandbox: scoped([root]), params: [root] }, ws, {});
+    expect((await ws.response('unpaged')).result.map((entry) => entry.name).sort(byName)).toEqual(names.sort(byName));
   });
 
   test('scoped native mutations stay inside the resolved root', async () => {

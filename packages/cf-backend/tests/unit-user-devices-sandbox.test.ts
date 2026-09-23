@@ -258,6 +258,22 @@ describe('the frame carries the calling workspace own home', () => {
     await harness.closeDeviceHarness();
   });
 
+  test('a machine linked from / runs every call as with the switch off, and the roster says so', async () => {
+    // `kinu connect` in `/` consented the whole machine; the switch still reads on.
+    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
+    harness.consentDecision = 'always';
+    await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_bwrap', gpu: [] }, { root: '/' }));
+
+    await harness.userDO.deviceRpc(harness.workspace, 'readFile', ['/etc/hostname'], { agentName: WORKSPACE });
+    await harness.userDO.deviceRpc(harness.workspace, 'listFiles', ['/'], { agentName: WORKSPACE });
+
+    expect(harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox)?.tier)).toEqual(['raw', 'raw']);
+    expect((await harness.userDO.listDevices(await testOwner()))[0]).toMatchObject({
+      wholeMachine: true, sandbox: { tier: 'sandboxed' },
+    });
+    await harness.closeDeviceHarness();
+  });
+
   test('a machine that consented no directory sends an empty root list, never a guess', async () => {
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
     harness.consentDecision = 'always';

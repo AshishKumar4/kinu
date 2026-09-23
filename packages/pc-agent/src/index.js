@@ -149,16 +149,9 @@ const CANCEL_PROTOCOL = 1;
  * past the cap without retaining them, so a noisy process cannot grow its heap. */
 const EXEC_STREAM_MAX_BYTES = 512 * 1024;
 
-/** A file answer rides the same socket: base64 grows bytes by a third, so 16
- *  MiB of file is the most one answer carries under that 32 MiB ceiling. A
- *  larger file is read in ranges, each held to the same bound. */
-const FILE_READ_MAX_BYTES = 16 * 1024 * 1024;
-
+/** How much a range read allocates at a time, so memory follows the bytes the
+ *  file actually has rather than the length a caller asked for. */
 const READ_CHUNK_BYTES = 1024 * 1024;
-
-/** One listing answer. A directory holding more is listed a subdirectory at a
- *  time, or counted and filtered by a command. */
-const LIST_MAX_ENTRIES = 10_000;
 
 /**
  * The terminal protocol, which is the one thing on this socket that is not a
@@ -1664,31 +1657,28 @@ function frameAgentHome(value) {
 }
 
 /**
- * The tier of a frame that reaches this machine. The hub composes a sandbox
- * block from the owner's Sandbox switch for every method that runs something
- * or touches a file, so a frame without a tier did not come from a hub that
- * decided one: it is refused, never read as unconfined.
+ * The sandbox block of a frame that reaches this machine: the tier, the
+ * consented roots, and a sandboxed frame's one agent home. The hub composes it
+ * from the owner's Sandbox switch for every method that runs something or
+ * touches a file, so a frame without a tier did not come from a hub that
+ * decided one: it is refused, never read as unconfined. A consented root of
+ * `/` is the whole machine, which is what the switch off means, so that frame
+ * runs raw. `agentHome()` checks the agent home a sandboxed frame names.
  */
-function frameTier(msg) {
+function frameSandbox(msg) {
   const block = parseRecord(msg.sandbox ?? null, UNTIERED);
 
   if (block.tier !== 'raw' && block.tier !== 'sandboxed') throw new Error(UNTIERED);
-
-  return block.tier;
-}
-
-/** The whole block: the tier, the consented roots, and a sandboxed frame's one agent home. */
-function frameSandbox(msg) {
-  const tier = frameTier(msg);
-  const block = msg.sandbox;
 
   const roots = Array.isArray(block.roots)
     ? block.roots.map((root) => path.resolve(parseString(root, 'device sandbox roots must be paths')))
     : [];
 
-  if (tier === 'raw') return { tier, roots };
-
-  return { tier, agentHome: frameAgentHome(block.agentHome), roots };
+  return {
+    tier: block.tier === 'raw' || roots.includes('/') ? 'raw' : 'sandboxed',
+    roots,
+    agentHome: () => frameAgentHome(block.agentHome),
+  };
 }
 
 function isDirectory(candidate) {
@@ -1726,20 +1716,20 @@ function rawWorkingDirectory(msg, roots) {
  * the terminal it was just given, which is the only difference between them.
  */
 function planFromFrame(msg, command, source = process.env) {
-  if (frameTier(msg) === 'sandboxed' && SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
-    const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
-    error.code = 'sandbox_unavailable';
-    error.reason = SANDBOX_CAPABILITY.status;
-    throw error;
-  }
-
   const frame = frameSandbox(msg);
 
   if (frame.tier === 'raw') {
     return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: rawWorkingDirectory(msg, frame.roots), source });
   }
 
-  const { agentHome } = frame;
+  if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
+    const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
+    error.code = 'sandbox_unavailable';
+    error.reason = SANDBOX_CAPABILITY.status;
+    throw error;
+  }
+
+  const agentHome = frame.agentHome();
   const agentTmp = path.join(path.dirname(agentHome), 'tmp');
 
   // Created on first use, 0700: the hub computes the path per (device,
@@ -1774,12 +1764,13 @@ function viewFromFrame(msg) {
   const frame = frameSandbox(msg);
 
   if (frame.tier === 'raw') return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
+  const agentHome = frame.agentHome();
 
   return sandbox.viewFor({
     platform: os.platform(),
     home: os.homedir(),
-    agentHome: frame.agentHome,
-    agentTmp: path.join(path.dirname(frame.agentHome), 'tmp'),
+    agentHome,
+    agentTmp: path.join(path.dirname(agentHome), 'tmp'),
     deviceHome: DEVICE_HOME,
     roots: frame.roots,
   });
@@ -1815,57 +1806,59 @@ function checkpointDirFor(view, requested) {
 }
 
 /**
- * One whole file, or a refusal once it outgrows what one answer carries. Read
- * to its end rather than to its stat size, because /proc and pipes report 0.
+ * Up to `length` bytes of `file` from `offset`, fewer at its end. The hub asks
+ * for a large file a range at a time, each answer under the socket's 32 MiB
+ * receive ceiling, so the whole file crosses whatever its size.
  */
-function readWhole(file) {
+function readRangeBytes(file, offset, length) {
   const descriptor = fs.openSync(file, 'r');
 
   try {
-    const reported = fs.fstatSync(descriptor).size;
-
-    const tooLarge = (size) => new Error(
-      `device file '${file}' is ${size} bytes, and one read answers at most ${FILE_READ_MAX_BYTES}: read it in ranges`,
-    );
-
-    if (reported > FILE_READ_MAX_BYTES) throw tooLarge(reported);
     const chunks = [];
     let total = 0;
 
-    for (;;) {
-      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, FILE_READ_MAX_BYTES + 1 - total));
-      const read = fs.readSync(descriptor, chunk, 0, chunk.length, null);
+    while (total < length) {
+      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, length - total));
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, offset + total);
 
-      if (read === 0) return Buffer.concat(chunks, total);
-      total += read;
-
-      if (total > FILE_READ_MAX_BYTES) throw tooLarge(`more than ${FILE_READ_MAX_BYTES}`);
+      if (read === 0) break;
       chunks.push(chunk.subarray(0, read));
+      total += read;
     }
+
+    return Buffer.concat(chunks, total);
   } finally {
     fs.closeSync(descriptor);
   }
 }
 
-/** One directory's entries, or a refusal past what one answer carries. */
-function listBounded(dir, requested) {
+function listEntry(entry) {
+  return { name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' };
+}
+
+/**
+ * One page of a directory, in the order the filesystem yields it: `next` is
+ * the offset of the page after, or null past the last entry. The hub pages a
+ * large directory so each answer stays under the socket's receive ceiling.
+ */
+function listPage(dir, offset, limit) {
   const opened = fs.opendirSync(dir);
   const entries = [];
 
   try {
-    for (let entry = opened.readSync(); entry !== null; entry = opened.readSync()) {
-      if (entries.length === LIST_MAX_ENTRIES) {
-        throw new Error(`device directory '${requested}' holds more than ${LIST_MAX_ENTRIES} entries, and one listing `
-          + `answers at most ${LIST_MAX_ENTRIES}: list a subdirectory, or count and filter them with a command`);
-      }
+    let index = 0;
 
-      entries.push({ name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' });
+    for (let entry = opened.readSync(); entry !== null; entry = opened.readSync(), index += 1) {
+      if (index < offset) continue;
+
+      if (entries.length === limit) return { entries, next: index };
+      entries.push(listEntry(entry));
     }
   } finally {
     opened.closeSync();
   }
 
-  return entries;
+  return { entries, next: null };
 }
 
 /**
@@ -2063,10 +2056,10 @@ function handle(msg, ws, ctx) {
       );
     } else if (method === 'readFile') {
       const options = params[1] ?? {};
-      const bytes = readWhole(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'));
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
-      if (options.encoding === 'base64') rpc(ws, id, { content: bytes.toString('base64'), encoding: 'base64' });
-      else rpc(ws, id, bytes.toString('utf8'));
+      if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
+      else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
     } else if (method === 'readRange') {
       const offset = params[1], length = params[2];
 
@@ -2074,17 +2067,8 @@ function handle(msg, ws, ctx) {
         return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
 
-      if (length > FILE_READ_MAX_BYTES) {
-        return rpc(ws, id, null, `readRange answers at most ${FILE_READ_MAX_BYTES} bytes at a time; ask for a shorter range`);
-      }
-
-      const file = fs.openSync(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), 'r');
-
-      try {
-        const bytes = Buffer.allocUnsafe(length);
-        const read = fs.readSync(file, bytes, 0, length, offset);
-        rpc(ws, id, { encoding: 'base64', content: bytes.subarray(0, read).toString('base64') });
-      } finally { fs.closeSync(file); }
+      const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
+      rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === 'writeFile') {
       const options = params[2] ?? {};
       const view = viewFromFrame(msg);
@@ -2105,9 +2089,19 @@ function handle(msg, ws, ctx) {
       // The home DEFAULTS to the agent's when the frame carries one, which is
       // the directory the model is told `~` is, not the owner's.
       const frame = frameSandbox(msg);
-      const requested = params[0] ?? (frame.tier === 'sandboxed' ? frame.agentHome : os.homedir());
-      const listed = listBounded(confinedDeviceViewPath(viewFromFrame(msg), requested, 'read'), requested);
-      rpc(ws, id, listed);
+      const requested = params[0] ?? (frame.tier === 'sandboxed' ? frame.agentHome() : os.homedir());
+      const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
+      const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
+
+      // A hub from before paging names no page and reads every entry in one answer.
+      if (page.limit === undefined) return rpc(ws, id, fs.readdirSync(dir, { withFileTypes: true }).map(listEntry));
+      const offset = page.offset ?? 0;
+
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
+        return rpc(ws, id, null, 'listFiles pages by a non-negative offset and a positive limit');
+      }
+
+      rpc(ws, id, listPage(dir, offset, page.limit));
     } else if (method === 'statPath') {
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
@@ -2914,8 +2908,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  FILE_READ_MAX_BYTES,
-  LIST_MAX_ENTRIES,
   handle,
   inFlight,
   CANCEL_METHOD,
