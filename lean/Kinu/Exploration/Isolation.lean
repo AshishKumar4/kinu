@@ -64,7 +64,7 @@ open Kinu.MCTS.StorageIsolation
     identity held by no existing branch. This is the modelling of "has tools" —
     *Isolation*'s reading of the frame condition, stated positively. -/
 def AcquiresOwnStorage (s s' : MCTSSystemState) : Prop :=
-  ∃ b ∈ s'.branches, ∀ b' ∈ s.branches, b.storageId ≠ b'.storageId
+  ∃ b ∈ s'.branches, ∀ b' ∈ s.branches, b.actorId ≠ b'.actorId
 
 /-- **An agent node's step is not a `.BranchExplore` step.** So
     `transition_preserves_isolation` does not apply to it — its hypothesis is
@@ -102,14 +102,14 @@ theorem agent_node_is_not_a_branch_evaluate (s s' : MCTSSystemState) (score : Fl
 theorem dropping_the_frame_condition_breaks_isolation :
     ∃ s s' : MCTSSystemState,
       StorageIsolated s ∧ s'.orch = s.orch ∧ ¬ StorageIsolated s' := by
-  refine ⟨{ orch := { nodes := [], budget := 1, storageId := "orch" }, branches := [] },
-          { orch := { nodes := [], budget := 1, storageId := "orch" },
-            branches := [{ id := "n", storageId := "orch", score := none }] },
+  refine ⟨{ orch := { budget := 1, actorId := "orch" }, branches := [] },
+          { orch := { budget := 1, actorId := "orch" },
+            branches := [{ id := "n", actorId := "orch", score := none }] },
           ?_, rfl, ?_⟩
   · intro b hmem
     exact absurd hmem (List.not_mem_nil b)
   · intro hiso
-    exact hiso { id := "n", storageId := "orch", score := none }
+    exact hiso { id := "n", actorId := "orch", score := none }
       (List.mem_cons_self _ _) rfl
 
 /-- And the acquisition itself is representable, so
@@ -117,10 +117,10 @@ theorem dropping_the_frame_condition_breaks_isolation :
     rather than a vacuous exclusion. -/
 theorem agent_node_step_is_representable :
     ∃ s s' : MCTSSystemState, AcquiresOwnStorage s s' := by
-  refine ⟨{ orch := { nodes := [], budget := 1, storageId := "orch" }, branches := [] },
-          { orch := { nodes := [], budget := 1, storageId := "orch" },
-            branches := [{ id := "n", storageId := "node-ws", score := none }] },
-          { id := "n", storageId := "node-ws", score := none },
+  refine ⟨{ orch := { budget := 1, actorId := "orch" }, branches := [] },
+          { orch := { budget := 1, actorId := "orch" },
+            branches := [{ id := "n", actorId := "node-ws", score := none }] },
+          { id := "n", actorId := "node-ws", score := none },
           List.mem_cons_self _ _, ?_⟩
   intro b' hb'
   exact absurd hb' (List.not_mem_nil b')

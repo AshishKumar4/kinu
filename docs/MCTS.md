@@ -209,7 +209,7 @@ Rewards are clamped to `[0, 1]`. The new value is `(old_value × visits + reward
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/exploration-hosting.ts`) | One workspace SQLite, actor-led keys. (`MCTS/StorageIsolation.lean` still models the old separate-store topology: its invariant is distinct branch storage ids, so it does not prove this row.) |
+| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/exploration-hosting.ts`) | One workspace SQLite, actor-led keys. A write under one actor leaves every other actor's rows as they were (`another_actors_writes_are_invisible` in `MCTS/StorageIsolation.lean`). |
 | CLI | `child_process.fork('branch-worker.ts')` over the workspace database file (`createBranchSpawner`) | Separate OS process, same database. A branch binds its own actor row and writes its rollout traces there. |
 
 A CF runtime built without the branch host has no fallback: `spawnBranch` refuses (`requireBranches`, `packages/cf-backend/src/runtime.ts`) rather than running a search with no rollouts.
@@ -291,7 +291,7 @@ Primary key `(actor_id, id)`.
 
 ## Formal properties (Lean 4)
 
-37 of the corpus's 437 named declarations live in `lean/Kinu/MCTS/`
+39 of the corpus's 435 named declarations live in `lean/Kinu/MCTS/`
 (measured 2026-09-23 with `node lean/check-traceability.mjs --list-declarations`). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 
@@ -299,7 +299,8 @@ uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 |----------|------|---------|--------------|
 | Budget terminates (well-founded on Nat) | `StorageIsolation.lean` | `budget_well_founded` | by-construction-witness |
 | Initial state is storage-isolated | `StorageIsolation.lean` | `init_isolated` | proved-in-abstract-model |
-| All 7 MCTS transitions preserve isolation | `StorageIsolation.lean` | `transition_preserves_isolation` | proved-in-abstract-model |
+| All 7 MCTS transitions keep branches off the orchestrator's actor | `StorageIsolation.lean` | `transition_preserves_isolation` | proved-in-abstract-model |
+| A write under one actor leaves every other actor's rows | `StorageIsolation.lean` | `a_write_leaves_other_actors_alone` | proved-in-abstract-model |
 | A reward in [0,S] keeps a node's mean in range | `Backpropagation.lean` | `update_preserves_range` | proved-in-abstract-model |
 | …lifted to a whole reward history | `Backpropagation.lean` | `applyRewards_preserves_range` | proved-in-abstract-model |
 | `value · visits = Σ rewards` after any history | `Backpropagation.lean` | `applyRewards_sum_invariant`, `sum_invariant` | proved-in-abstract-model |

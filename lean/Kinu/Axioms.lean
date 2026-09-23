@@ -79,16 +79,12 @@ import Kinu
 
 /-! ## Kinu/Execution/Capabilities.lean -/
 
-#print axioms Kinu.Execution.Capabilities.container_subsumes_nimbus
-#print axioms Kinu.Execution.Capabilities.ssh_subsumes_container
-#print axioms Kinu.Execution.Capabilities.ssh_subsumes_nimbus
-#print axioms Kinu.Execution.Capabilities.workspace_incomparable_nimbus
-#print axioms Kinu.Execution.Capabilities.chain
-#print axioms Kinu.Execution.Capabilities.route_satisfies_all
-#print axioms Kinu.Execution.Capabilities.route_available
-#print axioms Kinu.Execution.Capabilities.route_has_all_caps
+#print axioms Kinu.Execution.Capabilities.the_kind_says_who_owns_the_files
+#print axioms Kinu.Execution.Capabilities.no_executor_claims_docker_or_gpu
 #print axioms Kinu.Execution.Capabilities.subsumes_refl
 #print axioms Kinu.Execution.Capabilities.subsumes_trans
+#print axioms Kinu.Execution.Capabilities.a_session_extends_the_workspace
+#print axioms Kinu.Execution.Capabilities.the_sandbox_never_subsumes_a_nimbus_box
 
 /-! ## Kinu/MCTS/Backpropagation.lean -/
 
@@ -115,6 +111,8 @@ import Kinu
 
 #print axioms Kinu.MCTS.StorageIsolation.init_isolated
 #print axioms Kinu.MCTS.StorageIsolation.transition_preserves_isolation
+#print axioms Kinu.MCTS.StorageIsolation.a_write_leaves_other_actors_alone
+#print axioms Kinu.MCTS.StorageIsolation.another_actors_writes_are_invisible
 #print axioms Kinu.MCTS.StorageIsolation.budget_well_founded
 
 /-! ## Kinu/MCTS/Uct.lean -/

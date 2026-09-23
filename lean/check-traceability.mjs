@@ -937,6 +937,7 @@ const STATE_MIRRORS = [
   { lean: "Kinu.Exploration.Publication.Surface", ts: "packages/core/src/types/objective.ts#PUBLICATION_SURFACES" },
   { lean: "Kinu.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
   { lean: "Kinu.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
+  { lean: "Kinu.Execution.Capabilities.ExecutorKind", ts: "packages/core/src/execution/types.ts#ExecutorKind" },
   { lean: "Kinu.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
 ];
 

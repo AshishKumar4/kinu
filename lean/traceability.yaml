@@ -129,30 +129,30 @@ requirements:
       - The TypeScript uses configurable floating-point arithmetic and unbounded observations rather than this fixed scaled-Nat model
       - WP-F4 differential fixtures after the production arithmetic is settled
   PR-EXEC-001:
-    statement: The abstract executor capability lattice is reflexive and transitive, and whenever its router returns an executor that executor is available and has every requested capability.
+    statement: Every shipped executor, over the inputs its constructor reads, either owns or shares its files as its kind says, never claims docker or gpu, and a workspace with a Nimbus session keeps every workspace capability and gains every Nimbus capability but owned files; a fully configured Nimbus box subsumes the sandbox and the sandbox subsumes no Nimbus box.
     status: proved-in-abstract-model
     theorems:
-      - Kinu.Execution.Capabilities.container_subsumes_nimbus
-      - Kinu.Execution.Capabilities.ssh_subsumes_container
-      - Kinu.Execution.Capabilities.ssh_subsumes_nimbus
-      - Kinu.Execution.Capabilities.workspace_incomparable_nimbus
-      - Kinu.Execution.Capabilities.chain
-      - Kinu.Execution.Capabilities.route_satisfies_all
-      - Kinu.Execution.Capabilities.route_available
-      - Kinu.Execution.Capabilities.route_has_all_caps
+      - Kinu.Execution.Capabilities.the_kind_says_who_owns_the_files
+      - Kinu.Execution.Capabilities.no_executor_claims_docker_or_gpu
       - Kinu.Execution.Capabilities.subsumes_refl
       - Kinu.Execution.Capabilities.subsumes_trans
+      - Kinu.Execution.Capabilities.a_session_extends_the_workspace
+      - Kinu.Execution.Capabilities.the_sandbox_never_subsumes_a_nimbus_box
     tsRefs:
       - packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES
-      - packages/core/src/execution/router.ts#DefaultExecutionRouter
+      - packages/core/src/execution/types.ts#ExecutorKind
+      - packages/core/src/execution/toolchain.ts#TOOLCHAIN_PROBE
+      - packages/core/src/vfs/workspace-runtimes.ts#workspaceToolchainCapabilities
       - packages/core/src/execution/inline.ts#createInlineExecutor
       - packages/core/src/execution/nimbus.ts#createNimbusExecutor
+      - packages/core/src/execution/nimbus.ts#createNimbusWorkspaceExecutor
       - packages/core/src/execution/sandbox.ts#createSandboxExecutor
       - packages/core/src/execution/device-tunnel-executor.ts#createDeviceTunnelExecutor
+      - packages/core/src/execution/parent.ts#createParentExecutor
     remainingEvidence:
-      - WP-F3.6 must realign stale executor names and the false container-subsumes-Nimbus relation with the current provider set; ExecutorKind models workspace, nimbus, container and ssh against a shipped workspace, nimbus, sandbox, laptop and parent, so it cannot be enrolled as a state mirror until the model moves
-      - The production router filters availability but does not implement the modeled required-capability search
-      - WP-F4 differential routing fixtures
+      - The capability lists are transcribed from each constructor's body; no fixture runs the constructors, which need a VFS, a box handle or a device transport
+      - FromProbe is a premise: createInlineExecutor's toolchain parameter is typed as any capability, and only its producers keep it to the probed set
+      - The router lists available executors and never chooses by capability, so a requirement for docker or gpu surfaces as the model's own choice, not as a routing refusal
   PR-MCTS-001:
     statement: Exact scaled-integer backpropagation preserves reward bounds and the reward-sum and visit-count invariants in the abstract model.
     status: proved-and-refined
@@ -181,19 +181,22 @@ requirements:
     remainingEvidence:
       - WP-F4 differential fixtures must connect these constructor-shape witnesses to the recursive SQLite update
   PR-MCTS-003:
-    statement: Storage identity separation is invariant under every transition admitted by the abstract MCTS transition relation.
+    statement: No MCTS transition lets a branch run as the orchestrator's actor, and on the workspace's one actor-keyed store a write under one actor leaves every other actor's rows exactly as they were, so nothing a branch does changes the orchestrator's rows.
     status: proved-in-abstract-model
     theorems:
       - Kinu.MCTS.StorageIsolation.init_isolated
       - Kinu.MCTS.StorageIsolation.transition_preserves_isolation
+      - Kinu.MCTS.StorageIsolation.a_write_leaves_other_actors_alone
+      - Kinu.MCTS.StorageIsolation.another_actors_writes_are_invisible
     tsRefs:
       - packages/cli-backend/src/branch-process.ts#createBranchSpawner
       - packages/cli-backend/src/branch-worker.ts#validateActor
       - packages/cf-backend/src/runtime.ts#createCFRuntime
+      - packages/cf-backend/src/exploration-hosting.ts#hostBranch
     remainingEvidence:
-      - Transition postconditions are hand-asserted rather than refined from branch spawning and storage code
-      - The abstract Converge transition is identity while production convergence mutates node statuses and persistent memory
-      - Integration assertion that branch storage identity differs from orchestrator storage identity
+      - Actor separation is a premise of Expand, not a property proved of hostBranch or createBranchSpawner
+      - That every statement binds the acting actor's id is read off the shipped queries, which take an ActorHandle; no fixture runs them against the model
+      - A swarm node with tools is not a branch; Exploration/Isolation.lean proves this proof does not reach it
   PR-MCTS-004:
     statement: The exploration bonus selectNode ranks by is ordered exactly as natural powers, falls strictly with a node's own visits from one visit on and rises strictly with its parent's visits from two on, ties on the max(1) and max(2) plateaus, rises at the self-parenting root from two visits to three, and the argmax returns an eligible row that no eligible row outranks.
     status: proved-and-refined

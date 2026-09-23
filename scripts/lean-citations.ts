@@ -97,7 +97,7 @@ const CITED_NAMES_LEADING =
 /** Theorem names this scanner cannot see, because they carry no underscore. The
  *  set is asserted against the declarations, so a NEW one fails the gate naming
  *  itself instead of quietly joining the blind spot. */
-const CITATION_OPAQUE = { 'Kinu.Execution.Capabilities.chain': true } as const;
+const CITATION_OPAQUE: Readonly<Record<string, true>> = {};
 
 /**
  * Citations presented as ILLUSTRATIONS rather than as references — the declared
