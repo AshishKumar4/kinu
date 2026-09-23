@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import { generateText } from 'ai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { PROVIDER_SDK_RETRIES, withRateLimitRetry } from '../src/providers/rate-limit-retry';
 import { ProviderPacer } from '../src/providers/pacing';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import { describeProviderError, toProviderError } from '../src/providers/util';
+import { classifyErrorCode } from '../src/obs/index';
+import type { JsonValue } from '../src/utils/json';
 
 /**
  * The layer under test on a clock the suite owns. The pacer must share it: it holds requests until declared
@@ -165,5 +170,101 @@ describe('withRateLimitRetry', () => {
     expect(harness.warnings).toEqual([
       '[kinu] api.example.com rate-limited — waiting 2s (attempt 1)',
     ]);
+  });
+
+  /** Each provider's documented "allowance exhausted" 429 body: waiting cannot clear any of them. */
+  const EXHAUSTED_CASES: ReadonlyArray<readonly [string, JsonValue]> = [
+    ['openai insufficient_quota type', { error: { message: 'You exceeded your current quota, please check your plan and billing details.', type: 'insufficient_quota', param: null, code: 'insufficient_quota' } }],
+    ['openai spend-limit code', { error: { message: 'Your project reached its enforced spend limit.', code: 'project_spend_limit_exceeded' } }],
+    ['codex plan usage limit', { error: { type: 'usage_limit_reached', message: 'The usage limit has been reached', plan_type: 'plus', resets_at: 1_760_000_000 } }],
+    ['anthropic tier spend cap', { type: 'error', error: { type: 'rate_limit_error', message: 'You have reached your API usage limits.', details: { error_code: 'enforced_spend_limit_reached' } }, request_id: 'req_1' }],
+    ['gemini daily quota', { error: { code: 429, message: 'You exceeded your current quota.', status: 'RESOURCE_EXHAUSTED', details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '50' }] }] } }],
+    ['gemini zero quota, openai-compatible array envelope', [{ error: { code: 429, message: 'You exceeded your current quota.', status: 'RESOURCE_EXHAUSTED', details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', quotaValue: '0' }] }] } }]],
+    ['gemini interactions quota_exceeded', { error: { code: 'quota_exceeded', message: 'You have exceeded your daily quota.' } }],
+    ['workers ai daily allocation (v4 envelope)', { success: false, errors: [{ code: 3036, message: 'You have used up your daily free allocation of 10,000 neurons.' }] }],
+    ['workers ai daily allocation (direct binding)', { error: { code: 3036, message: 'You have used up your daily free allocation of 10,000 neurons.' } }],
+    ['openrouter upstream quota', { error: { code: 429, message: 'Upstream quota exhausted', metadata: { error_type: 'rate_limit_exceeded', provider_code: 'insufficient_quota' } } }],
+  ];
+
+  const EXHAUSTED_BODIES = EXHAUSTED_CASES.map(([provider, body]) => [provider, JSON.stringify(body)] as const);
+
+  const OPENAI_QUOTA = EXHAUSTED_BODIES[0]?.[1] ?? '';
+
+  /** What a call rejected with; a success is itself the failure under test. */
+  async function rejectionOf<T>(action: () => Promise<T>): Promise<Error> {
+    try {
+      await action();
+    } catch (error) {
+      if (error instanceof Error) return error;
+      throw new Error(`expected an Error rejection, received ${String(error)}`, { cause: error });
+    }
+
+    throw new Error('a quota 429 was retried into a success');
+  }
+
+  test('a 429 naming an exhausted quota or spend limit fails once, classified, with the provider text', async () => {
+    for (const [provider, body] of EXHAUSTED_BODIES) {
+      const harness = retryHarness([
+        new Response(body, { status: 429, headers: { 'content-type': 'application/json' } }),
+        new Response('ok'),
+      ]);
+
+      const failure = await rejectionOf(() => harness.wrapped('https://api.example.com/v1/chat', { body: '{}' }));
+
+      expect({ provider, calls: harness.calls(), waits: harness.waits }).toEqual({ provider, calls: 1, waits: [] });
+      expect({ provider, code: classifyErrorCode({ cause: failure }) }).toEqual({ provider, code: 'budget' });
+      expect(describeProviderError({ cause: failure })).toContain('HTTP 429');
+    }
+  });
+
+  test('a quota 429 keeps the provider message and code for the user', async () => {
+    const harness = retryHarness([new Response(OPENAI_QUOTA, { status: 429 }), new Response('ok')]);
+    const failure = await rejectionOf(() => harness.wrapped('https://api.example.com/v1/chat', { body: '{}' }));
+
+    expect(describeProviderError({ cause: failure })).toBe(
+      'You exceeded your current quota, please check your plan and billing details. (HTTP 429, insufficient_quota)',
+    );
+  });
+
+  test('real rate limits keep waiting', async () => {
+    const limits: ReadonlyArray<readonly [string, string]> = [
+      ['openai requests limit', JSON.stringify({ error: { message: 'Rate limit reached for requests', type: 'requests', code: 'rate_limit_exceeded' } })],
+      ['openai slow_down', JSON.stringify({ error: { message: 'Slow down', type: 'rate_limit_error', code: 'slow_down' } })],
+      ['anthropic rate limit', JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'This request would exceed your rate limit.' } })],
+      ['gemini per-minute quota', JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'You exceeded your current quota.', details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier', quotaValue: '15' }] }] } })],
+      ['workers ai capacity', JSON.stringify({ success: false, errors: [{ code: 3040, message: 'Capacity temporarily exceeded, please try again.' }] })],
+      ['openrouter rate limit', JSON.stringify({ error: { code: 429, message: 'Rate limit exceeded: free-models-per-min.', metadata: { error_type: 'rate_limit_exceeded' } } })],
+      ['plain text', 'Too Many Requests'],
+    ];
+
+    for (const [provider, body] of limits) {
+      const harness = retryHarness([new Response(body, { status: 429 }), new Response('ok')]);
+      const response = await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+
+      expect({ provider, status: response.status, calls: harness.calls() }).toEqual({ provider, status: 200, calls: 2 });
+    }
+  });
+
+  test('the SDK neither retries a quota 429 nor loses its class on the way to the caller', async () => {
+    let requests = 0;
+
+    const completion = {
+      id: 'c', object: 'chat.completion', created: 0, model: 'm',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+    };
+
+    const fetchImpl = withRateLimitRetry(asFetchFunction(async () => {
+      requests++;
+
+      return requests === 1
+        ? new Response(OPENAI_QUOTA, { status: 429, headers: { 'content-type': 'application/json' } })
+        : new Response(JSON.stringify(completion), { headers: { 'content-type': 'application/json' } });
+    }), { pacer: new ProviderPacer({ sleep: async () => {} }), sleep: async () => {}, warn: () => {} });
+
+    const model = createOpenAICompatible({ name: 'quota-probe', baseURL: 'https://api.example.com/v1', fetch: fetchImpl }).chatModel('m');
+    const failure = await rejectionOf(() => generateText({ model, prompt: 'hi', maxRetries: PROVIDER_SDK_RETRIES }));
+
+    expect(requests).toBe(1);
+    expect(toProviderError({ doing: 'calling the model', cause: failure }).code).toBe('budget');
   });
 });

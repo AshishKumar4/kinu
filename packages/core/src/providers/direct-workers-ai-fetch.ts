@@ -464,10 +464,12 @@ function unstreamable(model: string, saw: string): Response {
 async function upstreamRefusal(response: Response, model: string): Promise<Response> {
   const body = await response.text();
   diagnostics.event('workers_ai.direct_call_refused', { model, status: response.status });
+  const upstream = upstreamError(body);
+  const message = upstream?.message ?? `Workers AI refused ${model} with HTTP ${String(response.status)}.`;
 
-  const refusal = errorResponse(
-    response.status,
-    upstreamMessage(body) ?? `Workers AI refused ${model} with HTTP ${String(response.status)}.`,
+  const refusal = new Response(
+    JSON.stringify({ error: upstream?.code === undefined ? { message } : { message, code: upstream.code } }),
+    { status: response.status, headers: { 'content-type': 'application/json' } },
   );
 
   // Forward the mandated wait so the retry follows it instead of guessing.
@@ -478,19 +480,19 @@ async function upstreamRefusal(response: Response, model: string): Promise<Respo
   return refusal;
 }
 
-function upstreamMessage(body: string): string | null {
+function upstreamError(body: string): { message: string; code?: number } | null {
   const decoded = tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
   const parsed = v.safeParse(UpstreamErrorSchema, decoded);
   const head = body.trim();
 
-  if (!parsed.success) return head === '' ? null : head;
+  if (!parsed.success) return head === '' ? null : { message: head };
   const first = parsed.output.errors?.[0];
   const text = parsed.output.description ?? parsed.output.message ?? first?.message;
 
-  if (text === undefined) return head === '' ? null : head;
+  if (text === undefined) return head === '' ? null : { message: head };
   const code = parsed.output.internalCode ?? first?.code;
 
-  return code === undefined ? text : `${String(code)}: ${text}`;
+  return code === undefined ? { message: text } : { message: `${String(code)}: ${text}`, code };
 }
 
 function jsonResponse(body: JsonObject): Response {
