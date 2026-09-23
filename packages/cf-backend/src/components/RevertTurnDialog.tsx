@@ -2,7 +2,9 @@
 import { startTransition, useCallback, useEffect, useState } from "react";
 import { Button } from "@cloudflare/kumo";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
-import type { FileCheckpointEntry, FileCheckpointListing, FileRestoreChange, FileRestorePlan, Rpc } from "@kinu.run/core";
+import {
+  deviceHistoryNote, type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestorePlan, type Rpc,
+} from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
@@ -22,6 +24,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
   onRestorePlan: (plan: DeviceRestorePlan) => void;
 }) {
   const [checkpoints, setCheckpoints] = useState<readonly FileCheckpointEntry[]>([]);
+  const [historyNote, setHistoryNote] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
   const [deviceFailure, setDeviceFailure] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -35,7 +38,10 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
         // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
         const listing = await rpc<FileCheckpointListing>("listFileCheckpoints", [200, messageId]);
 
-        if (current) setCheckpoints(listing.availability.available ? listing.entries : []);
+        if (current) {
+          setCheckpoints(listing.availability.available ? listing.entries : []);
+          setHistoryNote(deviceHistoryNote(listing));
+        }
       } catch (cause) {
         if (current) setDeviceFailure(renderThrownChain({ cause }));
       } finally {
@@ -113,6 +119,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
           The messages from here on are removed from the conversation. Files in the workspace, sandbox
           and your devices stay as they are.
         </p>
+        {historyNote && <p data-device-history className="text-xs p-text-3 leading-relaxed">{historyNote}</p>}
         {deviceFailure && (
           <p className="text-xs p-warning leading-relaxed">
             Your devices' file history could not be read: {deviceFailure}

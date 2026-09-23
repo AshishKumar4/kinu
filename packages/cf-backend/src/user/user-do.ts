@@ -232,6 +232,10 @@ const CONSENT_FREE_DEVICE_METHODS = {
   checkpointPlan: true,
 } as const satisfies Record<string, true>;
 
+const CHECKPOINT_STORE_METHODS = {
+  checkpointList: true, checkpointPlan: true, checkpointRestore: true,
+} as const satisfies Record<string, true>;
+
 /** Frames the daemon refuses without the owner's Sandbox switch. */
 const DEVICE_VIEW_METHODS = {
   exec: true, [DEVICE_PTY_OPEN_METHOD]: true,
@@ -2463,6 +2467,12 @@ export class UserDO extends Agent<Env> {
     },
   ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+    const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
+
+    if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
+      throw new Error(`workspace ${proven} reads and restores only its own device checkpoints`);
+    }
+
     // Cancellation is never consent-gated: it only ends a command already allowed, and
     // gating it could leave a live process waiting on an unanswered card.
     const stopping = method === DEVICE_CANCEL_METHOD;
@@ -2520,7 +2530,7 @@ export class UserDO extends Agent<Env> {
       rpcOptions.extra = {
         ...rpcOptions.extra,
         checkpoint: {
-          agent: opts.checkpoint.agent,
+          agent: proven ?? opts.checkpoint.agent,
           turnId: opts.checkpoint.turnId,
           sessionId: opts.checkpoint.sessionId,
           dir: opts.checkpoint.dir,

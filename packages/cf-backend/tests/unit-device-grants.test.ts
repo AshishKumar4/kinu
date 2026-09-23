@@ -1408,6 +1408,41 @@ describe('the account keeps one row per linked machine', () => {
   });
 });
 
+describe('a workspace\'s device checkpoints are its own', () => {
+  test('another workspace\'s store is refused by name, before any frame leaves', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+
+    for (const [method, params] of [
+      ['checkpointList', [OTHER_WORKSPACE, 50, null]],
+      ['checkpointPlan', [OTHER_WORKSPACE, '/home/ashish/work', 'c0ffee1']],
+      ['checkpointRestore', [OTHER_WORKSPACE, '/home/ashish/work', 'c0ffee1']],
+    ] satisfies Array<[string, JsonValue[]]>) {
+      await expect(harness.userDO.deviceRpc(harness.workspace, method, params))
+        .rejects.toThrow('reads and restores only its own device checkpoints');
+    }
+
+    expect(harness.deviceFrames).toEqual([]);
+    await harness.userDO.deviceRpc(harness.workspace, 'checkpointList', [WORKSPACE, 50, null]);
+    expect(harness.deviceFrames.map((frame) => frame.method)).toEqual(['checkpointList']);
+    await harness.closeDeviceHarness();
+  });
+
+  test('a snapshot hint lands in the calling workspace\'s store, whatever store it names', async () => {
+    const harness = await deviceHarness();
+    harness.consentDecision = 'always';
+
+    await harness.userDO.deviceRpc(harness.workspace, 'writeFile', ['/home/ashish/work/a.txt', 'x'], {
+      agentName: WORKSPACE, checkpoint: { agent: OTHER_WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
+    });
+
+    expect(harness.deviceFrames.map((frame) => frame.checkpoint)).toEqual([
+      { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
+    ]);
+    await harness.closeDeviceHarness();
+  });
+});
+
 describe('device RPC stays unreachable from owner HTTP routes', () => {
   test('no /api/user route forwards an arbitrary method to deviceRpc', () => {
     const source = readFileSync(new URL('../src/user/routes.ts', import.meta.url).pathname, 'utf8');

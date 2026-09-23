@@ -22,6 +22,7 @@ import {
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
 import { mcpPresetById } from "@kinu.run/core";
+import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT } from "@kinu.run/core";
 import type { ReasoningEffort } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
@@ -170,7 +171,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -471,6 +472,7 @@ function deviceRowsFixture(path: string, method: string, body: BodyInit | null |
   }
 
   if (path === "/api/user/devices") {
+    if (frame === "devices-empty") return fixtureJson([]);
     const incident = localStorage.getItem("gallery-device-incident");
 
     if (incident === "acknowledged") return fixtureJson([]);
@@ -1418,7 +1420,7 @@ const REVERT_THREAD: UIMessage[] = [
   }),
 ];
 
-const REVERT_DEVICE_CONNECTED = new URLSearchParams(location.search).get("checkpoints") === "1";
+const REVERT_CHECKPOINTS = new URLSearchParams(location.search).get("checkpoints");
 
 const REVERT_CHECKPOINT: FileCheckpointEntry = {
   id: "c0ffee1", dir: "/pc/ashish-device/work/shop", at: NOW - 6 * 60e3,
@@ -1426,9 +1428,14 @@ const REVERT_CHECKPOINT: FileCheckpointEntry = {
 };
 
 /** Separate facts: an unreachable store says nothing about what a turn changed. */
-const REVERT_LISTING: FileCheckpointListing = REVERT_DEVICE_CONNECTED
-  ? { availability: { available: true }, entries: [REVERT_CHECKPOINT] }
-  : { availability: { available: false, reason: "no device connected — connect one with `kinu connect`" }, entries: [] };
+const REVERT_LISTINGS = new Map<string | null, FileCheckpointListing>([
+  ["1", { availability: { available: true }, entries: [REVERT_CHECKPOINT] }],
+  ["none", { availability: { available: true }, entries: [] }],
+  ["nogit", { availability: { available: false, reason: CHECKPOINTS_UNAVAILABLE_NO_GIT }, entries: [] }],
+]);
+
+const REVERT_LISTING: FileCheckpointListing = REVERT_LISTINGS.get(REVERT_CHECKPOINTS)
+  ?? { availability: { available: false, reason: CHECKPOINTS_NO_DEVICE }, entries: [] };
 
 function seedFrameTranscript(transcript: string | null): void {
   if (transcript === "revert") seedGalleryChat(REVERT_THREAD);
@@ -6124,6 +6131,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
     ["couponboard", { node: <CouponBoardSlate />, entries: ["/"] }],
   ]);
 

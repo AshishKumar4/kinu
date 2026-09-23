@@ -1239,8 +1239,8 @@ export {
 
 // File checkpoints
 export {
-  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_UNAVAILABLE_NO_GIT, CHECKPOINTS_UNCONFIGURED, summarizeRestorePlan,
-  checkpointAvailability, fileCheckpointListing,
+  DEFAULT_CHECKPOINT_KEEP, CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, CHECKPOINTS_UNCONFIGURED, summarizeRestorePlan,
+  checkpointAvailability, deviceHistoryNote, fileCheckpointListing,
   CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
   type FileCheckpoints, type FileCheckpointReads, type CheckpointTurnMeta, type CheckpointAvailability,
   type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestoreKind,
