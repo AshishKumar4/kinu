@@ -47,7 +47,7 @@ import {
   type WorkMode, type JsonObject,
   type HeadInput, type HeadReport, type HeadRuntime,
   type SleepTimeUpdate,
-  type AgentSignal, type SendOutcome, type ReleaseBoard, type EgressSecretBinding,
+  type ReleaseBoard, type EgressSecretBinding,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
@@ -259,7 +259,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
   /** The background-job registry; its store owns lease epoch and resume counter policy. */
   /** One post-turn evolution lane, started exactly as a completed turn does. */
-  harnessSettleEvolution(): void { this.settleEvolutionInBackground(); }
   /** One activation's alarm housekeeping: runs the interrupted-fiber scan with no client. */
   harnessAlarmHousekeeping(): Promise<void> { return this._onAlarmHousekeeping(); }
 
@@ -381,15 +380,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Marks the turn running for `BackendHost.turnInFlight`, routing signals into the
    *  live turn's next step; production sets it in `beforeTurn`. `settleTurnEvents` clears it. */
 
-  /** Replace the delivery seam; signal policy and terminal ledger stay real. */
-  harnessSetSignalDeliverer(
-    deliver: (signal: AgentSignal) => Promise<SendOutcome>,
-  ): void {
-    Object.defineProperty(this.orch.inbox, 'send', {
-      configurable: true,
-      value: deliver,
-    });
-  }
 
 
 

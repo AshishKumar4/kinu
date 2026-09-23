@@ -8,7 +8,10 @@ import {
   type AdvisorRecoverySnapshot, type AgentSignal, type EnqueueTurnResult, type JsonValue, type ProgrammaticTurn,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
-import { jobsOver, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  catalogTurn, gatewayWorkspace, jobsOver, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
+import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
@@ -187,21 +190,23 @@ describe('a background job whose executor died', () => {
 
   /** A wake delivered on an idle agent resolves only when its turn ends; the hook must answer without awaiting it inside `blockConcurrencyWhile`. */
   test("a settled job's wake is delivered DETACHED, not awaited by the hook", async () => {
-    const { agent, db } = orchestratorHarness();
+    const queued = Promise.withResolvers<void>();
+    const arrived = Promise.withResolvers<void>();
+
+    // The wake's turn runs on the model the platform gateway serves, and holds there until released.
+    const { agent, db } = gatewayWorkspace(stubAiBinding(async (run) => {
+      arrived.resolve();
+      await queued.promise;
+
+      return chatCompletion(run, 'Read the answer.');
+    }));
+
     const jobs = jobsOver(db);
     jobs.create({
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'done already' }), now: Date.now(), label: 'done already',
     });
     jobs.settle('bgjob-settled', jobs.epochOf('bgjob-settled') ?? 0, '"answer"', Date.now());
-    const queued = Promise.withResolvers<void>();
-    const arrived = Promise.withResolvers<void>();
-    agent.harnessSetSignalDeliverer(async () => {
-      arrived.resolve();
-      await queued.promise;
-
-      return 'queued';
-    });
 
     const recovery = recovering(agent, interrupted(
       `${BACKGROUND_FIBER_PREFIX}search`,
@@ -222,11 +227,17 @@ describe('a background job whose executor died', () => {
 
 describe('the post-turn lanes', () => {
   test('the evolution lane leaves a durable row and hands the re-entry to a carrier', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, db } = gatewayWorkspace(answeringGateway('Done.'));
+    // The first turn creates the platform's fiber table; the second's lanes run under the recorder.
+    await catalogTurn(agent, 'Tidy the notes.');
+    db.run('CREATE TABLE fiber_starts (name TEXT NOT NULL)');
+    db.run('CREATE TRIGGER record_fiber_start AFTER INSERT ON cf_agents_runs BEGIN INSERT INTO fiber_starts VALUES (NEW.name); END');
+    await catalogTurn(agent, 'Tidy them again.');
+    await agent.harnessJoinDetachedFibers();
 
-    agent.harnessSettleEvolution();
     // `runFiber` writes the row before the body runs; a bare `keepAliveWhile` leaves nothing for a later activation.
-    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toContain('evolution:settle');
+    expect(db.query<{ name: string }, []>('SELECT name FROM fiber_starts').all().map((row) => row.name))
+      .toContain('evolution:settle');
 
     const result = await recover(agent, interrupted('evolution:settle', { lane: 'evolution:settle' }));
 

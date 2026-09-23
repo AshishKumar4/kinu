@@ -1,5 +1,5 @@
 {
-  "measured": "e42431f33: 1148 test files, 1006 runnable suites, 12952 tests, 40 runners, 38 non-public product members",
+  "measured": "45949647b: 1148 test files, 1006 runnable suites, 12951 tests, 40 runners, 36 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -103,14 +103,6 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-device-turn-stop.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: a settled job's wake is delivered DETACHED, not awaited by the hook :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-eviction-durability.test.ts :: the evolution lane leaves a durable row and hands the re-entry to a carrier :: harness bridge to a non-public member",
       "count": 1
     },
     {
