@@ -215,7 +215,7 @@ import {
   DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
-  DeferredApprovalQueue, DeferredApprovalStore,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
   type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
   type DeferredApprovalNotice, type ApprovalGrant,
   TURN_AUTHOR_METADATA_KEY,
@@ -2606,9 +2606,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   async decideDeferredApprovals(
     ids: string[], decision: DeferredApprovalAnswer,
   ): Promise<{ decided: string[] }> {
-    const decided = await this.deferrals.decide(ids, decision);
-
-    return { decided: decided.map((a) => a.id) };
+    return decideDeferredApprovals(this.deferrals, ids, decision);
   }
 
 

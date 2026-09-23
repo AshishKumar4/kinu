@@ -3500,15 +3500,13 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Resolves on admission, not landing; where the words land reaches clients as steer_status
-   * under the same id. Unrecognized mode runs as build; an already-held id is refused. */
+   * under the same id. Unrecognized mode runs as build. */
   @callable()
   async send(text: string, id: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<void> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
-    const messageId = v.parse(v.pipe(v.string(), v.nonEmpty(), v.maxLength(128)), id);
 
-    if (this.admittedSend(messageId)) throw new KinuError('bad_input', `message ${messageId} was already sent`);
-    await this.chatLoop.admit({ text, files: attachments }, { id: messageId, mode: isWorkMode(mode) ? mode : 'build' });
+    await this.chatLoop.admit({ text, files: attachments }, { id, mode: isWorkMode(mode) ? mode : 'build' });
   }
 
   /** Aborts the in-flight LLM request first so stop works even if the cancel frame is lost.

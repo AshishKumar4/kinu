@@ -42,7 +42,7 @@ import { TierIdSchema,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -815,9 +815,7 @@ export class LocalAgentSession implements BackendHost {
   async decideDeferredApprovals(
     ids: string[], decision: DeferredApprovalAnswer,
   ): Promise<{ decided: string[] }> {
-    const decided = await this.deferrals.decide(ids, decision);
-
-    return { decided: decided.map((action) => action.id) };
+    return decideDeferredApprovals(this.deferrals, ids, decision);
   }
 
   /** `allow_always` grants exactly the rules asked about on that executor, never a whole-agent

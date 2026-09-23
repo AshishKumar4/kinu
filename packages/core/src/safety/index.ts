@@ -84,6 +84,7 @@ export {
 
 export {
   DeferredApprovalQueue,
+  decideDeferredApprovals,
   DeferredApprovalStore,
   initDeferredApprovalsTable,
   queuedActionMessage,

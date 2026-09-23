@@ -435,3 +435,12 @@ export class DeferredApprovalQueue {
     }
   }
 }
+
+/** The owner's decision as both backends answer it: the ids it moved. */
+export async function decideDeferredApprovals(
+  queue: DeferredApprovalQueue, ids: readonly string[], answer: DeferredApprovalAnswer,
+): Promise<{ decided: string[] }> {
+  const decided = await queue.decide(ids, answer);
+
+  return { decided: decided.map((action) => action.id) };
+}

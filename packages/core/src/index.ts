@@ -1525,6 +1525,7 @@ export {
   type EgressPlan,
   type ScrubReplacement,
   DeferredApprovalQueue,
+  decideDeferredApprovals,
   DeferredApprovalStore,
   initDeferredApprovalsTable,
   queuedActionMessage,
