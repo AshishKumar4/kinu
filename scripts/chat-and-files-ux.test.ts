@@ -135,20 +135,41 @@ interface Observed {
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
   readonly toolActivity: {
-    total: number;
-    collapsedRows: number;
-    expandedRows: number;
-    mutationRows: number;
-    compactHeight: number;
-    mutationHeight: number;
-    ground: string;
-    pageGround: string;
-    /** The mode the page actually rendered in, so a colour claim cannot be
-     *  satisfied by the wrong theme. */
-    mode: string | null;
+    /** Call rows drawn before the reader clicks anything, and once the fold's
+     *  control is pressed, each split into reads and everything else. */
+    folded: ToolRows;
+    unfolded: ToolRows;
+    /** The one control standing for the calls a fold holds back, by its words. */
+    foldLabel: string | null;
     /** What the preview card shows while the run is still folded. */
-    collapsedPreview: { text: string | null; height: number; folded: string | null };
+    collapsedPreview: { text: string | null; height: number };
   };
+}
+
+/** The call rows a message draws: how many read, how many did anything else,
+ *  and every row's height, so "the same compact row" is a measurement. */
+interface ToolRows {
+  readonly reads: number;
+  readonly others: number;
+  readonly heights: readonly number[];
+}
+
+/** The call rows on the page now, by the effect each row declares. Runs in
+ *  the page. */
+function toolRows(): ToolRows {
+  const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')];
+
+  return {
+    reads: rows.filter((row) => row.dataset.toolEffect === 'read').length,
+    others: rows.filter((row) => row.dataset.toolEffect !== 'read').length,
+    heights: rows.map((row) => Math.round(row.getBoundingClientRect().height)),
+  };
+}
+
+/** A fold's control, found by what it says: the only button whose words are a
+ *  count of calls held back. Runs in the page. */
+function foldControl(): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll('button')].find((button) => /^\d+ more$/u.test((button.textContent ?? '').trim()));
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
@@ -347,10 +368,6 @@ async function run(): Promise<Observed> {
 
     const tools = await newPage();
     await tools.setViewport({ width: 1280, height: 1600 });
-    // `theme` is the key the pre-paint script in gallery.html reads (hooks/
-    // use-theme.ts MODE_KEY). Seeding any other name leaves the page in the
-    // default mode, and the light-mode assertion below then photographs dark.
-    await tools.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'light'); });
     await tools.goto(`${origin}/gallery.html?frame=toolrun`, { waitUntil: 'networkidle0' });
     await tools.reload({ waitUntil: 'networkidle0' });
     // The run's preview call points at the gallery's preview origin, which no
@@ -367,28 +384,11 @@ async function run(): Promise<Observed> {
       await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
     });
     await tools.reload({ waitUntil: 'networkidle0' });
-    await tools.waitForSelector('[data-tool-group]');
+    await tools.waitForSelector('[data-tool-state]');
 
-    const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
-      const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')];
-      const mutation = rows.find((row) => row.dataset.toolEffect === 'mutate');
-      const compact = rows.find((row) => row.dataset.toolEffect === 'read');
-      const standalone = rows.filter((row) => row.closest('[data-tool-group]') === null);
-
-      const foldedCount = [...document.querySelectorAll('[data-tool-group]')]
-        .reduce((count, block) => count + Number(block.getAttribute('data-tool-count')), 0);
-
-      return {
-        total: foldedCount + standalone.length,
-        collapsedRows: rows.length,
-        mutationRows: rows.filter((row) => row.dataset.toolEffect === 'mutate').length,
-        compactHeight: Math.round(compact?.getBoundingClientRect().height ?? 0),
-        mutationHeight: Math.round(mutation?.getBoundingClientRect().height ?? 0),
-        ground: getComputedStyle(group).backgroundColor,
-        pageGround: getComputedStyle(document.body).backgroundColor,
-        mode: document.documentElement.dataset.mode ?? null,
-      };
-    });
+    const folded = await tools.evaluate(toolRows);
+    const fold = await tools.evaluateHandle(foldControl);
+    const foldLabel = await tools.evaluate((button: HTMLButtonElement | undefined) => button?.textContent?.trim() ?? null, fold);
 
     // The preview card, read while the group is still folded: the reader has
     // clicked nothing, and the app the turn started is on screen.
@@ -403,20 +403,19 @@ async function run(): Promise<Observed> {
     const collapsedPreview = {
       text: await previewDocument.$eval('[data-run-preview]', (element) => element.textContent),
       height: Math.round(await previewFrameHandle.evaluate((element) => element.getBoundingClientRect().height)),
-      folded: await tools.$eval('[data-tool-group-toggle]', (element) => element.getAttribute('aria-expanded')),
     };
 
-    await tools.click('[data-tool-group-toggle]');
-    await tools.waitForFunction(
-      () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
-    );
+    // No fold drawn is a finding for the assertions below, never a wait on a
+    // control that is not there.
+    if (foldLabel !== null) {
+      await tools.evaluate((button: HTMLButtonElement | undefined) => { button?.click(); }, fold);
+      await tools.waitForFunction((drawn: number) => document.querySelectorAll('[data-tool-state]').length > drawn,
+        {}, folded.reads + folded.others);
+    }
 
-    const expandedRows = await tools.$$eval(
-      '[data-tool-state]',
-      (rows) => rows.length,
-    );
+    const unfolded = await tools.evaluate(toolRows);
 
-    const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
+    const toolActivity = { folded, unfolded, foldLabel, collapsedPreview };
     await tools.close();
 
     const files = await newPage();
@@ -710,35 +709,35 @@ describe('the streaming turn, as a browser lays it out', () => {
   });
 });
 
-describe('large tool runs, as the activity timeline draws them', () => {
-  test('the default stays bounded and expansion restores every call', () => {
-    const activity = observed.toolActivity;
-    expect(activity.total).toBeGreaterThan(50);
-    expect(activity.collapsedRows).toBeLessThanOrEqual(8);
-    expect(activity.expandedRows).toBe(activity.total);
+describe('large tool runs, as the timeline draws them', () => {
+  // The owner's rule, 2026-09-23: no activity card. Every call is one compact
+  // row; only a run of nine or more adjacent read-only calls folds, and only
+  // its middle, behind one "N more".
+  test('the run of reads keeps its first and last rows and folds the rest behind one count', () => {
+    const { folded, unfolded, foldLabel } = observed.toolActivity;
+
+    expect(folded.reads).toBe(2);
+    expect(foldLabel).toBe(`${String(unfolded.reads - folded.reads)} more`);
   });
 
-  test('mutations remain more prominent than observations', () => {
-    const activity = observed.toolActivity;
-    expect(activity.mutationRows).toBeGreaterThanOrEqual(2);
-    expect(activity.mutationHeight).toBeGreaterThan(activity.compactHeight);
+  test('nothing but reads folds', () => {
+    const { folded, unfolded } = observed.toolActivity;
+
+    expect(folded.others).toBeGreaterThan(0);
+    expect(folded.others).toBe(unfolded.others);
+  });
+
+  test('every call is the same compact row, a change as much as a read', () => {
+    expect(new Set(observed.toolActivity.unfolded.heights).size).toBe(1);
   });
 
   test('the app a mid-run call started is on screen before any click', () => {
-    // The app stays visible before the reader opens the folded reads.
-    const { collapsedPreview } = observed.toolActivity;
-    expect(collapsedPreview.folded).toBe('false');
+    const { collapsedPreview, foldLabel } = observed.toolActivity;
+
+    // Read while the reads were still folded: the reader has clicked nothing.
+    expect(foldLabel).not.toBeNull();
     expect(collapsedPreview.text).toBe('the running app');
     expect(collapsedPreview.height).toBeGreaterThan(200);
-  });
-
-  test('light mode uses a recessed activity ground instead of white cards', () => {
-    const activity = observed.toolActivity;
-    // First: that this page IS light. Without it the two colour assertions
-    // below are satisfied by the default dark theme, where they say nothing.
-    expect(activity.mode).toBe('light');
-    expect(activity.ground).not.toBe(activity.pageGround);
-    expect(activity.ground).not.toBe('rgb(255, 255, 255)');
   });
 });
 
