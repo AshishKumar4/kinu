@@ -840,10 +840,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #restartSync(): Promise<void> {
     const store = this.store;
 
-    if (store === undefined || !this.#syncRuns()) return;
+    if (store === undefined || !this.#syncsInContainer()) return;
 
     try {
+      // Every stop's flush reaches the box through this host.
       await this.setOutboundByHost(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HANDLER);
+
+      if (!this.#syncRuns()) return;
       const started = await this.#rawExec(syncStartCommand(this.#syncConfig(store)), DEVBOX_RUNTIME_DIR);
 
       if (started.exitCode !== 0) throw new Error(started.stderr.trim() || started.stdout.trim() || `exit ${String(started.exitCode)}`);
@@ -853,7 +856,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
   }
 
-  /** A failure is an incident; the stop goes on. */
   async #stopSync(): Promise<void> {
     if (!this.#syncsInContainer() || this.ctx.container?.running !== true) return;
 

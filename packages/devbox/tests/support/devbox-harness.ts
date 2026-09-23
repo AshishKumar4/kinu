@@ -9,7 +9,8 @@ import type { StartClock } from '../../src/lifecycle';
 import { snapshotChainStorage } from '../../src/snapshot-chain';
 import { DEVBOX_RUNTIME_DIR, type StoredValue } from '../../src/storage';
 import {
-  containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller, syncWorker, type SyncAnswer,
+  DEVBOX_SYNC_HANDLER, DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
+  syncWorker, type SyncAnswer,
 } from '../../src/sync';
 import { sessionShellRefusal } from './session-shell';
 
@@ -793,6 +794,8 @@ export class FakeSandbox {
     const generation = async (): Promise<string | undefined> => await Promise.resolve(this.bootId);
 
     const transport = async (body: string): Promise<{ status: number; text: string }> => {
+      // `.internal` resolves nowhere: without the box's binding the request never leaves the container.
+      if (this.outboundHosts.get(DEVBOX_SYNC_HOST) !== DEVBOX_SYNC_HANDLER) throw new Error('Unable to connect. Is the computer able to access the url?');
       const answer = await host(body);
 
       return { status: answer.status, text: answer.body };
