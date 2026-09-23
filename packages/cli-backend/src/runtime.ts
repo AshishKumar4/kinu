@@ -548,6 +548,7 @@ export function createCLIRuntime(
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => db.transaction(write)(),
+    workspaceIsMachine: cwd !== null,
     actor, sql,
     execRaw,
     vfs: agentVfs,
@@ -807,6 +808,7 @@ async function buildCLIHeadRuntime(
     // programs; with the default, the parent would execute its head's source.
     scaffoldPath: actorScaffoldPath(opts.actorBinding),
     actor, sql, execRaw: parent.storage.execRaw, vfs: agentVfs, agentStateVfs,
+    workspaceIsMachine: parent.workspaceIsMachine,
     llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     memory: parent.memory, craftStore: parent.craftStore,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,

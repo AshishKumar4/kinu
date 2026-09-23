@@ -66,6 +66,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       actor,
       storage: { ...origin.storage, vfs },
       agentStateVfs: origin.agentStateVfs,
+      workspaceIsMachine: origin.workspaceIsMachine,
       memory: origin.memory,
       executor: origin.executor,
       llm: origin.llm,

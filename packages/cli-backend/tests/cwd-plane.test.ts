@@ -349,3 +349,19 @@ test('local Plan file inspection remains useful without granting native project 
   expect(await build({ action: 'write', path: 'inspect.txt', content: 'built' })).toMatchObject({ ok: true });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('built');
 });
+
+test('a file the agent writes is named local:// when the directory is the workspace, vfs:// when it is not', async () => {
+  const { state, project } = roots('cwd-plane-reference');
+
+  const write = (rt: CLIRuntime) => {
+    const file = buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file;
+
+    if (file === undefined) throw new Error('No Build file tool');
+
+    return toolExecute(file)({ action: 'write', path: 'notes/plan.md', content: 'ship it' });
+  };
+
+  expect(await write(agentRuntime(state, 'bound', project))).toMatchObject({ ok: true, reference: 'local://notes/plan.md' });
+  expect(readFileSync(join(project, 'notes/plan.md'), 'utf8')).toBe('ship it');
+  expect(await write(agentRuntime(state, 'unbound'))).toMatchObject({ ok: true, reference: 'vfs://notes/plan.md' });
+});

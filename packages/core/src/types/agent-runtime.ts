@@ -80,6 +80,7 @@ export interface AgentRuntime {
   /** The agent's own state (SOUL.md, scaffold, memory, transcripts) when a shared file plane
    *  must not hold it. Absent when they coincide; readers use `agentStateVfs ?? storage.vfs`. */
   agentStateVfs?: VFS;
+  readonly workspaceIsMachine: boolean;
   memory: Memory;
   executor: Executor;
   llm: LLM;
