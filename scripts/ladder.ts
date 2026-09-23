@@ -2092,9 +2092,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run verify:lean',
     label: 'Lean proofs, consistency, and traceability',
     tier: 'deploy',
-    // 2.2s WARM, median of 2.19 / 2.20 on the 24-thread box, 2026-08-21: `lake
-    // build` is a no-op once the Lean build cache holds the build, so this figure sits on
-    // the same basis as every other one here, a prepared checkout.
+    // 10 s WARM: 10.1 and 9.3 s at 5e22e792f (lane/formal-proofs) in a detached
+    // worktree on the 24-thread box, 2026-09-22, at load 20-21 with other lanes
+    // running, after one cold run of 24.4 s. The growth from 2.2 s (2026-08-21,
+    // warm, `lake build` a no-op) is the refinement fixtures regenerated and
+    // diffed and 824 refinement cases under bun test (2.4 s of it).
     //
     // COLD IT IS ~15 MINUTES, and that is what CI pays: the lean-verify workflow
     // caches `~/.elan` and not the Lean build cache, so a runner rebuilds 330 theorems
@@ -2104,7 +2106,7 @@ export const LADDER: readonly Gate[] = [
     //
     // Declared at ZERO until 2026-08-21, which made the deploy tier's cost line
     // fiction and its budget unenforceable.
-    seconds: 2.2,
+    seconds: 10,
     catches: 'a Lean module that stops compiling, an axiom set that makes the model '
       + 'inconsistent, a requirement in lean/traceability.yaml with no theorem behind it, '
       + 'and a TypeScript comment citing a theorem no module defines. `check-no-false.sh` '
