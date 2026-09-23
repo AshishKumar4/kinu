@@ -28,11 +28,16 @@ type BenchSuiteName = (typeof BENCH_SUITE_NAMES)[number];
 
 /** The verifiable outcomes this repo already supplies. `core` is the whole core
  *  suite plus its typecheck — running the FULL suite rather than just the
- *  target test is deliberate: it scores collateral damage for free. */
+ *  target test is deliberate: it scores collateral damage for free.
+ *
+ *  The suite runs as `test:core` runs it, four workers. Serially it did not fit
+ *  its own limit: on 2026-09-23 it took 131 s in a worktree and was killed at
+ *  180 s in the sandbox (validate-d8389864d96e, both attempts `exitCode: null`),
+ *  so every task read BAD; `--parallel=4` took 61 s on the same box. */
 export const BENCH_SUITES: Readonly<Record<BenchSuiteName, BenchSuite>> = Object.freeze({
   core: {
     checks: [
-      { id: 'core-tests', command: ['bun', 'test', '--timeout=0', '--cwd', 'packages/core'], timeoutMs: 180_000 },
+      { id: 'core-tests', command: ['bun', 'test', '--timeout=0', '--parallel=4', '--cwd', 'packages/core'], timeoutMs: 180_000 },
       // The vendored binary, not `bun x` — scoring must never depend on a
       // package fetch, and the sandbox runs with a pruned environment.
       { id: 'core-typecheck', command: ['node_modules/.bin/tsc', '--noEmit', '-p', 'packages/core'], timeoutMs: 180_000 },

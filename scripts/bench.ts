@@ -181,11 +181,44 @@ function benchLLM(): LLMProviderConfig {
 interface BenchFamily {
   id: BenchFamilyId;
   corpus: BenchCorpus;
+  /** Every task id in the corpus file, both splits: the set a `--shard` cuts. */
+  ids: readonly string[];
   /** Corpus file path, printed in the report. */
   path: string;
   /** Puts the task's starting state into a fresh sandbox copy. */
   prepare(task: BenchTask): (dir: string) => void;
   resolveSolver(spec: string, opts: { sharedHome?: string }): Solver;
+}
+
+/** One slice of a validate run, 1-based: `--shard 3/20`. */
+export interface ValidateShard {
+  index: number;
+  count: number;
+}
+
+export function parseShard(raw: string): ValidateShard {
+  const match = /^(\d+)\/(\d+)$/.exec(raw);
+
+  if (match === null) throw new Error(`--shard takes k/n, got "${raw}"`);
+  const index = Number(match[1]);
+  const count = Number(match[2]);
+
+  if (count < 1 || index < 1 || index > count) throw new Error(`--shard ${raw}: k must lie in 1..n`);
+
+  return { index, count };
+}
+
+/** The one partition every shard of a validate run is cut from: ids sorted and
+ *  dealt round-robin, so the n shards are disjoint, their union is the corpus,
+ *  and their sizes differ by at most one. More shards than tasks leaves a shard
+ *  empty, and a shard over nothing would report ok, so that refuses. */
+export function shardTaskIds(ids: readonly string[], shard: ValidateShard): string[] {
+  if (shard.count > ids.length) {
+    throw new Error(`--shard ${String(shard.index)}/${String(shard.count)} over ${String(ids.length)} `
+      + 'tasks leaves a shard empty');
+  }
+
+  return [...ids].sort().filter((_, position) => position % shard.count === shard.index - 1);
 }
 
 /** Shared by both families: the agent variants differ only in which solver
@@ -335,7 +368,7 @@ function loadFamily(id: BenchFamilyId): BenchFamily {
     const { corpus, patches, path } = loadBenchCorpus(REPO_ROOT);
 
     return {
-      id, corpus, path,
+      id, corpus, path, ids: [...patches.keys()],
       prepare: (task) => (dir) => applyPatch(dir, patchFor(patches, task.id), { reverse: false }),
       resolveSolver: (spec, opts) => {
         if (spec === 'null') return nullSolver;
@@ -370,7 +403,7 @@ function loadFamily(id: BenchFamilyId): BenchFamily {
   const { corpus, specs, path } = loadLongHorizonCorpus(REPO_ROOT);
 
   return {
-    id, corpus, path,
+    id, corpus, path, ids: [...specs.keys()],
     prepare: (task) => (dir) => materializeLongHorizon(dir, specFor(specs, task.id)),
     resolveSolver: (spec, opts) => {
       if (spec === 'null') return nullSolver;
@@ -676,10 +709,22 @@ async function runWellFormedAttempt(req: WellFormedRequest): Promise<WellFormedA
   return { broken, oracle: fixed };
 }
 
-async function cmdValidate(args: Map<string, string>, common: CommonOptions): Promise<number> {
-  const family = loadFamily(common.family);
-  const corpus = family.corpus;
-  const devTasks = selectTasks(corpus.dev, common.limit, common.seed);
+/** The ids a validate run is narrowed to: a `--shard` of the whole corpus, or
+ *  the `--id` list. Undefined means the whole corpus. */
+function validationSelection(args: Map<string, string>, family: BenchFamily): string[] | undefined {
+  const shard = args.get('shard');
+
+  if (shard !== undefined) {
+    if (args.has('id') || args.has('limit')) {
+      throw new Error('--shard cuts the whole corpus; it cannot be combined with --id or --limit');
+    }
+
+    const selected = shardTaskIds(family.ids, parseShard(shard));
+    console.log(`shard ${shard}: ${String(selected.length)} of the corpus's ${String(family.ids.length)} tasks`);
+
+    return selected;
+  }
+
   // A typo that validated NOTHING and reported ok is the same defect as a gate
   // over an empty set, so an id naming no task refuses before any sandbox is
   // built. Checked against the WHOLE corpus rather than the dev split, because a
@@ -687,17 +732,25 @@ async function cmdValidate(args: Map<string, string>, common: CommonOptions): Pr
   // well-formedness carries no performance signal either way.
   const only = args.get('id')?.split(',').map((id) => id.trim()).filter((id) => id.length > 0);
 
-  if (only !== undefined) {
-    if (only.length === 0) throw new Error('--id needs at least one task id');
+  if (only === undefined) return undefined;
 
-    const unknown = only.filter((id) =>
-      !corpus.dev.some((task) => task.id === id) && !corpus.sealed.has(id));
+  if (only.length === 0) throw new Error('--id needs at least one task id');
 
-    if (unknown.length > 0) {
-      throw new Error(`--id names ${String(unknown.length)} task(s) this corpus does not have: `
-        + `${unknown.join(', ')} — a narrowed run over nothing would report ok`);
-    }
+  const unknown = only.filter((id) => !family.ids.includes(id));
+
+  if (unknown.length > 0) {
+    throw new Error(`--id names ${String(unknown.length)} task(s) this corpus does not have: `
+      + `${unknown.join(', ')} — a narrowed run over nothing would report ok`);
   }
+
+  return only;
+}
+
+async function cmdValidate(args: Map<string, string>, common: CommonOptions): Promise<number> {
+  const family = loadFamily(common.family);
+  const corpus = family.corpus;
+  const devTasks = selectTasks(corpus.dev, common.limit, common.seed);
+  const only = validationSelection(args, family);
 
   const oracle = family.resolveSolver('oracle', {});
 
@@ -1036,7 +1089,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
 const USAGE = `Kinu bench harness — machine-scored, sealed-split, rejection by default
 
 Usage:
-  bun scripts/bench.ts validate  --run-root <dir> [--id a,b] [--limit n] [--validate-retries n]
+  bun scripts/bench.ts validate  --run-root <dir> [--id a,b | --shard k/n] [--limit n] [--validate-retries n]
   bun scripts/bench.ts pilot     --run-root <dir> --variant <variant> --out <report.json> [--limit n] [--repeats n]
   bun scripts/bench.ts compare   --run-root <dir> --a <variant> --b <variant> [--pilot-report <path>] [--repeats n] [--sealed] [--require-accept]
   bun scripts/bench.ts gain      --run-root <dir> [--stateful <variant>] [--stateless <variant>] --pilot-report <path> [--repeats n]
@@ -1080,6 +1133,10 @@ Options:
                        id naming no task refuses rather than reporting ok over an
                        empty set. The summary says NARROWED so it cannot be
                        quoted as a verdict on the corpus.
+  --shard <k/n>        validate: the k-th of n slices of the whole corpus, both
+                       splits, cut by one partition (ids sorted, dealt
+                       round-robin), so n runs of k = 1..n validate every task
+                       exactly once. What the nightly workflow's matrix runs.
   --limit <n>          Use a RANDOM n-task sample drawn from --seed, not the
                        alphabetical head. Recorded in the report and in the
                        retained provenance as "random n of N, seed s".

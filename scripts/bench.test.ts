@@ -14,7 +14,7 @@ import {
   type AttemptOutcome, type BenchTask, type JsonValue,
 } from '../packages/core/src/index';
 import { manifestHash } from '../packages/core/src/bench/split';
-import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench';
+import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon, parseShard, shardTaskIds } from './bench';
 import { BENCH_SUITES, benchPatchFiles, corpusMembership, loadBenchCorpus, stalePatches } from './bench-corpus';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox';
@@ -318,6 +318,28 @@ describe('parseCommon — repeats and the validation retry budget', () => {
     expect(() => opts({ repeats: '0' })).toThrow(/--repeats must be an integer ≥ 1/);
     expect(() => opts({ repeats: '2.5' })).toThrow(/--repeats must be an integer ≥ 1/);
     expect(() => opts({ 'validate-retries': '-1' })).toThrow(/--validate-retries must be an integer ≥ 0/);
+  });
+});
+
+describe('validate --shard — n slices cut by one partition', () => {
+  const ids = [...loadBenchCorpus(REPO_ROOT).patches.keys()];
+
+  test('the n shards are disjoint, differ in size by at most one, and together are the corpus', () => {
+    for (const count of [1, 2, 7, 20, ids.length]) {
+      const shards = Array.from({ length: count }, (_, k) => shardTaskIds(ids, { index: k + 1, count }));
+      const dealt = shards.flat();
+      const sizes = shards.map((shard) => shard.length);
+
+      expect(dealt.length, `${String(count)} shards dealt a task twice`).toBe(new Set(dealt).size);
+      expect(new Set(dealt)).toEqual(new Set(ids));
+      expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test('refuses a slice that is not k of n, and more shards than tasks', () => {
+    for (const raw of ['0/3', '4/3', '1/0', '3', 'a/b', '1/2/3']) expect(() => parseShard(raw)).toThrow(/--shard/);
+    expect(parseShard('3/20')).toEqual({ index: 3, count: 20 });
+    expect(() => shardTaskIds(['a', 'b'], { index: 3, count: 3 })).toThrow(/leaves a shard empty/);
   });
 });
 
