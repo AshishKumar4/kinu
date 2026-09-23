@@ -1837,6 +1837,29 @@ function listEntry(entry) {
 }
 
 /**
+ * A `listFiles` frame's answer. The home DEFAULTS to the agent's when the
+ * frame carries one, which is the directory the model is told `~` is, not the
+ * owner's. A hub from before paging names no page and reads every entry in
+ * one answer.
+ */
+function listFilesAnswer(msg) {
+  const { params } = msg;
+  const frame = frameSandbox(msg);
+  const requested = params[0] ?? (frame.tier === 'sandboxed' ? frame.agentHome() : os.homedir());
+  const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
+  const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
+
+  if (page.limit === undefined) return fs.readdirSync(dir, { withFileTypes: true }).map(listEntry);
+  const offset = page.offset ?? 0;
+
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
+    throw new Error('listFiles pages by a non-negative offset and a positive limit');
+  }
+
+  return listPage(dir, offset, page.limit);
+}
+
+/**
  * One page of a directory, in the order the filesystem yields it: `next` is
  * the offset of the page after, or null past the last entry. The hub pages a
  * large directory so each answer stays under the socket's receive ceiling.
@@ -2086,22 +2109,7 @@ function handle(msg, ws, ctx) {
       fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
       rpc(ws, id, { success: true });
     } else if (method === 'listFiles') {
-      // The home DEFAULTS to the agent's when the frame carries one, which is
-      // the directory the model is told `~` is, not the owner's.
-      const frame = frameSandbox(msg);
-      const requested = params[0] ?? (frame.tier === 'sandboxed' ? frame.agentHome() : os.homedir());
-      const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
-      const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
-
-      // A hub from before paging names no page and reads every entry in one answer.
-      if (page.limit === undefined) return rpc(ws, id, fs.readdirSync(dir, { withFileTypes: true }).map(listEntry));
-      const offset = page.offset ?? 0;
-
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
-        return rpc(ws, id, null, 'listFiles pages by a non-negative offset and a positive limit');
-      }
-
-      rpc(ws, id, listPage(dir, offset, page.limit));
+      rpc(ws, id, listFilesAnswer(msg));
     } else if (method === 'statPath') {
       const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 

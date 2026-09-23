@@ -59,13 +59,13 @@ function switchState(markup: string) {
   const switches = [...markup.matchAll(/<button[^>]*role="switch"[^>]*>/g)].map((match) => match[0]);
   const checked = switches[0]?.match(/aria-checked="(true|false)"/)?.[1] ?? null;
 
-  return { count: switches.length, checked };
+  return { count: switches.length, checked, disabled: switches[0]?.includes('disabled=""') ?? false };
 }
 
 describe('the device row labels the switch state', () => {
   test('sandbox on: the switch checked, the Sandboxed label, the GPU line', () => {
     const html = renderRow({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0'] });
-    expect(switchState(html)).toEqual({ count: 1, checked: 'true' });
+    expect(switchState(html)).toEqual({ count: 1, checked: 'true', disabled: false });
     expect(html).toContain('data-sandbox-mode="sandboxed"');
     expect(html).toContain('Sandboxed.');
     expect(html).toContain(`GPU: ${describeGpuNodes(['/dev/nvidia0'])}`);
@@ -73,7 +73,7 @@ describe('the device row labels the switch state', () => {
 
   test('sandbox off: the switch unchecked, the Off label, no GPU line', () => {
     const html = renderRow({ tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: ['/dev/nvidia0'] });
-    expect(switchState(html)).toEqual({ count: 1, checked: 'false' });
+    expect(switchState(html)).toEqual({ count: 1, checked: 'false', disabled: false });
     expect(html).toContain('data-sandbox-mode="raw"');
     expect(html).toContain('Off.');
     expect(html).not.toContain('GPU:');
@@ -88,7 +88,7 @@ describe('the device row labels the switch state', () => {
 describe('a machine that cannot sandbox carries the badge, never an explanation', () => {
   test('switch on, no bwrap: the badge, the Files only label, no GPU line', () => {
     const html = renderRow({ tier: 'sandboxed', capability: 'files_only', reason: 'no_bwrap', detail: null, gpu: [] });
-    expect(switchState(html)).toEqual({ count: 1, checked: 'true' });
+    expect(switchState(html)).toEqual({ count: 1, checked: 'true', disabled: false });
     expect(html).toContain('data-sandbox-mode="files_only"');
     expect(html).toContain('Cannot sandbox');
     expect(html).toContain('Files only.');
@@ -97,7 +97,7 @@ describe('a machine that cannot sandbox carries the badge, never an explanation'
 
   test('switch off on such a machine: the badge stays — it is a fact about the machine', () => {
     const html = renderRow({ tier: 'raw', capability: 'raw_only', reason: 'unsupported_platform', detail: null, gpu: [] });
-    expect(switchState(html)).toEqual({ count: 1, checked: 'false' });
+    expect(switchState(html)).toEqual({ count: 1, checked: 'false', disabled: false });
     expect(html).toContain('data-sandbox-mode="raw"');
     expect(html).toContain('Cannot sandbox');
   });
@@ -172,7 +172,7 @@ describe('a device linked from / says the agent has the whole machine', () => {
     expect(html).toContain('the agent has this whole machine');
     expect(html).toContain('data-sandbox-mode="raw"');
     expect(html).not.toContain('Sandboxed.');
-    expect(html).toMatch(/<button[^>]*role="switch"[^>]*disabled=""/);
+    expect(switchState(html)).toMatchObject({ count: 1, disabled: true });
   });
 });
 

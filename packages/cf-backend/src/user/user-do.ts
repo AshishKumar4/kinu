@@ -2495,30 +2495,7 @@ export class UserDO extends Agent<Env> {
       if (!consent.allowed) throw new Error(consent.reason);
     }
 
-    // `agentHome` is empty only under the raw tier.
-    let frameSandbox: JsonObject | null = null;
-
-    if (Object.hasOwn(DEVICE_VIEW_METHODS, method)) {
-      const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
-      const sandbox = this.deviceSandboxFor(deviceId, workspace);
-
-      // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
-      if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
-        throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
-      }
-
-      if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
-        throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
-          ? 'an agent home belongs to a workspace, and this call has none'
-          : 'the daemon did not report where agent homes live'));
-      }
-
-      frameSandbox = {
-        tier: sandbox.tier,
-        agentHome: sandbox.agentHome ?? '',
-        roots: [...sandbox.roots],
-      };
-    }
+    const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
 
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
@@ -2581,6 +2558,24 @@ export class UserDO extends Agent<Env> {
     if (stopping) this.recordToolPathCancellation(params, result);
 
     return result === undefined ? undefined : JSON.stringify(result);
+  }
+
+  /** `agentHome` is empty only under the raw tier. */
+  private frameSandboxFor(method: string, deviceId: string, workspace: string | null): JsonObject {
+    const sandbox = this.deviceSandboxFor(deviceId, workspace);
+
+    // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
+    if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
+      throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
+    }
+
+    if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
+      throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
+        ? 'an agent home belongs to a workspace, and this call has none'
+        : 'the daemon did not report where agent homes live'));
+    }
+
+    return { tier: sandbox.tier, agentHome: sandbox.agentHome ?? '', roots: [...sandbox.roots] };
   }
 
   /** Store the answer from a forwarded cancellation so the durable authority holds one outcome per request.

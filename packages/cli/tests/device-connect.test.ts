@@ -435,7 +435,7 @@ describe('device-connect daemon lifecycle', () => {
     await connect();
 
     expect(bodies.map((body) => body.replaces)).toEqual([undefined, 'device-token']);
-  }, 30_000);
+  });
 
   test('session mode is a no-op while a daemon is already running', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
