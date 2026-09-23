@@ -36,7 +36,7 @@ const FileChangedEnvelope = v.object({
   size: v.optional(v.pipe(v.number(), v.minValue(0))),
 });
 
-export const ContainerEventEnvelopeSchema = v.variant('kind', [
+const ContainerEventEnvelopeSchema = v.variant('kind', [
   ProcessDoneEnvelope, FileChangedEnvelope,
 ]);
 

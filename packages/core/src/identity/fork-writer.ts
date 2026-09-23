@@ -1,7 +1,7 @@
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
 import type { SqlExecutor, VFS } from '../types/primitives';
-import { SOUL_PATH, summarizeSoul } from './soul';
+import { SOUL_PATH } from './soul';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
@@ -16,7 +16,6 @@ import type {
   ForkCraftedToolRow,
   ForkMemoryChunkRow,
   ForkSessionMessageRow,
-  ForkSnapshot,
   ForkSnapshotHead,
 } from './fork-rows';
 
@@ -37,8 +36,6 @@ export interface ForkWriteTarget {
   now?: number;
   /** Hosted owner, carried through the identity rewrite so row and file namespace cannot diverge. Local backends omit it. */
   ownerUserId?: string;
-  /** Hosted owner-only writer for SOUL.md; other inherited files are ordinary workspace writes. */
-  writeSoulFile?: (content: string) => Promise<void>;
   /** Runs the publication atomically. Staging happens outside it: a host transaction is
      *  synchronous and the filesystem is not. */
   transaction?: (rows: () => void) => void;
@@ -232,22 +229,6 @@ export class ForkTargetWriter {
     }
 
     this.staging.count({ contextMembers: rows.length });
-  }
-
-  /** One inherited file, whole ({@link VFS} has no append). SOUL.md yields the fork mission here.
-     *  `artifact` marks a payload file relative to its artifact directory. */
-  async stageFile(path: string, content: string, artifact = false): Promise<void> {
-    const destination = artifact ? this.artifactPath(path) : path;
-    this.staging.addFile(destination);
-    const dir = destination.slice(0, destination.lastIndexOf('/'));
-
-    if (dir) await this.targetVfs.mkdir(dir, { recursive: true });
-
-    if (!artifact && destination === SOUL_PATH) this.staging.mission(summarizeSoul(content));
-
-    if (!artifact && destination === SOUL_PATH && this.opts.writeSoulFile) await this.opts.writeSoulFile(content);
-    else await this.targetVfs.writeFile(destination, content);
-    this.staging.count({ files: 1 });
   }
 
   /** Record an inherited file a native sink already published. SOUL is excluded: its protected writer returns the mission. */
@@ -452,43 +433,4 @@ function forkResultOf(head: ForkSnapshotHead, counts: ForkStagedCounts): ForkRes
     messagesCopied: counts.conversationEntries,
     craftedToolsCopied: counts.craftedTools,
   };
-}
-
-/** Land a whole snapshot in-process. Files go first, outside any transaction; staging and publication
- *  then share one transaction so a mid-write failure leaves no fork. */
-export async function writeForkSnapshot(
-  target: SqlExecutor,
-  targetVfs: VFS,
-  snapshot: ForkSnapshot,
-  opts: ForkWriteTarget,
-): Promise<ForkResult> {
-  const writer = new ForkTargetWriter(target, targetVfs, opts);
-  // Head and counters precede the first staged file; row deletion stays inside the transaction below.
-  writer.begin({ source: snapshot.source, cut: snapshot.cut });
-
-  for (const file of snapshot.files) await writer.stageFile(file.path, file.content);
-
-  for (const artifact of snapshot.artifacts) await writer.stageFile(artifact.path, artifact.content, true);
-
-  const rows = (): ForkResult => {
-    writer.clearStagedRows();
-    writer.stageAgentConfig(snapshot.agentConfig);
-    writer.stageCraftedTools(snapshot.craftedTools);
-    writer.stageMemoryChunks(snapshot.memoryChunks);
-    writer.stageSessionMessages(snapshot.sessionMessages);
-    writer.stageConversationEntries(snapshot.conversationEntries);
-    writer.stageConversationEntryParts(snapshot.conversationEntryParts);
-    writer.stageContextMembers(snapshot.contextMembers);
-
-    return writer.publishRows();
-  };
-
-  let result: ForkResult | null = null;
-
-  if (opts.transaction) opts.transaction(() => { result = rows(); });
-  else result = rows();
-
-  if (result === null) throw new Error('fork write transaction produced no result');
-
-  return result;
 }

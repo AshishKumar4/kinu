@@ -1,6 +1,6 @@
 /**
  * `ctx.storage.transactionSync`, executed. Defends: the admit + roster write (`actor-agent.ts`) and
- * `writeForkSnapshot` committing partially; under bun the body runs directly, so only workerd can tell.
+ * a fork's publication committing partially; under bun the body runs directly, so only workerd can tell.
  */
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';

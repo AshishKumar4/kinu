@@ -13,7 +13,7 @@ export type EvidenceLabel =
   | 'speculative';
 
 /** Labels a fault injector may treat as real; `documented` gives a threshold, not the runtime's behaviour at it. */
-export const PROVEN_LABELS: readonly EvidenceLabel[] = [
+const PROVEN_LABELS: readonly EvidenceLabel[] = [
   'proven-by-probe',
   'proven-by-source',
   'observed-in-production',

@@ -26,7 +26,7 @@ const VfsErrorCodeSchema = v.picklist([
   'EISDIR', 'ENOTEMPTY', 'EROFS', 'ENOTSUP',
 ]);
 
-export class VfsError extends Error {
+class VfsError extends Error {
   readonly errno: number;
 
   constructor(

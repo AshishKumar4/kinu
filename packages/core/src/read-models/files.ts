@@ -297,12 +297,12 @@ export class ExecutorFileDownload {
   }
 }
 
-export function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
+function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
   return router.getProvider(executorId)?.files ?? null;
 }
 
 /** Absolute-path arithmetic shared with the browser; restores the slash `normalizePath` strips. */
-export function normalizeDir(path: string): string {
+function normalizeDir(path: string): string {
   return `/${normalizePath(path)}`;
 }
 

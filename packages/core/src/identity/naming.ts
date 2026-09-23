@@ -166,7 +166,7 @@ export function workspaceSlug(id: string): string {
 }
 
 /** A stated persona name wins, then the mission's opening line; empty when neither. */
-export function workspaceTitleFromMission(mission: string): string {
+function workspaceTitleFromMission(mission: string): string {
   const persona = extractPersonaName(mission);
   const named = persona === null ? '' : cleanTitle(persona);
 

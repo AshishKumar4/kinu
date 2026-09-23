@@ -23,12 +23,12 @@ export interface ExecOutcome {
   readonly refusal?: Refusal;
 }
 
-export const STDOUT_LABEL = '--- stdout ---';
+const STDOUT_LABEL = '--- stdout ---';
 
-export const STDERR_LABEL = '--- stderr ---';
+const STDERR_LABEL = '--- stderr ---';
 
 /** What a command that wrote nothing anywhere reads as. */
-export const NO_OUTPUT = '(no output)';
+const NO_OUTPUT = '(no output)';
 
 /** Encode a declared refusal-string channel; never use it to classify arbitrary output. */
 export function refusalText(error: KinuError | Refusal): string {

@@ -36,7 +36,7 @@ export interface ShellApprovalRequest {
 /** A channel's answer. 'allow_always' grants each tripped rule on this executor ({@link ApprovalGrant}). */
 export type ShellApprovalOutcome = 'allow' | 'allow_always' | 'deny';
 
-export function approvalGrants(outcome: ShellApprovalOutcome): boolean {
+function approvalGrants(outcome: ShellApprovalOutcome): boolean {
   return outcome === 'allow' || outcome === 'allow_always';
 }
 
@@ -388,7 +388,7 @@ export function formatApproval(result: ApprovalResult): string {
   return [`Approval review: ${result.decision}`, ...lines].join('\n');
 }
 
-export const APPROVAL_DENIED = 'Denied';
+const APPROVAL_DENIED = 'Denied';
 
 /** Plain union, not imported from config/store.ts: this file is a layergate subject source and stays import-free. */
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';

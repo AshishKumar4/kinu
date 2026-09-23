@@ -5,6 +5,7 @@ import { workspacePath } from '../vfs/workspace-path';
 import { SlateDirectoryName } from './rpc';
 import type { WorkspaceSlateContentStore } from './content';
 import { KinuError } from '../obs/error';
+import { compareCodeUnits } from '../utils/text';
 
 export { SlateDirectoryName };
 
@@ -19,15 +20,6 @@ const TreeEntry = v.variant('kind', [
 const Tree = v.object({ mode: v.number(), entries: v.array(TreeEntry) });
 
 type TreeEntry = v.InferOutput<typeof TreeEntry>;
-
-/** Code-unit order: the walk order is part of the content-addressed ref, so never locale-aware. */
-function byName(left: { name: string }, right: { name: string }): number {
-  if (left.name < right.name) return -1;
-
-  if (left.name > right.name) return 1;
-
-  return 0;
-}
 
 export function slateDirectory(id: SlateId): string {
   const name = v.safeParse(SlateDirectoryName, id.value);
@@ -65,7 +57,8 @@ export class SlateFiles {
     const entries: TreeEntry[] = [];
 
     const walk = (directory: string, relative: string): void => {
-      for (const entry of this.vfs.readdir(directory).sort(byName)) {
+      // Never locale order: the walk order is part of the content-addressed ref.
+      for (const entry of this.vfs.readdir(directory).sort((left, right) => compareCodeUnits(left.name, right.name))) {
         const absolute = `${directory}/${entry.name}`;
         const path = relative === '' ? entry.name : `${relative}/${entry.name}`;
         const stat = this.vfs.lstat(absolute);

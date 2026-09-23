@@ -68,7 +68,7 @@ export function unavailable(error: string): Refusal {
   return refusalOf(new KinuError('unavailable', error));
 }
 
-export function badInput(error: string): Refusal {
+function badInput(error: string): Refusal {
   return refusalOf(new KinuError('bad_input', error));
 }
 
@@ -167,7 +167,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
 }
 
 /** The workspace as an instrument sees it: only the members *Measurement context* names. */
-export function measurementContext(rt: AgentRuntime): MeasurementContext | null {
+function measurementContext(rt: AgentRuntime): MeasurementContext | null {
   const shell = rt.shell;
 
   if (!shell) return null;
@@ -176,7 +176,7 @@ export function measurementContext(rt: AgentRuntime): MeasurementContext | null 
 }
 
 /** The measured baseline reported alongside a candidate, or null (*Measured baseline*). */
-export function baselineOf(measurement: Measurement, key: string | null): number | null {
+function baselineOf(measurement: Measurement, key: string | null): number | null {
   if (!key) return null;
   const reported = measurement.measured?.[key];
 

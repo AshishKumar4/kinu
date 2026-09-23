@@ -21,8 +21,7 @@ export {
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
-  terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
-  TERMINAL_EFFECT_KEY_VERSION,
+  terminalEffectKey, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
@@ -69,19 +68,14 @@ export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
 
 export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
 
-export {
-  forkWorkspaceStorage, snapshotWorkspaceForFork, readForkLineage,
-  type ForkOpts, type ForkLineageRow, type ForkSnapshotSource,
-} from './identity/fork';
+export { readForkLineage, type ForkLineageRow } from './identity/fork';
 
 export {
-  ForkSnapshotSchema,
-  type ForkSnapshot, type ForkSnapshotHead,
-  type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
+  type ForkSnapshotHead, type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow,
 } from './identity/fork-rows';
 
 export {
-  writeForkSnapshot, ForkTargetWriter,
+  ForkTargetWriter,
   type ForkResult, type ForkWriteTarget, type ForkStagedCounts,
 } from './identity/fork-writer';
 
@@ -89,8 +83,8 @@ export { ForkStagingState, type ForkStaging } from './identity/fork-staging';
 
 export {
   FORK_TRANSFER_VERSION, FORK_FRAME_BYTES, FORK_ROW_SECTIONS, FORK_STREAM_SEED,
-  ForkFrameSchema, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
-  forkFramePreimage, foldForkStream,
+  ForkTransferReceiver, forkTransferFrames, sealForkFrame,
+  foldForkStream,
   type ForkFrame, type ForkBeginFrame, type ForkFileFrame, type ForkRowFrame,
   type ForkRowSection, type ForkSectionCounts, type ForkFrameOutcome,
   type UnsealedForkFrame,
@@ -115,7 +109,7 @@ export {
 
 // Workspace archive: one backup format for both backends.
 export {
-  WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
+  WORKSPACE_ARCHIVE_EXTENSION,
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
   ArchiveCursorSchema,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveFilesCursor,
@@ -136,7 +130,6 @@ export {
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
   workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle, codenameFor,
-  workspaceTitleFromMission,
   type NameOrigin,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
@@ -229,7 +222,7 @@ export {
 } from './evolution/behavior-labels';
 
 export {
-  initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
+  initReplayTables, runReplayEval, listReplayEvals,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
 
@@ -390,7 +383,6 @@ export {
   createExperienceLibrary,
   findPublishable,
   runExperienceAction,
-  EXPERIENCE_ACTIONS,
   EXPERIENCE_KINDS,
   type ExperienceAction,
   type ExperienceActionDeps,
@@ -530,7 +522,6 @@ export {
   MISSION_LABELS_METADATA_KEY,
   readMissionLabels,
   readMissionLimits,
-  localMissionPort,
   // A surface that prices a call must use this, exactly as the ledger debits it.
   priceCall,
   localMissionScope,
@@ -589,7 +580,7 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, codemodeInputSchema,
+  craftedToolDescription, jsonSchemaToTs, nativeToolInputSchema, codemodeInputSchema,
   renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
@@ -694,7 +685,6 @@ export {
   TEMPORARY_LIFETIME,
   TASK_TURN_ENDINGS,
   createTemporaryAgentPort,
-  renderTemporaryTaskBrief,
   temporaryRunSettles,
   terminalTaskReport,
   type SubordinateLifetime,
@@ -1103,7 +1093,6 @@ export {
 // Auto-judge shadow evaluation
 export {
   runAutoShadowEval,
-  JudgeOutputSchema,
   DEFAULT_AUTO_JUDGE_CONFIG,
   type AutoJudgeConfig,
   type AutoShadowEvalResult,
@@ -1175,8 +1164,8 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits, type PreviewRouteCheck,
-  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
-  BoundedOutput, COMMAND_OUTPUT_LIMITS, type CommandOutputLimits, type OutputSpill, type SpillOutcome,
+  commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
   unsandboxedCommandEnvironment,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
@@ -1212,7 +1201,7 @@ export {
 
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
-  type VfsError, type VfsErrorCode,
+  type VfsErrorCode,
 } from './vfs/errno';
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
@@ -1309,6 +1298,8 @@ export {
   parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, projectJsonValue, nonEmptyString,
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
+
+export { compareCodeUnits } from './utils/text';
 
 // Sleep-time compute
 export {
@@ -1460,7 +1451,6 @@ export {
 export {
   PLATFORM_CATALOG,
   PLATFORM_FACT_IDS,
-  PROVEN_LABELS,
   injectableFaults,
   platformFact,
   platformFactEntries,
@@ -1493,7 +1483,6 @@ export {
   gatedGrants,
   formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
-  approvalGrants,
   gateExec,
   grantsAreSubset,
   resolveInheritedGrants,
@@ -1533,9 +1522,6 @@ export {
   DeferredApprovalQueue,
   DeferredApprovalStore,
   initDeferredApprovalsTable,
-  queuedActionMessage,
-  deniedActionMessage,
-  decisionWakeMessage,
   DEFERRED_APPROVAL_SIGNAL,
   DENIAL_STANDING_MS,
   type DeferredApproval,
@@ -1653,7 +1639,7 @@ export {
   LiveHeadJournal, type AnnounceHeadActivity,
   type HeadStreamFrame, type HeadStreamKind,
   type ReportHeadDelta, type PublishHeadStream,
-  reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
@@ -1677,7 +1663,7 @@ export {
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
-  BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
@@ -1767,7 +1753,7 @@ export {
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
-  SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
+  SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
   SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery, type ScaffoldHistoryReader,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
@@ -1913,7 +1899,7 @@ export type {
 // Read models
 export {
   classifyEvolutionType, getRunTimeline, runEventToSpan, toolKindFor,
-  RUN_TIMELINE_DEFAULT, RUN_TIMELINE_MAX,
+  RUN_TIMELINE_MAX,
 } from './read-models/timeline';
 
 export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline';
@@ -1955,9 +1941,9 @@ export {
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';
 
 export {
-  getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
+  getExecutorFiles, readExecutorFile, sortDirEntries, writeExecutorFileOp,
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
-  listEnvironments, normalizeDir, joinDir, parentDir,
+  listEnvironments, joinDir, parentDir,
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   ExecutorFileUpload, ExecutorFileDownload, ChunkedUpload, pumpUploadChunks,
 } from './read-models/files';
@@ -2084,7 +2070,6 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  advisorSignalText,
   ADVISOR_LANE_FIBER,
   reviewRecordedTurn,
   AdvisorRecoverySnapshotSchema,
@@ -2095,7 +2080,6 @@ export {
   judgeNote,
   normalizeNote,
   parseAdvisorReply,
-  reviewCompletedTurn,
   type AdvisorDisposition,
   type AdvisorRecoverySnapshot,
   type AdvisorNote,
@@ -2568,7 +2552,6 @@ export {
   BRANCH_EXPLORE,
   BRANCH_REFLECT,
   BRANCH_READY,
-  BRANCH_METHODS,
   BranchCallSchema,
   BranchReplySchema,
   BranchCallAttributionSchema,

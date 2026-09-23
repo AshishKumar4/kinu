@@ -148,7 +148,7 @@ export async function measureChild(input: {
 }
 
 /** Measure each declared Pareto coordinate without synthesising an aggregate. */
-export async function measureParetoChild(input: {
+async function measureParetoChild(input: {
   readonly pareto: PreparedParetoMeasurement;
   readonly artifact: string;
 }): Promise<ChildOutcome> {
@@ -204,7 +204,7 @@ export async function measureParetoChild(input: {
  * ensemble falls below `minEnsemble` fails rather than scoring. A thrown judge
  * fails the run like a thrown verifier (*The closed verifier registry*).
  */
-export async function judgeChild(input: {
+async function judgeChild(input: {
   readonly rt: AgentRuntime;
   readonly mode: WorkMode;
   readonly samples: number;

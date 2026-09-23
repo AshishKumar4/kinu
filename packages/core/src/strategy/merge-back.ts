@@ -158,7 +158,7 @@ export const APPLY_PRECONDITIONS = [
 export type ApplyPrecondition = (typeof APPLY_PRECONDITIONS)[number];
 
 /** A refusal about the member set, not one member; neither in the spec's gate nor the substrate's list. */
-export const ORDER_RULES = ['dependency-cycle'] as const;
+const ORDER_RULES = ['dependency-cycle'] as const;
 
 export type OrderRule = (typeof ORDER_RULES)[number];
 
@@ -243,7 +243,7 @@ export type MergeOrder =
  * `FanIn.lean — derived_order_satisfies_rule_one`, `FanIn.lean — every_member_is_ordered`,
  * `FanIn.lean — an_orderable_member_does_not_land_beside_a_cycle`, `FanIn.lean — the_sweep_bound_is_tight`.
  */
-export function dependencyOrder(
+function dependencyOrder(
   members: readonly MergeMember[],
   settled: ReadonlySet<string> = new Set(),
 ): MergeOrder {

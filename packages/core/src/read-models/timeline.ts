@@ -173,7 +173,7 @@ export interface RunTimelineDeps {
 }
 
 /** The CLI's local peer keeps its own default of 100 and shares only the ceiling. */
-export const RUN_TIMELINE_DEFAULT = 200;
+const RUN_TIMELINE_DEFAULT = 200;
 
 /** Admits the widest recorded caller (`kinu timeline`), matching `ACTIVITY_STEP_WINDOW` at 400. */
 export const RUN_TIMELINE_MAX = 400;

@@ -19,7 +19,7 @@ import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './execut
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 /** One judge call's output. The judge sees two unlabelled responses in random order. */
-export const JudgeOutputSchema = v.object({
+const JudgeOutputSchema = v.object({
   winner: v.picklist(['a', 'b', 'tie']),
   rationale: v.pipe(v.string(), v.minLength(1)),
   scoreA: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),

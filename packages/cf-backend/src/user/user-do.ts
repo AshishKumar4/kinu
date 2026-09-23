@@ -112,7 +112,7 @@ import {
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
 } from '@kinu.run/core';
-import { initAccessTokenTable } from '@kinu.run/core';
+import { compareCodeUnits, initAccessTokenTable } from '@kinu.run/core';
 import {
   addSkill, ChunkedUpload, deleteDriveEntry, driveFailure, DriveUploadTargetSchema, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   listDrive, makeDriveFolder, markAsSkill, normalizeDrivePath, packDriveFolder, receiveDriveUpload, renameDriveEntry,
@@ -195,15 +195,6 @@ interface DeviceConsentCheck {
   /** Present when the caller is the named workspace itself; the card then asks for the
    *  workspace's binding, which is what "always" records. */
   workspaceName?: string;
-}
-
-/** Codepoint order, so the surface this sorts hashes the same every time. */
-function byToolKey(a: { toolKey: string }, b: { toolKey: string }): number {
-  if (a.toolKey < b.toolKey) return -1;
-
-  if (a.toolKey > b.toolKey) return 1;
-
-  return 0;
 }
 
 /** A pasted SKILL.md rides one RPC argument, so it stays far under the structured-clone ceiling. */
@@ -4973,7 +4964,8 @@ export class UserDO extends Agent<Env> {
 
     // Sorted because the orchestrator's cache hashes this JSON; SDK map order is unstable and would
     // force needless rebuilds of every tool closure.
-    out.sort(byToolKey);
+    // Code-unit order, so the surface this sorts hashes the same every time.
+    out.sort((a, b) => compareCodeUnits(a.toolKey, b.toolKey));
 
     return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
   }
