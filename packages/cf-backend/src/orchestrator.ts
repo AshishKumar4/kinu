@@ -4858,7 +4858,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
       // The target's own payload plane: carried payloads are re-rooted so the fork never reads its source.
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
-      writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
 

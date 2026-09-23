@@ -208,9 +208,8 @@ A workspace holds the state. Agents are the actors that work inside it.
     do it: a fresh workspace is the root of its own delegation tree, so a
     subordinate that could call it could not be its child. The hire names a
     fresh workspace and records `fork_lineage` (`source_workspace_id/name`).
-    `forkWorkspaceStorage`
-    (`packages/core/src/identity/fork.ts#forkWorkspaceStorage`) does the copy
-    in one process; `deliverCloudFork`
+    `forkTransferFrames` (`packages/core/src/identity/fork-transfer.ts`) streams
+    the copy as bounded frames and `ForkTransferReceiver` lands them; `deliverCloudFork`
     (`packages/cf-backend/src/user/workspace-fork.ts#deliverCloudFork`) is the
     hosted entry point. The roster the UI shows comes from `listSubordinates()`
     (RPC, plus the `subordinates_changed` socket event) and holds this
@@ -256,7 +255,7 @@ A workspace holds the state. Agents are the actors that work inside it.
 | CLI | `kinu create <name>`, `kinu exec --workspace <name>`, `/api/cli/workspaces/*` |
 | Access-token scopes | `ACCESS_TOKEN_SCOPES`: `workspace.read`, `workspace.exec`, `ai.proxy` |
 | MCP resources | `kinu://workspace/<name>/memory` |
-| Identity API (core) | `createWorkspace` / `openWorkspaceMainActor` / `forkWorkspaceStorage` |
+| Identity API (core) | `createWorkspace` / `openWorkspaceMainActor` / `forkWorkspace` |
 | Registry (UserDO) | `user_workspaces` plus `listWorkspaces` / `hasWorkspace` / ... |
 
 Some names keep the actor sense. `OrchestratorAgent` is the one exported agent

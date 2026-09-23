@@ -80,32 +80,10 @@ export const ForkCraftedToolRowSchema = v.object({
   updated_at: v.number(),
 });
 
-/** One actor_config row; shell-approval keys are withheld at the read in {@link snapshotWorkspaceForFork}. */
+/** One actor_config row; shell-approval keys are withheld at the source's read (fork-transfer.ts). */
 export const ForkConfigRowSchema = v.object({ key: v.string(), value: v.string() });
 
-/** One inherited file, read through the workspace filesystem. */
-const ForkFileSchema = v.object({ path: v.string(), content: v.string() });
-
-/**
- * Everything a fork copies, for the in-process fork; a hosted fork streams instead (fork-transfer.ts).
- * `artifacts` are relative to the owning artifact directory, `files` are workspace paths.
- */
-const ForkSnapshotSchema = v.object({
-  ...ForkSnapshotHeadSchema.entries,
-  sessionMessages: v.array(ForkSessionMessageRowSchema),
-  conversationEntries: v.array(ForkConversationEntryRowSchema),
-  conversationEntryParts: v.array(ForkConversationEntryPartRowSchema),
-  contextMembers: v.array(ForkContextMemberRowSchema),
-  files: v.array(ForkFileSchema),
-  artifacts: v.array(ForkFileSchema),
-  memoryChunks: v.array(ForkMemoryChunkRowSchema),
-  craftedTools: v.array(ForkCraftedToolRowSchema),
-  agentConfig: v.array(ForkConfigRowSchema),
-});
-
 export type ForkSnapshotHead = v.InferOutput<typeof ForkSnapshotHeadSchema>;
-
-export type ForkSnapshot = v.InferOutput<typeof ForkSnapshotSchema>;
 
 export type ForkSessionMessageRow = v.InferOutput<typeof ForkSessionMessageRowSchema>;
 
@@ -120,5 +98,3 @@ export type ForkMemoryChunkRow = v.InferOutput<typeof ForkMemoryChunkRowSchema>;
 export type ForkCraftedToolRow = v.InferOutput<typeof ForkCraftedToolRowSchema>;
 
 export type ForkConfigRow = v.InferOutput<typeof ForkConfigRowSchema>;
-
-export type ForkFile = v.InferOutput<typeof ForkFileSchema>;

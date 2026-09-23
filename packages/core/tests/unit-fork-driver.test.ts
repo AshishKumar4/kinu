@@ -2,12 +2,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  forkWorkspace, readForkLineage, writeForkSnapshot, snapshotWorkspaceForFork,
+  forkWorkspace, readForkLineage,
   workspaceAddressRefusal, CHAT_SESSION_ID,
   type ForkDriverDeps, type ForkTransport,
 } from '../src/index';
 import { createTestWorkspace, type TestWorkspace } from './helpers';
 import { seedForkSource, SOURCE_ARTIFACTS, TARGET_ARTIFACTS } from './helpers/fork-conversation';
+import { streamFork } from './helpers/fork-stream';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
@@ -185,16 +186,11 @@ describe('forkWorkspace', () => {
     const out = await forkWorkspace(deps(src, {
       async occupied() { return false; },
       async deliver(name, source) {
-        const snapshot = await snapshotWorkspaceForFork({
-          sql: source.sql, vfs: source.vfs, untilMessageId: source.untilMessageId,
-          artifactDirectory: source.artifactDirectory,
-        });
-
-        await writeForkSnapshot(target.sql, target.vfs, snapshot, {
+        const landed = await streamFork(source, target, {
           workspaceId: 'TGT', workspaceName: name, artifactDirectory: TARGET_ARTIFACTS, now: 5000,
-        });
+        }, { untilMessageId: source.untilMessageId, artifactDirectory: source.artifactDirectory });
 
-        return { workspaceId: 'TGT', forkPointMs: snapshot.cut.createdAtMs };
+        return { workspaceId: 'TGT', forkPointMs: landed.forkPointMs };
       },
     }), 'm2', { name: 'landed' });
 
