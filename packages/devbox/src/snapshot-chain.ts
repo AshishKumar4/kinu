@@ -371,7 +371,7 @@ export interface ChainState extends ChainGeneration {
   /** Monotonic revision. Every publication bumps it, and so does a restore
    *  that promotes the fallback. */
   readonly rev: number;
-  /** Epoch ms the checkpoint completed. The interval gate reads this. */
+  /** Epoch ms the last tick's checkpoint completed: the interval gate's clock ({@link tickClock}). */
   readonly at: number;
   /** Advanced only on a successful checkpoint or an unchanged report, never after an unarchived
    *  change: the next tick would believe it was already saved. */
@@ -467,6 +467,11 @@ export function normalizeChainState(raw: StoredValue): ChainState | null {
     retiredDeltas: row.retiredDeltas,
     lastFailure: row.lastFailure,
   };
+}
+
+/** A quiesce commit keeps the last tick's clock: a refused stop must not delay the next tick. */
+function tickClock(previous: ChainState | null, kind: CheckpointKind, now: number): number {
+  return kind === 'tick' ? now : previous?.at ?? 0;
 }
 
 function shouldCheckpoint(
@@ -819,7 +824,7 @@ interface ChainCommitOptions {
   /** Archive the merged work directory as a new base under a new generation. */
   readonly rebasing?: boolean;
   readonly upperMark?: string;
-  readonly kind?: CheckpointKind;
+  readonly kind: CheckpointKind;
 }
 
 interface ComposedMounts {
@@ -1630,6 +1635,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const commitExtract = async (
     previous: ChainState | null,
     version: string,
+    kind: CheckpointKind,
   ): Promise<CheckpointOutcome> => {
     // LOCAL DEVELOPMENT ONLY: the SDK archives the whole tree.
     const backup = await ports.createExtractSnapshot(
@@ -1651,7 +1657,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // carry no digest, and an absent digest means unknown.
       base: { id: backup.id, ...stored },
       delta: undefined,
-      at: ports.now(),
+      at: tickClock(previous, kind, ports.now()),
       changeVersion: version,
       upperMark: undefined,
       // The superseded archive is recorded before anything deletes it and kept as the fallback,
@@ -1749,7 +1755,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const commitChain = async (
     previous: ChainState | null,
     version: string,
-    { rebasing = false, upperMark, kind }: ChainCommitOptions = {},
+    { rebasing = false, upperMark, kind }: ChainCommitOptions,
   ): Promise<CheckpointOutcome> => {
     const first = previous === null;
     const fresh = first || rebasing;
@@ -1777,7 +1783,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
           + `box archives whole trees from here: ${describe({ cause: error })}`,
         );
 
-        return await commitExtract(previous, version);
+        return await commitExtract(previous, version, kind);
       }
     }
 
@@ -1832,7 +1838,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       retiredDeltas: retirementAfter(previous),
       deltaFormat: fresh ? undefined : deltaFormat,
       deltaFallback,
-      at: ports.now(),
+      at: tickClock(previous, kind, ports.now()),
       changeVersion: version,
       upperMark,
       // A rebase supersedes a generation; a delta commit stays inside its generation and
@@ -1992,7 +1998,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     try {
       // A box attaches the way it was checkpointed, so the mode comes from
       // the record; commitChain decides it for a box with no record.
-      if (state?.mode === 'extract') return await commitExtract(state, version);
+      if (state?.mode === 'extract') return await commitExtract(state, version, kind);
 
       return await commitChain(state, version, { rebasing: shouldRebase(state, kind), kind });
     } catch (error) {

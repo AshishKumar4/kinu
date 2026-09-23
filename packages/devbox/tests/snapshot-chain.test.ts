@@ -1167,6 +1167,18 @@ describe('attach — the mount must be observed to have landed', () => {
     expect((await checkpointOf(quiesced, 'quiesce')).kind).toBe('committed');
   });
 
+  test('a quiesce commit never delays the next tick, so a refused stop keeps the loss window', async () => {
+    // The loss-window model's counterexample `a_refused_stop_stretches_the_window`, P = INTERVAL_MS.
+    const options = { state: chainState({ at: 10 }), mounts: MOUNTED, upperMark: 'before-the-quiesce', now: INTERVAL_MS };
+    const record = harness(options);
+
+    expect((await checkpointOf(record, 'quiesce')).kind).toBe('committed');
+    record.upperMark = 'written-after-the-quiesce-capture';
+    options.now = INTERVAL_MS + 10;
+
+    expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+  });
+
   test('movedBytes: a skip says 0, a failure says undefined, because those differ',
     async () => {
       // A skip attempted no PUT, so 0 is known; a failure may have landed an object before

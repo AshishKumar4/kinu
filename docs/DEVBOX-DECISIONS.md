@@ -1154,6 +1154,24 @@ are: DBX-5 moves backup and sync into the container (m712: that machinery
 "should live inside the docker image/container itself, and NOT be issued via
 the DO"), which takes them off the Durable Object entirely.
 
+D29. Checkpoint payloads do not cross the Durable Object; DBX-5 moves the
+orchestration, not the bytes (2026-09-23). The chain's publish (D15) and its
+layer reads go to `r2.internal`, which the SDK serves in its `ContainerProxy`
+WorkerEntrypoint: `@cloudflare/sandbox` 0.12.9, `dist/sandbox-D0rNqxlr.js`
+lines 7199-7222 (`ContainerProxy$1.fetch` sends `r2EgressMount` to
+`r2EgressHandler`), with the SDK's note that the handler registry is "NOT
+shared between the Durable Object's execution context and the ContainerProxy
+WorkerEntrypoint context"; `putRequestBody` and `handleUploadPart` stream
+each object and part through a `FixedLengthStream` into the R2 binding, with
+no buffering. Cloudflare
+documents outbound handlers as running on the container's machine. Presigned
+URLs straight to `<account>.r2.cloudflarestorage.com` were weighed and
+dropped: `KinuSandbox` sets `interceptHttps` with a catch-all handler, and
+the documented precedence sends even an allowed host through that handler,
+so the hop would stay and signing keys would return to the Worker. Status:
+read from source. The Durable Object byte meter that shows zero payload
+bytes on a deployed run lands with DBX-5's in-image checkpoint.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
