@@ -524,6 +524,17 @@ describe('executor file plane', () => {
     db.close();
   });
 
+  test('the directories the platform manages are not listed beside the work', async () => {
+    const { rt, db } = createTestRuntime();
+    await rt.storage.vfs.mkdir('/proj/.nimbus/runtimes', { recursive: true });
+    await rt.storage.vfs.mkdir('/proj/.kinu/tool-output', { recursive: true });
+    await rt.storage.vfs.writeFile('/proj/hello.py', 'print(42)\n');
+
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    expect(listed.entries?.map((e) => e.name)).toEqual(['hello.py']);
+    db.close();
+  });
+
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile('/home/user/SOUL.md', 'me');

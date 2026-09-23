@@ -11,6 +11,7 @@ import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { KinuError, renderThrownChain } from '../obs/index';
+import { isSystemManaged } from './files-plane';
 
 /**
  * These two bound the response, not residency: their product is 100 MiB, near
@@ -26,8 +27,7 @@ const MAX_SNAPSHOT_FILES = 400;
 const MAX_CHANGESET_BODY_CHARS = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
 
 const SNAPSHOT_IGNORED_DIRECTORIES = new Set([
-  '.git', '.kinu', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv',
-  '__pycache__', 'node_modules', 'venv',
+  '.git', '.cache', '.mypy_cache', '.pnpm-store', '.pytest_cache', '.venv', '__pycache__', 'node_modules', 'venv',
 ]);
 
 const NOT_GIT_REPO = '__KINU_NOT_GIT_REPO__';
@@ -84,7 +84,7 @@ export async function walkWorkspaceTextFiles(
     }
 
     for (const name of names) {
-      if (SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
+      if (isSystemManaged(name) || SNAPSHOT_IGNORED_DIRECTORIES.has(name)) continue;
       const full = dir === '' ? name : `${dir}/${name}`;
       let st: VfsEntryStat | null;
 

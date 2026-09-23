@@ -53,6 +53,25 @@ describe('workspace diff lifecycle', () => {
     });
   });
 
+  test('a Nimbus runtime install and one written file read as exactly one change', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.exists('scaffold/agent.js');
+    await resetWorkspaceBaseline(rt);
+
+    // The text files `nimbus install python` wrote on kinu.run, 2026-09-23.
+    const runtime = '.nimbus/runtimes/cpython/3.13.14';
+
+    for (const path of ['bin/python', 'bin/python3', 'etc/ssl/cert.pem', 'lib/python3.13/os.py', 'LICENSE', 'manifest.json']) {
+      await rt.storage.vfs.mkdir(`${runtime}/${path}`.replace(/\/[^/]+$/, ''), { recursive: true });
+      await rt.storage.vfs.writeFile(`${runtime}/${path}`, `${path}\n`);
+    }
+
+    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added hello.py']);
+  });
+
   test('an intentionally empty baseline is stable and reads never move it', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
