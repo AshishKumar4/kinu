@@ -2,7 +2,8 @@
  * Refinement of `Safety/Credentials.lean — openStored` by the deployed envelope: each row in
  * `lean/fixtures/credential-envelope.json` is sealed by one deployment's `createCredentialCipher`
  * (real AES-GCM) and opened by another's, and the open must answer what the model answers: the
- * plaintext, or a refusal naming a missing key or a context the envelope was not sealed for.
+ * plaintext, or a refusal naming a missing key, a context the envelope was not sealed for, or a row
+ * that holds no envelope.
  * `bash scripts/verify-lean.sh` regenerates the fixture from the model.
  */
 
@@ -25,7 +26,7 @@ const FixtureSchema = v.object({
     openAad: v.string(),
     outcome: v.union([
       v.object({ opens: v.string() }),
-      v.object({ refused: v.picklist(['no-key', 'mismatch']) }),
+      v.object({ refused: v.picklist(['no-key', 'mismatch', 'not-sealed']) }),
     ]),
   })),
 });
@@ -38,9 +39,9 @@ function secret(name: string): string {
 }
 
 describe('createCredentialCipher refines Credentials.openStored', () => {
-  test('the fixture opens, refuses for a missing key, and refuses a foreign context', () => {
+  test('the fixture opens, and refuses a missing key, a foreign context and an unsealed row', () => {
     const outcomes = new Set(cases.map((c) => ('opens' in c.outcome ? 'opens' : c.outcome.refused)));
-    expect(outcomes).toEqual(new Set(['opens', 'no-key', 'mismatch']));
+    expect(outcomes).toEqual(new Set(['opens', 'no-key', 'mismatch', 'not-sealed']));
   });
 
   test.each(cases.map((c, i) => [i, c] as const))('case %d', async (_i, c) => {
@@ -59,6 +60,8 @@ describe('createCredentialCipher refines Credentials.openStored', () => {
       expect(await opened).toBe(c.outcome.opens);
     } else if (c.outcome.refused === 'no-key') {
       await expect(opened).rejects.toThrow('which this deployment no longer has');
+    } else if (c.outcome.refused === 'not-sealed') {
+      await expect(opened).rejects.toThrow('is not a sealed envelope');
     } else {
       await expect(opened).rejects.toThrow('failed to decrypt');
     }

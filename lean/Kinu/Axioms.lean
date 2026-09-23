@@ -163,13 +163,13 @@ import Kinu
 /-! ## Kinu/Safety/Credentials.lean -/
 
 #print axioms Kinu.Safety.Credentials.an_envelope_opens_only_where_it_was_sealed
-#print axioms Kinu.Safety.Credentials.a_plain_row_opens_under_every_context
+#print axioms Kinu.Safety.Credentials.an_unsealed_row_opens_nowhere
 #print axioms Kinu.Safety.Credentials.one_context_per_store_and_key
 #print axioms Kinu.Safety.Credentials.credential_contexts_never_meet_mcp_contexts
 #print axioms Kinu.Safety.Credentials.clients_cannot_tell_two_stores_apart_by_their_secrets
 #print axioms Kinu.Safety.Credentials.a_deleted_credential_yields_no_headers
 #print axioms Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
-#print axioms Kinu.Safety.Credentials.rewrap_seals_a_plain_row
+#print axioms Kinu.Safety.Credentials.rewrap_seals_plaintext_only_in_a_never_sealed_store
 
 /-! ## Kinu/Storage/FTS5Search.lean -/
 

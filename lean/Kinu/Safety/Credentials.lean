@@ -20,11 +20,9 @@
   - a deleted credential yields no headers (`a_deleted_credential_yields_no_headers`);
   - rotation keeps every secret that opened (`rewrap_keeps_every_readable_secret`).
 
-  And one finding, machine-checked: `CredentialCipher.open` passes a value
-  without the `pce1.` prefix through as plaintext, so such a row opens under
-  every store and key (`a_plain_row_opens_under_every_context`), despite the
-  envelope module's "no plaintext fallback". Only rotation seals such a row
-  (`rewrap_seals_a_plain_row`).
+  A row without an envelope opens under no context (`an_unsealed_row_opens_nowhere`);
+  only the rotation of a store that was never sealed reads one as plaintext and
+  seals it (`rewrap_seals_plaintext_only_in_a_never_sealed_store`).
 
   The cipher's guarantees are premises (`Aead`), not axioms: sealing then
   opening under the same context returns the plaintext and under another returns
@@ -70,13 +68,14 @@ inductive Stored (Env : Type) where
 inductive OpenError where
   | noKey
   | mismatch
+  | notSealed
   deriving Repr, DecidableEq
 
-/-- `CredentialCipher.open` with the deployment's keys, current first: a plain row
-    passes through; an envelope opens under the configured key its id names. -/
+/-- `CredentialCipher.open` with the deployment's keys, current first: a row without
+    an envelope is refused; an envelope opens under the configured key its id names. -/
 def openStored {Key Env : Type} (A : Aead Key Env) (keys : List Key) (aad : String) :
     Stored Env → Except OpenError String
-  | .plain p => .ok p
+  | .plain _ => .error .notSealed
   | .sealed e =>
     match keys.find? (fun k => A.keyId k == A.envKeyId e) with
     | none => .error .noKey
@@ -112,11 +111,10 @@ theorem an_envelope_opens_only_where_it_was_sealed {Key Env : Type} (A : Aead Ke
     · rw [A.open_elsewhere k' a a' p ha] at h
       cases h
 
-/-- **Finding: a plain row opens under every context.** `open` returns a value
-    without the envelope prefix unchanged, so a row written around the envelope
-    is read as a secret by any store under any key. -/
-theorem a_plain_row_opens_under_every_context {Key Env : Type} (A : Aead Key Env)
-    (keys : List Key) (a p : String) : openStored A keys a (.plain p) = .ok p := rfl
+/-- **An unsealed row opens nowhere**: `open` refuses a value without the envelope
+    prefix under every store, key and context. -/
+theorem an_unsealed_row_opens_nowhere {Key Env : Type} (A : Aead Key Env)
+    (keys : List Key) (a p : String) : openStored A keys a (.plain p) = .error .notSealed := rfl
 
 /-! ## Contexts -/
 
@@ -310,23 +308,23 @@ theorem a_deleted_credential_yields_no_headers {Key Env : Type} (A : Aead Key En
   simp only [bne_iff_ne, ne_eq] at this
   simpa using this
 
-/-- One row through `rewrapCredentials`: opened with the old keys and resealed under
-    the new current key, or left as it was when it does not open. -/
+/-- One row through `rewrapCredentials`. `marked` says the store was ever sealed
+    (its `credential_envelope_key_id` marker exists): only a never-sealed store reads
+    a row without an envelope as plaintext. Every other row is opened with the old
+    keys and resealed under the new current key, or left as it was. -/
 def rewrapRow {Key Env : Type} (A : Aead Key Env) (oldKeys : List Key) (current : Key)
-    (doId : String) (r : Row Env) : Row Env :=
-  match openStored A oldKeys (credentialAad doId r.key) r.value with
+    (doId : String) (marked : Bool) (r : Row Env) : Row Env :=
+  let reopened : Except OpenError String :=
+    match r.value, marked with
+    | .plain p, false => .ok p
+    | v, _ => openStored A oldKeys (credentialAad doId r.key) v
+  match reopened with
   | .ok p => { r with value := .sealed (A.sealAs current (credentialAad doId r.key) p) }
   | .error _ => r
 
-/-- **Rotation keeps every secret that opened**: after the rewrap, the row opens
-    to the same secret under the new keys, whatever became of the old ones. -/
-theorem rewrap_keeps_every_readable_secret {Key Env : Type} (A : Aead Key Env)
-    (oldKeys newKeys : List Key) (current : Key) (hcur : current ∈ newKeys)
-    (hids : DistinctIds A newKeys) (doId : String) (r : Row Env) (p : String)
-    (h : openStored A oldKeys (credentialAad doId r.key) r.value = .ok p) :
-    openStored A newKeys (credentialAad doId r.key) (rewrapRow A oldKeys current doId r).value = .ok p := by
-  unfold rewrapRow
-  rw [h]
+private theorem sealed_opens_under {Key Env : Type} (A : Aead Key Env) (keys : List Key)
+    (current : Key) (hcur : current ∈ keys) (hids : DistinctIds A keys) (aad p : String) :
+    openStored A keys aad (.sealed (A.sealAs current aad p)) = .ok p := by
   simp only [openStored]
   split
   · rename_i hnone
@@ -339,13 +337,35 @@ theorem rewrap_keeps_every_readable_secret {Key Env : Type} (A : Aead Key Env)
     simp only [beq_iff_eq, A.sealed_names_its_key] at hid
     rw [hids k hk current hcur hid, A.open_seal]
 
-/-- And rotation is what seals a plain row: afterwards it is an envelope for its
-    own store and key. -/
-theorem rewrap_seals_a_plain_row {Key Env : Type} (A : Aead Key Env) (oldKeys : List Key)
-    (current : Key) (doId : String) (r : Row Env) (p : String) (h : r.value = .plain p) :
-    (rewrapRow A oldKeys current doId r).value = .sealed (A.sealAs current (credentialAad doId r.key) p) := by
-  unfold rewrapRow
-  rw [h]
-  rfl
+/-- **Rotation keeps every secret that opened**: after the rewrap, the row opens
+    to the same secret under the new keys, whatever became of the old ones. -/
+theorem rewrap_keeps_every_readable_secret {Key Env : Type} (A : Aead Key Env)
+    (oldKeys newKeys : List Key) (current : Key) (hcur : current ∈ newKeys)
+    (hids : DistinctIds A newKeys) (doId : String) (marked : Bool) (r : Row Env) (p : String)
+    (h : openStored A oldKeys (credentialAad doId r.key) r.value = .ok p) :
+    openStored A newKeys (credentialAad doId r.key) (rewrapRow A oldKeys current doId marked r).value
+      = .ok p := by
+  cases hv : r.value with
+  | plain q => rw [hv] at h; simp [openStored] at h
+  | sealed e =>
+    rw [hv] at h
+    have hrow : (rewrapRow A oldKeys current doId marked r).value =
+        .sealed (A.sealAs current (credentialAad doId r.key) p) := by
+      cases marked <;> simp [rewrapRow, hv, h]
+    rw [hrow]
+    exact sealed_opens_under A newKeys current hcur hids _ p
+
+/-- **Rotation reads plaintext only in a never-sealed store.** There it seals a
+    legacy plain row for its own store and key; in a store that was ever sealed it
+    leaves the row, which then opens nowhere. -/
+theorem rewrap_seals_plaintext_only_in_a_never_sealed_store {Key Env : Type} (A : Aead Key Env)
+    (oldKeys : List Key) (current : Key) (doId : String) (r : Row Env) (p : String)
+    (h : r.value = .plain p) :
+    (rewrapRow A oldKeys current doId false r).value
+        = .sealed (A.sealAs current (credentialAad doId r.key) p) ∧
+      rewrapRow A oldKeys current doId true r = r := by
+  constructor
+  · simp [rewrapRow, h]
+  · simp [rewrapRow, h, openStored]
 
 end Kinu.Safety.Credentials

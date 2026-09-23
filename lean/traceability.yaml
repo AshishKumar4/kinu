@@ -300,17 +300,17 @@ requirements:
     refinement:
       - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
   PR-CRED-001:
-    statement: No client operation on the credential store answers anything that depends on a stored secret, an envelope opens only under the store and key it was sealed for, credential and MCP header contexts never meet, a deleted credential yields no headers, rotation keeps every readable secret, and a row without the envelope prefix opens under every context.
+    statement: No client operation on the credential store answers anything that depends on a stored secret, an envelope opens only under the store and key it was sealed for, credential and MCP header contexts never meet, a deleted credential yields no headers, rotation keeps every readable secret, and a row without an envelope opens under no context and is read as plaintext only by the rotation of a store that was never sealed.
     status: proved-and-refined
     theorems:
       - Kinu.Safety.Credentials.an_envelope_opens_only_where_it_was_sealed
-      - Kinu.Safety.Credentials.a_plain_row_opens_under_every_context
+      - Kinu.Safety.Credentials.an_unsealed_row_opens_nowhere
       - Kinu.Safety.Credentials.one_context_per_store_and_key
       - Kinu.Safety.Credentials.credential_contexts_never_meet_mcp_contexts
       - Kinu.Safety.Credentials.clients_cannot_tell_two_stores_apart_by_their_secrets
       - Kinu.Safety.Credentials.a_deleted_credential_yields_no_headers
       - Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
-      - Kinu.Safety.Credentials.rewrap_seals_a_plain_row
+      - Kinu.Safety.Credentials.rewrap_seals_plaintext_only_in_a_never_sealed_store
     tsRefs:
       - packages/core/src/credentials/envelope.ts#createCredentialCipher
       - packages/core/src/credentials/validate.ts#validateCredentialKey
@@ -318,11 +318,12 @@ requirements:
       - packages/cf-backend/src/user/user-do.ts#UserDO.setCredential
       - packages/cf-backend/src/user/user-do.ts#UserDO.deleteCredential
       - packages/cf-backend/src/user/user-do.ts#UserDO.getAuthHeaders
+      - packages/cf-backend/src/user/user-do.ts#UserDO.rewrapCredentials
     remainingEvidence:
       - The cipher's guarantees are premises satisfied by the transparent cipher; AES-GCM's confidentiality and the key id's freedom from HMAC collisions are assumed, not proved
-      - CredentialCipher.open passes an unprefixed value through as plaintext, contrary to the envelope module's no-plaintext-fallback claim, so the binding theorem holds only for sealed rows; the fixture's plain row opens under a foreign context on the deployed code too
       - The fixture runs the deployed envelope; the UserDO's list, set and delete, and its private credentialAad, are modelled but not exercised, because they need a workerd Durable Object
       - getAuthHeaders answers a Worker-internal caller with the secret by design and is modelled as egress, not as a client view
+      - The never-sealed-store rule rests on the user_schema_meta marker, which rewrapCredentials writes only after a clean pass; the fixture exercises the envelope, not the marker
     refinement:
       - lean/fixtures/credential-envelope.json :: packages/core/tests/refinement-credentials.test.ts
   PR-STORE-001:
