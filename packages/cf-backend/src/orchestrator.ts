@@ -728,6 +728,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const swarm: AgentsSwarmDeps = {
       rt: turn.runtime,
       model: turn.model,
+      reportModelCall: (report) => { this.reportModelCall(report); },
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session as the mission ledger, so a search's estimate and its debit read one rate.
       costModel: () => ({

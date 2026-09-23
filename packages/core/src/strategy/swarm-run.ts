@@ -70,7 +70,6 @@ export interface SwarmRunDeps {
   readonly signal?: AbortSignal;
   /** See HeadInferenceDeps.clock. */
   readonly clock?: Clock;
-  /** Absent = unreported, which the spend coverage fraction states. */
   readonly reportModelCall?: ModelCallSink;
   /** Transient output frames (heads/head-stream.ts). Absent = nothing watching. */
   readonly publishHeadStream?: PublishHeadStream;

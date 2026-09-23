@@ -2630,6 +2630,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const swarm: AgentsSwarmDeps = {
       rt: this.rt,
       model: this.getModel(),
+      reportModelCall: (report) => { this.reportModelCall(report); },
       originContext: () => this._turnOriginContext,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
       // Same catalog session as the context window and mission ledger, so a search's estimate

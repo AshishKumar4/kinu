@@ -126,6 +126,7 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
     rt, model, resolveModel: () => model,
     // One hosted actor per node id, all over the one workspace database.
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    reportModelCall: () => undefined,
     ...overrides,
   };
 }
@@ -385,6 +386,7 @@ describe('agents.* codemode namespace — dispatch', () => {
         swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+          reportModelCall: () => undefined,
         },
       };
     });
@@ -575,6 +577,7 @@ describe('agents.* codemode namespace — declared types', () => {
         rt: createTestRuntime().rt, model: new MockLanguageModelV3(),
         // Reads the declaration and runs nothing, so no seat is asked for.
         hostNode: refuseHostNode('this case renders declarations and runs no node'),
+        reportModelCall: () => undefined,
       },
     })).types;
 

@@ -23,7 +23,7 @@ import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox,
   backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID,
-  JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
+  JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY, usageTotal,
   profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
@@ -4139,6 +4139,15 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(settled.candidates).toHaveLength(2);
     expect(settled.report.tokens).toBeGreaterThan(0);
 
+    // What the search cost is what the spend ledger bills: a `swarm` row per node, summing to its tokens.
+    const billed = [WORKSPACE_RUN_ID, ...session.listRuns().items.map((r) => r.runId)]
+      .flatMap((runId) => session.getRunEvents(runId))
+      .flatMap((e) => (e.type === 'model_call' && e.source === 'swarm' ? [e.usage] : []));
+
+    expect(billed).toHaveLength(settled.report.expansions);
+    expect(billed.reduce((sum, usage) => sum + (usage === undefined ? 0 : usageTotal(usage) ?? 0), 0))
+      .toBe(settled.report.tokens);
+
     await session.end();
   });
 
@@ -4545,7 +4554,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
 
-    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt) } }, calls };
+    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt), reportModelCall: () => undefined } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {

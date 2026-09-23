@@ -118,6 +118,7 @@ function harness(input: {
     rt,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
+    reportModelCall: () => undefined,
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 
@@ -265,7 +266,7 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     const entry = createAgentsTool({
       mode: 'build',
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model, reportModelCall: () => undefined },
     });
 
     if (!entry) throw new Error('Expected the agents tool to be created');
@@ -355,6 +356,7 @@ function perNodeHarness() {
     rt,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
     model: caller.model,
+    reportModelCall: () => undefined,
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
 

@@ -127,7 +127,7 @@ function searchOnlyDeps(): AgentsToolDeps {
   // would otherwise share one claim ledger and loop pointer.
   const seats = hostedSeatsOver({ rt, db: testSql.db });
 
-  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel() } };
+  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel(), reportModelCall: () => undefined } };
 }
 
 function fullDeps(): AgentsToolDeps {

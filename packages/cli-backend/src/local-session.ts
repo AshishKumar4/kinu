@@ -2520,6 +2520,7 @@ export class LocalAgentSession implements BackendHost {
       announceHeadActivity: () => this.headActivity,
       reportNodeDelta: () => this.publishHeadStream,
       model: this.cachedModel ?? this.defaultModel("an agents swarm"),
+      reportModelCall: this.modelCallSink,
       originContext: () => this.actorSession.history,
       costModel: () => ({
         spec: this.effectiveModelSpec(),

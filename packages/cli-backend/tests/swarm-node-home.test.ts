@@ -177,7 +177,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const rt = cliRuntime('swarm-node-home-private');
     const { provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), reportModelCall: () => undefined, provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))
@@ -188,7 +188,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     const rt = cliRuntime('swarm-node-home-inodes');
     const { nodeHome, provisionNodeHome } = nodeHomeWiring(rt);
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), provisionNodeHome });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), reportModelCall: () => undefined, provisionNodeHome });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     // Through `rt.storage.vfs`, the origin's own view: a home the origin could not see would be a second tree.
@@ -212,7 +212,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
   test('the same call with no home host reports the shared plane instead', async () => {
     const rt = cliRuntime('swarm-node-home-absent');
 
-    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt) });
+    const settled = await runShippedSwarm({ rt, model: answeringModel(), hostNode: nodeSeatFactory(rt), reportModelCall: () => undefined });
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))

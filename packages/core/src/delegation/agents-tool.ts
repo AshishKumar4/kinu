@@ -36,6 +36,7 @@ import { freezeInheritedContext } from '../orchestrator/heads-support';
 import { SWARM_CONTEXTS } from '../types/swarm';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
+import type { ModelCallSink } from '../events/model-call';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE,
@@ -248,6 +249,8 @@ export interface AgentsSwarmDeps {
   rt: AgentRuntime;
   hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
+  /** Every expansion and node of a search bills its calls here. */
+  reportModelCall: ModelCallSink;
   /**
    * Turns a resolved tier's model spec into the model a delegated node runs on. Optional in the type,
    * required wherever {@link AgentsToolDeps.profile} is wired: a run with a profile snapshot and no
@@ -1112,6 +1115,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
     signal,
     // Real time on every node's ledger (D19); a test can inject its own clock.
     clock: REAL_CLOCK,
+    reportModelCall: swarm.reportModelCall,
     publishHeadStream,
     announceHeadActivity,
     provisionHome,

@@ -519,7 +519,7 @@ describe('the mission ledger a search charges', () => {
 
     const deps: AgentsToolDeps = {
       mode: 'build',
-      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, reportModelCall: () => undefined },
       budget: governor,
     };
 

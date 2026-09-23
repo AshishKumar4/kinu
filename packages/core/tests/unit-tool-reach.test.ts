@@ -99,6 +99,7 @@ describe('the reach declaration', () => {
         swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
+          reportModelCall: () => undefined,
         },
       })),
       memory: () => createMemoryCodemodeProvider(() => ({

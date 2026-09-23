@@ -119,6 +119,7 @@ function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   return {
     rt, model: testModel,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
+    reportModelCall: () => undefined,
     ...overrides,
   };
 }
