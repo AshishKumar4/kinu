@@ -204,10 +204,10 @@ describe('the workspace plane mount table', () => {
 				if (path === '/home/dev/notes.txt') content = machine['/home/dev/notes.txt'];
 				else if (path === '/etc/secrets.key') content = machine['/etc/secrets.key'];
 
-				if (method === 'readFile') {
+				if (method === 'readRange') {
 					if (content === undefined) throw new Error(`ENOENT: ${path}`);
 
-					return content;
+					return { encoding: 'base64', content: Buffer.from(content).toString('base64') };
 				}
 
 				if (method === 'listFiles') return Object.keys(machine).filter((p) => p.startsWith(`${path}/`));

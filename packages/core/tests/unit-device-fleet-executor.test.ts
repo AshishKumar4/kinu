@@ -143,7 +143,7 @@ describe('the device fleet at the executor surface', () => {
     expect(await provider.tools.writeFile.execute('/tmp/x', 'y', { device: 'ashish@studio' })).toBe('Written 1 bytes to /tmp/x');
 
     expect(t.sent.map((frame) => [frame.method, frame.deviceId])).toEqual([
-      ['readFile', 'dev-rig'], ['listFiles', 'dev-rig'], ['exists', 'dev-studio'], ['writeFile', 'dev-studio'],
+      ['readRange', 'dev-rig'], ['listFiles', 'dev-rig'], ['exists', 'dev-studio'], ['writeFile', 'dev-studio'],
     ]);
   });
 
