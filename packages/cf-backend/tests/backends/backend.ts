@@ -6,11 +6,11 @@
 import { Database } from 'bun:sqlite';
 import {
   initWorkspaceSchema, type ActorHandle, type EvolutionChangelogView, type LLMProviderConfig,
-  type RefinementRequestView, type SqlExecutor, type VFS,
+  type RefinementRequestView, type SessionHistory, type SqlExecutor, type VFS,
 } from '@kinu.run/core';
 import { scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import {
-  orchestratorHarness, workspaceFiles, workspaceMainActor,
+  historyOver, orchestratorHarness, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
 import type { OrchestratorAgent } from '../../src/orchestrator';
 import { LocalAgentSession } from '../../../cli-backend/src/local-session';
@@ -46,7 +46,8 @@ type SameCall =
   | 'latestAlternateTakes' | 'pickAlternateTake'
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
-  | 'listRefinements' | 'showRefinement' | 'decideRefinement';
+  | 'listRefinements' | 'showRefinement' | 'decideRefinement'
+  | 'revertConversation' | 'runScaffoldGepaOptimization';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -61,6 +62,8 @@ export type SharedSurface = { readonly [K in SameCall]: Answer<K> } & {
   getEvolutionChangelog(limit: number): Promise<EvolutionChangelogView>;
   /** The durable request the owner opened; the lane that runs it is each backend's own cadence. */
   requestRefinement(opts?: { turnIds?: string[] }): Promise<RefinementRequestView>;
+  /** The owner's words; cf names each message, the CLI mints the name. */
+  send(text: string): Promise<void>;
 };
 
 export interface SharedBackend {
@@ -71,17 +74,21 @@ export interface SharedBackend {
   readonly actor: ActorHandle;
   /** The workspace file plane, as the owner and the agent reach it. */
   readonly files: VFS;
+  /** The main actor's conversation store, as each backend records its turns. */
+  readonly history: SessionHistory;
 }
 
 /** The cf Durable Object, in process over bun:sqlite. */
 function cloudflare(): SharedBackend {
-  const { agent, db } = orchestratorHarness();
+  const harness = orchestratorHarness();
+  const { agent, db } = harness;
 
   return {
     name: 'cf',
     sql: sqlOver(db),
     actor: workspaceMainActor(db),
     files: workspaceFiles(agent),
+    history: historyOver(harness),
     surface: {
       getReasoningEffort: () => agent.getReasoningEffort(),
       setReasoningEffort: (effort) => agent.setReasoningEffort(effort),
@@ -125,6 +132,9 @@ function cloudflare(): SharedBackend {
       showRefinement: (requestId, routeIndex) => agent.showRefinement(requestId, routeIndex),
       requestRefinement: (opts) => agent.requestRefinement(opts),
       decideRefinement: (input) => agent.decideRefinement(input),
+      revertConversation: (entryId) => agent.revertConversation(entryId),
+      runScaffoldGepaOptimization: (opts) => agent.runScaffoldGepaOptimization(opts),
+      send: (text) => agent.send(text, crypto.randomUUID()),
     },
   };
 }
@@ -175,6 +185,7 @@ function cli(): SharedBackend {
     sql: rt.storage.sql,
     actor: rt.actor,
     files: rt.storage.vfs,
+    history: rt.stores.history,
     surface: {
       getReasoningEffort: async () => session.getReasoningEffort(),
       setReasoningEffort: async (effort) => session.setReasoningEffort(effort),
@@ -218,6 +229,9 @@ function cli(): SharedBackend {
       showRefinement: (requestId, routeIndex) => session.showRefinement(requestId, routeIndex),
       requestRefinement: (opts) => session.requestRefinement(opts),
       decideRefinement: (input) => session.decideRefinement(input),
+      revertConversation: (entryId) => session.revertConversation(entryId),
+      runScaffoldGepaOptimization: (opts) => session.runScaffoldGepaOptimization(opts),
+      send: async (text) => { await session.send(text); },
     },
   };
 }

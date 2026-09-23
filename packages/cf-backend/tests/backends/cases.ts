@@ -5,6 +5,7 @@
  */
 import type { SharedBackend } from './backend';
 import { CONFIG_PLANE_CASES } from './cases/config-plane';
+import { CONVERSATION_CASES } from './cases/conversation';
 import { EVOLUTION_CASES } from './cases/evolution';
 import { OWNER_DESK_CASES } from './cases/owner-desk';
 import { WORK_LEDGER_CASES } from './cases/work-ledger';
@@ -21,4 +22,5 @@ export const SHARED_CASES: readonly SharedCase[] = [
   ...OWNER_DESK_CASES,
   ...WORK_LEDGER_CASES,
   ...EVOLUTION_CASES,
+  ...CONVERSATION_CASES,
 ];
