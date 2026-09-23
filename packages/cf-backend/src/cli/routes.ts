@@ -386,8 +386,8 @@ export async function handleCliRequest<Id>(
   }
 
   if (path === '/devices' && method === 'POST') {
-    const body = await safeJson(request, DeviceRegistrationRequestSchema);
-    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label, body?.replaces);
+    const registration = await safeJson(request, DeviceRegistrationRequestSchema) ?? {};
+    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), registration.label, registration.replaces);
 
     return json({ body: { deviceId, token, userId: cli.userId, origin: url.origin } }, { status: 201 });
   }

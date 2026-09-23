@@ -21,7 +21,7 @@ import { insertSearchNode } from '../mcts/record-node';
 import { backpropagate } from '../mcts/backpropagation';
 import { readProposalCode } from '../execution/code-fence';
 import type { MctsSearchStore } from '../mcts/search-store';
-import { recordSwarmNode } from './swarm-resume';
+import { outcomeFacts, recordSwarmNode } from './swarm-resume';
 import { unavailable } from './swarm-setup';
 import type { Refusal } from '../obs/error';
 import type { Expansion, TreeNode } from './swarm-tree';
@@ -280,10 +280,7 @@ export async function judgeChild(input: {
   };
 }
 
-/**
- * Score, persist, backpropagate and rank one expansion: scorer outcome -> node record
- * -> selection row -> terminal state or ancestor reward -> best candidate.
- */
+/** One expansion, in order: scored, sealed on a breach, recorded, backpropagated, ranked. */
 interface ScoreExpansionInput {
   readonly expansion: Expansion;
   readonly siblings: readonly Expansion[];
@@ -369,28 +366,23 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
       + `${expansion.id}, so no number this run produced can be trusted: ${outcome.error}`);
   }
 
-  const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
-    ? outcome.measurement
-    : null;
+  const { breach, rank, ensemble, ...facts } = outcomeFacts(outcome);
+  const candidate: SwarmCandidate = { id: expansion.id, artifact: expansion.artifact, ...facts };
 
-  const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
-    ? outcome.score
-    : null;
+  // Seal first, so a sealed record always has its seal.
+  if (breach !== null) {
+    publication = { kind: 'sealed', breach };
 
-  const candidate: SwarmCandidate = {
-    id: expansion.id,
-    artifact: expansion.artifact,
-    measured: measurement,
-    pareto: outcome?.kind === 'pareto' ? outcome.evidence : null,
-    unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
-    incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
-    score,
-    witnessFound: outcome?.kind === 'sealed'
-      || outcome?.kind === 'scored'
-      || outcome?.kind === 'unmeasurable'
-      ? outcome.witnessFound ?? null
-      : null,
-  };
+    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach, at: Date.now() });
+    log.event('exploration.floor_breach', {
+      preset: resolved.preset,
+      metric: measured?.metric ?? '',
+      value: breach.measured.value,
+      floor: breach.floor.value,
+      margin: breach.margin,
+      hypotheses: breach.hypotheses.join(','),
+    });
+  }
 
   candidates.push(candidate);
   recordSwarmNode(sql, rt.actor, {
@@ -412,9 +404,9 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
   nodes.set(expansion.id, {
     id: expansion.id, parentId: expansion.parentId, depth: expansion.depth,
     artifact: expansion.artifact,
-    measurement,
-    score,
-    pareto: candidate.pareto,
+    measurement: facts.measured,
+    score: facts.score,
+    pareto: facts.pareto,
     proposal: expansion.proposal,
     proposalError: expansion.proposalError,
     granted: expansion.granted,
@@ -431,37 +423,18 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
     });
   }
 
-  if (outcome?.kind === 'sealed') {
-    publication = { kind: 'sealed', breach: outcome.breach };
-
-    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach: outcome.breach, at: Date.now() });
-    log.event('exploration.floor_breach', {
-      preset: resolved.preset,
-      metric: measured?.metric ?? '',
-      value: outcome.measurement.value,
-      floor: outcome.breach.floor.value,
-      margin: outcome.breach.margin,
-      hypotheses: outcome.breach.hypotheses.join(','),
-    });
+  if (ensemble > 0) {
+    state.ensembles.push(ensemble);
+    searchLedger.observeJudgeEnsemble(rootId, ensemble);
   }
 
-  if (outcome?.kind === 'judged' && outcome.ensemble > 0) {
-    state.ensembles.push(outcome.ensemble);
-    searchLedger.observeJudgeEnsemble(rootId, outcome.ensemble);
-  }
-
-  if (score !== null) {
-    backpropagate(sql, rt.actor, expansion.id, score);
+  if (facts.score !== null) {
+    backpropagate(sql, rt.actor, expansion.id, facts.score);
   } else if (outcome && outcome.kind !== 'pareto') {
-    const status = outcome.kind === 'sealed' ? 'terminal' : 'failed';
+    const status = breach === null ? 'failed' : 'terminal';
     void sql`UPDATE search_nodes SET status = ${status}
       WHERE actor_id = ${rt.actor.actorId} AND id = ${expansion.id}`;
   }
-
-  let rank: number | null = null;
-
-  if (outcome?.kind === 'scored') rank = outcome.measurement.value;
-  else if (outcome?.kind === 'judged') rank = outcome.score;
 
   if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
     best = candidate;

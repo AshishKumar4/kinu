@@ -937,6 +937,20 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(unsealed.result.publication.state.kind).toBe('open');
     expect(unsealed.result.report.records?.written).toBeGreaterThan(0);
   });
+
+  test('a node is recorded as sealed only once its seal is written', async () => {
+    // A re-entry trusts a sealed record to have its seal, so a failed seal write must leave none.
+    const { rt, db } = createTestRuntime();
+    db.exec(`CREATE TRIGGER refuse_seal BEFORE INSERT ON exploration_seals
+      BEGIN SELECT RAISE(ABORT, 'seal refused'); END`);
+
+    await expect(run({ depth: 1, branches: 2, proposeWidth: null, rt, floor: REFUTED_FLOOR }))
+      .rejects.toThrow('seal refused');
+
+    expect(rt.storage.sql`SELECT node_id FROM swarm_node_records
+      WHERE actor_id = ${rt.actor.actorId} AND json_extract(record_json, '$.outcome.kind') = 'sealed'`)
+      .toEqual([]);
+  });
 });
 
 // The swarm path reaches `mcts/evaluation.ts`'s judge ensemble. The pool derives from the request

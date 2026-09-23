@@ -24,6 +24,7 @@ import {
   type FloorBreach, type MeasuredValue, type ParetoAxis, type ParetoEvidence, type PublicationState,
 } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
+import type { SwarmCandidate } from './swarm';
 
 /**
  * What scoring one child produced. Declared here because the settled arms are the persisted row;
@@ -70,6 +71,29 @@ export type ChildOutcome =
 
 /** Every arm a node can be recorded under. */
 export type SettledChildOutcome = Exclude<ChildOutcome, { kind: 'instrument-faulted' }>;
+
+/** One reading of a recorded outcome for scoring, re-entry and harvest; sealed ranks nothing. */
+export function outcomeFacts(outcome: SettledChildOutcome | null): Omit<SwarmCandidate, 'id' | 'artifact'> & {
+  readonly breach: FloorBreach | null;
+  readonly rank: number | null;
+  readonly ensemble: number;
+} {
+  const score = outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null;
+
+  return {
+    measured: outcome?.kind === 'sealed' || outcome?.kind === 'scored' ? outcome.measurement : null,
+    pareto: outcome?.kind === 'pareto' ? outcome.evidence : null,
+    unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
+    incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
+    score,
+    witnessFound: outcome?.kind === 'sealed' || outcome?.kind === 'scored' || outcome?.kind === 'unmeasurable'
+      ? outcome.witnessFound ?? null
+      : null,
+    breach: outcome?.kind === 'sealed' ? outcome.breach : null,
+    rank: outcome?.kind === 'scored' ? outcome.measurement.value : score,
+    ensemble: outcome?.kind === 'judged' ? outcome.ensemble : 0,
+  };
+}
 
 /**
  * What the engine recorded about one node that `search_nodes` cannot answer. `aggregated` is the
@@ -538,18 +562,9 @@ export function harvestSwarm(deps: {
     const artifact = row.observation.trim();
 
     if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;
+    const { score, breach, witnessFound } = outcomeFacts(outcome);
     candidates.push({
-      nodeId: row.id,
-      depth: row.depth,
-      artifact,
-      score: outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null,
-      outcome: outcome?.kind ?? 'unrecorded',
-      breach: outcome?.kind === 'sealed' ? outcome.breach : null,
-      witnessFound: outcome?.kind === 'scored'
-        || outcome?.kind === 'sealed'
-        || outcome?.kind === 'unmeasurable'
-        ? outcome.witnessFound ?? null
-        : null,
+      nodeId: row.id, depth: row.depth, artifact, score, outcome: outcome?.kind ?? 'unrecorded', breach, witnessFound,
     });
   }
 
