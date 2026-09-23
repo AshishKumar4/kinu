@@ -117,7 +117,7 @@ export function normalizeDrivePath(raw: string): string {
   return `/${segments.join('/')}`;
 }
 
-/** `/skills`, `/blueprints` and the root are never renamed or deleted from the UI. */
+/** `/skills` and the root are never renamed or deleted from the UI. */
 function isReservedDrivePath(path: string): boolean {
   return path === '/' || DRIVE_RESERVED_DIRS.includes(path);
 }

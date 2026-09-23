@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { FileIcon } from "@phosphor-icons/react";
+import { tileBadge, tileWash } from "@/components/ui/cover";
 
 export type SlateArt = "coupons" | "perf" | "ledger" | "release" | "palette" | "issues" | "inbox" | "game";
 
@@ -280,12 +281,9 @@ const ART: Record<SlateArt, () => ReactNode> = {
 };
 
 function Cover({ hue, letter }: { hue: number; letter: string }) {
-  const tone = `oklch(62% 0.13 ${String(hue)}`;
-
   return (
-    <span className="absolute inset-0 flex items-center justify-center p-recessed" style={{ backgroundImage: `linear-gradient(180deg, ${tone} / 0.13), ${tone} / 0.02))` }}>
-      <span className="flex size-11 items-center justify-center rounded-xl text-lg font-semibold"
-        style={{ background: `${tone} / 0.2)`, color: `color-mix(in oklch, ${tone}) 55%, var(--c-text))` }}>
+    <span className="absolute inset-0 flex items-center justify-center p-recessed" style={tileWash(hue)}>
+      <span className="flex size-11 items-center justify-center rounded-xl text-lg font-semibold" style={tileBadge(hue)}>
         {letter}
       </span>
     </span>

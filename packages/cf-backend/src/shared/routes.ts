@@ -10,9 +10,8 @@ import {
   type LiveShareVisibility, LiveShareCreatedSchema,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
-import { forgetPublicShare, indexPublicShare, listPublicShares } from './public-index';
+import { forgetPublicShare, indexPublicShare } from './public-index';
 import type { AuthIdentity } from '../auth/session';
-import type { PublicShareRow } from '@kinu.run/core/control-plane';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { sharesGiven } from '../user/shares-given';
@@ -79,7 +78,6 @@ const PublishBody = v.object({
   version: v.string(),
   include: v.optional(v.array(v.string())),
   emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
-  public: v.optional(v.boolean()),
 });
 
 const ForkBody = v.union([
@@ -108,7 +106,7 @@ export async function handleSharedRequest(request: Request, env: Env, identity: 
 
   if (path === '/live' && request.method === 'POST') return shareLive(request, env, identity, owner);
 
-  if (path === '/live/revoke' && request.method === 'POST') return revokeLive(request, env, identity);
+  if (path === '/revoke' && request.method === 'POST') return revoke(request, env, identity);
 
   if (path === '/live/open' && request.method === 'POST') return openLive(request, env, identity);
 
@@ -119,7 +117,6 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId));
   const slates: OwnedSlate[] = [];
   const mine: SharedRow[] = [];
-  const named: string[] = [];
 
   for (const { workspace, shares } of await sharesGiven(env, owner, identity.userId)) {
     const owned = workspaceOwner(env, workspace);
@@ -137,7 +134,6 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
         id, kind: 'blueprint', share: share.id, title: reading.value.view.title, description: reading.value.view.description,
         createdAt: share.createdAt, bindings: reading.value.view.bindings.length, workspace, users: share.users,
       });
-      named.push(...share.users);
     }
 
     const live = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
@@ -159,7 +155,6 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
         createdAt: share.createdAt, bindings: share.grant.members.length, visibility: share.visibility,
         workspace, users: share.users,
       });
-      named.push(...share.users);
     }
 
     // A slate this workspace cannot read is left out: a tile that opens nothing is worse than none.
@@ -186,7 +181,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
         id: receipt.shareId, kind: 'live', share: receipt.shareId,
         title: live.value.title, description: live.value.description, createdAt: live.value.record.createdAt,
         bindings: live.value.record.grant.members.length, visibility: live.value.record.visibility,
-        workspace: receipt.workspace, owner: receipt.ownerEmail,
+        workspace: receipt.workspace, owner: receipt.ownerEmail, fork: live.value.record.grant.fork !== false,
       });
       continue;
     }
@@ -205,52 +200,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     });
   }
 
-  // Each index row is re-asked of its owner's object; a refusal drops it. "Known" is derived here and stored nowhere.
-  const known = new Set<string>(receipts.map((receipt) => receipt.ownerUserId));
-
-  for (const email of named) known.add(await deriveUserId(email));
-  const publicRows: SharedRow[] = [];
-  const knownRows: SharedRow[] = [];
-
-  for (const entry of await listPublicShares(env)) {
-    if (entry.ownerUserId === identity.userId) continue;
-    const row = await publicRow(env, entry);
-
-    if (row === null) continue;
-    publicRows.push(row);
-
-    if (known.has(entry.ownerUserId)) knownRows.push(row);
-  }
-
-  return { slates, mine, received, public: publicRows, known: knownRows };
-}
-
-async function publicRow(env: Env, entry: PublicShareRow): Promise<SharedRow | null> {
-  const object = workspaceOwner(env, entry.workspace);
-
-  if (entry.kind === 'live') {
-    const live = await object.readLiveShare(entry.shareId);
-
-    if (!live.ok || live.value.record.visibility !== 'public' || live.value.record.grant.fork === false) return null;
-
-    return {
-      id: entry.shareId, kind: 'live', share: entry.shareId, title: live.value.title, description: live.value.description,
-      createdAt: live.value.record.createdAt, bindings: live.value.record.grant.members.length, visibility: 'public',
-      workspace: entry.workspace, owner: entry.ownerEmail,
-    };
-  }
-
-  const reading = await object.readBlueprint(entry.shareId);
-
-  if (!reading.ok) return null;
-  const id = await mintBlueprintId(env, entry.workspace, entry.shareId);
-
-  if (id === null) return null;
-
-  return {
-    id, kind: 'blueprint', share: entry.shareId, title: reading.value.view.title, description: reading.value.view.description,
-    createdAt: reading.value.view.createdAt, bindings: reading.value.view.bindings.length, workspace: entry.workspace, owner: entry.ownerEmail,
-  };
+  return { slates, mine, received };
 }
 
 function slateRefusalStatus(reason: ErrorCode): number {
@@ -296,13 +246,6 @@ async function publish(request: Request, env: Env, identity: AuthIdentity, owner
       const recipient = env.UserDO.get(env.UserDO.idFromName(user.userId));
       await retryTransientDO('sharesReceived_add', () => recipient.sharesReceived_add(owner, receipt));
     }
-  }
-
-  if (body.public === true) {
-    await indexPublicShare(env, {
-      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
-      kind: 'blueprint', title: inspection.title, createdAt: share.createdAt,
-    });
   }
 
   return json({ body: { id, share: share.id, users, published: published.value } }, { status: 201 });
@@ -400,7 +343,8 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
   return json({ body: { share, url } }, { status: 201 });
 }
 
-async function revokeLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+/** A live share and a blueprint link revoke alike: the owner's object knows which it holds. */
+async function revoke(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, LiveIdBody);
 
   if (!body) return err(400, 'Body must be { workspace, share }');

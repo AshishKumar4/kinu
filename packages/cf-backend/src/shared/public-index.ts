@@ -29,10 +29,3 @@ export async function forgetPublicShare(env: Env, key: PublicShareKey): Promise<
     await controlPlaneStub(env).publicShares_forget(await internalCaller(env), key);
   });
 }
-
-/** The index as it stands; empty where this deployment has no control plane. */
-export async function listPublicShares(env: Env): Promise<PublicShareRow[]> {
-  if (!hasControlPlane(env)) return [];
-
-  return controlPlaneStub(env).publicShares_list(await internalCaller(env));
-}

@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { CaretLeftIcon, EyeIcon, FilesIcon, FileTextIcon, FolderSimpleIcon, GitForkIcon, XIcon } from "@phosphor-icons/react";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { Segmented } from "@/components/ui/Segmented";
-import { TileMenu, type Person } from "./tiles";
+import { TileMenu } from "@/components/drive/DriveTiles";
+import type { Person } from "./tiles";
 
 function UserTurn({ text }: { text: string }) {
   return (
@@ -83,7 +84,7 @@ export function SharedWorkspaceView({ title, owner }: { title: string; owner: Pe
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b p-border pl-2 pr-3 sm:pl-3 sm:pr-4">
-        <Link to="/drive/shared" aria-label="Back to Shared"
+        <Link to="/shared" aria-label="Back to Shared"
           className="flex size-8 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
           <CaretLeftIcon size={16} />
         </Link>

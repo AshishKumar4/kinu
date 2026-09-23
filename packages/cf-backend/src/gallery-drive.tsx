@@ -1,8 +1,5 @@
-/**
- * Gallery Drive frames: `drive[&path=]`, `drive-empty`, `shared`, `shared-empty`.
- * The in-memory Mossaic tenant runs the same core Drive rules the Durable Object runs, so gates observe product rules.
- */
-import { lazy, Suspense, type ReactNode } from "react";
+/** Gallery Drive frames on an in-memory tenant running the core Drive rules; `/api/shared` answers a fixed library. */
+import { lazy, Suspense } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { Route, Routes } from "react-router-dom";
 import * as v from "valibot";
@@ -14,8 +11,6 @@ import {
 } from "@kinu.run/core";
 import { KinuError, renderThrownChain, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
-import type { SharedLibraryProps } from "@/components/shared/SharedLibrary";
-import type { WorkspaceEntry } from "@/lib/user-api";
 
 const DrivePage = lazy(() => import("@/pages/DrivePage"));
 
@@ -33,7 +28,6 @@ async function seededDrive(): Promise<MossaicVfs> {
   await write("/projects/ops/runbook.md", "# Runbook\n");
   await write("/notes/todo.md", "- write the skill\n");
   await write("/skills/review/SKILL.md", SKILL("review", "Review a pull request the way this team does"));
-  await drive.mkdir("/blueprints", { recursive: true });
 
   return drive;
 }
@@ -142,10 +136,42 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
   }
 }
 
-/** Route `/api/drive/*` to the seeded tenant; everything else to `next`. */
-export function installDriveFixture(seeded: boolean): void {
+const NOW = Date.now();
+
+const DESCRIPTION = "Reads the open issues of a repository, groups them by area, and writes a triage note every morning.";
+
+const LIBRARY: SharedLibrary = {
+  slates: [
+    { id: "issue-triage", title: "Issue triage", workspace: "checkout-fixes", bindings: 4, visibility: "public" },
+    { id: "lighthouse", title: "Landing perf report", workspace: "perf-audit", bindings: 1 },
+    { id: "standup", title: "Standup notes", workspace: "email-triage", bindings: 0 },
+  ],
+  mine: [
+    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [] },
+    { id: "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha", kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: DESCRIPTION, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
+  ],
+  received: [
+    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 2 * 3600e3, bindings: 2, visibility: "users", workspace: "sam-mail", owner: "sam@example.com", fork: true },
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 864e5, bindings: 2, workspace: "sam-mail", owner: "sam@example.com" },
+  ],
+};
+
+const EMPTY_LIBRARY: SharedLibrary = { slates: [], mine: [], received: [] };
+
+const FIXTURES = {
+  drive: { seeded: true, library: LIBRARY },
+  shared: { seeded: true, library: LIBRARY },
+  app: { seeded: true, library: LIBRARY },
+  "drive-empty": { seeded: false, library: EMPTY_LIBRARY },
+  "drive-recipient": { seeded: false, library: { ...EMPTY_LIBRARY, received: LIBRARY.received } },
+} satisfies Record<string, { seeded: boolean; library: SharedLibrary }>;
+
+export function installDriveFixture(frame: string): void {
+  const fixture = Object.entries(FIXTURES).find(([name]) => name === frame)?.[1];
+
+  if (fixture === undefined) return;
   const next = window.fetch.bind(window);
-  const drive = seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
+  const drive = fixture.seeded ? seededDrive() : Promise.resolve(mossaicVfs(fakeMossaic().tenant("gallery-owner")));
 
   window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -153,21 +179,26 @@ export function installDriveFixture(seeded: boolean): void {
 
     if (path === "/api/drive" || path.startsWith("/api/drive/")) return drive.then((tenant) => serveDrive(tenant, request));
 
+    if (path === "/api/shared" && request.method === "GET") {
+      return Promise.resolve(new Response(JSON.stringify(fixture.library), { headers: { "content-type": "application/json" } }));
+    }
+
     return next(input, init);
   }, { preconnect: next.preconnect });
 }
 
-export function DrivePageFrame({ library, workspaces }: { library?: SharedLibrary; workspaces?: readonly WorkspaceEntry[] }) {
-  const fixture: SharedLibraryProps | undefined = library === undefined ? undefined : { fixture: library, workspaces };
+const FALLBACK = <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;
 
+export function DrivePageFrame() {
   return (
     <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
+        <Suspense fallback={FALLBACK}>
           <Routes>
-            <Route path={APP_ROUTES.drive} element={<DrivePage library={fixture} />} />
-            <Route path={APP_ROUTES.driveFolder} element={<DrivePage library={fixture} />} />
+            <Route path={APP_ROUTES.drive} element={<DrivePage tab="mine" />} />
+            <Route path={APP_ROUTES.driveFolder} element={<DrivePage tab="mine" />} />
+            <Route path={APP_ROUTES.shared} element={<DrivePage tab="shared" />} />
           </Routes>
         </Suspense>
       </main>
@@ -175,11 +206,6 @@ export function DrivePageFrame({ library, workspaces }: { library?: SharedLibrar
   );
 }
 
-export function DriveRoute({ children }: { children?: ReactNode }) {
-  return (
-    <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
-      <DrivePage />
-      {children}
-    </Suspense>
-  );
+export function DriveRoute({ tab }: { tab: "mine" | "shared" }) {
+  return <Suspense fallback={FALLBACK}><DrivePage tab={tab} /></Suspense>;
 }

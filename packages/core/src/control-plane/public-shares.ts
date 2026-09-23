@@ -1,6 +1,7 @@
 /**
  * The public share index. A projection, never an authority: visibility lives on
- * the owner's share row and every open re-checks it.
+ * the owner's share row, so a reader must re-check each row against it. Written
+ * and forgotten today; the public gallery that reads it is later work.
  */
 import * as v from 'valibot';
 import type { ControlPlaneSql } from './sql';
@@ -38,11 +39,6 @@ export interface PublicShareKey {
   readonly shareId: string;
 }
 
-const StoredRow = v.object({
-  owner_user_id: v.string(), owner_email: v.string(), workspace: v.string(), share_id: v.string(),
-  kind: v.picklist(['blueprint', 'live']), title: v.string(), created_at: v.number(),
-});
-
 /** Upsert one row; the title and the owner's email follow the latest write. */
 export function indexPublicShare(sql: ControlPlaneSql, row: PublicShareRow): void {
   sql.exec(
@@ -59,17 +55,4 @@ export function forgetPublicShare(sql: ControlPlaneSql, key: PublicShareKey): vo
     'DELETE FROM cp_public_shares WHERE owner_user_id = ? AND workspace = ? AND share_id = ?',
     key.ownerUserId, key.workspace, key.shareId,
   );
-}
-
-/** Newest first; readers verify each row against its owner. */
-export function listPublicShares(sql: ControlPlaneSql, limit = 200): PublicShareRow[] {
-  return sql.exec('SELECT * FROM cp_public_shares ORDER BY created_at DESC, share_id LIMIT ?', limit).toArray()
-    .map((raw) => {
-      const row = v.parse(StoredRow, raw);
-
-      return {
-        ownerUserId: row.owner_user_id, ownerEmail: row.owner_email, workspace: row.workspace,
-        shareId: row.share_id, kind: row.kind, title: row.title, createdAt: row.created_at,
-      };
-    });
 }

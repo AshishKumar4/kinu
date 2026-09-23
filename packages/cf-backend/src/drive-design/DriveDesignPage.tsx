@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
-  AppWindowIcon, ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon,
+  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon,
   FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, GitForkIcon, HardDrivesIcon, PencilSimpleIcon, PlusIcon,
-  ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersThreeIcon, XIcon,
+  ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, XIcon,
 } from "@phosphor-icons/react";
-import { Button } from "@cloudflare/kumo";
+import * as v from "valibot";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { PreviewPicture, SkillPicture, type Preview } from "./previews";
 import {
-  AccessGlyph, fileIcon, FOLDER_ICON, FolderTile, GRID, KIND, LIST, SKILLS_ICON, SLATE_ICON, Tile,
-  type Access, type MenuItem, type Person, type ShareKind,
-} from "./tiles";
+  fileIcon, FOLDER_ICON, FolderTile, GRID, SKILLS_ICON, SLATE_ICON, Tile, type MenuItem,
+} from "@/components/drive/DriveTiles";
+import { AccessGlyph, KIND, LIST, type Access, type Person, type ShareKind } from "./tiles";
 import { namedPeople, ShareDialog, StopSharingDialog, type ReachGroup, type SharePane, type ShareSubject } from "./ShareDialog";
 
 export interface SlateItem {
@@ -63,13 +63,17 @@ export type Dialog =
   | { readonly kind: "share"; readonly subject: ShareSubject; readonly pane: SharePane; readonly accessOpen?: boolean }
   | { readonly kind: "stop"; readonly title: string; readonly who: string };
 
+export type DriveTab = "mine" | "shared";
+
 export const SKILLS_FOLDER = "/skills";
 
-type Place = "slates" | "files" | "shared";
+const TAB_LABEL: Record<DriveTab, string> = { mine: "My stuff", shared: "Shared" };
 
-const PLACE_LABEL: Record<Place, string> = { slates: "Slates", files: "Files", shared: "Shared" };
+const TAB_HREF: Record<DriveTab, string> = { mine: "/drive", shared: "/shared" };
 
 const SHARE_PANE: Record<ShareKind, SharePane> = { live: "live", blueprint: "blueprint", workspace: "workspace" };
+
+const ChosenState = v.object({ chosen: v.literal(true) });
 
 function entriesOf(data: DriveData, folder: string): readonly DriveEntry[] {
   const entries = data.folders[folder] ?? [];
@@ -81,25 +85,16 @@ function entriesOf(data: DriveData, folder: string): readonly DriveEntry[] {
   return entries.filter((entry) => !(entry.kind === "folder" && entry.name === "skills" && skills.length === 0));
 }
 
-function placesOf(data: DriveData): Place[] {
-  const places: Place[] = [];
-
-  if (data.slates.length > 0) places.push("slates");
-  places.push("files");
-
-  if (data.received.length + data.given.length > 0) places.push("shared");
-
-  return places;
+function blueprintsOf(data: DriveData): readonly GivenItem[] {
+  return data.given.filter((item) => item.kind === "blueprint");
 }
 
-function landingPlace(data: DriveData): Place {
-  if (data.slates.length > 0) return "slates";
+function mineIsEmpty(data: DriveData): boolean {
+  return data.slates.length === 0 && blueprintsOf(data).length === 0 && entriesOf(data, "/").length === 0;
+}
 
-  if (entriesOf(data, "/").length > 0) return "files";
-
-  if (data.received.length + data.given.length > 0) return "shared";
-
-  return "files";
+function sharesAnything(data: DriveData): boolean {
+  return data.received.length + data.given.length > 0;
 }
 
 function joinPath(folder: string, name: string): string {
@@ -110,6 +105,10 @@ function folderLabel(path: string): string {
   if (path === SKILLS_FOLDER) return "Skills";
 
   return path.split("/").at(-1) ?? path;
+}
+
+function folderHref(path: string): string {
+  return path === "/" ? "/drive" : `/drive${path}`;
 }
 
 function accessLabel(access: Access): string {
@@ -133,118 +132,25 @@ export function slateSubject(slate: SlateItem, owner: Person): ShareSubject {
   };
 }
 
-const PLACE_ICON: Record<Place, ReactNode> = {
-  slates: <AppWindowIcon size={16} />,
-  files: <FolderSimpleIcon size={16} />,
-  shared: <UsersThreeIcon size={16} />,
-};
-
-const PLACE_ROW = "flex items-center gap-2.5 rounded-lg py-[7px] pl-2.5 pr-2 p-t-control transition-colors";
-
-const ROW_ON = "bg-[color-mix(in_srgb,var(--c-text)_8%,transparent)]";
-
-const ROW_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_5%,transparent)]";
-
-function placeHref(place: Place): string {
-  return `/drive/${place}`;
-}
-
-function folderHref(path: string): string {
-  return path === "/" ? "/drive/files" : `/drive/files${path}`;
-}
-
-function FolderTree({ data, parent, current, depth }: { data: DriveData; parent: string; current: string; depth: number }) {
-  const children = entriesOf(data, parent).filter((entry) => entry.kind === "folder");
-
-  if (children.length === 0) return null;
-
-  return (
-    <ul>
-      {children.map((child) => {
-        const path = joinPath(parent, child.name);
-        const active = path === current;
-        const open = current === path || current.startsWith(`${path}/`);
-        const hasChildren = entriesOf(data, path).some((entry) => entry.kind === "folder");
-        const skills = path === SKILLS_FOLDER;
-
-        return (
-          <li key={path}>
-            <Link to={folderHref(path)} style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
-              className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${active ? `${ROW_ON} font-medium p-text` : `p-text-2 ${ROW_HOVER}`}`}>
-              <span className="flex w-3 shrink-0 justify-center p-text-4">
-                {hasChildren && (open ? <CaretDownIcon size={10} weight="bold" /> : <CaretRightIcon size={10} weight="bold" />)}
-              </span>
-              {skills
-                ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
-                : <FolderSimpleIcon size={15} weight="fill" className="shrink-0 p-info" />}
-              <span className="truncate">{folderLabel(path)}</span>
-            </Link>
-            {open && hasChildren && <FolderTree data={data} parent={path} current={current} depth={depth + 1} />}
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 function NewDot() {
   return <span className="size-1.5 shrink-0 rounded-full p-dot-accent" title="Something new" />;
 }
 
-function DriveColumn({ data, places, place, folder }: { data: DriveData; places: readonly Place[]; place: Place; folder: string }) {
-  const unseen = data.received.some((item) => item.unseen);
-
+function TabStrip({ tab, unseen }: { tab: DriveTab; unseen: boolean }) {
   return (
-    <aside aria-label="Drive" className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
-      <div className="flex h-8 items-center gap-2.5 px-2.5">
-        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-        <h1 className="p-display text-2xl">Drive</h1>
-      </div>
-      <nav aria-label="Drive places" className="mt-6 space-y-0.5">
-        {places.map((each) => {
-          const active = each === place;
-          const here = active && (each !== "files" || folder === "/");
-          let tone = `p-text-2 ${ROW_HOVER}`;
-
-          if (here) tone = `${ROW_ON} p-text`;
-          else if (active) tone = `p-text ${ROW_HOVER}`;
-
-          return (
-            <div key={each}>
-              <Link to={placeHref(each)} aria-current={here ? "page" : undefined} className={`${PLACE_ROW} ${tone}`}>
-                <span className={`flex shrink-0 ${active ? "p-accent" : "p-text-3"}`}>{PLACE_ICON[each]}</span>
-                <span className="flex-1">{PLACE_LABEL[each]}</span>
-                {each === "shared" && unseen && !active && <NewDot />}
-              </Link>
-              {each === "files" && active && (
-                <div className="mt-0.5 pl-3"><FolderTree data={data} parent="/" current={folder} depth={0} /></div>
-              )}
-            </div>
-          );
-        })}
-      </nav>
-    </aside>
-  );
-}
-
-function PlaceStrip({ data, places, place }: { data: DriveData; places: readonly Place[]; place: Place }) {
-  const navigate = useNavigate();
-  const unseen = data.received.some((item) => item.unseen);
-
-  return (
-    <div role="tablist" aria-label="Drive places" className="flex w-fit items-center gap-0.5 rounded-lg p-recessed p-0.5">
-      {places.map((each) => {
-        const selected = each === place;
+    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-lg p-recessed p-0.5">
+      {(["mine", "shared"] as const).map((each) => {
+        const selected = each === tab;
 
         return (
-          <button key={each} type="button" role="tab" aria-selected={selected} onClick={() => void navigate(placeHref(each))}
-            className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 p-t-control${selected ? " p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : " p-text-3 hover:p-text"}`}>
-            {PLACE_LABEL[each]}
+          <Link key={each} to={TAB_HREF[each]} state={{ chosen: true }} aria-current={selected ? "page" : undefined}
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3.5 py-1.5 p-t-control${selected ? " p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : " p-text-3 hover:p-text"}`}>
+            {TAB_LABEL[each]}
             {each === "shared" && unseen && !selected && <NewDot />}
-          </button>
+          </Link>
         );
       })}
-    </div>
+    </nav>
   );
 }
 
@@ -288,7 +194,7 @@ function Crumbs({ folder }: { folder: string }) {
 
   return (
     <nav aria-label="Folder" className="flex min-w-0 items-center gap-1.5">
-      <Link to={folderHref("/")} className="shrink-0 p-text-3 transition-colors hover:p-text">Files</Link>
+      <Link to={folderHref("/")} state={{ chosen: true }} className="shrink-0 p-text-3 transition-colors hover:p-text">My stuff</Link>
       {parts.map((_, index) => {
         const path = `/${parts.slice(0, index + 1).join("/")}`;
         const last = index === parts.length - 1;
@@ -306,36 +212,22 @@ function Crumbs({ folder }: { folder: string }) {
   );
 }
 
-function EmptyState({ icon, title, body, children }: { icon: ReactNode; title: string; body: ReactNode; children?: ReactNode }) {
+function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: ReactNode }) {
   return (
     <div data-design-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
       <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">{icon}</span>
       <h2 className="mt-5 p-heading text-[19px] p-text">{title}</h2>
       <p className="mt-2 max-w-[26rem] p-row-text p-text-3">{body}</p>
-      {children !== undefined && <div className="mt-6 flex flex-wrap justify-center gap-2">{children}</div>}
     </div>
   );
 }
 
-function SlatesPlace({ data, onOpen, onShare, menuFor }: {
-  data: DriveData;
-  onOpen: (what: string) => void;
-  onShare: (subject: ShareSubject) => void;
-  menuFor: string | null;
-}) {
+function Section({ label, titled = true, children }: { label: string; titled?: boolean; children: ReactNode }) {
   return (
-    <ul className={GRID}>
-      {data.slates.map((slate: SlateItem) => (
-        <Tile key={slate.id} title={slate.title} picture={<PreviewPicture preview={slate.preview} />} icon={SLATE_ICON}
-          onOpen={() => onOpen(`Opens ${slate.title} in ${slate.workspaceTitle}.`)} menuOpen={menuFor === slate.id}
-          meta={<><span className="truncate">{slate.workspaceTitle}</span><AccessGlyph access={slate.access} /></>}
-          menu={[
-            { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => onOpen(`Opens ${slate.title} in ${slate.workspaceTitle}.`) },
-            { label: "Share…", icon: <ShareNetworkIcon size={15} />, onSelect: () => onShare(slateSubject(slate, data.me)) },
-            { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => onOpen(`Opens ${slate.workspaceTitle}.`) },
-          ]} />
-      ))}
-    </ul>
+    <section aria-label={label}>
+      {titled && <h2 className="mb-2.5 p-row-text font-medium p-text-2">{label}</h2>}
+      {children}
+    </section>
   );
 }
 
@@ -353,24 +245,101 @@ function entryMenu(entry: DriveEntry, onOpen: (what: string) => void, reserved: 
   ];
 }
 
-function FilesPlace({ data, folder, onOpen }: { data: DriveData; folder: string; onOpen: (what: string) => void }) {
+function FileDrawer({ entry, onClose }: { entry: Extract<DriveEntry, { kind: "file" }>; onClose: () => void }) {
+  return (
+    <>
+      <div aria-hidden="true" className="p-scrim fixed inset-0 z-40" onClick={onClose} />
+      <aside aria-label={entry.name} className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l p-border p-bg p-shadow-overlay animate-fade-in sm:w-[min(640px,92vw)]">
+        <div className="flex shrink-0 items-center gap-2 border-b p-border px-3 py-2">
+          <span className="flex shrink-0 p-text-3">{fileIcon(entry.name)}</span>
+          <span className="truncate font-mono text-xs p-text">{entry.name}</span>
+          <span className="shrink-0 p-meta p-text-4">{entry.size}</span>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <button type="button" className="flex items-center gap-1 p-1 p-t-control p-text-2 hover:p-text"><DownloadSimpleIcon size={12} />Download</button>
+            <button type="button" onClick={onClose} aria-label="Close preview" className="p-1 p-text-3 hover:p-text"><XIcon size={13} /></button>
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-5">
+          <div className="relative mx-auto aspect-[16/10] w-full max-w-[560px] overflow-hidden rounded-lg border p-border">
+            <PreviewPicture preview={entry.preview} />
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function MyStuff({ data, folder, onOpen, onShare, menuFor }: {
+  data: DriveData;
+  folder: string;
+  onOpen: (what: string) => void;
+  onShare: (subject: ShareSubject) => void;
+  menuFor: string | null;
+}) {
+  const [search, setSearch] = useSearchParams();
   const entries = entriesOf(data, folder);
   const folders = entries.filter((entry) => entry.kind === "folder");
   const rest = entries.filter((entry) => entry.kind !== "folder");
-  const both = folders.length > 0 && rest.length > 0;
+  const root = folder === "/";
+  const slates = root ? data.slates : [];
+  const blueprints = root ? blueprintsOf(data) : [];
+  const opened = rest.find((entry) => entry.kind === "file" && entry.name === search.get("file"));
 
-  if (entries.length === 0) {
-    return (
-      <EmptyState icon={<FolderSimpleIcon size={26} />} title={folder === "/" ? "No files yet" : "This folder is empty"}
-        body="Drop files here to add them, or use New." />
-    );
+  const openFile = (name: string): void => {
+    const next = new URLSearchParams(search);
+    next.set("file", name);
+    setSearch(next);
+  };
+
+  const closeFile = (): void => {
+    const next = new URLSearchParams(search);
+    next.delete("file");
+    setSearch(next);
+  };
+
+  if (entries.length === 0 && slates.length === 0 && blueprints.length === 0) {
+    return root
+      ? <EmptyState icon={<FolderSimpleIcon size={26} />} title="Nothing here yet" body="Drop files here, or use New. Slates your workspaces build show up here too." />
+      : <EmptyState icon={<FolderSimpleIcon size={26} />} title="This folder is empty" body="Drop files here, or use New." />;
   }
 
+  const titled = [slates, blueprints, folders, rest].filter((group) => group.length > 0).length > 1;
+
   return (
-    <div className="space-y-7">
+    <div className="space-y-8">
+      {slates.length > 0 && (
+        <Section label="Slates" titled={titled}>
+          <ul className={GRID}>
+            {slates.map((slate: SlateItem) => (
+              <Tile key={slate.id} title={slate.title} picture={<PreviewPicture preview={slate.preview} />} icon={SLATE_ICON}
+                onOpen={() => onOpen(`Opens ${slate.title} in ${slate.workspaceTitle}.`)} menuOpen={menuFor === slate.id}
+                meta={<><span className="truncate">{slate.workspaceTitle}</span><AccessGlyph access={slate.access} /></>}
+                menu={[
+                  { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => onOpen(`Opens ${slate.title} in ${slate.workspaceTitle}.`) },
+                  { label: "Share…", icon: <ShareNetworkIcon size={15} />, onSelect: () => onShare(slateSubject(slate, data.me)) },
+                  { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => onOpen(`Opens ${slate.workspaceTitle}.`) },
+                ]} />
+            ))}
+          </ul>
+        </Section>
+      )}
+      {blueprints.length > 0 && (
+        <Section label="Blueprints" titled={titled}>
+          <ul className={GRID}>
+            {blueprints.map((item) => (
+              <Tile key={item.id} title={item.title} picture={<PreviewPicture preview={item.preview} />} icon={KIND.blueprint.icon}
+                onOpen={() => onOpen(`Opens the ${item.title} blueprint page.`)}
+                meta={<span className="truncate">{accessLabel(item.access)}</span>}
+                menu={[
+                  { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => onOpen(`Opens the ${item.title} blueprint page.`) },
+                  { label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => onOpen("Copies the link.") },
+                ]} />
+            ))}
+          </ul>
+        </Section>
+      )}
       {folders.length > 0 && (
-        <section aria-label="Folders">
-          {both && <h3 className="mb-2.5 p-meta font-medium p-text-3">Folders</h3>}
+        <Section label="Folders" titled={titled}>
           <ul className={GRID}>
             {folders.map((entry) => {
               const path = joinPath(folder, entry.name);
@@ -382,11 +351,10 @@ function FilesPlace({ data, folder, onOpen }: { data: DriveData; folder: string;
               );
             })}
           </ul>
-        </section>
+        </Section>
       )}
       {rest.length > 0 && (
-        <section aria-label="Files">
-          {both && <h3 className="mb-2.5 p-meta font-medium p-text-3">Files</h3>}
+        <Section label={folder === SKILLS_FOLDER ? "Skills" : "Files"} titled={titled}>
           <ul className={GRID}>
             {rest.map((entry) => entry.kind === "skill"
               ? (
@@ -398,14 +366,15 @@ function FilesPlace({ data, folder, onOpen }: { data: DriveData; folder: string;
               : entry.kind === "file" && (
                 <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} picture={<PreviewPicture preview={entry.preview} />}
                   meta={<span className="truncate">{entry.preview.kind === "upload" ? `Uploading · ${entry.size}` : `${entry.size} · ${entry.updated}`}</span>}
-                  onOpen={() => onOpen(`Opens a preview of ${entry.name}.`)}
+                  onOpen={() => { if (entry.preview.kind !== "upload") openFile(entry.name); }}
                   menu={entry.preview.kind === "upload"
                     ? [{ label: "Cancel upload", icon: <XIcon size={15} />, danger: true, onSelect: () => onOpen("Stops the upload.") }]
-                    : entryMenu(entry, onOpen, false)} />
+                    : [{ label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => openFile(entry.name) }, ...entryMenu(entry, onOpen, false)]} />
               ))}
           </ul>
-        </section>
+        </Section>
       )}
+      {opened?.kind === "file" && <FileDrawer entry={opened} onClose={closeFile} />}
     </div>
   );
 }
@@ -440,10 +409,9 @@ function SharedPlace({ data, onOpen, onDialog, menuFor }: {
   };
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-8">
       {data.received.length > 0 && (
-        <section aria-label="Shared with you">
-          <h3 className="mb-3 p-heading text-[15px] p-text">Shared with you</h3>
+        <Section label="Shared with you">
           <ul className={GRID}>
             {data.received.map((item) => (
               <Tile key={item.id} title={item.title} picture={<PreviewPicture preview={item.preview} />} icon={KIND[item.kind].icon}
@@ -456,11 +424,10 @@ function SharedPlace({ data, onOpen, onDialog, menuFor }: {
                 ]} />
             ))}
           </ul>
-        </section>
+        </Section>
       )}
       {data.given.length > 0 && (
-        <section aria-label="Shared by you">
-          <h3 className="mb-3 p-heading text-[15px] p-text">Shared by you</h3>
+        <Section label="Shared by you">
           <ul className={GRID}>
             {data.given.map((item) => (
               <Tile key={item.id} title={item.title} picture={<PreviewPicture preview={item.preview} />} icon={KIND[item.kind].icon}
@@ -473,15 +440,12 @@ function SharedPlace({ data, onOpen, onDialog, menuFor }: {
                   { label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => onOpen("Copies the link.") },
                   {
                     label: "Stop sharing", icon: <ProhibitIcon size={15} />, danger: true, apart: true,
-                    onSelect: () => onDialog({
-                      kind: "stop", title: item.title,
-                      who: whoLoses(item.access),
-                    }),
+                    onSelect: () => onDialog({ kind: "stop", title: item.title, who: whoLoses(item.access) }),
                   },
                 ]} />
             ))}
           </ul>
-        </section>
+        </Section>
       )}
     </div>
   );
@@ -501,38 +465,39 @@ function Toast({ text, onDone }: { text: string; onDone: () => void }) {
   );
 }
 
-export function DriveDesignPage({ data, initialDialog, menuFor, dropping = false }: {
+export function DriveDesignPage({ tab, data, initialDialog, menuFor, dropping = false, autoLanding = true }: {
+  tab: DriveTab;
   data: DriveData;
   initialDialog: Dialog | null;
   menuFor: string | null;
   dropping?: boolean;
+  autoLanding?: boolean;
 }) {
-  const params = useParams();
-  const places = placesOf(data);
-  const place = places.find((each) => each === params.place);
-  const splat = params["*"] ?? "";
+  const splat = useParams()["*"] ?? "";
+  const location = useLocation();
   const folder = splat === "" ? "/" : `/${splat.replace(/\/+$/u, "")}`;
   const [dialog, setDialog] = useState<Dialog | null>(initialDialog);
   const [toast, setToast] = useState<string | null>(null);
   const clearToast = useRef(() => setToast(null)).current;
+  const shared = sharesAnything(data);
+  const chosen = !autoLanding || v.safeParse(ChosenState, location.state).success;
 
-  if (place === undefined) return <Navigate to={placeHref(landingPlace(data))} replace />;
+  if (tab === "shared" && !shared) return <Navigate to="/drive" replace />;
 
-  const column = places.length > 1;
-  const inSkills = place === "files" && folder === SKILLS_FOLDER;
+  if (tab === "mine" && folder === "/" && !chosen && mineIsEmpty(data) && shared) return <Navigate to="/shared" replace />;
+
   const onOpen = (what: string): void => setToast(what);
-
-  const crumbs = place === "files" && folder !== "/" ? <Crumbs folder={folder} /> : null;
+  const inSkills = tab === "mine" && folder === SKILLS_FOLDER;
+  const emptyDrive = mineIsEmpty(data) && !shared;
+  const unseen = data.received.some((item) => item.unseen);
 
   let subtitle: ReactNode = null;
 
   if (inSkills) subtitle = "Every workspace you own uses these skills.";
-  else if (place === "files" && folder === "/") subtitle = <>Every workspace you own sees these files at <span className="font-mono p-text-2">/shared</span>.</>;
-
-  const toolbar = crumbs !== null || subtitle !== null;
+  else if (tab === "mine" && folder === "/" && !mineIsEmpty(data)) subtitle = <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
 
   const action = (compact: boolean): ReactNode => {
-    if (place !== "files") return null;
+    if (tab !== "mine") return null;
 
     if (inSkills) {
       return compact
@@ -540,59 +505,45 @@ export function DriveDesignPage({ data, initialDialog, menuFor, dropping = false
         : <FilledButton className="h-8 gap-1.5 px-3 text-sm" onClick={() => onOpen("Opens the new-skill dialog.")}><PlusIcon size={13} weight="bold" /> New skill</FilledButton>;
     }
 
-    return <NewMenu compact={compact} onPick={(what) => onOpen(`${what}: opens the picker for ${folderLabel(folder) === "" ? "Files" : folderLabel(folder)}.`)} />;
+    return <NewMenu compact={compact} onPick={(what) => onOpen(`${what}: opens the picker for ${folder === "/" ? "My stuff" : folderLabel(folder)}.`)} />;
   };
 
-  const emptyDrive = !column && entriesOf(data, "/").length === 0;
-
   return (
-    <div className="flex h-full min-h-0">
-      {column && <DriveColumn data={data} places={places} place={place} folder={place === "files" ? folder : ""} />}
-      <div className="min-w-0 flex-1 overflow-y-auto">
-        <div className="px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
-          <header className={`flex items-center gap-3 ${column ? "lg:hidden" : ""}`}>
-            <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-            <h1 className="p-display text-2xl">Drive</h1>
-            {!emptyDrive && <div className={`ml-auto ${column ? "" : "lg:hidden"}`}>{action(true)}</div>}
-          </header>
-          {column && <div className="mt-4 lg:hidden"><PlaceStrip data={data} places={places} place={place} /></div>}
+    <div className="h-full min-h-0 overflow-y-auto">
+      <div className="mx-auto max-w-5xl px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
+        <header className="flex items-center gap-3">
+          <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
+          <h1 className="p-display text-2xl">Drive</h1>
+          <div className="ml-auto">
+            <span className="sm:hidden">{action(true)}</span>
+            <span className="hidden sm:inline">{action(false)}</span>
+          </div>
+        </header>
 
-          {emptyDrive ? (
-            <EmptyState icon={<HardDrivesIcon size={26} />} title="Your Drive is empty"
-              body={<>Files you add here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>. Slates your workspaces build, and anything people share with you, show up here too.</>}>
-              <FilledButton className="h-9 gap-1.5 px-4 text-sm" onClick={() => onOpen("Opens the file picker.")}><UploadSimpleIcon size={14} weight="bold" /> Upload files</FilledButton>
-              <Button variant="secondary" size="sm" className="!h-9 px-4" icon={<FolderPlusIcon size={14} />} onClick={() => onOpen("Asks for a folder name.")}>New folder</Button>
-            </EmptyState>
-          ) : (
-            <>
-              {toolbar && (
-                <div className={`mt-5 flex items-start gap-4 ${column ? "lg:mt-0" : ""}`}>
-                  <div className="min-w-0 flex-1">
-                    {crumbs !== null && <h2 className="p-heading text-[15px] lg:text-[18px] lg:leading-8">{crumbs}</h2>}
-                    {subtitle !== null && <p className={crumbs === null ? "p-row-text p-text-3 lg:leading-8" : "mt-0.5 p-meta p-text-3"}>{subtitle}</p>}
-                  </div>
-                  <div className="hidden shrink-0 lg:block">{action(false)}</div>
+        {emptyDrive ? (
+          <EmptyState icon={<HardDrivesIcon size={26} />} title="Your Drive is empty"
+            body={<>Drop files here, or use New. Every workspace you own sees them at <span className="font-mono p-text-2">/shared</span>, and the slates your workspaces build show up here too.</>} />
+        ) : (
+          <>
+            {shared && <div className="mt-5"><TabStrip tab={tab} unseen={unseen} /></div>}
+            {tab === "mine" && folder !== "/" && <h2 className="mt-6 p-heading text-[15px] sm:text-[17px]"><Crumbs folder={folder} /></h2>}
+            {subtitle !== null && <p className={`p-meta p-text-3 ${folder === "/" ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
+            <div className="relative mt-6">
+              {tab === "mine" && (
+                <MyStuff data={data} folder={folder} onOpen={onOpen} menuFor={menuFor}
+                  onShare={(subject) => setDialog({ kind: "share", subject, pane: "live" })} />
+              )}
+              {tab === "shared" && <SharedPlace data={data} onOpen={onOpen} onDialog={setDialog} menuFor={menuFor} />}
+              {dropping && tab === "mine" && (
+                <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
+                  <span className="flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-sm font-semibold text-[var(--c-accent-on)] p-shadow-menu">
+                    <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {folder === "/" ? "My stuff" : folderLabel(folder)}
+                  </span>
                 </div>
               )}
-              <div className={toolbar || !column ? "mt-6" : "mt-6 lg:mt-0"}>
-                {place === "slates" && <SlatesPlace data={data} onOpen={onOpen} menuFor={menuFor} onShare={(subject) => setDialog({ kind: "share", subject, pane: "live" })} />}
-                {place === "files" && (
-                  <div className="relative">
-                    <FilesPlace data={data} folder={folder} onOpen={onOpen} />
-                    {dropping && (
-                      <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
-                        <span className="flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-sm font-semibold text-[var(--c-accent-on)] p-shadow-menu">
-                          <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {folder === "/" ? "Files" : folderLabel(folder)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {place === "shared" && <SharedPlace data={data} onOpen={onOpen} onDialog={setDialog} menuFor={menuFor} />}
-              </div>
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
 
       {dialog?.kind === "share" && (

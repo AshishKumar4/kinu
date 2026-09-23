@@ -62,7 +62,7 @@ export {
 } from './analytics-sql';
 
 export {
-  forgetPublicShare, indexPublicShare, listPublicShares, PublicShareRowSchema,
+  forgetPublicShare, indexPublicShare, PublicShareRowSchema,
   type PublicShareKey, type PublicShareRow,
 } from './public-shares';
 

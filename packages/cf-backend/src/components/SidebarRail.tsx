@@ -3,14 +3,14 @@
  * animates; each state's column has its own width behind `overflow-hidden`, so nothing reflows.
  */
 import { useState, type MouseEvent } from "react";
-import { Link, NavLink, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PlusIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
 
 import { useAccount } from "@/hooks/use-account";
 import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
 import Sidebar from "./Sidebar";
-import { PRIMARY_NAV } from "./nav";
+import { navActive, PRIMARY_NAV } from "./nav";
 
 const RAIL_KEY = "kinu:rail-open";
 
@@ -22,6 +22,7 @@ const LANE_ENTER_CLS = "motion-safe:animate-[fade-in_180ms_ease-out]";
 export function SidebarRail() {
   const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== "0");
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const profile = lastValue(useAccount().profile);
 
   const setOpen = (open: boolean) => {
@@ -58,11 +59,11 @@ export function SidebarRail() {
             <PlusIcon size={17} weight="bold" />
           </button>
           <nav aria-label="Primary" className="flex flex-col items-center gap-1 pt-1">
-            {PRIMARY_NAV.map(({ to, label, Icon, end }) => (
-              <NavLink key={to} to={to} end={end} aria-label={label} title={label}
-                className={({ isActive }) => `${RAIL_ICON_CLS} ${isActive ? "bg-[var(--c-elevated)] p-accent" : ""}`}>
-                <Icon size={17} />
-              </NavLink>
+            {PRIMARY_NAV.map((item) => (
+              <Link key={item.to} to={item.to} aria-label={item.label} title={item.label} aria-current={navActive(item, pathname) ? "page" : undefined}
+                className={`${RAIL_ICON_CLS} ${navActive(item, pathname) ? "bg-[var(--c-elevated)] p-accent" : ""}`}>
+                <item.Icon size={17} />
+              </Link>
             ))}
           </nav>
           <Link to="/user/settings" aria-label="Account settings" title="Account settings" className="mt-auto flex size-[26px] items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">

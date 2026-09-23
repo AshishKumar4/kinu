@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "@/components/layout";
 import {
-  DriveDesignPage, SKILLS_FOLDER, slateSubject, type Dialog, type DriveData, type DriveEntry, type GivenItem,
+  DriveDesignPage, SKILLS_FOLDER, slateSubject, type Dialog, type DriveData, type DriveEntry, type DriveTab, type GivenItem,
   type ReceivedItem, type SlateItem,
 } from "@/drive-design/DriveDesignPage";
 import type { ReachGroup } from "@/drive-design/ShareDialog";
@@ -207,10 +207,10 @@ export function driveDesignFrame() {
     document.documentElement.style.colorScheme = theme;
   }
 
-  const page = (
-    <DriveDesignPage data={Object.entries(DATA).find(([name]) => name === params.get("data"))?.[1] ?? FULL}
+  const page = (tab: DriveTab) => (
+    <DriveDesignPage tab={tab} data={Object.entries(DATA).find(([name]) => name === params.get("data"))?.[1] ?? FULL}
       initialDialog={Object.entries(DIALOGS).find(([name]) => name === params.get("dialog"))?.[1] ?? null}
-      menuFor={params.get("menu")} dropping={params.get("drop") === "1"} />
+      menuFor={params.get("menu")} dropping={params.get("drop") === "1"} autoLanding={params.get("chosen") !== "1"} />
   );
 
   return {
@@ -219,8 +219,8 @@ export function driveDesignFrame() {
       <>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/drive" element={page} />
-            <Route path="/drive/:place/*" element={page} />
+            <Route path="/drive/*" element={page("mine")} />
+            <Route path="/shared" element={page("shared")} />
             <Route path="/shared/workspace/:id" element={<SharedWorkspaceView title="Q3 launch plan" owner={LEE} />} />
             <Route path="*" element={<Navigate to="/drive" replace />} />
           </Route>
