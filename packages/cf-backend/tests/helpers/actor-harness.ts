@@ -4,7 +4,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
-import type { PlanReviewStore, SessionHistory } from '@kinu.run/core';
+import type { PlanReviewStore } from '@kinu.run/core';
 import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -19,7 +19,13 @@ import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn, RunEventRecorder } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, PendingSendStore, type KinuExtension } from '@kinu.run/core';
-import { createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError } from '@kinu.run/core/obs';
+import {
+  createParentWorkspaceVfs, openWorkspaceMainActor, SessionHistory, TerminalTransitions, type VFS,
+} from '@kinu.run/core';
+import { sqlOver } from '@kinu.run/test-utils';
+import {
+  createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
+} from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
 import {
@@ -45,7 +51,7 @@ import {
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
-import { platformGatewayEnv } from './platform-gateway';
+import { platformGatewayEnv, type StubbedAiBinding } from './platform-gateway';
 import {
   TerminalEffectInterrupt,
   type TerminalEffectName, type TerminalEffectPhase,
@@ -282,8 +288,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return shadowTrialPlan(this.scaffoldControl, messageId);
   }
 
-  /** The activation's wake-row reconcile, awaited; production detaches it. */
-  reconcileWakeRow(): Promise<void> { return this.reconcileTimerRow(); }
   observeAutoGepaCadence(): number { return this.config.getAutoGepaEveryNTurns(); }
   setAutoGepaCadence(turns: number): void { this.config.setAutoGepaEveryNTurns(turns); }
   /** One auto-title round-trip through `ActorAgent.suggestTitle`. */
@@ -897,12 +901,99 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 }
 
+/** The workspace's files as a fork reaches them: core's parent adapter over the object's public
+ *  workspace RPC, so a suite reads and writes the object's own file plane through a door it has. */
+export function workspaceFiles(agent: HarnessOrchestratorAgent): VFS {
+  return createParentWorkspaceVfs({
+    read: (path) => agent.readWorkspaceFile(path),
+    write: (input) => agent.writeWorkspaceFile(input),
+    list: (path) => agent.listWorkspaceFiles(path),
+    stat: (path) => agent.statWorkspaceFile(path),
+    delete: (path) => agent.deleteWorkspaceFile(path),
+    exec: (command) => agent.execWorkspaceCommand(command),
+  });
+}
+
+/**
+ * Yields to the event loop, joining fibers each lap, until `holds()` reads true in what the object
+ * stored. Detached work is observed by its effect, the way an operator would see it; a condition
+ * that never holds fails by name after 1000 laps rather than hanging.
+ */
+export async function until(holds: () => boolean, what: string): Promise<void> {
+  for (let lap = 0; lap < 1000; lap++) {
+    if (holds()) {
+      await joinHarnessFibers();
+
+      return;
+    }
+
+    await joinHarnessFibers();
+    await Bun.sleep(0);
+  }
+
+  throw new Error(`${what}: never held after 1000 event-loop laps`);
+}
+
+/**
+ * Core's terminal ledger over the object's stored rows: a seed writes a claim the way a prior
+ * activation left it, and `begin` on a closed sequence answers `done` without writing. The object's
+ * own instance is never reached.
+ */
+export function ledgerOver(db: Database): TerminalTransitions {
+  return new TerminalTransitions({
+    actor: workspaceMainActor(db), sql: sqlOver(db), effects: {}, now: () => Date.now(),
+    scheduleRetry: async () => {},
+  });
+}
+
+/** The canonical conversation over the object's stored rows, for transcript a prior turn left. */
+export function historyOver(harness: ActorHarness<HarnessOrchestratorAgent>): SessionHistory {
+  return new SessionHistory({
+    sql: sqlOver(harness.db), actor: workspaceMainActor(harness.db), transactionSync: (write) => write(),
+    files: async () => ({ vfs: workspaceFiles(harness.agent), artifactDirectory: '/actor/.kinu/context' }),
+  });
+}
+
+/** A settled response's improvement-lanes effect ran: its row completed, or the whole terminal
+ *  sequence closed and pruned it. Other effects of the sequence may still be owed. */
+export function improvementLanesRan(db: Database, messageId: string): boolean {
+  const effect = db.query<{ n: number }, [string]>(
+    "SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_name = 'improvement_lanes' AND sequence_id LIKE ? AND status = 'completed'",
+  ).get(`%/${messageId}`)?.n === 1;
+
+  const closed = db.query<{ n: number }, [string]>(
+    'SELECT COUNT(*) AS n FROM tool_effect_claims WHERE normalized_call_id = ? AND result_json IS NOT NULL',
+  ).get(`terminal:response:${messageId}`)?.n === 1;
+
+  return effect || closed;
+}
+
+/** Loggers suites record with. A settle swaps in its own sink to catch close failures, and forwards to these. */
+const diagnosticTaps = new Set<Logger>();
+
+/** Records diagnostics into `logger` until the returned restore, across settles too. */
+export function tapDiagnostics(logger: Logger): () => void {
+  diagnosticTaps.add(logger);
+  const restore = setDiagnosticsSink(logger);
+
+  return () => {
+    diagnosticTaps.delete(logger);
+    restore();
+  };
+}
+
+/** The workspace's main actor as its durable identity rows name it, read through core's directory. */
+export function workspaceMainActor(db: Database): ActorHandle {
+  return openWorkspaceMainActor(sqlOver(db));
+}
+
 /** A candidate under trial, seeded under `runtime.actor`: the pointer is per-actor. */
-export function declareShadowCandidate(runtime: AgentRuntime): void {
-  runtime.actor.config.setShadowSampleRate(0.5);
-  void runtime.storage.sql`INSERT OR REPLACE INTO scaffold_versions
+export function declareShadowCandidate(db: Database): void {
+  const actor = workspaceMainActor(db);
+  actor.config.setShadowSampleRate(0.5);
+  void sqlOver(db)`INSERT OR REPLACE INTO scaffold_versions
     (actor_id, version, written_at, rationale, status)
-    VALUES (${runtime.actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
+    VALUES (${actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
 }
 
 /** An actor's stored naming state: the two rows `planWorkspaceTitle` decides from. */
@@ -1158,8 +1249,9 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
   const finish = async (parked: ParkedTurn, answer: ScriptedAnswer): Promise<SettledTurn> => {
     const closeFailures: string[] = [];
 
-    // A fresh console logger, never the `diagnostics` proxy: it forwards to this composite.
-    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), {
+    // A fresh console logger, never the `diagnostics` proxy: it forwards to this composite. A suite's
+    // tap still hears what the settle reports.
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), ...diagnosticTaps, {
       event: () => {},
       failure: (name, error) => {
         // The interrupted effect's cause, not the loop's wrapper.
@@ -1406,6 +1498,8 @@ export interface RecordedUserPlaneCalls {
   failWarm: Error | null;
   /** Set to make `userMcp_toolDescriptors` reject with this error; unset, the read is unreachable. */
   failDescriptors?: Error;
+  /** How many times the object asked for its tool descriptors. */
+  descriptorReads?: number;
   /** Set to make the egress-vault listing reject; unset, it answers empty. */
   failVault?: Error;
   /** The owner profile `getProfile` answers with. Null (no verified address) is
@@ -1420,6 +1514,8 @@ export interface HarnessActorWorld {
   userDO?: UserDO;
   workspace?: string;
   ownerUserId?: string;
+  /** The platform AI binding the gateway provider calls; a recording stub by default. */
+  aiGateway?: StubbedAiBinding;
 }
 
 /** The one read the instruction-trust authority performs against a parent. */
@@ -1445,7 +1541,7 @@ export function makeEnv(
       load: () => { throw new Error('harness LOADER: a dynamic worker is not loadable under bun'); },
     },
     // The platform gateway is the harness's model provider, over a recording AI binding.
-    ...platformGatewayEnv(),
+    ...platformGatewayEnv(world?.aiGateway),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails
@@ -1471,6 +1567,7 @@ export function makeEnv(
             return { servers: 1 };
           },
           userMcp_toolDescriptors: async (): Promise<never> => {
+            if (userPlane) userPlane.descriptorReads = (userPlane.descriptorReads ?? 0) + 1;
             throw userPlane?.failDescriptors
               ?? new Error('harness UserDO: userMcp_toolDescriptors is not reachable under bun');
           },

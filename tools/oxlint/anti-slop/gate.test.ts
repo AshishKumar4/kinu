@@ -17,6 +17,7 @@ const expectedRules = [
   "anti-slop/no-module-mocking",
   "anti-slop/no-near-duplicate-functions",
   "anti-slop/no-object-parameters",
+  "anti-slop/no-output-token-cap",
   "anti-slop/no-reduce-accumulator-copy",
   "anti-slop/no-reflect-apply",
   "anti-slop/no-reflect-get",

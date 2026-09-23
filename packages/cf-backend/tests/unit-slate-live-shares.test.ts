@@ -8,7 +8,9 @@ import {
   LiveShareRecordSchema, SlateCapabilityGraphSchema, ViewerRequestRecordSchema,
   type AgentRuntime, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
-import { orchestratorHarness, hostedSubordinateHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  orchestratorHarness, hostedSubordinateHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
+} from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
@@ -65,7 +67,7 @@ async function ownerWorld(): Promise<World> {
     { name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
     { name: 'create_issue', inputSchema: { type: 'object' } },
   ]);
-  await authorIssuesSlate(owner.agent.observeRuntime().storage.vfs);
+  await authorIssuesSlate(workspaceFiles(owner.agent));
 
   return { owner, close: () => { user.close(); resetRecordedMcp(); } };
 }
@@ -241,7 +243,7 @@ test('S1: agent-control and eval bindings surface as problems and admit no membe
   const world = await ownerWorld();
 
   try {
-    const files = world.owner.agent.observeRuntime().storage.vfs;
+    const files = workspaceFiles(world.owner.agent);
     await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
       name: 'issues', main: 'src/server.ts',
       slate: { title: 'Issue triage', bindings: {

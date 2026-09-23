@@ -12,6 +12,7 @@ import { noManufacturedSqlColumnRule } from "./rules/no-manufactured-sql-column.
 import { noModuleMockingRule } from "./rules/no-module-mocking.ts";
 import { noNearDuplicateFunctionsRule } from "./rules/no-near-duplicate-functions.ts";
 import { noObjectParametersRule } from "./rules/no-object-parameters.ts";
+import { noOutputTokenCapRule } from "./rules/no-output-token-cap.ts";
 import { noReduceAccumulatorCopyRule } from "./rules/no-reduce-accumulator-copy.ts";
 import { noReflectApplyRule } from "./rules/no-reflect-apply.ts";
 import { noReflectGetRule } from "./rules/no-reflect-get.ts";
@@ -52,6 +53,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-known-value-widening": noKnownValueWideningRule,
 		"no-module-mocking": noModuleMockingRule,
 		"no-object-parameters": noObjectParametersRule,
+		"no-output-token-cap": noOutputTokenCapRule,
 		"no-reduce-accumulator-copy": noReduceAccumulatorCopyRule,
 		"no-reflect-apply": noReflectApplyRule,
 		"no-reflect-get": noReflectGetRule,

@@ -15,6 +15,7 @@
     "no-empty-catch",
     "no-manufactured-sql-column",
     "no-near-duplicate-functions",
+    "no-output-token-cap",
     "no-sentinel-catch",
     "no-unaccounted-catch",
     "no-untyped-console",
@@ -54,7 +55,8 @@
     ],
     "no-design-smells.gate.test.ts": [
       "no-near-duplicate-functions",
-      "no-manufactured-sql-column"
+      "no-manufactured-sql-column",
+      "no-output-token-cap"
     ]
   },
   "vendored": {
@@ -69,7 +71,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "f1bbf13178fd9b12b510569068329f56dbd46122cdd0f0b289d5cfd94cf733b6",
+      "local": "5c03c98f7588e921f12943b8618521480d2880199d054cca8396a333f8a744e1",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -367,6 +369,12 @@
       "kinuOnly": true
     },
     "no-design-smells.gate.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-output-token-cap.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-output-token-cap.test.ts": {
       "kinuOnly": true
     }
   },

@@ -7,7 +7,9 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import type { UIMessage } from 'ai';
 import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent, workspaceMainActor,
+} from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
 /** Scoped by handle: an unscoped read would let a sibling's cancellation satisfy or pollute this assertion. */
@@ -87,7 +89,7 @@ describe('the workspace root answers the actor control plane', () => {
     await orchestrator.agent.cancelCurrentWork();
     expect(child.actor.session.interrupt()).toEqual([]);
 
-    const rootId = orchestrator.agent.observeRuntime().actor.actorId;
+    const rootId = workspaceMainActor(orchestrator.db).actorId;
     expect(cancelActivity(orchestrator.db, rootId)).toEqual([{ detail: '0 foreground aborted' }]);
     expect(cancelActivity(orchestrator.db, child.actor.handle.actorId)).toEqual([]);
   });

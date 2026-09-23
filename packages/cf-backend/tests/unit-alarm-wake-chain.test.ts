@@ -6,7 +6,10 @@ import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
-import { hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, until, type HarnessOrchestratorAgent,
+} from './helpers/actor-harness';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
 
 /** Journal, job registry and search ledger are actor-private: seeds must carry the owner the agent resolves. */
@@ -19,6 +22,11 @@ function held(db: Database, counting: string): number {
 }
 
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
+
+/** The maintenance wake a truncated sweep arms at its end: the sweep's own record that it ran. */
+function wakeArmed(db: Database): boolean {
+  return held(db, "SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_kinuTerminalRetryTick'") > 0;
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -105,7 +113,7 @@ describe('the workspace keeps exactly one wake row', () => {
     for (let i = 0; i < 4096 + 50; i++) insert.run(`stale-${i}`, '_chatRecovery', 'delayed', overdueSec);
 
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await until(() => wakeArmed(db), 'the truncated sweep armed the maintenance wake');
 
     const staleRecoveries = `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_chatRecovery'`;
 
@@ -132,7 +140,7 @@ describe('the workspace keeps exactly one wake row', () => {
     for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
 
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await until(() => wakeArmed(db), 'the truncated fiber sweep armed the maintenance wake');
 
     const seededFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`;
 
@@ -169,7 +177,7 @@ describe('the workspace keeps exactly one wake row', () => {
     for (let i = 0; i < 4096 + 12; i++) insert.run(`sub-fiber-${i}`, 'bg:stale', expired);
 
     await workspace.agent.activateActor();
-    await workspace.agent.harnessSettleBackgroundTasks();
+    await until(() => wakeArmed(workspace.db), 'the truncated fiber sweep armed the shared wake');
 
     // Seeded rows only: the activation's own terminal-lane fiber writes a fresh carrier row here.
     const seededChildFibers = `SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`;
@@ -194,7 +202,7 @@ describe('the workspace keeps exactly one wake row', () => {
     });
 
     await workspace.agent.activateActor();
-    await workspace.agent.harnessSettleBackgroundTasks();
+    await joinHarnessFibers();
     expect(await workspace.agent.listSchedules()).toEqual([]);
 
     const now = Date.now();
@@ -205,7 +213,7 @@ describe('the workspace keeps exactly one wake row', () => {
     ).run(child.actor.handle.actorId, resumeAt, now);
 
     await workspace.agent.activateActor();
-    await workspace.agent.harnessSettleBackgroundTasks();
+    await until(() => wakeArmed(workspace.db), 'the activation armed a wake for the child\'s owed job');
 
     const wakes = async (): Promise<Array<{ id: string; time: number }>> =>
       (await workspace.agent.listSchedules())
@@ -273,7 +281,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // The recovery cutoff is the isolate's construction instant, and the pass runs once per activation.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await joinHarnessFibers();
 
     const actorId = harnessActorId(db);
 
@@ -305,7 +313,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // `closeUnclaimed` must not fail swarm rows created after construction.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await joinHarnessFibers();
 
     const actorId = harnessActorId(db);
 
@@ -332,7 +340,7 @@ describe('the workspace keeps exactly one wake row', () => {
   test('a live run-event start after activation is not terminalized by the tick', async () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await joinHarnessFibers();
 
     const actorId = harnessActorId(db);
 
@@ -362,7 +370,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // The delay is baked into the schedule row, so nothing can shorten an armed wake.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await joinHarnessFibers();
 
     const insert = db.prepare(
       `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
@@ -457,7 +465,7 @@ describe('the workspace keeps exactly one wake row', () => {
 
   test('an activation restores a wake row that went missing', async () => {
     // Redelivery is bounded, so activation reconstructs the derived wake row.
-    const { agent } = orchestratorHarness();
+    const { agent, db } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
 
@@ -466,7 +474,8 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(await agent.listSchedules()).toEqual([]);
     // Through activation, not the reconcile method: an onStart that stopped reconciling must fail this.
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    await until(() => held(db, `SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '${KINU_TIMER_CALLBACK}'`) > 0,
+      'the activation restored the timer wake');
 
     expect((await agent.listSchedules()).map((row) => row.callback))
       .toEqual([KINU_TIMER_CALLBACK]);
@@ -475,7 +484,8 @@ describe('the workspace keeps exactly one wake row', () => {
   test('the reconcile cannot invent a wake nothing is waiting for', async () => {
     const { agent } = orchestratorHarness();
 
-    await agent.reconcileWakeRow();
+    await agent.activateActor();
+    await joinHarnessFibers();
 
     expect(await agent.listSchedules()).toEqual([]);
   });
@@ -490,7 +500,8 @@ describe('the workspace keeps exactly one wake row', () => {
     db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`)
       .run(Math.floor((Date.now() - 2 * DAY_MS) / 1000), armed.id);
 
-    await agent.reconcileWakeRow();
+    await agent.activateActor();
+    await joinHarnessFibers();
 
     expect((await agent.listSchedules()).map((row) => row.id)).toEqual([armed.id]);
   });

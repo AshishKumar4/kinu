@@ -140,7 +140,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     const runtime = agent.observeRuntime();
     const first = await agent.runOutcomeEnsemble(['fake-a/m1', 'fake-b/m1']);
     expect(first.run?.judged.map((row) => row.stored)).toEqual([3, 3]);
-    declareShadowCandidate(runtime);
+    declareShadowCandidate(harness.db);
     await runtime.storage.vfs.writeFile(`${runtime.identity.scaffold.path}.v1`,
       'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }');
     expect(await agent.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });

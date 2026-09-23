@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { providersInWorkMode, type JsonValue } from '@kinu.run/core';
-import { orchestratorHarness, chatSessionTurns } from './helpers/actor-harness';
+import { orchestratorHarness, chatSessionTurns, workspaceFiles } from './helpers/actor-harness';
 import * as v from 'valibot';
 import { ROOT_SLATE_CALLER } from '../src/slates/bindings';
 
 test('a real Plan turn reads files but cannot edit them, even after a Build turn starts', async () => {
   const { agent } = orchestratorHarness();
-  const files = agent.observeRuntime().storage.vfs;
+  const files = workspaceFiles(agent);
   const path = '/home/user/source.txt';
   await files.writeFile(path, 'original');
   agent.harnessDrivingUserMessage('Inspect only.', { kinuMode: 'plan' });
@@ -37,7 +37,7 @@ test('a real Plan turn reads files but cannot edit them, even after a Build turn
 
 test('Plan blocks slate source restoration and authored calls without converting an existing Build app', async () => {
   const { agent } = orchestratorHarness();
-  const files = agent.observeRuntime().storage.vfs;
+  const files = workspaceFiles(agent);
   const path = '/home/user/slates/app/server.ts';
   await files.mkdir('/home/user/slates/app', { recursive: true });
   await files.writeFile('/home/user/slates/app/package.json', JSON.stringify({ main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' }, PEER: { kind: 'app', id: 'app' } } } }));

@@ -70,6 +70,7 @@
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-near-duplicate-functions": "error",
     "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-output-token-cap": "error",
     "anti-slop/no-unaccounted-catch": "error",
     "anti-slop/no-reduce-accumulator-copy": "error",
     "anti-slop/no-reflect-apply": "error",

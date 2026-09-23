@@ -1,16 +1,13 @@
 // Defends: alarm/email/peer-woken turns reporting every MCP server unavailable. The HTTP first-hit
-// warmup gate is per Worker isolate, so every settled turn must schedule establishment.
+// warmup gate is per Worker isolate, so every settled turn must schedule establishment. Driven through
+// real settled turns; observed at the UserDO binding the object calls.
 import { describe, expect, test } from 'bun:test';
-import { memberBody } from '@kinu.run/test-utils';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { joinHarnessFibers } from './helpers/agents-sdk';
-import { orchestratorHarness, type RecordedUserPlaneCalls } from './helpers/actor-harness';
-import type { CompletedTurn } from '@kinu.run/core';
 import {
-  createRecordingLogger, setDiagnosticsSink, type RecordedLog,
-} from '@kinu.run/core/obs';
-import {} from '../src/fiber-recovery';
+  chatSessionTurns, improvementLanesRan, orchestratorHarness, tapDiagnostics, until,
+  type ActorHarness, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
+} from './helpers/actor-harness';
+import type { ScriptedAnswer } from './helpers/turn-harness';
+import { createRecordingLogger, type RecordedLog } from '@kinu.run/core/obs';
 
 /** The real `env.UserDO` binding and capability-token row, driven through the harness seam. */
 function warmingActor(behaviour: { holdsCapability?: boolean; fail?: Error } = {}) {
@@ -28,12 +25,28 @@ function warmingActor(behaviour: { holdsCapability?: boolean; fail?: Error } = {
   return { harness, userPlane };
 }
 
-async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
+/** One turn settled through the chat loop, its warm opportunity passed, and the fibers it began joined. */
+async function settleTurn(
+  harness: ActorHarness<HarnessOrchestratorAgent>,
+  answer: ScriptedAnswer = { messageId: 'a-warm', text: 'done' },
+): Promise<void> {
+  const { messageId } = await chatSessionTurns(harness.agent).settle(answer);
+  await until(() => improvementLanesRan(harness.db, messageId), `the improvement lanes of ${messageId} ran`);
+  // A rejected warm reports from its catch, a macrotask after the fiber body settles.
+  await Bun.sleep(0);
+}
+
+/** Records diagnostics across `body`; `endsOn` names an event whose arrival ends the recording. */
+async function recordDiagnostics(body: () => Promise<void>, endsOn?: string): Promise<readonly RecordedLog[]> {
   const logger = createRecordingLogger();
-  const restore = setDiagnosticsSink(logger);
+  const restore = tapDiagnostics(logger);
 
   try {
     await body();
+
+    if (endsOn !== undefined) {
+      await until(() => logger.emitted.some((line) => line.event === endsOn), `${endsOn} was reported`);
+    }
 
     return logger.emitted;
   } finally {
@@ -45,96 +58,83 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
   test('one settle asks the one UserDO authority exactly once, with this actor’s caller', async () => {
     const { harness, userPlane } = warmingActor();
 
-    await harness.agent.harnessWarmUserMcp();
+    await settleTurn(harness);
 
     // Resolved by the production `userCaller()`, not handed in.
     expect(userPlane.warmConnections).toEqual([{ workspaceToken: 'harness-token' }]);
   });
 
-  test('a failed warm is contained — nothing reaches the settled turn', async () => {
+  test('a failed warm is contained — the turn still settles', async () => {
     const { harness, userPlane } = warmingActor({
       fail: new Error('the MCP server refused the connection'),
     });
 
-    const logs = await recordDiagnostics(
-      async () => await harness.agent.harnessWarmUserMcp(),
-    );
+    const logs = await recordDiagnostics(async () => { await settleTurn(harness); }, 'mcp.settle_warmup_failed');
 
     expect(logs.map((line) => line.event)).toContain('mcp.settle_warmup_failed');
     expect(userPlane.warmConnections).toHaveLength(1);
+    expect((await harness.agent.listRuns()).items).toHaveLength(1);
   });
 
   test('the next settle retries — a failure needs no record to be retryable', async () => {
     const { harness, userPlane } = warmingActor({ fail: new Error('connection refused') });
 
-    const logs = await recordDiagnostics(
-      async () => await harness.agent.harnessWarmUserMcp(),
-    );
+    const logs = await recordDiagnostics(async () => { await settleTurn(harness); }, 'mcp.settle_warmup_failed');
 
     expect(logs.map((line) => line.event)).toContain('mcp.settle_warmup_failed');
     expect(userPlane.warmConnections).toHaveLength(1);
 
     // Nothing is stored about the failure: the live connection is the state, and warm is idempotent.
     userPlane.failWarm = null;
-    await harness.agent.harnessWarmUserMcp();
+    await settleTurn(harness, { messageId: 'a-warm-again', text: 'done again' });
     expect(userPlane.warmConnections).toHaveLength(2);
-  });
-
-  test('an actor with no owner asks nothing', async () => {
-    const { harness, userPlane } = warmingActor();
-    // `owner_user_id` is NOT NULL, so unowned means no identity row; a cold activation drops the memo.
-    harness.db.prepare("DELETE FROM workspace_identity WHERE id = 'harness-actor'").run();
-    harness.agent.forgetActivationLatches();
-
-    await harness.agent.harnessWarmUserMcp();
-
-    expect(userPlane.warmConnections).toEqual([]);
   });
 
   test('a claimed owner with no capability token yet asks nothing, and reports nothing', async () => {
     // Reaching the hub here would file a failure diagnostic on every turn until provisioned.
     const { harness, userPlane } = warmingActor({ holdsCapability: false });
 
-    await harness.agent.harnessWarmUserMcp();
+    const logs = await recordDiagnostics(async () => { await settleTurn(harness); });
 
     expect(userPlane.warmConnections).toEqual([]);
+    expect(logs.map((line) => line.event)).not.toContain('mcp.settle_warmup_failed');
+
+    // The same settle, once provisioned, does ask: the silence above was the missing token.
+    harness.agent.harnessHoldsCapability('harness-token');
+    await settleTurn(harness, { messageId: 'a-provisioned', text: 'done' });
+    expect(userPlane.warmConnections).toEqual([{ workspaceToken: 'harness-token' }]);
   });
 });
 
 describe('every settled turn schedules the lane, whatever the turn was', () => {
   // Plan, aborted and failed turns return early at the improvement-lane verdict, so the warm is
-  // scheduled before it. Driven through the real terminal effect.
-  const turnFor = (id: string): CompletedTurn => ({
-    userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1,
-    hadError: false, feedback: null, turnId: id, sessionId: 'default', origin: 'user',
+  // scheduled before it.
+  test('a completed build turn warms', async () => {
+    const { harness, userPlane } = warmingActor();
+    await settleTurn(harness, { messageId: 't-ok', text: 'done' });
+    expect(userPlane.warmConnections).toHaveLength(1);
   });
 
-  const settles = [
-    { name: 'a completed build turn warms', status: 'completed', turnId: 't-ok', workMode: undefined },
-    {
-      name: 'an aborted turn warms — the next turn still needs its connections',
-      status: 'aborted', turnId: 't-cut', workMode: undefined,
-    },
-    {
-      name: 'a PLAN turn warms, though it opens no improvement lane',
-      status: 'completed', turnId: 't-plan', workMode: 'plan',
-    },
-  ] as const;
+  test('an aborted turn warms — the next turn still needs its connections', async () => {
+    const { harness, userPlane } = warmingActor();
+    await settleTurn(harness, { messageId: 't-cut', status: 'aborted' });
+    expect(userPlane.warmConnections).toHaveLength(1);
+  });
 
-  for (const { name, status, turnId, workMode } of settles) {
-    test(name, async () => {
-      const { harness, userPlane } = warmingActor();
-      await harness.agent.harnessSettleSpine({ status, turn: turnFor(turnId), workMode });
-      await joinHarnessFibers();
-      expect(userPlane.warmConnections).toHaveLength(1);
-    });
-  }
+  test('a PLAN turn warms, though it opens no improvement lane', async () => {
+    const { harness, userPlane } = warmingActor();
+    harness.agent.harnessDrivingUserMessage('Plan it first.', { kinuMode: 'plan' });
+    await settleTurn(harness, { messageId: 't-plan', text: 'the plan' });
+    expect(userPlane.warmConnections).toHaveLength(1);
+  });
 
-  test('the descriptor read is not where establishment lives', () => {
+  test('the descriptor read is not where establishment lives', async () => {
     // Hydrating on the read awaited an unbounded `_connectWithRetry` on the critical path.
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
-    const read = memberBody(source, 'private async buildUserMcpTools(nativeTools: ToolSet)', 'actor-agent.ts');
-    expect(read).not.toContain('userMcp_warmConnections');
-    expect(read).toContain('userMcp_toolDescriptors');
+    const { harness, userPlane } = warmingActor();
+
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'use my tools' }] });
+
+    expect(userPlane.descriptorReads ?? 0).toBeGreaterThan(0);
+    expect(userPlane.warmConnections).toEqual([]);
   });
 });

@@ -2,9 +2,10 @@
  * `getWorkspaceOverview` over real stores: the read never `acquire`s an actor,
  * and unfinished work with nothing running reads 'unfinished', not 'working'.
  */
+import { sqlOver } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import { RunEventRecorder, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval } from '@kinu.run/core';
-import { orchestratorHarness, hostedSubordinateHarness } from './helpers/actor-harness';
+import { orchestratorHarness, hostedSubordinateHarness, workspaceMainActor } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
@@ -35,14 +36,13 @@ describe('getWorkspaceOverview', () => {
   });
 
   test('a pending consent and a parked command both wait on the owner', async () => {
-    const { agent } = orchestratorHarness();
-    const rt = agent.observeRuntime();
+    const { agent, db } = orchestratorHarness();
 
     const consent = agent.awaitDeviceConsent({
       deviceId: 'dev-1', deviceLabel: 'device', method: 'shell', command: 'git push',
     });
 
-    const parked = new DeferredApprovalStore(rt.storage.sql, rt.actor).create({
+    const parked = new DeferredApprovalStore(sqlOver(db), workspaceMainActor(db)).create({
       id: `defer-${crypto.randomUUID()}`,
       command: 'bun run deploy',
       executor: 'workspace',
@@ -96,8 +96,8 @@ describe('getWorkspaceOverview', () => {
   });
 
   test('the newest sealed run is the card line; the reserved aggregate is skipped', async () => {
-    const { agent } = orchestratorHarness();
-    const recorder = new RunEventRecorder(agent.observeRuntime().storage.sql, agent.observeRuntime().actor);
+    const { agent, db } = orchestratorHarness();
+    const recorder = new RunEventRecorder(sqlOver(db), workspaceMainActor(db));
 
     recorder.emit('run-older', { type: 'run_start', agentId: 'main', userMessage: 'first task' });
     recorder.emit('run-older', { type: 'run_end', reason: 'completed' });
@@ -112,8 +112,8 @@ describe('getWorkspaceOverview', () => {
   });
 
   test('a live turn beside a completed last run reads working, and the run line is the live run', async () => {
-    const { agent } = orchestratorHarness();
-    const recorder = new RunEventRecorder(agent.observeRuntime().storage.sql, agent.observeRuntime().actor);
+    const { agent, db } = orchestratorHarness();
+    const recorder = new RunEventRecorder(sqlOver(db), workspaceMainActor(db));
 
     recorder.emit('run-1', { type: 'run_start', agentId: 'main', userMessage: 'done' });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });

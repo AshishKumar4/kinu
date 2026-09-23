@@ -5,11 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  declareShadowCandidate,
-  orchestratorHarness, chatSessionTurns,
-  reactivateOrchestratorHarness,
-  type ActorHarness,
-  type HarnessOrchestratorAgent,
+  declareShadowCandidate, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceMainActor,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { TurnHarness } from './helpers/turn-harness';
@@ -580,12 +576,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const queued = (harness: ActorHarness<HarnessOrchestratorAgent>): number => v.parse(
       v.object({ n: v.number() }),
       harness.db.query('SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE actor_id = ?')
-        .get(harness.agent.observeRuntime().actor.actorId),
+        .get(workspaceMainActor(harness.db).actorId),
     ).n;
 
     // Positive control: a completed build turn does owe a trial.
     const open = orchestratorHarness();
-    declareShadowCandidate(open.agent.observeRuntime());
+    declareShadowCandidate(open.db);
     const openId = sampled(open);
     turns(open).open('u-shadow-ok');
     await turns(open).settle({ messageId: openId });
@@ -594,7 +590,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     for (const shut of ['error', 'aborted', 'plan'] as const) {
       const harness = orchestratorHarness();
-      declareShadowCandidate(harness.agent.observeRuntime());
+      declareShadowCandidate(harness.db);
       const messageId = sampled(harness);
       turns(harness).open(`u-shadow-${shut}`);
 
@@ -612,7 +608,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   /** Sampling is deterministic per id: a duplicate callback rebuilds the declaration and must claim the same rows. */
   test('one turn always makes the same sampling decision', async () => {
     const harness = orchestratorHarness();
-    declareShadowCandidate(harness.agent.observeRuntime());
+    declareShadowCandidate(harness.db);
 
     const first = harness.agent.harnessShadowPlan('a-sample');
 
@@ -693,7 +689,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       `INSERT INTO terminal_effects
          (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, status, outcome, attempts, claimed_at, settled_at)
        VALUES (?, 'u-alien/a-alien', 'v9:teleport:a-alien', 'teleport', 'a-alien', 0, '{}', 'pending', NULL, 0, 1, NULL)`,
-    ).run(harness.agent.observeRuntime().actor.actorId);
+    ).run(workspaceMainActor(harness.db).actorId);
 
     await harness.agent.harnessResumeTerminalTransitions();
 
@@ -715,7 +711,7 @@ describe('a turn releases its tool claims only when no response can still run', 
   /** An open run the isolate died inside; the restart re-opens it as a continuation. */
   function openRun(harness: ActorHarness<HarnessOrchestratorAgent>, runId: string, turnId: string): void {
     openTurnRun(harness.agent.harnessEventRecorder, runId, {
-      agentId: harness.agent.observeRuntime().actor.actorId,
+      agentId: workspaceMainActor(harness.db).actorId,
       causedBy: 'chat',
       userMessage: 'the message the turn answers',
       turnIndex: 1,

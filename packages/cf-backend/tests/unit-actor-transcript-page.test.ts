@@ -5,7 +5,9 @@
 
 import { describe, expect, test } from 'bun:test';
 import { getChatHistoryPage, CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type ChatHistoryEntry, type Page } from '@kinu.run/core';
-import { hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import {
+  hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor,
+} from './helpers/actor-harness';
 
 /** The root's public RPC, or the production read model over a hosted child's handle. */
 interface Root {
@@ -48,7 +50,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     const root = orchestratorHarness();
 
     await root.agent.activateActor();
-    const actor = root.agent.observeRuntime().actor;
+    const actor = workspaceMainActor(root.db);
     const seeded = await seed(actor, root.agent.observeActorHost().bindStores(actor).stores.history, 25);
 
     const walked = await walk({ page: (request) => root.agent.getChatHistoryPage(request) }, 10);
@@ -87,7 +89,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     });
 
     await parent.agent.activateActor();
-    const actor = parent.agent.observeRuntime().actor;
+    const actor = workspaceMainActor(parent.db);
     await seed(actor, parent.agent.observeActorHost().bindStores(actor).stores.history, 4);
 
     expect((await walk({ page: (request) => parent.agent.getChatHistoryPage(request) }, 10)).ids)
@@ -117,7 +119,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
   /** An unknown cursor is refused, not answered with the newest page (which re-delivers history). */
   test('a cursor from another conversation is refused rather than answered', async () => {
     const workspace = orchestratorHarness();
-    const actor = workspace.agent.observeRuntime().actor;
+    const actor = workspaceMainActor(workspace.db);
     const history = workspace.agent.observeActorHost().bindStores(actor).stores.history;
     await seed(actor, history, 4);
 
@@ -141,7 +143,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
     });
 
     await workspace.agent.activateActor();
-    const actor = workspace.agent.observeRuntime().actor;
+    const actor = workspaceMainActor(workspace.db);
     await seed(actor, workspace.agent.observeActorHost().bindStores(actor).stores.history, 4, 'root');
     const seeded = await seed(child.actor.handle, child.actor.stores.history, 25);
 

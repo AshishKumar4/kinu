@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
-import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 
 const root = new URL('../', import.meta.url).pathname;
 
@@ -60,7 +60,7 @@ describe('reachability of the root policy read', () => {
       },
     });
 
-    workspace.agent.observeRuntime().actor.config
+    workspaceMainActor(workspace.db).config
       .grantShellApproval([{ rule: GATED_RULE, executor: 'workspace' }]);
 
     const main = await hostedMainActor(workspace);
@@ -91,7 +91,7 @@ describe('reachability of the root policy read', () => {
   test('a hosted actor whose root granted nothing is still gated', async () => {
     const workspace = orchestratorHarness();
     // Read, not assumed: a harness seeding a grant here would duplicate the case above.
-    expect(workspace.agent.observeRuntime().actor.config.getShellApprovalGrants()).toEqual([]);
+    expect(workspaceMainActor(workspace.db).config.getShellApprovalGrants()).toEqual([]);
 
     const child = await hostedSubordinateHarness(workspace, {
       name: 'grantee-2', displayName: 'Grantee', nameOrigin: 'user',

@@ -9,7 +9,9 @@ import { turnAuthor, type ProgrammaticTurn } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { SessionMessage } from 'agents/experimental/memory/session';
 import * as v from 'valibot';
-import { orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import {
+  orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent, workspaceMainActor,
+} from './helpers/actor-harness';
 import { present } from '@kinu.run/test-utils';
 
 const SteerFrameSchema = v.object({
@@ -212,7 +214,7 @@ describe('a message typed while the agent is working', () => {
 
   test('a pending steer with an attachment survives a reset intact — the rerun carries real file data', async () => {
     const h = steerHarness();
-    const actorId = h.agent.observeRuntime().actor.actorId;
+    const actorId = workspaceMainActor(h.db).actorId;
 
     // Written through SQL as an eviction leaves them; the next activation's loop is the restore/sweep entry point.
     h.db.query(
@@ -358,7 +360,7 @@ describe('a steer that never saw a step boundary', () => {
 describe('an eviction with acknowledged steers', () => {
   test('restores only the live turn\'s rows and sweeps a dead turn\'s as one user-origin turn', async () => {
     const h = steerHarness();
-    const actorId = h.agent.observeRuntime().actor.actorId;
+    const actorId = workspaceMainActor(h.db).actorId;
 
     await h.startTurn('u-live');
     await h.agent.send('the live turn keeps me', 'steer-live');

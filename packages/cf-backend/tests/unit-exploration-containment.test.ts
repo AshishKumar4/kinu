@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
-import { hostedExplorationHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedExplorationHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 import { hostBranch } from '../src/exploration-hosting';
 import {
   HeadCapture,
@@ -232,7 +232,7 @@ describe('exploration actors write the workspace journal and acquire only their 
   test("a head's step trace lands in the workspace's journal, under the workspace's own actor", async () => {
     const workspace = orchestratorHarness();
     const head = await hostedExplorationHarness(workspace, 'head', 'head-1');
-    const root = workspace.agent.observeRuntime().actor.actorId;
+    const root = workspaceMainActor(workspace.db).actorId;
     // Distinct actors: a step filed under the head's own id would be invisible to the subtree's journal readers.
     expect(head.actor.handle.actorId).not.toBe(root);
 

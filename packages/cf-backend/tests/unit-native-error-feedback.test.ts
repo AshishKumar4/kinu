@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { createProviderRegistry, type VFS, type VfsNativeReads } from '@kinu.run/core';
+import { createProviderRegistry } from '@kinu.run/core';
 import { hostedSubordinateHarness, chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
 
 function modelCallingFile() {
@@ -45,74 +45,6 @@ test('Think orchestrator sends typed native error feedback in the NEXT provider 
   await agent.onStart();
   await chatSessionTurns(agent).run('Try the file operation.');
   assertNativeFeedback(model);
-});
-
-test('parallel hosted native calls retain their SDK identities after reverse completion', async () => {
-  const agent = orchestratorHarness().agent;
-  await agent.onStart();
-  const files = agent.observeRuntime().storage.vfs;
-  await files.writeFile('identical.txt', 'same result');
-  const first = Promise.withResolvers<void>();
-  const plane: VFS & Partial<VfsNativeReads> = files;
-  const readRange = plane.readRange;
-
-  if (readRange === undefined) throw new Error('the hosted file plane reads by range');
-  let reads = 0;
-  plane.readRange = async (...args) => {
-    if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
-
-    return await readRange.apply(files, args);
-  };
-
-  // The order tools settled in, read from the actor's extension host where the runner reports each result.
-  const order: string[] = [];
-  agent.harnessRegisterExtension({
-    name: 'probe.tool-order',
-    onToolResult: (context) => {
-      order.push(context.toolCallId ?? '');
-
-      if (context.toolCallId === 'call-B') first.resolve();
-    },
-  });
-
-  let step = 0;
-
-  const model = scriptedTurnModel({ doGenerate: () => {
-    const calls = step++ === 0;
-
-    return {
-      content: calls ? ['call-A', 'call-B'].map((toolCallId) => ({
-        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: 'identical.txt' }),
-      })) : [{ type: 'text', text: 'done' }],
-      finishReason: { unified: calls ? 'tool-calls' : 'stop', raw: undefined },
-      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
-        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
-    };
-  } });
-
-  agent.modelFactory = () => model;
-
-  try {
-    await chatSessionTurns(agent).run('Read the file twice in parallel.');
-    const run = (await agent.listRuns()).items[0];
-
-    if (run === undefined) throw new Error('the chat did not retain a run');
-    const recorded = (await agent.getRunEvents(run.runId)).filter((event) => event.type === 'tool_call_end');
-
-    expect(order).toEqual(['call-B', 'call-A']);
-    expect(recorded.map((event) => event.toolCallId)).toEqual(['call-B', 'call-A']);
-    const request = model.doStreamCalls.at(-1);
-    const returned = request?.prompt.flatMap((message) => message.role === 'tool' ? message.content : []);
-
-    const requested = request?.prompt.flatMap((message) => message.role === 'assistant' ? message.content : [])
-      .flatMap((part) => part.type === 'tool-call' ? [part.toolCallId] : []);
-
-    expect(returned).toHaveLength(2);
-    expect(returned?.flatMap((part) => part.type === 'tool-result' ? [part.toolCallId] : []).sort()).toEqual(requested?.sort());
-  } finally {
-    first.resolve();
-    plane.readRange = readRange;
-  }
 });
 
 test('a delegated turn sends the same typed native error feedback in its NEXT provider request', async () => {

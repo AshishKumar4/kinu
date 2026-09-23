@@ -1,11 +1,11 @@
 // Kinu-only gate; see upstream.json's `kinuRules`.
 //
-// The two design-smell rules own RuleTester suites, but a suite proves only that the rule function
-// behaves, not that the rule is reachable through the command the repo gates on. This file runs the
-// real `oxlint` binary with the real `.oxlintrc.json` over a seeded instance of each defect and over
-// its corrected form, and asserts red on the first and green on the second. It also asserts the live
-// denominator for each rule: a corpus with no SQL and no pair of same-shaped functions would let
-// either rule pass by inspecting nothing.
+// The design-smell rules and the output-cap ban own RuleTester suites, but a suite proves only that
+// the rule function behaves, not that the rule is reachable through the command the repo gates on.
+// This file runs the real `oxlint` binary with the real `.oxlintrc.json` over a seeded instance of
+// each defect and over its corrected form, and asserts red on the first and green on the second. It
+// also asserts the live denominator for each rule: a corpus with no SQL, no pair of same-shaped
+// functions or no model call would let a rule pass by inspecting nothing.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,6 +55,20 @@ export function part(actorId: string, messageId: string, operation: Operation): 
 `,
   },
   {
+    rule: "no-output-token-cap",
+    // The shape the owner directive retired: a cap on the call instead of an effort on the route.
+    bad: `declare function streamText(options: { model: string; prompt: string; maxOutputTokens?: number }): void;
+export function summarize(model: string, prompt: string): void {
+  streamText({ model, prompt, maxOutputTokens: 4096 });
+}
+`,
+    good: `declare function streamText(options: { model: string; prompt: string; providerOptions?: object }): void;
+export function summarize(model: string, prompt: string): void {
+  streamText({ model, prompt, providerOptions: { 'workers-ai': { reasoningEffort: 'low' } } });
+}
+`,
+  },
+  {
     rule: "no-manufactured-sql-column",
     // The projection read that faked message_updates' shape for its reader (messages.ts, 2026-09-21).
     bad: `declare const sql: <T>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
@@ -98,15 +112,17 @@ for (const { rule } of cases) {
  * SQL rule, and function declarations for the duplicate rule. A corpus that has silently gone to
  * zero on either must fail loudly rather than report a clean lint.
  */
-const corpus = { files: 0, selects: 0, functions: 0 };
+const corpus = { files: 0, selects: 0, functions: 0, modelCalls: 0 };
 for (const [, text] of readSources()) {
   corpus.files += 1;
   corpus.selects += text.match(/\bSELECT\b/gu)?.length ?? 0;
   corpus.functions += text.match(/\bfunction\b|=>/gu)?.length ?? 0;
+  corpus.modelCalls += text.match(/\b(generateText|streamText|generateObject|streamObject)\(/gu)?.length ?? 0;
 }
 assert.ok(corpus.files > 0, "found no TypeScript sources under packages/*/src; the rules would gate nothing");
 assert.ok(corpus.selects > 0, `found ${corpus.files} sources but no SELECT; the SQL rule would inspect nothing`);
 assert.ok(corpus.functions > 1, `found ${corpus.files} sources but no pair of functions; the duplicate rule would inspect nothing`);
+assert.ok(corpus.modelCalls > 0, `found ${corpus.files} sources but no model call; the output-cap rule would inspect nothing`);
 
 // System temp dir, NOT the repo root: gates built on scripts/sources.ts enumerate untracked
 // worktree files on purpose, so repo-root scratch is visible mid-run to every one of them.
@@ -116,9 +132,13 @@ try {
   const goodDirectory = join(fixtures, "green");
   mkdirSync(badDirectory);
   mkdirSync(goodDirectory);
+  // Under a package's `src`, where a product-scoped rule governs.
+  const source = (directory: string): string => join(directory, "packages", "fixture", "src");
+  mkdirSync(source(badDirectory), { recursive: true });
+  mkdirSync(source(goodDirectory), { recursive: true });
   for (const { rule, bad, good } of cases) {
-    writeFileSync(join(badDirectory, `${rule}.ts`), bad);
-    writeFileSync(join(goodDirectory, `${rule}.ts`), good);
+    writeFileSync(join(source(badDirectory), `${rule}.ts`), bad);
+    writeFileSync(join(source(goodDirectory), `${rule}.ts`), good);
   }
 
   const lint = (directory: string): readonly LintDiagnostic[] => {
@@ -157,7 +177,7 @@ try {
   assert.deepEqual(
     [...new Set(red.map(ruleOf).filter((rule) => rule !== null))].sort(),
     cases.map((entry) => entry.rule).sort(),
-    "the red run must exercise both design-smell rules and no rule the fixtures did not seed",
+    "the red run must exercise every rule this gate proves and no rule the fixtures did not seed",
   );
   assert.deepEqual(
     green.filter((d) => ruleOf(d) !== null).map((d) => `${d.filename}: ${d.code}`),
@@ -166,7 +186,7 @@ try {
   );
 
   process.stdout.write(
-    `no-design-smells: ${cases.length} rules proven red->green through oxlint over ${corpus.selects} SELECTs and ${corpus.functions} functions in ${corpus.files} sources\n`,
+    `no-design-smells: ${cases.length} rules proven red->green through oxlint over ${corpus.selects} SELECTs, ${corpus.functions} functions and ${corpus.modelCalls} model calls in ${corpus.files} sources\n`,
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });
