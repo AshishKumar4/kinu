@@ -541,20 +541,21 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:bench-corpus',
     label: 'Seeded bench defects still apply',
-    // PUSH, not commit, and the reason is cost placement rather than the gate: the
-    // commit tier is the pre-commit hook and declares 53.24s, so a whole-corpus
-    // check belongs at push — still the author's machine, before the code leaves
-    // it — where a stale patch is fully recoverable. That is what 'drift must fail
-    // on the same push that causes it' asked for.
-    tier: 'push',
-    seconds: 0.31,
-    catches: 'a refactor that silently unruns a bench task. Each of the 159 seeded defects is a '
+    // COMMIT. Held at push, it let comment-only commits on 2026-09-22 break 37
+    // seeded patches and still commit cleanly: a comment reflow moves the
+    // context a patch anchors on as surely as a rename does, and the author had
+    // already moved on by push. At 0.34s over the whole corpus (measured
+    // 2026-09-23 at load 20) the refusal belongs on the commit that moves the
+    // anchor.
+    tier: 'commit',
+    seconds: 0.34,
+    catches: 'a refactor that silently unruns a bench task. Each seeded defect is a '
       + 'context diff against source that keeps moving, so renaming or reflowing the code a '
       + 'patch anchors on stops it applying — and `prepare` then throws OUTSIDE the '
       + 'per-attempt catch, killing a whole compare/gain/validate run mid-flight with no '
       + 'partial report. All 16 re-anchors to date landed as a follow-up commit AFTER the '
       + 'change that caused them, because the only thing proving applicability was a pair of '
-      + 'near-duplicate assertions at the ci tier. At 0.31s over the whole corpus there was no '
+      + 'near-duplicate assertions at the ci tier. At 0.34s over the whole corpus there was no '
       + 'reason for that: the breaking change now fails on the machine that made it, while the '
       + 'person who moved the code is still holding it. It caught the branch that introduced '
       + 'it breaking sealed-validate-flags-the-good-tasks. Both enumerations, so an ORPHAN '
@@ -3449,6 +3450,8 @@ if (import.meta.main) {
         `      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure, `
         + `${String(gateEnvNames(plan.closure).length)} environment names given)`,
       );
+
+      if (plan.unreadable !== undefined) console.log(`      the entry stored under this key proves nothing — ${plan.unreadable}`);
 
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }

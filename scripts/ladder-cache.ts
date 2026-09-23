@@ -28,7 +28,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -86,9 +86,17 @@ const EntrySchema = v.object({
 
 export type Entry = v.InferOutput<typeof EntrySchema>;
 
+/** What a key holds in the store. An entry that does not read back as one is
+ *  no proof of anything, so it counts as a miss: the gate runs, and its green
+ *  run replaces the entry. */
+export type Lookup =
+  | { readonly kind: 'entry'; readonly entry: Entry }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly why: string };
+
 export interface Store {
   readonly directory: string;
-  lookup(key: string): Entry | undefined;
+  lookup(key: string): Lookup;
   record(key: string, entry: Entry): void;
 }
 
@@ -100,23 +108,49 @@ export function defaultStoreDirectory(base = process.env.XDG_CACHE_HOME): string
   return join(base === undefined || base.length === 0 ? join(homedir(), '.cache') : base, 'kinu-ladder');
 }
 
+/** `path`'s bytes on the disk before this returns, not in the page cache. */
+function flushed(path: string, flags: 'r' | 'w', bytes?: string): void {
+  const descriptor = openSync(path, flags);
+
+  try {
+    if (bytes !== undefined) writeSync(descriptor, bytes);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 export function storeAt(directory: string): Store {
   return {
     directory,
     lookup(key) {
       const path = join(directory, key);
 
-      if (!existsSync(path)) return undefined;
+      if (!existsSync(path)) return { kind: 'absent' };
+      const text = readFileSync(path, 'utf8');
 
-      return v.parse(EntrySchema, JSON.parse(readFileSync(path, 'utf8')));
+      try {
+        const parsed = v.safeParse(EntrySchema, JSON.parse(text));
+
+        return parsed.success
+          ? { kind: 'entry', entry: parsed.output }
+          : { kind: 'unreadable', why: `not an entry: ${v.summarize(parsed.issues).split('\n')[0] ?? ''}` };
+      } catch (error) {
+        return { kind: 'unreadable', why: `not JSON (${String(text.length)} bytes): ${error instanceof Error ? error.message : String(error)}` };
+      }
     },
     record(key, entry) {
       mkdirSync(directory, { recursive: true });
-      // Written whole then renamed: a concurrent reader sees a complete
-      // entry or none, never a truncated one.
+      // Written whole, flushed, then renamed, and the rename flushed: a
+      // concurrent reader sees a complete entry or none, and a crash leaves the
+      // old entry or the new one. Without the flushes a crash after the rename
+      // left entries of the right size holding only NUL bytes (2026-09-22,
+      // 11 entries on integration/0923a): the name reached the disk before the
+      // blocks it named.
       const temporary = join(directory, `.${key}.${String(process.pid)}`);
-      writeFileSync(temporary, `${JSON.stringify(entry, null, 2)}\n`);
+      flushed(temporary, 'w', `${JSON.stringify(entry, null, 2)}\n`);
       renameSync(temporary, join(directory, key));
+      flushed(directory, 'r');
     },
   };
 }
@@ -189,7 +223,8 @@ export function keyFor(preimage: KeyPreimage): string {
 /** A gate's cache decision before it runs. */
 export type Plan =
   | { readonly kind: 'hit'; readonly key: string; readonly entry: Entry; readonly closure: Derived }
-  | { readonly kind: 'miss'; readonly key: string; readonly closure: Derived }
+  /** `unreadable` names why the entry stored under this key proves nothing. */
+  | { readonly kind: 'miss'; readonly key: string; readonly closure: Derived; readonly unreadable?: string }
   | { readonly kind: 'uncacheable'; readonly closure: Exclude<Closure, Derived> };
 
 /** One gate row against one tree: the command, the inputs its row declares,
@@ -208,11 +243,11 @@ export function planGate(gate: GateCacheRequest): Plan {
 
   if (closure.kind !== 'derived') return { kind: 'uncacheable', closure };
   const key = keyFor({ run: gate.run, closure, tools: gate.tools, repo: gate.repo });
-  const entry = gate.store.lookup(key);
+  const stored = gate.store.lookup(key);
 
-  if (entry === undefined) return { kind: 'miss', key, closure };
+  if (stored.kind === 'entry') return { kind: 'hit', key, entry: stored.entry, closure };
 
-  return { kind: 'hit', key, entry, closure };
+  return stored.kind === 'unreadable' ? { kind: 'miss', key, closure, unreadable: stored.why } : { kind: 'miss', key, closure };
 }
 
 /** Record a green run. The closure is re-derived and re-hashed AFTER the run:

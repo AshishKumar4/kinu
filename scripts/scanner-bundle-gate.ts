@@ -40,8 +40,9 @@ export const BUNDLE_BANNER =
   + '// Bun loads the install scanner before it installs anything, so the scanner\n'
   + '// cannot import a dependency; this bundle carries its decoder inlined.';
 
-/** Every import specifier a bundle names, in order. */
-const IMPORT_SPECIFIER = /^\s*import\b[^'"]*['"]([^'"]+)['"]/gmu;
+/** The bundle's module graph as Bun itself reads it: every static import,
+ *  dynamic import and require a module names. */
+const importScanner = new Bun.Transpiler({ loader: 'js' });
 
 /** The imports a bundle names that the bootstrap cannot satisfy: anything but
  *  a relative path and a runtime builtin. A builtin resolves in a checkout with
@@ -49,8 +50,8 @@ const IMPORT_SPECIFIER = /^\s*import\b[^'"]*['"]([^'"]+)['"]/gmu;
  *  importing `node:fs` scanned a fresh install), and `Bun.build` writes
  *  `node:fs` as `fs`. */
 export function dependencyImports(bundle: string): string[] {
-  return [...bundle.matchAll(IMPORT_SPECIFIER)]
-    .map(([, specifier]) => specifier ?? '')
+  return importScanner.scanImports(bundle)
+    .map(({ path }) => path)
     .filter((specifier) => !specifier.startsWith('.') && !specifier.startsWith('node:')
       && !specifier.startsWith('bun:') && !builtinModules.includes(specifier));
 }

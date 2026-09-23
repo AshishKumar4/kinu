@@ -7,7 +7,7 @@
  * hits could not tell a cache from a `true`.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
@@ -203,6 +203,24 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(first.plan.kind).toBe('miss');
     expect(entries(fx.store)).toEqual([]);
     expect(runGate(fx, 'bun scripts/red.ts').plan.kind).toBe('miss');
+  });
+
+  test('an entry a crash left unreadable is a miss, and the next green run replaces it', () => {
+    // The shape a crash left on 2026-09-22: the entry's name and size, and
+    // nothing but NUL bytes where its JSON should be.
+    const fx = fixture({ 'scripts/a.ts': `export const a = 1;\n${GREEN}` });
+    expect(runGate(fx, 'bun scripts/a.ts').refused).toBeUndefined();
+    const [key] = entries(fx.store);
+
+    if (key === undefined) throw new Error('the green run recorded nothing');
+    const path = join(fx.store.directory, key);
+    writeFileSync(path, Buffer.alloc(statSync(path).size));
+
+    const { plan } = runGate(fx, 'bun scripts/a.ts');
+
+    if (plan.kind !== 'miss') throw new Error(`planned as ${plan.kind}`);
+    expect(plan.unreadable).toContain('not JSON');
+    expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
   });
 
   test('a tool version change misses everything', () => {
