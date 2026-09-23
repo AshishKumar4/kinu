@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
-import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult } from '@kinu.run/core';
+import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
@@ -33,6 +33,7 @@ import {
   suggestAgentIdentityFromMission,
   type SuggestAgentIdentityOptions,
 } from './agent-create';
+import { inspectLocalSubordinate } from './local-inspection';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import { createProfileAuthorityReader } from './profiles';
 import {
@@ -529,6 +530,10 @@ export class LocalAgentClient implements AgentClient {
 
   async setRole(roleId: string): Promise<{ role: string }> {
     return this.session.setRole(roleId);
+  }
+
+  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    return inspectLocalSubordinate(this.agentName, request);
   }
 
   async readMemory(): Promise<string> {

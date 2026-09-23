@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
-import type { EvolutionConfigView } from '@kinu.run/core';
+import { missingSubordinateHistory, type EvolutionConfigView } from '@kinu.run/core';
 
 import type {
   AgentClient,
@@ -42,6 +42,7 @@ export function soloHub(client: AgentClient): TuiHubData {
       id: client.agentName, label: client.agentName, kind: 'main', status: 'idle',
       roleId: 'task', tierId: 'default', workspace: client.agentName,
     }],
+    subordinates: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -71,6 +72,7 @@ interface FakeClientOptions {
   connect?: AgentClient['connect'];
   history?: AgentClient['history'];
   rename?: AgentClient['rename'];
+  inspectSubordinate?: AgentClient['inspectSubordinate'];
 }
 
 export function fakeClient(options: FakeClientOptions) {
@@ -157,6 +159,7 @@ export function fakeClient(options: FakeClientOptions) {
       }],
       failures: [],
     })),
+    inspectSubordinate: options.inspectSubordinate ?? (async (request) => missingSubordinateHistory(request.path)),
   };
 
   const rename = options.rename ?? (mode === 'local'

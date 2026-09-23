@@ -70,6 +70,7 @@ export interface TuiSubordinate {
   readonly status: TuiAgentStatus;
   readonly roleId?: string;
   readonly tierId?: string;
+  readonly task?: string;
 }
 
 export interface TuiAgentSummary extends ListedAgent {

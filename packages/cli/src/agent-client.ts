@@ -13,6 +13,7 @@ import type {
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
+  SubordinateInspectionRequest, SubordinateInspectionResult,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -310,6 +311,7 @@ export interface AgentClient {
   getEvolutionConfig(): Promise<EvolutionConfigView>;
   setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView>;
   listModels(): Promise<AgentModelMenu>;
+  inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
 }
 
 export interface AgentUiMessage {

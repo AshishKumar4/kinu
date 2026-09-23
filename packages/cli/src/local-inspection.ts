@@ -24,6 +24,8 @@ import {
   createCompletionLLM,
   ensembleReport,
   getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
+  missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema,
+  type SubordinateInspectionRequest, type SubordinateInspectionResult,
   getEvolutionChangelog,
   ingestOutcomeLabels,
   initTurnOutcomeTables,
@@ -497,6 +499,35 @@ export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHist
     const transcript = readSessionTranscript(sql, openWorkspaceMainActor(sql), CHAT_SESSION_ID, () => Promise.resolve(files));
 
     return [...(await getChatHistoryPage(transcript, { limit })).items];
+  });
+}
+
+/** Walks from the main actor; starts nothing. */
+export function inspectLocalSubordinate(name: string, request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+  const input = v.parse(SubordinateInspectionRequestSchema, request);
+
+  return withLocalDbAsync(name, async (db) => {
+    const directory = actorDirectory(db);
+
+    if (directory === null) return missingSubordinateHistory(input.path);
+    let target = directory.main();
+
+    for (const segment of input.path) {
+      const child = directory.resolveChild(target, segment);
+
+      if (child === null) return missingSubordinateHistory(input.path);
+      target = child;
+    }
+
+    const sql = makeSql(db);
+    const files = inspectionFiles(db, resolveAgentRef(name)?.cwd ?? null);
+
+    return readSubordinateInspection({
+      sql,
+      raw: makeSqlExec(db),
+      actor: target,
+      transcriptFor: (actor) => readSessionTranscript(sql, actor, CHAT_SESSION_ID, () => Promise.resolve(files)),
+    }, input);
   });
 }
 

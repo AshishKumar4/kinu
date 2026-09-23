@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
-import type { AgentModelMenu } from '@kinu.run/core';
+import { missingSubordinateHistory, type AgentModelMenu, type SubordinateRosterEntry } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
@@ -491,6 +491,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       id: 'agent-main', label: 'Checkout', kind: 'main', status: 'idle',
       roleId: 'task', tierId: 'default', workspace: 'shop',
     }],
+    subordinates: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -601,6 +602,69 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     // n is not a hub action here.
     expect(screen.frame()).toContain('Agent Hub');
     screen.mockInput.pressEscape();
+  });
+
+  test('the Agent Hub lists the subagents the open agent hired, and Enter opens one\'s conversation', async () => {
+    const scout: SubordinateRosterEntry = {
+      name: 'scout',
+      actorReference: null,
+      birth: {
+        creationId: 'birth-scout',
+        seed: { name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', tier: 'default', mission: 'Survey the logs', lifetime: 'durable' },
+        assignment: null,
+      },
+      deleteRequested: false,
+      createdBy: 'orchestrator',
+      status: 'working',
+      currentTask: 'Survey the logs',
+      createdAt: 1,
+      dismissedAt: null,
+      lifetime: 'durable',
+      taskEventId: null,
+    };
+
+    const dismissed: SubordinateRosterEntry = {
+      ...scout,
+      name: 'retired-helper',
+      birth: null,
+      status: 'dismissed',
+      dismissedAt: 2,
+    };
+
+    const main = fakeClient({
+      name: 'checkout',
+      inspectSubordinate: async (request) => {
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed] } };
+
+        if (request.view !== 'history' || request.path.join('/') !== 'scout') return missingSubordinateHistory(request.path);
+
+        return {
+          view: 'history',
+          path: request.path,
+          page: {
+            status: 'end',
+            items: [
+              { id: 'h1', role: 'user', content: 'Look through app.log for errors', createdAt: 1 },
+              { id: 'h2', role: 'assistant', content: 'Found 3 errors in app.log', createdAt: 2 },
+            ],
+          },
+        };
+      },
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout · agent · task/default'));
+    expect(screen.frame()).toContain('Survey the logs');
+    expect(screen.frame()).not.toContain('retired-helper');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the subagent conversation', () => screen.frame().includes('Found 3 errors in app.log'));
+    expect(screen.frame()).toContain('Look through app.log for errors');
+    screen.mockInput.pressEscape();
+    await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Agent Hub'));
+    expect(screen.frame()).not.toContain('Found 3 errors in app.log');
   });
 
   test('drafts stay with their conversation across a workspace switch', async () => {
