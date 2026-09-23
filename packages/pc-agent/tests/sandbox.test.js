@@ -192,18 +192,59 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
     const run = runSandboxed('env | sort | tr "\\n" " "', {
       source: {
-        PATH: '/usr/bin:/bin', LANG: 'C.UTF-8',
-        KINU_TOKEN: 'ptc_leaked_cli_bearer', GITHUB_TOKEN: 'ghp_leaked_pat',
+        PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', LC_TIME: 'en_GB.UTF-8', TZ: 'Asia/Kolkata', COLORTERM: 'truecolor',
+        HTTPS_PROXY: 'http://proxy.corp:3128', no_proxy: 'localhost',
+        KINU_TOKEN: 'ptc_leaked_cli_bearer', GITHUB_TOKEN: 'ghp_leaked_pat', AWS_SECRET_ACCESS_KEY: 'leaked-aws-key',
         SSH_AUTH_SOCK: '/tmp/leaked-agent.sock', NODE_OPTIONS: '--require /tmp/x.js',
       },
     });
 
+    // The sandbox hides ~/.aws and ~/.ssh; the environment must not hand the same secrets over.
     expect(run.stdout).not.toContain('ptc_leaked_cli_bearer');
     expect(run.stdout).not.toContain('ghp_leaked_pat');
+    expect(run.stdout).not.toContain('leaked-aws-key');
     expect(run.stdout).not.toContain('SSH_AUTH_SOCK');
     expect(run.stdout).not.toContain('NODE_OPTIONS');
     expect(run.stdout).toContain('KINU_SANDBOX=1');
-    expect(run.stdout).toContain('LANG=C.UTF-8');
+
+    // What a command needs to read its clock, its locale, its colours and its network.
+    for (const kept of ['LANG=C.UTF-8', 'LC_TIME=en_GB.UTF-8', 'TZ=Asia/Kolkata', 'COLORTERM=truecolor',
+      'HTTPS_PROXY=http://proxy.corp:3128', 'no_proxy=localhost']) {
+      expect(run.stdout).toContain(kept);
+    }
+  });
+
+  test('with the Sandbox switch off a command gets the owner\'s environment, less Kinu\'s credentials', () => {
+    const owner = { PATH: '/usr/bin', GITHUB_TOKEN: 'ghp_owner_pat', SSH_AUTH_SOCK: '/tmp/owner-agent.sock', TZ: 'UTC', DISPLAY: ':0' };
+    const withheld = Object.fromEntries(sandbox.WITHHELD_ENV.map((name) => [name, `planted:${name}`]));
+
+    const { env } = sandbox.plan({ tier: 'raw', deviceHome: '/home/dev/.kinu', command: 'env', cwd: '/home/dev', source: { ...owner, ...withheld } });
+
+    expect(env).toEqual(owner);
+  });
+
+  test('what a dotenv file put into the daemon at launch reaches no command, in either tier', () => {
+    const project = scratchDir('launch-dotenv');
+    fs.writeFileSync(path.join(project, '.env'), 'PROJECT_DB_URL=postgres://app:secret@db/app\nSHARED=from-dotenv\n');
+    fs.writeFileSync(path.join(project, '.env.local'), 'LOCAL_ONLY=local-secret\n');
+    fs.writeFileSync(path.join(project, '.env.test.local'), 'TEST_LOCAL=test-secret\n');
+    fs.writeFileSync(path.join(project, '.dev.vars'), 'HTTPS_PROXY=http://user:pass@proxy:3128\n');
+
+    const source = {
+      PATH: '/usr/bin', PROJECT_DB_URL: 'postgres://app:secret@db/app', LOCAL_ONLY: 'local-secret',
+      TEST_LOCAL: 'test-secret', HTTPS_PROXY: 'http://user:pass@proxy:3128',
+      // The owner's shell set this name to its own value; only the file's value is the project's.
+      SHARED: 'from-the-shell',
+    };
+
+    const dotenv = sandbox.launchDotenv(project, 'test');
+
+    // Under NODE_ENV=test Bun skips `.env.local`, so its value came from somewhere else.
+    expect(sandbox.rawEnvironment(source, dotenv)).toEqual({ PATH: '/usr/bin', LOCAL_ONLY: 'local-secret', SHARED: 'from-the-shell' });
+    expect(sandbox.sandboxEnvironment(source, {}, dotenv)).toEqual({ PATH: '/usr/bin' });
+    expect(sandbox.rawEnvironment(source, sandbox.launchDotenv(project, 'development'))).toEqual({
+      PATH: '/usr/bin', TEST_LOCAL: 'test-secret', SHARED: 'from-the-shell',
+    });
   });
 
   test('the raw tier is the machine as it was, minus Kinu\'s own directory', () => {
@@ -376,6 +417,35 @@ describe('a sandboxed command reads only the system and what the owner shared', 
 
     expect(inside.stderr).toBe('');
     expect(inside.stdout).toBe(outside.stdout);
+  });
+
+  test('a toolchain under /opt is there inside the sandbox, byte for byte and executable', () => {
+    if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    // ROCm, Arch's CUDA and conda install a GPU job's runtime under /opt.
+    const found = spawnSync('find', ['/opt', '-maxdepth', '4', '-type', 'f', '-perm', '-u+x', '-print', '-quit'], { encoding: 'utf8' });
+    const tool = found.stdout.trim();
+
+    // A machine with nothing installed under /opt has no such job to keep.
+    if (tool === '') return;
+    const probe = `test -x ${JSON.stringify(tool)} && sha256sum ${JSON.stringify(tool)}`;
+    const outside = spawnSync('bash', ['-c', probe], { encoding: 'utf8' });
+    const inside = runSandboxed(probe);
+
+    expect(inside.stderr).toBe('');
+    expect(inside.stdout).toBe(outside.stdout);
+  });
+
+  test('/opt is readable and read-only to the file methods, as to the shell', () => {
+    if (!LINUX || !fs.existsSync('/opt')) return;
+    const home = scratchDir('view-opt');
+
+    const policy = sandbox.viewFor({
+      platform: 'linux', home, agentHome: path.join(home, '.kinu', 'agents', 'ws', 'home'),
+      agentTmp: path.join(home, '.kinu', 'agents', 'ws', 'tmp'), deviceHome: path.join(home, '.kinu'), roots: [],
+    });
+
+    expect(policy.resolvePath('/opt/rocm/bin/rocminfo', 'read')).toBe('/opt/rocm/bin/rocminfo');
+    expect(() => policy.resolvePath('/opt/rocm/bin/planted', 'write')).toThrow('read-only');
   });
 
   test('the command environment never names Kinu\'s own directory', () => {

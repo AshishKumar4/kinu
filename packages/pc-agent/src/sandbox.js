@@ -10,7 +10,7 @@
 // The visible set is an ALLOW-LIST. The rejected design was "read-only disk
 // plus a deny-list of credential directories", and it fails on one miss:
 // ~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.docker/config.json, ~/.netrc,
-// ~/.npmrc, ~/.config/gh, a second drive at /data, a VPN profile under /opt —
+// ~/.npmrc, ~/.config/gh, a second drive at /data, a mounted share —
 // the list has no end. So on Linux a command sees the system trees a program
 // needs to start, its own home and tmp, and the directories the owner named
 // at `kinu connect`, and nothing else exists.
@@ -26,6 +26,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { spawnSync } = require('node:child_process');
+
+const util = require('node:util');
+
+const update = require('./update.js');
 
 /** Why a machine cannot sandbox. `ok` is the only status that runs a command;
  *  every other value is reported to the hub, which refuses `exec` and says so
@@ -79,13 +83,14 @@ const USERNS_REFUSALS = [
  * in. Codex's bubblewrap sandbox reads the same list when a policy asks for
  * platform defaults (`LINUX_PLATFORM_DEFAULT_READ_ROOTS`,
  * codex-rs/linux-sandbox/src/bwrap.rs at openai/codex 39598ed17, read
- * 2026-09-22), plus `/lib32` and `/libx32` for multilib programs and `/sys`:
+ * 2026-09-22), plus `/lib32` and `/libx32` for multilib programs, `/opt`,
+ * where ROCm, Arch's CUDA and conda install a GPU job's runtime, and `/sys`:
  * NVML and the CUDA driver find the GPU through it, and without it `cuInit`
  * answers CUDA_ERROR_OPERATING_SYSTEM (measured 2026-09-22, driver 595.84,
  * RTX 4080).
  */
 const LINUX_READ_ROOTS = Object.freeze([
-  '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc', '/sys',
+  '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc', '/opt', '/sys',
   '/nix/store', '/run/current-system/sw',
 ]);
 
@@ -108,20 +113,80 @@ const MAC_DENY_SUBPATHS = Object.freeze([
 ]);
 
 /**
- * The environment a command runs with, by ALLOW-LIST, shared with the daemon's
- * unsandboxed path (F8). The daemon inherits the shell that ran
- * `kinu connect`, so its own environment can hold the CLI bearer, a GitHub
- * PAT, cloud keys and SSH_AUTH_SOCK. Only the names a POSIX command needs to
- * find its tools, its home and its locale cross. NODE_OPTIONS and BUN_INSPECT
- * are excluded by not being here, which is the property an allow-list has and
- * a deny-list cannot.
+ * A SANDBOXED command's environment, by ALLOW-LIST. The daemon inherits the
+ * shell that ran `kinu connect`, so its own environment can hold the CLI
+ * bearer, a GitHub PAT, cloud keys and SSH_AUTH_SOCK, and the sandbox that
+ * hides ~/.aws/credentials must not hand over AWS_SECRET_ACCESS_KEY. Only the
+ * names a POSIX command needs to find its tools, its home, its locale, its
+ * clock, its terminal's colours and its proxy cross. NODE_OPTIONS and
+ * BUN_INSPECT are excluded by not being here, which is the property an
+ * allow-list has and a deny-list cannot.
  */
 const ENV_ALLOWLIST = Object.freeze([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR',
-  'XDG_RUNTIME_DIR',
+  'XDG_RUNTIME_DIR', 'TZ', 'COLORTERM',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
 ]);
 
 const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
+
+/**
+ * What never crosses into a command of either tier: the credentials Kinu's
+ * CLI reads from its environment (cli-backend model-resolver.ts
+ * PROVIDER_CREDENTIAL_ENV and SESSION_CREDENTIAL_ENV, branch-process.ts
+ * BRANCH_CREDENTIAL_ENV; this file ships alone and cannot import them, so
+ * cli-backend's cwd-plane test holds the lists together), and the two
+ * settings this daemon itself reads: its update key and its predecessor.
+ */
+const WITHHELD_ENV = Object.freeze([
+  'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'CODEX_ACCESS_TOKEN',
+  'KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH', 'KINU_LLM_HEADERS', 'KINU_PROVIDER_CREDENTIALS',
+  update.RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
+]);
+
+/**
+ * The values dotenv files put into this process at launch, by name: the files
+ * Bun loads from its working directory for NODE_ENV (bun.sh/docs/runtime/env;
+ * `.env.local` is skipped under test) and wrangler's `.dev.vars`. They are the
+ * project's secrets, not the owner's shell, so no command inherits them.
+ */
+function launchDotenv(dir, nodeEnv) {
+  const mode = nodeEnv === undefined || nodeEnv === '' ? 'development' : nodeEnv;
+  const files = ['.env', `.env.${mode}`, ...(mode === 'test' ? [] : ['.env.local']), `.env.${mode}.local`, '.dev.vars'];
+  const supplied = new Map();
+
+  for (const file of files) {
+    let text;
+
+    try {
+      text = fs.readFileSync(path.join(dir, file), 'utf8');
+    } catch (err) {
+      if (err && (err.code === 'ENOENT' || err.code === 'EISDIR' || err.code === 'EACCES')) continue;
+      throw err;
+    }
+
+    for (const [name, value] of Object.entries(util.parseEnv(text))) supplied.set(name, value);
+  }
+
+  return supplied;
+}
+
+/** An UNSANDBOXED command's environment: this daemon's own, as the owner's
+ *  shell would give it, less what {@link WITHHELD_ENV} names and what a
+ *  dotenv file supplied. */
+function rawEnvironment(source, dotenv) {
+  const withheld = new Set(WITHHELD_ENV);
+  const env = {};
+
+  for (const name of Object.keys(source)) {
+    const value = source[name];
+
+    if (value === undefined || withheld.has(name) || dotenv.get(name) === value) continue;
+    env[name] = value;
+  }
+
+  return env;
+}
 
 /** GPU character devices, enumerated at every exec rather than at daemon start
  *  so a driver loaded after the daemon is picked up. `/dev/dri` covers Intel,
@@ -532,17 +597,14 @@ function rawViewFor(options) {
 
 /** The command environment, allow-listed out of `source`, with the sandbox's
  *  own overrides last. */
-function sandboxEnvironment(source, overrides) {
+function sandboxEnvironment(source, overrides, dotenv = new Map()) {
   const env = {};
 
-  for (const name of ENV_ALLOWLIST) {
-    const value = source[name];
-
-    if (value !== undefined) env[name] = value;
-  }
-
   for (const name of Object.keys(source)) {
-    if (ENV_ALLOWLIST_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
+    const value = source[name];
+    const allowed = ENV_ALLOWLIST.includes(name) || ENV_ALLOWLIST_FAMILY.test(name);
+
+    if (allowed && value !== undefined && dotenv.get(name) !== value) env[name] = value;
   }
 
   for (const name of Object.keys(overrides)) {
@@ -684,7 +746,7 @@ function plan(options) {
     return {
       view,
       argv: ['bash', '-c', command],
-      env: sandboxEnvironment(options.source ?? process.env, {}),
+      env: rawEnvironment(options.source ?? process.env, options.dotenv ?? new Map()),
       cwd: options.cwd,
       // The command's process starts there: nothing else puts it anywhere.
       spawnCwd: options.cwd,
@@ -713,7 +775,7 @@ function plan(options) {
       PATH: [...LINUX_PATH_HEAD.map((tail) => path.join(view.agentHome, tail)), ...MAC_PATH_TAIL].join(':'),
       KINU_SANDBOX: '1',
       XDG_RUNTIME_DIR: undefined,
-    });
+    }, options.dotenv);
 
     return {
       view,
@@ -736,7 +798,7 @@ function plan(options) {
     XDG_RUNTIME_DIR: '/tmp/xdg',
     NPM_CONFIG_PREFIX: path.join(view.home, '.local'),
     KINU_SANDBOX: '1',
-  });
+  }, options.dotenv);
 
   const gpu = options.gpu ?? gpuNodes();
 
@@ -867,6 +929,7 @@ module.exports = {
   MAC_DENY_SUBPATHS,
   ENV_ALLOWLIST,
   ENV_ALLOWLIST_FAMILY,
+  WITHHELD_ENV,
   VIEW_INVISIBLE,
   VIEW_READ_ONLY,
   VIEW_WRITABLE,
@@ -878,6 +941,8 @@ module.exports = {
   buildLinuxArgv,
   buildMacProfile,
   sandboxEnvironment,
+  rawEnvironment,
+  launchDotenv,
   plan,
   probe,
   helloCapability,

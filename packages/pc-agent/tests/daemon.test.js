@@ -422,19 +422,25 @@ describe('daemon startup hardening', () => {
 });
 
 describe('daemon exec output bound', () => {
-  test('a noisy command drains after the retained response is truncated', async () => {
+  const noisy = `${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000) + 'END')"`;
+
+  test('a noisy command keeps its head and tail, and its whole output is saved where the model can read it', async () => {
     const ws = fakeWs();
-    handle({
-      id: 'rpc-noisyexec0-1',
-      method: 'exec',
-      sandbox: RAW,
-      params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`],
-    }, ws, {});
+    handle({ id: 'rpc-noisyexec0-1', method: 'exec', sandbox: RAW, params: [noisy] }, ws, {});
 
     const result = (await ws.response('rpc-noisyexec0-1')).result;
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('[output truncated at 524288 bytes]');
-    expect(Buffer.byteLength(result.stdout)).toBeLessThan(525_000);
+    const spill = path.join(os.tmpdir(), 'kinu-tool-output', 'device-rpc-noisyexec0-1.stdout.log');
+
+    try {
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.startsWith('x'.repeat(1000))).toBe(true);
+      expect(result.stdout).toContain(`${'x'.repeat(1000)}END\n[stdout: 600003 bytes, `);
+      expect(result.stdout).toContain(`the full stdout is at ${spill}]`);
+      expect(Buffer.byteLength(result.stdout)).toBeLessThan(530_000);
+      expect(fs.statSync(spill).size).toBe(600_003);
+    } finally {
+      fs.rmSync(spill, { force: true });
+    }
   });
 });
 
@@ -1392,6 +1398,29 @@ describe('daemon process under Bun against a local hub', () => {
     });
   });
 
+  test('a sandboxed command spills into its own tmp, named as its shell and the file methods name it', async () => {
+    if (process.platform !== 'linux') return;
+    const sandbox = require('../src/sandbox.js');
+
+    if (sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+    await withDaemon(undefined, async ({ hub, root, reply }) => {
+      const block = { tier: 'sandboxed', agentHome: path.join(root, 'agents', 'ws-spill', 'home'), roots: [] };
+      // System tools only: the runtime that runs this suite lives in a home the sandbox hides.
+      const noisy = "head -c 600000 /dev/zero | tr '\\0' x; printf END";
+
+      hub.socket().send(JSON.stringify({ id: 'rpc-noisysbx00-1', method: 'exec', sandbox: block, params: [noisy] }));
+      const ran = await reply('rpc-noisysbx00-1');
+      const shown = '/tmp/kinu-tool-output/device-rpc-noisysbx00-1.stdout.log';
+      expect(ran.result.stdout).toContain(`the full stdout is at ${shown}]`);
+
+      hub.socket().send(JSON.stringify({ id: 'rpc-readspill0-1', method: 'readRange', sandbox: block, params: [shown, 599_990, 20] }));
+      const tail = await reply('rpc-readspill0-1');
+      expect(Buffer.from(tail.result.content, 'base64').toString('utf8')).toBe('xxxxxxxxxxEND');
+      hub.socket().send(JSON.stringify({ id: 'rpc-noisyack00-1', method: 'execAck', params: ['rpc-noisysbx00-1', 1] }));
+      await reply('rpc-noisyack00-1');
+    });
+  });
+
   test('a sandboxed exec naming an agent home outside the daemon\'s own root is refused', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     await withDaemon(undefined, async ({ hub, reply }) => {
@@ -1410,46 +1439,28 @@ describe('daemon process under Bun against a local hub', () => {
     });
   });
 
-  // F8. The daemon inherits the shell that ran `kinu connect`. Before this,
-  // every command inherited that whole environment, so one `env` turned a
-  // shell grant into the owner's CLI bearer, their PAT and their SSH agent.
-  test('a command gets an allow-listed environment, never the daemon\'s inherited credentials', async () => {
+  // F8, as Main decided on 2026-09-23: with the Sandbox switch off a command is
+  // the owner's own shell, so it keeps their environment; only what Kinu itself
+  // holds is withheld. The sandboxed tier keeps its allow-list (sandbox.test.js).
+  test('an unsandboxed command gets the owner\'s environment, never Kinu\'s own credentials', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+    const owner = { GITHUB_TOKEN: 'ghp_owner_pat', SSH_AUTH_SOCK: '/tmp/owner-agent.sock', TZ: 'Asia/Kolkata' };
+    const kinu = Object.fromEntries(['KINU_TOKEN', 'KINU_AUTH', 'OPENAI_API_KEY'].map((name) => [name, `${name.toLowerCase()} from the shell`]));
 
-    // NODE_OPTIONS is the code-loading class the allow-list exists for, and
-    // bun ignores it, so a pre-fix tree still RUNS the command and the failure
-    // below is the credential leak rather than a broken spawn. BUN_INSPECT is
-    // the same class and the same construction excludes it, but a pre-fix
-    // supervisor exits 1 trying to open that socket, which proves nothing
-    // about credentials.
-    const poison = {
-      KINU_TOKEN: 'ptc_leaked_cli_bearer',
-      KINU_AUTH: 'leaked-gateway-auth',
-      GITHUB_TOKEN: 'ghp_leaked_pat',
-      AWS_SECRET_ACCESS_KEY: 'leaked-aws-key',
-      SSH_AUTH_SOCK: '/tmp/leaked-agent.sock',
-      NODE_OPTIONS: '--require /tmp/leaked-preload.js',
-    };
-
-    await withDaemon(poison, async ({ hub, reply }) => {
+    await withDaemon({ ...owner, ...kinu }, async ({ hub, reply }) => {
       hub.socket().send(JSON.stringify({ id: 'rpc-envdump000-1', method: 'exec', sandbox: RAW, params: ['env'] }));
       const dumped = await reply('rpc-envdump000-1');
       expect(dumped.error).toBeUndefined();
       expect(dumped.result.exitCode).toBe(0);
 
-      const names = new Set(
-        dumped.result.stdout.split('\n')
-          .filter((line) => line.includes('='))
-          .map((line) => line.slice(0, line.indexOf('='))),
-      );
+      const seen = Object.fromEntries(dumped.result.stdout.split('\n')
+        .filter((line) => line.includes('='))
+        .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
 
-      // A command that cannot find its own tools is not hardened, it is broken.
-      expect(names.has('PATH')).toBe(true);
-      expect(names.has('HOME')).toBe(true);
+      expect(Object.keys(seen)).toContain('PATH');
+      expect(seen).toMatchObject(owner);
       // Asserted as a SET so the failure names what leaked.
-      expect([...names].filter((name) => Object.hasOwn(poison, name))).toEqual([]);
-      expect(dumped.result.stdout).not.toContain('ptc_leaked_cli_bearer');
-      expect(dumped.result.stdout).not.toContain('ghp_leaked_pat');
+      expect(Object.keys(seen).filter((name) => Object.hasOwn(kinu, name))).toEqual([]);
 
       hub.socket().send(JSON.stringify({ id: 'rpc-envdmpack-1', method: 'execAck', params: ['rpc-envdump000-1', 1] }));
       await reply('rpc-envdmpack-1');

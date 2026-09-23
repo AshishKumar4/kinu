@@ -98,40 +98,13 @@ const PONG_DEADLINE_MS = 10_000;
 
 const { KINU_INFLIGHT_ROOT } = process.env;
 
-/** The environment a command runs with, built by ALLOW-LIST out of this
- *  daemon's own. The list lives in sandbox.js, shared with the sandbox tiers.
- *  One edit reaches both paths, so the two cannot drift.
- *
- *  The daemon inherits the shell that ran `kinu connect`, so its environment
- *  can hold the CLI bearer (KINU_TOKEN), SSH_AUTH_SOCK, cloud keys and a
- *  GitHub PAT. A command that runs `env` reads all of them, which made a
- *  full-tier grant a credential read as well as a shell. Only the names a
- *  POSIX command needs to find its tools, its home and its locale cross.
- *
- *  An allow-list rather than a deny-list, because the dangerous set is open:
- *  NODE_OPTIONS and BUN_INSPECT load code into the next process this daemon
- *  starts, and nobody can enumerate the rest. LC_* is a family, so it is
- *  matched; the others are named.
- */
-function commandEnvironment(source = process.env) {
-  const env = {};
+/** The supervisor's own environment: the sandboxed tier's allow-list, so no
+ *  NODE_OPTIONS or BUN_INSPECT loads code into it. The command it starts runs
+ *  with its plan's environment (sandbox.js), never this one. */
+const COMMAND_ENV = sandbox.sandboxEnvironment(process.env, {});
 
-  for (const name of sandbox.ENV_ALLOWLIST) {
-    const value = source[name];
-
-    if (value !== undefined) env[name] = value;
-  }
-
-  for (const name of Object.keys(source)) {
-    if (sandbox.ENV_ALLOWLIST_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
-  }
-
-  return env;
-}
-
-/** One construction for both processes: the supervisor is started with this,
- *  and hands its own `process.env` to `/bin/sh`. */
-const COMMAND_ENV = commandEnvironment();
+/** What the dotenv files in this daemon's launch directory put into its environment; no command inherits it. */
+const LAUNCH_DOTENV = sandbox.launchDotenv(process.cwd(), process.env.NODE_ENV);
 
 /** The method that terminates one in-flight command's process group, and the
  *  cancellation protocol this daemon speaks. Both mirror core's
@@ -884,9 +857,9 @@ const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
 
 const EXEC_ACK_METHOD = 'execAck';
 
-const EXEC_STREAM_TRUNCATION_MARKER = `[output truncated at ${EXEC_STREAM_MAX_BYTES} bytes]\n`;
-
-const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + Buffer.byteLength(EXEC_STREAM_TRUNCATION_MARKER);
+/** Room for what the supervisor writes around the kept bytes: the seam, and the closing line that names
+ *  the spill path or why it was not saved. */
+const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + 16 * 1024;
 
 function supervisionSupported(platform = process.platform) {
   return platform === 'linux' || platform === 'darwin';
@@ -1043,17 +1016,14 @@ function readTerminalResult(dir) {
   return { kind, exitCode };
 }
 
+/** The supervisor bounds the file as it writes it; the read bound only keeps a damaged file off the heap. */
 function readCapturedOutput(file) {
   const descriptor = fs.openSync(file, 'r');
 
   try {
-    const size = fs.fstatSync(descriptor).size;
-    const retained = Math.min(size, size > EXEC_CAPTURE_MAX_BYTES ? EXEC_STREAM_MAX_BYTES : EXEC_CAPTURE_MAX_BYTES);
-    const bytes = Buffer.allocUnsafe(retained);
+    const bytes = Buffer.allocUnsafe(Math.min(fs.fstatSync(descriptor).size, EXEC_CAPTURE_MAX_BYTES));
     const read = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
     const output = bytes.subarray(0, read).toString();
-
-    if (size > EXEC_CAPTURE_MAX_BYTES) return output + EXEC_STREAM_TRUNCATION_MARKER;
 
     return fs.existsSync(file + '.after-exit') ? output + '\n[background output after command exit is not captured]\n' : output;
   } finally {
@@ -1092,7 +1062,9 @@ const { execFileSync, spawn } = require('node:child_process');
 
 const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
-const marker = '[output truncated at ' + maxOutput + ' bytes]\\n';
+// Half kept from the start, half from the end, as core's BoundedOutput keeps them (COMMAND_OUTPUT_LIMITS).
+const HEAD = Math.floor(maxOutput / 2);
+const TAIL = maxOutput - HEAD;
 
 /** The daemon that started this supervisor, by IDENTITY rather than liveness:
  * the kernel reparents an orphan, so a changed ppid is exactly "the parent is
@@ -1137,26 +1109,123 @@ function processGroupHasLiveProcess(group) {
   });
 }
 
+/** One stream: the first HEAD bytes go to its file as they arrive, the last TAIL stay in a ring, every
+ *  byte is counted, and once the stream outgrows both the whole of it goes to the spill file. close()
+ *  writes what core's BoundedOutput.finish writes, byte for byte, so every executor reads the same.
+ *  The spill is written at its host path and named by the path the command's own view gives it. */
 class Capture {
-  constructor(file) {
-    this.fd = fs.openSync(file, 'w', 0o600);
-    this.remaining = maxOutput;
-    this.truncated = false;
+  constructor(file, spill, stream) {
+    this.fd = fs.openSync(file, 'w+', 0o600);
+    this.spillTarget = spill || null;
+    this.stream = stream;
+    this.head = 0;
+    this.ring = null;
+    this.ringEnd = 0;
+    this.ringLength = 0;
+    this.total = 0;
+    this.spill = null;
+    this.spillFailure = null;
   }
 
   write(chunk) {
-    if (this.remaining === 0) {
-      this.truncated = true;
+    this.total += chunk.length;
+    // Nothing is dropped before this chunk, so the head and ring hold everything seen so far.
+    if (this.spill === null && this.spillFailure === null && this.total > HEAD + TAIL) this.openSpill();
+    if (this.spill !== null) this.spillWrite(chunk);
+    let rest = chunk;
+    if (this.head < HEAD) {
+      const taken = rest.subarray(0, HEAD - this.head);
+      fs.writeSync(this.fd, taken, 0, taken.length, this.head);
+      this.head += taken.length;
+      rest = rest.subarray(taken.length);
+    }
+    if (rest.length > 0 && TAIL > 0) this.keep(rest);
+  }
+
+  openSpill() {
+    if (this.spillTarget === null) {
+      this.spillFailure = 'no directory to save it in';
       return;
     }
-    const retained = chunk.subarray(0, this.remaining);
-    fs.writeSync(this.fd, retained);
-    this.remaining -= retained.length;
-    if (retained.length !== chunk.length) this.truncated = true;
+    try {
+      fs.mkdirSync(require('node:path').dirname(this.spillTarget.file), { recursive: true, mode: 0o700 });
+      this.spill = fs.openSync(this.spillTarget.file, 'w', 0o600);
+      const head = Buffer.alloc(this.head);
+      fs.readSync(this.fd, head, 0, this.head, 0);
+      this.spillWrite(head);
+      this.spillWrite(this.keptTail());
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  spillWrite(bytes) {
+    if (this.spill === null) return;
+    try {
+      for (let offset = 0; offset < bytes.length;) offset += fs.writeSync(this.spill, bytes, offset);
+    } catch (err) {
+      this.fail(err);
+    }
+  }
+
+  fail(err) {
+    this.spillFailure = 'saving ' + this.spillTarget.shown + ' failed: ' + (err && err.message ? err.message : String(err));
+    if (this.spill !== null) fs.closeSync(this.spill);
+    this.spill = null;
+  }
+
+  keep(rest) {
+    this.ring = this.ring || Buffer.alloc(TAIL);
+    if (rest.length >= TAIL) {
+      rest.copy(this.ring, 0, rest.length - TAIL);
+      this.ringEnd = 0;
+      this.ringLength = TAIL;
+      return;
+    }
+    const first = Math.min(rest.length, TAIL - this.ringEnd);
+    rest.copy(this.ring, this.ringEnd, 0, first);
+    rest.copy(this.ring, 0, first);
+    this.ringEnd = (this.ringEnd + rest.length) % TAIL;
+    this.ringLength = Math.min(TAIL, this.ringLength + rest.length);
+  }
+
+  keptTail() {
+    if (this.ring === null) return Buffer.alloc(0);
+    if (this.ringLength < TAIL) return this.ring.subarray(0, this.ringLength);
+    return Buffer.concat([this.ring.subarray(this.ringEnd), this.ring.subarray(0, this.ringEnd)]);
   }
 
   close() {
-    if (this.truncated) fs.writeSync(this.fd, marker);
+    const tail = this.keptTail();
+    if (this.total === this.head + tail.length) {
+      fs.writeSync(this.fd, tail, 0, tail.length, this.head);
+      fs.closeSync(this.fd);
+      return;
+    }
+    // A character cut at either seam is dropped whole rather than decoded as a replacement.
+    const last = Buffer.alloc(Math.min(4, this.head));
+    fs.readSync(this.fd, last, 0, last.length, this.head - last.length);
+    let headEnd = this.head;
+    for (let lead = last.length - 1; lead >= 0; lead--) {
+      const byte = last[lead];
+      if ((byte & 0xC0) === 0x80) continue;
+      const size = byte >= 0xF0 ? 4 : byte >= 0xE0 ? 3 : byte >= 0xC0 ? 2 : 1;
+      if (lead + size > last.length) headEnd = this.head - last.length + lead;
+      break;
+    }
+    let tailStart = 0;
+    while (tailStart < Math.min(3, tail.length) && (tail[tailStart] & 0xC0) === 0x80) tailStart++;
+    const omitted = this.total - headEnd - (tail.length - tailStart);
+    if (this.spill !== null) fs.closeSync(this.spill);
+    let where = 'the full ' + this.stream + ' was not saved: ' + this.spillFailure;
+    if (this.spill !== null) where = 'the full ' + this.stream + ' is at ' + this.spillTarget.shown;
+    const closing = Buffer.concat([
+      Buffer.from('\\n[\\u2026 ' + omitted + ' bytes omitted \\u2026]\\n'),
+      tail.subarray(tailStart),
+      Buffer.from('\\n[' + this.stream + ': ' + this.total + ' bytes, ' + omitted + ' omitted from the middle; ' + where + ']\\n'),
+    ]);
+    fs.writeSync(this.fd, closing, 0, closing.length, headEnd);
+    fs.ftruncateSync(this.fd, headEnd + closing.length);
     fs.closeSync(this.fd);
   }
 }
@@ -1217,8 +1286,9 @@ try {
   // on disk rather than two, and a sentinel the daemon would have to
   // interpolate into this script is not needed.
   const argv = [...plan.argv, command];
-  stdout = new Capture(stdoutFile);
-  stderr = new Capture(stderrFile);
+  const spill = plan.spill || {};
+  stdout = new Capture(stdoutFile, spill.stdout, 'stdout');
+  stderr = new Capture(stderrFile, spill.stderr, 'stderr');
   child = spawn(argv[0], argv.slice(1), {
     detached: true,
     env: plan.env,
@@ -1577,7 +1647,10 @@ function startSupervisor(requestId, command, plan) {
   // it from `command`, which it unlinks before the command runs.
   fs.writeFileSync(
     planFile,
-    JSON.stringify({ argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd, cwd: plan.spawnCwd }),
+    JSON.stringify({
+      argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd, cwd: plan.spawnCwd,
+      spill: outputSpill(plan, requestId),
+    }),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
 
@@ -1591,6 +1664,24 @@ function startSupervisor(requestId, command, plan) {
   child.unref();
 
   return { child, dir };
+}
+
+/**
+ * Where a command's whole output goes once it outgrows the bound, as `{ file, shown }`: the host path,
+ * and the path the command's own view names it by. A sandboxed command spills into the agent's own
+ * tmp, which its shell reaches as /tmp and the file methods serve; an unsandboxed one into this
+ * machine's tmp. Never Kinu's own directory, which neither serves.
+ */
+function outputSpill(plan, requestId) {
+  const dir = path.join(plan.view.raw ? os.tmpdir() : plan.view.agentTmp, 'kinu-tool-output');
+
+  const at = (stream) => {
+    const file = path.join(dir, `device-${requestId}.${stream}.log`);
+
+    return { file, shown: plan.view.raw ? file : plan.view.insidePath(file) };
+  };
+
+  return { stdout: at('stdout'), stderr: at('stderr') };
 }
 
 function waitForSupervisorState(dir, child) {
@@ -1719,7 +1810,9 @@ function planFromFrame(msg, command, source = process.env) {
   const frame = frameSandbox(msg);
 
   if (frame.tier === 'raw') {
-    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: rawWorkingDirectory(msg, frame.roots), source });
+    return sandbox.plan({
+      tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: rawWorkingDirectory(msg, frame.roots), source, dotenv: LAUNCH_DOTENV,
+    });
   }
 
   if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
@@ -1747,6 +1840,7 @@ function planFromFrame(msg, command, source = process.env) {
     cwd: msg.cwd === undefined ? agentHome : path.resolve(parseString(msg.cwd, 'exec cwd must be a path')),
     command,
     source,
+    dotenv: LAUNCH_DOTENV,
     statusFd: 3,
   });
 }

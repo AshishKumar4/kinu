@@ -7,7 +7,8 @@ import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -458,16 +459,25 @@ describe('pc-agent command cancellation', () => {
 });
 
 describe('pc-agent durable supervisor', () => {
-  test('bounds captured output and includes the truncation marker', async () => {
+  test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {
     const ws = recorder();
     const id = rpcId(300);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, id);
-    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`] }, ws.socket);
+    const spill = join(tmpdir(), 'kinu-tool-output', `device-${id}.stdout.log`);
+    handle({ id, method: 'exec', params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000) + 'END')"`] }, ws.socket);
     const answer = await settled(() => ws.of(id)[0], 'the bounded output result');
     const result = v.parse(ExecResultSchema, answer.result);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('[output truncated at 524288 bytes]');
-    expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(525_000);
+
+    try {
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`END\n[stdout: 600003 bytes, `);
+      expect(result.stdout).toContain(`the full stdout is at ${spill}]`);
+      expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(530_000);
+      expect(statSync(spill).size).toBe(600_003);
+    } finally {
+      rmSync(spill, { force: true });
+    }
+
     acknowledge(rpcId(301), id, ws.socket);
     await settled(() => ws.of(rpcId(301))[0], 'the bounded output ACK');
   });
