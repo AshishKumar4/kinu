@@ -314,7 +314,7 @@ Every fetch goes through `withRateLimitRetry` (`packages/core/src/providers/rate
 
 Classification is narrow. 429 and 529 always count. A 503 counts only when status text, `x-error-code` or body matches overload, capacity, too many requests, or rate limit. An unreadable 503 propagates rather than reading healthy. Without `Retry-After` the wait is a full-jitter draw doubling from 2 s to a 60 s cap (`DEFAULT_BASE_DELAY_MS`, `DEFAULT_MAX_DELAY_MS`). Non-replayable bodies pass through untouched. SDK transport retry is pinned at `PROVIDER_SDK_RETRIES = 2`, stated at the `streamText` call, so a vendor default cannot move it silently.
 
-`ProviderPacer` (`packages/core/src/providers/pacing.ts`) spaces request starts per shared host. It holds the lane only while awaiting headers. A request sleeping out `Retry-After` frees capacity for siblings. `declareWait` joins siblings into one cooldown instead of each starting into a refusing limit.
+`ProviderPacer` (`packages/core/src/providers/pacing.ts`) holds requests to a host behind its declared cooldown. `declareWait` joins siblings into one cooldown instead of each starting into a refusing limit. The pacer counts no requests. Workers limits connections waiting for headers to six per invocation and queues the seventh itself. An isolate-wide count made one request wait on another request's release, and workerd cancels such a request as hung: HTTP 500 `error code: 1101` on kinu.run, 2026-09-23.
 
 ## Environment variables
 
