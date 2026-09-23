@@ -271,6 +271,23 @@ describe('the shell over the bound directory', () => {
     const entries = await checkpoints.list({ limit: 10 });
     expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
   });
+
+  test('a file write snapshots the bound directory, never a marked directory above it', async () => {
+    const { state, project } = roots('cwd-plane-file-checkpoint');
+    // A marker above the workspace: snapshotting there would stage every file beside the workspace too.
+    writeFileSync(join(dirname(project), 'package.json'), '{}\n');
+    const rt = agentRuntime(state, `file-checkpointer-${basename(dirname(state))}`, project);
+    const checkpoints = rt.checkpoints;
+
+    if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
+
+    if (!(await checkpoints.status()).available) return; // no git on this box
+
+    await rt.storage.vfs.writeFile('notes/plan.md', 'ship it\n');
+
+    const entries = await checkpoints.list({ limit: 10 });
+    expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
+  });
 });
 
 describe('what an opened workspace puts where', () => {
