@@ -1,7 +1,6 @@
 /**
- * The public share index. A projection, never an authority: visibility lives on
- * the owner's share row, so a reader must re-check each row against it. Written
- * and forgotten today; the public gallery that reads it is later work.
+ * The public share index: a projection, never an authority, since visibility
+ * lives on the owner's share row. Nothing reads it yet.
  */
 import * as v from 'valibot';
 import type { ControlPlaneSql } from './sql';

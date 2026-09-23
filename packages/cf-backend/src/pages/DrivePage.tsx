@@ -1,61 +1,35 @@
 /** The Drive: My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`). Nothing empty is drawn. */
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
 import {
-  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FileArchiveIcon,
-  FolderPlusIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon, PencilSimpleIcon, PlusIcon, ProhibitIcon,
-  ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, WarningIcon, XIcon,
+  ArrowSquareOutIcon, BookOpenIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
+  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
   APP_ROUTES, DRIVE_SKILLS_DIR, blueprintPagePath, entryRevision, formatBytes, parseSkillFile, shortAge, workspaceDisplayTitle,
-  type DriveEntry, type DriveListing, type LiveShareVisibility, type MarkedSkill, type OwnedSlate, type SharedLibrary, type SharedRow,
+  type DriveEntry, type DriveListing, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import {
-  addSkillArchive, addSkillFolder, addSkillText, deleteEntry, downloadUrl, inlineUrl, listDrive, makeFolder, markAsSkill,
-  readDriveText, renameEntry, uploadFile, uploadFolder, uploadZip, type PickedFile,
+  downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip,
 } from "@/lib/drive-api";
-import { getSharedLibrary, openLiveShare, revokeShare } from "@/lib/shared-api";
+import { getSharedLibrary, openLiveShare } from "@/lib/shared-api";
 import { useAsyncResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { useWorkspaceRpc } from "@/hooks/use-kinu";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { Modal } from "@/components/ui/Modal";
-import { FilledButton } from "@/components/ui/FilledButton";
-import { inputCls } from "@/components/ui/form";
 import {
   Cover, FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon, type MenuItem,
 } from "@/components/drive/DriveTiles";
+import { childPath, DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";
-import { ForkDialog } from "@/components/shared/ForkDialog";
-import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 
 export type DriveTab = "mine" | "shared";
 
 function folderHref(path: string): string {
   return path === "/" ? APP_ROUTES.drive : `${APP_ROUTES.drive}${path}`;
-}
-
-function childPath(folder: string, name: string): string {
-  return folder === "/" ? `/${name}` : `${folder}/${name}`;
-}
-
-function relativePathOf(file: File): string {
-  return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
-}
-
-function picked(files: FileList | null): PickedFile[] {
-  return [...(files ?? [])].map((file) => ({ path: relativePathOf(file), file }));
-}
-
-function pickedFolderName(files: readonly PickedFile[]): string | null {
-  const first = files[0]?.path.split("/")[0];
-
-  return first === undefined || first === files[0]?.path ? null : first;
 }
 
 function slateHref(slate: OwnedSlate): string {
@@ -125,150 +99,6 @@ function EmptyState({ title, body }: { title: string; body: ReactNode }) {
   );
 }
 
-function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: {
-  title: string; icon: ReactNode; initial: string; label: string; action: string;
-  onCommit: (name: string) => Promise<void>; onClose: () => void;
-}) {
-  const [value, setValue] = useState(initial);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const name = value.trim();
-  const valid = name !== "" && !name.includes("/") && name !== "." && name !== "..";
-
-  const submit = (): void => {
-    if (!valid || busy) return;
-    setBusy(true);
-    setError(null);
-    startTransition(async () => {
-      try {
-        await onCommit(name);
-        onClose();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
-      }
-    });
-  };
-
-  return (
-    <Modal title={title} icon={icon} onClose={onClose} busy={busy}
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</FilledButton>
-      </>}>
-      <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-2">
-        <label className="block p-meta p-text-3" htmlFor="drive-name">{label}</label>
-        <input id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()} className={inputCls} aria-invalid={value !== "" && !valid} />
-        {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
-      </form>
-    </Modal>
-  );
-}
-
-function ConfirmDialog({ title, body, action, onConfirm, onClose, marker }: {
-  title: string; body: ReactNode; action: string; onConfirm: () => Promise<void>; onClose: () => void; marker: `data-${string}`;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const confirm = (): void => {
-    setBusy(true);
-    setError(null);
-    startTransition(async () => {
-      try {
-        await onConfirm();
-        onClose();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
-      }
-    });
-  };
-
-  return (
-    <Modal title={title} onClose={onClose} busy={busy} maxWidthClass="max-w-sm"
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton danger {...{ [marker]: "" }} onClick={confirm} disabled={busy}>{busy ? `${action}…` : action}</FilledButton>
-      </>}>
-      <p className="p-row-text p-text-2">{body}</p>
-      {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
-    </Modal>
-  );
-}
-
-const DELETE_ALSO: Record<DriveEntry["kind"], string> = {
-  file: "",
-  folder: " and everything inside it",
-  symlink: " (the folder it points at stays)",
-};
-
-function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: () => void }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const folderInput = useRef<HTMLInputElement>(null);
-  const zipInput = useRef<HTMLInputElement>(null);
-
-  const run = (work: () => Promise<MarkedSkill>): void => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    startTransition(async () => {
-      try {
-        await work();
-        onAdded();
-        onClose();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
-      }
-    });
-  };
-
-  return (
-    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>
-          {busy ? "Adding…" : "Add"}
-        </FilledButton>
-      </>}>
-      <div className="space-y-3">
-        <p className="p-row-text p-text-2">
-          Paste a <span className="font-mono p-text">SKILL.md</span>: front matter that names it, then the steps. Every workspace you own uses it from its next turn.
-        </p>
-        <textarea data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false}
-          placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"}
-          aria-label="SKILL.md" className={`${inputCls} font-mono text-xs leading-relaxed`} />
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="p-meta p-text-3">or pick</span>
-          <button type="button" className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs" disabled={busy}
-            onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</button>
-          <button type="button" className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs" disabled={busy}
-            onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</button>
-          <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-skill-folder
-            onChange={(event) => {
-              const files = picked(event.currentTarget.files);
-              event.currentTarget.value = "";
-
-              if (files.length > 0) run(() => addSkillFolder(files, pickedFolderName(files)));
-            }} />
-          <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" data-drive-skill-zip
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-
-              if (file !== undefined) run(() => addSkillArchive(file, file.name.replace(/\.zip$/iu, "")));
-            }} />
-        </div>
-        {error !== null && <div role="alert" data-drive-skill-error className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
-      </div>
-    </Modal>
-  );
-}
-
 const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|css|html?)$/iu;
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
@@ -299,7 +129,9 @@ function TextCover({ path, name }: { path: string; name: string }) {
       observer.disconnect();
       readDriveText(path, 2048).then(
         (file) => { if (live) setText(file.content ?? null); },
-        () => { if (live) setText(null); },
+        (...rejection: [unknown]) => {
+          diagnostics.failure("drive.cover_read_failed", toKinuError({ doing: `read ${path} for its tile`, cause: rejection[0], otherwise: "unavailable" }));
+        },
       );
     });
 
@@ -324,87 +156,12 @@ function TextCover({ path, name }: { path: string; name: string }) {
   );
 }
 
-/** The share sheet talks to the slate's own workspace. */
-function DriveShareSheet({ slate, onClose }: { slate: OwnedSlate; onClose: () => void }) {
-  const { rpc } = useWorkspaceRpc(slate.workspace);
-
-  return <ShareSlateDialog workspace={slate.workspace} slate={slate.id} title={slate.title} rpc={rpc} onClose={onClose} />;
-}
-
-const NEW_BUTTON = "h-8 gap-1.5 px-3 text-sm max-sm:!size-9 max-sm:rounded-full max-sm:!p-0";
-
 interface Transfer {
   readonly id: number;
   readonly name: string;
   readonly status: "uploading" | "failed";
   readonly error?: string;
 }
-
-function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: {
-  onFiles: (files: File[]) => void;
-  onFolder: (files: PickedFile[]) => void;
-  onZip: (file: File) => void;
-  onNewFolder: () => void;
-  onNewSkill: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
-  const filesInput = useRef<HTMLInputElement>(null);
-  const folderInput = useRef<HTMLInputElement>(null);
-  const zipInput = useRef<HTMLInputElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useCloseOnOutsideClick(open, menu, close);
-
-  const items: readonly { label: string; icon: ReactNode; marker: `data-${string}`; run: () => void; apart?: boolean }[] = [
-    { label: "Upload files", icon: <UploadSimpleIcon size={15} />, marker: "data-drive-upload-files", run: () => filesInput.current?.click() },
-    { label: "Upload a folder", icon: <FolderSimpleIcon size={15} />, marker: "data-drive-upload-folder", run: () => folderInput.current?.click() },
-    { label: "Unpack a .zip", icon: <FileArchiveIcon size={15} />, marker: "data-drive-upload-zip", run: () => zipInput.current?.click() },
-    { label: "New folder", icon: <FolderPlusIcon size={15} />, marker: "data-drive-new-folder", run: onNewFolder, apart: true },
-    { label: "New skill", icon: <BookOpenIcon size={15} />, marker: "data-drive-add-skill", run: onNewSkill },
-  ];
-
-  return (
-    <div ref={menu} className="relative">
-      <FilledButton className={NEW_BUTTON} aria-label="New" aria-haspopup="menu" aria-expanded={open}
-        data-drive-new onClick={() => setOpen((value) => !value)}>
-        <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span>
-      </FilledButton>
-      {open && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
-          {items.map((item) => (
-            <div key={item.label}>
-              {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
-              <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-elevated)]">
-                <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <input ref={filesInput} type="file" multiple className="hidden" data-drive-files-input
-        onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; onFiles(files); }} />
-      <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-folder-input
-        onChange={(event) => { const files = picked(event.currentTarget.files); event.currentTarget.value = ""; onFolder(files); }} />
-      <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" data-drive-zip-input
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          event.currentTarget.value = "";
-
-          if (file !== undefined) onZip(file);
-        }} />
-    </div>
-  );
-}
-
-type Dialog =
-  | { kind: "new-folder" }
-  | { kind: "rename"; entry: DriveEntry }
-  | { kind: "delete"; entry: DriveEntry }
-  | { kind: "add-skill" }
-  | { kind: "share"; slate: OwnedSlate }
-  | { kind: "stop"; row: SharedRow }
-  | { kind: "fork"; row: SharedRow };
 
 function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | undefined }) {
   if (visibility === undefined) return null;
@@ -422,16 +179,169 @@ function whoCanOpen(row: SharedRow): string {
   return users.length === 1 ? users[0] ?? "" : `${String(users.length)} people`;
 }
 
-function whoLoses(row: SharedRow): string {
-  const users = row.users ?? [];
-
-  if (row.kind === "blueprint" || row.visibility === "public" || users.length === 0) return "Everyone with the link loses";
-
-  return `${users.join(", ")} ${users.length === 1 ? "loses" : "lose"}`;
-}
-
 function isEmptyLibrary(library: SharedLibrary): boolean {
   return library.received.length + library.mine.length === 0;
+}
+
+interface MineContents {
+  readonly slates: readonly OwnedSlate[];
+  readonly blueprints: readonly SharedRow[];
+  readonly folders: readonly DriveEntry[];
+  readonly files: readonly DriveEntry[];
+}
+
+/** The Skills folder leads the folders, and is left out until it holds a skill. */
+function mineContents(path: string, entries: readonly DriveEntry[], library: SharedLibrary | null, skillsListed: boolean): MineContents {
+  const isRoot = path === "/";
+  const isSkills = (entry: DriveEntry): boolean => isRoot && entry.name === DRIVE_SKILLS_DIR.slice(1);
+  const shown = entries.filter((entry) => skillsListed || !isSkills(entry));
+
+  return {
+    slates: isRoot && library !== null ? library.slates : [],
+    blueprints: isRoot && library !== null ? library.mine.filter((row) => row.kind === "blueprint") : [],
+    folders: shown.filter((entry) => entry.kind !== "file").sort((a, b) => Number(isSkills(b)) - Number(isSkills(a))),
+    files: shown.filter((entry) => entry.kind === "file"),
+  };
+}
+
+function isEmptyMine(contents: MineContents): boolean {
+  return contents.slates.length + contents.blueprints.length + contents.folders.length + contents.files.length === 0;
+}
+
+/** Shared with nothing in it goes back to My stuff; a first visit to an empty My stuff goes to what is shared. */
+function landing(tab: DriveTab, firstVisit: boolean, mineEmpty: boolean, library: SharedLibrary | null): ReactNode {
+  const sharesAnything = library !== null && !isEmptyLibrary(library);
+
+  if (tab === "shared" && library !== null && !sharesAnything) return <Navigate to={APP_ROUTES.drive} replace state={{ chosen: true }} />;
+
+  if (tab === "mine" && firstVisit && mineEmpty && sharesAnything) return <Navigate to={APP_ROUTES.shared} replace />;
+
+  return null;
+}
+
+function subtitleOf(tab: DriveTab, path: string, mineEmpty: boolean): ReactNode {
+  if (tab !== "mine") return null;
+
+  if (path === DRIVE_SKILLS_DIR) return "Every workspace you own uses these skills.";
+
+  if (path !== "/" || mineEmpty) return null;
+
+  return <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
+}
+
+function SectionList({ groups, titled = false }: { groups: readonly { label: string; tiles: readonly ReactNode[] }[]; titled?: boolean }) {
+  const shown = groups.filter((group) => group.tiles.length > 0);
+
+  return (
+    <div className="space-y-8">
+      {shown.map((group) => <Section key={group.label} label={group.label} titled={titled || shown.length > 1}>{group.tiles}</Section>)}
+    </div>
+  );
+}
+
+function MineBody({ resource, onRetry, empty, isRoot, sharesAnything, children }: {
+  resource: AsyncResource<DriveListing>;
+  onRetry: () => void;
+  empty: boolean;
+  isRoot: boolean;
+  sharesAnything: boolean;
+  children: ReactNode;
+}) {
+  if (resource.status === "loading") return <div className="flex justify-center py-16"><Loader size="base" /></div>;
+
+  if (resource.status === "error" && resource.last === null) {
+    return <LoadFailure what="this folder" message={resource.message} onRetry={onRetry} className="py-3" />;
+  }
+
+  if (!empty) return children;
+
+  if (!isRoot) return <EmptyState title="This folder is empty" body="Drop files here, or use New." />;
+
+  return (
+    <EmptyState title={sharesAnything ? "Nothing here yet" : "Your Drive is empty"}
+      body={<>Drop files here, or use New. Every workspace you own sees them at <span className="font-mono p-text-2">/shared</span>, and the slates your workspaces build show up here too.</>} />
+  );
+}
+
+function DropZone({ label, onFiles, children }: { label: string; onFiles: (files: File[]) => void; children: ReactNode }) {
+  const [over, setOver] = useState(false);
+
+  return (
+    <div data-drive-list className="relative mt-6"
+      onDragOver={(event) => { event.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => { event.preventDefault(); setOver(false); onFiles([...event.dataTransfer.files]); }}>
+      {children}
+      {over && (
+        <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
+          <span className="flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-sm font-semibold text-[var(--c-accent-on)] p-shadow-menu">
+            <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {label}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TransferRow({ row, onDismiss }: { row: Transfer; onDismiss: () => void }) {
+  if (row.status === "uploading") {
+    return (
+      <li data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
+        <Loader size="sm" /><span className="truncate p-text-2">{row.name}</span><span className="p-text-3">uploading…</span>
+      </li>
+    );
+  }
+
+  return (
+    <li data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
+      <WarningIcon size={13} className="shrink-0 p-danger" /><span className="truncate p-text-2">{row.name}</span>
+      <span className="min-w-0 truncate p-danger" title={row.error}>{row.error}</span>
+      <button type="button" onClick={onDismiss} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label={`Dismiss ${row.name}`}><XIcon size={12} /></button>
+    </li>
+  );
+}
+
+function DriveNotices({ notice, onDismissNotice, libraryResource, onRetryLibrary, copyStatus, transfers, onDismissTransfer }: {
+  notice: string | null;
+  onDismissNotice: () => void;
+  libraryResource: AsyncResource<SharedLibrary>;
+  onRetryLibrary: () => void;
+  copyStatus: ReturnType<typeof useCopy>["status"];
+  transfers: readonly Transfer[];
+  onDismissTransfer: (id: number) => void;
+}) {
+  return (
+    <>
+      {notice !== null && (
+        <div role="alert" data-drive-notice className="p-notice-danger mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs">
+          <WarningIcon size={13} className="mt-px shrink-0" />
+          <span className="min-w-0 break-words">{notice}</span>
+          <button type="button" onClick={onDismissNotice} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
+        </div>
+      )}
+      {libraryResource.status === "error" && (
+        <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
+      )}
+      {copyStatus !== "idle" && <p role="status" className="mt-4 p-meta p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
+      {transfers.length > 0 && (
+        <ul className="mt-4 space-y-1">
+          {transfers.map((row) => <TransferRow key={row.id} row={row} onDismiss={() => onDismissTransfer(row.id)} />)}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function FileDrawer({ path, entry, onSaved, onClose }: { path: string; entry: DriveEntry; onSaved: () => void; onClose: () => void }) {
+  return (
+    <>
+      <div aria-hidden="true" className="p-scrim fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[min(640px,92vw)]" data-drive-viewer>
+        <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)}
+          onSaved={onSaved} onClose={onClose} />
+      </div>
+    </>
+  );
 }
 
 export default function DrivePage({ tab }: { tab: DriveTab }) {
@@ -449,10 +359,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const library = useAsyncResource(loadLibrary, undefined, "library");
   const loadSkills = useCallback((): Promise<DriveListing | null> => (isRoot ? listDrive(DRIVE_SKILLS_DIR) : Promise.resolve(null)), [isRoot]);
   const skills = useAsyncResource(loadSkills, undefined, isRoot ? "root" : "folder");
-  const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [dialog, setDialog] = useState<DriveDialogState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
-  const [dragOver, setDragOver] = useState(false);
   const nextTransfer = useRef(0);
 
   const titleOf = (workspace: string): string => {
@@ -477,11 +386,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   const uploadFiles = (files: File[]): void => {
     for (const file of files) transfer(file.name, () => uploadFile(childPath(path, file.name), file));
-  };
-
-  const act = async (work: () => Promise<void>): Promise<void> => {
-    await work();
-    listing.reload();
   };
 
   const background = (work: () => Promise<void>): void => {
@@ -511,42 +415,23 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     if (path !== DRIVE_SKILLS_DIR) await navigate(folderHref(DRIVE_SKILLS_DIR));
   };
 
-  const openFile = (name: string): void => {
+  const showFile = (name: string | null): void => {
     const next = new URLSearchParams(search);
-    next.set("file", name);
-    setSearch(next);
-  };
 
-  const closeFile = (): void => {
-    const next = new URLSearchParams(search);
-    next.delete("file");
+    if (name === null) next.delete("file");
+    else next.set("file", name);
     setSearch(next);
   };
 
   const shared = lastValue(library.resource);
   const sharesAnything = shared !== null && !isEmptyLibrary(shared);
-  const entries = lastValue(listing.resource)?.entries ?? [];
-  const skillsListed = (lastValue(skills.resource)?.entries.length ?? 0) > 0;
-  const shown = entries.filter((entry) => !(isRoot && entry.name === DRIVE_SKILLS_DIR.slice(1) && !skillsListed));
-  const leads = (entry: DriveEntry): number => Number(isRoot && entry.name === DRIVE_SKILLS_DIR.slice(1));
-
-  const folders = shown.filter((entry) => entry.kind !== "file").sort((a, b) => leads(b) - leads(a));
-  const files = shown.filter((entry) => entry.kind === "file");
-  const slates = isRoot && shared !== null ? shared.slates : [];
-  const blueprints = isRoot && shared !== null ? shared.mine.filter((row) => row.kind === "blueprint") : [];
-
-  const settled = (resource: AsyncResource<unknown>): boolean => resource.status !== "loading";
-
-  const mineEmpty = settled(listing.resource) && settled(library.resource) && settled(skills.resource)
-    && shown.length === 0 && slates.length === 0 && blueprints.length === 0;
-
-  const chosen = v.safeParse(ChosenState, location.state).success;
+  const contents = mineContents(path, lastValue(listing.resource)?.entries ?? [], shared, (lastValue(skills.resource)?.entries.length ?? 0) > 0);
+  const settled = [listing.resource, library.resource, skills.resource].every((resource) => resource.status !== "loading");
+  const mineEmpty = settled && isEmptyMine(contents);
   const inSkills = path === DRIVE_SKILLS_DIR;
-  const opened = files.find((entry) => entry.name === search.get("file"));
+  const redirect = landing(tab, isRoot && !v.safeParse(ChosenState, location.state).success, mineEmpty, shared);
 
-  if (tab === "shared" && shared !== null && !sharesAnything) return <Navigate to={APP_ROUTES.drive} replace state={{ chosen: true }} />;
-
-  if (tab === "mine" && isRoot && !chosen && mineEmpty && sharesAnything) return <Navigate to={APP_ROUTES.shared} replace />;
+  if (redirect !== null) return redirect;
 
   const folderMenu = (entry: DriveEntry): MenuItem[] => {
     const full = childPath(path, entry.name);
@@ -557,7 +442,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       items.push({
         label: "Mark as skill", icon: <BookOpenIcon size={15} />, marker: "data-drive-mark",
         refused: entry.skill ? undefined : entry.skillProblem ?? "Not a skill",
-        onSelect: () => background(() => act(async () => { await markAsSkill(full); })),
+        onSelect: () => background(async () => { await markAsSkill(full); listing.reload(); }),
       });
     }
 
@@ -573,13 +458,11 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const fileMenu = (entry: DriveEntry): MenuItem[] => [
-    { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => openFile(entry.name) },
+    { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => showFile(entry.name) },
     { label: "Download", icon: <DownloadSimpleIcon size={15} />, marker: "data-drive-download", onSelect: () => window.location.assign(downloadUrl(childPath(path, entry.name))) },
     { label: "Rename", icon: <PencilSimpleIcon size={15} />, marker: "data-drive-rename", onSelect: () => setDialog({ kind: "rename", entry }) },
     { label: "Delete", icon: <TrashIcon size={15} />, marker: "data-drive-delete", danger: true, apart: true, onSelect: () => setDialog({ kind: "delete", entry }) },
   ];
-
-  const blueprintLink = (row: SharedRow): string => new URL(blueprintPagePath(row.id), window.location.origin).toString();
 
   const shareTile = (row: SharedRow, mine: boolean): ReactNode => {
     const open: MenuItem = row.kind === "live"
@@ -588,7 +471,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
     const menu: MenuItem[] = [open];
 
-    if (row.kind === "blueprint") menu.push({ label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => copier.copy(blueprintLink(row)) });
+    if (row.kind === "blueprint") {
+      menu.push({ label: "Copy link", icon: <CopyIcon size={15} />, onSelect: () => copier.copy(new URL(blueprintPagePath(row.id), window.location.origin).toString()) });
+    }
 
     if (mine) {
       menu.push({ label: "Stop sharing", icon: <ProhibitIcon size={15} />, marker: "data-drive-stop-sharing", danger: true, apart: true, onSelect: () => setDialog({ kind: "stop", row }) });
@@ -596,8 +481,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       menu.push({ label: "Fork…", icon: <GitForkIcon size={15} />, onSelect: () => setDialog({ kind: "fork", row }) });
     }
 
-    const age = shortAge(row.createdAt);
-    const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, age].filter(Boolean).join(" · ");
+    const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");
 
     return (
       <Tile key={`${row.kind}:${row.id}`} title={row.title} picture={<Cover title={row.title} seed={row.share} />} icon={SHARE_ICON[row.kind]}
@@ -607,103 +491,60 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     );
   };
 
-  let mineBody: ReactNode;
+  const slateTile = (slate: OwnedSlate): ReactNode => (
+    <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title} picture={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />}
+      icon={SLATE_ICON} href={slateHref(slate)}
+      meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
+      attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}
+      menu={[
+        { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(slateHref(slate)) },
+        { label: "Share…", icon: <ShareNetworkIcon size={15} />, marker: "data-drive-share-slate", onSelect: () => setDialog({ kind: "share", slate }) },
+        { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => void navigate(`/workspace/${encodeURIComponent(slate.workspace)}`) },
+      ]} />
+  );
 
-  if (listing.resource.status === "loading") {
-    mineBody = <div className="flex justify-center py-16"><Loader size="base" /></div>;
-  } else if (listing.resource.status === "error" && lastValue(listing.resource) === null) {
-    mineBody = <LoadFailure what="this folder" message={listing.resource.message} onRetry={listing.reload} className="py-3" />;
-  } else if (mineEmpty) {
-    mineBody = isRoot
-      ? <EmptyState title={sharesAnything ? "Nothing here yet" : "Your Drive is empty"}
-        body={<>Drop files here, or use New. Every workspace you own sees them at <span className="font-mono p-text-2">/shared</span>, and the slates your workspaces build show up here too.</>} />
-      : <EmptyState title="This folder is empty" body="Drop files here, or use New." />;
-  } else {
-    const titled = [slates, blueprints, folders, files].filter((group) => group.length > 0).length > 1;
+  const folderTile = (entry: DriveEntry): ReactNode => {
+    const full = childPath(path, entry.name);
+    const opens = entry.kind === "symlink" && entry.target !== undefined ? entry.target : full;
+    const attributes = { "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": entry.skill ? "true" : "false" };
+    let icon = entry.skill ? SKILLS_ICON : FOLDER_ICON;
 
-    mineBody = (
-      <div className="space-y-8">
-        {slates.length > 0 && (
-          <Section label="Slates" titled={titled}>
-            {slates.map((slate) => (
-              <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title} picture={<Cover title={slate.title} seed={`${slate.workspace}/${slate.id}`} />}
-                icon={SLATE_ICON} href={slateHref(slate)}
-                meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
-                attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}
-                menu={[
-                  { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(slateHref(slate)) },
-                  { label: "Share…", icon: <ShareNetworkIcon size={15} />, marker: "data-drive-share-slate", onSelect: () => setDialog({ kind: "share", slate }) },
-                  { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => void navigate(`/workspace/${encodeURIComponent(slate.workspace)}`) },
-                ]} />
-            ))}
-          </Section>
-        )}
-        {blueprints.length > 0 && <Section label="Blueprints" titled={titled}>{blueprints.map((row) => shareTile(row, true))}</Section>}
-        {folders.length > 0 && (
-          <Section label={inSkills ? "Skills" : "Folders"} titled={titled}>
-            {folders.map((entry) => {
-              const full = childPath(path, entry.name);
-              const opens = entry.kind === "symlink" && entry.target !== undefined ? entry.target : full;
-              const attributes = { "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": entry.skill ? "true" : "false" };
-              let icon = entry.skill ? SKILLS_ICON : FOLDER_ICON;
+    if (entry.kind === "symlink") icon = entry.skill ? SKILLS_ICON : LINK_ICON;
 
-              if (entry.kind === "symlink") icon = entry.skill ? SKILLS_ICON : LINK_ICON;
+    if (inSkills && entry.skill) {
+      let meta = opens === full ? "" : `From ${opens.slice(1)}`;
 
-              if (inSkills && entry.skill) {
-                let meta = opens === full ? "" : `From ${opens.slice(1)}`;
+      if (opens === full && entry.mtimeMs > 0) meta = `Updated ${shortAge(entry.mtimeMs)}`;
 
-                if (opens === full && entry.mtimeMs > 0) meta = `Updated ${shortAge(entry.mtimeMs)}`;
+      return (
+        <Tile key={entry.name} title={entry.name} icon={<BookOpenIcon size={16} />} href={`${folderHref(opens)}?file=SKILL.md`}
+          picture={<TextCover path={`${opens}/SKILL.md`} name="SKILL.md" />}
+          meta={<span className="truncate">{meta}</span>} menu={folderMenu(entry)} attributes={attributes} />
+      );
+    }
 
-                return (
-                  <Tile key={entry.name} title={entry.name} icon={<BookOpenIcon size={16} />} href={`${folderHref(opens)}?file=SKILL.md`}
-                    picture={<TextCover path={`${opens}/SKILL.md`} name="SKILL.md" />}
-                    meta={<span className="truncate">{meta}</span>} menu={folderMenu(entry)} attributes={attributes} />
-                );
-              }
-
-              return (
-                <FolderTile key={entry.name} name={full === DRIVE_SKILLS_DIR ? "Skills" : entry.name} icon={icon}
-                  href={folderHref(opens)} menu={folderMenu(entry)} attributes={attributes} />
-              );
-            })}
-          </Section>
-        )}
-        {files.length > 0 && (
-          <Section label="Files" titled={titled}>
-            {files.map((entry) => {
-              const full = childPath(path, entry.name);
-              const age = entry.mtimeMs > 0 ? shortAge(entry.mtimeMs) : null;
-
-              return (
-                <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => openFile(entry.name)}
-                  picture={TEXT.test(entry.name) && entry.size > 0 ? <TextCover path={full} name={entry.name} />
-                    : <FileCover name={entry.name} image={IMAGE.test(entry.name) ? inlineUrl(full) : undefined} />}
-                  meta={<span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span>}
-                  menu={fileMenu(entry)}
-                  attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />
-              );
-            })}
-          </Section>
-        )}
-      </div>
+    return (
+      <FolderTile key={entry.name} name={full === DRIVE_SKILLS_DIR ? "Skills" : entry.name} icon={icon}
+        href={folderHref(opens)} menu={folderMenu(entry)} attributes={attributes} />
     );
-  }
+  };
 
-  let sharedBody: ReactNode = <div className="flex justify-center py-16"><Loader size="base" /></div>;
+  const fileTile = (entry: DriveEntry): ReactNode => {
+    const full = childPath(path, entry.name);
+    const age = entry.mtimeMs > 0 ? shortAge(entry.mtimeMs) : null;
 
-  if (shared !== null) {
-    sharedBody = (
-      <div className="space-y-8">
-        {shared.received.length > 0 && <Section label="Shared with you">{shared.received.map((row) => shareTile(row, false))}</Section>}
-        {shared.mine.length > 0 && <Section label="Shared by you">{shared.mine.map((row) => shareTile(row, true))}</Section>}
-      </div>
+    return (
+      <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => showFile(entry.name)}
+        picture={TEXT.test(entry.name) && entry.size > 0 ? <TextCover path={full} name={entry.name} />
+          : <FileCover name={entry.name} image={IMAGE.test(entry.name) ? inlineUrl(full) : undefined} />}
+        meta={<span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span>}
+        menu={fileMenu(entry)}
+        attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />
     );
-  }
+  };
 
-  let subtitle: ReactNode = null;
-
-  if (tab === "mine" && inSkills) subtitle = "Every workspace you own uses these skills.";
-  else if (tab === "mine" && isRoot && !mineEmpty) subtitle = <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
+  const opened = contents.files.find((entry) => entry.name === search.get("file"));
+  const subtitle = subtitleOf(tab, path, mineEmpty);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -713,16 +554,10 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
           <h1 className="p-display text-2xl">Drive</h1>
           {tab === "mine" && (
             <div className="ml-auto">
-              {inSkills ? (
-                <FilledButton className={NEW_BUTTON} aria-label="New skill" data-drive-add-skill onClick={() => setDialog({ kind: "add-skill" })}>
-                  <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New skill</span>
-                </FilledButton>
-              ) : (
-                <NewMenu onFiles={uploadFiles}
-                  onFolder={(picks) => { if (picks.length > 0) transfer(pickedFolderName(picks) ?? "folder", () => uploadFolder(path, picks)); }}
-                  onZip={(file) => transfer(file.name, () => uploadZip(childPath(path, file.name.replace(/\.zip$/iu, "")), file))}
-                  onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
-              )}
+              <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
+                onFolder={(picks) => { if (picks.length > 0) transfer(pickedFolderName(picks) ?? "folder", () => uploadFolder(path, picks)); }}
+                onZip={(file) => transfer(file.name, () => uploadZip(childPath(path, file.name.replace(/\.zip$/iu, "")), file))}
+                onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
             </div>
           )}
         </header>
@@ -731,96 +566,36 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         {tab === "mine" && !isRoot && <div className="mt-6"><Crumbs path={path} /></div>}
         {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "mt-4" : "mt-1"}`}>{subtitle}</p>}
 
-        {notice !== null && (
-          <div role="alert" data-drive-notice className="p-notice-danger mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs">
-            <WarningIcon size={13} className="mt-px shrink-0" />
-            <span className="min-w-0 break-words">{notice}</span>
-            <button type="button" onClick={() => setNotice(null)} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
-          </div>
-        )}
-        {library.resource.status === "error" && (
-          <LoadFailure what="your slates and shares" message={library.resource.message} onRetry={library.reload} className="mt-4" />
-        )}
-        {copier.status !== "idle" && <p role="status" className="mt-4 p-meta p-text-3">{copier.status === "copied" ? "Link copied." : "Could not copy the link."}</p>}
-
-        {transfers.length > 0 && (
-          <ul className="mt-4 space-y-1">
-            {transfers.map((row) => (
-              <li key={row.id} data-drive-transfer={row.status} className="flex items-center gap-2 text-xs">
-                {row.status === "uploading"
-                  ? <><Loader size="sm" /><span className="truncate p-text-2">{row.name}</span><span className="p-text-3">uploading…</span></>
-                  : <><WarningIcon size={13} className="shrink-0 p-danger" /><span className="truncate p-text-2">{row.name}</span>
-                    <span className="min-w-0 truncate p-danger" title={row.error}>{row.error}</span>
-                    <button type="button" onClick={() => setTransfers((rows) => rows.filter((other) => other.id !== row.id))}
-                      className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label={`Dismiss ${row.name}`}><XIcon size={12} /></button></>}
-              </li>
-            ))}
-          </ul>
-        )}
+        <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} libraryResource={library.resource} onRetryLibrary={library.reload}
+          copyStatus={copier.status} transfers={transfers} onDismissTransfer={(id) => setTransfers((rows) => rows.filter((row) => row.id !== id))} />
 
         {tab === "mine" ? (
-          <div data-drive-list className="relative mt-6"
-            onDragOver={(event) => { event.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(event) => { event.preventDefault(); setDragOver(false); uploadFiles([...event.dataTransfer.files]); }}>
-            {mineBody}
-            {dragOver && (
-              <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
-                <span className="flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-sm font-semibold text-[var(--c-accent-on)] p-shadow-menu">
-                  <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)}
-                </span>
-              </div>
+          <DropZone label={isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)} onFiles={uploadFiles}>
+            <MineBody resource={listing.resource} onRetry={listing.reload} empty={mineEmpty} isRoot={isRoot} sharesAnything={sharesAnything}>
+              <SectionList groups={[
+                { label: "Slates", tiles: contents.slates.map(slateTile) },
+                { label: "Blueprints", tiles: contents.blueprints.map((row) => shareTile(row, true)) },
+                { label: inSkills ? "Skills" : "Folders", tiles: contents.folders.map(folderTile) },
+                { label: "Files", tiles: contents.files.map(fileTile) },
+              ]} />
+            </MineBody>
+          </DropZone>
+        ) : (
+          <div className="mt-6">
+            {shared === null ? <div className="flex justify-center py-16"><Loader size="base" /></div> : (
+              <SectionList titled groups={[
+                { label: "Shared with you", tiles: shared.received.map((row) => shareTile(row, false)) },
+                { label: "Shared by you", tiles: shared.mine.map((row) => shareTile(row, true)) },
+              ]} />
             )}
           </div>
-        ) : <div className="mt-6">{sharedBody}</div>}
+        )}
       </div>
 
-      {opened !== undefined && (
-        <>
-          <div aria-hidden="true" className="p-scrim fixed inset-0 z-40" onClick={closeFile} />
-          <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[min(640px,92vw)]" data-drive-viewer>
-            <FileViewer path={childPath(path, opened.name)} read={readDriveText} revision={entryRevision(opened)}
-              rawHref={inlineUrl(childPath(path, opened.name))} downloadHref={downloadUrl(childPath(path, opened.name))}
-              onSaved={() => listing.reload()} onClose={closeFile} />
-          </div>
-        </>
-      )}
-
-      {dialog?.kind === "new-folder" && (
-        <NameDialog title="New folder" icon={<FolderPlusIcon size={18} className="p-info" />} initial="" label="Folder name" action="Create"
-          onCommit={(name) => act(() => makeFolder(childPath(path, name)))} onClose={() => setDialog(null)} />
-      )}
-      {dialog?.kind === "rename" && (
-        <NameDialog title={`Rename ${dialog.entry.name}`} icon={<PencilSimpleIcon size={18} className="p-text-3" />}
-          initial={dialog.entry.name} label="New name" action="Rename"
-          onCommit={(name) => act(() => renameEntry(childPath(path, dialog.entry.name), childPath(path, name)))} onClose={() => setDialog(null)} />
-      )}
-      {dialog?.kind === "delete" && (
-        <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm"
-          body={<>This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</>}
-          onConfirm={() => act(() => deleteEntry(childPath(path, dialog.entry.name)))} onClose={() => setDialog(null)} />
-      )}
-      {dialog?.kind === "add-skill" && (
-        <AddSkillDialog onClose={() => setDialog(null)} onAdded={() => void afterSkillAdded()} />
-      )}
-      {dialog?.kind === "share" && <DriveShareSheet slate={dialog.slate} onClose={() => { setDialog(null); library.reload(); }} />}
-      {dialog?.kind === "stop" && (
-        <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm"
-          body={`${whoLoses(dialog.row)} access right away, and the link stops working.`}
-          onConfirm={async () => {
-            const workspace = dialog.row.workspace;
-
-            if (workspace === undefined) throw new Error("this share names no workspace");
-            await revokeShare({ workspace, share: dialog.row.share });
-            library.reload();
-          }}
-          onClose={() => setDialog(null)} />
-      )}
-      {dialog?.kind === "fork" && dialog.row.kind === "live" && (
-        <ForkDialog live={{ share: dialog.row.share, workspace: dialog.row.workspace ?? "" }} title={dialog.row.title} onClose={() => setDialog(null)} />
-      )}
-      {dialog?.kind === "fork" && dialog.row.kind === "blueprint" && (
-        <ForkDialog blueprint={dialog.row.id} title={dialog.row.title} onClose={() => setDialog(null)} />
+      {opened !== undefined && <FileDrawer path={childPath(path, opened.name)} entry={opened} onSaved={listing.reload} onClose={() => showFile(null)} />}
+      {dialog !== null && (
+        <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}
+          onSharesChanged={library.reload} onSkillAdded={() => void afterSkillAdded()} />
       )}
     </div>
   );

@@ -16,7 +16,6 @@ export const APP_ROUTES = {
   control: '/control',
   agentSettings: '/settings/:agentId',
   triggers: '/triggers/:agentId',
-  /** The Drive's My stuff; a folder below it is `driveFolder`, and what is shared either way is `shared`. */
   drive: '/drive',
   /** The Drive below its root: `*` is the folder path, any depth. */
   driveFolder: '/drive/*',

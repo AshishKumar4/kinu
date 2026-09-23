@@ -249,7 +249,7 @@ const SharedRowSchema = v.object({
   workspace: v.optional(v.string()),
   users: v.optional(v.array(v.string())),
   owner: v.optional(v.string()),
-  /** A received live share the sharer closed to forks carries false; a blueprint always forks. */
+  /** False on a received live share closed to forks. */
   fork: v.optional(v.boolean()),
 });
 

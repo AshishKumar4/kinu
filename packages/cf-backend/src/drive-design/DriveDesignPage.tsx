@@ -465,6 +465,16 @@ function Toast({ text, onDone }: { text: string; onDone: () => void }) {
   );
 }
 
+function subtitleOf(tab: DriveTab, folder: string, data: DriveData): ReactNode {
+  if (tab !== "mine") return null;
+
+  if (folder === SKILLS_FOLDER) return "Every workspace you own uses these skills.";
+
+  if (folder !== "/" || mineIsEmpty(data)) return null;
+
+  return <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
+}
+
 export function DriveDesignPage({ tab, data, initialDialog, menuFor, dropping = false, autoLanding = true }: {
   tab: DriveTab;
   data: DriveData;
@@ -491,10 +501,7 @@ export function DriveDesignPage({ tab, data, initialDialog, menuFor, dropping = 
   const emptyDrive = mineIsEmpty(data) && !shared;
   const unseen = data.received.some((item) => item.unseen);
 
-  let subtitle: ReactNode = null;
-
-  if (inSkills) subtitle = "Every workspace you own uses these skills.";
-  else if (tab === "mine" && folder === "/" && !mineIsEmpty(data)) subtitle = <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
+  const subtitle = subtitleOf(tab, folder, data);
 
   const action = (compact: boolean): ReactNode => {
     if (tab !== "mine") return null;
