@@ -222,6 +222,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
       cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
     },
+    cf_ai_chat_stream_metadata: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
+      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
+    },
     // `cf_agents_sub_agents` is absent on purpose: no actor calls `subAgent()`
     // (`state/actor-host.ts`), so it is not a plane member.
     // Only cf wires the deferral channel; the table is shared schema.

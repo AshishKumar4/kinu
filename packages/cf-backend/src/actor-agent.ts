@@ -1220,7 +1220,7 @@ export abstract class ActorAgent extends Agent<Env> {
       actor: this.actorHandle(),
       sql: this.boundSql,
       effects: this.terminalEffectTable(),
-      now: () => Date.now() + this._terminalClockSkewMs,
+      now: () => Date.now(),
       fault: () => this.terminalEffectFault,
       // A synchronous DO run is already atomic; transactionSync keeps the claim and roster one unit
       // regardless of what core later puts between them.
@@ -1360,9 +1360,6 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
-
-  /** Test-only skew of the ledger clock (the only clock the due-check reads). Zero in production. */
-  protected _terminalClockSkewMs = 0;
 
   /** Read at the start of a terminal sequence and carried through: the loop's live turn becomes
    *  the next one as soon as it opens, so a detached re-read could close the wrong claim. */

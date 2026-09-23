@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { createProviderRegistry } from '@kinu.run/core';
-import { hostedSubordinateHarness, chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
+import * as v from 'valibot';
+import { chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask } from './helpers/actor-harness';
+import { requestOf, scriptedGateway } from './helpers/platform-gateway';
 
 function modelCallingFile() {
   return scriptedTurnModel({ doGenerate: options => {
@@ -47,23 +48,26 @@ test('Think orchestrator sends typed native error feedback in the NEXT provider 
   assertNativeFeedback(model);
 });
 
+/** A refusal as the provider request carries it: the typed error the tool returned, serialised whole. */
+const RefusalSchema = v.object({ reason: v.string(), error: v.string() });
+
 test('a delegated turn sends the same typed native error feedback in its NEXT provider request', async () => {
-  // A hired child on the production delegated runner with an injected model; its `file` tool is built over the
-  // child's runtime by the production builder, so the refusal is the loop's own, not a fixture's.
-  const workspace = orchestratorHarness();
+  // A hired child's delegated turn on the platform gateway; its `file` tool is built over the child's runtime by the
+  // production builder, so the refusal is the loop's own, not a fixture's.
+  const gateway = scriptedGateway([{ tool: 'file', args: { action: 'transmogrify', path: '/' } }]);
+  const workspace = gatewayWorkspace(gateway);
 
   const child = await hostedSubordinateHarness(workspace, {
     name: 'error-prover', displayName: 'Error prover', nameOrigin: 'user',
     mission: 'Try the file operation.',
   });
 
-  const model = modelCallingFile();
-  workspace.agent.overrideProviderRegistry({
-    registry: createProviderRegistry(),
-    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
-    resolveModel: () => model,
-    normalizeSpecSync: (spec) => spec ?? 'test/model',
-  });
-  await workspace.agent.runHostedTaskTurn(child.actor, 'Try the file operation.');
-  assertNativeFeedback(model);
+  await runDelegatedTask(workspace, child.actor, 'Try the file operation.');
+  const next = gateway.runs.map(requestOf).find((request) => request.messages.some((message) => message.role === 'tool'));
+  const results = next?.messages.filter((message) => message.role === 'tool') ?? [];
+
+  expect(results).toHaveLength(1);
+  const refusal = v.parse(RefusalSchema, JSON.parse(v.parse(v.string(), results[0]?.content)));
+  expect(refusal.reason).toBe('bad_input');
+  expect(refusal.error).toContain('transmogrify');
 });

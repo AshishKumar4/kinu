@@ -172,7 +172,6 @@ function routeAiCall(binding: Extract<SlateBinding, { kind: 'ai' }>, request: Sl
 
   if (!parsed.success) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
 
-  // A declared tier cannot be overridden by the call.
   if (binding.tier !== undefined && parsed.output.tier !== undefined && parsed.output.tier !== binding.tier) {
     throw new KinuError('bad_input', `${name} pins tier ${binding.tier}; the call's tier cannot change it`);
   }

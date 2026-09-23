@@ -1,6 +1,7 @@
 /**
- * Defends: the signed-out pages (self-contained, no `index.css`) drifting from the app's palette,
- * radii, pre-paint theme and Kinu identity; the shell's projection is checked against the cascade.
+ * Defends: the signed-out pages (self-contained, no `index.css`) shipping a broken stylesheet, pre-paint
+ * theme or Kinu identity. Whether their palette and radii match the app's is asked of Chromium in
+ * scripts/public-shell-palette-ux.test.ts.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -19,45 +20,6 @@ import {
   composerTextAt, cueCountAt, cursorAt, discreteAt,
 } from '../src/components/landing/landing-movie-timeline';
 
-const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
-
-/** Palette blocks per theme in source order; later declarations win, replaying the cascade (as `unit-palette-contrast`). */
-const CASCADE = {
-  'dark': [':root'],
-  'light': [':root', '[data-mode="light"]'],
-} satisfies Readonly<Record<string, readonly string[]>>;
-
-/** Anchored at line start so `[data-palette="silk"]` cannot match a compound selector or a comment. */
-function block(selector: string) {
-  const at = INDEX_CSS.search(new RegExp(`^${selector.replace(/[[\]"().*+?^${}|\\]/g, '\\$&')}\\s*\\{`, 'm'));
-
-  if (at === -1) throw new Error(`no ${selector} block in index.css`);
-  const open = INDEX_CSS.indexOf('{', at);
-  let depth = 0;
-  let i = open;
-
-  for (; i < INDEX_CSS.length; i++) {
-    if (INDEX_CSS[i] === '{') depth++;
-    else if (INDEX_CSS[i] === '}' && --depth === 0) break;
-  }
-
-  return Object.fromEntries(
-    [...INDEX_CSS.slice(open, i).matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
-  );
-}
-
-/** Throws on an unknown theme, which would otherwise measure nothing. */
-function resolved(theme: string) {
-  const selectors = Object.entries(CASCADE).find(([name]) => name === theme)?.[1];
-
-  if (selectors === undefined) throw new Error(`no cascade modelled for ${theme}`);
-  const out: Record<string, string> = {};
-
-  for (const selector of selectors) Object.assign(out, block(selector));
-
-  return out;
-}
-
 /** Reads the shipped bytes, not the module's internals. */
 function shippedStyle(): string {
   const page = publicPage({ title: 't', body: '' });
@@ -69,32 +31,7 @@ function shippedStyle(): string {
   return page.slice(start + '<style>'.length, end);
 }
 
-function shippedBlock(style: string, selector: string) {
-  const at = style.indexOf(`${selector}{`);
-
-  if (at === -1) throw new Error(`shipped stylesheet carries no ${selector} block`);
-  const open = style.indexOf('{', at);
-  let depth = 0;
-  let i = open;
-
-  for (; i < style.length; i++) {
-    if (style[i] === '{') depth++;
-    else if (style[i] === '}' && --depth === 0) break;
-  }
-
-  return Object.fromEntries(
-    style.slice(open + 1, i).split(';').flatMap((entry) => {
-      const colon = entry.indexOf(':');
-
-      if (colon === -1) return [];
-      const name = entry.slice(0, colon).trim();
-
-      return name.startsWith('--') ? [[name, entry.slice(colon + 1).trim()]] : [];
-    }),
-  );
-}
-
-describe('public shell tokens are the app palette', () => {
+describe('the shell stylesheet', () => {
   const style = shippedStyle();
 
   test('both themes are projected before the shell', () => {
@@ -107,66 +44,8 @@ describe('public shell tokens are the app palette', () => {
     expect(shellAt).toBeGreaterThan(lightAt);
   });
 
-  for (const [mode, selectors] of Object.entries(CASCADE)) {
-    test(`${mode} matches index.css`, () => {
-      const app = resolved(mode);
-      const selector = selectors.at(-1);
-
-      if (selector === undefined) throw new Error(`no block modelled for ${mode}`);
-      const emitted = shippedBlock(style, selector);
-
-      for (const [token, value] of Object.entries(emitted)) {
-        if (token.startsWith('--r-')) continue;
-        expect(app[token], `${token} in ${selector}`).toBe(value);
-      }
-    });
-  }
-
-  test('every projected token is declared in every theme', () => {
-    // An undeclared token would resolve to whichever theme declared it last.
-    const names = Object.keys(shippedBlock(style, ':root')).filter((name) => !name.startsWith('--r-'));
-
-    for (const theme of Object.keys(CASCADE)) {
-      const app = resolved(theme);
-
-      for (const token of names) expect(app[token], `${token} in ${theme}`).toBeString();
-    }
-  });
-
-  test('radius roles match what index.css resolves', () => {
-    // control and row alias Tailwind rungs; card and overlay are the mock's 14px literals.
-    const root = block(':root');
-    const rungs = block('@theme');
-    const shipped = shippedBlock(style, ':root');
-    const remToPx = (rem: string) => `${Number(rem.replace(/rem.*$/, '').trim()) * 16}px`;
-
-    for (const [role, rung] of [['--r-control', '--radius-sm'], ['--r-row', '--radius-md']] as const) {
-      const rungValue = rungs[rung];
-
-      if (rungValue === undefined) throw new Error(`no ${rung} rung in index.css`);
-      expect(shipped[role], `${role} resolves through ${rung}`).toBe(remToPx(rungValue));
-    }
-
-    for (const role of ['--r-card', '--r-overlay'] as const) {
-      const rootValue = root[role];
-
-      if (rootValue === undefined) throw new Error(`no ${role} role in index.css`);
-      expect(shipped[role], `${role} is its own literal`).toBe(remToPx(rootValue));
-    }
-  });
-
-  test('the display face is one stack, shared with the app', () => {
-    const app = block(':root')['--font-display'];
-    expect(app).toBeString();
-    expect(publicPage({ title: 't', body: '' })).toContain(`--font-display:${app.replaceAll(', ', ',')}`);
-  });
-
-  test('both faces lead with the shipped webfonts in both stylesheets', () => {
-    // The app's @font-face must use the asset paths the shell inlines and preloads.
-    expect(block(':root')['--font-display']).toStartWith('"Schibsted Grotesk"');
-    expect(block(':root')['--font-mono']).toStartWith('"Fragment Mono"');
-    expect(INDEX_CSS).toContain('src: url("/assets/fonts/schibsted-latin-var.woff2") format("woff2-variations")');
-    expect(INDEX_CSS).toContain('src: url("/assets/fonts/fragmentmono-latin.woff2") format("woff2")');
+  test('both faces lead with the shipped webfonts, preloaded', () => {
+    // The app's faces match these files in Chromium: scripts/public-shell-palette-ux.test.ts.
     const page = publicPage({ title: 't', body: '' });
     expect(page).toContain('@font-face{font-family:"Schibsted Grotesk"');
     expect(page).toContain('@font-face{font-family:"Fragment Mono"');
@@ -194,9 +73,8 @@ describe('public shell tokens are the app palette', () => {
     expect(readFileSync(resolve(file, '../OFL.txt'), 'utf8')).toContain('SIL Open Font License');
   });
 
-  test('Newsreader stays in the React bundle rather than the standalone shell', () => {
+  test('Newsreader stays out of the standalone shell', () => {
     expect(publicPage({ title: 't', body: '' })).not.toContain('Newsreader');
-    expect(INDEX_CSS).toContain('/assets/fonts/newsreader-latin-var.woff2');
   });
 
 });

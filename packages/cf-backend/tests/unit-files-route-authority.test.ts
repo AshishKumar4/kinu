@@ -10,7 +10,7 @@ import {
   type DeviceFrame, type TestUserDO,
 } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { chatSessionTurns, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { makeKv } from './helpers/kv';
 import { workerContext } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
@@ -138,8 +138,8 @@ async function seam(options: {
     const token = await provisionTestWorkspace(user, workspace, workspace);
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
     actor.agent.harnessHoldsCapability(token);
-    // The turn-start refresh makes a device visible to the mount table; awaited here because production detaches it.
-    await actor.agent.harnessRefreshDeviceStatus();
+    // A turn's start reads the device hub, which makes a device visible to the mount table.
+    await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'list my files' }] });
     actors.set(workspace, actor);
   }
 

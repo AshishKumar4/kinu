@@ -15,7 +15,6 @@ export const TOOLCHAIN_PROBE: readonly (readonly [ExecutorCapability, readonly s
 
 /** Capabilities a probe cannot settle; declared so omission is not read as measured absence. */
 export const TOOLCHAIN_UNPROBEABLE: readonly (readonly [ExecutorCapability, string])[] = [
-  // A `docker` client on PATH does not prove a reachable daemon.
   ['docker', 'a docker client on PATH is not a reachable daemon'],
   ['gpu', 'nothing on PATH establishes usable hardware'],
 ] as const;

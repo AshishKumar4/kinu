@@ -77,7 +77,6 @@
     "esbuild": "^0.28.1",
     "miniflare": "^5.20260903.0-alpha",
     "oxc-parser": "0.143.0",
-    "postcss": "8.5.28",
     "tailwindcss": "^4.2.2",
     "typescript": "7.0.2",
     "vite": "^8.0.8",

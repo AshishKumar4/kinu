@@ -588,6 +588,36 @@ describe('the workspace keeps exactly one wake row', () => {
     await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
+  test('an email the binding refused is retried by the one timer wake', async () => {
+    // The mail outbox arms the Kinu timer like every other wake, awaited: a lost arm drops the receipt silently.
+    const refusals: string[] = [];
+
+    const { agent } = orchestratorHarness(
+      { warmConnections: [], failWarm: null, titles: [], profile: { email: 'owner@example.com' } },
+      {
+        email: {
+          send: async () => {
+            refusals.push('send');
+
+            throw new Error('the mail route refused the message');
+          },
+        },
+      },
+    );
+
+    const admission = await agent.acceptEmailDelivery({
+      from: 'owner@example.com', to: 'workspace@kinu.run', subject: 'status?', body_text: 'how is the deploy?',
+      message_id: '<m-1@example.com>', in_reply_to: null, references: null, attachments: [], now: Date.now(),
+    });
+
+    expect(admission).toMatchObject({ admitted: true, duplicate: false });
+    expect(refusals).toEqual(['send']);
+
+    const wakes = (await agent.listSchedules()).filter((row) => row.callback === KINU_TIMER_CALLBACK);
+    expect(wakes).toHaveLength(1);
+    expect((wakes[0]?.time ?? 0) * 1000).toBeGreaterThan(Date.now());
+  });
+
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
     // `onStart` detaches `reconcileTimerRow()`, so concurrent arms interleave across awaits and both write.
     // The pair must collapse to one survivor, the sooner wake.

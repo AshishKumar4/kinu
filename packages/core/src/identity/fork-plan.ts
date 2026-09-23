@@ -171,7 +171,6 @@ export function planForkConversation(input: {
       throw new Error(`fork carries a reference to message ${JSON.stringify(messageId)}, which the source does not have`);
     }
 
-    // An open message is still streaming; a fork requires an idle source.
     if (row.sealed_at === null) {
       throw new Error(`fork cannot carry message ${JSON.stringify(messageId)}: it is still open in the source`);
     }

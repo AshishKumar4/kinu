@@ -4,16 +4,14 @@
  * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
-import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
   JsonValue,
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, tolerate, toKinuError, type Refusal } from '@kinu.run/core/obs';
-import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
@@ -75,91 +73,6 @@ function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
   }));
 
   return runtimeModule;
-}
-
-/** Only ENOENT (by `code`, not rendered text) reads as absence; other failures throw. */
-function absentAsNull<T>(read: () => T): T | null {
-  return tolerate(read, 'enoent') ?? null;
-}
-
-/** The raw `SqliteVFS` as the session user: the same identity the Nimbus session's file RPCs resolve to. */
-function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_SESSION_USER): NimbusSandboxHandle['files'] {
-  const view = async (): Promise<CredentialedVfs> => (await open()).as(cred);
-
-  return {
-    as: (agent) => workspaceBoxFiles(open, agent),
-    async read(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readFileString(path));
-    },
-    async readBytes(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readFile(path));
-    },
-    async readRange(path, offset, length) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readRange(path, offset, length));
-    },
-    async write(path, content) {
-      const vfs = await view();
-      // The SDK write contract creates missing parents.
-      const cut = path.lastIndexOf('/');
-
-      if (cut > 0) {
-        const parent = path.slice(0, cut);
-
-        if (!vfs.exists(parent)) vfs.mkdir(parent, { recursive: true });
-      }
-
-      vfs.writeFile(path, content);
-    },
-    async stat(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => {
-        const stat = vfs.stat(path);
-
-        return { type: stat.type, size: stat.size, mtime: stat.mtime };
-      });
-    },
-    async lstat(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => {
-        const stat = vfs.lstat(path);
-
-        return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
-      });
-    },
-    async rename(from, to) { (await view()).rename(from, to); },
-    async chmod(path, mode) { (await view()).chmod(path, mode); },
-    async list(path) {
-      return (await view()).readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type }));
-    },
-    async exists(path) { return (await view()).exists(path); },
-    async mkdir(path) { (await view()).mkdir(path, { recursive: true }); },
-    async delete(path, options) {
-      const vfs = await view();
-
-      if (options?.recursive) {
-        vfs.removeRecursive(path);
-
-        return;
-      }
-
-      // Non-recursive delete of a directory is `rmdir`, which refuses a populated one.
-      if (vfs.isDirectory(path)) {
-        vfs.rmdir(path);
-
-        return;
-      }
-
-      vfs.unlink(path);
-    },
-  };
 }
 
 export interface HostedWorkspaceDeps<Id> {

@@ -87,6 +87,8 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       expect(await surface.pickAlternateTake(set.id, `${set.id}-branch`)).toMatchObject({
         outcome: 'corrected', changedAnswer: true, continuationQueued: true, chosen: { text: 'Call it Borealis.' },
       });
+      // The picks on a fresh activation were recorded: the turn's effective verdict is the correction.
+      expect((await surface.listRefinements(5)).debt.turnIds).toEqual(['turn-1']);
       expect(await surface.latestAlternateTakes()).toMatchObject({ chosenNodeId: `${set.id}-branch` });
       await expect(surface.pickAlternateTake(set.id, '')).rejects.toThrow('pickAlternateTake requires takeId and nodeId');
     },

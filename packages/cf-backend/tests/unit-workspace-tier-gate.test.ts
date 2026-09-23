@@ -1,11 +1,10 @@
 // The attenuation boundary against the real UserDO methods: a registered workspace reaches everything
 // but `owner_only` authorities. A non-CapabilityDeniedError failure means the gate let the call through.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
-import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
+import { USER_DO_RPC_SURFACE, type UserDoRpcMethod } from '../src/rpc-surface';
+import type { UserDO } from '../src/user/user-do';
 import { sha256Hex } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
@@ -662,39 +661,36 @@ describe('facets attenuate with their workspace', () => {
   });
 });
 
-// Completeness: reads the source so a new privileged method must take the caller or be exempted.
+// Completeness, held by the compiler: a new RPC method must take the caller first or be exempted here.
 
-const USER_DO_SOURCE = readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8');
-
-/** Not RPC: the runtime calls the first four; the SDK base calls `createMcpOAuthProvider` in
- *  process (`unit-rpc-surface.test.ts` holds that override sealed). */
-const NON_RPC_METHODS = new Set(['fetch', 'webSocketMessage', 'webSocketClose', 'webSocketError', 'createMcpOAuthProvider']);
+/** Dispatched by the runtime or the SDK, never by a stub-holder with a caller. */
+const RUNTIME_DISPATCHED = new Set([
+  'fetch', '__unsafe_ensureInitialized', 'alarm', 'webSocketMessage', 'webSocketClose', 'webSocketError',
+]);
 
 /** Cannot take a caller: it bootstraps caller identity. Safe by shape, not by gate. */
 const IDENTITY_BOOTSTRAP = 'ensureWorkspaceCapability';
 
-const declaredMembers = () => declaredClassMembers(USER_DO_SOURCE);
+/** The first parameter of a method, or `never` when it takes none. */
+type FirstParameter<F> = F extends (...args: infer A) => void ? (A extends [infer First, ...unknown[]] ? First : never) : never;
+
+/** `true` when `F` takes exactly a `UserCaller` first. */
+type TakesCallerFirst<F> = [FirstParameter<F>] extends [UserCaller]
+  ? ([UserCaller] extends [FirstParameter<F>] ? true : false)
+  : false;
+
+type UngatedRpcMethod = {
+  [K in Exclude<UserDoRpcMethod, typeof IDENTITY_BOOTSTRAP>]: TakesCallerFirst<UserDO[K]> extends true ? never : K
+}[Exclude<UserDoRpcMethod, typeof IDENTITY_BOOTSTRAP>];
+
+/** `true` when `Names` is empty; otherwise the names, so the compiler error lists them. */
+type NoneOf<Names> = [Names] extends [never] ? true : Names;
+
+const everyRpcMethodTakesTheCallerFirst: NoneOf<UngatedRpcMethod> = true;
 
 describe('no privileged UserDO method escapes the gate', () => {
-  test('every externally-callable member takes the caller first, or is an explicit exception', () => {
-    const ungated = declaredMembers()
-      .filter((m) => !isInternalMember(m))
-      .filter((m) => !NON_RPC_METHODS.has(m.name) && m.name !== IDENTITY_BOOTSTRAP)
-      .filter((m) => !m.params.startsWith('caller: UserCaller'))
-      .map((m) => m.name);
-
-    expect(ungated).toEqual([]);
-  });
-
-  test('the check sees the method shapes someone might actually add', () => {
-    // Guards the guard: a regex matching only `async foo(` would let getters and modifiers through.
-    const declared = declaredMembers();
-    const named = (name: string) => declared.some((m) => m.name === name);
-    expect(named('getAuthHeaders')).toBe(true);              // async, no modifier
-    expect(named('fetch')).toBe(true);                       // override async
-    expect(named('requireTier')).toBe(true);                 // private, non-async
-    expect(named('credentialSummaries')).toBe(true);         // private, non-async
-    expect(declared.filter(isInternalMember).length).toBeGreaterThan(5);
+  test('every RPC method takes the caller first, or is the identity bootstrap', () => {
+    expect(everyRpcMethodTakesTheCallerFirst).toBe(true);
   });
 
   test('owner-only profile writes reject every workspace token and accept an owner session', async () => {
@@ -710,18 +706,14 @@ describe('no privileged UserDO method escapes the gate', () => {
   });
 
   test('every gated method is exercised by the lists above', () => {
-    const declared = new Set(
-      declaredMembers()
-        .filter((m) => !isInternalMember(m) && m.params.startsWith('caller: UserCaller'))
-        .map((m) => m.name),
-    );
+    const gated = USER_DO_RPC_SURFACE.filter((name) => !RUNTIME_DISPATCHED.has(name) && name !== IDENTITY_BOOTSTRAP);
 
     const exercised = new Set([
       ...GATED_CALLS.map((call) => call.name.replace(/\(.*$/u, '')),
       ...OWNER_ONLY_CALLS.map((call) => call.name),
     ]);
 
-    expect([...declared].filter((name) => !exercised.has(name)).sort()).toEqual([]);
+    expect(gated.length).toBeGreaterThan(20);
+    expect(gated.filter((name) => !exercised.has(name)).sort()).toEqual([]);
   });
-
 });

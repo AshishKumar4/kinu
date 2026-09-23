@@ -3,8 +3,28 @@
  * (kept on an archive), all through the production seams.
  */
 import { describe, expect, test } from 'bun:test';
-import { agentHome, agentTmpRoot, actorReferenceOf, subordinateAgentName } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import { agentHome, agentTmpRoot, subordinateAgentName } from '@kinu.run/core';
+import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+
+/** An agent the owner adds takes the workspace's mission, which the soul states. */
+const SOUL = '# Kinu\n\n## Mission\n\nBuild the thing.\n';
+
+const DIRECTORY = { ok: true, value: expect.objectContaining({ isDir: true }) };
+
+/** An agent the owner added, as the browser adds one, and the home name its directory row gives it. */
+async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorAgent>; name: string; agentName: string }> {
+  const parent = orchestratorHarness();
+  await parent.agent.setSoul(SOUL);
+  const { name } = await parent.agent.createSubordinateAgent();
+
+  const row = parent.db.query<{ storage_key: string }, [string]>(
+    "SELECT storage_key FROM workspace_actors WHERE name = ? AND kind = 'subordinate'",
+  ).get(name);
+
+  if (row === null) throw new Error(`no directory row names ${name}`);
+
+  return { parent, name, agentName: subordinateAgentName(row.storage_key) };
+}
 
 const hire = {
   displayName: 'Builder',
@@ -34,18 +54,21 @@ describe('a hosted subordinate runs as its own home', () => {
     expect(await parent.agent.statWorkspaceFile('/tmp/x')).toMatchObject({ ok: true, value: null });
   });
 
-  test('a wipe releases the home with the storage; an archive keeps both', async () => {
-    const parent = orchestratorHarness();
-    const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-2' });
-    const actor = child.actor.handle;
-    const agentName = subordinateAgentName(actor.storageKey);
-    const directory = { ok: true, value: expect.objectContaining({ isDir: true }) };
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(directory);
+  test('an archive keeps the home', async () => {
+    const { parent, name, agentName } = await addedAgent();
+    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(DIRECTORY);
 
-    await parent.agent.observeSubordinateRuntime().dismiss('builder-2', true, actorReferenceOf(actor));
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(directory);
+    await parent.agent.dismissSubordinate(name, true);
 
-    await parent.agent.observeSubordinateRuntime().dismiss('builder-2', false, actorReferenceOf(actor));
+    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(DIRECTORY);
+  });
+
+  test('a wipe releases the home and its temp root with the storage', async () => {
+    const { parent, name, agentName } = await addedAgent();
+    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject(DIRECTORY);
+
+    await parent.agent.dismissSubordinate(name, false);
+
     expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject({ ok: true, value: null });
     expect(await parent.agent.statWorkspaceFile(agentTmpRoot(agentName))).toMatchObject({ ok: true, value: null });
   });

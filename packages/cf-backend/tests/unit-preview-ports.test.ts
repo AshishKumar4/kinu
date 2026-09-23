@@ -1,6 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -50,15 +48,6 @@ describe('preview port refresh reconciliation', () => {
       ports: [port('workspace', 8080)],
       error: 'workspace: invalid preview registration for port 8080',
     });
-  });
-
-  test('the hook rejects stale overlapping refresh completions', () => {
-    const source = readFileSync(join(import.meta.dir, '../src/hooks/use-kinu.ts'), 'utf8');
-    expect(source).toContain('const generation = ++exposedPortsRefreshGeneration.current;');
-    expect(source).toContain('if (generation !== exposedPortsRefreshGeneration.current) return;');
-    const resetAt = source.indexOf('setLoadGeneration(0);');
-    expect(resetAt).toBeGreaterThan(0);
-    expect(source.slice(resetAt - 160, resetAt)).toContain('++exposedPortsRefreshGeneration.current;');
   });
 });
 

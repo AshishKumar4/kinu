@@ -8,7 +8,8 @@ import * as v from 'valibot';
 import type { UIMessage } from 'ai';
 import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import {
-  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, type HarnessOrchestratorAgent, workspaceMainActor,
+  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
+  workspaceMainActor,
 } from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
@@ -49,17 +50,18 @@ describe('the workspace root answers the actor control plane', () => {
    * 'queued' (KINU-N026: answering 'idle' let another turn file the guidance). Subordinates answer the same way.
    */
   test('steering with no turn running queues the text as the next ordinary turn', async () => {
-    const { agent } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent } = harness;
     const turns = chatSessionTurns(agent);
     const next = turns.park();
 
     // The send is admitted as the operator's own next turn, under their stamp and typed mode.
-    const landing = agent.harnessChatLoop.send('use the other parser');
+    const landing = agent.send('use the other parser', 'm-parser');
     await next;
     await turns.settle({ messageId: 'a-parser', text: 'ok' });
-    expect(await landing).toBe('turn');
+    await landing;
 
-    const opened = (await agent.harnessTranscript.history()).find((message) => message.role === 'user');
+    const opened = (await storedChat(harness)).find((message) => message.role === 'user');
     expect(opened?.parts).toEqual([{ type: 'text', text: 'use the other parser' }]);
     expect(v.parse(v.looseObject({ metadata: v.optional(v.unknown()) }), opened).metadata)
       .toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' });
@@ -123,37 +125,39 @@ describe('the workspace root answers the walk-back', () => {
   };
 
   test('the transcript ends before the message the revert names, and every tab is told', async () => {
-    const { agent } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent } = harness;
     const turns = chatSessionTurns(agent);
     await turns.run('first ask');
     await turns.run('second ask');
-    const before = await agent.harnessTranscript.history();
+    const before = await storedChat(harness);
     const second = before.filter((message) => message.role === 'user').at(-1);
 
     if (second === undefined) throw new Error('the harness recorded no user message');
     const frames = captureTranscriptFrames(agent);
     await agent.revertConversation(second.id);
 
-    const kept = await agent.harnessTranscript.history();
+    const kept = await storedChat(harness);
     expect(lines(kept)).toEqual(['first ask', 'ok']);
     expect(frames).toEqual([kept.map((message) => message.id)]);
   });
 
   test('a turn in flight refuses the walk-back and keeps the conversation', async () => {
-    const { agent } = orchestratorHarness();
+    const harness = orchestratorHarness();
+    const { agent } = harness;
     const turns = chatSessionTurns(agent);
     await turns.run('first ask');
-    const first = (await agent.harnessTranscript.history()).filter((message) => message.role === 'user').at(-1);
+    const first = (await storedChat(harness)).filter((message) => message.role === 'user').at(-1);
 
     if (first === undefined) throw new Error('the harness recorded no user message');
     const parked = turns.park();
-    const landing = agent.harnessChatLoop.send('second ask');
+    const landing = agent.send('second ask', 'm-second');
     await parked;
 
     await expect(agent.revertConversation(first.id)).rejects.toThrow(/Stop the turn that is running/);
 
     await turns.settle({ messageId: 'second-answer', text: 'ok' });
-    expect(await landing).toBe('turn');
-    expect(lines(await agent.harnessTranscript.history())).toEqual(['first ask', 'ok', 'second ask', 'ok']);
+    await landing;
+    expect(lines(await storedChat(harness))).toEqual(['first ask', 'ok', 'second ask', 'ok']);
   });
 });

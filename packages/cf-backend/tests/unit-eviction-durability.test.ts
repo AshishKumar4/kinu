@@ -8,7 +8,7 @@ import {
   type AdvisorRecoverySnapshot, type AgentSignal, type EnqueueTurnResult, type JsonValue, type ProgrammaticTurn,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { jobsOver, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
@@ -162,13 +162,13 @@ function recovering(agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext):
 
 describe('a background job whose executor died', () => {
   test('the recovery hands the re-drive to a carrier and terminalizes the old fiber', async () => {
-    const { agent } = orchestratorHarness();
-    agent.harnessJobs().create({
+    const { agent, db } = orchestratorHarness();
+    jobsOver(db).create({
       id: 'bgjob-evicted', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'keep going' }), now: Date.now(), label: 'keep going',
     });
 
-    expect(agent.harnessJobs().get('bgjob-evicted')?.status).toBe('running');
+    expect(jobsOver(db).get('bgjob-evicted')?.status).toBe('running');
 
     const result = await recover(agent, interrupted(
       `${BACKGROUND_FIBER_PREFIX}search`,
@@ -187,8 +187,8 @@ describe('a background job whose executor died', () => {
 
   /** A wake delivered on an idle agent resolves only when its turn ends; the hook must answer without awaiting it inside `blockConcurrencyWhile`. */
   test("a settled job's wake is delivered DETACHED, not awaited by the hook", async () => {
-    const { agent } = orchestratorHarness();
-    const jobs = agent.harnessJobs();
+    const { agent, db } = orchestratorHarness();
+    const jobs = jobsOver(db);
     jobs.create({
       id: 'bgjob-settled', kind: 'search', workMode: 'build',
       input: JSON.stringify({ task: 'done already' }), now: Date.now(), label: 'done already',
@@ -475,7 +475,7 @@ describe('whether the container may be disturbed', () => {
 
   test('an admitted send protects the container until its reservation retires', async () => {
     const { agent, db } = orchestratorHarness();
-    const sends = new PendingSendStore(makeSql(db), agent.observeRuntime().actor.actorId);
+    const sends = new PendingSendStore(makeSql(db), workspaceMainActor(db).actorId);
     sends.reserve({ id: 'accepted-before-reset', turnId: null, mode: 'build', text: 'inspect the container' });
 
     expect(await agent.hasSandboxBackgroundWork()).toBe(true);
@@ -484,8 +484,8 @@ describe('whether the container may be disturbed', () => {
   });
 
   test('a running detached job counts, because it may hold the container', async () => {
-    const { agent } = orchestratorHarness();
-    agent.harnessJobs().create({
+    const { agent, db } = orchestratorHarness();
+    jobsOver(db).create({
       id: 'bgjob-live', kind: 'shell', workMode: 'build',
       input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
     });
@@ -493,8 +493,8 @@ describe('whether the container may be disturbed', () => {
   });
 
   test('a settled job does not', async () => {
-    const { agent } = orchestratorHarness();
-    const jobs = agent.harnessJobs();
+    const { agent, db } = orchestratorHarness();
+    const jobs = jobsOver(db);
     jobs.create({
       id: 'bgjob-done', kind: 'shell', workMode: 'build',
       input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',

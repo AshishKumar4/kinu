@@ -3,18 +3,18 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity, subordinateAgentName, nativeToolFunctions,
-  createProviderRegistry, openWorkspaceMainActor, RunEventRecorder, WORKSPACE_RUN_ID,
+  openWorkspaceMainActor, RunEventRecorder, WORKSPACE_RUN_ID,
   type JsonValue, type SlateCallResult,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
-import { MockLanguageModelV3 } from 'ai/test';
 import {
-  hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles,
+  hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
+import { chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
-import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
+import { joinHarnessFibers, resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
 import type { SqlDatabase, SqlRow, SqlValue as VendorSqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -66,7 +66,7 @@ test('native MCP protocol failures reject while namespace responses retain their
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
 
-    const turn = await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }], tools: actor.agent.observeRawTools() });
+    const turn = await chatSessionTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }] });
 
     const native = turn.tools.mcp_github_read_issue;
 
@@ -378,7 +378,9 @@ test('a tool binding keeps native Plan checks and the same approval ladder as co
   const marker = '/home/user/slate-tool-approved';
   const command = `npm publish --dry-run && printf ran > ${marker}`;
   const binding = () => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'tool-gate', 'RUN', { member: 'call', args: [{ command }], invocation: null });
-  const native = nativeToolFunctions(actor.agent.observeRawTools());
+  // The shell a turn's model calls.
+  const turns = chatSessionTurns(actor.agent);
+  const native = nativeToolFunctions((await turns.prepare({ messages: [{ role: 'user', content: 'publish it' }] })).tools);
   const codemode = () => native.shell?.execute({ command });
 
   for (const [mode, reason] of [['deny_all', 'denied'], ['strict', 'unavailable']]) {
@@ -397,6 +399,7 @@ test('a tool binding keeps native Plan checks and the same approval ladder as co
 
   expect(await write()).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
   expect(await files.stat(marker)).toBeNull();
+  await turns.settle({ messageId: 'a-publish', text: 'refused' });
 });
 
 test('workspace read models are the root\'s own reads; a hosted actor holds none of them', async () => {
@@ -525,8 +528,8 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
     actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'pager', 'AGENT', { member: 'send', args, invocation: null });
 
   expect(await call([{ text: 'done', data: { count: 2 } }])).toEqual({ ok: true, value: { outcome: 'queued' } });
-  await actor.agent.harnessChatLoop.pumpPromise;
-  const admitted = (await actor.agent.harnessTranscript.history()).filter((message) => message.role === 'user');
+  await joinHarnessFibers();
+  const admitted = (await storedChat(actor)).filter((message) => message.role === 'user');
   expect(admitted).toHaveLength(1);
   expect(admitted[0]).toMatchObject({
     parts: [{ type: 'text', text: 'Slate pager: done' }],
@@ -544,41 +547,25 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
 });
 
 test('a slate ai binding runs one model call under the caller authority, as a slate spend row', async () => {
-  const actor = orchestratorHarness();
+  const gateway = stubAiBinding((run) => chatCompletion(run, 'model answer'));
+  const actor = orchestratorHarness(undefined, { aiGateway: gateway });
+  actor.agent.harnessInstallCatalog({ tiers: { default: { model: GATEWAY_MODEL } }, availableModels: [GATEWAY_MODEL] });
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/home/user/slates/thinker', { recursive: true });
   await files.writeFile('/home/user/slates/thinker/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { MODEL: { kind: 'ai' } } },
   }));
 
-  const seen: string[] = [];
-
-  actor.agent.overrideProviderRegistry({
-    registry: createProviderRegistry(),
-    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
-    resolveModel: (spec) => {
-      seen.push(spec);
-
-      return new MockLanguageModelV3({
-        doGenerate: async () => ({
-          content: [{ type: 'text' as const, text: 'model answer' }],
-          finishReason: { unified: 'stop' as const, raw: undefined },
-          usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 4, text: 4, reasoning: undefined } },
-          warnings: [],
-        }),
-      });
-    },
-    normalizeSpecSync: (spec) => spec ?? 'test/model',
-  });
-
   const call = (args: JsonValue[]) =>
     actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'thinker', 'MODEL', { member: 'shell', args, invocation: null });
 
   const answer = await call([{ prompt: 'summarize', system: 'be brief' }]);
 
-  expect(answer).toEqual({ ok: true, value: { text: 'model answer', model: DEFAULT_WORKERS_AI_MODEL_SPEC, tier: 'default', usage: { input: 9, output: 4 } } });
-
-  expect(seen).toEqual([DEFAULT_WORKERS_AI_MODEL_SPEC]);
+  expect(answer).toMatchObject({ ok: true, value: { text: 'model answer', model: GATEWAY_MODEL, tier: 'default', usage: { input: 1, output: 1 } } });
+  // One call reached the platform, carrying the slate's prompt and system.
+  expect(gateway.runs).toHaveLength(1);
+  expect(JSON.stringify(gateway.runs[0]?.query)).toContain('summarize');
+  expect(JSON.stringify(gateway.runs[0]?.query)).toContain('be brief');
 
   const operations = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)))
     .read(WORKSPACE_RUN_ID)
@@ -588,6 +575,7 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
   expect(operations.map((row) => row.phase)).toEqual(['start', 'end']);
 
   expect(await call([{ prompt: 'p', tier: 'imaginary' }])).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(gateway.runs).toHaveLength(1);
 });
 
 test('a path-scoped workspace binding reaches inside its prefixes and nowhere else', async () => {

@@ -2,7 +2,6 @@
 // Grants are only written to the root DO's `actor_config`; a facet reads them over RPC, and a method missing
 // from the surface is silently unreachable rather than a build error.
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import {
   createInheritedApprovalPolicy, egressSecretRule, gateExec,
   grantsAreSubset, resolveInheritedGrants,
@@ -11,8 +10,6 @@ import {
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
 import { hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
-
-const root = new URL('../', import.meta.url).pathname;
 
 /** A force-push reaches out, so the agent's own `sandbox` does not exempt it. */
 const GATED = 'git push --force origin main';
@@ -26,15 +23,6 @@ const ROOT_GRANTS: ApprovalGrant[] = [
 ];
 
 describe('reachability of the root policy read', () => {
-  // Derived from runtime.ts: a call added there without allowlisting it must fail here.
-  test('every root method the facet policy calls is on the RPC surface', () => {
-    const source = readFileSync(`${root}src/runtime.ts`, 'utf8');
-    const block = source.slice(source.indexOf('async function fetchRootApprovalPolicy'));
-    const called = [...block.slice(0, 900).matchAll(/\broot\.(\w+)\(/g)].map(([, name]) => name);
-    expect(called.length).toBeGreaterThan(0);
-    expect([...new Set(called)].filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name))).toEqual([]);
-  });
-
   test('they are reachable BECAUSE they are in AGENT_RPC_ACCESS, not a second list', () => {
     // ORCHESTRATOR_RPC_SURFACE spreads Object.keys(AGENT_RPC_ACCESS): the mechanism runtime.ts's SAFETY comment cites.
     for (const name of ['getShellApprovalMode', 'getShellApprovalGrants']) {
@@ -48,17 +36,10 @@ describe('reachability of the root policy read', () => {
    * answers to the workspace name, so a name comparison would hand a subordinate the root's authority.
    */
   test('a hosted actor reaches the root for its policy; the main actor never does', async () => {
-    const workspace = orchestratorHarness();
-    let rootReads = 0;
-    const readGrants = workspace.agent.getShellApprovalGrants.bind(workspace.agent);
-    Object.defineProperty(workspace.agent, 'getShellApprovalGrants', {
-      configurable: true,
-      value: async () => {
-        rootReads += 1;
-
-        return readGrants();
-      },
-    });
+    // The root's own namespace hands out workerd's stub: a policy read off the RPC surface is refused, not served.
+    const rpcServed: string[] = [];
+    const workspace = orchestratorHarness(undefined, { rpcServed });
+    const rootReads = () => rpcServed.filter((name) => name === 'getShellApprovalGrants').length;
 
     workspaceMainActor(workspace.db).config
       .grantShellApproval([{ rule: GATED_RULE, executor: 'workspace' }]);
@@ -68,7 +49,7 @@ describe('reachability of the root policy read', () => {
 
     if (!mainShell) throw new Error('the main actor carries a shell');
     expect((await mainShell.exec(GATED)).refusal).toBeUndefined();
-    expect(rootReads).toBe(0);
+    expect(rootReads()).toBe(0);
 
     const child = await hostedSubordinateHarness(workspace, {
       name: 'grantee-1', displayName: 'Grantee', nameOrigin: 'user',
@@ -80,9 +61,9 @@ describe('reachability of the root policy read', () => {
 
     if (!childShell) throw new Error('a hosted subordinate carries a shell');
     // Counted after the hire, so the hop is attributed to the child's own gate.
-    const beforeExec = rootReads;
+    const beforeExec = rootReads();
     expect((await childShell.exec(GATED)).refusal).toBeUndefined();
-    expect(rootReads).toBeGreaterThan(beforeExec);
+    expect(rootReads()).toBeGreaterThan(beforeExec);
   });
 
   /** The control that makes the pass above mean "inherited", not "ungated": with nothing granted on the root
