@@ -14,7 +14,7 @@ import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { claims, LADDER, gatesFor } from './ladder';
 import { auditClosure } from './ladder-audit';
 import {
-  CACHE_BLIND_SPOTS, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
 import type { Plan, Store, ToolVersions } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -89,6 +89,28 @@ const GREEN = 'process.exit(0);';
 /** Entries in the store. An absent directory is a store nothing has written
  *  to, which is the property most of these tests assert. */
 const entries = (store: Store): string[] => (existsSync(store.directory) ? readdirSync(store.directory) : []);
+
+/** `body` under this process's environment with `values` applied (undefined
+ *  unsets a name), restored afterwards: the key reads the process's own
+ *  environment, as the ladder does. */
+function withEnv<T>(values: Record<string, string | undefined>, body: () => T): T {
+  const saved = Object.keys(values).map((name) => [name, process.env[name]] as const);
+
+  const apply = (pairs: Iterable<readonly [string, string | undefined]>): void => {
+    for (const [name, value] of pairs) {
+      if (value === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = value;
+    }
+  };
+
+  apply(Object.entries(values));
+
+  try {
+    return body();
+  } finally {
+    apply(saved);
+  }
+}
 
 describe('ladder-cache — the green path', () => {
   test('after a green run, a rerun hits every cacheable gate and names the hash, the revision and the closure size', () => {
@@ -247,38 +269,36 @@ describe('ladder-cache — red in every direction it claims', () => {
     }
   });
 
-  test('a keyed environment value enters the key, and a name the gate is not given does not', () => {
+  test('a recorded green is reused only under the environment it was recorded in, name by name', () => {
     const fx = fixture({ 'scripts/a.ts': `export const a = process.env.ALPHA;\n${GREEN}` });
+    const declaredBeta: Inputs = { kind: 'derived', env: ['BETA'] };
+    const recordedUnder = { ALPHA: undefined, BETA: undefined, CI: undefined };
+    // Read once, so the git it runs is found on the PATH this process started with.
     const repo = fx.repo();
-    const plan = planGate({ run: 'bun scripts/a.ts', inputs: DERIVED, repo, tools: fx.tools, store: fx.store });
+    const planned = (inputs: Inputs = DERIVED): Plan['kind'] => planGate({ run: 'bun scripts/a.ts', inputs, repo, tools: fx.tools, store: fx.store }).kind;
 
-    if (plan.kind === 'uncacheable') throw new Error(plan.closure.why);
-    expect(plan.closure.env).toEqual(['ALPHA']);
-    const reader = (values: Record<string, string>) => (name: string) => values[name];
-    const base = keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({}) });
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ ALPHA: 'x' }) })).not.toBe(base);
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ ALPHA: '' }) })).not.toBe(base);
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ UNRELATED: 'x' }) })).toBe(base);
+    withEnv(recordedUnder, () => {
+      expect(runGate(fx, 'bun scripts/a.ts').refused).toBeUndefined();
+      expect(runGate(fx, 'bun scripts/a.ts', declaredBeta).refused).toBeUndefined();
+    });
+
+    expect(withEnv(recordedUnder, () => planned())).toBe('hit');
+    // The graph reads ALPHA, so a value for it, even an empty one, is another tree.
+    expect(withEnv({ ...recordedUnder, ALPHA: 'x' }, () => planned())).toBe('miss');
+    expect(withEnv({ ...recordedUnder, ALPHA: '' }, () => planned())).toBe('miss');
+    // A name the gate is not given changes nothing it can see.
+    expect(withEnv({ ...recordedUnder, UNRELATED: 'x' }, () => planned())).toBe('hit');
     // The base names every gate is given are keyed like the graph's own.
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ CI: 'true' }) })).not.toBe(base);
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ PATH: '/opt/other' }) })).not.toBe(base);
-
-    // A declared name the graph never reads is a key input once declared:
-    // with it, a value for BETA moves the key away from the base; without it,
-    // the same value leaves the base untouched.
-    const declared = { ...plan.closure, env: ['ALPHA', 'BETA'] };
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: plan.closure, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).toBe(base);
-    expect(keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({ BETA: 'y' }) })).not.toBe(
-      keyFor({ run: 'bun scripts/a.ts', closure: declared, tools: fx.tools, repo, env: reader({}) }),
-    );
+    expect(withEnv({ ...recordedUnder, CI: 'true' }, () => planned())).toBe('miss');
+    expect(withEnv({ ...recordedUnder, PATH: '/opt/other' }, () => planned())).toBe('miss');
+    // A name the graph never reads is keyed once the row declares it, and only then.
+    expect(withEnv({ ...recordedUnder, BETA: 'y' }, () => planned())).toBe('hit');
+    expect(withEnv({ ...recordedUnder, BETA: 'y' }, () => planned(declaredBeta))).toBe('miss');
   });
 
   test('a name the key does not hash never reaches the gate, however the gate reads the environment', () => {
     // The planted input: a verdict that flips on an environment name the
     // walker cannot see, read through a computed key and by enumeration.
-    // Handed the ambient environment, the planted value turns the gate red
-    // under an UNCHANGED key; handed its gate environment, the gate cannot
-    // see the name at all, so no value of it can split two runs of one key.
     const fx = fixture({
       'scripts/planted.ts': [
         "const name = ['PLAN', 'TED'].join('');",
@@ -287,20 +307,24 @@ describe('ladder-cache — red in every direction it claims', () => {
       ].join('\n'),
     });
 
-    const plan = planGate({ run: 'bun scripts/planted.ts', inputs: DERIVED, repo: fx.repo(), tools: fx.tools, store: fx.store });
+    const planned = (): Plan => planGate({ run: 'bun scripts/planted.ts', inputs: DERIVED, repo: fx.repo(), tools: fx.tools, store: fx.store });
+    const plan = planned();
 
     if (plan.kind === 'uncacheable') throw new Error(plan.closure.why);
     const ambient = Object.assign(childEnv(), { PLANTED: 'x' });
-    const reader = (name: string) => ambient[name];
     const run = (env: Record<string, string | undefined>) => Bun.spawnSync(['bun', 'scripts/planted.ts'], { cwd: fx.root, env, stdout: 'pipe' });
 
+    // Handed the ambient environment, the planted value turns the gate red.
     expect(run(ambient).exitCode).toBe(1);
-    const gated = run(gateEnvironment(plan.closure, reader));
+    // Handed its gate environment, the gate cannot see the name at all.
+    const gated = run(gateEnvironment(plan.closure, (name) => ambient[name]));
     expect(gated.exitCode).toBe(0);
     const seen = v.parse(v.array(v.string()), JSON.parse(gated.stdout.toString()));
     expect(seen.filter((name) => !gateEnvNames(plan.closure).includes(name))).toEqual([]);
-    expect(keyFor({ run: 'bun scripts/planted.ts', closure: plan.closure, tools: fx.tools, repo: fx.repo(), env: reader }))
-      .toBe(keyFor({ run: 'bun scripts/planted.ts', closure: plan.closure, tools: fx.tools, repo: fx.repo(), env: (name) => (name === 'PLANTED' ? undefined : reader(name)) }));
+    // So a green recorded without the name is reused with it set: no value of
+    // it can split two runs of one key.
+    withEnv({ PLANTED: undefined }, () => expect(runGate(fx, 'bun scripts/planted.ts').refused).toBeUndefined());
+    expect(withEnv({ PLANTED: 'x' }, planned).kind).toBe('hit');
   });
 
   test('a closure that changes while the gate runs is not recorded', () => {
