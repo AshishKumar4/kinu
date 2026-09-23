@@ -472,8 +472,8 @@ export class FakeSandbox {
       (row) => row.command.includes('kinu-journal-daemon') && row.status === 'running',
     );
   }
-  /** An explicit platform input block. The patched SDK's container hook does
-   *  not hold one; delivered operations join Devbox readiness themselves. */
+  /** The SDK's start block (D26): set while the start hook runs, so `deliver` holds every
+   *  operation that arrives during the restore until the hook settles. */
   initGate: Promise<void> | undefined;
 
   constructor(readonly ctx: DurableObjectState) {
@@ -1195,10 +1195,16 @@ export class FakeSandbox {
       await beforeHook.promise;
     }
 
-    // Models the platform: an adoption RPC inside the SDK hook block never gets its reply,
-    // measured 2026-09-13. The storage block is released first; readiness singleflight gates callers.
-    await this.onStart();
+    // The patched SDK runs the hook inside its start block, which holds the input gate until the
+    // hook settles (D26); the hook's own container calls answer on a connection opened inside it.
+    const hook = this.onStart();
+    this.initGate = Promise.allSettled([hook]).then(() => undefined);
 
+    try {
+      await hook;
+    } finally {
+      this.initGate = undefined;
+    }
   }
 
   /** Proves the control listener or a requested app port before opening onStart (D1);

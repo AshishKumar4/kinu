@@ -1,5 +1,5 @@
 /** One ephemeral container presented as a durable workspace; admission is port-proven (D1).
- *  onStart restores once under one raced budget (D8, D19); requests only adopt or refuse. */
+ *  onStart restores inside the SDK's start block under one raced budget (D19, D26); requests only adopt or refuse. */
 
 import { Sandbox } from '@cloudflare/sandbox';
 import type {
@@ -354,6 +354,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** A caller joins the attempt only while its generation still matches: a superseded
    *  attempt's result is already discarded. */
   #startup: Flight | undefined;
+  #disarmAdmission: (() => void) | undefined;
   /** Opened by the attempt on its hook; every phase stamp reads it until the attempt settles.
    *  Memory only: a witness needing stamps past a reset keeps them via `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
@@ -574,12 +575,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** The SDK releases its storage block after proving the control listener. */
+  /** Runs inside the SDK's start block (D26): nothing else reaches the object until it settles.
+   *  A timer set before the block holds every timer the hook sets, so the admission window goes. */
   override onStart(): Promise<void> {
+    this.#disarmAdmission?.();
+
     return this.#restoreInStartGate();
   }
 
-  /** Reconnects join the hook; a settled boot is adopted without re-attaching. */
+  /** Joins a re-entered hook; adopts a settled boot without re-attaching. */
   async #restoreInStartGate(): Promise<void> {
     const pending = this.#gateRestore;
 
@@ -1000,11 +1004,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.#admitControlListener();
   }
 
-  /** Instance allocation and control-listener proof are outside the hook budget. */
+  /** Instance allocation and control-listener proof are outside the hook budget. The window's timer
+   *  is set outside the start block, so the hook disarms it first (D26). */
   async #admitControlListener(): Promise<void> {
     const generation = this.#generation;
     const since = Date.now();
     this.#trace('startup.admit.enter', { generation, running: this.ctx.container?.running === true });
+    const window = new AbortController();
+    const timer = setTimeout(() => { window.abort(); }, this.policy.portWaitMs);
+    const disarm = (): void => { clearTimeout(timer); };
+
+    this.#disarmAdmission = disarm;
 
     try {
       await this.startAndWaitForPorts({
@@ -1013,7 +1023,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           instanceGetTimeoutMS: this.policy.portWaitMs,
           portReadyTimeoutMS: this.policy.portWaitMs,
           waitInterval: ADMISSION_POLL_INTERVAL_MS,
-          abort: AbortSignal.timeout(this.policy.portWaitMs),
+          abort: window.signal,
         },
       });
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
@@ -1034,6 +1044,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       } else {
         console.error(`[devbox] superseded admission refused: ${reason}`);
       }
+    } finally {
+      disarm();
+
+      if (this.#disarmAdmission === disarm) this.#disarmAdmission = undefined;
     }
   }
 
@@ -1463,16 +1477,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.#arm(STARTUP_CALLBACK, 1);
   }
 
-  /** Requests may start a stopped box, then adopt the hook's settled generation. */
+  /** Requests may start a stopped box, then adopt the hook's settled generation (D26). */
   async resolveReadiness(): Promise<RestoreReadiness> {
     const wasRunning = this.ctx.container?.running === true;
     this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
     if (!wasRunning) await this.#startContainer();
-    // Join application readiness without withholding the hook's RPC replies.
-    const hook = this.#gateRestore;
-
-    if (hook?.generation === this.#generation) await hook.run;
     await this.#resolveAdoption();
 
     // Allocation can report running before the SDK opens onStart. The same
@@ -1581,34 +1591,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
       const pending = this.#startup;
 
-      if (pending !== undefined && pending.generation === this.#generation) {
-        // Join the pending restoration for at most `requestJoinMs`, then answer from its state;
-        // the attempt keeps running under single-flight, so the lane is never held unbounded.
-        const joined = await runRestoreStep(
-          this.policy.requestJoinMs,
-          async () => await pending.run,
-          (failure) => {
-            console.error(
-              '[devbox] the restoration this checkpoint joined settled after the checkpoint had '
-              + `answered: ${describe({ cause: failure.cause })}`,
-            );
-          },
-        );
-
-        if (joined.kind === 'failed') throw joined.cause;
-
-        // Still restoring: answers with the readiness gate's sentence (`isRearmableStartupRefusal`
-        // reads it as "ask again") as an outcome, not a throw: `checkpointNow` callers act on it.
-        if (joined.kind === 'late') {
-          return {
-            kind: 'failed',
-            reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
-              + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
-            bytes: undefined,
-            movedBytes: undefined,
-          };
-        }
-      }
+      // Waits for the startup to settle rather than racing it against a timer: a timer set here
+      // would outlive into the start block and hold every timer its hook sets (D26).
+      if (pending !== undefined && pending.generation === this.#generation) await pending.run;
 
       if (this.ctx.container?.running === true && this.#admission() === undefined) {
         return {

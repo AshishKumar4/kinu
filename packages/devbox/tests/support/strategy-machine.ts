@@ -655,7 +655,7 @@ export class ContainerDisk {
       if (row.kind === 'symlink') return { ...base, target: row.target };
 
       if (row.kind !== 'file') return base;
-      const runs = (row.runs ?? []).map(([offset, body]) => ({ offset, bytes: base64ToBytes(body) }));
+      const runs = (row.runs ?? []).map(([offset, body]) => ({ offset, bytes: Uint8Array.from(Buffer.from(body, 'base64')) }));
       const size = row.size ?? 0;
       const dense = runs.length === 1 && runs[0].offset === 0 && runs[0].bytes.byteLength === size;
 
@@ -841,15 +841,6 @@ function bytesToBase64(bytes: Uint8Array): string {
   for (const byte of bytes) text += String.fromCharCode(byte);
 
   return btoa(text);
-}
-
-function base64ToBytes(encoded: string): Uint8Array {
-  const text = atob(encoded);
-  const bytes = new Uint8Array(text.length);
-
-  for (let at = 0; at < text.length; at += 1) bytes[at] = text.charCodeAt(at);
-
-  return bytes;
 }
 
 const encoder = new TextEncoder();

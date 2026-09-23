@@ -1,27 +1,48 @@
 diff --git a/dist/lib/container.js b/dist/lib/container.js
-index b7567e230..f6132d575 100644
+index b7567e2..0cd6dfb 100644
 --- a/dist/lib/container.js
 +++ b/dist/lib/container.js
-@@ -581,8 +581,9 @@ export class Container extends DurableObject {
+@@ -581,7 +581,8 @@ export class Container extends DurableObject {
          this.setupMonitorCallbacks();
          // TODO: We should consider an onHealthy callback
          await this.ctx.blockConcurrencyWhile(async () => {
 -            await this.onStart();
 +            await this.state.setHealthy();
++            await this.callOnStart();
          });
-+        await this.onStart();
      }
      async startAndWaitForPorts(portsOrArgs, cancellationOptions, startOptions) {
-         // Parse arguments to handle different overload signatures
-@@ -632,8 +633,10 @@ export class Container extends DurableObject {
+@@ -632,7 +633,7 @@ export class Container extends DurableObject {
          await this.ctx.blockConcurrencyWhile(async () => {
              // All ports are ready
              await this.state.setHealthy();
 -            await this.onStart();
++            await this.callOnStart();
          });
-+        // RPC replies need input delivery. Application readiness remains held
-+        // by the awaited hook, never by a block that prevents its own reply.
-+        await this.onStart();
      }
      /**
-      *
+@@ -728,6 +729,24 @@ export class Container extends DurableObject {
+     onStart() {
+         // Default implementation does nothing
+     }
++    /**
++     * Runs `onStart` inside the start block. A subclass that owns container
++     * connections overrides this to open them inside the block: a WebSocket
++     * delivers its messages under the input gate it was accepted under.
++     *
++     * workerd fires timers in due order, each under the input gate it was set
++     * under, so a timer set outside the block that falls due inside it holds
++     * every later timer until the block ends. The alarm loop's wait is such a
++     * timer; end it here, as a container exit does, and the loop re-arms.
++     */
++    callOnStart() {
++        if (this.timeout) {
++            clearTimeout(this.timeout);
++            this.timeout = undefined;
++            this.resolve?.();
++        }
++        return this.onStart();
++    }
+     /**
+      * Lifecycle method called when container shuts down
+      * Override this method in subclasses to handle Container stopped events

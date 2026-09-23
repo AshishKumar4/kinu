@@ -37,12 +37,14 @@ Official: developers.cloudflare.com/containers/concepts/architecture,
 "Persistent disk", updated 2026-08-28. A Durable Object reset beside a
 container that keeps running does not lose that disk.
 
-P2. A timer set inside `blockConcurrencyWhile` fires on schedule. Measured
-2026-09-13 on a plain Durable Object: a 50 ms `setTimeout` awaited inside the
-block completed at exactly 50 ms. Evidence: `kinu-logs/startup-probe/`
-(`p1-get-timer-inside.body`, `observations.md`). The earlier claim in
-`lifecycle.ts` that timers starve in the block was a hypothesis written as
-fact; it is withdrawn.
+P2. A timer set inside `blockConcurrencyWhile` fires on schedule while no
+timer set outside the block falls due first (P5). Measured 2026-09-13 on a
+plain Durable Object: a 50 ms `setTimeout` awaited inside the block completed
+at exactly 50 ms. Evidence: `kinu-logs/startup-probe/`
+(`p1-get-timer-inside.body`, `observations.md`). Remeasured deployed
+2026-09-23 (run `s20260923020822`): 50 ms alone and 50 ms with reads queued
+at the gate. The earlier claim in `lifecycle.ts` that timers starve in the
+block was a hypothesis written as fact; it is withdrawn.
 
 P3. One control exec inside `onStart` completes when the block opens against
 an accepting control server, and never completes when it does not. Measured
@@ -53,6 +55,33 @@ the block to the cap and reset the object at 41 s, 3/3. Port 3000 is
 port wait runs outside the block with real timers. Probe source:
 `packages/devbox/bench/onstart-probe.ts`, `probe-worker.ts`,
 `wrangler.probe.jsonc`.
+
+P4. A WebSocket delivers its messages under the input gate current when it
+was accepted. A reply over a connection accepted before a
+`blockConcurrencyWhile` block cannot arrive inside the block; a reply over a
+connection accepted inside it can. Source, read 2026-09-23: workerd
+`src/workerd/api/web-socket.c++` (`internalAccept(js,
+IoContext::current().getCriticalSection())`; `readLoop` runs each message
+through `context.run(..., mapAddRef(cs))`). Measured deployed 2026-09-23 (run
+`s20260923013446`): a hook exec over the connection opened before the block
+got no reply, 4 of 4, and the object reset at the cap; over a connection
+opened inside the block it answered in 152 to 176 ms, 4 of 4.
+
+P5. Timers fire in due order, and each runs under the input gate current when
+it was set. A timer set outside a block that falls due while the block holds
+the gate waits for the block to end, and every later timer, those set inside
+the block included, waits behind it. `clearTimeout` of the waiting timer
+drops its pending run and the queue moves on. Source, read 2026-09-23: workerd
+`src/workerd/io/io-context.c++`, `TimeoutManagerImpl::setTimeoutImpl` (captures
+`context.getCriticalSection()` when the timer is set; an entry of
+`timeoutTimes` is fulfilled "when the time has been reached AND all previous
+timeouts have completed") and `TimeoutState::cancel`; `scheduler.wait` and
+`AbortSignal.timeout` use the same queue (`src/workerd/api/basics.c++`,
+`setTimeoutInternal`). Measured 2026-09-23, local workerd: a 250 ms interval
+set inside the block stopped at the first tick after the SDK's 1 s connection
+poll, set before the block, fell due; the block then reset at 30 s, 3 of 3.
+With that poll cleared at block entry, the hook's timers fired and the hook
+returned, 3 of 3.
 
 ## Decisions
 
@@ -271,7 +300,7 @@ The eager counterexamples `c3_attach_copies_the_whole_64mib_base` and
 implementation. They do not describe v2 storage attach. No product deployment,
 full-hook latency guarantee or callback-only publication bound is claimed.
 
-D8. SDK input blocks contain storage work only (`4bca22e3c`, 2026-09-13).
+D8. SDK input blocks contain storage work only (`4bca22e3c`, 2026-09-13). Reversed by D26.
 This supersedes D1/D3's
 in-block restore placement and the input-block part of R1, as authorized by
 the lifecycle-defect assignment on 2026-09-13. Restore still runs once per
@@ -995,6 +1024,97 @@ ran a real recycle: stop 8578 ms, wake 579 store calls in 45917 ms, boot
 were identical. No write was lost. The cause stays an inference: stops that
 never completed were measured as recycles. `requireConfirmedStop` in
 `scripts/bench-devbox-strategies.ts` refuses a wake after an unconfirmed stop.
+
+D26. Restore runs inside the SDK start block again (2026-09-23,
+`lane/devbox`). This reverses D8's placement (hook after the block) and
+restores R1: no event reaches the object until the restore settles. Two
+platform facts made the in-block hook deadlock, and the patched SDK isolates
+the hook from both.
+
+P4 was D8's deadlock. In the first start block of D8's trace
+`b20260913105359` the hook's execs answered (700, 143, 59, 99, 56, 55 ms),
+because their capnweb connection opened inside that block. The second
+block, 12 ms after a request exec, sent the boot-id RPC over that earlier
+connection, and the reply could not arrive inside the new block. The SDK
+closes an idle connection after 1 s, so the window is narrow.
+
+P5 was found while measuring the P4 fix: a timer the hook set never fired.
+The SDK's control client polls every 1 s while a connection is open, the
+alarm loop waits between schedule rows, and Devbox's admission window ran
+for `portWaitMs`; each is set before the block, and once due it holds every
+timer the hook sets, the D19 restore budget's included.
+
+The change. The containers patch runs `setHealthy`, then `callOnStart()`,
+inside both start blocks; `callOnStart()` ends the alarm loop's wait (as a
+container exit does; the loop re-arms) and calls `onStart()`. The sandbox
+patch overrides `callOnStart()`: it suspends the outer control client's poll
+and idle timers and runs the hook on a fresh client
+(`createClientForTransport`), whose connection opens inside the block and
+never starts a container; afterwards it restores the outer client and resumes
+its timers, and in-flight calls on the outer client keep their connection.
+Devbox disarms its admission window when the hook starts, a checkpoint that
+meets a pending startup waits for it to settle instead of racing a timer
+(`requestJoinMs` is gone), and `resolveReadiness` no longer joins the hook,
+because no request runs while the block holds the gate.
+`scripts/do-init-gate.ts` requires both start blocks to run the hook through
+`callOnStart`, the installed `callOnStart` to suspend the outer timers and
+swap the client before the hook, and the base `callOnStart` to clear the
+alarm wait before `onStart()`; every other input block still reaches no
+container RPC.
+
+Residual. A timer another event sets before the block, outside the SDK's two
+and Devbox's own, still holds the hook's timers once it falls due. The
+hook's ordinary path awaits no timer; the budget's races need one only when
+a step overruns, and then the platform resets the object at 30 s and the
+next activation recovers the interrupted restore (the `restoring` row,
+`ContainerStartInterrupted`).
+
+Measured 2026-09-23 with `scripts/bench-devbox-onstart-shapes.ts --local`
+(workerd under `wrangler dev`, Docker, image `cloudflare/sandbox:0.12.8`),
+run `s20260923025542`, base `b2c60d09f`, window 5,000 ms, hold 2,000 ms, a
+request every 250 ms, 2 runs per cell. Each arm is the same probe
+(`probeReentry`: start, leave one timer pending, start again at once, hook
+execs once, then holds) built from pristine npm packages plus one patch set:
+outside is `b2c60d09f`'s pair, inside is upstream's containers package with
+`b2c60d09f`'s sandbox patch, rotated is this tree's pair. Pending timer:
+connection (an exec just before, so the 1 s poll is armed), alarm (two
+schedule rows, the loop waiting for the second), stray (a 1 s `setTimeout`
+nothing clears).
+
+| Arm | connection | alarm | stray |
+| --- | --- | --- | --- |
+| outside (D8) | exec 7, 6 ms; 8, 8 requests ran during the hook; exited | exec 60, 37 ms; 8, 7 requests; exited | exec 30, 26 ms; 7, 7 requests; exited |
+| inside (upstream block) | no reply; reset at the cap | exec 45, 20 ms; hold never ended; reset | exec 31, 31 ms; hold never ended; reset |
+| rotated (D26) | exec 11, 13 ms; no request during the hook; exited at +2.0 s | exec 22, 22 ms; no request; exited at +2.0 s | exec 18, 69 ms; hold never ended; reset |
+
+Deployed, run `s20260923013446` (01:34:46 to 01:48:15 UTC, connection cell
+only, four runs per arm, with the rotated arm's client swap but before the
+timer suspension): outside answered in 80 to 103 ms with 6 to 7 requests
+delivered during the hook; inside got no reply, 4 of 4, and reset at the cap;
+rotated answered in 152 to 176 ms, 4 of 4, and its 2 s hold never ended.
+That run is P4's deployed evidence and the first sighting of P5. Each arm
+deleted its Worker and container application and listed the application
+absent; at 2026-09-23T02:06:52Z the account listed 65 Worker scripts and 6
+container applications, none named `kinu-devbox-shapes-*` (Workers API `GET
+/workers/scripts`, `wrangler containers list --json`). The earlier local runs
+`s20260923011640` (void: `git apply` inside the repository skipped every
+patch) and `s20260923012340` preceded the timer finding.
+
+Tests: `tests/restore-after-start.test.ts` T1 and T5 are red on D8's harness
+(the hook outside the block) and green on the block-holding harness;
+`scripts/do-init-block-bodies.test.ts` is red on D8's shape, on upstream's
+block, on a `callOnStart` that keeps the old client or leaves its timers
+running, and on a start block that leaves the alarm wait armed, and green on
+this tree's install. In a clean install of this tree, 2026-09-23: `bun test`
+over the devbox package 484 pass, 0 fail; its workerd suite 7 pass;
+`bun scripts/do-init-gate.ts` ok.
+
+D27. Snapshot-chain stays and the storage strategy search stops (owner
+decision, 2026-09-23, checklist row DBX-10; asked first in m1191). The
+evidence is D18: settlement `20260915065241` admitted snapshot-chain on all
+ten gates, and no other design measured under the contract below was shown
+better (D5's table). A new design reopens the search only with a comparison
+run under that contract; none is scheduled (O3).
 
 ## Measurement contract for a strategy comparison
 

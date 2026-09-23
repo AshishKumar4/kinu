@@ -28,9 +28,6 @@ export interface DevboxPolicy {
    *  A cap, not a per-port timer: each port gets min(this, remaining `attachBudgetMs`). */
   readonly portWaitMs: number;
   readonly portProbeIntervalMs: number;
-  /** A delivered checkpoint may join startup or explicit repair for this long.
-   * Requests arriving during onStart are held by the platform's own gate. */
-  readonly requestJoinMs: number;
 }
 
 export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
@@ -41,7 +38,6 @@ export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
   attachBudgetMs: 25_000,
   portWaitMs: 30_000,
   portProbeIntervalMs: 2_000,
-  requestJoinMs: 5_000,
 };
 
 /** The `devbox:` prefix keeps these rows apart from a host's own durable keys.

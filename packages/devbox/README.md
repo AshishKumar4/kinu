@@ -35,9 +35,9 @@ on every call.
    records an incident and arms the `devboxStartup` row to try again.
 2. `onStart` adopts the running instance when it is already restored, or
    restores it (attach, workload restart, port exposure) under one raced
-   budget. It then arms the container schedule rows and retires the startup
-   row. Public operations join that restore, and status cannot report ready
-   while it is pending.
+   budget. The SDK runs it inside its start block, so nothing else reaches the
+   object until it settles. It then arms the container schedule rows and
+   retires the startup row.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
@@ -154,13 +154,17 @@ refuses it, to prove the test can go red.
 
 ## Platform constraints
 
-Restore runs once per fresh container, in the awaited `onStart` hook, after
-admission. The patched SDK keeps only storage work inside its
-`blockConcurrencyWhile` input blocks, so the restore's container calls are not
-held behind a closed input gate (D8 in the decision log). `scripts/do-init-
-gate.ts` holds the hook to that shape by name.
+Restore runs once per fresh container, in `onStart`, after admission and
+inside the SDK's `blockConcurrencyWhile` start block (D26 in the decision
+log). Two platform facts shape the patched SDK. A WebSocket delivers its
+messages under the input gate it was accepted under, so the hook gets a
+control connection opened inside the block (P4). Timers fire in due order,
+each under the gate it was set under, so a timer set before the block that
+falls due inside it holds every timer the hook sets (P5); the SDK clears its
+own such timers at block entry, and Devbox sets none that outlive into the
+block. `scripts/do-init-gate.ts` holds the SDK and the hook to that shape.
 
-The earlier shape put the restore inside the input block. On a deployed Worker
+Before admission waited for the control listener, the in-block restore failed. On a deployed Worker
 the first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
 The call was canceled and the Durable Object was reset.` Six fresh container
