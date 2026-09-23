@@ -14,7 +14,7 @@ export const LONGHORIZON_CORPUS_DIR = 'bench-corpus';
 
 export const LONGHORIZON_ANSWER_FILE = 'bench-answer.txt';
 
-export const LONGHORIZON_ENTRIES_PER_FILE = 25;
+const LONGHORIZON_ENTRIES_PER_FILE = 25;
 
 export type LongHorizonMode = 'digest' | 'continuation';
 
@@ -66,7 +66,7 @@ function pick<T>(pool: readonly T[], draw: number): T {
   return pool[Math.min(pool.length - 1, Math.floor(draw * pool.length))];
 }
 
-export function longHorizonEntryId(index: number): string {
+function longHorizonEntryId(index: number): string {
   return `entry-${String(index).padStart(5, '0')}`;
 }
 
@@ -149,7 +149,7 @@ function fillerText(spec: LongHorizonSpec, index: number): string {
   return words.join(' ');
 }
 
-export function renderLongHorizonEntry(spec: LongHorizonSpec, entry: LongHorizonEntry): string {
+function renderLongHorizonEntry(spec: LongHorizonSpec, entry: LongHorizonEntry): string {
   const lines = [
     `### ${entry.id}`,
     `actor: ${entry.actor}`,

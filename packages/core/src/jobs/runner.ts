@@ -17,7 +17,7 @@ import { parseJsonValue, type JsonValue } from '../utils/json';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
-export const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
+const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
 
 /** Shared with each backend's fiber-recovery hook, which matches on it. */
 export const BACKGROUND_FIBER_PREFIX = 'bg:';

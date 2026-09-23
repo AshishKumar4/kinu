@@ -21,7 +21,6 @@ export {
 } from './library';
 
 export {
-  EXPERIENCE_MIN_FACT_CONFIDENCE,
   findPublishable,
   listPublishable,
   type PublishRefusal,
@@ -41,7 +40,6 @@ export {
 } from './imports';
 
 export {
-  EXPERIENCE_ACTIONS,
   runExperienceAction,
   type ExperienceAction,
   type ExperienceActionDeps,

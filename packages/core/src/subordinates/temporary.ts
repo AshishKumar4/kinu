@@ -100,7 +100,7 @@ export function temporaryRunSettles(input: {
 
 /** A task-lifetime hire's brief: the question, the material paths, and that the next
  *  message is the whole deliverable. */
-export function renderTemporaryTaskBrief(input: {
+function renderTemporaryTaskBrief(input: {
   readonly task: string;
   readonly contextRefs?: readonly string[];
 }): string {

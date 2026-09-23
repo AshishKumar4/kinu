@@ -50,7 +50,7 @@ export function deriveStop(input: {
 
 /** Cells the seal cost (*The publication seal*), over candidates this run measured;
  *  zero unless sealed. */
-export function suppressedCellCount(input: {
+function suppressedCellCount(input: {
   readonly publication: PublicationState;
   readonly archiveKey: string | null;
   readonly measuredCells: ReadonlySet<string>;
@@ -63,7 +63,7 @@ export function suppressedCellCount(input: {
 }
 
 /** The smallest ensemble any candidate actually sampled; null where none reached one. */
-export function judgeEnsembleRealised(
+function judgeEnsembleRealised(
   requested: number | null,
   ensembles: readonly number[],
 ): JudgeEnsembleReport | null {
@@ -99,7 +99,7 @@ export function measuredCellsFor(
   }));
 }
 
-export function settleReport(input: {
+function settleReport(input: {
   readonly resolved: ResolvedSwarm;
   readonly measured: MeasuredObjective | null;
   readonly baseline: number | null;

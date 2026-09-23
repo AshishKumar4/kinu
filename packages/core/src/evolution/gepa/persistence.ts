@@ -108,7 +108,7 @@ export function persistGepaCandidate(
 
 
 /** Mid-run, so a hibernating DO can resume. */
-export function updateGepaRunCounters(
+function updateGepaRunCounters(
   sql: SqlExecutor,
   actor: ActorHandle,
   args: { runId: string; metricCalls: number; iterations: number },

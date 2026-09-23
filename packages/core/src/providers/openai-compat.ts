@@ -15,7 +15,7 @@ const ModelListSchema = v.object({
   })),
 });
 
-export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
+const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
 /** `openai-compat:groq` → `openai-compat.groq` */
 function credKeyFor(providerId: string): string {
@@ -69,7 +69,7 @@ export function createOpenAICompatProvider(providerId = 'openai-compat'): ModelP
 
 /** The endpoint's `/models` list; fetch or parse failure throws rather than
  *  reporting a wrong base URL as a provider with no models. */
-export async function discoverOpenAICompatibleModels(
+async function discoverOpenAICompatibleModels(
   auth: AuthResolution | null,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ModelInfo[]> {

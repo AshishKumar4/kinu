@@ -75,7 +75,7 @@ export interface AttemptOutcome {
 const NonNegativeInteger = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
 
 /** Retained outcomes are parsed, not asserted, so drift fails loudly. */
-export const CheckOutcomeSchema = v.strictObject({
+const CheckOutcomeSchema = v.strictObject({
   id: v.pipe(v.string(), v.minLength(1)),
   passed: v.boolean(),
   exitCode: v.nullable(NonNegativeInteger),

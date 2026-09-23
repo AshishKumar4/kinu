@@ -261,7 +261,7 @@ export async function evaluateWithMultiModelJudging(
 }
 
 /** Independent checks requested per branch, matching LATS §5.2; bounds executor calls, not spend. */
-export const MAX_GENERATED_CHECKS = 4;
+const MAX_GENERATED_CHECKS = 4;
 
 /**
  * Ask the judge for independent checks, one fence each, so a measured pass fraction exists. Empty when

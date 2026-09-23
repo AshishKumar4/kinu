@@ -452,13 +452,6 @@ export interface ToolSurfaceContext {
   role: Role;
 }
 
-export class TrustViolationError extends Error {
-  constructor(public readonly attempted: TrustLevel, public readonly required: TrustLevel) {
-    super(`Trust violation: have ${attempted}, need ${required}`);
-    this.name = 'TrustViolationError';
-  }
-}
-
 export class IngressRejectedError extends Error {
   constructor(public readonly ingress: IngressKind | 'invalid_combination', public readonly reason: string) {
     super(`Ingress ${ingress} rejected: ${reason}`);

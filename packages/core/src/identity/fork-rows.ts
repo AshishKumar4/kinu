@@ -84,13 +84,13 @@ export const ForkCraftedToolRowSchema = v.object({
 export const ForkConfigRowSchema = v.object({ key: v.string(), value: v.string() });
 
 /** One inherited file, read through the workspace filesystem. */
-export const ForkFileSchema = v.object({ path: v.string(), content: v.string() });
+const ForkFileSchema = v.object({ path: v.string(), content: v.string() });
 
 /**
  * Everything a fork copies, for the in-process fork; a hosted fork streams instead (fork-transfer.ts).
  * `artifacts` are relative to the owning artifact directory, `files` are workspace paths.
  */
-export const ForkSnapshotSchema = v.object({
+const ForkSnapshotSchema = v.object({
   ...ForkSnapshotHeadSchema.entries,
   sessionMessages: v.array(ForkSessionMessageRowSchema),
   conversationEntries: v.array(ForkConversationEntryRowSchema),
