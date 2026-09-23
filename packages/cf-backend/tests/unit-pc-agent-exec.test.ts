@@ -77,8 +77,9 @@ const SupervisorRegistrySchema = v.object({
 
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
 
+/** As the hub sends it: with the owner's Sandbox switch, here off. */
 function handle(message: DaemonMessage, socket: ReplySocket): void {
-  pcAgent.handle(message, socket);
+  pcAgent.handle({ ...message, sandbox: { tier: 'raw', agentHome: '', roots: [] } }, socket);
 }
 
 const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() });

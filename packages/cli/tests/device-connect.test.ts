@@ -71,7 +71,7 @@ interface StubCloudOptions {
   devices?: () => unknown[];
   registerGate?: { release: Promise<void>; onArrival?: () => void };
   registrationFailure?: { status: number; error: string };
-  onRegister?: (body: { label?: string }) => void;
+  onRegister?: (body: { label?: string; replaces?: string }) => void;
   /** Ticket-exchange statuses in order, last repeating; 401 makes the daemon exit, 404 retries. */
   ticketStatuses?: readonly number[];
 }
@@ -99,7 +99,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         hits.register += 1;
-        const body = v.safeParse(v.object({ label: v.optional(v.string()) }), await req.json());
+        const body = v.safeParse(v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) }), await req.json());
         opts.onRegister?.(body.success ? body.output : {});
 
         if (opts.registerGate) {
@@ -198,12 +198,13 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
     createdAt: 0,
     lastSeenAt: null,
     sandbox: { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
+    wholeMachine: false,
     ...overrides,
   };
 }
 
 function connectedResult(label = connectedDevice(true).label) {
-  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox };
+  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false };
 }
 
 async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
@@ -410,6 +411,32 @@ describe('device-connect daemon lifecycle', () => {
     expect(await waitForPidExit(status.daemonPid ?? 0)).toBe(true);
   }, 20_000);
 
+  test('linking this machine again names the registration it replaces, only to the hub that issued it', async () => {
+    const bodies: Array<{ label?: string; replaces?: string }> = [];
+    const stub = startStubCloud({ devices: () => [connectedDevice(true)], onRegister: (body) => { bodies.push(body); } });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    // The session daemon dies with the script; a pidfile it left must name a dead process, or the
+    // next connect reads "already running" and registers nothing.
+    const connect = async () => {
+      await runScript(home, `
+        import { connectDevice } from './packages/cli/src/device-connect.ts';
+        await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
+        process.exit(0);
+      `);
+      const pidfile = join(home, 'pc-agent.pid');
+
+      if (existsSync(pidfile)) expect(await waitForPidExit(Number(readFileSync(pidfile, 'utf-8').trim()))).toBe(true);
+    };
+
+    // A device.json another deployment issued is that deployment's secret, and stays unsent.
+    writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'u', token: 'pdt_other_hub', origin: 'https://other.example' }));
+    await connect();
+    await connect();
+
+    expect(bodies.map((body) => body.replaces)).toEqual([undefined, 'device-token']);
+  }, 30_000);
+
   test('session mode is a no-op while a daemon is already running', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(false)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
@@ -547,6 +574,7 @@ describe('the sandbox state the machine reported', () => {
           id: 'dev_3', label: 'vm',
           sandbox: { tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', detail: null, gpu: [] },
         }),
+        connectedDevice(true, { id: 'dev_5', label: 'server', wholeMachine: true }),
         connectedDevice(false, { id: 'dev_4', label: 'retired' }),
       ],
     });
@@ -559,7 +587,14 @@ describe('the sandbox state the machine reported', () => {
     `);
 
     expect(out.trim())
-      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox)');
+      .toBe('Connected: studio (sandbox on), tower (sandbox OFF), vm (cannot sandbox), server (whole machine)');
+  });
+
+  test('a machine linked from / is described as the whole machine, whatever the switch says', () => {
+    const [line] = describeDeviceSandbox({ tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] }, true);
+
+    expect(line).toContain('the agent has this whole machine');
+    expect(line).not.toContain('Sandbox on');
   });
 
   test('a device row from a hub too old to report the switch still lists', async () => {

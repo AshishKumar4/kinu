@@ -17,6 +17,7 @@ def outcomeJson : Except OpenError String → Json
   | .ok p => .obj [("opens", .str p)]
   | .error .noKey => .obj [("refused", .str "no-key")]
   | .error .mismatch => .obj [("refused", .str "mismatch")]
+  | .error .notSealed => .obj [("refused", .str "not-sealed")]
 
 /-- The sealing deployment's current key seals `plaintext` under `sealAad`, or the
     row is stored without an envelope; the opening deployment holds `openKeys`,
@@ -57,7 +58,7 @@ def directed : List Json :=
     caseOf false "k1" aad "moved" ["k1"] (credentialAad "d2" "openai.bearer"),
     -- `credential_contexts_never_meet_mcp_contexts`
     caseOf false "k1" (mcpAad "d1" "s1") "mcp headers" ["k1"] aad,
-    -- `a_plain_row_opens_under_every_context`
+    -- `an_unsealed_row_opens_nowhere`
     caseOf true "k1" aad "plain" ["k2"] (credentialAad "d2" "anthropic.bearer") ]
 
 def fixture : String :=

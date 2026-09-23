@@ -20,6 +20,7 @@ function device(sandbox: UserDevice['sandbox'], label = 'workstation', update: P
     id: 'dev-1', label, os: 'linux', hostname: 'pc', connected: true,
     createdAt: AT, lastSeenAt: AT, expiresAt: AT + 864e5,
     lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
+    reuseDetectedAt: null, wholeMachine: false,
     sandbox,
     ...update,
   };
@@ -37,9 +38,13 @@ function readable(markup: string): string {
     .replaceAll('&amp;', '&');
 }
 
-function renderRow(sandbox: UserDevice['sandbox'], update?: Pick<UserDevice, 'version' | 'servedVersion' | 'update'>): string {
+function renderRow(
+  sandbox: UserDevice['sandbox'],
+  update?: Pick<UserDevice, 'version' | 'servedVersion' | 'update'>,
+  overrides: Partial<UserDevice> = {},
+): string {
   return readable(renderToStaticMarkup(createElement(DeviceRow, {
-    device: device(sandbox, 'workstation', update),
+    device: { ...device(sandbox, 'workstation', update), ...overrides },
     grants: [],
     onDeviceChanged: () => {},
     onGrantsChanged: () => {},
@@ -158,6 +163,38 @@ describe('the device row shows the machine\'s software state beside its link sta
   });
 });
 
+describe('a device linked from / says the agent has the whole machine', () => {
+  test('the plain sentence, the raw mode, and a switch that cannot pretend otherwise', () => {
+    const html = renderRow(
+      { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] }, undefined, { wholeMachine: true },
+    );
+
+    expect(html).toContain('the agent has this whole machine');
+    expect(html).toContain('data-sandbox-mode="raw"');
+    expect(html).not.toContain('Sandboxed.');
+    expect(html).toMatch(/<button[^>]*role="switch"[^>]*disabled=""/);
+  });
+});
+
+describe('a revoked device names why it was revoked', () => {
+  const sandboxed = { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] } as const;
+
+  test('a key used from two places: that, and no claim about commands', () => {
+    const html = renderRow(sandboxed, undefined, { revokedAt: AT, reuseDetectedAt: AT });
+
+    expect(html).toContain('its key was used after it had been replaced');
+    expect(html).toContain('Run kinu connect on the machine you trust');
+    expect(html).not.toContain('could not confirm that every command stopped');
+  });
+
+  test('an unconfirmed command: that, and no claim about the key', () => {
+    const html = renderRow(sandboxed, undefined, { revokedAt: AT, unstoppedAt: AT });
+
+    expect(html).toContain('could not confirm that every command stopped');
+    expect(html).not.toContain('its key was used');
+  });
+});
+
 describe('a device row written before the registry recorded a sandbox', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
@@ -181,5 +218,7 @@ describe('a device row written before the registry recorded a sandbox', () => {
       { tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
     ]);
     expect(devices.map((row) => row.update)).toEqual(['unreported', 'unreported']);
+    // A hub from before these fields read as no incident and a confined link.
+    expect(devices.map((row) => [row.reuseDetectedAt, row.wholeMachine])).toEqual([[null, false], [null, false]]);
   });
 });
