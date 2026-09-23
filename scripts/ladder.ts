@@ -2267,8 +2267,9 @@ export const LADDER: readonly Gate[] = [
       + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
       + 'so it stands outside the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 66s and 67s against 41494531d on 2026-09-23, ten rows over the public edge.
-    seconds: 67,
+    // 66s, 67s and 128s against 41494531d on 2026-09-23, ten rows over the public
+    // edge: the first answer's model turn (35 to 97s) is the spread.
+    seconds: 128,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
       + 'as the eval identity, asserting only what the page shows. The first-run tier reads '

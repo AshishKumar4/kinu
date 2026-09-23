@@ -778,7 +778,10 @@ export async function writtenFileShowsInFilesAndDiffs(target: FlowTarget): Promi
 const DRIVE_LISTED = `[...document.querySelectorAll('[data-drive-entry]')].map((row) => row.getAttribute('data-drive-entry') ?? '')`;
 
 /** Counts, on `window`, every Drive listing the page's own fetch has had
- *  answered; installed before each document's scripts run. */
+ *  answered, body and all (or ended short of it); installed before each
+ *  document's scripts run. A count at the headers is a count of nothing yet:
+ *  from the edge the listing itself came 50 ms behind them (2026-09-23), and a
+ *  snapshot two frames after the headers read the Drive one step late. */
 const COUNT_DRIVE_LISTINGS = `(() => {
   window.__driveListings = 0;
   const real = window.fetch.bind(window);
@@ -786,7 +789,10 @@ const COUNT_DRIVE_LISTINGS = `(() => {
     const response = await real(input, init);
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href);
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    if (method === 'GET' && url.pathname === '/api/drive') window.__driveListings += 1;
+    if (method === 'GET' && url.pathname === '/api/drive') {
+      const settled = () => { window.__driveListings += 1; };
+      response.clone().arrayBuffer().then(settled, settled);
+    }
     return response;
   };
 })()`;
