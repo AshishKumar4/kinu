@@ -77,6 +77,14 @@ async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
   await wakeHold.gate.release.promise;
 }
 
+/** The AI proxy's held model (`/proxy/hold`): each `/proxy/park` waits for `/proxy/release`, which also answers
+ *  every `/proxy/parked` reader still short of its count. Node-side, so no request context owns the wait. */
+let proxyHold: {
+  parked: number;
+  readonly release: PromiseWithResolvers<void>;
+  readonly readers: { readonly count: number; readonly resolve: () => void }[];
+} | null = null;
+
 /** Park a scripted call numbered `from` onward (counted per model) until `/queue/release`. */
 async function holdQueuedCall(model: string): Promise<void> {
   const hold = heldRequest;
@@ -482,6 +490,52 @@ async function parityControl(pathname: string, request: Request): Promise<Respon
   throw new Error(`probe-control: unhandled ${request.method} ${pathname}`);
 }
 
+/** The AI proxy lane's controls: arm the hold, park a model call, wait for a parked count, release them all. */
+async function proxyControl(url: URL, request: Request): Promise<Response> {
+  if (url.pathname === '/proxy/hold' && request.method === 'POST') {
+    proxyHold = { parked: 0, release: Promise.withResolvers<void>(), readers: [] };
+
+    return Response.json({ ok: true });
+  }
+
+  const hold = proxyHold;
+
+  if (hold === null) throw new Error('proxy model hold was not armed');
+
+  if (url.pathname === '/proxy/park' && request.method === 'POST') {
+    hold.parked += 1;
+
+    for (const reader of hold.readers) {
+      if (reader.count <= hold.parked) reader.resolve();
+    }
+
+    await hold.release.promise;
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/proxy/parked' && request.method === 'GET') {
+    const count = v.parse(v.pipe(v.string(), v.toNumber(), v.integer()), url.searchParams.get('count'));
+
+    if (hold.parked < count) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      hold.readers.push({ count, resolve });
+      await Promise.race([promise, hold.release.promise]);
+    }
+
+    return Response.json({ parked: hold.parked });
+  }
+
+  if (url.pathname === '/proxy/release' && request.method === 'POST') {
+    hold.release.resolve();
+    proxyHold = null;
+
+    return Response.json({ ok: true });
+  }
+
+  throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
+}
+
 /** The probe control host: holds, the call log, and the reset between drives. */
 async function probeControl(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/queue/hold' && request.method === 'POST') {
@@ -507,6 +561,8 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   }
 
   if (url.pathname.startsWith('/parity/')) return parityControl(url.pathname, request);
+
+  if (url.pathname.startsWith('/proxy/')) return proxyControl(url, request);
 
   if (url.pathname === '/wake/hold' && request.method === 'POST') {
     const { where } = v.parse(v.object({ where: WakeHoldPlacementSchema }), JSON.parse(await request.text()));

@@ -102,6 +102,7 @@ import {
   EPISODE_TRANSCRIPT_FILES, INFRA_FAILURE_MARKER, LIVE_MODEL_ENV, readRunRecord, TASK_OUTCOME,
   type EvalRunRecord, type EvalSubgoal,
 } from '@kinu.run/test-utils';
+import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import { tolerate } from '../packages/core/src/obs/index';
 
 /** The OpenAI model-listing shape every provider door answers. */
@@ -308,7 +309,7 @@ async function listProviderModels(door: ProviderDoor, key: string | undefined): 
 /** The account menu's ids, provider prefix removed: `workers-ai/@cf/x` → `@cf/x`. */
 async function listAccountModels(access: AccountAccess): Promise<string[]> {
   const response = await fetch(`${access.origin}/api/user/models`, {
-    headers: { 'x-kinu-dev-identity': access.webIdentity },
+    headers: { [DEV_IDENTITY_HEADER]: access.webIdentity },
   });
 
   if (!response.ok) {
@@ -553,6 +554,7 @@ function resolveIdentity(): { origin: string; token: string } | null {
 
   return { origin, token };
 }
+
 
 function readSubgoals(transcripts: string, tasks: readonly string[]): RetainedSubgoals {
   const out = new Map<string, readonly EvalSubgoal[]>();

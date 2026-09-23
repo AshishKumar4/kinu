@@ -1,6 +1,6 @@
 // Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
-import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
+import { DEV_IDENTITY_HEADER, DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession,
   type AuthStoreEnv, type SessionAuthority,
@@ -119,9 +119,6 @@ export interface AuthEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
   /** Required to act as `DEV_USER_EMAIL` off loopback. */
   DEV_IDENTITY_SECRET?: string;
 }
-
-/** A header, not a cookie: a cookie-carried dev identity would be an ambient credential. */
-const DEV_IDENTITY_HEADER = 'x-kinu-dev-identity';
 
 /** `[::1]` keeps its brackets because `URL.hostname` does. */
 const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0.0.0.0'];

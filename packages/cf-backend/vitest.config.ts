@@ -313,7 +313,7 @@ export default defineConfig({
           modules: probeModules(publicSurfaceProbe),
           // `DEV_USER_EMAIL` selects the dev inference plane and the loopback identity.
           bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'SurfaceAI' } },
           outboundService: probeOutbound,
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },

@@ -27,7 +27,7 @@ import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import { SLATE_PREFIX, SURFACES, firstVisibleSurface, resolveGatedSurface, surfaceHasContent } from "./presence";
+import { SLATE_PREFIX, SURFACES, landedSurface, openPortOf, surfaceHasContent } from "./presence";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
@@ -104,8 +104,12 @@ export interface WorkSurfaceProps {
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
-  const { surface } = props;
+  const requested = props.surface;
   const strip = useRef<HTMLDivElement>(null);
+  const [hasDiffs, setHasDiffs] = useState(false);
+  const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasDiffs };
+  const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
+  const surface = landedSurface(requested, content, ports);
 
   const focus = useSurfaceFocus({
     surface,
@@ -116,29 +120,18 @@ export function WorkSurface(props: WorkSurfaceProps) {
   });
 
   const chip = focus.readyChip;
-
-  const [hasDiffs, setHasDiffs] = useState(false);
-  const content = { tabPresence: props.tabPresence, mctsTrees: props.mctsTrees, slates: props.slates, hasDiffs };
   const workAvailable = surfaceHasContent("Work", content);
 
   useEffect(() => {
     if (props.planFocus && workAvailable) focus.navigate("Work");
   }, [props.planFocus, workAvailable, focus.navigate]);
 
-  const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
-  const openPort = surface.startsWith("preview:") ? ports.find(port => surface === `preview:${port.executor}:${port.port}`) : undefined;
-  const previewSelected = surface.startsWith(SLATE_PREFIX) || surface.startsWith("preview:");
   useEffect(() => {
-    const duplicate = surface.startsWith("preview:workspace:") ? props.slates?.find(slate => `preview:workspace:${slate.port}` === surface) : undefined;
+    if (surface !== requested) focus.navigate(surface);
+  }, [surface, requested, focus.navigate]);
 
-    const gated = surface.startsWith("preview:") && !openPort
-      ? firstVisibleSurface(content)
-      : resolveGatedSurface(surface, content);
-
-    const resolved = duplicate ? slateSurface(duplicate.id) : gated;
-
-    if (resolved !== surface) focus.navigate(resolved);
-  }, [surface, focus.navigate, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
+  const openPort = openPortOf(surface, ports);
+  const previewSelected = surface.startsWith(SLATE_PREFIX) || surface.startsWith("preview:");
   // One-shot intent: an Environment card's Files action opens that environment's root.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
 

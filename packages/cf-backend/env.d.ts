@@ -97,7 +97,7 @@ declare global {
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
-    /** Presented in `x-kinu-dev-identity` to act as `DEV_USER_EMAIL` off localhost. */
+    /** Presented in core's `DEV_IDENTITY_HEADER` to act as `DEV_USER_EMAIL` off localhost. */
     DEV_IDENTITY_SECRET?: string;
     /** Email Sending (`send_email`); optional, outbound email skips without it. */
     EMAIL?: SendEmail;
