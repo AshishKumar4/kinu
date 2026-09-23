@@ -6,7 +6,7 @@ import type { Shell, VFS } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
 import { makeVfsError } from '../vfs/errno';
-import { workspacePath } from '../vfs/workspace-path';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
@@ -341,7 +341,7 @@ const SESSION_CONTROL_TYPES =
 export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): PortAnsweringExecutor {
   const box = opts.box;
   const configured = box != null;
-  const root = opts.root ?? '/home/user';
+  const root = opts.root ?? WORKSPACE_ROOT;
   const namespace = opts.namespace ?? 'nimbus';
   let active = false;
   let lastError: string | undefined;

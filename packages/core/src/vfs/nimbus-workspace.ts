@@ -16,7 +16,10 @@ import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import { agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
+import {
+  agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  type HomeRootVfs, type TmpConfiner,
+} from './agent-home';
 import { provisionWorkspaceRuntimes, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
@@ -255,6 +258,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         }
 
         const workspace = await NimbusWorkspace.create(creation);
+        settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
         // After substrate registrations so a runtime bin never shadows a coreutil.
         const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {

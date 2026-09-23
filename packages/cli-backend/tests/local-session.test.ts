@@ -4987,7 +4987,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
       return { stream: new ReadableStream<LanguageModelV2StreamPart>({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
-          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: '/home/user/queued-build.txt', content: 'authorized Build' }) });
+          controller.enqueue({ type: 'tool-call', toolCallId: 'file-' + current, toolName: 'file', input: JSON.stringify({ action: 'write', path: '/home/main/queued-build.txt', content: 'authorized Build' }) });
           controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 } });
           controller.close();
         },
@@ -5003,7 +5003,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   release.resolve();
   await plan;
   await session.send('Now implement the change.');
-  expect(await rt.storage.vfs.readFile('/home/user/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
+  expect(await rt.storage.vfs.readFile('/home/main/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
   const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
   expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });

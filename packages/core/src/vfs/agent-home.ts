@@ -8,10 +8,12 @@
 
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import * as v from 'valibot';
-import { WORKSPACE_ROOT } from './workspace-path';
+import { LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT } from './workspace-path';
 
-/** Its home is {@link WORKSPACE_ROOT}: `/home/user` is the vendored substrate's own `$HOME`. */
+/** Its home is {@link WORKSPACE_ROOT}. */
 export const MAIN_AGENT = 'main';
 
 /** Owner writes; everyone reads and traverses. */
@@ -181,6 +183,39 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
   }
 
   return agentHome(agentName);
+}
+
+export type RootMoveVfs = Pick<CredentialedVfs,
+  'exists' | 'isDirectory' | 'isSymlink' | 'readlink' | 'readdir' | 'rename' | 'removeRecursive' | 'symlink' | 'unlink'>;
+
+/** The old root moves to {@link WORKSPACE_ROOT}; its name is a link. */
+export function settleWorkspaceRoot(kernel: RootMoveVfs): void {
+  const legacy = LEGACY_WORKSPACE_ROOT;
+
+  if (kernel.isSymlink(legacy) && kernel.readlink(legacy) === WORKSPACE_ROOT) return;
+
+  if (kernel.isDirectory(legacy)) {
+    if (kernel.exists(WORKSPACE_ROOT)) {
+      moveMissing(kernel, legacy, WORKSPACE_ROOT);
+      kernel.removeRecursive(legacy);
+    } else {
+      kernel.rename(normalizeVfsPath(legacy), normalizeVfsPath(WORKSPACE_ROOT));
+    }
+  } else if (kernel.exists(legacy)) {
+    kernel.unlink(legacy);
+  }
+
+  kernel.symlink(WORKSPACE_ROOT, legacy);
+}
+
+function moveMissing(kernel: RootMoveVfs, from: string, to: string): void {
+  for (const { name } of kernel.readdir(from)) {
+    const source = `${from}/${name}`;
+    const target = `${to}/${name}`;
+
+    if (!kernel.exists(target)) kernel.rename(normalizeVfsPath(source), normalizeVfsPath(target));
+    else if (kernel.isDirectory(source) && kernel.isDirectory(target)) moveMissing(kernel, source, target);
+  }
 }
 
 /** Make `/tmp` resolve to this agent's own tmp for this agent's uid. */

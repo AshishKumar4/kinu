@@ -4471,8 +4471,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
       { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
-    ["/home", [{ name: "user", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
-    ["/home/user", [
+    ["/home", [{ name: "main", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
+    ["/home/main", [
       { name: "memory", type: "dir", mtimeMs: NOW - 26e5 },
       { name: "skills", type: "dir", mtimeMs: NOW - 20 * 864e5 },
       { name: "AGENTS.md", type: "file", size: 2_148, mtimeMs: NOW - 3 * 864e5 },
@@ -4480,8 +4480,8 @@ function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
       { name: "notes.md", type: "file", size: 4_402, mtimeMs: NOW - 42e5 },
       { name: "binary-weights.bin", type: "file", size: 4_089_446, mtimeMs: NOW - 6 * 864e5 },
     ]],
-    ["/home/user/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
-    ["/home/user/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
+    ["/home/main/memory", [{ name: "MEMORY.md", type: "file", size: 1_204, mtimeMs: NOW - 26e5 }]],
+    ["/home/main/skills", [{ name: "sql-triage.md", type: "file", size: 2_010, mtimeMs: NOW - 20 * 864e5 }]],
     ["/sandbox", [{ name: "workspace", type: "dir", mtimeMs: NOW - 30 * 60e3 }]],
     ["/sandbox/workspace", [
       { name: "build.log", type: "file", size: 18_211, mtimeMs: NOW - 31 * 60e3 },
@@ -4512,9 +4512,9 @@ const PC_MOUNT = `/pc/${PC_SEGMENT}`;
 const PC_CONSENTED_ROOT = `${PC_MOUNT}/home/dev`;
 
 const FILES_TEXT = {
-  "/home/user/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
-  "/home/user/SOUL.md": "I keep this workspace's changes small and proven.\n",
-  "/home/user/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
+  "/home/main/notes.md": "# Checkout coupon regression\n\n- kind:null rows come from the 0412 migration\n- the serializer guards only percentage coupons\n- fix drafted in packages/checkout/src/apply-coupon.ts\n",
+  "/home/main/SOUL.md": "I keep this workspace's changes small and proven.\n",
+  "/home/main/AGENTS.md": "## Working agreements\n\nRun the checkout suite before claiming a fix.\n",
   [`${PC_CONSENTED_ROOT}/quarterly-report.txt`]: "Q3 numbers, draft 2 — do not circulate.\n",
   [`${PC_CONSENTED_ROOT}/notes.html`]: "<h1>Q3 close</h1><p>Signed off by finance.</p>\n",
   "/sandbox/workspace/build.log": "$ bun run build\nbundled 412 modules in 1.9s\nok\n",
@@ -4679,9 +4679,9 @@ function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false
         {deferPreview && (
           <div className="absolute z-20 flex gap-2 p-2">
             <button data-files-fixture-mutate type="button" onClick={() => {
-              const path = "/home/user/notes.md";
+              const path = "/home/main/notes.md";
               contents.set(path, "# Fresh after refresh\n\nThe older reply must not reclaim this preview.\n");
-              store.set("/home/user", (store.get("/home/user") ?? []).map((entry) => (
+              store.set("/home/main", (store.get("/home/main") ?? []).map((entry) => (
                 entry.name === "notes.md" ? { ...entry, mtimeMs: Date.now() } : entry
               )));
             }}>Mutate preview source</button>

@@ -22,8 +22,8 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
 /** The fixture slate: every grant-relevant binding kind, plus the `digest`
  *  slate the PEER app hop walks into (which hops back, proving the cycle guard). */
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
-  await files.mkdir('/home/user/slates/issues', { recursive: true });
-  await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
+  await files.mkdir('/home/main/slates/issues', { recursive: true });
+  await files.writeFile('/home/main/slates/issues/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
     slate: { title: 'Issue triage', bindings: {
       GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
@@ -33,16 +33,16 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
       PEER: { kind: 'app', id: 'digest' },
     } },
   }));
-  await files.writeFile('/home/user/slates/issues/src/server.ts', 'export default {};');
-  await files.mkdir('/home/user/slates/digest', { recursive: true });
-  await files.writeFile('/home/user/slates/digest/package.json', JSON.stringify({
+  await files.writeFile('/home/main/slates/issues/src/server.ts', 'export default {};');
+  await files.mkdir('/home/main/slates/digest', { recursive: true });
+  await files.writeFile('/home/main/slates/digest/package.json', JSON.stringify({
     name: 'digest', main: 'server.ts',
     slate: { title: 'Digest', bindings: {
       DIGEST_FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
       BACK: { kind: 'app', id: 'issues' },
     } },
   }));
-  await files.writeFile('/home/user/slates/digest/server.ts', 'export default {};');
+  await files.writeFile('/home/main/slates/digest/server.ts', 'export default {};');
 }
 
 interface World {
@@ -150,7 +150,7 @@ test('a public share admits read members, refuses mutating ones, and audits ever
     const call = (binding: string, member: string, args: JsonValue[] = []) =>
       world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', binding, { member, args, invocation: admission.invocation });
 
-    expect(await call('FILES', 'readFile', ['/home/user/slates/issues/package.json'])).toMatchObject({ ok: true });
+    expect(await call('FILES', 'readFile', ['/home/main/slates/issues/package.json'])).toMatchObject({ ok: true });
     const refused = await call('FILES', 'writeFile', ['/tmp/x', 'y']);
 
     expect(refused).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('does not grant') });
@@ -224,7 +224,7 @@ test('S6: revoking between two calls refuses the second and stops new admissions
     if (admission instanceof Response) throw new Error(`admission refused: ${admission.status}`);
     const viewerCaller: SlateCaller = { ...ROOT_SLATE_CALLER, share: created.share.id };
 
-    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/home/user/slates/issues/package.json'], invocation: admission.invocation }))
+    expect(await world.owner.agent.slateBindingCallAs(viewerCaller, 'issues', 'FILES', { member: 'readFile', args: ['/home/main/slates/issues/package.json'], invocation: admission.invocation }))
       .toMatchObject({ ok: true });
 
     answered(await world.owner.agent.slate({ op: 'unshare', share: created.share.id }), LiveShareRecordSchema);
@@ -242,7 +242,7 @@ test('S1: agent-control and eval bindings surface as problems and admit no membe
 
   try {
     const files = world.owner.agent.observeRuntime().storage.vfs;
-    await files.writeFile('/home/user/slates/issues/package.json', JSON.stringify({
+    await files.writeFile('/home/main/slates/issues/package.json', JSON.stringify({
       name: 'issues', main: 'src/server.ts',
       slate: { title: 'Issue triage', bindings: {
         CONTROL: { kind: 'namespace', namespace: 'agents' },

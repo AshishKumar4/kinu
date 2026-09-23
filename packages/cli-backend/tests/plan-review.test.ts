@@ -87,7 +87,7 @@ function fileResults(events: readonly SessionEvent[]) {
 
 describe('LocalAgentSession — plan review', () => {
   test('a submitted plan is stored, broadcast, holds the next build turn, and releases it on approval', async () => {
-    const write = { action: 'write', path: '/home/user/ledger.txt', content: 'integer cents' };
+    const write = { action: 'write', path: '/home/main/ledger.txt', content: 'integer cents' };
 
     const { db, agent, events, taken } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
@@ -172,7 +172,7 @@ describe('LocalAgentSession — plan review', () => {
 
   test('a build turn with no plan pending keeps its build authority', async () => {
     const { db, agent, events } = session([
-      { call: 'file', input: { action: 'write', path: '/home/user/plain.txt', content: 'no plan here' } },
+      { call: 'file', input: { action: 'write', path: '/home/main/plain.txt', content: 'no plan here' } },
       { answer: 'Done.' },
     ]);
 

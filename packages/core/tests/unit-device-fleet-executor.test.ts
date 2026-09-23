@@ -264,7 +264,7 @@ describe('where the file browser lands on a mount', () => {
 
     const lookup = {
       getProvider: (name: string) => name === 'workspace'
-        ? { files: workspace, homeDir: async () => '/home/user' }
+        ? { files: workspace, homeDir: async () => '/home/main' }
         : router.getProvider(name),
     };
 

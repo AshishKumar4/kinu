@@ -710,7 +710,7 @@ describe('buildSystemPromptSync', () => {
       ],
     });
 
-    expect(prompt).toContain('/home/user');
+    expect(prompt).toContain('/home/main');
     expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
     expect(prompt).toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');

@@ -64,7 +64,7 @@ async function delegated(name: string, model: MockLanguageModelV3) {
 }
 
 test("a delegated turn's tool call reaches the answer its caller gets", async () => {
-  const turn = await delegated('reader', turnCalling('file', { action: 'list', path: '/home/user' }));
+  const turn = await delegated('reader', turnCalling('file', { action: 'list', path: '/home/main' }));
 
   // No decision or finding, so the synthesis falls to the tool tally from the shared capture.
   expect(turn.text).toBe('Ran 1 tool call(s): file');

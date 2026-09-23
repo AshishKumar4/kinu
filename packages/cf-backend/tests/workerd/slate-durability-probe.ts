@@ -129,7 +129,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.workspaceTarget(input.workspace);
 
     await this.claimWorkspace(target, input.workspace, input.owner);
-    const root = `/home/user/slates/${input.id}`;
+    const root = `/home/main/slates/${input.id}`;
 
     await this.writeSlateFile(target, `${root}/package.json`, JSON.stringify({
       main: 'server.ts',

@@ -337,11 +337,11 @@ describe('turn-pipeline correctness wiring', () => {
     const workspace = orchestratorHarness();
     await hostedMainActor(workspace);
     const rootFiles = workspace.agent.observeRuntime().storage.vfs;
-    await rootFiles.writeFile('/home/user/shared-proof.md', 'registered workspace bytes');
+    await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
     const head = await hostedExplorationHarness(workspace, 'head', 'head-a1');
     expect(head.actor.record.kind).toBe('head');
     const headFiles = head.actor.runtime.storage.vfs;
-    expect(await headFiles.readFile('/home/user/shared-proof.md', { encoding: 'utf8' }))
+    expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
     // The seam carries no name of its own; the only names are the directory's.
     expect(exploration).not.toContain('sharedParent');

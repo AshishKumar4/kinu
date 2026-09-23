@@ -27,7 +27,7 @@ describe('the roots are the live mount table', () => {
 describe('a mounted path formats to the reference of the plane that serves it', () => {
   test('every root: the workspace, the container, each machine by its segment', () => {
     const cases: Array<[string, string]> = [
-      ['/home/user/report.txt', 'vfs://home/user/report.txt'],
+      ['/home/main/report.txt', 'vfs://home/main/report.txt'],
       ['/sandbox/workspace/build.log', 'sandbox://workspace/build.log'],
       ['/pc/ashish@studio/home/dev/a.txt', 'ashish@studio://home/dev/a.txt'],
       ['/pc/dev-rig/etc/hosts', 'dev-rig://etc/hosts'],
@@ -40,7 +40,7 @@ describe('a mounted path formats to the reference of the plane that serves it', 
     expect(formatReference('/pc/ashish@studio', CF)).toBe('ashish@studio://');
     expect(formatReference('/pc/toaster/x', CF)).toBe('vfs://pc/toaster/x');
     expect(formatReference('/sandbox', CF)).toBe('sandbox://');
-    expect(formatReference('home/user/x', CF)).toBe('vfs://home/user/x');
+    expect(formatReference('home/main/x', CF)).toBe('vfs://home/main/x');
   });
 
   test('in the CLI the machine is the workspace: local names the directory', () => {

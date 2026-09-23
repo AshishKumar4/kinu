@@ -28,7 +28,7 @@ describe('a hosted subordinate runs as its own home', () => {
     expect(identity.exitCode).toBe(0);
     expect(identity.stdout.split(' ')).toEqual([agentHome(agentName), agentTmpRoot(agentName)]);
     await child.actor.runtime.storage.vfs.writeFile(`${agentHome(agentName)}/notes.md`, 'mine');
-    await expect(child.actor.runtime.storage.vfs.writeFile('/home/user/theirs.md', 'x'))
+    await expect(child.actor.runtime.storage.vfs.writeFile('/home/main/theirs.md', 'x'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect((await shell.exec('echo s > /tmp/x')).exitCode).toBe(0);
     expect(await parent.agent.statWorkspaceFile('/tmp/x')).toMatchObject({ ok: true, value: null });

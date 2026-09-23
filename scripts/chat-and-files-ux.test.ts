@@ -114,7 +114,7 @@ interface Observed {
   readonly filesPreviewText: string;
   /** The edit buffer a whole file opens with. */
   readonly filesEditorSeedsFromTheFile: string;
-  /** /home/user rows after renaming SOUL.md → CREDO.md, then after deleting
+  /** /home/main rows after renaming SOUL.md → CREDO.md, then after deleting
    *  AGENTS.md — both against the frame's stateful fixture. */
   readonly filesAfterRename: string[];
   readonly filesAfterDelete: string[];
@@ -476,24 +476,24 @@ async function run(): Promise<Observed> {
     await files.click('[data-files-crumb]');
     await waitForRow('sandbox');
     await files.click(rowSelector('home'));
-    await waitForRow('user');
-    await files.click(rowSelector('user'));
+    await waitForRow('main');
+    await files.click(rowSelector('main'));
     await waitForRow('notes.md');
 
     // The parent row goes UP ONE LEVEL — to /home, never straight to the root.
     await files.waitForSelector('[data-files-up-row]');
     await files.click('[data-files-up-row]');
-    await waitForRow('user');
+    await waitForRow('main');
     const filesAfterUp = await crumbs();
 
     // The tree carries FILES, not only folders — a recursion that drops file
     // entries leaves the sidebar unable to reach one. Each level is expanded
     // through its own caret.
-    await files.click(rowSelector('user'));
+    await files.click(rowSelector('main'));
     await waitForRow('notes.md');
     await files.click('[data-files-tree-node="/home"] button');
-    await files.waitForSelector('[data-files-tree-node="/home/user"]');
-    await files.click('[data-files-tree-node="/home/user"] button');
+    await files.waitForSelector('[data-files-tree-node="/home/main"]');
+    await files.click('[data-files-tree-node="/home/main"] button');
     await files.waitForSelector('[data-files-tree-file]');
 
     const treeFileNames = await files.$$eval(
@@ -1857,8 +1857,8 @@ describe('file preview request generation at the actual FilesSurface boundary', 
       const row = (name: string) => `[data-files-entry][title="${name}"]`;
       await page.waitForSelector(row('home'));
       await page.click(row('home'));
-      await page.waitForSelector(row('user'));
-      await page.click(row('user'));
+      await page.waitForSelector(row('main'));
+      await page.click(row('main'));
       await page.waitForSelector(row('notes.md'));
       await page.click(row('notes.md'));
       await page.waitForSelector('[data-files-preview-body] [class*="Loader"], [data-files-preview-body]');

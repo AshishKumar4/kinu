@@ -6,6 +6,7 @@
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
+import { canonicalWorkspacePath } from '../vfs/workspace-path';
 import {
   ForkContextMemberRowSchema,
   ForkConversationEntryPartRowSchema,
@@ -62,10 +63,11 @@ function assertArtifactSegments(relative: string, path: string, root: string): v
 
 /** One payload path relative to its owning artifact directory. A path outside it is refused:
  *  carrying another workspace's absolute path would re-root or escape into a directory the fork does not own. */
-function forkArtifactRelativePath(path: string, artifactDirectory: string): string {
+function forkArtifactRelativePath(stored: string, artifactDirectory: string): string {
   // One trailing-separator rule so `/a/b` and `/a/b/` relativize and re-root identically.
-  const root = artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory;
+  const root = canonicalWorkspacePath(artifactDirectory.endsWith('/') ? artifactDirectory.slice(0, -1) : artifactDirectory);
   const prefix = `${root}/`;
+  const path = canonicalWorkspacePath(stored);
 
   if (!path.startsWith(prefix)) {
     throw new Error(

@@ -76,7 +76,7 @@ auto_activate: true
 
 A slate is a small application that lives in this workspace: a server class with its own storage, a React client in a sandboxed iframe, and an RPC link between them. Users rarely ask for "a slate". They ask for a tracker, a dashboard, a picker, a form, a live view over workspace data. Each of those is a slate.
 
-A slate is a directory \`/home/user/slates/<id>/\` with a \`package.json\`:
+A slate is a directory \`/home/main/slates/<id>/\` with a \`package.json\`:
 
 \`\`\`json
 { "main": "server.ts", "browser": "client.tsx",
@@ -160,7 +160,7 @@ A binding is a capability of YOURS handed to the slate under a name in \`slate.b
 
 - \`{ "kind": "agent" }\` — \`env.agent.send({ text, data? })\` puts a message in your inbox as an event of kind \`slate\`. This is the one way a slate reaches you; use it when a user acts and you should react.
 - \`{ "kind": "ai", "tier"?: "<tier>" }\` — \`env.ai.run({ prompt, system?, tier? })\` runs one model call through your catalog and tiers and answers \`{ text, model, tier, usage }\`. A binding that declares a tier is pinned to it.
-- \`{ "kind": "namespace", "namespace": "workspace", "paths": ["/home/user/data"] }\` — \`readFile\`, \`writeFile\`, \`editFile\`, \`readdir\`, \`exists\` under those prefixes only. Without \`paths\`, the whole namespace with all its members.
+- \`{ "kind": "namespace", "namespace": "workspace", "paths": ["/home/main/data"] }\` — \`readFile\`, \`writeFile\`, \`editFile\`, \`readdir\`, \`exists\` under those prefixes only. Without \`paths\`, the whole namespace with all its members.
 - \`{ "kind": "memory" | "tasks" | "web" }\`, \`{ "kind": "tool", "name": "file" }\`, \`{ "kind": "mcp", "server": "..." }\`, \`{ "kind": "rpc", "methods": [...] }\` for read models, \`{ "kind": "app", "id": "<other slate>" }\` to call another slate's methods.
 
 A slate cannot bind \`agents\` or \`eval\`; it never delegates or steers you.

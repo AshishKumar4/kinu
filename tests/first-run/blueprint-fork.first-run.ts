@@ -51,11 +51,11 @@ describe(SUITE, () => {
         const headers = webHeaders(plan.identity);
         const mcpName = `eval-fork-${crypto.randomUUID()}`;
 
-        const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /home/user/slates/${SLATE}
-cat > /home/user/slates/${SLATE}/package.json <<'END'
+        const setup = v.parse(Exec, await session.execute('workspace', `mkdir -p /home/main/slates/${SLATE}
+cat > /home/main/slates/${SLATE}/package.json <<'END'
 {"name":"${SLATE}","description":"Blueprint fork probe","main":"server.ts","slate":{"title":"Fork probe","bindings":{"DOCS":{"kind":"mcp","server":"${mcpName}","tools":["search_cloudflare_documentation"]},"FILES":{"kind":"namespace","namespace":"workspace","members":["readFile"]}}}}
 END
-cat > /home/user/slates/${SLATE}/server.ts <<'END'
+cat > /home/main/slates/${SLATE}/server.ts <<'END'
 import { SlateObject } from "kinu:slate";
 export class Slate extends SlateObject {
   async hello() { return { ok: true }; }
@@ -139,7 +139,7 @@ END`));
           if (!connected.ok) throw new Error(`Connect fork MCP answered ${String(connected.status)}: ${connectedText.slice(0, 200)}`);
           const connection = v.parse(McpConnection, JSON.parse(connectedText));
           mcpId = connection.id;
-          const manifestPath = `/home/user/slates/${fork.slate}/package.json`;
+          const manifestPath = `/home/main/slates/${fork.slate}/package.json`;
           const project = parseSlateProject(JSON.parse(await forked.readFile(manifestPath)));
           const binding = project.slate.bindings.DOCS;
 
