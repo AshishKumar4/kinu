@@ -106,7 +106,7 @@ import {
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
   credentialToHeaders, codexAccessTokenExpiring,
   validateCredential, validateCredentialKey, validateWorkspaceName,
-  createCredentialCipher, type CredentialCipher,
+  createCredentialCipher, isSealedCredential, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
@@ -3488,10 +3488,8 @@ export class UserDO extends Agent<Env> {
     this.dropCredential(key);
   }
 
-  /**
-   * Re-seals unenveloped or retired-key rows under the current key once per instance; skipped when
-   * the `user_schema_meta` marker matches. Unopenable rows are left so only that credential fails.
-   */
+  /** Re-seals retired-key rows and a never-sealed store's plaintext once per instance, unless the
+   *  marker matches. Unopenable rows are left so only that credential fails. */
   private rewrapCredentials(): Promise<void> {
     this._credentialsRewrapped ??= (async () => {
       const cipher = await this.cipher();
@@ -3503,13 +3501,18 @@ export class UserDO extends Agent<Env> {
       if (marker?.value === cipher.keyId) return;
       let clean = true;
 
+      // Only a never-sealed store holds pre-encryption rows.
+      const reopen = (aad: string, stored: string): Promise<string> => (
+        marker === undefined && !isSealedCredential(stored) ? Promise.resolve(stored) : cipher.open(aad, stored)
+      );
+
       for (const row of this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
         const aad = this.credentialAad(row.key);
 
         try {
           this.sqlx(
             `UPDATE user_credentials SET value = ? WHERE key = ?`,
-            await cipher.seal(aad, await cipher.open(aad, row.value)), row.key,
+            await cipher.seal(aad, await reopen(aad, row.value)), row.key,
           );
         } catch (err) {
           clean = false;
@@ -3529,7 +3532,7 @@ export class UserDO extends Agent<Env> {
         try {
           this.sqlx(
             `UPDATE user_mcp_servers SET headers = ? WHERE id = ?`,
-            await cipher.seal(aad, await cipher.open(aad, row.headers)), row.id,
+            await cipher.seal(aad, await reopen(aad, row.headers)), row.id,
           );
         } catch (err) {
           clean = false;
