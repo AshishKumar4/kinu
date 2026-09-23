@@ -356,12 +356,12 @@ describe('compareRuns — a declared treatment admits exactly one arm field', ()
     expect(formatComparison(comparison)).toContain('treatment: arm.tools');
   });
 
-  test('every undeclared field still refuses, the prompt included', () => {
-    const moved: EvalArmState = { ...solo, evolution: false, prompt: 'caveman' };
+  test('every undeclared field still refuses, prompt and effort included', () => {
+    const moved: EvalArmState = { ...solo, evolution: false, prompt: 'caveman', effort: 'low' };
     const comparison = compareRuns(baseline, run('cand', observations, { arm: moved }), { ...OPTS, treatment: 'tools' });
 
     if (comparison.comparable) throw new Error('expected a refusal');
-    expect(comparison.refusals.map((r) => r.field).sort()).toEqual(['arm.evolution', 'arm.prompt']);
+    expect(comparison.refusals.map((r) => r.field).sort()).toEqual(['arm.effort', 'arm.evolution', 'arm.prompt']);
   });
 
   test('a declared treatment that both runs share is refused: there is nothing to attribute', () => {

@@ -35,7 +35,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 
-import type { LLMProviderConfig } from '../../packages/core/src/index';
+import type { LLMProviderConfig, ReasoningEffort } from '../../packages/core/src/index';
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
 
@@ -201,6 +201,26 @@ export async function createCliWorkspace(opts: CliWorkspaceOptions): Promise<voi
   if (exitCode !== 0) {
     throw childFailure(`kinu create ${opts.workspace} failed`, exitCode, `${stdout}\n${stderr}`);
   }
+}
+
+/**
+ * `kinu effort <workspace> <level>`: the reasoning effort a user sets, stored in the workspace the
+ * next `exec` reads. Through the shipped command rather than a store write, so the setting takes the
+ * same validation and the same path to the provider request as a user's.
+ */
+export async function setCliEffort(opts: CliWorkspaceOptions, level: ReasoningEffort): Promise<void> {
+  const proc = Bun.spawn({
+    cmd: [process.execPath, CLI_BIN, 'effort', opts.workspace, level],
+    cwd: childProjectRoot(opts.home),
+    env: childEnv(opts),
+    stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
+  });
+
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
+  ]);
+
+  if (exitCode !== 0) throw childFailure(`kinu effort ${opts.workspace} ${level} failed`, exitCode, `${stdout}\n${stderr}`);
 }
 
 /**

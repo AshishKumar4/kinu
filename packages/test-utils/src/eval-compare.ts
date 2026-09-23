@@ -25,6 +25,7 @@ const ARM_FIELDS = {
   settle: (arm) => arm.settle,
   tools: (arm) => [...arm.tools].sort().join(', '),
   prompt: (arm) => arm.prompt ?? 'as written',
+  effort: (arm) => arm.effort ?? 'model default',
 } satisfies Record<string, (arm: EvalArmState) => string>;
 
 export type ArmTreatment = keyof typeof ARM_FIELDS;

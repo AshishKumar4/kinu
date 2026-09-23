@@ -34,9 +34,9 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 
 import type { EvalCase, LLMProviderConfig } from '../../packages/core/src/index';
-import { openWorkspaceMainActor } from '../../packages/core/src/index';
+import { openWorkspaceMainActor, REASONING_EFFORTS } from '../../packages/core/src/index';
 import { makeSql } from '../../packages/cli-backend/src/runtime';
-import { childProjectRoot, cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-driver';
+import { childProjectRoot, cliWorkspaceDbPath, createCliWorkspace, execCliTask, setCliEffort } from './cli-driver';
 import { environmentFailure } from './episode-failure';
 import { readLedgerTotals, readRunEvents } from './harness';
 import {
@@ -82,10 +82,17 @@ const LLM: LLMProviderConfig = TARGET === null
   : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
 
 /** Evolution off: each episode is one fresh workspace, and the behaviour arm owns the evolution comparison. */
+/** `KINU_EVAL_EFFORT` sets each child workspace's reasoning effort through `kinu effort`; absent, the
+ *  model's default. The effort sweep of EVAL-2 is this family run once per level. */
+const EFFORT = process.env.KINU_EVAL_EFFORT === undefined
+  ? undefined
+  : v.parse(v.picklist(REASONING_EFFORTS), process.env.KINU_EVAL_EFFORT);
+
 const ARM: EvalArmState = {
   evolution: false,
   settle: 'none',
   tools: FULL_TOOL_SURFACE,
+  effort: EFFORT,
 };
 
 const TRANSCRIPTS = join(
@@ -93,7 +100,7 @@ const TRANSCRIPTS = join(
     flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
     repoRoot: REPO_ROOT, runRoot: tmpdir(),
   }),
-  `math-${TIER}-${String(Date.now())}`,
+  `math-${TIER}-${EFFORT ?? 'default'}-${String(Date.now())}`,
 );
 
 const PURPOSE = 'A senior engineer working in the given workspace. Prefer real tool calls over describing '
@@ -437,6 +444,8 @@ async function runEpisode(evalCase: EvalCase): Promise<string[]> {
   // Birth through the shipped CLI, then the problem's data files into the directory the child is bound
   // to (`childProjectRoot`): the filesystem its tools read, and where its answer lands.
   await createCliWorkspace(workspace);
+
+  if (EFFORT !== undefined) await setCliEffort(workspace, EFFORT);
   const projectRoot = childProjectRoot(workspace.home);
 
   for (const file of problem.files) {

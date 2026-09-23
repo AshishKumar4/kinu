@@ -10,7 +10,8 @@ import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
   BUILTIN_TOOLS, classifyToolFailure, DEFAULT_WORKERS_AI_MODEL_ID, minimumPairsForSignificance, requiredPairs,
-  type ActorHandle, type Clock, type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
+  type ActorHandle, type Clock, type ReasoningEffort, type RunEvent, type SqlExecutor, type WorkspaceSpend,
+  type ToolOutcome,
 } from '@kinu.run/core';
 import { gitEnv } from './git';
 import { BEHAVIOUR_SCORERS, type BehaviourScorer } from './agent-evals';
@@ -38,6 +39,8 @@ export interface EvalArmState {
   readonly tools: readonly string[];
   /** Absent: as written. */
   readonly prompt?: EvalPromptStyle;
+  /** Absent: model default. Set through the workspace, so only the spawned-CLI families apply it. */
+  readonly effort?: ReasoningEffort;
 }
 
 export type EvalPromptStyle = 'caveman' | 'use-swarm';
@@ -724,7 +727,8 @@ export function formatRunRecord(record: EvalRunRecord): string {
     `  ledger observed: ${record.modelObserved ?? 'no serving model — the record carries no ledger check'}`,
     `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,
     `  arm: evolution ${record.arm.evolution ? 'ON' : 'OFF'}, settle ${record.arm.settle}, `
-      + `${String(record.arm.tools.length)} tools, prompt ${record.arm.prompt ?? 'as written'}`,
+      + `${String(record.arm.tools.length)} tools, prompt ${record.arm.prompt ?? 'as written'}, `
+      + `effort ${record.arm.effort ?? 'model default'}`,
     `  tasks ${String(record.executedTasks.length)}/${String(record.declaredTasks.length)} `
       + `× ${String(record.repeats)} repeats, seed ${String(record.seed)}`,
     `  ADMISSIBLE: ${a.admissible ? 'yes' : 'NO'} — ${String(a.gradedTurns)} graded turns, `
