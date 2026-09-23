@@ -456,3 +456,30 @@ test('a failed fs call keeps the code and path the workspace names, once', async
 
   expect(out.result).toEqual(['ENOTDIR', `ENOTDIR: not a directory, scandir '${WORKSPACE_ROOT}/notes.md'`]);
 });
+
+test('a synchronous call fails naming the awaited call that replaces it, and that call runs', async () => {
+  const files = new Map([[`${WORKSPACE_ROOT}/notes.md`, 'hello']]);
+  const commands: string[] = [];
+
+  const execute = toolExecute<{ code: string }, ExecuteToolResult>(
+    createNodeCodemodeToolFactory({ extraProviders: [mapWorkspace(files, commands)] })({ native: {}, craftedTools: () => ({}), providers: [] }),
+  );
+
+  // Issue #23: the model reached for execSync and read its output synchronously.
+  const cases = [
+    { call: "require('child_process').execSync('pwd; ls -la').toString()", answer: 'ran' },
+    { call: "require('fs').readFileSync('notes.md', 'utf8')", answer: 'hello' },
+  ];
+
+  for (const { call, answer } of cases) {
+    const [tried] = await Promise.allSettled([execute({ code: `// Try a synchronous call\nreturn ${call};` })]);
+    const refusal = tried?.status === 'rejected' ? String(tried.reason) : 'the synchronous call ran';
+    expect(refusal).toContain('Write instead: ');
+    const rewrite = refusal.slice(refusal.indexOf('Write instead: ') + 'Write instead: '.length);
+    const program = rewrite.startsWith('const { stdout }') ? `${rewrite};\nreturn stdout;` : `return ${rewrite};`;
+
+    expect(await execute({ code: `// Run the suggested form\n${program}` })).toMatchObject({ result: answer });
+  }
+
+  expect(commands).toEqual(['pwd; ls -la']);
+});

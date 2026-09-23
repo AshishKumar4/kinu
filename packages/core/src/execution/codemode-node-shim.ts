@@ -79,6 +79,22 @@ function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
 }
 
+/** An argument as a suggestion can repeat it: short JSON, else an ellipsis. */
+function shownArg(value) {
+  const json = typeof value === 'function' ? undefined : JSON.stringify(value);
+  return json !== undefined && json.length <= 80 ? json : '…';
+}
+
+/**
+ * A synchronous or streaming Node call. Nothing in the sandbox can block on the workspace (workerd,
+ * 2026-09-23: "Atomics.wait cannot be called in this context"), so it names the awaited replacement.
+ */
+function asyncOnly(name, rewrite) {
+  return (...args) => {
+    throw new Error(name + ' cannot run here: this sandbox reaches your workspace only asynchronously. Write instead: ' + rewrite(args));
+  };
+}
+
 const EXIT_PREFIX = /^Error \(exit (\d+)\)\n?/;
 const STDERR_LABEL = '\n--- stderr ---\n';
 
@@ -196,9 +212,6 @@ function makeFs(workspace, cwd) {
     copyFile, rename, access,
     exists: async (path) => (await workspace.exists(resolveAt(cwd, path))) === true,
   };
-  const unavailable = (name) => () => {
-    throw new Error('fs.' + name + ' is not available in this sandbox: use await require("fs/promises").' + name.replace(/Sync$/, '') + '(...)');
-  };
   const callbackForm = (fn) => (...args) => {
     const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;
     const promise = fn(...args);
@@ -207,9 +220,9 @@ function makeFs(workspace, cwd) {
     return undefined;
   };
   const fs = { promises };
-  for (const [name, fn] of Object.entries(promises)) fs[name] = callbackForm(fn);
-  for (const name of ['readFileSync', 'writeFileSync', 'readdirSync', 'statSync', 'existsSync', 'mkdirSync', 'rmSync', 'unlinkSync']) {
-    fs[name] = unavailable(name);
+  for (const [name, fn] of Object.entries(promises)) {
+    fs[name] = callbackForm(fn);
+    fs[name + 'Sync'] = asyncOnly('fs.' + name + 'Sync', (args) => 'await require("fs/promises").' + name + '(' + args.slice(0, 2).map(shownArg).join(', ') + ')');
   }
   return { fs, promises };
 }
@@ -237,10 +250,16 @@ function makeChildProcess(workspace) {
     const callback = typeof args === 'function' ? args : (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback);
     return exec([file, ...argv].map(shellQuote).join(' '), callback);
   }
-  const unavailable = (name) => () => {
-    throw new Error('child_process.' + name + ' is not available in this sandbox: use await require("child_process").exec(command) or workspace.exec(command)');
+  const viaExec = (args) => 'const { stdout } = await require("child_process").exec(' + JSON.stringify(String(args[0])) + ')';
+  const viaExecFile = (args) => 'const { stdout } = await require("child_process").execFile(' + JSON.stringify(String(args[0])) + ', ' + JSON.stringify(Array.isArray(args[1]) ? args[1].map(String) : []) + ')';
+  return {
+    exec, execFile,
+    execSync: asyncOnly('child_process.execSync', viaExec),
+    execFileSync: asyncOnly('child_process.execFileSync', viaExecFile),
+    spawn: asyncOnly('child_process.spawn', viaExecFile),
+    spawnSync: asyncOnly('child_process.spawnSync', viaExecFile),
+    fork: asyncOnly('child_process.fork', (args) => viaExec(['node ' + String(args[0])])),
   };
-  return { exec, execFile, spawn: unavailable('spawn'), execSync: unavailable('execSync'), spawnSync: unavailable('spawnSync'), fork: unavailable('fork') };
 }
 
 export function createRequire({ workspace, builtins, cwd }) {

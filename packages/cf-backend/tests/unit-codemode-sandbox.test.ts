@@ -193,10 +193,6 @@ describe("createRequire — Node's fs and child_process over the workspace", () 
 
   const require = shim.createRequire({ workspace, builtins: { "node:path": { join: (...parts: string[]) => parts.join("/") } }, cwd: WORKSPACE_ROOT });
 
-  test("the sync fs API names the async form instead of hanging", () => {
-    expect(() => require("fs").readFileSync("notes.md")).toThrow('fs.readFileSync is not available in this sandbox: use await require("fs/promises").readFile(...)');
-  });
-
   test("child_process.exec runs through the workspace shell, in promise and callback form", async () => {
     const { exec } = require("child_process");
     expect(await exec("ls -la")).toEqual({ stdout: "ran: ls -la", stderr: "" });

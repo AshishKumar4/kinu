@@ -497,7 +497,7 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
 /** Which substrate runs the program. */
 export type SandboxSubstrate = 'hosted' | 'local';
 
-const SANDBOX_WORKSPACE = '`require()` resolves the Node builtins (`path`, `url`, `util`, `crypto`, `buffer`, `events`, `stream`, …) plus `fs`, `fs/promises` and `child_process` implemented over your workspace files and shell, and `process.cwd()` is the workspace root: `await require("fs/promises").readFile("notes.md", "utf8")`, `await require("child_process").exec("ls -la")`. ';
+const SANDBOX_WORKSPACE = '`require()` resolves the Node builtins (`path`, `url`, `util`, `crypto`, `buffer`, `events`, `stream`, …) plus `fs`, `fs/promises` and `child_process` implemented over your workspace files and shell, and `process.cwd()` is the workspace root. They are asynchronous only: `execSync`, `spawn` and every `fs.*Sync` call throw, so await the promise forms: `const { stdout } = await require("child_process").exec("ls -la")`, `await require("fs/promises").readFile("notes.md", "utf8")`. ';
 
 const SANDBOX_FACTS = {
   hosted:
