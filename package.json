@@ -129,9 +129,9 @@
       "packages/devbox": {
         "entry": [
           "src/index.ts!",
+          "src/sync-main.ts!",
           "bench/worker.ts!",
           "bench/strategy-dispatch.ts!",
-          "bench/measure-first/probe.ts!",
           "tests/**/*.test.ts"
         ]
       }

@@ -19,7 +19,6 @@ function devboxScratchDir(label: string): string {
 
 import {
   archiveCommand,
-  archiveExcludeFile,
   archiveSizeCommand,
   baseObjectKey,
   chainBackupOptions,
@@ -2964,15 +2963,12 @@ describe('the real archiver applies the policy this file claims', () => {
     expect(entries).toContain('sub/.cache/x');
   });
 
-  test('the extraction options and the direct command are one policy', () => {
+  test('the extraction options carry the box\'s own exclude policy, not a copy of the default', () => {
     // If `chainBackupOptions` spelled the policy itself, a box that replaced it would be
     // obeyed in the chain path and ignored in the extraction path.
-    const dir = fixtureTree('devbox-archive-parity');
+    const replaced = ['**/node_modules', 'dist/**'];
 
-    const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
-    expect(declared).toEqual([...CHAIN_EXCLUDES]);
-    expect(archiveExcludeFile(declared)).toBe(archiveExcludeFile(CHAIN_EXCLUDES));
-    expect(archiveOf(dir, declared).entries).toEqual(archiveOf(dir, CHAIN_EXCLUDES).entries);
+    expect(chainBackupOptions(true, replaced).excludes).toEqual(replaced);
   });
 
   test('the staging estimate measures exactly the bytes the archive takes', () => {

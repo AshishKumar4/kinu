@@ -1,5 +1,4 @@
-/** Every devbox decision as a pure function, so lifecycle boundaries can be pinned by tables.
- *  Nothing here touches a container, a bucket or a clock; devbox.ts holds the platform. */
+/** Pure decisions: nothing here touches a container, a bucket or a clock. */
 
 import * as v from 'valibot';
 
@@ -18,8 +17,8 @@ export interface DevboxPolicy {
   /** Quiescing also requires this much OBSERVED quiet — consecutive
    *  heartbeats that agreed — so one unlucky sample cannot stop a box. */
   readonly quietConfirmMs: number;
-  /** Minimum checkpoint gap and the schedule's tick period are one number, so an early tick
-   *  (a container restart re-arms the schedule) cannot double-commit. */
+  /** Minimum checkpoint gap and the sync's tick period are one number, so an early tick (a
+   *  container restart re-arms it) cannot double-commit. It bounds the loss window (D30). */
   readonly checkpointIntervalMs: number;
   /** Whole onStart restore budget: identity, attachment, workload resumption, durable settlement.
    *  A raced timer bounds each step; control-listener proof precedes the SDK opening the block. */
@@ -77,8 +76,6 @@ export interface StartBudget {
   /** The window this budget was opened with; carried so a refusal names the budget it spent
    *  and the call site holds no second copy of the number. */
   readonly budgetMs: number;
-  /** The clock this budget is measured on; every race under it arms its
-   *  timer on the same clock. */
   readonly clock: StartClock;
   /** Milliseconds left before the deadline, never negative. */
   remainingMs(): number;
@@ -447,8 +444,7 @@ export interface MountLine {
   readonly options: string;
 }
 
-/** Fields follow fstab order; mountpoints octal-escape spaces (`\040`), so decode before
- *  comparing. Shared by both strategies; each applies its own predicate to the entry. */
+/** Fields follow fstab order; mountpoints octal-escape spaces (`\040`), so decode first. */
 export function findMount(procMounts: string, dir: string): MountLine | undefined {
   for (const line of procMounts.split('\n')) {
     const [source, mountpoint, fstype, options] = line.trim().split(/\s+/);
@@ -804,7 +800,7 @@ export function canonicalPath(path: string): string {
 export interface CheckpointLane {
   busy(): boolean;
   /** Same kind in flight joins it; a different kind queues, so a quiesce never inherits a tick's
-   *  `skipped` and stops over just-landed work. Overlap would share staging and journal sequences. */
+   *  `skipped` and stops over just-landed work. */
   run(kind: CheckpointKind, op: () => Promise<CheckpointOutcome>): Promise<CheckpointOutcome>;
 }
 

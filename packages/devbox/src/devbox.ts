@@ -55,7 +55,9 @@ import {
   ChainRecordAdvanced,
   chainStoreRoot,
   normalizeChainState,
+  seedStampPorts,
   snapshotChainStorage,
+  storeObjectUrl,
   type ChainState,
   type SnapshotChainPorts,
 } from './snapshot-chain';
@@ -71,6 +73,20 @@ import {
   type DevboxStrategyName,
   type StoredValue,
 } from './storage';
+import {
+  BOOT_ID_PATH,
+  DEVBOX_SYNC_HANDLER,
+  DEVBOX_SYNC_HOST,
+  DEVBOX_SYNC_SESSION,
+  SYNC_ALIVE_PROBE,
+  parseSyncOutcome,
+  serveSync,
+  syncFlushCommand,
+  syncStartCommand,
+  syncStopCommand,
+  type SyncAnswer,
+  type SyncConfig,
+} from './sync';
 
 /** Bounded wait for `running` to clear after an acknowledged stop: an unbounded wait pins the
  *  attempt, and `kickStartup` early-returns on a pinned attempt, so nothing re-arms. */
@@ -78,8 +94,7 @@ const CONTAINER_STOP_ATTEMPTS = 50;
 
 const CONTAINER_STOP_INTERVAL_MS = 100;
 
-/** The admission probe's poll interval inside the `portWaitMs` window; the SDK default.
- *  Named once because the retry count is derived from it; a divisor spelled twice drifts. */
+/** The SDK's default poll interval; the retry count derives from it. */
 const ADMISSION_POLL_INTERVAL_MS = 100;
 
 /** `delivered` separates a failure the host already saw from one it never did. */
@@ -127,14 +142,6 @@ const INCIDENT_CALLBACK = 'devboxIncidents';
 /** A classified recovery obligation; executed outside the SDK start block. */
 const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
 
-/** Beside the upper, not inside: everything under the upper is archived as the next delta.
- *  On ephemeral disk (P1) so a replaced disk cannot claim its upper already holds the delta. */
-const CHAIN_SEED_STAMP_PATH = `${DEVBOX_RUNTIME_DIR}/upper.seed-stamp`;
-
-/** Under `/tmp` deliberately: it must NOT survive a replacement, since a surviving
- *  file would prove nothing. */
-const BOOT_ID_PATH = '/tmp/devbox-boot-id';
-
 /** s3fs defaults (300 s connect, 120 s idle, 5 retries) outlive the `attachBudgetMs` attach;
  *  a dead connection then runs beside the retry; each request is an egress hop, not a WAN. */
 const STORE_MOUNT_S3FS_OPTIONS: readonly string[] = [
@@ -147,8 +154,7 @@ const STORE_MOUNT_S3FS_OPTIONS: readonly string[] = [
  *  survive an eviction, so writes are throttled rather than one per call. */
 const INTERACTION_PERSIST_INTERVAL_MS = 30_000;
 
-/** Twin of `LIVE_PROCESS_STATES` in `packages/cf-backend/src/sandbox-exec-lane.ts`; keep both in sync.
- *  Compared, not tabled: indexing a partial table by the SDK's closed status union is implicit `any`. */
+/** Twin of `LIVE_PROCESS_STATES` in `packages/cf-backend/src/sandbox-exec-lane.ts`. */
 function isProcessLive(status: string): boolean {
   return status === 'starting' || status === 'running';
 }
@@ -206,15 +212,13 @@ export interface DevboxReport {
   readonly lastInteractionAt: number | undefined;
   readonly quietSince: number | undefined;
   readonly chain: ChainState | null;
-  /** Durable, not in memory: the call that starts a container is often not the one asking what
-   *  it restored, and an eviction in between would erase the only evidence of the restore. */
+  /** Durable: an eviction between the start and the question would erase the only evidence. */
   readonly lastAttach: AttachOutcome | undefined;
   /** A `lastTick.at` far in the past means the box stopped ticking; the row says what
    *  the last tick saw. */
   readonly lastTick: HeartbeatTick | undefined;
   readonly bootId: string | undefined;
-  /** How many times the platform has replaced this box's container instance.
-   *  A measured fact about the platform, not a failure of this class. */
+  /** Platform replacements of this box's container: a fact about the platform, not a failure. */
   readonly replacedCount: number;
   readonly supervised: readonly SupervisedProcessSpec[];
   readonly ports: readonly PortExposureSpec[];
@@ -228,6 +232,8 @@ export interface DevboxReport {
     readonly startupMs: number | null;
     readonly hookMs: number | null;
   };
+  /** The persistence path's whole share of this object's wire since it activated (D29). */
+  readonly wire: { readonly sent: number; readonly received: number };
 }
 
 /** One value per container generation, so a superseded attempt cannot leave readiness and
@@ -265,8 +271,7 @@ export type RestoreReadiness =
   | RestoreAdmission
   | { readonly kind: 'pending'; readonly reason: string };
 
-/** A witness hears `opened` once, each {@link RestorePhase} as it lands, then `settled` once.
- *  The two ends are not phases: the bench stores them as the row's `at` and `wallMs`. */
+/** `opened` once, each {@link RestorePhase} as it lands, then `settled` once. */
 export type RestoreClockPhase = 'opened' | RestorePhase | 'settled';
 
 interface RestoreClock {
@@ -282,8 +287,7 @@ const STAMP_MISSING = {
   pending: 'the boot id stamp failed',
 } as const;
 
-/** Shared by the ordinary restore and the attached-container repair: nothing missing is
- *  `attached`, anything missing is `repair` naming it. Keep one builder so both agree. */
+/** One builder for restore and repair: nothing missing is `attached`, else `repair` names it. */
 function settledRestoration(
   down: readonly string[],
   stamp: keyof typeof STAMP_MISSING | 'done',
@@ -321,8 +325,7 @@ function recoveryRow(owner: string, stage: RecoveryStage | undefined): RecoveryR
   return stage === undefined ? { owner } : { owner, stage };
 }
 
-/** The SDK exports neither `readFile` result type; matching two signatures infers both arms
- *  in declaration order, so a changed SDK declaration stops resolving at compile time. */
+/** Infers both `readFile` arms from the SDK's declaration, so a changed one fails to compile. */
 type ReadFileArms<Method> = Method extends {
   (...args: infer StreamArgs): infer StreamResult;
   (...args: infer ValueArgs): infer ValueResult;
@@ -431,8 +434,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return { expected, settled };
   }
 
-  /** Every reader of the restoration (request door, heartbeat, checkpoint) settles adoption first:
-   *  memory can name `attached` for a replaced container, admitting callers onto a bare `/workspace`. */
+  /** Memory can name `attached` for a replaced container, so every reader settles adoption first. */
   async #resolveAdoption(): Promise<void> {
     if (this.#gateRestore !== undefined) return;
 
@@ -556,7 +558,6 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return true;
   }
 
-  /** Every start budget and its races run on this one clock (D19); a test double advances its own. */
   protected get startClock(): StartClock {
     return REAL_START_CLOCK;
   }
@@ -673,6 +674,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     await this.#armContainerSchedules();
 
+    if (this.#restoration.phase === 'attached') await this.#restartSync();
+
     if (this.#admission() !== undefined) this.deleteSchedules(STARTUP_CALLBACK);
   }
 
@@ -695,7 +698,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #armContainerSchedules(): Promise<void> {
     await this.kickStartup();
 
-    if (this.ambientCheckpoints) {
+    if (this.ambientCheckpoints && !this.#syncsInContainer()) {
       await this.#arm(CHECKPOINT_CALLBACK, Math.ceil(this.policy.checkpointIntervalMs / 1000));
     }
 
@@ -806,6 +809,97 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const value = read.stdout.trim();
 
     return value.length > 0 ? value : undefined;
+  }
+
+  async #readBeat(): Promise<{ readonly bootId: string | undefined; readonly syncAlive: boolean }> {
+    const read = await this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null; printf '\\0'; ${SYNC_ALIVE_PROBE}`, DEVBOX_RUNTIME_DIR);
+    const [bootId = '', sync = ''] = read.stdout.split('\0');
+
+    return { bootId: bootId.trim() || undefined, syncAlive: !this.#syncRuns() || sync.includes('alive') };
+  }
+
+  /** A box that may extract runs in local `wrangler dev`, whose container cannot reach it. */
+  #syncsInContainer(): boolean {
+    return this.store !== undefined && !this.allowExtraction;
+  }
+
+  #syncRuns(): boolean {
+    return this.#syncsInContainer() && this.ambientCheckpoints;
+  }
+
+  #syncConfig(store: DevboxStore): SyncConfig {
+    return {
+      storeRoot: chainStoreRoot(this.#boxPrefix()),
+      binding: store.binding,
+      excludes: [...this.archiveExcludes],
+      periodMs: this.policy.checkpointIntervalMs,
+    };
+  }
+
+  /** A failure is an incident, not a failed restore: the stop's flush still commits. */
+  async #restartSync(): Promise<void> {
+    const store = this.store;
+
+    if (store === undefined || !this.#syncRuns()) return;
+
+    try {
+      await this.setOutboundByHost(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HANDLER);
+      const started = await this.#rawExec(syncStartCommand(this.#syncConfig(store)), DEVBOX_RUNTIME_DIR);
+
+      if (started.exitCode !== 0) throw new Error(started.stderr.trim() || started.stdout.trim() || `exit ${String(started.exitCode)}`);
+      this.#trace('sync.start', { generation: this.#generation });
+    } catch (error) {
+      await this.#record('checkpoint', `the container's sync did not start: ${describe({ cause: error })}`);
+    }
+  }
+
+  /** A failure is an incident; the stop goes on. */
+  async #stopSync(): Promise<void> {
+    if (!this.#syncsInContainer() || this.ctx.container?.running !== true) return;
+
+    try {
+      const stopped = await (await this.getSession(DEVBOX_SYNC_SESSION)).exec(syncStopCommand(), { cwd: DEVBOX_RUNTIME_DIR });
+
+      if (stopped.exitCode !== 0) throw new Error(stopped.stderr.trim() || `exit ${String(stopped.exitCode)}`);
+    } catch (error) {
+      await this.#record('checkpoint', `the container's sync did not stop before the detach: ${describe({ cause: error })}`);
+    }
+  }
+
+  async #runCheckpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
+    const store = this.store;
+
+    if (store === undefined || !this.#syncsInContainer()) return await this.#requireStorage().checkpoint(kind);
+
+    if (this.ctx.container?.running !== true) {
+      return { kind: 'skipped', reason: 'container is not running', bytes: undefined, movedBytes: 0 };
+    }
+
+    // The flush calls back through `devboxSync`, so this checkpoint's lane must not gate it: the
+    // record's fenced write is that path's concurrency control.
+    const command = syncFlushCommand(this.#syncConfig(store), kind);
+    const session = await this.getSession(DEVBOX_SYNC_SESSION);
+    const flushed = await session.exec(command, { cwd: DEVBOX_RUNTIME_DIR });
+    this.#containerCommandBytes.sent += Buffer.byteLength(command);
+    this.#containerCommandBytes.received += Buffer.byteLength(flushed.stdout) + Buffer.byteLength(flushed.stderr);
+
+    return parseSyncOutcome(flushed.stdout, flushed.stderr, flushed.exitCode);
+  }
+
+  async devboxSync(body: string): Promise<SyncAnswer> {
+    const store = this.store;
+
+    if (store === undefined) return { status: 403, body: JSON.stringify({ ok: false, error: 'refused', reason: 'this devbox has no store' }) };
+
+    const reply = await serveSync({
+      ports: this.#chainPorts(store),
+      generation: async () => await this.ctx.storage.get<string>(BOOT_ID_KEY),
+    }, body);
+
+    this.#containerCommandBytes.received += Buffer.byteLength(body);
+    this.#containerCommandBytes.sent += Buffer.byteLength(reply.body);
+
+    return reply;
   }
 
   async #restoreNow(
@@ -1267,8 +1361,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.deleteSchedules(STARTUP_CALLBACK);
   }
 
-  /** Only cancellation for exec work abandoned at the attach deadline; awaits the stop because
-   *  `destroy` acknowledges before `container.running` flips. Re-arms nothing; `ensureReady` restores. */
+  /** Cancels exec work abandoned at the attach deadline; `destroy` acks before `running` flips. */
   async #replaceContainer(reason: string): Promise<void> {
     this.#invalidateGeneration(this.#startup);
     const replacing = this.#generation;
@@ -1510,8 +1603,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     };
   }
 
-  /** Strict form of {@link resolveReadiness}: a direct operation must never treat `pending`
-   *  as permission to run, so it becomes a refusal. Adds no readiness policy of its own. */
+  /** Strict {@link resolveReadiness}: `pending` is a refusal, never permission. */
   async ensureReady(): Promise<RestoreAdmission> {
     const readiness = await this.resolveReadiness();
 
@@ -1587,8 +1679,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return await this.#checkpoint(kind);
   }
 
-  /** Single serialization point for `checkpointNow`, the scheduled tick, quiesce and activity
-   *  expiry; overlapping runs must never interleave in storage (see `createCheckpointLane`). */
+  /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`). */
   #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
     return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
       const pending = this.#startup;
@@ -1604,7 +1695,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         };
       }
 
-      return await this.#requireStorage().checkpoint(kind);
+      const { sent, received } = this.#containerCommandBytes;
+      const outcome = await this.#runCheckpoint(kind);
+
+      this.#trace('checkpoint.bytes', {
+        kind, outcome: outcome.kind, movedBytes: outcome.movedBytes,
+        sentBytes: this.#containerCommandBytes.sent - sent, receivedBytes: this.#containerCommandBytes.received - received,
+      });
+
+      return outcome;
     }));
   }
 
@@ -1666,6 +1765,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       };
     }
 
+    await this.#stopSync();
     await this.#releaseWorkdirHolders();
     await this.#detachStorage();
     this.#invalidateGeneration();
@@ -1749,10 +1849,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
   }
 
-  /** Generation turns over first so an in-flight restore writes nothing durable. Chain discard
-   *  touches only R2 and the durable row, so a stopped box never starts an instance to clean. */
+  /** An in-flight restore writes nothing durable after this, and no tick publishes after the
+   *  discard; a stopped box never starts an instance to clean. */
   async discardState(): Promise<void> {
     this.#invalidateGeneration();
+    await this.#stopSync();
     await this.#requireStorage().discard();
     // The attach evidence describes the discarded bytes, so it is deleted with them.
     await this.ctx.storage.delete(LAST_ATTACH_KEY);
@@ -1961,6 +2062,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         startupMs: this.#startup === undefined ? null : Date.now() - this.#startup.since,
         hookMs: this.#gateRestore === undefined ? null : Date.now() - this.#gateRestore.since,
       },
+      wire: { ...this.#containerCommandBytes },
     };
   }
 
@@ -2134,7 +2236,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async devboxCheckpoint(): Promise<void> {
     // The ambient schedule is this row's only writer; with it disabled the row is never armed,
     // so a call here is stray and ending the chain keeps nothing ticking the host didn't ask for.
-    if (!this.ambientCheckpoints) return;
+    if (!this.ambientCheckpoints || this.#syncsInContainer()) return;
     const period = Math.ceil(this.policy.checkpointIntervalMs / 1000);
     await this.#scheduled(CHECKPOINT_CALLBACK, period, async () => {
       if (this.ctx.container?.running !== true) return null;
@@ -2176,10 +2278,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       }
 
       let observed: string | undefined;
+      let syncAlive: boolean;
 
       try {
         // The boot-id read is the liveness ping too: one container call, not two (D28).
-        observed = await this.#readBootId();
+        ({ bootId: observed, syncAlive } = await this.#readBeat());
       } catch (error) {
         const reason = describe({ cause: error });
         console.error(`[devbox] heartbeat ping failed: ${reason}`);
@@ -2196,6 +2299,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         await this.kickStartup();
 
         return beat;
+      }
+
+      if (!syncAlive && this.#restoration.phase === 'attached') {
+        // Nothing commits while it is down, so its death is an incident, not only a restart.
+        await this.#record('checkpoint', 'the container\'s sync had stopped, so nothing was committed since; restarting it');
+        await this.#restartSync();
       }
 
       const now = Date.now();
@@ -2258,6 +2367,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  A failed checkpoint does not block the stop; the alarm chain is ending, so refusing loses both. */
   override async onActivityExpired(): Promise<void> {
     const outcome = await this.#checkpoint('quiesce');
+    await this.#stopSync();
     await this.#tick({
       running: this.ctx.container?.running === true,
       ping: `activity expired, final checkpoint ${outcome.kind}`,
@@ -2295,8 +2405,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     super.renewActivityTimeout();
   }
 
-  /** Only caller-facing operations call this; scheduled callbacks must not, or the box never idles.
-   *  `protected` so a host can stamp its own caller entry points, such as preview requests. */
+  /** Caller-facing operations only: a scheduled callback stamping it would keep the box awake. */
   protected stampInteraction(): void {
     this.renewActivityTimeout();
     const now = Date.now();
@@ -2402,17 +2511,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       stamp: (phase) => this.#stampPhase(phase),
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),
-      storeObjectUrl: (key) => {
-        // `r2EgressHandler` prepends the mount's prefix, so the key segment is relative to it (D15).
-        // One PUT lands the object; s3fs marker/placeholder writes never occur on this path.
-        const root = chainStoreRoot(this.#boxPrefix());
-
-        if (!key.startsWith(`${root}/`)) {
-          throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
-        }
-
-        return `http://r2.internal/${store.binding}/${key.slice(root.length + 1)}`;
-      },
+      storeObjectUrl: (key) => storeObjectUrl(chainStoreRoot(this.#boxPrefix()), store.binding, key),
       mountStore: async (at) => {
         await this.mountBucket(store.binding, at, {
           prefix: `/${chainStoreRoot(this.#boxPrefix())}`,
@@ -2429,31 +2528,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           console.log(`[devbox] store mount at ${at} was not released: ${describe({ cause: error })}`);
         }
       },
-      readSeedStamp: async () => {
-        const read = await this.#rawExec(
-          `cat '${CHAIN_SEED_STAMP_PATH}' 2>/dev/null || true`, DEVBOX_RUNTIME_DIR,
-        );
-
-        const stamp = read.stdout.trim();
-
-        return stamp.length > 0 ? stamp : undefined;
-      },
-      writeSeedStamp: async (stamp) => {
-        // Temp-plus-rename in one command: a half-written stamp would claim an upper holds a delta
-        // it does not, the one way this marker could cost data rather than time.
-        const written = await this.#rawExec(
-          `printf %s ${JSON.stringify(stamp)} > '${CHAIN_SEED_STAMP_PATH}.tmp' && `
-          + `mv '${CHAIN_SEED_STAMP_PATH}.tmp' '${CHAIN_SEED_STAMP_PATH}'`,
-          DEVBOX_RUNTIME_DIR,
-        );
-
-        if (written.exitCode !== 0) {
-          throw new Error(
-            `the seed stamp could not be written at ${CHAIN_SEED_STAMP_PATH}: `
-            + `${written.stderr.trim() || written.stdout.trim() || `exit ${written.exitCode}`}`,
-          );
-        }
-      },
+      ...seedStampPorts(async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR)),
       objectFacts: async (key) => {
         // R2 `digest` exists only when R2 was given a checksum (s3fs and multipart supply none),
         // so a chain layer's digest is normally absent; `objectVersion` is always present.
@@ -2505,6 +2580,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     const result = await super.exec(command, { cwd });
     this.#stampPhase('containerStart');
+    this.#containerCommandBytes.sent += Buffer.byteLength(command);
+    this.#containerCommandBytes.received += Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr);
 
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   }
@@ -2512,6 +2589,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Per-instance and reset with the generation: a replacement container's disk
    *  holds none of our runtime directory (P1). */
   #runtimeDirReady = false;
+
+  readonly #containerCommandBytes = { sent: 0, received: 0 };
 
   async #specs<T>(prefix: string): Promise<readonly T[]> {
     const rows = await this.ctx.storage.list<T>({ prefix });
@@ -2527,8 +2606,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return this.#specs<PortExposureSpec>(PORT_SPEC_PREFIX);
   }
 
-  /** Idempotent: `onStart` fires at least once per container start; a restart must not
-   *  double every period. A due row is still owed unless its own callback is dispatching (D14). */
+  /** Idempotent: `onStart` fires at least once per container start (D14). */
   async #arm(callback: string, delaySeconds: number): Promise<void> {
     if (await this.#pending(callback)) return;
     await this.schedule(delaySeconds, callback, null);
@@ -2553,6 +2631,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       this.#dispatching.delete(callback);
     }
   }
+}
+
+/** A concrete class spreads this into its `outboundHandlers`: the registry is keyed by class name,
+ *  and the handler finds the box from `ctx.containerId`. */
+export function devboxSyncHandlers<E>(namespaceOf: (env: E) => DurableObjectNamespace<Devbox<E>>) {
+  return {
+    [DEVBOX_SYNC_HANDLER]: async (request: Request, env: E, ctx: { readonly containerId: string }): Promise<Response> => {
+      if (request.method !== 'POST') return new Response(`POST only on ${DEVBOX_SYNC_HOST}`, { status: 405 });
+      const namespace = namespaceOf(env);
+      const reply = await namespace.get(namespace.idFromString(ctx.containerId)).devboxSync(await request.text());
+
+      return new Response(reply.body, { status: reply.status, headers: { 'content-type': 'application/json' } });
+    },
+  };
 }
 
 /** The SDK's `BackupOptions` takes a mutable `excludes`; a shared constant must

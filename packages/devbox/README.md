@@ -36,12 +36,13 @@ on every call.
 2. `onStart` adopts the running instance when it is already restored, or
    restores it (attach, workload restart, port exposure) under one raced
    budget. The SDK runs it inside its start block, so nothing else reaches the
-   object until it settles. It then arms the container schedule rows and
-   retires the startup row.
+   object until it settles. It then arms the container schedule rows, starts
+   the container's own sync, and retires the startup row.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
-5. A graceful stop checkpoints, disables keep-alive, then sends `SIGTERM`.
+5. A graceful stop takes a final checkpoint through the container's sync, ends
+   the sync, disables keep-alive, then sends `SIGTERM`.
 6. A lifecycle failure is stored before delivery retries until the host accepts
    it.
 
@@ -80,6 +81,16 @@ The atomic `PUT` lets a reader see the old delta or the new one. Devbox writes
 the state record before cleanup. A crash between them leaves a complete unnamed
 delta that the next attach adopts. Squashfs checks its superblock, so the mount
 validates the object.
+
+Writes land on the overlay's local upper. The container syncs it in the
+background (D30): the image's `sync.js` runs the chain checkpoint every
+`checkpointIntervalMs` (5 min) on the container's own shell, gated on the
+upper's fingerprint, so an idle box costs one local walk per period. It asks
+its Durable Object only for what a container cannot reach: the record, the
+store binding, and the SDK's store mount, over `http://devbox.internal`, which
+each concrete class routes to its box with `devboxSyncHandlers`. The box holds
+every such request to its own record, prefix and restored container, and the
+record write stays fenced. Payload bytes never cross the box (D29).
 
 Keys are `boxes/<box>/backups/<uuid>/data.sqsh` and `…/delta.sqsh`: one chain
 root per box, every generation beneath it. Key builders require a UUID, so no
@@ -353,6 +364,14 @@ dead guard.
 `patches/@cloudflare%2Fsandbox@0.12.9.patch` makes the SDK merge
 `outboundHandlers` rather than assign them. A bucket mount cannot then unbind a
 host handler.
+
+`example/worker.ts` uses Devbox with no Kinu code: one class, its outbound
+sync handler, and a router over the public entry. Kinu's `KinuSandbox`
+(`packages/cf-backend/src/kinu-sandbox.ts`) is the same shape plus the
+product's egress, preview and incident wiring.
+`bun scripts/bench-devbox-standalone.ts` deploys the example on its own Worker,
+bucket and container application, drives one box through start, write,
+delete, stop, wake and discard, and deletes everything it made.
 
 Every rule above has a unit test. Two deployed production-workerd runs of
 `bun scripts/sandbox-durability-probe.ts --run` passed all six phases on

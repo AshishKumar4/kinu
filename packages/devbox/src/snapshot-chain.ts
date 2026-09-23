@@ -48,7 +48,7 @@ import {
 
 /** One writable mount for the container's life: the SDK refuses a binding remounted with a
  *  different readOnly setting, and squashfuse holds layer files under it; the prefix bounds. */
-const CHAIN_STORE_MOUNT = '/backups';
+export const CHAIN_STORE_MOUNT = '/backups';
 
 /** R2 refuses a multipart part under 5 MiB unless it is the last, so a smaller part size
  *  fails mid-upload rather than running slower. */
@@ -180,7 +180,7 @@ function normalizeArchiveExclude(pattern: string): string | null {
 
 /** Two lines per pattern: mksquashfs anchors an exclude to the source dir unless prefixed `... `;
  *  with `-wildcards`, both lines exclude the pattern at every depth. */
-export function archiveExcludeFile(patterns: readonly string[]): string {
+function archiveExcludeFile(patterns: readonly string[]): string {
   const lines: string[] = [];
 
   for (const pattern of patterns) {
@@ -248,6 +248,41 @@ function assertChainId(id: string): string {
  *  a rebase mints a new generation while the old layers stay mounted as the overlay's lowers. */
 export function chainStoreRoot(boxPrefix: string): string {
   return `${boxPrefix}/backups`;
+}
+
+/** `r2EgressHandler` prepends the mount's prefix, so a key outside it has no URL (D15). */
+export function storeObjectUrl(root: string, binding: string, key: string): string {
+  if (!key.startsWith(`${root}/`)) throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
+
+  return `http://r2.internal/${binding}/${key.slice(root.length + 1)}`;
+}
+
+/** Beside the upper, whose contents are all archived; on ephemeral disk (P1), so a replaced disk
+ *  cannot claim its upper holds the delta. */
+const CHAIN_SEED_STAMP_PATH = `${DEVBOX_RUNTIME_DIR}/upper.seed-stamp`;
+
+export function seedStampPorts(exec: SnapshotChainPorts['exec']): Pick<SnapshotChainPorts, 'readSeedStamp' | 'writeSeedStamp'> {
+  return {
+    readSeedStamp: async () => {
+      const stamp = (await exec(`cat '${CHAIN_SEED_STAMP_PATH}' 2>/dev/null || true`)).stdout.trim();
+
+      return stamp.length > 0 ? stamp : undefined;
+    },
+    writeSeedStamp: async (stamp) => {
+      // A half-written stamp would claim a delta the upper does not hold.
+      const written = await exec(
+        `printf %s ${JSON.stringify(stamp)} > '${CHAIN_SEED_STAMP_PATH}.tmp' && `
+        + `mv '${CHAIN_SEED_STAMP_PATH}.tmp' '${CHAIN_SEED_STAMP_PATH}'`,
+      );
+
+      if (written.exitCode !== 0) {
+        throw new Error(
+          `the seed stamp could not be written at ${CHAIN_SEED_STAMP_PATH}: `
+          + `${written.stderr.trim() || written.stdout.trim() || `exit ${written.exitCode}`}`,
+        );
+      }
+    },
+  };
 }
 
 export function baseObjectKey(root: string, chainId: string): string {
@@ -486,9 +521,14 @@ function shouldCheckpoint(
 }
 
 export class ChainRecordAdvanced extends Error {
+  readonly expectedRev: number | null;
+  readonly storedRev: number | null;
+
   constructor(expectedRev: number | null, storedRev: number | null) {
     super(`another writer advanced the chain record to rev ${storedRev ?? 'none'} after this one read rev ${expectedRev ?? 'none'}`);
     this.name = 'ChainRecordAdvanced';
+    this.expectedRev = expectedRev;
+    this.storedRev = storedRev;
   }
 }
 
@@ -515,15 +555,13 @@ export interface SnapshotChainPorts {
    *  retained change state? */
   checkChanges(dir: string, since: string | undefined):
     Promise<{ status: ChangeStatus; version: string }>;
-  /** The only container-shell port: the strategy builds every command (mount flags, squashfs
-   *  options, probes) itself. A property, not a method: the suites read it off the record to wrap it. */
+  /** The only container-shell port: the strategy builds every command itself. */
   exec: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
   containerGeneration?(): Promise<string | undefined>;
   /** This box's chain root in the store, see {@link chainStoreRoot}. A port
    *  because the box's identity is the host's. */
   storeRoot(): string;
-  /** URL the store mount's egress host serves for `key`; the publisher PUTs to it directly (D15).
-   *  A key outside the mount's prefix has no URL: the handler would write a different object. */
+  /** Where the publisher PUTs `key` (D15). */
   storeObjectUrl(key: string): string;
   /** Writable, yet credentials never leave the DO: s3fs holds a dummy password and a Worker
    *  resolves its requests. The mount serves reads and registers the route `storeObjectUrl` uses. */
@@ -716,7 +754,9 @@ function chainShell(exec: ContainerExec, root: string) {
         + `setsid nohup /usr/local/bin/devbox-block-lower --base ${shellPath(lowerBase)} --delta ${shellPath(delta)} `
         + `--mount ${shellPath(blockLower)} --generation ${shellPath(generation)} `
         + `--base-source ${shellPath(baseSource)} --delta-source ${shellPath(deltaSource)} `
-        + `--stats ${shellPath(blockStats)} </dev/null >${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} 2>&1 &\n`
+        + `--stats ${shellPath(blockStats)} </dev/null `
+        // Workers Logs carries the container's stdout; the file feeds the failure report below.
+        + `> >(tee -a --output-error=warn ${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} /proc/1/fd/1 >/dev/null 2>&1) 2>&1 &\n`
         + `block_pid=$!; for _ in $(seq 1 100); do mountpoint -q ${shellPath(blockLower)} && break; `
         + `kill -0 "$block_pid" 2>/dev/null || break; sleep 0.05; done\n`
         + `mountpoint -q ${shellPath(blockLower)} || { cat ${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} >&2; false; }`);
@@ -759,8 +799,7 @@ function chainShell(exec: ContainerExec, root: string) {
 
       return bytes;
     },
-    /** Writes to the final name: a temp name plus rename is a server-side COPY of every byte,
-     *  and the object is visible only once the PUT completes, so no reader sees a partial (D15). */
+    /** The final name directly: a rename is a server-side copy, and a PUT is visible only whole. */
     publishArchive: async (archivePath: string, objectUrl: string): Promise<number> => {
       const result = await exec(publishCommand({ archivePath, objectUrl }));
       const [code, size, etag] = result.stdout.trim().split(/\s+/);
@@ -1422,8 +1461,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await attachStored(state);
   };
 
-  /** Publishes via the mount's egress host (D15) and returns what the store then holds.
-   *  `tmpStaged` means the archive sits on tmpfs, returned whether or not the record is written. */
+  /** Returns what the store then holds; `tmpStaged` means the archive sits on tmpfs. */
   const publishStagedArchive = async (
     key: string,
     staged: string,
@@ -1917,23 +1955,19 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       );
     }
 
-    let change: ChangeStatus;
-    let version: string;
-
-    try {
-      const checked = await ports.checkChanges(DEVBOX_WORKDIR, state?.changeVersion);
-      change = checked.status;
-      version = checked.version;
-    } catch (error) {
-      return await recordCheckpointFailure(stamps, state, `checkChanges failed: ${describe({ cause: error })}`);
-    }
-
-    // `checkChanges` with no `since` answers `unchanged` while establishing a baseline; skip on the
-    // upper fingerprint instead (metadata, not content, O(entries)), and an unreadable (empty)
-    // fingerprint never matches, so it commits.
-    const mark = overlayMounted ? gate.fingerprint : '';
+    // Asked only after the local gates: `checkChanges` is the host's call (D30).
+    const changed = async (): Promise<{ status: ChangeStatus; version: string } | CheckpointOutcome> => {
+      try {
+        return await ports.checkChanges(DEVBOX_WORKDIR, state?.changeVersion);
+      } catch (error) {
+        return await recordCheckpointFailure(stamps, state, `checkChanges failed: ${describe({ cause: error })}`);
+      }
+    };
 
     if (overlayMounted) {
+      // `checkChanges` with no `since` answers `unchanged` while it sets a baseline, so skip on the
+      // upper's fingerprint; an unreadable (empty) one never matches, so it commits.
+      const mark = gate.fingerprint;
       // The layer's mount point names its generation, so `/proc/mounts` shows whether a delta
       // layer is served; this reuses the read the overlay gate above made.
       const layered = state !== null && deltaLayerServed(procMounts, state.base.id);
@@ -1953,10 +1987,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         return { kind: 'skipped', ...idle, reason: 'within the minimum checkpoint interval' };
       }
 
+      const checked = await changed();
+
+      if ('kind' in checked) return checked;
+
       try {
         // COLLAPSE RATHER THAN APPEND while a delta is served as a layer
         // (header, "What the composition costs").
-        return await commitChain(state, version, {
+        return await commitChain(state, checked.version, {
           rebasing: (layered && state.deltaFormat !== 'chunked') || shouldRebase(state, kind),
           upperMark: mark,
           kind,
@@ -1966,6 +2004,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
+    const checked = await changed();
+
+    if ('kind' in checked) return checked;
+    const { status: change, version } = checked;
     const comparable = state?.changeVersion !== undefined;
     const effective: ChangeStatus = comparable ? change : 'changed';
 
@@ -2062,8 +2104,8 @@ export function archiveCommand(input: {
     + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
 }
 
-/** Publishes via the mount's egress host, not s3fs, which cannot PUT in one attempt (D15).
- *  The script's HEAD fails the command before the record names an unstored object. */
+/** Not through s3fs, which cannot PUT in one attempt (D15); the script's HEAD fails the command
+ *  before a record names an unstored object. */
 export function publishCommand(input: { archivePath: string; objectUrl: string }): string {
   const script = `${DEVBOX_RUNTIME_DIR}/devbox-publish.mjs`;
 

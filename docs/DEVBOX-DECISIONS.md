@@ -7,6 +7,9 @@ so. A change that reverses an entry names the entry and re-runs its
 measurement under both shapes before it lands.
 
 Report files named below live under `packages/devbox/bench/measure-first/`.
+The probes that took them left the tree once D27 closed the strategy search;
+`git log --diff-filter=D -- packages/devbox/bench/measure-first` finds their
+last version.
 Owner messages live under `docs/research/user-messages/`.
 
 ## Requirements (the owner's, verbatim where quoted)
@@ -1171,6 +1174,58 @@ the documented precedence sends even an allowed host through that handler,
 so the hop would stay and signing keys would return to the Worker. Status:
 read from source. The Durable Object byte meter that shows zero payload
 bytes on a deployed run lands with DBX-5's in-image checkpoint.
+
+D30. The container syncs itself; the Durable Object keeps the record
+(DBX-5, 2026-09-23; asked in m702, m712, m859). Writes land on the
+overlay's local upper, the local cache, and the image's `sync.js` publishes
+them in the background: every `checkpointIntervalMs` (5 min, as before) it runs the
+chain checkpoint on the container's own shell, fingerprint-gated, so an idle
+box costs one local walk per period and no request. The code that runs is
+`snapshotChainStorage(...).checkpoint`, the same code the box ran, bundled
+from `packages/devbox/src/sync-main.ts` into the block-lower image. What a
+container cannot reach, it asks its box for, over the path Cloudflare
+documents for this ("Connect to Workers and Bindings", containers docs, read
+2026-09-23): a POST to `http://devbox.internal/v1/sync`, which the class's
+outbound handler (`devboxSyncHandlers`, registered per concrete class because
+the registry is keyed by class name) sends to the box resolved from
+`ctx.containerId`. The box answers `devboxSync` with its own ports:
+`readState`, the fenced `writeState`, `checkChanges`, the store mount, and
+`objectFacts`/`deleteObjects` on the binding. Any process in the container
+can reach that host, so the box holds every request to its own record:
+a container generation other than the one it restored is refused, a key
+outside the box's store prefix is refused, and a record that names a new
+layer must name one the store holds at the declared size (the box checks
+with its own `head`). A request can therefore damage only this box's own
+history, which a process in the container could already do by deleting its
+files. The box starts the program after each restore; when the heartbeat's
+single container call finds it gone (D28's call now also carries that probe),
+the box files an incident, since nothing commits while it is down, and starts
+it again. Its alarm no longer ticks checkpoints. A stop's final checkpoint
+is one exec, `sync.js flush`, answered by the running program after its tick
+in flight, or in that process when none runs. When the stop goes ahead, the
+box ends the program before it detaches: the program finishes the checkpoint
+in flight, then exits, so no tick races the detach; a refused stop leaves it
+running. The flush runs in its own SDK session (`devbox-sync`): the container
+server runs one command at a time per session (`executeInSession` holds a
+per-session lock, read from the 0.12.9 container server), and a store mount
+the sync asks for runs in the default session, which the flush would
+otherwise hold until it finished. The container remembers the record it last
+read or wrote, so a tick with nothing to commit asks its box nothing; the
+retained-change query now runs only when a commit is due. A box that may
+extract (local
+`wrangler dev`, whose containers get no outbound interception, measured
+2026-09-23: a request to an intercepted host connected and never reached its
+handler) keeps driving its own checkpoints, as before. The block lower's log
+and the sync's log go to the container's stdout, which Workers Logs carries
+(DBX-7). Both redirect through bash process substitution; the session shell
+is `bash --norc` (read from the 0.12.9 container server), so the tests' parse
+gate now models bash where it modelled POSIX `sh`. The image and the box move
+together: `block-lower/upstream.json` pins the bundle's sha256
+(`dceb17ed…`, image `kinu-devbox-block-layer@sha256:8a2c971c…`), and
+`tests/block-image.test.ts` bundles the tree again and fails on any other
+bytes, so a change to the sync's code fails until the image is rebuilt and
+re-pinned. Status: built and unit-tested; the deployed measurement of the loss
+window and of the box's bytes per checkpoint is pending.
 
 ## Measurement contract for a strategy comparison
 

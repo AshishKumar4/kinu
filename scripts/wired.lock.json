@@ -457,14 +457,11 @@
   "packages/devbox/src/lifecycle.ts#healthProbeCommand (unreached-export)",
   "packages/devbox/src/lifecycle.ts#scopesOverlap (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#archiveCommand (unreached-export)",
-  "packages/devbox/src/snapshot-chain.ts#archiveExcludeFile (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#archiveSizeCommand (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#chainBackupOptions (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#metadataObjectKey (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#publishCommand (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#shouldRebase (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#supersedeGeneration (unreached-export)",
-  "packages/devbox/src/snapshot-chain.ts#upperFingerprintCommand (unreached-export)",
-  "packages/devbox/src/storage.ts#ATTACH_OUTCOME_KINDS (unreached-export)",
-  "packages/devbox/src/storage.ts#CHECKPOINT_OUTCOME_KINDS (unreached-export)"
+  "packages/devbox/src/storage.ts#ATTACH_OUTCOME_KINDS (unreached-export)"
 ]

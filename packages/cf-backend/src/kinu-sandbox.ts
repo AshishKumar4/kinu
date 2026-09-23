@@ -4,7 +4,7 @@
   */
 
 import {
-  Devbox,
+  Devbox, devboxSyncHandlers,
   type DevboxIncident, type DevboxStore,
   type IncidentDisposition,
 } from "@kinu.run/devbox";
@@ -110,6 +110,7 @@ export class KinuSandbox extends Devbox<Env> {
 }
 
 KinuSandbox.outboundHandlers = {
+  ...devboxSyncHandlers((env: Env) => env.Sandbox),
   // `ctx.params` is parsed, and undefined refuses: an unconfigured container cannot egress.
   // patches/@cloudflare%2Fsandbox@0.12.9.patch makes bucket mounts merge handler maps, not replace them.
   [EGRESS_HANDLER]: (request, env: Env, ctx) => handleContainerEgress(

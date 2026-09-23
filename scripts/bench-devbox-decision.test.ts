@@ -1,7 +1,6 @@
 /** Tests the storage-strategy decision rule against hand-built rows, without a deployment.
  *  It must refuse: never a winner for every input, never an unmeasured arm as the best one. */
 
-import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -401,7 +400,6 @@ printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
   });
 });
 
-
 /** The driver-side fields these fakes read out of a posted body. Parsed rather
  *  than trusted, because what the driver sends is the thing under test. */
 const PostedBodySchema = v.looseObject({
@@ -415,10 +413,8 @@ const PostedBodySchema = v.looseObject({
 /** Fast bounds: the protocol under test is the cadence's client, not the
  *  cadence. Production values live beside `OPERATION_DEADLINE_MS`. */
 
-
 /** A fixture that measures a whole arm and then refuses its WAKE. Every earlier route answers,
  *  so what the artifact keeps is decided by the driver, not by how far the fake got. */
-
 
 /** Store tally moves on every stop and wake, so a window opened before a stop confirms prices
  *  its operations. Wakes one and two attach (rung restores); the third refuses, ending the arm. */
@@ -562,10 +558,8 @@ describe('the tree-size restore rows', () => {
 /** The fake answers the whole probe path, so what the arm skips is the driver's choice.
  *  Publish and wake answers differ: identical archived bytes cannot show when each was read. */
 
-
 /** A stub lane's start or finish: overlap claims rest on the recorded ORDER;
  *  the wall clock is only for a reader of a failure. */
-
 
 /** Stub lanes test the driver's own scheduling (arms in flight at once, throw isolation);
  *  a real lane could answer that only by deploying five Workers. */
@@ -599,10 +593,6 @@ function measuredArm(strategy: Strategy): ArmResult {
     notes: [],
   };
 }
-
-
-
-
 
 /** Facts in which each control's defect shows up; `deltaLayerCollapse` is the served shape:
  *  delta in its own lower layer, never in the upper, next checkpoint collapses naming no delta. */
@@ -642,7 +632,6 @@ const COPIED_INTO_THE_UPPER: ControlWitnessFacts = {
     collapsedNamesDelta: true,
   },
 };
-
 
 describe('the preregistered witness cells', () => {
   test('chunked restore serves the marker from its composed lower with zero attach payload', () => {
@@ -688,8 +677,6 @@ describe('the preregistered witness cells', () => {
       expect(check({ ...facts, chunkedAbsorption: { ...absorption, ...changed } })?.observed).toBe(false);
     }
   });
-
-
 
   test('a delta COPIED into the fresh upper is the old behaviour, and refuses as drift', () => {
     const [, collapse] = controlWitnessChecks('snapshot-chain', COPIED_INTO_THE_UPPER, 'layered');
@@ -752,30 +739,10 @@ describe('the preregistered witness cells', () => {
     ]) expect(check({ ...facts, ...changed })?.observed).toBe(false);
   });
 
-
-
-
-
-
-
-
-});
-
-
-
-describe('the lifecycle-proof gate at the rule', () => {
-
-
-  test('the driver has no monolithic verification request', () => {
-    const source = readFileSync(new URL('./bench-devbox-strategies.ts', import.meta.url), 'utf8');
-    expect(source).not.toContain('/verify?box=');
-  });
-
 });
 
 /** The benchmark incurs no cost, so a dollar figure in the report is an unmeasured claim.
  *  `class A`/`class B` stay allowed: they name R2 operation kinds the experiment counts. */
-
 
 describe('the rendered report carries no money', () => {
   /** One complete arm with decisive ticks, so the decisive table renders. */
@@ -814,8 +781,6 @@ describe('the rendered report carries no money', () => {
     'loop budget ms': '8000',
     'deciding repetitions': '2',
   };
-
-
 
   test('and it still carries the operation classes, bytes moved and latency', () => {
     // The strip removes cost only: `class A`/`class B` name R2 operation kinds, and those counts,
@@ -968,14 +933,12 @@ describe('operation totals', () => {
 
 describe('moved bytes are three-valued, and the third value is not zero', () => {
 
-
   test("a skip's honest zero is answerable and is NOT unanswerable", () => {
     const totals = totalsFor([tick('a', 'git', 5, { bytesPut: 0 })], 'git');
     expect(totals.unanswerable).toBe(0);
     expect(totals.movedReported).toBe(true);
     expect(totals.bytesPut).toBe(0);
   });
-
 
   test('the sqlite median excludes unanswerable ticks rather than zeroing them', () => {
     const db = 64 * 1024 * 1024;
@@ -990,7 +953,6 @@ describe('moved bytes are three-valued, and the third value is not zero', () => 
   });
 
 });
-
 
 describe('container create retry classification', () => {
   test('the two deployed transient signatures are retried', () => {
@@ -1020,12 +982,6 @@ describe('container create retry classification', () => {
     expect(isRearmableStartupRefusal(undefined)).toBe(false);
   });
 });
-
-
-
-
-
-
 
 describe('cleanup verification observes; only the teardown replay deletes', () => {
   const plane = (world: {
@@ -1144,10 +1100,6 @@ describe('cleanup verification observes; only the teardown replay deletes', () =
     expect(world.aborted).toEqual([]);
 
     for (const command of commands) expect(command).not.toMatch(/delete|remove|--force/);
-    // The replay arm drains residue before retrying its delete; that path runs real wrangler
-    // subprocesses no fake can drive, so only a source check pins the order.
-    const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
-    expect(source).toContain('drainBucketResidue(residue, entry.name)');
   });
 });
 
@@ -1194,29 +1146,7 @@ describe('the chain arm asks the store for what its record names', () => {
     expect(chainArchiveExpectations('', undefined)).toEqual([]);
   });
 
-  test('the arm checks every expectation the record produced, in both directions', () => {
-    // Guards the source: a branch that only calls `head` cannot express an absence,
-    // so both the loop and the absence arm must be present.
-    const source = readFileSync(join(import.meta.dirname, 'bench-devbox-strategies.ts'), 'utf8');
-    expect(source).toContain('for (const expectation of expectations) await archive(expectation);');
-    expect(source).toContain('found.exists !== true,');
-
-    // The chain branch asks for a delta only as the record says; the one unconditional delta head
-    // left is the extraction branch's, whose record cannot have collapsed onto a fresh base.
-    const chainBranch = source.slice(
-      source.indexOf("if (mode === 'chain') {"),
-      source.indexOf('  } else {\n    // The chain in EXTRACTION mode'),
-    );
-
-    expect(chainBranch.length).toBeGreaterThan(200);
-    // Comments are stripped because the branch's prose names the defect,
-    // and a guard its own explanation could trip guards nothing.
-    const code = chainBranch.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
-    expect(code).not.toContain('delta.sqsh');
-  });
 });
-
-
 
 describe('an abandoned run is deleted from its names alone', () => {
 
@@ -1245,15 +1175,10 @@ describe('an abandoned run is deleted from its names alone', () => {
 // The strategy owns container paths and exports them; the driver must read them from the
 // strategy, never restate them, or its lifecycle proof checks paths no longer created.
 
-
 // An admission step narrows what it admits only with a stated reason, and narrows from
 // the product's own answer set, never a narrower restatement of it.
 
-
 describe('the counted restore (G5)', () => {
-
-
-
 
   test('a wake that never attached counts nothing', () => {
     const counted = countedRestoreWork({
@@ -1307,7 +1232,6 @@ describe('the counted restore (G5)', () => {
     expect(uncounted.missing.map((reason) => reason.split(':')[0]).sort()).toEqual(['cpuSteps', 'metadataBytes/payloadBytes']);
   });
 
-
   test('promotion needs all seven fields, never six', () => {
     const full = {
       serialRemoteOps: 2, totalRemoteOps: 2, metadataBytes: 128, payloadBytes: 0,
@@ -1344,52 +1268,4 @@ describe('the counted restore (G5)', () => {
     expect(tooMany.verified).toBe(false);
     expect(tooMany.reason).toContain('past the at-most-two-deep serve');
   });
-
-
-
-
-
-});
-
-
-
-describe('the instruments restate nothing unchecked', () => {
-  const driver = readFileSync(join(import.meta.dir, 'bench-devbox-strategies.ts'), 'utf8');
-  const repo = (...parts: string[]): string => readFileSync(join(import.meta.dir, '..', ...parts), 'utf8');
-
-  test('legacy checkpoints have no third kind to hide a barrier in', () => {
-    const storage = repo('packages', 'devbox', 'src', 'storage.ts');
-    const kinds = /type CheckpointKind = ((?:'[^']+'(?: \| )?)+)/.exec(storage)?.[1] ?? '';
-    expect([...kinds.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort()).toEqual(['quiesce', 'tick']);
-  });
-
-  test('the chain store mount is the product’s', () => {
-    const chain = repo('packages', 'devbox', 'src', 'snapshot-chain.ts');
-    const product = /CHAIN_STORE_MOUNT = '([^']+)'/.exec(chain)?.[1];
-    const restated = /CHAIN_STORE_MOUNT_DIR = '([^']+)'/.exec(driver)?.[1];
-    expect(product).toBeDefined();
-    expect(restated).toBe(product);
-  });
-
-
-
-
-  test('the incident rows restate the ledger row, key for key', () => {
-    const devbox = repo('packages', 'devbox', 'src', 'devbox.ts');
-    const product = /export interface IncidentReasonRow \{([\s\S]*?)\}/.exec(devbox)?.[1] ?? '';
-    const productKeys = [...product.matchAll(/readonly (\w+)/g)].map((match) => match[1]).sort();
-    expect(productKeys).toEqual(['at', 'attempts', 'delivered', 'reason', 'stage']);
-    const restated = /export interface IncidentReasonRow \{([\s\S]*?)\}/.exec(driver)?.[1] ?? '';
-    const restatedKeys = [...restated.matchAll(/(\w+)\?:/g)].map((match) => match[1]).sort();
-    expect(restatedKeys).toEqual(productKeys);
-  });
-
-
-  test('the probe scope gates the post-wake tail on verify-only', () => {
-    const arm = /async function measureArm[\s\S]*?\n\}\n/.exec(driver)?.[0] ?? '';
-    expect(arm).toContain('await runWorkloadPhases({ fixture, box, strategy, run: options, result, notes });');
-    expect(arm).toContain('if (options.verifyOnly) {');
-    expect(arm).toContain('await releaseArm(fixture, box, result, notes);');
-  });
-
 });

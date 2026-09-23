@@ -915,7 +915,7 @@ export interface RestoreWork {
   /** Entries the restore materialized on the container. */
   readonly cpuSteps: number;
   readonly mounts: number;
-  /** Journal entries or layers replayed over a base. */
+  /** Delta layers served over a base. */
   readonly replayUnits: number;
 }
 
@@ -933,19 +933,6 @@ export interface Refusal {
 export interface HeldFinalize {
   readonly entered: Promise<void>;
   readonly release: () => void;
-}
-
-/** Container-side starts that survive a Durable Object isolate reset. */
-export interface LifecycleCounts {
-  readonly daemonStarts: number;
-  readonly restoreStarts: number;
-}
-
-/** The write-ahead journal a container still holds: one record per admitted
- *  write, and the records a refused effect cancelled. */
-export interface JournalFacts {
-  readonly records: readonly string[];
-  readonly failedWrites: readonly string[];
 }
 
 /** A second container on the same box: the same durable store and rows, its
@@ -993,14 +980,9 @@ export interface ConformanceArm extends ArmBoot {
   committedHeads(): Promise<readonly string[]>;
   /** The counted-work rows for the last checkpoint and the last attach. */
   work(): WorkRows;
-  /** Container-side starts that survive a Durable Object isolate reset. */
-  lifecycleCounts?(): LifecycleCounts;
   /** Evicts clean local bytes (the disk-pressure escape); returns the clean bytes it found.
    *  An arm without this hook can only refuse when full. */
   evictCleanBytes?(): number;
-  /** Journal lines a container still holds, in order: one per workload effect, 'W <path>' per
-   *  landed write. Empty for arms whose write path keeps no journal. */
-  journalFacts?(): JournalFacts;
   readonly refusedProperties: Readonly<Partial<Record<TreeProperty, Refusal>>>;
   readonly refusedCells: Readonly<Record<string, Refusal>>;
 }

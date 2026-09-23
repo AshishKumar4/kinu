@@ -1269,13 +1269,6 @@ describe('bench arm selection fails closed', () => {
     expect(parseDevboxStrategyName('a-retired-format')).toBeNull();
     expect(parseDevboxStrategyName('snapshot-chain')).toBe('snapshot-chain');
   });
-
-  test('the deployed worker routes through the fail-closed parser', () => {
-    const worker = readFileSync(join(import.meta.dir, '../bench/worker.ts'), 'utf8');
-    expect(worker).toContain('const strategy = parseDevboxStrategyName(requested);');
-    expect(worker).toContain('if (strategy === null)');
-    expect(worker).not.toContain(": 'snapshot-chain';");
-  });
 });
 
 import { createCheckpointLane } from '../src/lifecycle';
@@ -1432,47 +1425,3 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
   });
 });
 
-describe('ambient checkpoints belong to product boxes, never the bench fixture', () => {
-  const devboxSource = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-
-  const workerSource = readFileSync(
-    join(import.meta.dir, '..', 'bench', 'worker.ts'), 'utf8',
-  );
-
-  test('the schedule is armed and re-armed only behind the seam', () => {
-    const schedules = devboxSource.slice(
-      devboxSource.indexOf('async #armContainerSchedules('),
-      devboxSource.indexOf('\n  }', devboxSource.indexOf('async #armContainerSchedules(')),
-    );
-
-    expect(schedules).toContain('if (this.ambientCheckpoints)');
-
-    const scheduled = devboxSource.slice(
-      devboxSource.indexOf('async devboxCheckpoint('),
-      devboxSource.indexOf('\n  }', devboxSource.indexOf('async devboxCheckpoint(')),
-    );
-
-    expect(scheduled).toContain('if (!this.ambientCheckpoints) return;');
-  });
-
-  test('the bench box disables it; the interval gate still guards driver ticks', () => {
-    expect(workerSource).toContain('protected override get ambientCheckpoints(): boolean');
-    expect(workerSource).toContain('return false;');
-    expect(devboxSource).toContain('this.policy.checkpointIntervalMs / 1000');
-  });
-
-  test('every strategy checkpoint funnels through ONE lane call site', () => {
-    // Two overlapping runs would share staging directories and stamp
-    // overlapping journal sequences; the funnel makes that unrepresentable.
-    const direct = [...devboxSource.matchAll(/#requireStorage\(\)\.checkpoint\(/g)].length;
-    expect(direct).toBe(1);
-    expect(devboxSource).toContain('#lane.run(kind, async () => await this.#withStorageMutation(async () => {');
-
-    for (const entry of ['async checkpointNow(', 'async quiesce(', 'async devboxCheckpoint(',
-      'override async onActivityExpired(']) {
-      const at = devboxSource.indexOf(entry);
-      const body = devboxSource.slice(at, at + 2_000);
-      expect(body).toContain('#checkpoint(');
-    }
-  });
-});

@@ -189,6 +189,31 @@ function parseDecisiveRun(text: string, source: string): DecisiveRun {
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 
+/** The paths `packages/devbox/src/storage.ts` and `snapshot-chain.ts` mount, restated: the product
+ *  modules need the Workers types this program does not load. A drift fails the wake cells, which
+ *  find these paths in the container's `/proc/mounts`. */
+const DEVBOX_WORKDIR = '/workspace';
+
+const DEVBOX_RUNTIME_DIR = '/var/tmp/devbox';
+
+const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
+
+const lowerBase = `${DEVBOX_RUNTIME_DIR}/lower-base`;
+
+const blockLower = `${DEVBOX_RUNTIME_DIR}/block-lower`;
+
+/** One mount point per served generation, `${lowerDeltaRoot}/<generation>`; its presence in
+ *  `/proc/mounts` is the fact `deltaLayerServed` reads to decide the collapse. */
+const lowerDeltaRoot = `${DEVBOX_RUNTIME_DIR}/lower-delta`;
+
+const CHAIN_STORE_MOUNT = '/backups';
+
+/** `storage.ts`'s checkpoint kinds and attach outcomes, restated for the same reason; a kind the
+ *  box adds is refused by admission, loudly, until it is added here. */
+type CheckpointKind = 'tick' | 'quiesce';
+
+const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
+
 const BENCH_DIR = join(REPO_ROOT, 'packages/devbox/bench');
 
 /** The account every devbox fixture is raised on; exported so the deployed lifecycle suite
@@ -930,7 +955,7 @@ interface DriverRequest {
   readonly command?: string;
   readonly path?: string;
   readonly content?: string;
-  readonly kind?: 'tick' | 'quiesce';
+  readonly kind?: CheckpointKind;
   /** Idempotency key for one semantic operation on the two armed routes; reused across retries
    *  so a re-posted request cannot arm a second publication. */
   readonly op?: string;
@@ -1282,11 +1307,12 @@ export interface DeployedFixture {
 export async function deployFixture(
   token: string,
   fixture: ArmFixture,
-  faultCuts = false,
+  boot: { readonly faultCuts?: boolean; readonly productionSync?: boolean } = {},
 ): Promise<DeployedFixture> {
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
-    '--var', `BENCH_PUBLICATION_CUT:${faultCuts ? '1' : '0'}`,
+    '--var', `BENCH_PUBLICATION_CUT:${boot.faultCuts === true ? '1' : '0'}`,
+    ...(boot.productionSync === true ? ['--var', 'BENCH_PRODUCTION_SYNC:1'] : []),
   ]);
 
   const deployedAt = Date.now();
@@ -1421,7 +1447,7 @@ export async function headObject(fixture: Fixture, box: string, key: string): Pr
   });
 }
 
-/** Mirrors `IncidentReasonRow` in `packages/devbox/src/devbox.ts`; the decision suite compares key sets literally.
+/** The fields of the box's incident rows the driver reads, as the wire carries them.
  *  Rows arrive oldest first, which adjacent-to-publish quoting depends on. */
 export interface IncidentReasonRow {
   stage?: string;
@@ -2082,7 +2108,7 @@ export interface OperationBounds {
 export interface CheckpointRequest {
   readonly fixture: Fixture;
   readonly box: string;
-  readonly kind: 'tick' | 'quiesce';
+  readonly kind: CheckpointKind;
   readonly what: string;
   readonly bounds?: OperationBounds;
 }
@@ -2113,7 +2139,7 @@ export interface ArmedCheckpoint {
 export interface ArmCheckpointRequest {
   readonly fixture: Fixture;
   readonly box: string;
-  readonly kind: 'tick' | 'quiesce';
+  readonly kind: CheckpointKind;
   readonly what: string;
   readonly route?: '/checkpoint' | '/checkpoint-cut';
 }
@@ -2253,7 +2279,7 @@ export async function teardownLiveArms(
 
 interface CheckpointRow {
   changeKiB: number;
-  kind: 'tick' | 'quiesce';
+  kind: CheckpointKind;
   ms: number;
   bytes: number;
   outcome: string;
@@ -2843,10 +2869,10 @@ function chunkedMarkerObserved(cell: ChunkedAbsorptionFacts): ChunkedMarkerObser
     && cell.manifest !== null && v.safeParse(DeltaManifestSchema, cell.manifest).success
     && cell.manifest.files.some((file) => file.p === cell.markerPath);
 
-  const merged = cell.markerInMerged?.path === `${DEVBOX_WORK_DIR}/${cell.markerPath}`
+  const merged = cell.markerInMerged?.path === `${DEVBOX_WORKDIR}/${cell.markerPath}`
     && witnessMatches(cell.markerInMerged, cell.markerDigest) === true;
 
-  const upperAbsent = cell.markerInUpper?.path === `${CHAIN_UPPER_DIR}/${cell.markerPath}`
+  const upperAbsent = cell.markerInUpper?.path === `${upperDir}/${cell.markerPath}`
     && cell.markerInUpper.error === null && cell.markerInUpper.reply?.ok === true
     && cell.markerInUpper.reply.exitCode === 0 && cell.markerInUpper.evidence?.kind === 'missing';
 
@@ -3006,10 +3032,6 @@ function absentCell(name: string): WitnessCheck {
   };
 }
 
-/** Admission only decides whether the run continues; verify checks and `armCompletedTheCell`
- *  judge proof. Restates `ATTACH_OUTCOME_KINDS`; `bench-devbox-decision.test.ts` pins it. */
-const PRODUCT_ATTACH_KINDS = ['empty', 'attached', 'already-attached'] as const;
-
 /** The three startup steps an arm takes, named so a step cannot be misspelled
  *  into an empty exclusion set. */
 type StartupStep = 'cold attach' | 'wake' | 'warm attach';
@@ -3032,27 +3054,9 @@ const ATTACH_KINDS_EXCLUDED = {
 export function admittedAttachKinds(step: StartupStep): readonly string[] {
   const excluded: Readonly<Record<string, string>> = ATTACH_KINDS_EXCLUDED[step];
 
-  return PRODUCT_ATTACH_KINDS.filter((kind) => excluded[kind] === undefined);
+  // Admission only decides whether the run continues; verify checks and `armCompletedTheCell` judge proof.
+  return ATTACH_OUTCOME_KINDS.filter((kind) => excluded[kind] === undefined);
 }
-
-/** Restates the constants the strategies publish (`storage.ts`, `snapshot-chain.ts`): this
- *  driver reads a deployed container over HTTP and imports nothing from the box it measures. */
-const DEVBOX_WORK_DIR = '/workspace';
-
-const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
-
-/** Layer paths the lifecycle proof reads; `bench-devbox-decision.test.ts` checks each against
- *  the strategy's exported constant, which is what makes restating them safe. */
-const CHAIN_LOWER_BASE_DIR = '/var/tmp/devbox/lower-base';
-
-/** One mount point per served generation, `${lowerDeltaRoot}/<generation>`; its presence in
- *  `/proc/mounts` is the fact `deltaLayerServed` reads to decide the collapse. */
-const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
-
-/** Restates `CHAIN_STORE_MOUNT` in `packages/devbox/src/snapshot-chain.ts`; the wake-count cell
- *  matches restore mount lines against it, and `bench-devbox-decision.test.ts` checks the copy. */
-const CHAIN_STORE_MOUNT_DIR = '/backups';
-
 
 function requiredChainId(id: string | undefined, what: string): string {
   if (id === undefined || !/^[a-zA-Z0-9-]+$/.test(id)) {
@@ -3096,8 +3100,8 @@ async function observeChunkedAbsorption(
   ranInBox(await execInBox(
     fixture,
     box,
-    `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
-    + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
+    `find ${DEVBOX_WORKDIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
+    + `&& printf %s ${marker} > ${DEVBOX_WORKDIR}/${markerFile} && sync`,
   ), 'the marker was not written');
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
 
@@ -3123,9 +3127,9 @@ async function observeChunkedAbsorption(
   sample.before = chainId;
   const deltaId = requiredChainId(sample.beforeState.state?.chain?.delta?.id, 'delta');
   sample.deltaHead = await headObject(fixture, box, `${sample.beforeState.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`);
-  const manifestPoint = `${dirname(CHAIN_UPPER_DIR)}/witness-manifest`;
+  const manifestPoint = `${DEVBOX_RUNTIME_DIR}/witness-manifest`;
   sample.manifestRead = await execInBox(fixture, box,
-    `mkdir -p '${manifestPoint}' && devbox-squashfuse '${CHAIN_STORE_MOUNT_DIR}/${deltaId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
+    `mkdir -p '${manifestPoint}' && devbox-squashfuse '${CHAIN_STORE_MOUNT}/${deltaId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
 
   if (sample.manifestRead.ok === true && sample.manifestRead.exitCode === 0 && sample.manifestRead.stdout !== undefined) {
     try {
@@ -3155,17 +3159,17 @@ async function observeChunkedAbsorption(
   sample.mounts = await execInBox(fixture, box, 'cat /proc/mounts');
 
   if (sample.mounts.ok === true && sample.mounts.exitCode === 0 && sample.mounts.stdout !== undefined) {
-    sample.sidecarMounted = mountAt(sample.mounts.stdout, `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null;
-    const block = mountAt(sample.mounts.stdout, `${dirname(CHAIN_UPPER_DIR)}/block-lower`);
+    sample.sidecarMounted = mountAt(sample.mounts.stdout, `${lowerDeltaRoot}/${chainId}`) !== null;
+    const block = mountAt(sample.mounts.stdout, blockLower);
     sample.blockMounted = block?.fstype === 'fuse';
   }
 
-  sample.markerInMerged = await readBoxFile(fixture, box, `${DEVBOX_WORK_DIR}/${markerFile}`);
-  sample.markerInUpper = await readBoxFile(fixture, box, `${CHAIN_UPPER_DIR}/${markerFile}`);
+  sample.markerInMerged = await readBoxFile(fixture, box, `${DEVBOX_WORKDIR}/${markerFile}`);
+  sample.markerInUpper = await readBoxFile(fixture, box, `${upperDir}/${markerFile}`);
 
   // A new write makes the next publication observable rather than a no-op.
   ranInBox(await execInBox(
-    fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
+    fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORKDIR}/witness-composed-next.txt && sync`,
   ), 'the post-wake write did not run');
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
   sample.nextCheckpoint = await checkpointOperation({
@@ -3397,12 +3401,12 @@ async function probeReadOnlyLayer(
   for (const raw of (mountsNow.ok === true && mountsNow.exitCode === 0 ? mountsNow.stdout ?? '' : '').split('\n')) {
     const at = raw.trim().split(' ')[1] ?? '';
 
-    if (at.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)) {
+    if (at.startsWith(`${lowerDeltaRoot}/`)) {
       layerPoint = at;
       break;
     }
 
-    if (at === CHAIN_LOWER_BASE_DIR) layerPoint = at;
+    if (at === lowerBase) layerPoint = at;
   }
 
   if (layerPoint === null) return null;
@@ -4537,8 +4541,8 @@ async function measureArm(
       workdirMount?.fstype.includes('overlay') === true,
       mountLine.length > 0 ? mountLine : '(no mount line)',
     );
-    await writableLayer(CHAIN_UPPER_DIR);
-    await lowerLayer('the base layer is present and mounted at its lower path', CHAIN_LOWER_BASE_DIR);
+    await writableLayer(upperDir);
+    await lowerLayer('the base layer is present and mounted at its lower path', lowerBase);
     // A chain freshly collapsed onto a new base (`shouldRebase`) names no delta and has no
     // `delta.sqsh`; check only the objects the record names.
     const chain = afterWake.state?.chain;
@@ -5824,7 +5828,7 @@ function replayUnitsOf(
   missing: string[],
 ): number | null {
   if (mounts !== null) {
-    return args.wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
+    return args.wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${lowerDeltaRoot}/`)).length;
   }
 
   missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
@@ -5957,8 +5961,8 @@ export function verifyRestoreBound(
   wakeMountLines: readonly string[],
 ): BoundVerdict {
   if (work === null) return { verified: false, reason: 'no counted row to hold to any bound' };
-  const baseLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '') === CHAIN_LOWER_BASE_DIR).length;
-  const deltaLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
+  const baseLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '') === lowerBase).length;
+  const deltaLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${lowerDeltaRoot}/`)).length;
 
   if (baseLayers <= 1 && deltaLayers <= 1) {
     return {
@@ -5973,11 +5977,8 @@ export function verifyRestoreBound(
   };
 }
 
-/** Restates the mount points the strategy declares; the decision suite checks them against it. */
-const WAKE_MOUNT_POINTS: readonly string[] = [
-  DEVBOX_WORK_DIR, CHAIN_STORE_MOUNT_DIR, CHAIN_LOWER_BASE_DIR, CHAIN_DELTA_LAYER_ROOT,
-  `${dirname(CHAIN_UPPER_DIR)}/block-lower`,
-];
+/** The mount points the strategy declares. */
+const WAKE_MOUNT_POINTS: readonly string[] = [DEVBOX_WORKDIR, CHAIN_STORE_MOUNT, lowerBase, lowerDeltaRoot, blockLower];
 
 /** The delta-layer root matches by prefix because one directory per served generation lives
  *  under it; every other point matches its mountpoint exactly. */
@@ -5998,7 +5999,7 @@ export function selectWakeMountLines(
 
     if (
       points.some((wanted) =>
-        point === wanted || (wanted === CHAIN_DELTA_LAYER_ROOT && point.startsWith(`${wanted}/`))
+        point === wanted || (wanted === lowerDeltaRoot && point.startsWith(`${wanted}/`))
       )
     ) {
       lines.push(line);
@@ -6068,8 +6069,8 @@ export interface CutJudgment {
   readonly detail: string;
 }
 
-/** Mirrors the `restored` words published in `packages/devbox/src/snapshot-chain.ts`;
- *  the cut judge tells a kept upper from a fresh serve by them, and the decision suite checks them. */
+/** The shape of the `restored` detail `packages/devbox/src/snapshot-chain.ts` publishes; the cut
+ *  judge tells a kept upper from a fresh serve by its word (`CHAIN_SERVED_WORDS`). */
 const CHAIN_SERVED_PATTERN = /^chain \S+ \d+B (.+)$/;
 
 
@@ -7247,7 +7248,7 @@ async function main(): Promise<number> {
       await armLogContext.run(lane.fixture.strategy, async (): Promise<void> => {
         try {
           wrangler(['r2', 'bucket', 'create', lane.fixture.bucket]);
-          const started = await deployFixture(token, lane.fixture, options.faultCuts);
+          const started = await deployFixture(token, lane.fixture, { faultCuts: options.faultCuts });
           lane.stop = started.stop;
           lane.live = { ...started.fixture, identity: { ...revision, workerVersion: started.workerVersion, image: SANDBOX_IMAGE } };
           lane.workerVersion = started.workerVersion;
