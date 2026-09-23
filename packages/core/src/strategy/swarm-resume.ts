@@ -19,8 +19,9 @@ import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
-import type {
-  FloorBreach, MeasuredValue, ParetoAxis, ParetoEvidence, PublicationState,
+import {
+  FloorBreachSchema, MeasuredValueSchema,
+  type FloorBreach, type MeasuredValue, type ParetoAxis, type ParetoEvidence, type PublicationState,
 } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
 
@@ -82,26 +83,6 @@ export interface SwarmNodeRecord {
   /** Null where the provider reported nothing; not zero. */
   readonly tokens: number | null;
 }
-
-const MeasuredValueSchema: v.GenericSchema<MeasuredValue> = v.object({
-  kind: v.literal('measured'),
-  value: v.number(),
-  detail: v.string(),
-  measured: v.optional(v.record(v.string(), v.number())),
-  perInstance: v.optional(v.record(v.string(), v.number())),
-});
-
-const FloorBreachSchema: v.GenericSchema<FloorBreach> = v.object({
-  floor: v.object({
-    value: v.number(),
-    proof: v.string(),
-    kind: v.picklist(['certificate', 'adversary', 'physical']),
-    bestKnownHonest: v.number(),
-  }),
-  measured: MeasuredValueSchema,
-  margin: v.number(),
-  hypotheses: v.tuple([v.literal('floor_wrong'), v.literal('verifier_gameable')]),
-});
 
 /** Stamped into every record envelope; an unknown version refuses by name. */
 export const RECORD_SCHEMA_VERSION = 1;
@@ -594,7 +575,7 @@ export function harvestSwarm(deps: {
   const publication: SwarmHarvest['publication'] = firstBreach === null
     ? { state: { kind: 'open' }, caveat: null }
     : {
-        state: { kind: 'sealed', breach: firstBreach, clearedBy: null },
+        state: { kind: 'sealed', breach: firstBreach },
         caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
       };
 

@@ -242,9 +242,16 @@ cross-workspace library called "separate and unchanged".
 it. Callers name a surface, so a writer chooses an enumerated member. A missing
 publication surface is a specification violation.
 
-Only recorded re-derivation clears a seal. Retry and later success are not
-evidence about the breached guarantee. Suppression is disclosed over
-`PUBLISHING_CARRIES`, since other carries write nothing later runs read.
+A breach seals the objective and floor, not only the run that measured it: the
+floor and the verifier it impugns are shared by every run there. `sealRecords`
+writes the seal to `exploration_seals`, and every records write reads it in the
+same synchronous step (`publicationOf`), so a concurrent run on the same
+objective and floor stops recording too.
+
+A seal lifts only under a new key: a re-derived floor or a replaced verifier.
+Retry and later success are not evidence about the breached guarantee.
+Suppression is disclosed over `PUBLISHING_CARRIES`, since other carries write
+nothing later runs read.
 
 Implemented by `PublicationState`, `PUBLICATION_SURFACES`, `admitsPublication`,
 and `carrySuppression`; `packages/core/tests/contract-publication-seal.test.ts` holds writer
@@ -612,9 +619,9 @@ The machine-checked contracts live in `lean/Kinu/Exploration/`:
 | module | contract | theorems |
 | --- | --- | ---: |
 | `Objective.lean` | direction, verifier fallibility, declaration-time floor checks | 13 |
-| `Publication.lean` | the publication seal, and that a breach makes it unreachable | 65 |
+| `Publication.lean` | the publication seal, and that a breach makes it unreachable | 60 |
 | `Records.lean` | monotone displacement over a cell's best | 36 |
-| `RecordsStore.lean` | a cell's best never falls over any finite write sequence | 22 |
+| `RecordsStore.lean` | a cell's best never falls over any finite write sequence | 21 |
 | `Archive.lean` | the descriptor partition | 13 |
 | `ArchiveAdmission.lean` | separation is invariant, and a cell's population is not bounded | 22 |
 | `FanIn.lean` | the derived merge order respects every dependency edge | 30 |
@@ -622,7 +629,7 @@ The machine-checked contracts live in `lean/Kinu/Exploration/`:
 | `Settle.lean` | `settle` is a total function of (score, advance) | 11 |
 | `Arbitration.lean` | a proposal cannot exceed the arbiter; depth stays bounded | 11 |
 | `Isolation.lean` | why the existing proof does not reach an agent node | 4 |
-| `Concurrent.lean` | under any interleaving of runs the best never falls; the seal is per run | 6 |
+| `Concurrent.lean` | under any interleaving of runs the best never falls; a breach stops every run | 5 |
 | `Counterfactual.lean` | B1 witnesses that a deterministic verifier could have failed | 4 |
 | `Improvement.lean` | rounds without gain become improbable under a discrimination floor | 4 |
 

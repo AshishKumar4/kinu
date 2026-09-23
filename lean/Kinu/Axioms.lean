@@ -281,9 +281,6 @@ import Kinu
 #print axioms Kinu.Exploration.Publication.breach_freezes_the_store
 #print axioms Kinu.Exploration.Publication.retry_does_not_clear
 #print axioms Kinu.Exploration.Publication.good_measurement_does_not_clear
-#print axioms Kinu.Exploration.Publication.refuted_replacement_does_not_clear
-#print axioms Kinu.Exploration.Publication.unaudited_rederivation_does_not_clear
-#print axioms Kinu.Exploration.Publication.rederivation_restores_publication
 #print axioms Kinu.Exploration.Publication.retroPublish_requires_same_verifier
 #print axioms Kinu.Exploration.Publication.breach_does_not_halt
 #print axioms Kinu.Exploration.Publication.sealed_still_scores
@@ -311,13 +308,11 @@ import Kinu
 #print axioms Kinu.Exploration.Publication.surface_enumeration_is_total
 #print axioms Kinu.Exploration.Publication.surface_enumeration_has_six
 #print axioms Kinu.Exploration.Publication.admits_ignores_surface
-#print axioms Kinu.Exploration.Publication.admits_iff_not_uncleared
+#print axioms Kinu.Exploration.Publication.admits_iff_not_sealed
 #print axioms Kinu.Exploration.Publication.every_surface_is_writable
 #print axioms Kinu.Exploration.Publication.every_surface_is_retro_writable
-#print axioms Kinu.Exploration.Publication.admissible_rederivation_admits
 #print axioms Kinu.Exploration.Publication.sealed_still_reports
 #print axioms Kinu.Exploration.Publication.suppression_none_is_not_zero
-#print axioms Kinu.Exploration.Publication.cleared_seal_discloses_nothing
 #print axioms Kinu.Exploration.Publication.sealed_publish_counts_the_refusal
 #print axioms Kinu.Exploration.Publication.inert_refusal_is_not_a_suppression
 #print axioms Kinu.Exploration.Publication.suppression_counts_every_refusal
@@ -438,7 +433,6 @@ import Kinu
 #print axioms Kinu.Exploration.RecordsStore.a_worse_new_artifact_joins
 #print axioms Kinu.Exploration.RecordsStore.the_direction_decides
 #print axioms Kinu.Exploration.RecordsStore.a_sealed_store_refuses_by_name
-#print axioms Kinu.Exploration.RecordsStore.a_cleared_seal_records_again
 #print axioms Kinu.Exploration.RecordsStore.a_breach_seals_the_store
 
 /-! ### Kinu/Exploration/ArchiveAdmission.lean -/
@@ -530,9 +524,8 @@ import Kinu
 
 #print axioms Kinu.Exploration.Concurrent.runC_cons
 #print axioms Kinu.Exploration.Concurrent.the_best_never_falls_under_any_interleaving
-#print axioms Kinu.Exploration.Concurrent.a_sealed_run_is_invisible_to_every_interleaving
-#print axioms Kinu.Exploration.Concurrent.a_breach_in_one_run_does_not_seal_another
-#print axioms Kinu.Exploration.Concurrent.a_store_scoped_seal_would_refuse_it
+#print axioms Kinu.Exploration.Concurrent.a_breach_stops_every_run_on_its_floor
+#print axioms Kinu.Exploration.Concurrent.a_breach_in_one_run_seals_another
 #print axioms Kinu.Exploration.Concurrent.a_split_check_and_write_lowers_the_best
 
 /-! ## Kinu/Exploration/Counterfactual.lean -/

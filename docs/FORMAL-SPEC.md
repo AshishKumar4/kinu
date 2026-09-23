@@ -19,7 +19,7 @@ evidence.
 
 | Area | Theorems | What is modeled | Boundary |
 |------|---------:|-----------------|----------|
-| Exploration | 265 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds, the records store under concurrent runs, the verifier counterfactual, eventual improvement under a discrimination floor | Two modules are conditional by their own headers: the descriptor partition depends on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation, not a bound. `Improvement.lean` models the engine's rounds, not its code |
+| Exploration | 258 | the publication seal, monotone records displacement, the descriptor partition and its admission test, the derived fan-in order, verdict rebasing, settle totality, arbitration bounds, the records store under concurrent runs, the verifier counterfactual, eventual improvement under a discrimination floor | Two modules are conditional by their own headers: the descriptor partition depends on how a descriptor is produced, and `Isolation.lean` proves a negative. `ArchiveAdmission.lean` reports a refutation, not a bound. `Improvement.lean` models the engine's rounds, not its code |
 | Storage | 77 | index/list properties, byte-chunk reassembly, a list-backed filesystem, the SQLite filesystem's own correctness obligations, snapshot-chain attach, tick, rebase, generation and crash-loss cost, read-only block-layer composition, and the wall-clock loss window of a periodic sync | SQLite tokenization, ranking, concurrency and table-to-model correspondence remain external evidence obligations. Every chain independence claim is checked against a cost definition, not against the algorithm. Alarm lateness and tick duration are parameters, not measurements |
 | MCTS | 39 | the UCT bonus order and the selection argmax, convergence over the tree the search leaves, exact scaled-integer backpropagation, storage isolation, a natural-number budget measure | SQLite scores and backpropagates in IEEE-754 `REAL` values, and the storage-isolation transitions are maintained by hand |
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
@@ -28,8 +28,8 @@ evidence.
 | Safety | 8 | the credential store's client view, envelope binding and rotation | The cipher's guarantees are premises. The device connection is not yet modelled |
 
 Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
-reports 435 named declarations, and the traceability map enrolls all 435: 66
-under `proved-and-refined` requirements, 309 under `proved-in-abstract-model`
+reports 428 named declarations, and the traceability map enrolls all 428: 64
+under `proved-and-refined` requirements, 304 under `proved-in-abstract-model`
 and 60 under `by-construction-witness`.
 
 Status is declared on a requirement and inherited by every theorem it claims,
@@ -69,7 +69,7 @@ is now proved:
 | `PR-MCTS-004`, UCT bonus monotonicity | `MCTS/Uct.lean` | The bonus order is the order of natural powers. It falls with a node's own visits and rises with its parent's, off two plateaus. At the root it rises from two visits to three (`the_root_bonus_rises_from_two_visits_to_three`) |
 | `PR-MCTS-005`, search convergence | `MCTS/Convergence.lean` | A candidate ranks by its own reward, so every winner carries the best reward and it stabilizes (`the_winner_carries_the_best_reward`). Ranking by the subtree mean let the search converge past its best candidate; the fixture keeps that case |
 | `PR-DISCRIM-003`, the verifier counterfactual | `Exploration/Counterfactual.lean` | B1 implies the counterfactual for a deterministic verifier and not for a nondeterministic one (`b1_passes_input_blind_noise`) |
-| `PR-PUBLISH-004`, the seal under concurrent runs | `Exploration/Concurrent.lean` | The best never falls under any interleaving. The seal is per run, so one run's breach leaves a concurrent run writing (`a_breach_in_one_run_does_not_seal_another`) |
+| `PR-PUBLISH-004`, the seal under concurrent runs | `Exploration/Concurrent.lean` | The best never falls under any interleaving, and a breach in one run stops every run on the objective and floor (`a_breach_stops_every_run_on_its_floor`) |
 | `PR-EXPL-002`, eventual improvement | `Exploration/Improvement.lean` | With a per-round improvement floor `a/b`, `n` rounds without gain have probability at most `(1 - a/b)ⁿ`. The engine has no gain stop to report `gain-decayed` |
 
 ## Minimality review
@@ -166,7 +166,7 @@ against real `bun:sqlite`.
 |---|---|---|---|---|
 | `uct-select.json` | `Uct.select` in doubles | `selectNode` | `refinement-uct.test.ts` | `PR-MCTS-004` |
 | `convergence.json` | `Convergence.outcomeOf`, backprop sums | `backpropagate`, `converge` in plan mode | `refinement-convergence.test.ts` | `PR-MCTS-001`, `PR-MCTS-005` |
-| `records.json` | `Concurrent.runC` | `recordExploration` with one seal per run | `refinement-records.test.ts` | `PR-PUBLISH-004`, `PR-RECORDS-003` |
+| `records.json` | `Concurrent.runC` | `recordExploration`, `sealRecords` | `refinement-records.test.ts` | `PR-PUBLISH-004`, `PR-RECORDS-003` |
 | `credential-envelope.json` | `Credentials.openStored`, transparent cipher | `createCredentialCipher`, AES-GCM | `refinement-credentials.test.ts` | `PR-CRED-001` |
 
 Measured 2026-09-23: 824 cases pass. Each test went red on planted breaks in

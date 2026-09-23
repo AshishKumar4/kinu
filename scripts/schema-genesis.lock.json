@@ -557,6 +557,14 @@
     "verifier_digest TEXT",
     "PRIMARY KEY (actor_id, record_key)"
   ],
+  "exploration_seals@packages/core/src/strategy/records.ts": [
+    "actor_id TEXT NOT NULL",
+    "objective_id TEXT NOT NULL",
+    "floor_digest TEXT NOT NULL",
+    "breach_json TEXT NOT NULL",
+    "sealed_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, objective_id, floor_digest)"
+  ],
   "fibers@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",

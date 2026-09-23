@@ -118,12 +118,7 @@ export type PublicationSurface = (typeof PUBLICATION_SURFACES)[number];
  *  the search itself continues. Gate: {@link admitsPublication}. */
 export type PublicationState =
   | { readonly kind: 'open' }
-  | {
-      readonly kind: 'sealed';
-      readonly breach: FloorBreach;
-      /** Cleared only by a recorded re-derivation, never by a retry or a later in-bound score. */
-      readonly clearedBy: FloorRederivation | null;
-    };
+  | { readonly kind: 'sealed'; readonly breach: FloorBreach };
 
 /** A refusal is a value, not a throw, so it stays distinguishable from a broken store. */
 export type PublicationVerdict =
@@ -148,14 +143,6 @@ export interface CarrySuppression {
   /** Distinct cells whose best could not be recorded, counted once per cell. Deliberately not
    *  Lean's `suppression_counts_every_refusal` attempt count. */
   readonly suppressedCells: number;
-}
-
-/** A human's replacement for a breached floor; required to clear a seal. */
-export interface FloorRederivation {
-  readonly floor: Floor;
-  /** Which of `FloorBreach.hypotheses` was adjudicated, and on what evidence. */
-  readonly adjudication: string;
-  readonly at: number;
 }
 
 /** A checkable certificate: a witness plus the predicate it must satisfy. */

@@ -2,31 +2,26 @@
   Kinu.Exploration.Concurrent — the publication seal and the records store
   under concurrent runs. 0 sorry, 0 axioms.
 
-  `RecordsStore.lean` folds ONE run's actions. Two swarm runs on one objective
-  share the cell's rows but not their seal: each run keeps its own
-  `PublicationState` (`packages/core/src/strategy/swarm-setup.ts#seedResumedSearch`
-  starts it `open` or re-derives it from the run's own rows, and
-  `packages/core/src/strategy/swarm-scoring.ts#scoreExpansion` seals it on the
-  run's own breach) and hands it to
-  `packages/core/src/strategy/records.ts#recordExploration`, which checks it,
-  reads the incumbent and writes, synchronously, with no `await` in between.
-  That makes a whole `recordExploration` call one atomic step of the
-  workspace's one isolate, so a concurrent execution is an interleaving of such
-  steps: `stepC` below applies `RecordsStore.stepOf` to the shared rows and the
-  acting run's own seal.
+  `RecordsStore.lean` folds ONE run's actions. Several swarm runs on one
+  objective share the cell's rows and, since a breach is evidence about the
+  floor and the verifier they share, they share its seal: a breach writes a seal
+  row for the objective and floor
+  (`packages/core/src/strategy/records.ts#sealRecords`), and every records
+  write reads it in the same synchronous step as the write
+  (`packages/core/src/strategy/records.ts#publicationOf`, consulted by
+  `recordExploration`). Each run also keeps its own `PublicationState`. A whole
+  `recordExploration` call runs with no `await` inside, so it is one atomic step
+  of the workspace's one isolate, and a concurrent execution is an interleaving
+  of such steps.
 
-  What the interleaving keeps, and what it does not:
-
-  - the cell's best never falls under any interleaving of any number of runs
-    (`the_best_never_falls_under_any_interleaving`);
-  - a sealed run's writes are invisible to everyone else: the interleaving ends
-    exactly where it would have if that run had written nothing
-    (`a_sealed_run_is_invisible_to_every_interleaving`);
-  - the seal is RUN-SCOPED. A breach in one run leaves a concurrent run on the
-    same objective and floor writing rows
-    (`a_breach_in_one_run_does_not_seal_another`), where a seal held by the
-    store would refuse that write (`a_store_scoped_seal_would_refuse_it`);
-  - atomicity is load-bearing: split the check from the write across an
+  - The cell's best never falls under any interleaving of any number of runs
+    (`the_best_never_falls_under_any_interleaving`).
+  - A breach in one run stops every run on the objective and floor: after it no
+    run records anything there (`a_breach_stops_every_run_on_its_floor`). The
+    spec's words, section 4.4: "Publication STOPS for that objective, until a
+    human re-derives the floor." A re-derived floor, or a replaced verifier, has
+    another digest, so it publishes under another key.
+  - Atomicity is load-bearing: split the check from the write across an
     `await` and two interleaved writes lower the best
     (`a_split_check_and_write_lowers_the_best`).
 -/
@@ -41,21 +36,36 @@ open Kinu.Exploration.RecordsStore
 
 /-! ## Runs over one store -/
 
-/-- The shared rows of one cell, and each run's own publication state. -/
+/-- The shared rows of one cell, each run's own publication state, and the breach
+    the store's seal row holds for the cell's objective and floor, if any. -/
 structure Shared where
   rows : List Row
   seals : Nat → Publication.Publication
+  store : Option Publication.Breach
 
 /-- Replace run `i`'s seal. -/
 def setSeal (f : Nat → Publication.Publication) (i : Nat) (p : Publication.Publication) :
     Nat → Publication.Publication :=
   fun j => if j = i then p else f j
 
-/-- One `recordExploration` call, or one seal transition, by run `i`: the single-run
-    step applied to the shared rows and run `i`'s own seal. -/
-def stepC (d : Direction) (s : Shared) (i : Nat) (a : StoreAction) : Shared :=
-  let local' := RecordsStore.stepOf d { rows := s.rows, pub := s.seals i } a
-  { rows := local'.rows, seals := setSeal s.seals i local'.pub }
+/-- `publicationOf`: the run's own seal, else the store's. -/
+def effective (own : Publication.Publication) : Option Publication.Breach → Publication.Publication
+  | none => own
+  | some b => if own.isSealed then own else .sealed b
+
+/-- `sealRecords`: the first breach holds. -/
+def sealStore : Option Publication.Breach → Publication.Breach → Option Publication.Breach
+  | none, b => some b
+  | some b', _ => some b'
+
+/-- One `recordExploration` call, or one breach, by run `i`. A write is the
+    single-run step under the publication `publicationOf` reads; a breach seals the
+    run and the store. -/
+def stepC (d : Direction) (s : Shared) (i : Nat) : StoreAction → Shared
+  | .write r =>
+    { s with rows := (RecordsStore.stepOf d { rows := s.rows, pub := effective (s.seals i) s.store }
+        (.write r)).rows }
+  | .breach b => { s with seals := setSeal s.seals i (.sealed b), store := sealStore s.store b }
 
 /-- An interleaving: any finite sequence of steps by any runs. -/
 def runC (d : Direction) (s : Shared) : List (Nat × StoreAction) → Shared :=
@@ -68,9 +78,9 @@ theorem runC_cons (d : Direction) (s : Shared) (st : Nat × StoreAction)
 
 /-! ## Monotone under every interleaving -/
 
-/-- **No interleaving of any number of runs lowers the cell's best.** Each step is
-    a single-run step on the shared rows, and every single-run step is monotone
-    whatever seal it consults. -/
+/-- **No interleaving of any number of runs lowers the cell's best.** A write is a
+    single-run step, monotone whatever seal it consults; a seal transition leaves
+    the rows alone. -/
 theorem the_best_never_falls_under_any_interleaving (d : Direction) (s : Shared)
     (sts : List (Nat × StoreAction)) :
     notWorse d (best d (runC d s sts).rows) (best d s.rows) = true := by
@@ -78,103 +88,70 @@ theorem the_best_never_falls_under_any_interleaving (d : Direction) (s : Shared)
   | nil => exact notWorse_refl d _
   | cons st sts ih =>
     rw [runC_cons]
-    exact notWorse_trans d _ _ _ (ih _)
-      (RecordsStore.step_monotone d { rows := s.rows, pub := s.seals st.1 } st.2)
-
-/-! ## A sealed run is invisible -/
-
-/-- Run `i` holds an uncleared seal. -/
-def sealedUncleared (p : Publication.Publication) : Prop :=
-  ∃ b, p = .sealed b none
-
-def isWriteBy (i : Nat) (st : Nat × StoreAction) : Bool :=
-  st.1 == i && match st.2 with
-    | .write _ => true
-    | _ => false
-
-def isClearBy (i : Nat) (st : Nat × StoreAction) : Bool :=
-  st.1 == i && match st.2 with
-    | .clear _ => true
-    | _ => false
-
-private theorem sealed_write_refused (d : Direction) (s : Shared) (i : Nat) (r : Row)
-    (h : sealedUncleared (s.seals i)) : stepC d s i (.write r) = s := by
-  obtain ⟨b, hb⟩ := h
-  have hv : verdict d { rows := s.rows, pub := s.seals i } r = .refused .sealed := by
-    simp [verdict, hb, Publication.admits, Publication.Publication.uncleared]
-  have hstep := refused_write_changes_nothing d { rows := s.rows, pub := s.seals i } r _ hv
-  simp only [stepC, hstep]
-  cases s with
-  | mk rows seals =>
-    simp only [Shared.mk.injEq, true_and]
-    funext j
-    simp only [setSeal]
-    split
-    · next h => subst h; rfl
-    · rfl
-
-private theorem stays_sealed (d : Direction) (s : Shared) (i : Nat) (st : Nat × StoreAction)
-    (h : sealedUncleared (s.seals i)) (hc : isClearBy i st = false) :
-    sealedUncleared ((stepC d s st.1 st.2).seals i) := by
-  obtain ⟨j, a⟩ := st
-  by_cases hj : j = i
-  · subst hj
-    obtain ⟨b, hb⟩ := h
+    refine notWorse_trans d _ _ _ (ih _) ?_
+    obtain ⟨i, a⟩ := st
     cases a with
-    | write r => rw [sealed_write_refused d s j r ⟨b, hb⟩]; exact ⟨b, hb⟩
-    | breach b' => exact ⟨b', by simp [stepC, setSeal, RecordsStore.stepOf]⟩
-    | clear rd => simp [isClearBy] at hc
-  · simp only [stepC, setSeal, if_neg (Ne.symm hj)]
-    exact h
+    | write r =>
+      exact RecordsStore.step_monotone d { rows := s.rows, pub := effective (s.seals i) s.store } (.write r)
+    | breach b => exact notWorse_refl d _
 
-/-- **A sealed run's writes are invisible to every interleaving.** If run `i`
-    holds an uncleared seal and clears nothing, the interleaving reaches exactly
-    the state it reaches with every one of `i`'s writes deleted: no other run can
-    observe that `i` tried to publish. -/
-theorem a_sealed_run_is_invisible_to_every_interleaving (d : Direction) (s : Shared) (i : Nat)
-    (sts : List (Nat × StoreAction)) (h : sealedUncleared (s.seals i))
-    (hc : ∀ st ∈ sts, isClearBy i st = false) :
-    runC d s sts = runC d s (sts.filter (fun st => !isWriteBy i st)) := by
-  induction sts generalizing s with
-  | nil => rfl
-  | cons st sts ih =>
-    have hc' : ∀ st' ∈ sts, isClearBy i st' = false := fun st' h' => hc st' (List.mem_cons_of_mem _ h')
-    rw [runC_cons]
-    by_cases hw : isWriteBy i st = true
-    · obtain ⟨j, a⟩ := st
-      simp only [isWriteBy, Bool.and_eq_true, beq_iff_eq] at hw
-      obtain ⟨rfl, ha⟩ := hw
-      cases a with
-      | write r =>
-        rw [sealed_write_refused d s j r h, List.filter_cons]
-        simp only [isWriteBy, beq_self_eq_true, Bool.true_and, Bool.not_true]
-        exact ih s h hc'
-      | breach b => simp at ha
-      | clear rd => simp at ha
-    · rw [List.filter_cons, if_pos (by simpa using hw), runC_cons]
-      exact ih _ (stays_sealed d s i st h (hc st (List.mem_cons_self _ _))) hc'
+/-! ## A breach stops every run -/
 
-/-! ## The seal is run-scoped -/
+private theorem sealed_refuses (p : Publication.Publication) (h : p.isSealed = true) :
+    Publication.admits p .records = false := by
+  cases p with
+  | open_ => cases h
+  | sealed b => rfl
+
+private theorem effective_refuses (own : Publication.Publication) (b : Publication.Breach) :
+    Publication.admits (effective own (some b)) .records = false := by
+  show Publication.admits (if own.isSealed then own else .sealed b) .records = false
+  by_cases h : own.isSealed = true
+  · rw [if_pos h]; exact sealed_refuses _ h
+  · rw [if_neg h]; rfl
+
+/-- Once the store holds a seal, every step keeps it and changes no row. -/
+private theorem sealed_step (d : Direction) (s : Shared) (st : Nat × StoreAction)
+    (h : s.store.isSome = true) :
+    (stepC d s st.1 st.2).store.isSome = true ∧ (stepC d s st.1 st.2).rows = s.rows := by
+  obtain ⟨i, a⟩ := st
+  obtain ⟨b, hb⟩ := Option.isSome_iff_exists.mp h
+  cases a with
+  | write r =>
+    refine ⟨h, ?_⟩
+    have hv : verdict d { rows := s.rows, pub := effective (s.seals i) s.store } r = .refused .sealed := by
+      simp [verdict, hb, effective_refuses]
+    simp [stepC, RecordsStore.stepOf, hv]
+  | breach b' => exact ⟨by simp [stepC, hb, sealStore], rfl⟩
+
+/-- **A breach in one run stops every run on the objective and floor.** After any
+    run's breach, every interleaving of any runs' steps leaves the rows exactly as
+    the breach found them. -/
+theorem a_breach_stops_every_run_on_its_floor (d : Direction) (s : Shared) (i : Nat)
+    (b : Publication.Breach) (sts : List (Nat × StoreAction)) :
+    (runC d (stepC d s i (.breach b)) sts).rows = s.rows := by
+  have key : ∀ (sts : List (Nat × StoreAction)) (t : Shared), t.store.isSome = true →
+      (runC d t sts).rows = t.rows := by
+    intro sts
+    induction sts with
+    | nil => intro t _; rfl
+    | cons st sts ih =>
+      intro t ht
+      rw [runC_cons]
+      obtain ⟨hst, hrows⟩ := sealed_step d t st ht
+      rw [ih _ hst, hrows]
+  have hs : (stepC d s i (.breach b)).store.isSome = true := by
+    cases h : s.store <;> simp [stepC, h, sealStore]
+  exact key sts _ hs
 
 /-- Two runs, both open, sharing an empty cell. -/
-def twoOpenRuns : Shared := { rows := [], seals := fun _ => .open_ }
+def twoOpenRuns : Shared := { rows := [], seals := fun _ => .open_, store := none }
 
-/-- **A breach in one run does not seal another.** Run 0 measures past the floor
-    and seals itself; run 1, on the same objective and floor, then records a row.
-    The floor's guarantee is void for both, and only run 0 stops publishing. -/
-theorem a_breach_in_one_run_does_not_seal_another :
+/-- Run 0 measures past the floor; run 1, on the same objective and floor, then
+    tries to record a row, and the store refuses it. -/
+theorem a_breach_in_one_run_seals_another :
     (runC .minimise twoOpenRuns
-      [(0, .breach sampleBreach), (1, .write { digest := "b", value := 4 })]).rows
-      = [{ digest := "b", value := 4 }] := by
-  decide
-
-/-- **A seal held by the store would refuse that write**: the single-store step,
-    whose seal every writer consults, answers run 1's write after run 0's breach
-    with `sealed`. -/
-theorem a_store_scoped_seal_would_refuse_it :
-    verdict .minimise
-      (RecordsStore.stepOf .minimise { rows := [], pub := .open_ } (.breach sampleBreach))
-      { digest := "b", value := 4 } = .refused .sealed := by
+      [(0, .breach sampleBreach), (1, .write { digest := "b", value := 4 })]).rows = [] := by
   decide
 
 /-! ## Atomicity is load-bearing -/

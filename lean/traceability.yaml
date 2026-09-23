@@ -376,7 +376,7 @@ requirements:
       - No runtime precondition yet implements C2 against the measured baseline
       - The majority-vote witnesses hardcode tasks.ts numbers rather than reading the corpus
   PR-PUBLISH-001:
-    statement: From an uncleared sealed state no finite sequence of the run's own actions publishes to any member of the enumerated six-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
+    statement: From a sealed state no finite sequence of the run's own actions publishes to any member of the enumerated six-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Exploration.Publication.runOf_nil
@@ -392,7 +392,7 @@ requirements:
       - Kinu.Exploration.Publication.surface_enumeration_is_total
       - Kinu.Exploration.Publication.surface_enumeration_has_six
       - Kinu.Exploration.Publication.admits_ignores_surface
-      - Kinu.Exploration.Publication.admits_iff_not_uncleared
+      - Kinu.Exploration.Publication.admits_iff_not_sealed
       - Kinu.Exploration.Publication.every_surface_is_writable
       - Kinu.Exploration.Publication.every_surface_is_retro_writable
     tsRefs:
@@ -406,25 +406,21 @@ requirements:
       - Five of the six enumerated surfaces have live writers that take no PublicationState at all, so where each gate sits is unwired even though the enumeration is now checked
       - The previous revision of this requirement was a true theorem about a false property: it quantified over records-store actions while experience_library was not one of them
   PR-PUBLISH-002:
-    statement: Only a recorded re-derivation carrying an admissible replacement floor and a stated adjudication admits publication again, retroactive publication additionally requires verifier-digest equality, and an identity-keyed seal provably cannot discriminate a corrected floor from the breached one.
+    statement: A seal is keyed by the objective and the floor's digest, because an identity-keyed seal provably cannot tell a corrected floor from the breached one, so a re-derived floor publishes under its own key; retroactive publication additionally requires verifier-digest equality.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Exploration.Publication.identityKey_is_floor_blind
       - Kinu.Exploration.Publication.sealKey_discriminates
-      - Kinu.Exploration.Publication.refuted_replacement_does_not_clear
-      - Kinu.Exploration.Publication.unaudited_rederivation_does_not_clear
-      - Kinu.Exploration.Publication.rederivation_restores_publication
       - Kinu.Exploration.Publication.retroPublish_requires_same_verifier
-      - Kinu.Exploration.Publication.admissible_rederivation_admits
     tsRefs:
       - packages/core/src/types/objective.ts#PublicationState
       - packages/core/src/types/objective.ts#Floor
-      - packages/core/src/types/objective.ts#FloorRederivation
       - packages/core/src/strategy/objective.ts#admitsPublication
+      - packages/core/src/strategy/records.ts#floorDigestOf
+      - packages/core/src/strategy/records.ts#sealRecords
     remainingEvidence:
       - Digest injectivity is a hypothesis on the theorems rather than a proved property of SHA-256
-      - No implementation of FloorRederivation or of the retroactive re-evaluation path exists yet
-      - The requirement that a replacement floor pass C1 is this model's reading of 'the same burden', not a literal clause of the spec
+      - No retroactive re-evaluation path exists yet
   PR-PUBLISH-003:
     statement: A floor breach suspends the floor and stops publication without halting the run, stopping scoring or suppressing the settle report, every refused publication is counted so the disclosure cannot under-report, and the suppressed-cell count is a provably independent quantity counted once per cell.
     status: proved-in-abstract-model
@@ -434,7 +430,6 @@ requirements:
       - Kinu.Exploration.Publication.breach_records_suspension
       - Kinu.Exploration.Publication.sealed_still_reports
       - Kinu.Exploration.Publication.suppression_none_is_not_zero
-      - Kinu.Exploration.Publication.cleared_seal_discloses_nothing
       - Kinu.Exploration.Publication.sealed_publish_counts_the_refusal
       - Kinu.Exploration.Publication.inert_refusal_is_not_a_suppression
       - Kinu.Exploration.Publication.suppression_counts_every_refusal
@@ -695,24 +690,26 @@ requirements:
       - B1 has no implementation, so nothing here is refined from code
       - The implication assumes the verifier is a function of the artifact; a verifier reporting a unit such as ms is not one, and for it B1 is no evidence that it could have failed
   PR-PUBLISH-004:
-    statement: Under every interleaving of runs sharing one records cell, each recordExploration call one atomic step, the cell's best never falls and a sealed run's writes are invisible, but the seal is run-scoped, so a breach in one run does not stop a concurrent run writing under the same floor, and splitting the check from the write would lower the best.
+    statement: Under every interleaving of runs sharing one records cell, each recordExploration call one atomic step that reads the store's seal for the objective and floor, the cell's best never falls, and after a breach in any run no run records anything on that objective and floor; splitting the check from the write would lower the best.
     status: proved-and-refined
     theorems:
       - Kinu.Exploration.Concurrent.runC_cons
       - Kinu.Exploration.Concurrent.the_best_never_falls_under_any_interleaving
-      - Kinu.Exploration.Concurrent.a_sealed_run_is_invisible_to_every_interleaving
-      - Kinu.Exploration.Concurrent.a_breach_in_one_run_does_not_seal_another
-      - Kinu.Exploration.Concurrent.a_store_scoped_seal_would_refuse_it
+      - Kinu.Exploration.Concurrent.a_breach_stops_every_run_on_its_floor
+      - Kinu.Exploration.Concurrent.a_breach_in_one_run_seals_another
       - Kinu.Exploration.Concurrent.a_split_check_and_write_lowers_the_best
     tsRefs:
       - packages/core/src/strategy/records.ts#recordExploration
+      - packages/core/src/strategy/records.ts#sealRecords
+      - packages/core/src/strategy/records.ts#publicationOf
+      - packages/core/src/strategy/archive.ts#admitToArchive
       - packages/core/src/strategy/objective.ts#admitsPublication
       - packages/core/src/types/objective.ts#PublicationState
       - packages/core/src/strategy/swarm-scoring.ts#scoreExpansion
       - packages/core/src/strategy/swarm-setup.ts#seedResumedSearch
     remainingEvidence:
-      - Atomicity is read off the shipped body, which checks the seal, reads and writes synchronously inside one isolate; the fixture interleaves whole recordExploration calls and cannot observe an interleaving inside one
-      - Whether a breach should seal every run on its objective and floor is a design decision the specification has not taken; the shipped seal is per run
+      - Atomicity is read off the shipped body, which reads the seal row, checks it, reads and writes synchronously inside one isolate; the fixture interleaves whole recordExploration calls and cannot observe an interleaving inside one
+      - Nothing clears a seal row: a re-derived floor or a replaced verifier has another digest and publishes under another key, which is how the specification's re-derivation reopens publication
     refinement:
       - lean/fixtures/records.json :: packages/core/tests/refinement-records.test.ts
   PR-EXPL-002:
@@ -753,7 +750,6 @@ requirements:
       - Kinu.Exploration.RecordsStore.a_worse_new_artifact_joins
       - Kinu.Exploration.RecordsStore.the_direction_decides
       - Kinu.Exploration.RecordsStore.a_sealed_store_refuses_by_name
-      - Kinu.Exploration.RecordsStore.a_cleared_seal_records_again
       - Kinu.Exploration.RecordsStore.a_breach_seals_the_store
     tsRefs:
       - packages/core/src/strategy/records.ts#recordExploration
