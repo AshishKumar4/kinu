@@ -5,10 +5,10 @@
 import { headStatusUnsettled, storedHeadReportStatus, type HeadRunView } from '../heads/types';
 import type { ForkNode, ForkNodeLifecycle } from '../protocol';
 
-/** One `search_nodes` row, as every transport serves it. */
+/** One `search_node_scores` row, as every transport serves it. */
 export interface MctsRow {
   id: string; parent_id: string | null; depth: number;
-  visits: number; value: number; status: ForkNode["status"]; action: string;
+  visits: number; value: number; own_score: number | null; status: ForkNode["status"]; action: string;
   /** Which search this row belongs to. */
   root_id?: string | null;
   task?: string; observation?: string; code_used?: string | null;
@@ -44,8 +44,8 @@ function linkVertices(vertices: readonly ForkNode[]): ForkNode | null {
 }
 
 /**
- * Fold search rows into the tree. `visits === 0 && value === 0` is the insert initialiser, not a
- * score, so it maps to null.
+ * Fold search rows into the tree, each vertex scored by its row's own score. `visits === 0 &&
+ * value === 0` is the insert initialiser, not a score, so it maps to null.
  */
 export function buildTree(nodes: MctsRow[]): ForkNode {
   const vertices = nodes.map((n): ForkNode => {
@@ -54,7 +54,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
     return {
       id: n.id, parentId: n.parent_id, depth: n.depth,
       visits: unevaluated ? null : n.visits,
-      value: unevaluated ? null : n.value,
+      value: unevaluated ? null : n.own_score,
       status: n.status, action: n.action,
       task: n.task, observation: n.observation, codeUsed: n.code_used, createdAt: n.created_at,
       children: [],

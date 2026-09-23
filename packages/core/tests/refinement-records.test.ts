@@ -1,9 +1,8 @@
 /**
- * Refinement of `Exploration/Concurrent.lean — runC` by the deployed records store: each case in
- * `lean/fixtures/records.json` interleaves the steps of one to three runs over one cell, each run
- * holding its own `PublicationState` as a swarm run does, and the deployed `recordExploration`
- * must give every write the model's verdict and leave the model's rows. One run is
- * `RecordsStore.lean`'s single-run store. `bash scripts/verify-lean.sh` regenerates the fixture.
+ * Refinement of `Exploration/Concurrent.lean — runC`: each case in `lean/fixtures/records.json`
+ * interleaves one to three runs over one cell, each with its own `PublicationState` and all
+ * sharing the store's seal, and the deployed `recordExploration` must give every write the
+ * model's verdict and leave its rows.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -13,9 +12,9 @@ import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { createTestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql } from './helpers';
-import { initExplorationRecordsTable, recordExploration } from '../src/strategy/records';
+import { initExplorationRecordsTable, recordExploration, sealRecords } from '../src/strategy/records';
 import type {
-  Floor, FloorBreach, FloorRederivation, ObjectiveIdentity, PublicationState,
+  Floor, FloorBreach, ObjectiveIdentity, PublicationState,
 } from '../src/strategy/objective';
 
 const FIXTURE = resolve(import.meta.dir, '../../../lean/fixtures/records.json');
@@ -31,7 +30,6 @@ const FixtureSchema = v.object({
         verdict: v.picklist(['recorded', 'sealed', 'not-better']),
       }),
       v.object({ run: v.number(), action: v.literal('breach') }),
-      v.object({ run: v.number(), action: v.literal('clear') }),
     ])),
     rows: v.array(v.object({ artifact: v.string(), value: v.number() })),
   })),
@@ -39,7 +37,7 @@ const FixtureSchema = v.object({
 
 const { cases } = v.parse(FixtureSchema, JSON.parse(readFileSync(FIXTURE, 'utf8')));
 
-/** `RecordsStore.lean`'s `sampleFloor`, `sampleBreach` and `sampleRederivation`. */
+/** `RecordsStore.lean`'s `sampleFloor` and `sampleBreach`. */
 const FLOOR: Floor = { value: 10, proof: 'fixture bound', kind: 'certificate', bestKnownHonest: 12 };
 
 const BREACH: FloorBreach = {
@@ -48,8 +46,6 @@ const BREACH: FloorBreach = {
   margin: (FLOOR.bestKnownHonest - FLOOR.value) / FLOOR.bestKnownHonest,
   hypotheses: ['floor_wrong', 'verifier_gameable'],
 };
-
-const REDERIVATION: FloorRederivation = { floor: { ...FLOOR, value: 2 }, adjudication: 'the floor was wrong', at: 0 };
 
 describe('recordExploration refines Concurrent.runC', () => {
   test('the fixture interleaves several runs and reaches every verdict', () => {
@@ -77,12 +73,8 @@ describe('recordExploration refines Concurrent.runC', () => {
       if (seal === undefined) throw new Error(`the fixture names run ${step.run} of ${c.runs}`);
 
       if (step.action === 'breach') {
-        seals[step.run] = { kind: 'sealed', breach: BREACH, clearedBy: null };
-        continue;
-      }
-
-      if (step.action === 'clear') {
-        if (seal.kind === 'sealed') seals[step.run] = { ...seal, clearedBy: REDERIVATION };
+        seals[step.run] = { kind: 'sealed', breach: BREACH };
+        sealRecords(sql, actor, { identity, breach: BREACH, at });
         continue;
       }
 

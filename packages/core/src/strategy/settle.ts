@@ -28,7 +28,7 @@ import type { ExplorationRecord, MeasurementContext, ObjectiveIdentity } from '.
 import type { ResolvedVerifier } from './verifier-registry';
 import type { SwarmReentry } from './swarm-resume';
 import type { ArchiveInForce } from './swarm-setup';
-import { recordExploration, type ExplorationWrite } from './records';
+import { publicationOf, recordExploration, type ExplorationWrite } from './records';
 
 /** `stop`, from what the loop observed: budget spent with nothing selectable is settled,
  *  with a frontier open or narrower than configured is truncated. */
@@ -191,7 +191,7 @@ export async function settleRun(input: {
 }): Promise<SwarmResult> {
   const {
     started, log, sql, actor, resolved, rootId, maxDepth, branches, policy, paretoAxes, ctx, verifier,
-    measured, baseline, identity, publishing, archive, publication, candidates, best,
+    measured, baseline, identity, publishing, archive, publication: runPublication, candidates, best,
     usage, judgeSamples, ensembles, spentBy, carriedIn, carriedBest, levelFanIn, reentry,
     aborted, missionSpent, lost, remainingBudget, expansionBudget, inheritedExpansions,
     inheritedTokens, ledgerEpoch, searchLedger, runProfile,
@@ -224,6 +224,10 @@ if (ctx) {
     applyMember: singlePathApply(ctx.vfs),
   });
 }
+
+const publication = identity === null
+  ? runPublication
+  : publicationOf(sql, actor, runPublication, { identity, floor: measured?.floor ?? null });
 
 // Carry admission, after the sweep so swept candidates are eligible. The only reader of
 // `carry:'artifacts'` `threshold`; `carry:'elites'` still requires a measurement.
@@ -405,11 +409,12 @@ const result: SwarmResult = {
   report,
   publication: {
     state: publication,
-    caveat: publication.kind === 'sealed' && publication.clearedBy === null
-      ? 'this run measured a candidate past its floor, so the floor is SUSPENDED for the rest of '
-        + 'the run and the answer is not publishable: the number may be a cheat the verifier '
-        + 'missed, or the bound may be wrong, and this observation cannot tell which. Nothing '
-        + 'clears it except a recorded re-derivation of the bound.'
+    caveat: publication.kind === 'sealed'
+      ? 'a candidate on this objective was measured past its floor, so the floor is SUSPENDED and '
+        + 'the answer is not publishable: the number may be a cheat the verifier missed, or the '
+        + 'bound may be wrong, and this observation cannot tell which. The seal holds for this '
+        + 'objective and floor; a re-derived bound or a replaced verifier is a new objective key '
+        + 'and publishes again.'
       : null,
   },
   best,

@@ -32,7 +32,7 @@ const allowedStatuses = new Set([
 const fixtureRoot = join(leanRoot, "fixtures");
 
 const refinementPattern =
-  /^(lean\/fixtures\/([a-z0-9-]+)\.json) :: (packages\/[a-z0-9-]+\/tests\/[A-Za-z0-9._-]+\.test\.ts)$/;
+  /^(lean\/fixtures\/([a-z0-9-]+)\.json) :: (packages\/[a-z0-9-]+\/tests\/[A-Za-z0-9._-]+\.test\.(?:ts|js))$/;
 
 const qualifiedNamePattern = /^Kinu(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
 
@@ -419,8 +419,10 @@ function relativePath(path) {
 // comment inside a SQL template ends the literal early, and because the SQL
 // carries no braces the depth survives and all four cited members still resolve.
 // Deciding parseability is tsc's job and this gate must not be read as doing it.
+// A `.js` file is scanned the same way: the device daemon (`packages/pc-agent`) is
+// plain JavaScript, and its declarations have the same top-level shapes.
 const tsRefPattern =
-  /^([A-Za-z0-9_.\-/]+\.ts)#([A-Za-z_$][A-Za-z0-9_$]*)(?:\.([A-Za-z_$][A-Za-z0-9_$]*))?$/;
+  /^([A-Za-z0-9_.\-/]+\.(?:ts|js))#([A-Za-z_$][A-Za-z0-9_$]*)(?:\.([A-Za-z_$][A-Za-z0-9_$]*))?$/;
 
 const tsTopDeclarationPattern =
   /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(function\s*\*?|class|interface|type|enum|const\s+enum|const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/;
@@ -863,7 +865,7 @@ for (const requirement of requirements.values()) {
     const match = refinementPattern.exec(entry);
 
     if (match === null) {
-      fail(`${requirement.id}: refinement ${entry} is not \`lean/fixtures/<name>.json :: packages/<pkg>/tests/<file>.test.ts\``);
+      fail(`${requirement.id}: refinement ${entry} is not \`lean/fixtures/<name>.json :: packages/<pkg>/tests/<file>.test.ts\` (or .test.js)`);
       continue;
     }
 
@@ -920,13 +922,7 @@ for (const name of declarations.axioms) {
 // `open`).
 //
 // Enrolled rather than discovered: a mirror nobody declared cannot be checked, so
-// adding one is a reviewable edit. Two mirrors are deliberately absent because
-// they hold in neither direction today and the model, not the gate, is what has
-// to move: `Execution.Capabilities.ExecutorKind` still names `container` and `ssh`
-// against `ExecutorKind`'s `sandbox`, `laptop` and `parent`, and
-// `Execution.ToolSystem.TopLevelTool` still names five tools against
-// `BUILTIN_TOOLS`. Both are recorded as remaining evidence on PR-EXEC-001 and
-// PR-EXEC-002.
+// adding one is a reviewable edit.
 const STATE_MIRRORS = [
   { lean: "Kinu.Exploration.Settle.Unit", ts: "packages/core/src/types/swarm.ts#SWARM_UNITS" },
   { lean: "Kinu.Exploration.Settle.Expand", ts: "packages/core/src/types/swarm.ts#SWARM_EXPANDS" },
@@ -943,6 +939,7 @@ const STATE_MIRRORS = [
   { lean: "Kinu.Exploration.Publication.Surface", ts: "packages/core/src/types/objective.ts#PUBLICATION_SURFACES" },
   { lean: "Kinu.NodeStatus", ts: "packages/core/src/types/mcts.ts#NodeStatus" },
   { lean: "Kinu.Execution.Capabilities.Capability", ts: "packages/core/src/execution/types.ts#EXECUTOR_CAPABILITIES" },
+  { lean: "Kinu.Execution.Capabilities.ExecutorKind", ts: "packages/core/src/execution/types.ts#ExecutorKind" },
   { lean: "Kinu.Storage.SnapshotChain.Kind", ts: "packages/devbox/src/storage.ts#CheckpointKind" },
 ];
 

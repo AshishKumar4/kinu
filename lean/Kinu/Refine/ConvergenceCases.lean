@@ -41,7 +41,8 @@ def sqlValue (es : List Cand) (n : String) : Float :=
     depth DESC`, and each one's outcome with exact double equality. -/
 def doubleOutcomes (es : List Cand) (pop : List Member) (minNum minDen : Nat) :
     List (String × String) :=
-  let value := fun (m : Member) => sqlValue es m.id
+  let value := fun (m : Member) =>
+    if m.depth == 0 then sqlValue es m.id else m.sum.toNat.toFloat / scale.toFloat
   let top := pop.foldl (fun acc m => if acc < value m then value m else acc) 0.0
   let atTop := pop.filter fun m => value m == top
   let deepest := atTop.foldl (fun acc m => max acc m.depth) 0
@@ -50,7 +51,7 @@ def doubleOutcomes (es : List Cand) (pop : List Member) (minNum minDen : Nat) :
   winners.map fun w =>
     let rival := pop.any fun x =>
       x.id != w.id && x.depth != 0 && value x == value w &&
-        !((lineage pop w).contains x.id) && !((lineage pop x).contains w.id) &&
+        !((lineage w).contains x.id) && !((lineage x).contains w.id) &&
         x.text != "" && x.text != w.text
     (w.id, if rival then "undifferentiated" else if value w < minValue then "no_acceptable_candidate"
       else "converged")
@@ -105,14 +106,14 @@ def directed : List Json :=
     caseOf .open_ 3 10
       [⟨"a", ["R"], 7, .open_, "approach a"⟩, ⟨"b", ["R"], 5, .open_, "approach b"⟩,
        ⟨"a1", ["R", "a"], 1, .open_, "refinement a1"⟩, ⟨"a2", ["R", "a"], 1, .open_, "refinement a2"⟩],
-    -- `a_unique_best_leaf_is_the_only_winner`
+    -- `the_winner_carries_the_best_reward`
     caseOf .open_ 3 10
       [⟨"a", ["R"], 3, .open_, "approach a"⟩, ⟨"b", ["R"], 6, .open_, "approach b"⟩,
        ⟨"a1", ["R", "a"], 5, .open_, "refinement a1"⟩],
     -- two distinct approaches tied exactly: undifferentiated
     caseOf .open_ 3 10
       [⟨"a", ["R"], 6, .open_, "approach a"⟩, ⟨"b", ["R"], 6, .open_, "approach b"⟩],
-    -- `a_pruned_parent_splits_a_lineage`
+    -- `an_ancestor_is_never_a_rival`, across a pruned parent
     caseOf .open_ 3 10
       [⟨"g", ["R"], 4, .open_, "grandparent"⟩, ⟨"p", ["R", "g"], 4, .pruned, "parent"⟩,
        ⟨"c", ["R", "g", "p"], 4, .open_, "grandchild"⟩],

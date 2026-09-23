@@ -17,15 +17,10 @@ fi
 node check-traceability.mjs
 bun ../scripts/lean-citations.ts
 
-# The deployed code on those fixtures: exactly the tests lean/traceability.yaml names.
+# The deployed code on those fixtures: exactly the tests lean/traceability.yaml names, run
+# from the repository root as the ladder runs every suite, so the root preload applies.
 mapfile -t refinement_tests < <(node check-traceability.mjs --list-refinement-tests)
-for package in $(printf '%s\n' "${refinement_tests[@]}" | sed 's|/tests/.*||' | sort -u); do
-  tests=()
-  for test in "${refinement_tests[@]}"; do
-    if [[ "$test" == "$package/tests/"* ]]; then tests+=("${test#"$package"/}"); fi
-  done
-  (cd "../$package" && bun test "${tests[@]}")
-done
+(cd .. && bun test "${refinement_tests[@]}")
 
 # Devbox's lifecycle corpus uses its own pinned Lean toolchain.
 cd ../packages/devbox/proof

@@ -39,17 +39,7 @@ const breach: FloorBreach = {
 
 const open: PublicationState = { kind: 'open' };
 
-const sealed: PublicationState = { kind: 'sealed', breach, clearedBy: null };
-
-const cleared: PublicationState = {
-  kind: 'sealed',
-  breach,
-  clearedBy: {
-    floor: { ...breach.floor, value: 600, proof: 'the bound counted one token per call; a call touches two' },
-    adjudication: 'floor_wrong — the certificate double-counted, the verifier was sound',
-    at: 1_700_000_000_000,
-  },
-};
+const sealed: PublicationState = { kind: 'sealed', breach };
 
 /** Source with comments and imports stripped: a mention in prose is not a call. */
 function callableSource(text: string): string {
@@ -97,14 +87,6 @@ describe('the seal is total over the enumerated publication surfaces', () => {
     expect([...admitted].sort()).toEqual([...PUBLICATION_SURFACES].sort());
   });
 
-  test('a RECORDED re-derivation reopens every surface — retroactive publication, in *The publication seal*', () => {
-    const admitted = PUBLICATION_SURFACES.filter(
-      (surface) => admitsPublication(cleared, surface).kind === 'admitted',
-    );
-
-    expect([...admitted].sort()).toEqual([...PUBLICATION_SURFACES].sort());
-  });
-
   test('the enumeration has no duplicates and names the cross-workspace channel', () => {
     expect(new Set(PUBLICATION_SURFACES).size).toBe(PUBLICATION_SURFACES.length);
     // Pinned by name: the cross-workspace channel.
@@ -126,12 +108,14 @@ describe("the settle path's egress is classified, not discovered", () => {
     'INSERT INTO task_history': 'task_history',
     // Turn-scoped and purged when unclaimed (mcts/takes.ts).
     captureAlternateTakes: 'disclosure: turn-scoped near-ties, purged when unclaimed',
-    // FloorRederivation re-evaluates the tree; sealing it would destroy the recovery path.
+    // A re-derived floor re-evaluates the tree under a new key; sealing it would destroy that path.
     abandonSearchTree: 'disclosure: run-keyed tree status, the re-evaluation input',
     'UPDATE search_nodes': 'disclosure: run-keyed tree status, the re-evaluation input',
     // Declared so a new import cannot arrive unclassified.
     isCraftable: 'disclosure: predicate, writes nothing',
     findNearTiedRivals: 'disclosure: read over the population',
+    searchTree: 'disclosure: read of the search tree, writes nothing',
+    inPopulation: 'disclosure: predicate, writes nothing',
     selectWinnerByTest: 'disclosure: selection, writes nothing durable',
     DEFAULT_CONFIG: 'disclosure: constants',
     EVIDENCE_BUDGETS: 'disclosure: constants',
@@ -244,8 +228,7 @@ describe('a seal that voids the carry axis says so, with a count', () => {
     expect(disclosed?.carry).toBe('artifacts');
   });
 
-  test('an open run and a cleared seal disclose nothing, because nothing was suppressed', () => {
+  test('an open run discloses nothing, because nothing was suppressed', () => {
     expect(carrySuppression(open, 'elites', 4)).toBeNull();
-    expect(carrySuppression(cleared, 'elites', 4)).toBeNull();
   });
 });

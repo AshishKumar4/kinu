@@ -829,7 +829,7 @@ export function seedResumedSearch(input: {
     if (outcome?.kind === 'judged' && outcome.ensemble > 0) ensembles.push(outcome.ensemble);
 
     if (outcome?.kind === 'sealed') {
-      publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
+      publication = { kind: 'sealed', breach: outcome.breach };
     }
 
     // Same rank expression as the loop: raw measurement, judged median, sealed ranks nothing.

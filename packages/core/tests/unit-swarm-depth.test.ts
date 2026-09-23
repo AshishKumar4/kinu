@@ -16,6 +16,9 @@ import { diversityAngle } from '../src/mcts/diversity';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
+import { explorationForkTree } from '../src/read-models/fork-tree-rows';
+import { readSearchTree } from '../src/read-models/search-tree';
+import { findForkNode } from '../src/read-models/swarm-tree-model';
 import type { Refusal } from '../src/obs/error';
 import {
   arbitrateBranch, resolveSwarm, swarmValidity, JUDGE_MARGINALISATION_MIN,
@@ -895,6 +898,44 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
     expect(breached.result.report.carrySuppressed?.carry).toBe('elites');
     expect(breached.result.report.carrySuppressed?.refused).toContain('records');
+  });
+
+  test('A BREACH SEALS ITS OBJECTIVE AND FLOOR for every later run, not only its own', async () => {
+    // Spec 4.4: "Publication STOPS for that objective". The later run's candidates make
+    // 2n-1 calls, over the refuted floor, so any refusal it meets is the earlier run's seal.
+    // `Concurrent.lean — a_breach_stops_every_run_on_its_floor`.
+    const { rt } = createTestRuntime();
+
+    const breached = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, floor: REFUTED_FLOOR,
+      config: { carry: { kind: 'elites' } },
+    });
+
+    expect('reason' in breached.result).toBe(false);
+
+    const later = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, floor: REFUTED_FLOOR,
+      answers: [THOROUGH], config: { carry: { kind: 'elites' } },
+    });
+
+    expect('reason' in later.result).toBe(false);
+
+    if ('reason' in later.result) return;
+    expect(later.result.publication.state).toMatchObject({ kind: 'sealed', breach: { floor: REFUTED_FLOOR } });
+    expect(later.result.report.records).toMatchObject({ written: 0 });
+    expect(later.result.report.carrySuppressed?.refused).toContain('records');
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
+
+    const unsealed = await run({
+      depth: 1, branches: 2, proposeWidth: null, floor: REFUTED_FLOOR,
+      answers: [THOROUGH], config: { carry: { kind: 'elites' } },
+    });
+
+    expect('reason' in unsealed.result).toBe(false);
+
+    if ('reason' in unsealed.result) return;
+    expect(unsealed.result.publication.state.kind).toBe('open');
+    expect(unsealed.result.report.records?.written).toBeGreaterThan(0);
   });
 });
 
@@ -1819,5 +1860,25 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
       if (branch === WINNER) continue;
       expect(best.score ?? 0).toBeGreaterThan(score);
     }
+  });
+});
+
+describe("the drawn tree shows each swarm node's own score", () => {
+  test("a node whose children scored otherwise draws its scorer's number, not its subtree's mean", async () => {
+    const { rt } = createTestRuntime();
+    const { nodes, result } = await run({ depth: 2, branches: 2, proposeWidth: null, answers: [THOROUGH, OPTIMAL], rt });
+    expect('reason' in result).toBe(false);
+
+    if ('reason' in result) return;
+    const root = present(nodes.find((node) => node.parent_id === null), 'the swarm root');
+    const rows = readSearchTree(rt.storage.sql, rt.actor, root.id);
+    const drawn = present(explorationForkTree({ tree: rows, head: null }), 'the drawn tree');
+    const scored = result.candidates.filter((candidate) => candidate.score !== null);
+    const ownScore = new Map(scored.map((candidate) => [candidate.id, candidate.score]));
+
+    // Some expanded node's mean moved off its own score, so a tree drawn from `value` fails here.
+    expect(nodes.some((node) => ownScore.has(node.id) && ownScore.get(node.id) !== node.value)).toBe(true);
+
+    for (const [id, score] of ownScore) expect(findForkNode(drawn, id)?.value).toBe(score);
   });
 });

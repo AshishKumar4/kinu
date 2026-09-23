@@ -209,7 +209,7 @@ Rewards are clamped to `[0, 1]`. The new value is `(old_value × visits + reward
 
 | Platform | Mechanism | Isolation |
 |----------|-----------|-----------|
-| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/exploration-hosting.ts`) | One workspace SQLite, actor-led keys. (`MCTS/StorageIsolation.lean` still models the old separate-store topology: its invariant is distinct branch storage ids, so it does not prove this row.) |
+| CF Workers | Hosted logical actors of kind `branch`, acquired per rollout from the workspace's one `ActorHost` (`packages/cf-backend/src/exploration-hosting.ts`) | One workspace SQLite, actor-led keys. A write under one actor leaves every other actor's rows as they were (`another_actors_writes_are_invisible` in `MCTS/StorageIsolation.lean`). |
 | CLI | `child_process.fork('branch-worker.ts')` over the workspace database file (`createBranchSpawner`) | Separate OS process, same database. A branch binds its own actor row and writes its rollout traces there. |
 
 A CF runtime built without the branch host has no fallback: `spawnBranch` refuses (`requireBranches`, `packages/cf-backend/src/runtime.ts`) rather than running a search with no rollouts.
@@ -248,17 +248,19 @@ writes a reflection. `pruneLowValueBranches` (`mcts/pruning.ts`) then takes open
 nodes with `value < pruneThreshold` (0.25) and `visits >= minVisitsForPrune` (2),
 marks them `status = 'pruned'`, clears `branch_agent_key`, and aborts the branch.
 
-`mcts/convergence.ts` takes the argmax over `terminal` and `open` values.
+`mcts/convergence.ts` takes the argmax over the `terminal` and `open` candidates'
+own scores (`search_node_scores.own_score`), the score each one's evaluation
+measured, never the subtree mean in `value`.
 Rivals within `takesEpsilon` (0.1) run one shared suite and compare the share of checks
 each satisfies. The measured share decides, not the pass bit, so two of four beats
-none of four. Value order stands when no candidate carries runnable code,
+none of four. Score order stands when no candidate carries runnable code,
 when nothing measured beats the argmax winner's own share, and always in `plan`
-mode, which keeps value order without running the suite.
+mode, which keeps score order without running the suite.
 
 Convergence refuses in two cases. One is a winner below `minAcceptableScore` (0.3).
 The other is an undifferentiated search: textually distinct approaches with
-exactly equal values, where `ORDER BY value DESC` would return row order while
-the shared value still clears the bar. Equality is exact, not epsilon: a near-tie
+exactly equal own scores, where `ORDER BY own_score DESC` would return row order while
+the shared score still clears the bar. Equality is exact, not epsilon: a near-tie
 belongs in alternate takes, while byte-identical scores mean the scorer is not a
 function of the proposal. Either refusal sets `converged: false`, records its reason,
 and marks open nodes failed rather than shipping an unearned answer.
@@ -278,18 +280,25 @@ Primary key `(actor_id, id)`.
 | `observation` | TEXT | Result of the exploration |
 | `depth` | INTEGER | Depth in tree (root = 0) |
 | `visits` | INTEGER | Number of backpropagation passes |
-| `value` | REAL | Running mean score (0-1) |
+| `value` | REAL | Mean reward of the evaluations in this node's subtree (0-1): what selection and pruning read, never the node's own score |
 | `status` | TEXT | `open`, `terminal`, `pruned`, `failed` |
 | `code_used` | TEXT | Runnable source selected from an exploration proposal |
 | `code_language` | TEXT | Executor language for `code_used`; null when no runnable code was offered |
 | `msg_id` | TEXT | Session message ID for tree navigation |
 | `branch_agent_key` | TEXT | The logical branch actor's key, for aborting its rollout |
-| `evaluation_json` | TEXT | Bounded per-branch evaluation facts as JSON; null for a node that was never evaluated |
+| `evaluation_json` | TEXT | Bounded per-branch evaluation facts as JSON; null for the root, a swarm node, and an MCTS evaluation that failed |
 | `created_at` | INTEGER | Epoch milliseconds |
+
+The view `search_node_scores` is these rows plus `own_score`, the one definition
+of a node's own score: the reward the node contributed itself. For an MCTS node
+that is its evaluation's `score`, 0 when the evaluation failed. For a swarm node
+it is the score its `swarm_node_records` outcome carries, NULL when the scorer
+gave no number. The root contributed none and keeps its mean. Convergence,
+alternate takes, the run list's winning score and every drawn tree read it.
 
 ## Formal properties (Lean 4)
 
-38 of the corpus's 452 named declarations live in `lean/Kinu/MCTS/`
+39 of the corpus's 429 named declarations live in `lean/Kinu/MCTS/`
 (measured 2026-09-23 with `node lean/check-traceability.mjs --list-declarations`). The model uses exact scaled-integer arithmetic; SQLite
 uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 
@@ -297,7 +306,8 @@ uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 |----------|------|---------|--------------|
 | Budget terminates (well-founded on Nat) | `StorageIsolation.lean` | `budget_well_founded` | proved-in-abstract-model |
 | Initial state is storage-isolated | `StorageIsolation.lean` | `init_isolated` | proved-in-abstract-model |
-| All 7 MCTS transitions preserve isolation | `StorageIsolation.lean` | `transition_preserves_isolation` | proved-in-abstract-model |
+| All 7 MCTS transitions keep branches off the orchestrator's actor | `StorageIsolation.lean` | `transition_preserves_isolation` | proved-in-abstract-model |
+| A write under one actor leaves every other actor's rows | `StorageIsolation.lean` | `a_write_leaves_other_actors_alone` | proved-in-abstract-model |
 | A reward in [0,S] keeps a node's mean in range | `Backpropagation.lean` | `update_preserves_range` | proved-and-refined |
 | …lifted to a whole reward history | `Backpropagation.lean` | `applyRewards_preserves_range` | proved-and-refined |
 | `value · visits = Σ rewards` after any history | `Backpropagation.lean` | `applyRewards_sum_invariant`, `sum_invariant` | proved-and-refined |
@@ -309,13 +319,12 @@ uses IEEE-754 `REAL`. [FORMAL-SPEC.md](./FORMAL-SPEC.md) defines claim status.
 | The bonus rises with the parent's visits from two on | `Uct.lean` | `bonus_rises_with_parent_visits` | proved-and-refined |
 | The root's bonus rises from two visits to three | `Uct.lean` | `the_root_bonus_rises_from_two_visits_to_three` | proved-and-refined |
 | The selected row is eligible and no eligible row outranks it | `Uct.lean` | `select_is_eligible`, `select_is_maximal` | proved-and-refined |
-| A unique best unexpanded candidate is the only winner | `Convergence.lean` | `a_unique_best_leaf_is_the_only_winner` | proved-and-refined |
-| The search can expand its best candidate and converge past it | `Convergence.lean` | `the_search_expands_its_best_candidate_then_converges_past_it` | proved-and-refined |
+| Every winner carries the best reward a candidate reached | `Convergence.lean` | `the_winner_carries_the_best_reward` | proved-and-refined |
+| The search keeps its best candidate through weak refinements | `Convergence.lean` | `the_search_expands_its_best_candidate_and_converges_on_it` | proved-and-refined |
 
 The bonus order is exact: for W > 0, `W·√(ln M₁ / N₁) < W·√(ln M₂ / N₂)` exactly
 when `M₁^N₂ < M₂^N₁` (`bonus_order_is_power_order`), so every monotonicity claim
-is about natural powers. `converge` ranks by `value`, a subtree mean, and
-returns the winner's own proposal. Expanding a candidate into weaker
-refinements lowers its mean, so the search does not in general converge on its
-best evaluated candidate. It does when refinements never score below their
-parent (`the_winner_is_optimal_when_refinements_never_score_worse`).
+is about natural powers. `converge` ranks a candidate by its own score, not by
+the subtree mean `value` holds after its refinements backpropagate, so weak
+refinements cannot bury the best answer the search evaluated
+(`the_winner_carries_the_best_reward`).

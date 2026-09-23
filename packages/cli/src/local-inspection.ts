@@ -398,7 +398,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         id: row.id,
         kind: 'mcts',
         label: row.action,
-        score: row.value,
+        value: row.value,
         status: row.status,
         ts: row.created_at,
       })));

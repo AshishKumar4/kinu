@@ -1,8 +1,6 @@
 /**
- * Refinement of `MCTS/Uct.lean — select_is_maximal` by the deployed query: on every table in
- * `lean/fixtures/uct-select.json`, `selectNode` returns a row the model's argmax, evaluated in
- * doubles, admits, or null exactly when the model selects nothing. `bash scripts/verify-lean.sh`
- * regenerates the fixture from the model and fails when it drifts.
+ * Refinement of `MCTS/Uct.lean — select_is_maximal`: on every table in `lean/fixtures/uct-select.json`
+ * the deployed `selectNode` returns a row the model's argmax admits, or null when it selects nothing.
  */
 
 import { describe, expect, test } from 'bun:test';

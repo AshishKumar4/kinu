@@ -25,7 +25,8 @@ import { recordSwarmNode } from './swarm-resume';
 import { unavailable } from './swarm-setup';
 import type { Refusal } from '../obs/error';
 import type { Expansion, TreeNode } from './swarm-tree';
-import type { ObjectiveDirection, PublicationState } from './objective';
+import type { ObjectiveDirection, ObjectiveIdentity, PublicationState } from './objective';
+import { sealRecords } from './records';
 import type { ResolvedSwarm, SwarmCandidate } from './swarm';
 
 /**
@@ -292,6 +293,7 @@ interface ScoreExpansionInput {
   readonly pareto: PreparedParetoMeasurement | null;
   readonly ctx: MeasurementContext | null;
   readonly measured: MeasuredObjective | null;
+  readonly identity: ObjectiveIdentity | null;
   readonly baseline: number | null;
   readonly judgeSamples: number | null;
   readonly resolved: ResolvedSwarm;
@@ -352,7 +354,7 @@ async function scoreOutcome(input: ScoreExpansionInput) {
 
 export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusal | null> {
   const {
-    expansion, measures, pareto, measured, resolved, rt, sql, rootId, candidates, spentBy,
+    expansion, measures, pareto, measured, identity, resolved, rt, sql, rootId, candidates, spentBy,
     nodes, log, searchLedger, ledgerEpoch, rankDirection, state,
   } = input;
 
@@ -430,7 +432,9 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
   }
 
   if (outcome?.kind === 'sealed') {
-    publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
+    publication = { kind: 'sealed', breach: outcome.breach };
+
+    if (identity !== null) sealRecords(sql, rt.actor, { identity, breach: outcome.breach, at: Date.now() });
     log.event('exploration.floor_breach', {
       preset: resolved.preset,
       metric: measured?.metric ?? '',

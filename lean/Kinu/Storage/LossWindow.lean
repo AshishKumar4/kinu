@@ -22,12 +22,12 @@
     (`the_tick_bound_is_tight`);
   - a tick that fails or is skipped commits nothing, and each one in a row adds
     `P + J + D` (`each_missed_tick_adds_a_period`);
-  - `shouldCheckpoint` skips a tick within `P` of the last commit, and a quiesce
-    commit whose stop is refused resets that clock without ending the run, so
-    the next tick is skipped and the window reaches past `P + J + 2·D`
-    (`a_refused_stop_stretches_the_window`). The gate skips at most one tick
-    after a commit (`the_gate_skips_at_most_one_tick`), so that path adds one
-    missed tick.
+  - `shouldCheckpoint` skips a tick within `P` of the last TICK commit, and a
+    quiesce commit does not move that clock, so the gate never skips a periodic
+    tick (`the_gate_never_skips_a_periodic_tick`). A quiesce commit is one more
+    sync, which can only keep a write (`another_commit_never_loses_a_write`), so
+    a quiesce whose stop is refused leaves the window at `P + J + 2·D`
+    (`a_refused_stop_keeps_the_window`).
 
   The constants are the host's: `P` is `DevboxPolicy.checkpointIntervalMs`
   (`packages/devbox/src/lifecycle.ts#DEFAULT_DEVBOX_POLICY`, 300 000 ms); `J`
@@ -196,28 +196,35 @@ theorem the_tick_bound_is_tight (P J D : Nat) (hD : 1 ≤ D) :
 /-! ## The minimum-interval gate -/
 
 /-- `shouldCheckpoint` for a changed tree: a tick commits only when at least `P`
-    has passed since the last commit. -/
-def gatePasses (P lastCommit now : Nat) : Bool := decide (lastCommit + P ≤ now)
+    has passed since the last tick's commit, the clock only tick commits set. -/
+def gatePasses (P lastTickCommit now : Nat) : Bool := decide (lastTickCommit + P ≤ now)
 
-/-- **A refused stop stretches the window past `P + J + 2·D`.** With `P = 300`,
-    `J = 0` and `D = 10`: a tick commits at 10, a quiesce captures at 290 and
-    commits at 300 but its stop is refused, the tick due at 310 fails the gate
-    against that commit, and the next tick, at 610, commits at 620. A write
-    accepted at 291, after the quiesce's capture, is still lost to a crash at
-    619, 328 after it; the periodic bound is 320. -/
-theorem a_refused_stop_stretches_the_window :
-    gatePasses 300 300 310 = false ∧ gatePasses 300 300 610 = true ∧
-    ¬ Survives [⟨0, 10⟩, ⟨290, 300⟩] 291 619 ∧
-    Survives [⟨0, 10⟩, ⟨290, 300⟩, ⟨610, 620⟩] 291 620 ∧
-    619 - 291 > 300 + 0 + 2 * 10 := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide⟩
-
-/-- **After a commit the gate skips at most one tick.** The skipped tick re-arms
-    `P` after it, so the next one finds `P` elapsed since that commit. -/
-theorem the_gate_skips_at_most_one_tick (P lastCommit skipped next : Nat)
-    (hskip : lastCommit ≤ skipped) (hnext : skipped + P ≤ next) :
-    gatePasses P lastCommit next = true := by
+/-- **The gate never skips a periodic tick**: the alarm re-arms `P` after a tick,
+    so the next tick finds `P` elapsed since that tick's commit, whatever quiesce
+    commits came between. -/
+theorem the_gate_never_skips_a_periodic_tick (P lastTickCommit next : Nat)
+    (h : lastTickCommit + P ≤ next) : gatePasses P lastTickCommit next = true := by
   simp only [gatePasses, decide_eq_true_eq]
-  omega
+  exact h
+
+/-- **Another commit never loses a write**: survival only grows with the syncs,
+    so a quiesce commit between two ticks can only shorten the window. -/
+theorem another_commit_never_loses_a_write (extra syncs : List Sync) (t T : Nat)
+    (h : Survives syncs t T) : Survives (extra ++ syncs) t T := by
+  obtain ⟨s, hs, hc, hT⟩ := h
+  exact ⟨s, List.mem_append_right _ hs, hc, hT⟩
+
+/-- **A refused stop keeps the window.** With `P = 300`, `J = 0` and `D = 10`: a
+    tick commits at 10, a quiesce captures at 290 and commits at 300 but its stop
+    is refused, and the tick due at 310 passes the gate against the tick commit at
+    10, captures at 310 and commits at 320. A write accepted at 291, after the
+    quiesce's capture, is durable at 320, 29 after it, inside the periodic bound
+    of 320. When the quiesce commit moved the gate's clock, that tick was skipped
+    and the write stayed lost until 620. -/
+theorem a_refused_stop_keeps_the_window :
+    gatePasses 300 10 310 = true ∧ gatePasses 300 300 310 = false ∧
+    Survives [⟨0, 10⟩, ⟨290, 300⟩, ⟨310, 320⟩] 291 320 ∧
+    320 - 291 ≤ 300 + 0 + 2 * 10 := by
+  refine ⟨by decide, by decide, by decide, by decide⟩
 
 end Kinu.Storage.LossWindow

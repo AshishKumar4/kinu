@@ -79,27 +79,12 @@ import Kinu
 
 /-! ## Kinu/Execution/Capabilities.lean -/
 
-#print axioms Kinu.Execution.Capabilities.container_subsumes_nimbus
-#print axioms Kinu.Execution.Capabilities.ssh_subsumes_container
-#print axioms Kinu.Execution.Capabilities.ssh_subsumes_nimbus
-#print axioms Kinu.Execution.Capabilities.workspace_incomparable_nimbus
-#print axioms Kinu.Execution.Capabilities.chain
-#print axioms Kinu.Execution.Capabilities.route_satisfies_all
-#print axioms Kinu.Execution.Capabilities.route_available
-#print axioms Kinu.Execution.Capabilities.route_has_all_caps
+#print axioms Kinu.Execution.Capabilities.the_kind_says_who_owns_the_files
+#print axioms Kinu.Execution.Capabilities.no_executor_claims_docker_or_gpu
 #print axioms Kinu.Execution.Capabilities.subsumes_refl
 #print axioms Kinu.Execution.Capabilities.subsumes_trans
-
-/-! ## Kinu/Execution/ToolSystem.lean -/
-
-#print axioms Kinu.Execution.ToolSystem.action_routes_to_valid_tool
-#print axioms Kinu.Execution.ToolSystem.only_mcts_uses_explore
-#print axioms Kinu.Execution.ToolSystem.shell_uses_run
-#print axioms Kinu.Execution.ToolSystem.memory_search_uses_search
-#print axioms Kinu.Execution.ToolSystem.memory_save_uses_note
-#print axioms Kinu.Execution.ToolSystem.file_ops_use_codemode
-#print axioms Kinu.Execution.ToolSystem.empty_is_isolated
-#print axioms Kinu.Execution.ToolSystem.append_workspace_preserves
+#print axioms Kinu.Execution.Capabilities.a_session_extends_the_workspace
+#print axioms Kinu.Execution.Capabilities.the_sandbox_never_subsumes_a_nimbus_box
 
 /-! ## Kinu/MCTS/Backpropagation.lean -/
 
@@ -116,17 +101,18 @@ import Kinu
 
 #print axioms Kinu.MCTS.Convergence.backprop_accumulates_the_evaluations_through_a_node
 #print axioms Kinu.MCTS.Convergence.the_winner_has_the_greatest_value
-#print axioms Kinu.MCTS.Convergence.a_unique_best_leaf_is_the_only_winner
-#print axioms Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_then_converges_past_it
-#print axioms Kinu.MCTS.Convergence.the_winner_is_optimal_when_refinements_never_score_worse
 #print axioms Kinu.MCTS.Convergence.a_bounded_rising_reward_stabilizes
+#print axioms Kinu.MCTS.Convergence.the_winner_carries_the_best_reward
+#print axioms Kinu.MCTS.Convergence.the_search_expands_its_best_candidate_and_converges_on_it
+#print axioms Kinu.MCTS.Convergence.an_ancestor_is_never_a_rival
 #print axioms Kinu.MCTS.Convergence.a_converged_winner_is_undisputed_and_acceptable
-#print axioms Kinu.MCTS.Convergence.a_pruned_parent_splits_a_lineage
 
 /-! ## Kinu/MCTS/StorageIsolation.lean -/
 
 #print axioms Kinu.MCTS.StorageIsolation.init_isolated
 #print axioms Kinu.MCTS.StorageIsolation.transition_preserves_isolation
+#print axioms Kinu.MCTS.StorageIsolation.a_write_leaves_other_actors_alone
+#print axioms Kinu.MCTS.StorageIsolation.another_actors_writes_are_invisible
 #print axioms Kinu.MCTS.StorageIsolation.budget_well_founded
 
 /-! ## Kinu/MCTS/Uct.lean -/
@@ -151,15 +137,6 @@ import Kinu
 #print axioms Kinu.MCTS.Uct.an_outranked_row_is_never_selected
 #print axioms Kinu.MCTS.Uct.the_more_visited_of_two_equal_siblings_is_never_selected
 
-/-! ## Kinu/Safety/CapabilitySafety.lean -/
-
-#print axioms Kinu.Safety.CapabilitySafety.grantableOps_only_toolcalls
-#print axioms Kinu.Safety.CapabilitySafety.sqlwrite_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.sqlread_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.scaffoldwrite_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.spawnsubagent_not_grantable
-#print axioms Kinu.Safety.CapabilitySafety.networkfetch_not_grantable
-
 /-! ## Kinu/Safety/Credentials.lean -/
 
 #print axioms Kinu.Safety.Credentials.an_envelope_opens_only_where_it_was_sealed
@@ -170,6 +147,34 @@ import Kinu
 #print axioms Kinu.Safety.Credentials.a_deleted_credential_yields_no_headers
 #print axioms Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
 #print axioms Kinu.Safety.Credentials.rewrap_seals_plaintext_only_in_a_never_sealed_store
+
+/-! ## Kinu/Safety/DeviceView.lean -/
+
+#print axioms Kinu.Safety.DeviceView.outside_is_never_writable
+#print axioms Kinu.Safety.DeviceView.kinu_own_directory_is_invisible_raw
+#print axioms Kinu.Safety.DeviceView.kinu_own_directory_is_invisible
+#print axioms Kinu.Safety.DeviceView.a_sandboxed_write_lands_where_consented
+#print axioms Kinu.Safety.DeviceView.a_valid_segment_has_no_slash
+#print axioms Kinu.Safety.DeviceView.an_accepted_home_is_one_workspace
+#print axioms Kinu.Safety.DeviceView.no_frame_reaches_a_kinu_secret
+#print axioms Kinu.Safety.DeviceView.another_workspace_is_invisible
+#print axioms Kinu.Safety.DeviceView.a_spanning_name_reaches_a_kinu_secret
+#print axioms Kinu.Safety.DeviceView.an_untiered_frame_is_refused
+#print axioms Kinu.Safety.DeviceView.a_root_of_slash_is_raw
+
+/-! ## Kinu/Safety/DeviceToken.lean -/
+
+#print axioms Kinu.Safety.DeviceToken.a_ticket_is_spent_once
+#print axioms Kinu.Safety.DeviceToken.a_ticket_dies_at_its_minute
+#print axioms Kinu.Safety.DeviceToken.a_revoked_devices_ticket_admits_nothing
+#print axioms Kinu.Safety.DeviceToken.revocation_is_permanent
+#print axioms Kinu.Safety.DeviceToken.a_retired_token_revokes_its_device
+#print axioms Kinu.Safety.DeviceToken.the_grace_is_one_shot
+#print axioms Kinu.Safety.DeviceToken.ahead_after_own
+#print axioms Kinu.Safety.DeviceToken.out_after_other
+#print axioms Kinu.Safety.DeviceToken.revoked_after_out
+#print axioms Kinu.Safety.DeviceToken.two_copies_cannot_alternate
+#print axioms Kinu.Safety.DeviceToken.one_holder_is_never_revoked
 
 /-! ## Kinu/Storage/FTS5Search.lean -/
 
@@ -193,8 +198,9 @@ import Kinu
 #print axioms Kinu.Storage.LossWindow.ticks_lose_at_most_one_period_and_two_ticks
 #print axioms Kinu.Storage.LossWindow.worstTicks_periodic
 #print axioms Kinu.Storage.LossWindow.the_tick_bound_is_tight
-#print axioms Kinu.Storage.LossWindow.a_refused_stop_stretches_the_window
-#print axioms Kinu.Storage.LossWindow.the_gate_skips_at_most_one_tick
+#print axioms Kinu.Storage.LossWindow.the_gate_never_skips_a_periodic_tick
+#print axioms Kinu.Storage.LossWindow.another_commit_never_loses_a_write
+#print axioms Kinu.Storage.LossWindow.a_refused_stop_keeps_the_window
 
 /-! ## Kinu/Storage/SnapshotChain.lean -/
 
@@ -304,9 +310,6 @@ import Kinu
 #print axioms Kinu.Exploration.Publication.breach_freezes_the_store
 #print axioms Kinu.Exploration.Publication.retry_does_not_clear
 #print axioms Kinu.Exploration.Publication.good_measurement_does_not_clear
-#print axioms Kinu.Exploration.Publication.refuted_replacement_does_not_clear
-#print axioms Kinu.Exploration.Publication.unaudited_rederivation_does_not_clear
-#print axioms Kinu.Exploration.Publication.rederivation_restores_publication
 #print axioms Kinu.Exploration.Publication.retroPublish_requires_same_verifier
 #print axioms Kinu.Exploration.Publication.breach_does_not_halt
 #print axioms Kinu.Exploration.Publication.sealed_still_scores
@@ -334,13 +337,11 @@ import Kinu
 #print axioms Kinu.Exploration.Publication.surface_enumeration_is_total
 #print axioms Kinu.Exploration.Publication.surface_enumeration_has_six
 #print axioms Kinu.Exploration.Publication.admits_ignores_surface
-#print axioms Kinu.Exploration.Publication.admits_iff_not_uncleared
+#print axioms Kinu.Exploration.Publication.admits_iff_not_sealed
 #print axioms Kinu.Exploration.Publication.every_surface_is_writable
 #print axioms Kinu.Exploration.Publication.every_surface_is_retro_writable
-#print axioms Kinu.Exploration.Publication.admissible_rederivation_admits
 #print axioms Kinu.Exploration.Publication.sealed_still_reports
 #print axioms Kinu.Exploration.Publication.suppression_none_is_not_zero
-#print axioms Kinu.Exploration.Publication.cleared_seal_discloses_nothing
 #print axioms Kinu.Exploration.Publication.sealed_publish_counts_the_refusal
 #print axioms Kinu.Exploration.Publication.inert_refusal_is_not_a_suppression
 #print axioms Kinu.Exploration.Publication.suppression_counts_every_refusal
@@ -461,7 +462,6 @@ import Kinu
 #print axioms Kinu.Exploration.RecordsStore.a_worse_new_artifact_joins
 #print axioms Kinu.Exploration.RecordsStore.the_direction_decides
 #print axioms Kinu.Exploration.RecordsStore.a_sealed_store_refuses_by_name
-#print axioms Kinu.Exploration.RecordsStore.a_cleared_seal_records_again
 #print axioms Kinu.Exploration.RecordsStore.a_breach_seals_the_store
 
 /-! ### Kinu/Exploration/ArchiveAdmission.lean -/
@@ -553,9 +553,8 @@ import Kinu
 
 #print axioms Kinu.Exploration.Concurrent.runC_cons
 #print axioms Kinu.Exploration.Concurrent.the_best_never_falls_under_any_interleaving
-#print axioms Kinu.Exploration.Concurrent.a_sealed_run_is_invisible_to_every_interleaving
-#print axioms Kinu.Exploration.Concurrent.a_breach_in_one_run_does_not_seal_another
-#print axioms Kinu.Exploration.Concurrent.a_store_scoped_seal_would_refuse_it
+#print axioms Kinu.Exploration.Concurrent.a_breach_stops_every_run_on_its_floor
+#print axioms Kinu.Exploration.Concurrent.a_breach_in_one_run_seals_another
 #print axioms Kinu.Exploration.Concurrent.a_split_check_and_write_lowers_the_best
 
 /-! ## Kinu/Exploration/Counterfactual.lean -/

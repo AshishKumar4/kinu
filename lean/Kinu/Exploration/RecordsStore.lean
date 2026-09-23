@@ -51,12 +51,6 @@
 
   2. `Int` FOR A SQLite REAL. As in `Records.lean`: a spurious tie loses a write,
      it never manufactures one, so the discard is conservative.
-
-  3. WHETHER THE CLEAR IS EARNED. `clear` here is unconditional, where production
-     requires an admissible `FloorRederivation`. That makes the modelled adversary
-     STRONGER — it can re-open writes at will — so a monotonicity result proved
-     against it holds against the real gate. `Publication.lean` carries the
-     conditional version, which is where the clear's own burden belongs.
 -/
 
 import Kinu.Exploration.Publication
@@ -124,15 +118,13 @@ def verdict (d : Direction) (s : Store) (r : Row) : Outcome :=
 
 /-! ## The store's whole input alphabet
 
-  Three actions, because `recordExploration` takes three things that can vary: the
-  write, and the two transitions of the `PublicationState` it is handed. A trace
+  Two actions, because `recordExploration` takes two things that can vary: the
+  write, and the `PublicationState` it is handed, which a breach seals. A trace
   over writes alone would prove monotonicity of a store nobody seals. -/
 
 inductive StoreAction where
   | write (r : Row)
   | breach (b : Publication.Breach)
-  /-- A recorded re-derivation, unconditional here — see header discard 3. -/
-  | clear (rd : Publication.Rederivation)
   deriving Repr, Inhabited
 
 /-- One step. Total, so every theorem below is about this definition rather than
@@ -145,11 +137,7 @@ def stepOf (d : Direction) (s : Store) (a : StoreAction) : Store :=
       match verdict d s r with
       | .recorded => { s with rows := overwriteRow s.rows r }
       | .refused _ => s
-  | .breach b => { s with pub := .sealed b none }
-  | .clear rd =>
-      match s.pub with
-      | .open_ => s
-      | .sealed b _ => { s with pub := .sealed b (some rd) }
+  | .breach b => { s with pub := .sealed b }
 
 /-- A finite sequence of everything the store can be asked to do. -/
 def runOf (d : Direction) (s : Store) : List StoreAction → Store :=
@@ -215,7 +203,7 @@ theorem refused_write_changes_nothing (d : Direction) (s : Store) (r : Row) (c :
   simp [stepOf, h]
 
 /-- **One step never lowers the best**, over the store's whole action alphabet —
-    the write, the breach and the clear. -/
+    the write and the breach. -/
 theorem step_monotone (d : Direction) (s : Store) (a : StoreAction) :
     notWorse d (best d (stepOf d s a).rows) (best d s.rows) = true := by
   cases a with
@@ -228,17 +216,13 @@ theorem step_monotone (d : Direction) (s : Store) (a : StoreAction) :
       rw [refused_write_changes_nothing d s r c hv]
       exact notWorse_refl d _
   | breach b => exact notWorse_refl d _
-  | clear rd =>
-    cases hp : s.pub with
-    | open_ => simp only [stepOf, hp]; exact notWorse_refl d _
-    | sealed b cl => simp only [stepOf, hp]; exact notWorse_refl d _
 
 /-- **The invariant, as reachability over all finite write sequences: no trace of
     the store's own operations lowers a cell's best.**
 
     The shape `sealed_publishes_nothing` uses, and for the same reason. A guard is
     a one-step property that a path not passing through it can bypass; this
-    quantifies over every finite sequence of writes, breaches and clears, so there
+    quantifies over every finite sequence of writes and breaches, so there
     is no such path to look for. -/
 theorem best_never_falls (d : Direction) (s : Store) (as : List StoreAction) :
     notWorse d (best d (runOf d s as).rows) (best d s.rows) = true := by
@@ -279,11 +263,6 @@ theorem step_deletes_no_digest (d : Direction) (s : Store) (a : StoreAction) (x 
         exact List.mem_cons_of_mem _ (List.mem_filter.mpr ⟨hx, by simp [hd]⟩)
     | refused c => exact ⟨x, by rw [refused_write_changes_nothing d s r c hv]; exact hx, rfl⟩
   | breach b => exact ⟨x, hx, rfl⟩
-  | clear rd =>
-    refine ⟨x, ?_, rfl⟩
-    cases hp : s.pub with
-    | open_ => simpa [stepOf, hp] using hx
-    | sealed b cl => simpa [stepOf, hp] using hx
 
 /-- And so over a whole trace. -/
 theorem trace_deletes_no_digest (d : Direction) (s : Store) (as : List StoreAction) (x : Row)
@@ -410,23 +389,11 @@ def sampleBreach : Publication.Breach :=
   { floor := sampleFloor, measured := 3,
     hypotheses := [.floorWrong, .verifierGameable] }
 
-def sampleRederivation : Publication.Rederivation :=
-  { floor := { sampleFloor with value := 2 }, adjudication := "the floor was wrong" }
-
 /-- **A sealed store refuses by the seal, and names it** — the cause is not folded
     into `not-better`, because the two refusals demand different responses. -/
 theorem a_sealed_store_refuses_by_name :
-    verdict .minimise { rows := [], pub := .sealed sampleBreach none }
+    verdict .minimise { rows := [], pub := .sealed sampleBreach }
       { digest := "a", value := 1 } = .refused .sealed := by
-  decide
-
-/-- **A seal is not a boolean**: a recorded re-derivation records again, so the
-    reachability theorem is not satisfied by a store that refuses everything. -/
-theorem a_cleared_seal_records_again :
-    verdict .minimise
-      (stepOf .minimise { rows := [], pub := .sealed sampleBreach none }
-        (.clear sampleRederivation))
-      { digest := "a", value := 1 } = .recorded := by
   decide
 
 /-- And the breach really does reach the state the refusal is proved against, so
