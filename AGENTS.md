@@ -78,6 +78,11 @@ The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a l
 - The AI SDK (`ai`) is required by the core chat driver and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
 
+## Every Fix
+- A bug has two root causes: the defect, and why the code let it exist (sloppy or unreadable code, a duplicated path, an anti-pattern, a noisy or source-coupled test that could not catch it). Name both in the commit body and fix both.
+- Each fix leaves its area smaller or clearer: delete the duplicate path, dead code or wrapper it touches, with no lost behaviour. A fix that only adds lines names why nothing could be cut.
+- 2026-09-23 example: the provider pacer applied a per-invocation platform limit as an isolate-wide lane budget; the parked request looked hung and was cancelled (1101). The cut deleted the budget, not the symptom.
+
 ## Waste
 Over-engineering that cost CPU, storage or latency and delivered nothing is named here as it is found, with the date and the measurement, so the next design is checked against the list. Add a line when you find one; remove it when the code is gone.
 - 2026-09-21 A streamed answer was one `message_updates` row AND one context revision per token, and every step re-read every row of every past answer: a 500-delta turn cost 6x after twenty long answers, one storage statement per token, and the eval objects spent their 30 s CPU budget on it (D23). Nothing ever read an intermediate cutoff. Rule: a durable record is written once per fact at the granularity a reader needs; a hot path is measured against transcript size before it ships.
