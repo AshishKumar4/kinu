@@ -151,9 +151,15 @@ describe('WorkspacePage paints exactly one live indicator', () => {
    *  running call rows, which are one state however many run. A hook on an element that draws nothing is none. */
   function liveStates(markup: string): number {
     const hooked = (kind: string) => markup.split(`data-live-indicator="${kind}"`).length - 1;
+    const carets: string[] = [];
 
-    const caretsOnText = [...markup.matchAll(/data-live-indicator="text"[^>]*>(.*?)<\/div>/gsu)]
-      .filter((match) => (match[1] ?? '').replace(/<[^>]*>/gu, '').trim() !== '').length;
+    new HTMLRewriter()
+      .on('[data-live-indicator="text"]', {
+        element() { carets.push(''); },
+        text(chunk) { carets[carets.length - 1] += chunk.text; },
+      })
+      .transform(markup);
+    const caretsOnText = carets.filter((drawn) => drawn.trim() !== '').length;
 
     return hooked('thinking') + hooked('reasoning') + caretsOnText + (markup.includes('data-tool-state="running"') ? 1 : 0);
   }
