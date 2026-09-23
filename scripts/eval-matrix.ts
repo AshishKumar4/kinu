@@ -99,7 +99,7 @@ import * as v from 'valibot';
 
 import { cloudProxyBaseURL } from '@kinu.run/core';
 import {
-  EPISODE_TRANSCRIPT_FILES, LIVE_MODEL_ENV, readRunRecord, TASK_OUTCOME,
+  EPISODE_TRANSCRIPT_FILES, INFRA_FAILURE_MARKER, LIVE_MODEL_ENV, readRunRecord, TASK_OUTCOME,
   type EvalRunRecord, type EvalSubgoal,
 } from '@kinu.run/test-utils';
 import { tolerate } from '../packages/core/src/obs/index';
@@ -621,7 +621,11 @@ interface Cell {
   readonly task: string;
   readonly label: string;
   readonly trials: number;
+  /** Trials whose episode the verifier graded. The rest are counted in `unmeasured`. */
+  readonly measured: number;
   readonly passes: number;
+  /** Why a trial produced no verdict (an INFRA FAILURE, a cancelled or errored case), by reason class. */
+  readonly unmeasured: Record<string, number>;
   readonly meanMs: number | null;
   readonly toolErrorRate: number | null;
   readonly calls: number;
@@ -658,9 +662,16 @@ function aggregate(results: readonly TrialResult[], tasks: readonly string[]): C
       const scored = observations.filter((observation) => observation.outcome === 'scored');
 
       const outcomeRows = scored.flatMap((observation) =>
-        (observation.scores ?? []).filter((score) => score.name === TASK_OUTCOME));
+        (observation.scores ?? []).filter((score) => score.name === TASK_OUTCOME && score.eligible > 0));
 
-      const passes = outcomeRows.filter((score) => score.eligible > 0 && score.passed === score.eligible).length;
+      const passes = outcomeRows.filter((score) => score.passed === score.eligible).length;
+      const unmeasured: Record<string, number> = {};
+
+      for (const observation of observations) {
+        if (observation.outcome === 'scored') continue;
+        const reason = observation.reason.startsWith(INFRA_FAILURE_MARKER) ? 'infra' : observation.outcome;
+        unmeasured[reason] = (unmeasured[reason] ?? 0) + 1;
+      }
 
       const errorRates = scored.flatMap((observation) =>
         (observation.scores ?? []).filter((score) => score.name === 'tool_outcomes' && score.rate !== null)
@@ -670,7 +681,7 @@ function aggregate(results: readonly TrialResult[], tasks: readonly string[]): C
       const misses = countMisses(mine, task);
 
       cells.push({
-        task, label, trials: mine.length, passes,
+        task, label, trials: mine.length, measured: outcomeRows.length, passes, unmeasured,
         meanMs: durations.length === 0 ? null : durations.reduce((sum, ms) => sum + ms, 0) / durations.length,
         toolErrorRate: errorRates.length === 0
           ? null
@@ -688,16 +699,21 @@ function aggregate(results: readonly TrialResult[], tasks: readonly string[]): C
 
 function printTable(cells: readonly Cell[], resolutions: readonly RowResolution[]): void {
   console.log('\n── kinu-tasks × model ──────────────────────────────────────');
-  console.log(['task', 'model', 'pass/trials', 'mean s', 'tool err', 'calls', 'tok in/out', 'misses'].join(' | '));
+  console.log(['task', 'model', 'pass/measured', 'trials', 'unmeasured', 'mean s', 'tool err', 'calls', 'tok in/out', 'misses'].join(' | '));
 
   for (const cell of cells) {
     const misses = Object.entries(cell.misses)
       .map(([what, count]) => `${what}×${String(count)}`).join(' ');
 
+    const unmeasured = Object.entries(cell.unmeasured)
+      .map(([why, count]) => `${why}×${String(count)}`).join(' ');
+
     console.log([
       cell.task,
       cell.label,
-      `${String(cell.passes)}/${String(cell.trials)}`,
+      `${String(cell.passes)}/${String(cell.measured)}`,
+      String(cell.trials),
+      unmeasured === '' ? '—' : unmeasured,
       cell.meanMs === null ? '—' : (cell.meanMs / 1000).toFixed(1),
       cell.toolErrorRate === null ? '—' : cell.toolErrorRate.toFixed(2),
       String(cell.calls),
