@@ -147,9 +147,8 @@ export interface EpisodeEvidence {
 }
 
 /**
- * How long an evidence read may run after the episode budget is spent. A Durable Object wedged in an
- * unclosed turn serves its run-event, history and spend routes from that thread (2026-09-17, cba44dcb9: collect()
- * never returned after a 20-minute budget); healthy reads take tens of milliseconds. Unanswered channels are recorded.
+ * How long an evidence read may run from its start. A wedged Durable Object (2026-09-17, cba44dcb9) or a closed
+ * socket (2026-09-23) never answers; healthy reads take tens of milliseconds. Unanswered channels are recorded.
  */
 export const EVIDENCE_GRACE_MS = 60_000;
 
@@ -193,7 +192,6 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   }
 
   const budget = new AbortController();
-  /** Where the evidence read ends: {@link EVIDENCE_GRACE_MS} past the spent budget. Separate from `budget`. */
   const reading = new AbortController();
 
   /** One collection channel, abandoned at the read's end; a late answer is dropped, never an unhandled rejection. */
@@ -202,7 +200,7 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     new Promise<never>((_resolve, reject) => {
       const abandon = (): void => {
         reject(new Error(`${options.taskId}: the ${name} channel had not answered `
-          + `${String(EVIDENCE_GRACE_MS)} ms after the episode budget was spent`));
+          + `${String(EVIDENCE_GRACE_MS)} ms after the evidence read began`));
       };
 
       if (reading.signal.aborted) abandon();
@@ -214,11 +212,15 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
 
   const collect = (): Promise<EpisodeEvidence> => {
     collection ??= (async () => {
+      const disarmReading = options.clock.after(EVIDENCE_GRACE_MS, () => { reading.abort(); });
+
       const [events, history, spend] = await Promise.allSettled([
         readChannel('events', reader.runEvents()),
         readChannel('history', reader.history()),
         readChannel('spend', reader.spend()),
       ]);
+
+      disarmReading();
 
       const errors: Error[] = [];
       const status: { channel: string; status: string; reason?: string }[] = [];
@@ -282,10 +284,6 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     spent.resolve({ spent: reason });
   });
 
-  const disarmReading = options.budgetMs === undefined
-    ? null
-    : options.clock.after(options.budgetMs + EVIDENCE_GRACE_MS, () => { reading.abort(); });
-
   try {
     const raced = await Promise.race([
       operation(reader, collect, budget.signal).then((value) => ({ value })),
@@ -304,18 +302,50 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     if (disarm !== null) disarm();
   }
 
+  let evidence: EpisodeEvidence;
+
   try {
-    await collect();
+    evidence = await collect();
   } catch (error) {
     if (!result.ok) throw new AggregateError([result.error, error], result.error.message, { cause: error });
     throw error;
-  } finally {
-    if (disarmReading !== null) disarmReading();
   }
 
-  if (!result.ok) throw result.error;
+  if (result.ok) return result.value;
 
-  return result.value;
+  if (result.error !== budget.signal.reason) throw result.error;
+
+  const spentOn = new Error(`${result.error.message}: ${ledgerTail(evidence.events)}`, { cause: result.error });
+
+  writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: spentOn.name, message: spentOn.message, phase: 'budget' }), { mode: 0o600 });
+
+  throw spentOn;
+}
+
+/** What a run was last doing, off its own ledger: what a case the budget ended waited on. */
+export function ledgerTail(events: readonly RunEvent[]): string {
+  const last = events.at(-1);
+
+  if (last === undefined) return 'the ledger holds no event, so the turn never started';
+
+  const run = events.filter((event) => event.runId === last.runId);
+  const waits = run.filter((event): event is Extract<RunEvent, { type: 'provider_wait' }> => event.type === 'provider_wait');
+
+  const said = [
+    `the ledger's last event was ${last.type} at ${last.timestamp}`,
+    run.some((event) => event.type === 'run_end') ? 'its run had ended' : 'its run had not ended',
+  ];
+
+  const latest = waits.at(-1);
+
+  if (latest !== undefined) {
+    const waited = waits.reduce((total, wait) => total + wait.waitMs, 0);
+
+    said.push(`${String(waits.length)} provider wait(s) on ${latest.provider}`
+      + `${latest.status === undefined ? '' : `, the last answered ${String(latest.status)}`}, ${(waited / 1000).toFixed(1)} s in all`);
+  }
+
+  return said.join('; ');
 }
 
 /** One task attempted once. `repetition` plus `taskId` is the pairing identity. */

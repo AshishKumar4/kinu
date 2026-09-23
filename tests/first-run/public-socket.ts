@@ -31,6 +31,12 @@ interface PendingTurn {
   readonly reject: (error: Error) => void;
 }
 
+/** One wait for a broadcast of one type. */
+interface PendingBroadcast {
+  readonly type: string;
+  readonly resolve: (arrived: boolean) => void;
+}
+
 /** One public socket, and the two frame kinds a browser sends over it. */
 export interface PublicSocket {
   readonly path: string;
@@ -38,6 +44,14 @@ export interface PublicSocket {
   readonly opened: Promise<boolean>;
   rpc(method: string, args: readonly JsonValue[]): Promise<JsonValue>;
   chat(text: string): Promise<PublicSendResult>;
+  /** True on the next broadcast of `type` the workspace sends this socket —
+   *  the frame the browser renders a card on — and false when the socket or
+   *  the case budget ends first. Ask before the action that raises it. */
+  broadcast(type: string): Promise<boolean>;
+  /** True when the next turn this socket did not send closes — a wake, or a
+   *  send from another tab — on the done frame the room broadcasts to every
+   *  tab; false when the socket or the case budget ends first. */
+  turnClosed(): Promise<boolean>;
   close(reason: string): void;
 }
 
@@ -57,17 +71,27 @@ export function openPublicSocket(
   const socket = new HEADER_WEBSOCKET(url.toString(), { headers: webHeaders(identity) });
   const rpcs = new Map<string, PendingRpc>();
   const turns = new Map<string, PendingTurn>();
+  const broadcasts = new Set<PendingBroadcast>();
+  const closings = new Set<(closed: boolean) => void>();
   let nextId = 0;
 
   const failInFlight = (reason: string): void => {
     const waiting = [...rpcs.values()];
     const sending = [...turns.values()];
+    const watching = [...broadcasts];
+    const closing = [...closings];
     rpcs.clear();
     turns.clear();
+    broadcasts.clear();
+    closings.clear();
 
     for (const pending of waiting) pending.reject(new Error(reason));
 
     for (const turn of sending) turn.reject(new Error(reason));
+
+    for (const watch of watching) watch.resolve(false);
+
+    for (const resolve of closing) resolve(false);
   };
 
   budget.addEventListener('abort', () => {
@@ -94,10 +118,29 @@ export function openPublicSocket(
       return;
     }
 
+    if (frame.kind === 'other') {
+      for (const watch of broadcasts) {
+        if (watch.type !== frame.type) continue;
+        broadcasts.delete(watch);
+        watch.resolve(true);
+      }
+
+      return;
+    }
+
     if (frame.kind !== 'response') return;
     const turn = turns.get(frame.frame.id);
 
-    if (turn === undefined) return;
+    if (turn === undefined) {
+      if (frame.frame.done !== true) return;
+      const closing = [...closings];
+      closings.clear();
+
+      for (const resolve of closing) resolve(true);
+
+      return;
+    }
+
     turn.recorder.apply(frame.frame);
     const settled = turn.recorder.settled();
 
@@ -112,7 +155,21 @@ export function openPublicSocket(
     turn.resolve(settled.landed === 'mid-turn' ? { landed: 'mid-turn', absorbedBy: null } : settled);
   });
 
-  socket.addEventListener('close', () => failInFlight(`${url.pathname} closed`));
+  // `WebSocket.send` on a closed socket drops the frame without a word (Bun
+  // 1.4.0, measured 2026-09-23), so after the close a write fails what waits
+  // on it at once, naming the close, rather than leaving it for an answer that
+  // cannot come.
+  let closed: string | null = null;
+
+  socket.addEventListener('close', (event: CloseEvent) => {
+    closed = `${url.pathname} closed (${String(event.code)}${event.reason === '' ? '' : `: ${event.reason}`})`;
+    failInFlight(closed);
+  });
+
+  const write = (frame: string): void => {
+    if (closed === null) socket.send(frame);
+    else failInFlight(closed);
+  };
 
   const opened = new Promise<boolean>((resolve) => {
     socket.addEventListener('open', () => resolve(true), { once: true });
@@ -134,15 +191,31 @@ export function openPublicSocket(
       return new Promise<JsonValue>((resolve, reject) => {
         const requestId = mint('rpc');
         rpcs.set(requestId, { resolve, reject });
-        socket.send(encodeRpcRequest({ requestId, method, args }));
+        write(encodeRpcRequest({ requestId, method, args }));
       });
     },
     chat(text) {
       return new Promise<PublicSendResult>((resolve, reject) => {
         const requestId = mint('turn');
         turns.set(requestId, { recorder: recordPublicTurn(), resolve, reject });
-        socket.send(encodeChatRequest({ requestId, text }));
+        write(encodeChatRequest({ requestId, text }));
       });
+    },
+    broadcast(type) {
+      const { promise, resolve } = Promise.withResolvers<boolean>();
+
+      if (budget.aborted || closed !== null) resolve(false);
+      else broadcasts.add({ type, resolve });
+
+      return promise;
+    },
+    turnClosed() {
+      const { promise, resolve } = Promise.withResolvers<boolean>();
+
+      if (budget.aborted || closed !== null) resolve(false);
+      else closings.add(resolve);
+
+      return promise;
     },
     close(reason) {
       failInFlight(reason);

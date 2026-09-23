@@ -613,7 +613,7 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
  *      the record with what the case actually saw. A record that only
  *      accumulates successes is not evidence.
  *   6. EVERY subgoal asserted, each in its own failure message.
- *   7. TEARDOWN in a `finally` — this DELETES the workspace, so a case that
+ *   7. TEARDOWN on every path — this DELETES the workspace, so a case that
  *      threw must not leave a row on the account.
  */
 export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
@@ -623,6 +623,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
 ): Promise<void> {
   const startedAt = Date.now();
   let opened: Session | undefined;
+  let failure: Error | null = null;
 
   const episode = spec.episode ?? spec.id;
 
@@ -685,10 +686,20 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       });
     }
 
-    throw error;
-  } finally {
-    await opened?.teardown();
+    failure = thrown;
   }
+
+  // A teardown that fails is reported beside the case's own failure, never in
+  // its place: on 2026-09-23 a DELETE the host never delivered replaced the
+  // turn's own verdict, and the run printed only the teardown.
+  try {
+    await opened?.teardown();
+  } catch (teardown) {
+    if (failure === null) throw teardown;
+    throw new AggregateError([failure, teardown], failure.message, { cause: teardown });
+  }
+
+  if (failure !== null) throw failure;
 }
 
 /**
