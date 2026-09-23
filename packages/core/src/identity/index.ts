@@ -5,4 +5,4 @@ export {
   type WorkspaceBirthConfig,
 } from './create';
 
-export { createInlineWorkspace } from './inline-primitives';
+export { createInlineWorkspace, inlineWorkspaceStorage, sqlStorageOver } from './inline-primitives';

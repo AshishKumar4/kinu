@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCLIRuntime } from '../src/runtime';
-import { localTransactions, nimbusSql } from '../src/nimbus-sql';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { scratchPath } from '@kinu.run/test-utils';
 
 function freshVfs() {
@@ -57,13 +57,15 @@ describe('workspace filesystem over a read-only handle', () => {
     const path = scratchPath('vfs-readonly', 'agent.db');
     const writer = new Database(path, { create: true });
 
-    await new SqliteVFS(nimbusSql(writer), localTransactions(writer)).as(CRED_KERNEL).writeFile('/note.txt', 'kept');
+    const written = inlineWorkspaceStorage(writer);
+    await new SqliteVFS(written.sql, written.transactions).as(CRED_KERNEL).writeFile('/note.txt', 'kept');
     writer.close();
 
     const reader = new Database(path, { readonly: true });
 
     try {
-      const vfs = new SqliteVFS(nimbusSql(reader), localTransactions(reader)).as(CRED_KERNEL);
+      const read = inlineWorkspaceStorage(reader);
+      const vfs = new SqliteVFS(read.sql, read.transactions).as(CRED_KERNEL);
 
       expect(new TextDecoder().decode(await vfs.readFile('/note.txt'))).toBe('kept');
     } finally {

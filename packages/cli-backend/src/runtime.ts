@@ -4,13 +4,13 @@
  * AGENTS.md) binds to `config.cwd` when set, else shares the in-SQLite tree.
  */
 
-import type { Database, SQLQueryBindings } from 'bun:sqlite';
+import type { Database } from 'bun:sqlite';
 import type {
   AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell,
 } from '@kinu.run/core';
 import type {
-  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
+  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
@@ -53,7 +53,7 @@ import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS } from './host-mount';
-import { bunSqlBinding, localTransactions, nimbusSql } from './nimbus-sql';
+import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
 import { createBranchSpawner } from './branch-process';
 import {
@@ -136,24 +136,8 @@ export interface CLIRuntime extends AgentRuntime {
 
 export type LocalDb = Database;
 
-interface LocalSqlRow {
-  [column: string]: string | number | boolean | null | ArrayBuffer | Uint8Array;
-}
-
 export function makeSql(db: Database): SqlExecutor {
-  const sql: SqlExecutor = function <T = unknown>(
-    strings: TemplateStringsArray,
-    ...values: SqlValue[]
-  ): T[] {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    const bound = values.map((value) => bunSqlBinding({ value }));
-
-    // `all()` for every statement, as DO `storage.sql` does: `UPDATE … RETURNING`
-    // is a write that produces rows, so sniffing the verb would return `[]`.
-    return db.prepare<T, SQLQueryBindings[]>(query).all(...bound);
-  };
-
-  return sql;
+  return wrapDatabase(db).sql;
 }
 
 export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
@@ -164,7 +148,8 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  *  Nimbus filesystem read as the kernel. */
 export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 'readFile'> {
   if (cwd !== null) return createCwdPlaneVFS(cwd, undefined);
-  const vfs = new SqliteVFS(nimbusSql(db), localTransactions(db)).as(CRED_KERNEL);
+  const storage = inlineWorkspaceStorage(db);
+  const vfs = new SqliteVFS(storage.sql, storage.transactions).as(CRED_KERNEL);
 
   return { readFile: (path, opts) => Promise.resolve(opts?.encoding === undefined ? vfs.readFile(path) : vfs.readFileString(path)) };
 }
@@ -178,27 +163,7 @@ const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRunti
 
 /** Positional-binding SQL; a Durable Object's `ctx.storage.sql` is this natively. */
 export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
-  const exec: SqlExec['exec'] = (query, ...bindings) => {
-    const bound = bindings.map((value) => bunSqlBinding({ value }));
-    // Eager and `all()` regardless of verb, like `storage.sql.exec`.
-    const rows = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query).all(...bound).map(toSqlRow);
-
-    return { toArray: () => rows };
-  };
-
-  return { exec };
-}
-
-function toSqlRow(row: LocalSqlRow) {
-  const output: Record<string, SqlValue> = {};
-
-  for (const [column, value] of Object.entries(row)) {
-    output[column] = value instanceof Uint8Array
-      ? new Uint8Array(value).buffer
-      : value;
-  }
-
-  return output;
+  return sqlStorageOver(db);
 }
 
 /** All onto one database, so no caller can pair a DDL handle with another file's reads. */
@@ -378,12 +343,11 @@ export function createCLIRuntime(
     codexConfigPath: config.codexConfigPath,
   });
 
-  const workspaceSql = nimbusSql(db);
+  const storage = inlineWorkspaceStorage(db);
 
   const workspace = createWorkspaceFilesystem({
-    sql: workspaceSql,
-    transactions: localTransactions(db),
-    generation: workspaceGenerationStorage(workspaceSql),
+    ...storage,
+    generation: workspaceGenerationStorage(storage.sql),
     runtimes: WORKSPACE_RUNTIMES,
     runtimeFacets: localFacetHost(),
   } satisfies WorkspaceOptions);
@@ -443,7 +407,7 @@ export function createCLIRuntime(
       return { vfs: fileVfs, artifactDirectory };
     }
 
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: workspaceSql }))(), () => target.assertCurrent())(actorFacetName(record));
+    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
 
     if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
     const plane = await workspace.asAgent(home);
@@ -526,7 +490,7 @@ export function createCLIRuntime(
   if (facetShell) {
     runtime.facetShell = facetShell;
   } else {
-    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: workspaceSql });
+    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: storage.sql });
   }
 
   runtime.nodeRuntime = localNodeRuntime({

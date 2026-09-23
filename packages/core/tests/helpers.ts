@@ -1,12 +1,10 @@
 /** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import type {
   SqlExecutor,
   SqlExec,
-  SqlExecRow,
-  SqlValue,
   RawSqlExec,
   Memory,
   Executor,
@@ -22,13 +20,14 @@ import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
-import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
-import { createWorkspace, workspaceGenerationStorage, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import {
+  createInlineMemory, createInlineWorkspace, sqlStorageOver, wrapDatabase,
+} from '../src/identity/inline-primitives';
+import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { CraftStore as AgentUtilsCraftStore, craftStoreView } from '@kinu.run/agent-utils/stores';
-import { localTransactions, nimbusSql } from '../../cli-backend/src/nimbus-sql';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 import { WORKSPACE_IDENTITY_DDL, tableExists, initActorTables } from '../src/identity/schema';
@@ -66,70 +65,15 @@ export function createTestWorkspace(): TestWorkspace {
 }
 
 export function makeSql(db: Database): SqlExecutor {
-  return function <T = unknown>(
-    strings: TemplateStringsArray,
-    ...values: SqlValue[]
-  ): T[] {
-    const query = strings.reduce(
-      (acc, s, i) => acc + s + (i < values.length ? '?' : ''),
-      '',
-    );
-
-    // bun:sqlite binds TypedArrays, not ArrayBuffers (the canonical VFS BLOB type).
-    const bound: SQLQueryBindings[] = values.map((value) =>
-      value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-
-    const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
-    // DELETE … RETURNING yields rows, as production executors answer it (agent-utils craft store).
-    const stmt = db.prepare<T, SQLQueryBindings[]>(query);
-
-    if (!isRead && !/\bRETURNING\b/i.test(query)) {
-      stmt.run(...bound);
-
-      return [];
-    }
-
-    return stmt.all(...bound);
-  };
+  return wrapDatabase(db).sql;
 }
 
 export function makeExecRaw(db: Database): RawSqlExec {
   return (ddl: string) => db.exec(ddl);
 }
 
-type NativeSqlValue = string | number | boolean | null | Uint8Array;
-
-type NativeSqlRow = Record<string, NativeSqlValue>;
-
-function canonicalSqlValue(value: NativeSqlValue): SqlValue {
-  if (!(value instanceof Uint8Array)) return value;
-  const copy = new Uint8Array(value.byteLength);
-  copy.set(value);
-
-  return copy.buffer;
-}
-
 export function makeSqlExec(db: Database): SqlExec {
-  return {
-    exec(query, ...bindings) {
-      const bound: SQLQueryBindings[] = bindings.map((value) =>
-        value instanceof ArrayBuffer ? new Uint8Array(value) : value);
-
-      const stmt = db.prepare<NativeSqlRow, SQLQueryBindings[]>(query);
-
-      if (stmt.columnNames.length === 0) {
-        stmt.run(...bound);
-
-        return { toArray: () => [] };
-      }
-
-      const rows: SqlExecRow[] = stmt.all(...bound).map((row) => Object.fromEntries(
-        Object.entries(row).map(([column, value]) => [column, canonicalSqlValue(value)]),
-      ));
-
-      return { toArray: () => rows };
-    },
-  };
+  return sqlStorageOver(db);
 }
 
 /** The production workspace filesystem (Nimbus) over the test database. */
@@ -166,45 +110,12 @@ function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<Vfs
 
 /** The workspace filesystem over the test database, bound as the local host binds its own. */
 export function createWorkspaceBundle(db: Database) {
-  const sql = nimbusSql(db);
-
-  return createWorkspace({ sql, transactions: localTransactions(db), generation: workspaceGenerationStorage(sql) });
-}
-
-function nativeSqlBinding(binding: { value: unknown }): SQLQueryBindings {
-  const value = binding.value;
-
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (value instanceof Uint8Array) return value;
-  const scalar = v.safeParse(v.union([v.string(), v.number(), v.boolean(), v.null()]), value);
-
-  if (scalar.success) return scalar.output;
-
-  if (v.safeParse(v.undefined(), value).success) return null;
-  throw new TypeError('Unsupported SQLite test binding');
-}
-
-/** bun:sqlite projected onto the identity bootstrap's deliberately small DB seam. */
-export function makeAgentDatabase(db: Database): AgentDatabase {
-  return {
-    prepare<T = unknown>(query: string) {
-      const statement = db.prepare<T, SQLQueryBindings[]>(query);
-
-      return {
-        all: (...params) => statement.all(...params.map((value) => nativeSqlBinding({ value }))),
-        run: (...params) => { statement.run(...params.map((value) => nativeSqlBinding({ value }))); },
-      };
-    },
-    exec: (query) => { db.exec(query); },
-    run: (query, params = []) => { db.run(query, params.map((value) => nativeSqlBinding({ value }))); },
-    transaction: <T>(fn: () => T) => db.transaction(fn),
-  };
+  return createInlineWorkspace(db);
 }
 
 /** The same inline Memory the local CLI builds, over the shared `memory_chunks` DDL. */
 export function createMemoryMemory(db: Database, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
-  return createInlineMemory(makeAgentDatabase(db), vfs);
+  return createInlineMemory(db, vfs);
 }
 
 export function createMockLLM(responses: Record<string, string> = {}): LLM {

@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createInlineCraftStore } from '../src/identity/inline-primitives';
-import { makeAgentDatabase, makeSql } from './helpers';
+import { makeSql } from './helpers';
 
 const WEATHER = {
   name: 'weather', description: 'look up the forecast for a city', params: { city: 'string' },
@@ -17,7 +17,7 @@ const WEATHER = {
 function stored() {
   const db = new Database(':memory:');
   initCraftedToolsTables(makeSql(db));
-  const tools = createInlineCraftStore(makeAgentDatabase(db));
+  const tools = createInlineCraftStore(db);
   tools.create({ ...WEATHER, params: { ...WEATHER.params } });
 
   return tools;

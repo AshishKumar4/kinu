@@ -22,7 +22,7 @@ import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js'
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
-import { nimbusSql, localTransactions } from '../packages/cli-backend/src/nimbus-sql';
+import { inlineWorkspaceStorage } from '../packages/core/src/identity/inline-primitives';
 
 const PROBES = [
   'node --version',
@@ -49,14 +49,13 @@ const runtimes: readonly RuntimePackage[] = process.argv.includes('--bare')
 
 const db = new Database(join(mkdtempSync(join(tmpdir(), 'nimbus-probe-')), 'probe.db'));
 
-const sql = nimbusSql(db);
+const storage = inlineWorkspaceStorage(db);
 
 const opened = performance.now();
 
 const workspace = createWorkspace({
-  sql,
-  transactions: localTransactions(db),
-  generation: workspaceGenerationStorage(sql),
+  ...storage,
+  generation: workspaceGenerationStorage(storage.sql),
   runtimes,
 });
 

@@ -8,7 +8,7 @@ import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
-import { nimbusSql, localTransactions } from '../src/nimbus-sql';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 const RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 
@@ -21,12 +21,11 @@ afterEach(() => {
 function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): WorkspaceBundle {
   const database = new Database(path);
   databases.push(database);
-  const sql = nimbusSql(database);
+  const storage = inlineWorkspaceStorage(database);
 
   return createWorkspace({
-    sql,
-    transactions: localTransactions(database),
-    generation: workspaceGenerationStorage(sql),
+    ...storage,
+    generation: workspaceGenerationStorage(storage.sql),
     runtimes,
     runtimeFacets: localFacetHost(),
   });
