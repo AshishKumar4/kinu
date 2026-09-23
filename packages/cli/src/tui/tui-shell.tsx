@@ -664,7 +664,7 @@ export function TuiShell(props: TuiShellProps) {
       <box key="scene-content" style={{ flexGrow: 1, minWidth: 0, height: '100%' }}>
         <SceneWidthContext.Provider value={sceneWidth}>{props.children}</SceneWidthContext.Provider>
       </box>
-      {layout === 'wide' && (
+      {layout === 'wide' && props.scene !== 'chat' && (
         <box
           style={{ position: 'absolute', right: 1, top: 1 }}
           onMouseDown={() => updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen }))}
