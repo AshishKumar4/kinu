@@ -230,6 +230,34 @@ describe('the frame carries the calling workspace own home', () => {
     await harness.closeDeviceHarness();
   });
 
+  test('every file method carries the same block a command does, so the daemon confines both alike', async () => {
+    const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
+    harness.consentDecision = 'always';
+    await harness.sendDeviceHello(hello({ capability: 'files_only', reason: 'no_bwrap', gpu: [] }, { root: '/home/ashish/projects/kinu' }));
+    const file = '/home/ashish/projects/kinu/notes.md';
+
+    for (const [method, params] of [
+      ['readFile', [file]], ['readRange', [file, 0, 4]], ['writeFile', [file, 'x']], ['listFiles', ['/home/ashish/projects/kinu']],
+      ['statPath', [file]], ['unlinkPath', [file]], ['mkdirPath', [`${file}.d`]], ['exists', [file]],
+    ] satisfies Array<[string, JsonValue[]]>) {
+      await harness.userDO.deviceRpc(harness.workspace, method, params, { agentName: WORKSPACE });
+    }
+
+    const blocks = harness.deviceFrames.map((frame) => v.parse(FrameSandboxSchema, frame.sandbox));
+
+    expect(blocks).toHaveLength(8);
+
+    for (const block of blocks) {
+      expect(block).toEqual({
+        tier: 'sandboxed',
+        agentHome: `/home/ashish/.kinu/agents/${WORKSPACE}/home`,
+        roots: ['/home/ashish/projects/kinu'],
+      });
+    }
+
+    await harness.closeDeviceHarness();
+  });
+
   test('a machine that consented no directory sends an empty root list, never a guess', async () => {
     const harness = await deviceHarness('ashish@studio', daemon, { hello: null });
     harness.consentDecision = 'always';

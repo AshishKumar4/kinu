@@ -7,14 +7,13 @@
 // shell cannot see, and the owner would have no way to know which one is the
 // truth. `viewFor` returns the object both ask.
 //
-// The invisible set is an ALLOW-LIST. The rejected design was "read-only real
-// home plus a deny-list of credential directories", and it fails on one miss:
+// The visible set is an ALLOW-LIST. The rejected design was "read-only disk
+// plus a deny-list of credential directories", and it fails on one miss:
 // ~/.ssh, ~/.aws, ~/.gnupg, ~/.kube, ~/.docker/config.json, ~/.netrc,
-// ~/.npmrc, ~/.config/gh, ~/.config/gcloud, ~/.azure, ~/.password-store,
-// ~/.local/share/keyrings, browser profiles — the list has no end. So the whole
-// real home is invisible except the agent's own home and the directories the
-// owner named at `kinu connect`, and everything in that list is covered by
-// construction rather than by enumeration.
+// ~/.npmrc, ~/.config/gh, a second drive at /data, a VPN profile under /opt —
+// the list has no end. So on Linux a command sees the system trees a program
+// needs to start, its own home and tmp, and the directories the owner named
+// at `kinu connect`, and nothing else exists.
 //
 // Dependency-free CommonJS, like index.js: the CLI ships both files beside each
 // other and there is no install step that could fetch a third.
@@ -75,19 +74,28 @@ const USERNS_REFUSALS = [
 ];
 
 /**
- * User-scoped locations OUTSIDE the real home, which the home swap does not
- * already hide. Directories become an empty tmpfs; a tmpfs needs no source on
- * disk, unlike an empty bind, and it is writable-but-ephemeral, which is
- * harmless. `/run/user` holds the keyring, gpg-agent, ssh-agent, dbus and
- * podman sockets. `/mnt` is what makes a WSL2 `C:\\Users\\<you>` invisible.
+ * What a Linux command may READ beyond its own directories and the consented
+ * ones: the trees a program needs to start, and no tree a person keeps files
+ * in. Codex's bubblewrap sandbox reads the same list when a policy asks for
+ * platform defaults (`LINUX_PLATFORM_DEFAULT_READ_ROOTS`,
+ * codex-rs/linux-sandbox/src/bwrap.rs at openai/codex 39598ed17, read
+ * 2026-09-22), plus `/lib32` and `/libx32` for multilib programs and `/sys`:
+ * NVML and the CUDA driver find the GPU through it, and without it `cuInit`
+ * answers CUDA_ERROR_OPERATING_SYSTEM (measured 2026-09-22, driver 595.84,
+ * RTX 4080).
  */
-const LINUX_MASK_DIRS = Object.freeze([
-  '/home', '/root', '/mnt', '/media', '/run/media', '/run/user',
+const LINUX_READ_ROOTS = Object.freeze([
+  '/usr', '/bin', '/sbin', '/lib', '/lib32', '/lib64', '/libx32', '/etc', '/sys',
+  '/nix/store', '/run/current-system/sw',
 ]);
 
-/** Sockets, which a tmpfs cannot replace, so they are shadowed by /dev/null.
- *  Membership of the docker group is root on the host, and that is the one
- *  real escape hatch on an ordinary developer machine. */
+/** The shared temp roots. Inside the sandbox each one IS the agent's tmp, so a
+ *  tool that writes /var/tmp works and never sees another process's files. */
+const LINUX_TEMP_ROOTS = Object.freeze(['/tmp', '/var/tmp']);
+
+/** Sockets a consented directory could hold, shadowed by /dev/null because a
+ *  tmpfs cannot replace a file. Membership of the docker group is root on the
+ *  host, the one real escape hatch on an ordinary developer machine. */
 const LINUX_MASK_FILES = Object.freeze([
   '/run/docker.sock', '/var/run/docker.sock',
 ]);
@@ -110,7 +118,7 @@ const MAC_DENY_SUBPATHS = Object.freeze([
  */
 const ENV_ALLOWLIST = Object.freeze([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR',
-  'XDG_RUNTIME_DIR', 'KINU_HOME',
+  'XDG_RUNTIME_DIR',
 ]);
 
 const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
@@ -208,39 +216,59 @@ function realTarget(requested) {
   return resolved;
 }
 
-/** The paths that exist, resolved through symlinks, each one once and in the
- *  order given. */
-function dedupeExisting(paths) {
-  const seen = new Set();
-  const kept = [];
-
-  for (const candidate of paths) {
-    let real;
-
-    try {
-      real = fs.realpathSync(candidate);
-    } catch (err) {
-      // A path that is not there needs no mask, and bwrap cannot create a
-      // mountpoint for it under a read-only bind anyway. Anything other than
-      // absence is this daemon's own breakage.
-      if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES')) throw err;
-      continue;
-    }
-
-    if (seen.has(real)) continue;
-    seen.add(real);
-    kept.push(real);
-  }
-
-  return kept;
-}
-
 /** Whether `target` is `root` itself or below it, decided on resolved paths so
  *  a prefix like `/home/dev-old` never reads as inside `/home/dev`. */
 function within(root, target) {
   if (target === root) return true;
 
   return target.startsWith(root === '/' ? '/' : `${root}/`);
+}
+
+/** The path a syscall reaches, or null when nothing is there to mount. */
+function realPathOrNull(candidate) {
+  try {
+    return fs.realpathSync(candidate);
+  } catch (err) {
+    if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ELOOP')) throw err;
+
+    return null;
+  }
+}
+
+/**
+ * The read-only half of the Linux view, as mounts. Each system tree is bound at
+ * its own path, and a top-level link into another bound tree stays a link:
+ * merged-/usr makes `/bin` a link to `usr/bin`, and `#!/bin/bash` needs the
+ * name. `/etc/resolv.conf` points into `/run/systemd/resolve` on Ubuntu, so
+ * that directory is bound too, or nothing in the sandbox resolves a host name
+ * and nothing installs.
+ */
+function linuxReadMounts(resolvConf = '/etc/resolv.conf') {
+  const mounts = [];
+
+  for (const logical of LINUX_READ_ROOTS) {
+    const real = realPathOrNull(logical);
+
+    if (real === null) continue;
+    mounts.push({ path: logical, real, link: fs.lstatSync(logical).isSymbolicLink() });
+  }
+
+  const trees = mounts.filter((mount) => !mount.link).map((mount) => mount.real);
+
+  const readMounts = mounts.map((mount) => (
+    mount.link && trees.some((tree) => within(tree, mount.real))
+      ? { kind: 'symlink', path: mount.path, target: fs.readlinkSync(mount.path), real: mount.real }
+      : { kind: 'bind', path: mount.path, real: mount.real }
+  ));
+
+  const resolver = realPathOrNull(resolvConf);
+  const resolverDir = resolver === null ? null : path.dirname(resolver);
+
+  if (resolverDir !== null && !readMounts.some((mount) => within(mount.real, resolverDir))) {
+    readMounts.push({ kind: 'bind', path: resolverDir, real: resolverDir });
+  }
+
+  return readMounts;
 }
 
 /** What the caller may do with a path, and where it actually lives. */
@@ -250,87 +278,101 @@ const VIEW_READ_ONLY = 'read_only';
 
 const VIEW_WRITABLE = 'writable';
 
+const OUTSIDE_THE_SANDBOX = 'outside what this device\'s sandbox exposes, which does not expose '
+  + 'files beyond the agent\'s home and the directories the owner shared';
+
+const INSIDE_KINU = 'inside Kinu\'s own directory, which the tunnel never serves';
+
 /**
  * The policy, as one object.
  *
  * `deviceHome` is Kinu's own directory. It is invisible in EVERY tier,
- * including raw: it holds device.json (this machine's long-lived token) and
- * config.json (the owner's CLI bearer), so serving it through the tunnel is a
- * machine clone and an account takeover. It is also never bound into the
- * sandbox, so the kernel enforces the same rule without being asked.
+ * including raw, and inside a consented directory that holds it: it holds
+ * device.json (this machine's long-lived token) and config.json (the owner's
+ * CLI bearer), so serving it is a machine clone and an account takeover.
  *
- * `roots` are the directories the owner named. They are writable, and they are
- * decided BEFORE the home swap, because a root inside the real home
- * (~/work/thing, the common case) is re-bound over the swapped home and is
- * reachable inside.
+ * `roots` are the directories the owner named, writable, and decided BEFORE
+ * the home swap: a root inside the real home (~/work/thing, the common case)
+ * is re-bound over the swapped home and is reachable inside. A root of `/` is
+ * the Sandbox switch turned off under another name, and the owner's switch is
+ * how the whole machine is given, so `/` shares nothing here.
+ *
+ * Every path is judged by where it LANDS on the host, after it is named the
+ * way a command in the namespace names it: `~/x` is the agent's own `x`, and a
+ * link the agent planted there pointing at the owner's real file is that file.
  */
 function viewFor(options) {
   const platform = options.platform ?? os.platform();
   const home = trimPath(options.home ?? os.homedir());
-  const agentHome = trimPath(options.agentHome);
-  const agentTmp = trimPath(options.agentTmp ?? path.join(path.dirname(agentHome), 'tmp'));
-  const deviceHome = trimPath(options.deviceHome);
+  const agentHomeSpelled = trimPath(options.agentHome);
+  const agentTmpSpelled = trimPath(options.agentTmp ?? path.join(path.dirname(agentHomeSpelled), 'tmp'));
+  const agentHome = realTarget(agentHomeSpelled);
+  const agentTmp = realTarget(agentTmpSpelled);
+  const deviceHome = realTarget(options.deviceHome);
 
   // Longest first, so a root nested inside another root answers for itself.
   const roots = (Array.isArray(options.roots) ? options.roots : [])
-    .map(trimPath)
+    .map(realTarget)
+    .filter((root) => root !== '/')
     .sort((left, right) => right.length - left.length);
 
-  // Every mask is kept, including whichever one holds the real home: the
-  // agent-home bind is created inside that tmpfs and shadows it.
-  const maskDirs = [...LINUX_MASK_DIRS];
+  const linux = platform !== 'darwin';
+  const readMounts = linux ? linuxReadMounts() : [];
+  const readTrees = readMounts.map((mount) => mount.real);
+  const bound = [...readTrees, ...roots];
 
-  /**
-   * Where a requested path lives from the DAEMON's side, and what may be done
-   * with it. The daemon's file methods run outside the sandbox, so a path under
-   * the real home has to be translated to the agent home to see what the shell
-   * sees — on Linux the two are the same path string inside the namespace.
-   */
+  /** The host path a command in the namespace reaches by `requested`, before links are followed. */
+  const hostSpelling = (requested) => {
+    const lexical = trimPath(requested);
+
+    const ownDirs = [agentHomeSpelled, agentTmpSpelled, agentHome, agentTmp];
+
+    if (ownDirs.some((dir) => within(dir, lexical))) return lexical;
+
+    if (roots.some((root) => within(root, lexical))) return lexical;
+
+    if (within(home, lexical)) {
+      const relative = path.relative(home, lexical);
+
+      return relative === '' ? agentHome : path.join(agentHome, relative);
+    }
+
+    if (linux) {
+      for (const temp of LINUX_TEMP_ROOTS) {
+        if (!within(temp, lexical)) continue;
+        const relative = path.relative(temp, lexical);
+
+        return relative === '' ? agentTmp : path.join(agentTmp, relative);
+      }
+    }
+
+    return lexical;
+  };
+
+  /** Where a requested path lives on the host, and what may be done with it. */
   const classify = (requested) => {
-    const target = realTarget(requested);
+    const target = realTarget(hostSpelling(requested));
 
     // The agent's OWN home is decided first, because it lives under Kinu's
     // directory (~/.kinu/agents/<workspace>/home) so that uninstall has one
-    // path to remove. Fencing ~/.kinu first made the agent's home invisible to
-    // the agent — found by the test below, not by reading.
+    // path to remove.
     if (within(agentHome, target) || within(agentTmp, target)) {
       return { access: VIEW_WRITABLE, path: target };
     }
 
-    if (within(deviceHome, target)) {
-      return { access: VIEW_INVISIBLE, path: target, why: 'inside Kinu\'s own directory, which the tunnel never serves' };
+    if (within(deviceHome, target)) return { access: VIEW_INVISIBLE, path: target, why: INSIDE_KINU };
+
+    if (roots.some((root) => within(root, target))) return { access: VIEW_WRITABLE, path: target };
+
+    if (linux) {
+      if (readTrees.some((tree) => within(tree, target))) return { access: VIEW_READ_ONLY, path: target };
+
+      return { access: VIEW_INVISIBLE, path: target, why: OUTSIDE_THE_SANDBOX };
     }
 
-    for (const root of roots) {
-      if (within(root, target)) return { access: VIEW_WRITABLE, path: target };
-    }
-
-    if (within(home, target)) {
-      // The agent home is bind-mounted over the real home on Linux, and HOME
-      // points at it on macOS. Either way `~/x` means the agent's own `x`.
-      const relative = path.relative(home, target);
-      const translated = relative === '' ? agentHome : path.join(agentHome, relative);
-
-      return { access: VIEW_WRITABLE, path: translated, translated: true };
-    }
-
-    if (platform === 'darwin') {
-      for (const denied of MAC_DENY_SUBPATHS) {
-        if (within(denied, target)) {
-          return { access: VIEW_INVISIBLE, path: target, why: `inside ${denied}, which this device's sandbox does not expose` };
-        }
-      }
-    } else {
-      for (const dir of maskDirs) {
-        if (within(dir, target)) {
-          return { access: VIEW_INVISIBLE, path: target, why: `inside ${dir}, which this device's sandbox does not expose` };
-        }
-      }
-
-      for (const file of LINUX_MASK_FILES) {
-        if (target === file) {
-          return { access: VIEW_INVISIBLE, path: target, why: `${file} is not exposed to this device's sandbox` };
-        }
+    for (const denied of MAC_DENY_SUBPATHS) {
+      if (within(denied, target)) {
+        return { access: VIEW_INVISIBLE, path: target, why: `inside ${denied}, which this device's sandbox does not expose` };
       }
     }
 
@@ -344,7 +386,12 @@ function viewFor(options) {
     agentTmp,
     deviceHome,
     roots,
-    maskDirs,
+    readMounts,
+    // Kinu's own directory, wherever a bind would otherwise carry it in; the
+    // mask goes on after every bind, so no bind can uncover it again.
+    hiddenDirs: bound.some((dir) => within(dir, deviceHome)) ? [deviceHome] : [],
+    hiddenFiles: [...new Set(LINUX_MASK_FILES.map(realPathOrNull))]
+      .filter((file) => file !== null && roots.some((root) => within(root, file))),
     classify,
     /**
      * The same directory, named as the COMMAND sees it. There are two
@@ -357,7 +404,7 @@ function viewFor(options) {
     insidePath(target) {
       const resolved = trimPath(target);
 
-      if (platform === 'darwin') return resolved;
+      if (!linux) return resolved;
 
       if (within(agentHome, resolved)) {
         const relative = path.relative(agentHome, resolved);
@@ -413,7 +460,29 @@ function viewFor(options) {
 
       return decision.path;
     },
+    checkpointDirectory: (dir) => checkpointVerdict({ deviceHome, own: [agentHome, agentTmp], writable: roots }, dir),
   };
+}
+
+const HOLDS_KINU = 'Kinu\'s own directory or holds it, and a checkpoint copies everything it covers';
+
+/**
+ * Where a checkpoint of `dir` may be kept, as `{ path, why }`: `why` is null
+ * when it may. A checkpoint names its directory by HOST path and copies all of
+ * it into a store at rest, so it covers only a directory the frame may write,
+ * never Kinu's own directory and never one holding it. `own` are the agent's
+ * directories, which live inside Kinu's; `writable` is where else the frame may
+ * write, or null for anywhere.
+ */
+function checkpointVerdict(scope, dir) {
+  const target = realTarget(dir);
+  const own = scope.own.some((ownDir) => within(ownDir, target));
+
+  if (within(target, scope.deviceHome) || (!own && within(scope.deviceHome, target))) return { path: target, why: HOLDS_KINU };
+
+  if (own || scope.writable === null || scope.writable.some((root) => within(root, target))) return { path: target, why: null };
+
+  return { path: target, why: OUTSIDE_THE_SANDBOX };
 }
 
 /**
@@ -423,7 +492,7 @@ function viewFor(options) {
  * existed.
  */
 function rawViewFor(options) {
-  const deviceHome = trimPath(options.deviceHome);
+  const deviceHome = realTarget(options.deviceHome);
 
   return {
     platform: options.platform ?? os.platform(),
@@ -433,9 +502,7 @@ function rawViewFor(options) {
     classify(requested) {
       const target = realTarget(requested);
 
-      if (within(deviceHome, target)) {
-        return { access: VIEW_INVISIBLE, path: target, why: 'inside Kinu\'s own directory, which the tunnel never serves' };
-      }
+      if (within(deviceHome, target)) return { access: VIEW_INVISIBLE, path: target, why: INSIDE_KINU };
 
       return { access: VIEW_WRITABLE, path: target };
     },
@@ -447,7 +514,7 @@ function rawViewFor(options) {
 
       return requested;
     },
-    resolvePath(requested, mode) {
+    resolvePath(requested) {
       const decision = this.classify(requested);
 
       if (decision.access === VIEW_INVISIBLE) {
@@ -459,8 +526,9 @@ function rawViewFor(options) {
       // A raw path is returned as REQUESTED, not resolved: the tier's contract
       // is "exactly what it was before", and resolving would change the error
       // a missing path produces.
-      return mode === 'read' || mode === 'write' ? requested : requested;
+      return requested;
     },
+    checkpointDirectory: (dir) => checkpointVerdict({ deviceHome, own: [], writable: null }, dir),
   };
 }
 
@@ -499,10 +567,10 @@ const MAC_PATH_TAIL = [
 ];
 
 /**
- * The bwrap argv. ORDER IS THE POLICY: a later mount shadows an earlier one,
- * so the masks come before the binds that re-expose consented roots beneath
- * them, and the agent-home bind comes after the `/home` tmpfs that hides every
- * other home on the machine.
+ * The bwrap argv. ORDER IS THE POLICY: a later mount shadows an earlier one.
+ * The root is an empty tmpfs, the system trees go in read-only, the agent's
+ * own directories and the consented roots go in writable, and Kinu's own
+ * directory is masked last so no bind can uncover it.
  */
 function buildLinuxArgv(view, options) {
   const argv = [
@@ -510,11 +578,15 @@ function buildLinuxArgv(view, options) {
     '--unshare-user', '--unshare-pid', '--unshare-ipc',
     '--die-with-parent',
     '--cap-drop', 'ALL',
-    '--ro-bind', '/', '/',
-    '--proc', '/proc',
-    '--dev', '/dev',
-    '--tmpfs', '/dev/shm',
+    '--tmpfs', '/',
   ];
+
+  for (const mount of view.readMounts) {
+    if (mount.kind === 'symlink') argv.push('--symlink', mount.target, mount.path);
+    else argv.push('--ro-bind', mount.real, mount.path);
+  }
+
+  argv.push('--proc', '/proc', '--dev', '/dev', '--tmpfs', '/dev/shm');
 
   if (options.statusFd !== undefined) argv.push('--json-status-fd', String(options.statusFd));
 
@@ -522,31 +594,26 @@ function buildLinuxArgv(view, options) {
   // (a driver reload) does not fail the command.
   for (const node of options.gpu) argv.push('--dev-bind-try', node, node);
 
-  // Masked by REAL path, and each real path once. `/var/run` is a symlink to
-  // `/run` on most distributions, so the two spellings of the docker socket
-  // name one file — and bwrap fails the whole command when asked to create the
-  // same mountpoint twice ("Can't create file at /var/run/docker.sock"),
-  // measured on this box. Masking the target is enough: the symlink still
-  // exists inside the read-only root and resolves to the masked path.
-  for (const dir of dedupeExisting(view.maskDirs)) argv.push('--tmpfs', dir);
-
-  for (const file of dedupeExisting(LINUX_MASK_FILES)) argv.push('--ro-bind', '/dev/null', file);
-  // The agent tmp lands on `/tmp` BEFORE the agent home lands on the real
-  // home path, because a home under /tmp is a home: bound the other way
+  // The agent tmp lands on the temp roots BEFORE the agent home lands on the
+  // real home path, because a home under /tmp is a home: bound the other way
   // round, the `/tmp` bind shadowed it and every command started with
   // `bwrap: Can't chdir to /tmp/<home>: No such file or directory` — the
   // first-run tier's daemons, each given a scratch HOME under the runner's
-  // tmpdir, measured 2026-09-04. A home anywhere else never touches `/tmp`
-  // and reads the same either way.
-  argv.push('--bind', view.agentTmp, '/tmp');
+  // tmpdir, measured 2026-09-04.
+  for (const temp of LINUX_TEMP_ROOTS) argv.push('--bind', view.agentTmp, temp);
   // The agent home lands ON the real home path, so `~` inside the sandbox is
   // the agent's own directory and every tool's default (~/.local, ~/.cache,
   // ~/.cargo, ~/.npm) lands there with no environment tricks.
   argv.push('--bind', view.agentHome, view.home);
 
   // Shortest first here: a root nested inside another must be mounted after
-  // its parent, or the parent's bind hides it.
-  for (const root of [...view.roots].reverse()) argv.push('--bind', root, root);
+  // its parent, or the parent's bind hides it. `-try`, because a directory the
+  // owner shared and later deleted is no reason to refuse every command.
+  for (const root of [...view.roots].reverse()) argv.push('--bind-try', root, root);
+
+  for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
+
+  for (const file of view.hiddenFiles) argv.push('--ro-bind', '/dev/null', file);
   argv.push('--chdir', view.insidePath(options.cwd));
   argv.push('--clearenv');
 
@@ -558,10 +625,13 @@ function buildLinuxArgv(view, options) {
 
 /** The SBPL profile. Rules evaluate in order and the LAST match wins, which is
  *  what makes "read everything, then deny the user's home, then re-allow the
- *  agent's own" expressible without enumerating what to hide. */
+ *  agent's own" expressible without enumerating what to hide. Kinu's own
+ *  directory is denied after the consented roots, which may hold it, and the
+ *  agent's directories inside it are allowed again after that. */
 function buildMacProfile(view) {
   const subpath = (dir) => `(subpath ${JSON.stringify(dir)})`;
-  const writable = [view.agentHome, view.agentTmp, ...view.roots, '/private/tmp', '/private/var/tmp'];
+  const own = [view.agentHome, view.agentTmp];
+  const writable = [...own, ...view.roots, '/private/tmp', '/private/var/tmp'];
 
   return [
     '(version 1)',
@@ -570,6 +640,8 @@ function buildMacProfile(view) {
     '(allow file-read*)',
     `(deny file-read* file-write* ${MAC_DENY_SUBPATHS.map(subpath).join(' ')})`,
     `(allow file-read* file-write* ${writable.map(subpath).join(' ')})`,
+    `(deny file-read* file-write* ${subpath(view.deviceHome)})`,
+    `(allow file-read* file-write* ${own.map(subpath).join(' ')})`,
     `(allow file-read-metadata (literal "/Users") (literal ${JSON.stringify(view.home)}))`,
     '(allow file-write* (literal "/dev/null") (literal "/dev/dtracehelper") (literal "/dev/ptmx") (regex #"^/dev/ttys[0-9]+$"))',
     '(allow pseudo-tty) (allow ipc-posix-sem)',
@@ -616,6 +688,8 @@ function plan(options) {
       argv: ['bash', '-c', command],
       env: sandboxEnvironment(options.source ?? process.env, {}),
       cwd: options.cwd,
+      // The command's process starts there: nothing else puts it anywhere.
+      spawnCwd: options.cwd,
     };
   }
 
@@ -632,7 +706,7 @@ function plan(options) {
   // so an unwritable one falls back to the agent's own home.
   const requestedCwd = options.cwd === undefined || options.cwd === null ? view.home : trimPath(options.cwd);
   const cwdDecision = view.classify(requestedCwd);
-  const cwd = cwdDecision.access === VIEW_WRITABLE ? cwdDecision.path : view.home;
+  const cwd = cwdDecision.access === VIEW_WRITABLE ? cwdDecision.path : view.agentHome;
 
   if (platform === 'darwin') {
     const env = sandboxEnvironment(options.source ?? process.env, {
@@ -648,6 +722,8 @@ function plan(options) {
       argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view), 'bash', '-c', command],
       env,
       cwd,
+      // No mount namespace to `--chdir` into, so the process starts there.
+      spawnCwd: cwd,
       profile: buildMacProfile(view),
     };
   }
@@ -789,7 +865,6 @@ function helloCapability(probeResult) {
 module.exports = {
   SANDBOX_STATUS,
   PROBE_HINTS,
-  LINUX_MASK_DIRS,
   LINUX_MASK_FILES,
   MAC_DENY_SUBPATHS,
   ENV_ALLOWLIST,

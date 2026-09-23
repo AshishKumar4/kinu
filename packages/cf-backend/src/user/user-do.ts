@@ -34,6 +34,7 @@ import {
   DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
   isDeviceUnknownMethodError,
+  isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createExperienceLibrary,
@@ -226,6 +227,14 @@ const CONSENT_FREE_DEVICE_METHODS = {
   checkpointStatus: true,
   checkpointList: true,
   checkpointPlan: true,
+} as const satisfies Record<string, true>;
+
+/** Frames the daemon refuses without the owner's Sandbox switch. */
+const DEVICE_VIEW_METHODS = {
+  exec: true, [DEVICE_PTY_OPEN_METHOD]: true,
+  readFile: true, readRange: true, writeFile: true, listFiles: true,
+  statPath: true, unlinkPath: true, mkdirPath: true, exists: true,
+  checkpointPlan: true, checkpointRestore: true,
 } as const satisfies Record<string, true>;
 
 /** The agent a device call's consent is keyed on, or undefined when the call is not gated
@@ -2407,28 +2416,25 @@ export class UserDO extends Agent<Env> {
       if (!consent.allowed) throw new Error(consent.reason);
     }
 
-    // Commands and terminals run things, so both get the same sandbox frame; a terminal
-    // must not bypass the owner's Sandbox switch. `agentHome` is empty only under the raw tier.
-    let execSandbox: JsonObject | null = null;
+    // `agentHome` is empty only under the raw tier.
+    let frameSandbox: JsonObject | null = null;
 
-    if (method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) {
+    if (Object.hasOwn(DEVICE_VIEW_METHODS, method)) {
       const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
       const sandbox = this.deviceSandboxFor(deviceId, workspace);
-      const mode = effectiveDeviceMode(sandbox);
 
-      // Refused before the frame leaves; the daemon refuses again on its own probe. Neither end
-      // ever downgrades a sandboxed command to raw.
-      if (mode === 'files_only') {
+      // Neither end ever downgrades a sandboxed command to raw; files need no kernel.
+      if ((method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) && effectiveDeviceMode(sandbox) === 'files_only') {
         throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
       }
 
-      if (mode === 'sandboxed' && sandbox.agentHome === null) {
+      if (sandbox.tier === 'sandboxed' && sandbox.agentHome === null) {
         throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
           ? 'an agent home belongs to a workspace, and this call has none'
           : 'the daemon did not report where agent homes live'));
       }
 
-      execSandbox = {
+      frameSandbox = {
         tier: sandbox.tier,
         agentHome: sandbox.agentHome ?? '',
         roots: [...sandbox.roots],
@@ -2453,7 +2459,7 @@ export class UserDO extends Agent<Env> {
       };
     }
 
-    if (execSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: execSandbox };
+    if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
 
     if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
 
@@ -2653,10 +2659,7 @@ export class UserDO extends Agent<Env> {
   }
 
 
-  /**
-   * Agent home is composed per call from the root the daemon reported, never stored.
-   * `.` and `..` workspace names are refused so the home cannot resolve above the agent root.
-   */
+  /** Agent home is composed per call from the root the daemon reported, for one workspace segment. */
   private deviceSandboxFor(deviceId: string, workspace: string | null): DeviceSandboxStatus & { deviceHome: string | null } {
     const row = this.sqlx<SandboxColumns & { tier: string | null; agent_root: string | null; consented_root: string | null; device_home: string | null }>(
       `SELECT tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu, agent_root, consented_root, device_home
@@ -2664,7 +2667,7 @@ export class UserDO extends Agent<Env> {
     )[0];
 
     const agentRoot = row?.agent_root ?? null;
-    const named = workspace !== null && workspace !== '.' && workspace !== '..' && workspace !== '';
+    const named = workspace !== null && isWorkspaceName(workspace) && workspace !== '.' && workspace !== '..';
     const consented = row?.consented_root ?? null;
 
     return {
