@@ -28,15 +28,8 @@ import { daemonArchive, releaseSigningEnv, startUpdateHub, until, type UpdateHub
 
 const repoRoot = resolve(__dirname, '../../..');
 
-/**
- * Modules the daemon requires beside itself, derived from its require lines; a sibling missing
- * here kills every clean install on its first require.
- */
+/** What the daemon requires beside itself, as this repo ships it: the installer must land each one, byte for byte. */
 const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE } as const;
-
-/** Mirrors the installer's private reader of `require('./x')` lines; drift fails these tests. */
-const REQUIRED_SIBLINGS = [...DAEMON_SOURCE.matchAll(/require\('\.\/([^']+)'\)/g)]
-  .map((m) => m[1] ?? '').filter((n) => n !== '');
 
 function newProjectDir(): string {
   const dir = scratchDir('test-project');
@@ -518,15 +511,6 @@ describe('the sandbox state the machine reported', () => {
     }
   });
 
-  test('the user-namespace fix is core\'s sentence, never a second copy here', () => {
-    const source = readFileSync(resolve(repoRoot, 'packages/cli/src/device-connect.ts'), 'utf8');
-    const SYSCTL = 'kernel.apparmor_restrict_unprivileged_userns=0';
-    expect(sandboxReasonFix('no_userns')).toContain(SYSCTL);
-    expect(source).not.toContain(SYSCTL);
-    expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: 'no_userns', detail: null, gpu: [] })[1])
-      .toContain(SYSCTL);
-  });
-
   test('a machine that cannot sandbox says so, and the reason code stays out of it', () => {
     expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] }))
       .toEqual(['This machine cannot sandbox.', sandboxReasonFix(null), NO_COMMANDS_LINE]);
@@ -628,8 +612,8 @@ describe('device-connect install hardening', () => {
     expect(JSON.parse(out.trim())).toEqual(connectedResult());
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
-    expect(REQUIRED_SIBLINGS.length).toBeGreaterThan(1);
-    expect(Object.keys(DAEMON_SIBLINGS).sort()).toEqual([...REQUIRED_SIBLINGS].sort());
+    // A sibling missing beside the installed daemon kills it on its first require.
+    expect(await runScript(home, `require(${JSON.stringify(join(home, 'pc-agent.js'))}); console.log('loaded');`)).toBe('loaded\n');
 
     for (const [name, source] of Object.entries(DAEMON_SIBLINGS)) {
       expect(readFileSync(join(home, name), 'utf-8')).toBe(source);

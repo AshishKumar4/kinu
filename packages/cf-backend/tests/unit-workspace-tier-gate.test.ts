@@ -414,7 +414,7 @@ describe('a registered workspace reaches the whole surface', () => {
       .toEqual([WORKSPACE, OTHER_WORKSPACE]);
     expect(await harness.userDO.hasWorkspace(caller, WORKSPACE)).toBe(true);
     expect(await harness.userDO.getAuthHeaders(caller, 'openai.bearer')).toEqual({ Authorization: 'Bearer sk-1' });
-    expect(await harness.userDO.getDeviceFileView(caller, WORKSPACE)).toEqual({ unconfined: false });
+    expect(await harness.userDO.getDeviceFileView(caller, WORKSPACE)).toEqual({ scope: 'root' });
     harness.close();
   });
 });
@@ -606,13 +606,13 @@ describe('facets attenuate with their workspace', () => {
 
     // A facet naming anything still gets workspace-a's answer: its identity is the token, not the argument.
     expect(await harness.userDO.getDeviceFileView(facetCaller, 'some-facet-name'))
-      .toEqual({ unconfined: true });
+      .toEqual({ scope: 'unconfined' });
     expect(await harness.userDO.getDeviceFileView(facetCaller, OTHER_WORKSPACE))
-      .toEqual({ unconfined: true });
+      .toEqual({ scope: 'unconfined' });
 
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
     expect(await harness.userDO.getDeviceFileView(sibling, WORKSPACE))
-      .toEqual({ unconfined: false });
+      .toEqual({ scope: 'root' });
     harness.close();
   });
 

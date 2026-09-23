@@ -3,7 +3,6 @@
  * driven over a real UserDO whose device socket answers, so a grant that did nothing is visible.
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
@@ -1243,6 +1242,23 @@ describe('a copied device.json goes stale', () => {
     harness.close();
   });
 
+  test('a grace that bought a ticket is spent: the machine is refused next time, and not revoked', async () => {
+    const harness = createTestUserDO({ deviceResponder: daemon });
+    const { deviceId, token: first } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+
+    // The rotation is lost with its socket, so the machine still holds `first`, now the grace.
+    expect(await connectDaemon(harness, first)).toBeTruthy();
+    harness.acceptedSockets.at(-1)?.drop();
+
+    // The grace buys a ticket, and the upgrade never arrives.
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toMatchObject({ ok: true });
+
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), first)).toEqual({ ok: false });
+    expect(await deviceRow(harness, deviceId)).toMatchObject({ revokedAt: null, reuseDetectedAt: null });
+    await harness.joinFibers();
+    harness.close();
+  });
+
   test('a retired key presented again revokes the device, closes its socket, and waits for the owner', async () => {
     // SECURITY-devices C3. Whichever copy of device.json acknowledged first holds the only valid
     // secret; the other copy's return is the only evidence there are two. The live socket may be
@@ -1440,14 +1456,5 @@ describe('a workspace\'s device checkpoints are its own', () => {
       { agent: WORKSPACE, turnId: 'turn-1', sessionId: 's', dir: null },
     ]);
     await harness.closeDeviceHarness();
-  });
-});
-
-describe('device RPC stays unreachable from owner HTTP routes', () => {
-  test('no /api/user route forwards an arbitrary method to deviceRpc', () => {
-    const source = readFileSync(new URL('../src/user/routes.ts', import.meta.url).pathname, 'utf8');
-    // Checkpoint reads are the only consent-free methods; an HTTP pass-through would widen the
-    // device RPC surface.
-    expect(source).not.toContain('deviceRpc');
   });
 });

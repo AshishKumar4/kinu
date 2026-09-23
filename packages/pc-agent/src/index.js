@@ -50,16 +50,16 @@ const PID_PATH = path.join(DEVICE_HOME, 'pc-agent.pid');
  *  one. `packages/cli/tests/device-connect.test.ts` pins the number. */
 const ALREADY_RUNNING_EXIT = 3;
 
-/** The hub's token-rotation frame type. Pinned against core's
- *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
- *  one dependency-free file and cannot import the constant. */
+/** The hub's token-rotation frame type, core's DEVICE_TOKEN_ROTATION: this
+ *  daemon ships as one dependency-free file and cannot import the constant, so
+ *  packages/cli/tests/daemon-update.test.ts drives it with core's frames. */
 const TOKEN_ROTATION = 'ROTATE';
 
-/** This daemon's answer once the rotated token is on disk. The hub keeps the
- *  superseded token valid until this frame arrives and drops it then, so the
- *  grace covers exactly the failure it exists for — a rotation lost with its
- *  socket — and not the indefinite window a copy of device.json could spend.
- *  Pinned against core's DEVICE_TOKEN_ROTATION_ACK in the device-hub test. */
+/** This daemon's answer once the rotated token is on disk, core's
+ *  DEVICE_TOKEN_ROTATION_ACK. The hub keeps the superseded token valid until
+ *  this frame arrives and drops it then, so the grace covers exactly the
+ *  failure it exists for — a rotation lost with its socket — and not the
+ *  indefinite window a copy of device.json could spend. */
 const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
 
 /** The hub's close code for a token it will not accept again, and the message
@@ -1004,16 +1004,21 @@ function processGroupHasLiveProcess(group) {
   });
 }
 
+/** A signal name the supervisor recorded: `SIG` and the platform's name for it. */
+const SIGNAL_NAME = /^SIG[A-Z0-9]+$/;
+
 function readTerminalResult(dir) {
   const fields = readFieldFile(path.join(dir, 'result'));
   const kind = fields.get('kind');
   const exitCode = Number(fields.get('exitCode'));
+  const signal = fields.get('signal') ?? null;
 
-  if ((kind !== 'exited' && kind !== 'cancelled') || !Number.isSafeInteger(exitCode)) {
+  if ((kind !== 'exited' && kind !== 'cancelled') || !Number.isSafeInteger(exitCode)
+    || (signal !== null && !SIGNAL_NAME.test(signal))) {
     throw new Error(`invalid terminal result in ${dir}`);
   }
 
-  return { kind, exitCode };
+  return { kind, exitCode, signal };
 }
 
 /** The supervisor bounds the file as it writes it; the read bound only keeps a damaged file off the heap. */
@@ -1031,14 +1036,17 @@ function readCapturedOutput(file) {
   }
 }
 
+/** A command a signal ended says so, in the words the CLI's own shell uses (cli-backend runtime.ts exitStatus). */
 function readExecResult(dir) {
   const terminal = readTerminalResult(dir);
+  const stderr = readCapturedOutput(path.join(dir, 'stderr'));
+  const note = terminal.signal === null ? '' : `Command terminated by ${terminal.signal}.`;
 
   return {
     terminal,
     result: {
       stdout: readCapturedOutput(path.join(dir, 'stdout')),
-      stderr: readCapturedOutput(path.join(dir, 'stderr')),
+      stderr: note === '' ? stderr : `${stderr}${stderr === '' || stderr.endsWith('\n') ? '' : '\n'}${note}`,
       exitCode: terminal.exitCode,
     },
   };
@@ -1084,9 +1092,10 @@ function startIdentity(pid) {
   return start;
 }
 
-function writeTerminalResult(kind, exitCode) {
+function writeTerminalResult(kind, exitCode, signal) {
   const temporary = resultFile + '.tmp.' + process.pid;
-  fs.writeFileSync(temporary, 'kind=' + kind + '\\nexitCode=' + exitCode + '\\n', { mode: 0o600 });
+  const named = signal ? 'signal=' + signal + '\\n' : '';
+  fs.writeFileSync(temporary, 'kind=' + kind + '\\nexitCode=' + exitCode + '\\n' + named, { mode: 0o600 });
   fs.renameSync(temporary, resultFile);
 }
 
@@ -1238,7 +1247,7 @@ let cancellationRequested = false;
 let cancellationSignalDelivered = false;
 let completed = false;
 
-function finish(kind, exitCode) {
+function finish(kind, exitCode, signal) {
   if (completed) return;
   completed = true;
   stdout.close();
@@ -1251,7 +1260,7 @@ function finish(kind, exitCode) {
   // The cloud may ACK as soon as result appears. Publish an open FIFO before
   // that result, otherwise its writer can create a regular file in the race.
   execFileSync('mkfifo', [ackFile]);
-  writeTerminalResult(kind, exitCode);
+  writeTerminalResult(kind, exitCode, signal);
   const acknowledgement = fs.createReadStream(ackFile);
   // The daemon is the only writer of this FIFO, so once it is gone the wait can
   // never end and this process would hold the request directory on the machine
@@ -1363,7 +1372,12 @@ child.once('exit', (code, signal) => {
       }
       return;
     }
-    finish('exited', typeof code === 'number' ? code : (signal ? 128 + 9 : 125));
+    // A signal death is 128 plus that signal's number on this platform (SIGBUS
+    // is 7 on Linux and 10 on macOS). Node reports exactly one of code and
+    // signal; an end with neither is this supervisor's own failure.
+    if (typeof code === 'number') finish('exited', code);
+    else if (signal) finish('exited', 128 + (require('node:os').constants.signals[signal] || 0), signal);
+    else finish('exited', 125);
   };
   setTimeout(() => {
     // A background descendant can retain the inherited pipes forever. At this

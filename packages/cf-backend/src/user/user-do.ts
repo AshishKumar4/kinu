@@ -139,7 +139,7 @@ import {
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause,
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
-  type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type DeviceFileScope, type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
   type McpPresetId, mcpPresetById,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
@@ -2317,7 +2317,7 @@ export class UserDO extends Agent<Env> {
 
     if (row.expires_at !== null && row.expires_at <= Date.now()) return { ok: false };
 
-    // Only the current secret retires the grace: a socket that failed on the grace may retry.
+    // Spent on the ticket it buys: a machine whose connect then fails is refused, not revoked.
     if (row.current === 1) this.retireDeviceTokens(row.id, [row.prev_token_hash], Date.now());
     this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
 
@@ -2900,19 +2900,20 @@ export class UserDO extends Agent<Env> {
    *  both the daemon and the hub-side path scope so shell and file views cannot drift. */
   async getDeviceFileView(
     caller: UserCaller, agentName: string, device?: string,
-  ): Promise<{ unconfined: boolean }> {
+  ): Promise<{ scope: DeviceFileScope }> {
     const resolved = await this.requireTier(caller, 'device.consent.read_self');
     // Per machine. Unnamed resolves the only live machine; several with none named is "confined".
     const deviceId = this._devices.connectedDeviceId(device);
 
-    if (!deviceId) return { unconfined: false };
+    if (!deviceId) return { scope: 'root' };
     // A workspace caller's identity is its token, never its argument, so a facet cannot read a
     // sibling's answer.
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+    const { tier } = this.deviceSandboxFor(deviceId, workspace);
 
-    if (this.getDeviceBinding(workspace, deviceId) !== 'allow') return { unconfined: false };
+    if (tier === 'sandboxed') return { scope: 'sandboxed' };
 
-    return { unconfined: this.deviceSandboxFor(deviceId, workspace).tier === 'raw' };
+    return { scope: this.getDeviceBinding(workspace, deviceId) === 'allow' ? 'unconfined' : 'root' };
   }
 
   /** Revoked rows are hidden, except those with an incident, visible until the owner acknowledges

@@ -72,7 +72,7 @@ function patterned(length: number): Uint8Array {
 const files = deviceFiles(tunnelToDaemon(), {
   consentedRoot: async () => '/',
   deviceHome: async () => '/',
-  unconfined: async () => true,
+  scope: async () => 'unconfined',
 });
 
 describe('a device file of any size crosses the tunnel', () => {

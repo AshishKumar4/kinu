@@ -539,24 +539,25 @@ function filesForCall(
   return { kind: 'view', view: deviceFiles(transport, consent, resolved.deviceId) };
 }
 
-/**
- * Device file view scope: only the directory named at `kinu connect` while Sandbox is on. No `$HOME` fallback (it holds
- * `~/.kinu/config.json`, `~/.ssh`). `unconfined` is the same switch the shell sandbox reads.
- */
+/** A device file view's reach: `unconfined` (Sandbox off), `sandboxed` (the consented directory and the agent's own
+ *  tmp, which the daemon maps `/tmp` and `/var/tmp` to), `root` (the consented directory). Never `$HOME`. */
+export type DeviceFileScope = 'unconfined' | 'sandboxed' | 'root';
+
 export interface DeviceFileConsent {
   /** Consented directory on the named machine, or null when it reported none. */
   consentedRoot(deviceId?: string): Promise<string | null>;
   /** That machine's HELLO-reported home, or null. Where the view opens without a consented dir; never a scope. */
   deviceHome(deviceId?: string): Promise<string | null>;
-  /** Sandbox switch off on that device: lifts the path scope as it lifts the shell's. */
-  unconfined(deviceId?: string): Promise<boolean>;
+  scope(deviceId?: string): Promise<DeviceFileScope>;
 }
 
 const ALWAYS_CONSENTED: DeviceFileConsent = {
   consentedRoot: async () => '/',
   deviceHome: async () => '/',
-  unconfined: async () => true,
+  scope: async () => 'unconfined',
 };
+
+const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
 export type DeviceVFS = VFS & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
@@ -593,15 +594,19 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   };
 
   const guard = async (path: string, op: string): Promise<string | null> => {
-    if (await consent.unconfined(deviceId)) return null;
+    const scope = await consent.scope(deviceId);
+
+    if (scope === 'unconfined') return null;
+
+    if (scope === 'sandboxed' && AGENT_TMP_PATHS.some((tmp) => path === tmp || path.startsWith(`${tmp}/`))) return null;
     const root = await effectiveRoot();
 
     // A device that named no directory threw above rather than widening to `/`.
     if (!(path === root || path.startsWith(`${root}/`))) {
       throw makeVfsError(
         'EACCES',
-        `'${path}' is outside the consented device directory '${root}' — `
-        + 'the agent sees its own home plus the folders the owner consented, and nothing else. '
+        `'${path}' is outside the consented device directory '${root}' — the agent sees the folder the owner `
+        + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
         + `Ask the owner to consent that directory, ${op} '${path}'`,
         path,
       );

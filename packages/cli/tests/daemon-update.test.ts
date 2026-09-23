@@ -1,13 +1,18 @@
-/** Device daemon self-update, with the hub faked at its two seams (helpers/update-hub.ts). */
+/** Device daemon self-update, and the frames it shares with the hub, with the hub faked at its two seams (helpers/update-hub.ts). */
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import { scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
-import type { JsonObject } from '@kinu.run/core';
+import * as v from 'valibot';
 import {
-  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, startUpdateHub, until, type UpdateHub,
+  deviceFiles, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema, parseJsonObject,
+  type DeviceStatus, type DeviceTransport, type JsonObject,
+} from '@kinu.run/core';
+import {
+  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub, until,
+  type HubPush, type HubSocket, type UpdateHub,
 } from './helpers/update-hub';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -289,6 +294,85 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect('version' in socket.hello).toBe(false);
     await socket.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
+  });
+});
+
+/** What a daemon reports in HELLO beyond its build: where it keeps agent homes, and what it proved it can sandbox. */
+const ProvedHelloSchema = v.looseObject({
+  agentRoot: v.string(),
+  sandbox: v.looseObject({ capability: v.string() }),
+});
+
+const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() });
+
+const ReplySchema = v.object({ id: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()) });
+
+type FrameSandbox = NonNullable<Extract<HubPush, { method: string }>['sandbox']>;
+
+/** Core's device transport over the fake hub's socket: every call carries the block, and its answer is the daemon's own. */
+function tunnelOver(socket: HubSocket, sandbox: FrameSandbox, log: () => string): DeviceTransport {
+  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+  let next = 0;
+
+  return {
+    status: () => connected,
+    refreshStatus: async () => connected,
+    rpc: async (method, params, opts) => {
+      const id = opts?.requestId ?? `rpc-spillfile0-${String(next += 1)}`;
+      socket.send({ id, method, params, sandbox });
+      const reply = v.parse(ReplySchema, await until(() => socket.frames.find((frame) => frame.id === id), `the answer to ${id}`, log));
+
+      if (reply.error !== undefined) throw new Error(reply.error);
+
+      return reply.result;
+    },
+  };
+}
+
+// The daemon is one dependency-free file and cannot import core's frame names or its file client;
+// driven by a hub that speaks them, it must answer in them.
+describe('the daemon answers the hub in core\'s frames', () => {
+  test('a rotated token is on disk when the daemon acknowledges it', async () => {
+    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home, await releaseSigningEnv());
+
+    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    await until(() => socket.frames.find((frame) => frame.type === DEVICE_TOKEN_ROTATION_ACK), 'the rotation acknowledgement', daemon.log);
+
+    expect(parseJsonObject(installed(home, 'device.json')).token).toBe(ROTATED_TOKEN);
+  });
+
+  test('a sandboxed command\'s whole output reads back through core\'s file client at the /tmp path it printed', async () => {
+    const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home, await releaseSigningEnv());
+    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const proved = v.parse(ProvedHelloSchema, socket.hello);
+
+    // What the machine proved at start: one that cannot sandbox runs no sandboxed command at all.
+    if (proved.sandbox.capability !== 'sandboxed') return;
+    const project = scratchDir('daemon-spill-project');
+    // As the hub composes it for a workspace: `<agentRoot>/<workspace>/home`, plus the directory named at `kinu connect`.
+    const block = { tier: 'sandboxed' as const, agentHome: join(proved.agentRoot, 'ws-spill', 'home'), roots: [project] };
+    const tunnel = tunnelOver(socket, block, daemon.log);
+
+    const files = deviceFiles(tunnel, {
+      consentedRoot: async () => project,
+      deviceHome: async () => null,
+      scope: async () => 'sandboxed',
+    });
+
+    const requestId = 'rpc-spillread0-1';
+    // System tools only: the runtime that runs this suite lives in a home the sandbox hides.
+    const noisy = "head -c 600000 /dev/zero | tr '\\0' x; printf END";
+    const ran = v.parse(ExecResultSchema, await tunnel.rpc('exec', [noisy], { requestId }));
+    const shown = '/tmp/kinu-tool-output/device-rpc-spillread0-1.stdout.log';
+
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
+    expect(await files.readFile(shown, { encoding: 'utf8' })).toBe(`${'x'.repeat(600_000)}END`);
+    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
   });
 });
 

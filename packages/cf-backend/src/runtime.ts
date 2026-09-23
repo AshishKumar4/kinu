@@ -37,7 +37,7 @@ import {
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
-import type { SandboxHandle } from "@kinu.run/core";
+import type { DeviceFileScope, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, REAL_CLOCK } from '@kinu.run/core';
 import type { HostedNodeHome } from '@kinu.run/core';
 
@@ -120,7 +120,7 @@ export interface ActorRuntimeIdentity {
 }
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
-  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ unconfined: boolean }>;
+  getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ scope: DeviceFileScope }>;
 }
 
 interface RuntimeUserDONamespace {
@@ -491,13 +491,13 @@ export function createCFRuntime(
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
     deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
-    unconfined: async (deviceId) => {
+    scope: async (deviceId) => {
       const hub = userDOStubFor(env, actor);
 
-      if (!hub) return false;
+      if (!hub) return 'root';
 
       try {
-        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).unconfined;
+        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).scope;
       } catch (cause) {
         throw toKinuError({
           doing: "reading the device's file-view scope",

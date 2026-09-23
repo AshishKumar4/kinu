@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import {
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_CANCEL_VERSION_REFUSAL, DEVICE_EXEC_ACK_METHOD,
   DEVICE_PTY_CLOSE, DEVICE_PTY_EXIT, DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_OUTPUT, DEVICE_PTY_RESIZE,
-  DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
+  DEVICE_UNKNOWN_METHOD, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
 
@@ -591,33 +591,43 @@ describe('pc-agent supervisor guards', () => {
   });
 });
 
+/** Executor → tunnel → daemon, as the hub wires them. The binding is declared before the socket: the two reference
+ *  each other, and nothing reads it before the first frame. */
+function deviceChain() {
+  let tunnel: DeviceTunnel;
+
+  const socket: TunnelSocket = {
+    readyState: 1,
+    send: (data: string) => {
+      handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
+        send: (reply: string) => { tunnel.handleMessage(reply); },
+      });
+    },
+  };
+
+  tunnel = new DeviceTunnel(socket);
+  const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+
+  const transport: DeviceTransport = {
+    rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
+    status: () => connected,
+    refreshStatus: async () => connected,
+  };
+
+  return { provider: createDeviceTunnelExecutor(transport), tunnel };
+}
+
+describe('the daemon answers in the words the hub reads', () => {
+  test('a method this daemon does not know reaches the hub as unknown, the way a newer frame meets an older daemon', async () => {
+    const { tunnel } = deviceChain();
+
+    await expect(tunnel.rpc('methodFromALaterHub', [])).rejects.toThrow(DEVICE_UNKNOWN_METHOD);
+    tunnel.dispose();
+  });
+});
+
 /** The whole chain, executor → tunnel → daemon → real process, aborted the way a stopped turn does. */
 describe('stopping a turn reaches the process on the user\'s machine', () => {
-  /** The binding is declared before the socket: the two reference each other, and nothing reads it before the first frame. */
-  function deviceChain() {
-    let tunnel: DeviceTunnel;
-
-    const socket: TunnelSocket = {
-      readyState: 1,
-      send: (data: string) => {
-        handle(v.parse(DaemonFrameSchema, JSON.parse(data)), {
-          send: (reply: string) => { tunnel.handleMessage(reply); },
-        });
-      },
-    };
-
-    tunnel = new DeviceTunnel(socket);
-    const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
-
-    const transport: DeviceTransport = {
-      rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
-      status: () => connected,
-      refreshStatus: async () => connected,
-    };
-
-    return { provider: createDeviceTunnelExecutor(transport), tunnel };
-  }
-
   test('the tool\'s abort kills the command and its child, and says it did', async () => {
     const dir = scratchDir('pc-agent-e2e');
     const { command, pidOf } = commandWithDescendant(dir, 'e2e');

@@ -176,7 +176,7 @@ describe('the composite file plane', () => {
     const t = fleetTransport([STUDIO, SPARE]);
 
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', unconfined: async () => true,
+      consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', scope: async () => 'unconfined',
     });
 
     const plane = provider.files;
@@ -198,7 +198,7 @@ describe('the composite file plane', () => {
     const t = fleetTransport([STUDIO, RIG, SPARE]);
 
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     });
 
     const plane = provider.files;
@@ -219,7 +219,7 @@ describe('the composite file plane', () => {
     const t = fleetTransport([STUDIO, RIG]);
 
     const provider = createDeviceTunnelExecutor(t, {
-      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     });
 
     const plane = provider.files;
@@ -255,7 +255,7 @@ describe('where the file browser lands on a mount', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async (id) => consented[id ?? ''] ?? null,
       deviceHome: async (id) => consented[id ?? ''] ?? null,
-      unconfined: async () => opts.unconfined ?? false,
+      scope: async () => (opts.unconfined === true ? 'unconfined' : 'root'),
     });
 
     const router = new DefaultExecutionRouter();

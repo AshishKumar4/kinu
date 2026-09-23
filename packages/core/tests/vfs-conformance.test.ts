@@ -335,7 +335,7 @@ const cases: Case[] = [
     make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'device file view', statMissing: 'null',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
-      consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     }), path: (s) => `/conf/${s}` },
 ];
 
@@ -495,7 +495,7 @@ describe('the global workspace namespace', () => {
 describe('device file view — the consented subtree is a boundary', () => {
   function scoped(root: string) {
     const calls: string[] = [];
-    const consent = { consentedRoot: async () => root, deviceHome: async () => root, unconfined: async () => false };
+    const consent = { consentedRoot: async () => root, deviceHome: async () => root, scope: async () => 'root' as const };
 
     return { vfs: deviceFiles(deviceTransport(new MemFs(), calls), consent), calls };
   }
@@ -549,7 +549,7 @@ describe('device file view — bounded range reads', () => {
     const consent = {
       consentedRoot: async () => '/home/me/proj',
       deviceHome: async () => '/home/me',
-      unconfined: async () => false,
+      scope: async () => 'root' as const,
     };
 
     const vfs = deviceFiles(deviceTransport(fs, calls), consent);

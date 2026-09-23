@@ -103,7 +103,7 @@ describe('createDeviceTunnelExecutor', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/home/dev/project',
       deviceHome: async () => '/home/dev',
-      unconfined: async () => false,
+      scope: async () => 'root',
     });
 
     const read = await provider.tools.readFile.execute('/etc/passwd');
@@ -133,7 +133,7 @@ describe('createDeviceTunnelExecutor', () => {
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
-      unconfined: async () => false,
+      scope: async () => 'root',
     });
 
     // Every file tool refuses without asking the machine anything, above all no `exec`.
@@ -163,7 +163,7 @@ describe('createDeviceTunnelExecutor', () => {
     const full = createDeviceTunnelExecutor(described, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
-      unconfined: async () => true,
+      scope: async () => 'unconfined',
     });
 
     expect(await full.homeDir()).toBe('/');

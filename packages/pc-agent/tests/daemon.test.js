@@ -444,6 +444,31 @@ describe('daemon exec output bound', () => {
   });
 });
 
+describe('a command a signal ended', () => {
+  // Each one kills the shell that runs it, so no exit code exists, only the
+  // signal. `ulimit -c 0`: nothing leaves a core file behind.
+  for (const [signal, id] of [['SIGSEGV', 'rpc-sigsegv000-1'], ['SIGABRT', 'rpc-sigabrt000-1'], ['SIGBUS', 'rpc-sigbus0000-1']]) {
+    test(`reports ${signal} by its own number, and says so`, async () => {
+      const ws = fakeWs();
+      handle({ id, method: 'exec', sandbox: RAW, params: [`ulimit -c 0; kill -${signal.slice(3)} $$`] }, ws, {});
+
+      const { result } = await ws.response(id);
+
+      expect(result.exitCode).toBe(128 + os.constants.signals[signal]);
+      expect(result.stderr).toBe(`Command terminated by ${signal}.`);
+    });
+  }
+
+  test('an exit code, even one above 128, is the command\'s own and names no signal', async () => {
+    const ws = fakeWs();
+    handle({ id: 'rpc-exit139000-1', method: 'exec', sandbox: RAW, params: ['echo failing >&2; exit 139'] }, ws, {});
+
+    const { result } = await ws.response('rpc-exit139000-1');
+
+    expect(result).toMatchObject({ exitCode: 139, stderr: 'failing\n' });
+  });
+});
+
 describe('daemon device path confinement', () => {
   /** The frame a hub with the Sandbox switch on sends: the consented
    *  directories ride the sandbox block, which is the SAME policy object the
