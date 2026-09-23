@@ -15,7 +15,7 @@
  * emits the tool call as soon as the arguments parse — see
  * openai-compatible-chat-language-model.ts:605, `isParsableJson`).
  */
-import { createServer as createHttpServer } from 'node:http';
+import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import * as v from 'valibot';
 import { parseJsonValue } from '@kinu.run/core';
 
@@ -32,10 +32,19 @@ const SCRIPTED_CREDENTIAL = 'openai-compat.default';
  *  answer waits for the words this server actually sends. */
 export const FALLBACK_ANSWER = 'Live answer from the fake model.';
 
-/** One answer: prose, or a tool call with its complete arguments. */
+/** A paced answer's silences, in the order a thinking model leaves them: before its first token, and after
+ *  `lead`, a first token that opens the answer's text with nothing to draw, as a blank lead line does. */
+export interface ScriptedPace {
+  readonly firstTokenMs: number;
+  readonly lead: string;
+  readonly leadMs: number;
+}
+
+/** One answer: prose, or a tool call with its complete arguments. Unpaced, it is written in one piece. */
 export interface ScriptedAnswer {
   readonly text?: string;
   readonly toolCall?: { readonly name: string; readonly arguments: unknown };
+  readonly pace?: ScriptedPace;
 }
 
 /** The request as a script reads it. `available` is what this turn may call —
@@ -139,6 +148,19 @@ function streamOf(answer: ScriptedAnswer): string {
   return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
 }
 
+/** Write a paced answer the way a slow provider streams one: the role chunk at once, then each silence as a real
+ *  wait on the socket, then the answer. */
+function writePaced(response: ServerResponse, answer: ScriptedAnswer, pace: ScriptedPace): void {
+  const frame = (delta: Record<string, string>): string =>
+    `data: ${JSON.stringify({ ...CHUNK, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
+
+  response.write(frame({ role: 'assistant' }));
+  setTimeout(() => {
+    response.write(frame({ content: pace.lead }));
+    setTimeout(() => { response.end(streamOf(answer)); }, pace.leadMs);
+  }, pace.firstTokenMs);
+}
+
 export interface ScriptedModelServer {
   readonly port: number;
   /** Every answer this server gave, in order — what a failing row reads first. */
@@ -172,7 +194,9 @@ export async function startScriptedModel(script: ScriptedModel): Promise<Scripte
         process.stderr.write(`scripted-model: tools=${asked.available.join(',')} called=${asked.called.join(',')} users=${JSON.stringify(asked.userTexts)}\n`);
         answers.push(answer);
         response.setHeader('content-type', 'text/event-stream');
-        response.end(streamOf(answer));
+
+        if (answer.pace === undefined) response.end(streamOf(answer));
+        else writePaced(response, answer, answer.pace);
 
         return;
       }
@@ -211,6 +235,39 @@ export async function registerScriptedModel(origin: string, port: number): Promi
       apiKey: 'fake-key',
     }),
   });
+}
+
+/* ── The paced turn ───────────────────────────────────────────────────── */
+
+/** The words that ask for the paced turn, and the prose it closes on. */
+export const PACED_TURN_ASK = 'Pace this turn: list the home folder, then say what is in it.';
+
+export const PACED_TURN_ANSWER = 'The home folder holds the workspace soul and its projects folder.';
+
+/** Long enough for a 20 ms sampler to read each silence many times over, short enough to keep the row small. */
+export const PACED_SILENCE_MS = 3_000;
+
+const PACED: ScriptedPace = { firstTokenMs: PACED_SILENCE_MS, lead: '\n\n', leadMs: PACED_SILENCE_MS };
+
+/**
+ * A turn that streams the way a thinking model does: silence before the first token, a first token that opens
+ * the answer's text with nothing to draw, silence, then a tool call; the next step the same before its closing
+ * prose. Null for any request that did not ask for it, so it composes in front of another script.
+ */
+export function pacedTurn(request: ScriptedRequest): ScriptedAnswer | null {
+  if (!request.userTexts.some((text) => text.includes(PACED_TURN_ASK))) return null;
+
+  if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
+
+  if (!request.called.includes('file')) {
+    return {
+      pace: PACED,
+      text: 'Listing the home folder.',
+      toolCall: { name: 'file', arguments: { action: 'list', path: '/home/user' } },
+    };
+  }
+
+  return { pace: PACED, text: PACED_TURN_ANSWER };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */

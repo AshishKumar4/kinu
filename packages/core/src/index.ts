@@ -2254,7 +2254,7 @@ export {
   type HeadDelta, type HeadDeltaKind, type HeadDeltas,
 } from './read-models/head-chat';
 
-export { threadLiveTail, type LiveTail } from './read-models/message-live-tail';
+export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
 export { turnLiveness, type TurnClaimState, type TurnLiveness } from './read-models/turn-liveness';
 
