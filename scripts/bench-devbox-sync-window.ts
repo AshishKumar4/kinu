@@ -193,6 +193,8 @@ async function main(): Promise<number> {
   // Its own id space, so a strategies bench started in the same second never shares its names; the
   // two-digit year keeps every derived name as long as the strategies bench's, which deploy.
   const runId = `w${new Date().toISOString().replace(/[^0-9]/g, '').slice(2, 14)}`;
+  // Read before deploying: a later read could name edits made after the deploy.
+  const revision = sourceRevision();
   const residue = r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId, secretAccessKey });
   await recoverAbandonedRuns(REPO, runId, orphanTeardownExecutor(residue), log);
   const fixtures = createFixtureResources(runId, [ARM]);
@@ -229,7 +231,7 @@ async function main(): Promise<number> {
   const observed = {
     runId,
     date: new Date().toISOString(),
-    revision: sourceRevision(),
+    revision,
     workerVersion: lane.workerVersion,
     result,
     failure,

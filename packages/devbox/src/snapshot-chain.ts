@@ -1788,6 +1788,16 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
   };
 
+  /** A delta is exact only over the base the overlay serves, its `lower-base` mount's `fsname` (D31). */
+  const rebaseOnCommit = (state: ChainState | null, procMounts: string, kind: CheckpointKind): boolean => {
+    if (state === null || state.mode !== 'chain') return false;
+    const archive = mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, state.base.id));
+
+    return findMount(procMounts, lowerBase)?.source !== archive
+      || (deltaLayerServed(procMounts, state.base.id) && state.deltaFormat !== 'chunked')
+      || shouldRebase(state, kind);
+  };
+
   /** A rebase archives the merged work directory as a base under a new generation id;
    *  the old generation is deleted only after the new record is durable. */
   const commitChain = async (
@@ -1968,9 +1978,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // `checkChanges` with no `since` answers `unchanged` while it sets a baseline, so skip on the
       // upper's fingerprint; an unreadable (empty) one never matches, so it commits.
       const mark = gate.fingerprint;
-      // The layer's mount point names its generation, so `/proc/mounts` shows whether a delta
-      // layer is served; this reuses the read the overlay gate above made.
-      const layered = state !== null && deltaLayerServed(procMounts, state.base.id);
 
       if (mark !== '' && mark === state?.upperMark) {
         return { kind: 'skipped', ...idle, reason: 'work directory is unchanged' };
@@ -1992,10 +1999,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if ('kind' in checked) return checked;
 
       try {
-        // COLLAPSE RATHER THAN APPEND while a delta is served as a layer
-        // (header, "What the composition costs").
         return await commitChain(state, checked.version, {
-          rebasing: (layered && state.deltaFormat !== 'chunked') || shouldRebase(state, kind),
+          rebasing: rebaseOnCommit(state, procMounts, kind),
           upperMark: mark,
           kind,
         });

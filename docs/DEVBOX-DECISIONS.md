@@ -1221,11 +1221,79 @@ and the sync's log go to the container's stdout, which Workers Logs carries
 is `bash --norc` (read from the 0.12.9 container server), so the tests' parse
 gate now models bash where it modelled POSIX `sh`. The image and the box move
 together: `block-lower/upstream.json` pins the bundle's sha256
-(`dceb17ed…`, image `kinu-devbox-block-layer@sha256:8a2c971c…`), and
+(`9f89cd2a…`, image `kinu-devbox-block-layer@sha256:5391d6b4…`), and
 `tests/block-image.test.ts` bundles the tree again and fails on any other
 bytes, so a change to the sync's code fails until the image is rebuilt and
-re-pinned. Status: built and unit-tested; the deployed measurement of the loss
-window and of the box's bytes per checkpoint is pending.
+re-pinned. The flush's own session left the default session's shell on the
+work directory: the container server returns a shell to where it rests after
+each command given a `cwd`, and keeps only a bare `cd`. So a first base's
+reseat inside the container failed EBUSY, D10's defect again (strategies run
+`20260923160413`: "reseating it failed: ... failed to unmount /workspace:
+Device or resource busy"). The box now parks that shell in the runtime
+directory with a bare `cd` for a quiesce's flush, and returns it after.
+
+Deployed, run `w260923160453` (2026-09-23, `2080bdbde`, one box, P = 300 s,
+5 writes at random offsets into the period): write-to-commit windows 153.9,
+194.0, 137.6, 262.8 and 53.5 s; p50 153.9 s, max 262.8 s, each inside
+P plus the commit. The box's own wire (commands, replies and sync requests)
+was 27,018 bytes for a small write's commit and 29,918 bytes for the commit
+that added 67,108,864 bytes to the store: payload bytes stay off the Durable
+Object (D29). That run predates D31, so its commits after the first were
+deltas; D31 makes them fresh bases until the box's next wake.
+
+D31. A delta is committed only over the base the overlay serves (2026-09-23,
+DBX-9). The standalone acceptance run `s20260923160514` deleted a file after
+the container's sync had committed the box's first base from a tick. The
+stop committed a delta, and the file was back after the wake. The upper is
+a delta relative to the lowers the overlay serves, not to the record's base.
+A fresh box's overlay serves no base, so its upper still held the file and
+deleting it left no whiteout. The old code reseated only a first base
+committed by a quiesce, and D30 made the first commit a tick. The same holds
+after a collapse: a file created after the old base, captured by the new
+one and then deleted leaves no whiteout, and a chunked delta's blocks are
+computed against the old base, not the new one.
+
+So while the base the overlay serves (the `fsname` of its `lower-base` mount)
+is not the record's, a changed checkpoint archives the merged view as a fresh
+base. A base is exact by construction. Recording deletions against the base
+instead, with whiteouts for base paths missing from the view, was rejected.
+In the common case (a fresh box before its first wake) the upper holds the
+whole tree and no base is mounted to diff blocks against, so a delta there
+already carries every byte a base does. It would save bytes only after a
+collapse while the box keeps running, and it would still need the base's path
+list at every tick, plus pruned whiteouts under replaced directories.
+
+Cost: until the box's next wake seats its base, each changed period uploads
+the whole tree. For a fresh box that equals what its deltas moved. After a
+collapse while running (a legacy layered delta at a tick, or a quiesce rebase
+whose stop was refused), it replaces the changes since the old base. The
+store holds at most the fallback and the current generation; each commit
+sweeps the rest. Tests: the conformance suite deletes a file after a tick
+commits the first base, commits by quiesce or by tick, wakes, and expects
+the file gone. It was red on `2080bdbde` (the file came back) and is green
+here. Deployed re-proof: owed on this image.
+
+D32. The dd-style storage arm DBX-8 asks for is not built (2026-09-23): D27
+stopped the storage search (owner, DBX-10), and a new design reopens it only
+under the measurement contract below. The platform would allow one. In the
+deployed container of run `w260923160453` (16:05Z, image `8a2c971c…`) the
+process held every capability (`CapEff 000001ffffffffff`), `/dev/loop-control`
+and `/dev/loop0` existed, `losetup` and `mkfs.ext4` were present (`fuse2fs`
+absent), ext4 was a registered filesystem, and a 64 MiB ext4 image
+loop-mounted and unmounted. The same run proved DBX-8's other half. Three
+benches started within 61 s on their own Worker, bucket and container
+application: strategies `20260923160413`, sync-window `w260923160453` and
+standalone `s20260923160514`. Each later start's sweep left the live runs
+alone ("run 20260923160413 is still running"). The sync-window and standalone
+runs tore down their own resources and passed their cleanup checks. One sweep
+misreported: at 16:02Z a start's sweep drained the bucket of the interrupted
+run `w260923143440`, logged it deleted and marked the entry done. The bucket,
+created 14:34:43Z, was still listed at 21:37Z. It was deleted by hand at
+21:39Z and the listing then showed it gone. Why the delete reported success
+is not established; the sweep should observe a bucket absent before marking
+it done. The account still lists `kinu-devbox-bench-*` resources from
+2026-08-31 to 2026-09-11 (9 Workers, 2 container applications, 11 buckets),
+created before manifests recorded owners and by none of these runs.
 
 ## Measurement contract for a strategy comparison
 

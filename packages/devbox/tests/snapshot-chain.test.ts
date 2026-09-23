@@ -118,9 +118,11 @@ const UPPER = `${DEVBOX_RUNTIME_DIR}/upper`;
 
 const LOWER_BASE = `${DEVBOX_RUNTIME_DIR}/lower-base`;
 
-/** What the PRODUCTION image reports: fuse-overlayfs, with NO dir options. */
+/** What the PRODUCTION image reports for an attached chain: fuse-overlayfs, with NO dir options,
+ *  over the base layer, whose mount names its archive (`fsname`). */
 const MOUNTED = [
   'sysfs /sys sysfs rw,relatime 0 0',
+  `/backups/${CHAIN_ID}/data.sqsh ${LOWER_BASE} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
   `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
 ].join('\n');
 
@@ -862,8 +864,31 @@ function chainState(over: StateLiteral = {}): ChainState {
 
 /** Mounts flip to attached only after `overlayAttach` is called, so a postcondition observes
  *  a change the code made rather than one the test staged in advance. */
+/** The mount table the calls so far leave: `standing` until one mounts or releases the base layer,
+ *  then an overlay over the base the last mount named, since its `fsname` is the archive. */
+function mountTable(calls: readonly string[], standing: string): string {
+  const last = [...calls].reverse().find((call) => call === `unmountPath:${LOWER_BASE}`
+    || (call.startsWith('mountLayer:') && call.endsWith(`:${LOWER_BASE}`)));
+
+  if (last === undefined) return standing;
+  const archive = last.startsWith('mountLayer:') ? last.slice('mountLayer:'.length, -`:${LOWER_BASE}`.length) : undefined;
+
+  return [
+    'sysfs /sys sysfs rw,relatime 0 0',
+    ...(archive === undefined ? [] : [`${archive} ${LOWER_BASE} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`]),
+    `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+  ].join('\n');
+}
+
+/** A fresh box's overlay serves the empty lower, so no base layer is mounted until one is. */
+const FRESH_OVERLAY = mountTable(['unmountPath:' + LOWER_BASE], '');
+
 function mountsAfterAttach(calls: readonly string[], mounted = MOUNTED): () => string {
-  return () => (calls.some(call => call.startsWith('overlayAttach')) ? mounted : NOT_MOUNTED);
+  return () => {
+    if (!calls.some(call => call.startsWith('overlayAttach'))) return NOT_MOUNTED;
+
+    return mounted === MOUNTED ? mountTable(calls, FRESH_OVERLAY) : mounted;
+  };
 }
 
 async function attachOf(record: Harness): Promise<AttachOutcome> {
@@ -1474,9 +1499,12 @@ describe('a wake whose container instance changed', () => {
       upperMark: 'written-since-the-wake',
     });
 
+    // A foreign layer forces no collapse, but the overlay then serves another generation's base,
+    // so the upper's changes are relative to that base, not the record's: the merged view is the
+    // only exact archive (D31).
     expect((await checkpointOf(foreign, 'tick')).kind).toBe('committed');
-    expect(foreign.state?.base.id).toBe(CHAIN_ID);
-    expect(foreign.state?.delta).toBeDefined();
+    expect(foreign.state?.base.id).not.toBe(CHAIN_ID);
+    expect(foreign.state?.delta).toBeUndefined();
   });
 });
 
@@ -1510,7 +1538,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     expect(record.state?.fallback?.base.id).toBe(CHAIN_ID);
   });
 
-  test('collapses ONCE: the next commit is an ordinary delta again', async () => {
+  test('until a wake seats the collapsed base, the next commit archives the merged view again', async () => {
     const record = harness({
       state: chainState({ at: 1 }),
       mounts: composedMounts(CHOSEN),
@@ -1528,11 +1556,11 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // the case tests which shape the second commit takes.
     expect((await storage.checkpoint('quiesce')).kind).toBe('committed');
 
-    // The layer stays mounted as a live overlay lower but serves a generation the record no
-    // longer names, so it forces no collapse; keying on mount path would rebase forever.
-    expect(record.state?.base.id).toBe(collapsed);
-    expect(record.state?.delta).toBeDefined();
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
+    // The overlay still serves the superseded base, so its upper holds files only the collapsed
+    // base has: a delta over that base could not carry their deletion (D31).
+    expect(record.state?.base.id).not.toBe(collapsed);
+    expect(record.state?.delta).toBeUndefined();
+    expect(record.calls.filter(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toEqual([]);
   });
 
   test('an ORPHAN delta the record does not name still forces the collapse', async () => {
@@ -3133,7 +3161,7 @@ describe('the generation lifecycle, against ONE box', () => {
       state: chainState({
         base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 }, at: 1,
       }),
-      mounts: () => (attached ? MOUNTED : NOT_MOUNTED),
+      mounts: () => (attached ? mountTable(record.calls, MOUNTED) : NOT_MOUNTED),
       now: 10 * INTERVAL_MS,
     });
 

@@ -361,7 +361,9 @@ export class FakeSandbox {
   readonly s3fsOptionsByMount = new Map<string, readonly string[]>();
   /** The SDK default session starts with `cwd: "/workspace"` (the mount point) and `unmountBucket`
    *  runs in it without its own cwd; a shell standing on the mount holds it, so unmount can EBUSY. */
-  sessionCwd = '/workspace';
+  /** Each session shell's directory: `/workspace` at start, a command's `cwd` while it runs, a bare
+   *  `cd` after (0.12.9 container server). */
+  readonly sessionCwds = new Map<string, string>([['default', '/workspace']]);
   /** A fresh container holds only the image's dirs; `/var/tmp/devbox` is made by whatever runs
    *  first. Commands earn dirs by `mkdir -p`; a cwd absent here refuses chdir, as the container does. */
   readonly directories = new Set<string>(IMAGE_DIRECTORIES);
@@ -403,6 +405,8 @@ export class FakeSandbox {
   /** Recorded when the box's own `squashfuse` command runs and read back via `/proc/mounts`;
    *  a stop clears them with the local filesystem, like `overlayMounts`. */
   readonly layerMounts = new Set<string>();
+  /** Each layer mount's `fsname`: the archive it serves, which `/proc/mounts` reports as its source. */
+  readonly #layerSources = new Map<string, string>();
   /** Must be the bucket `objectFacts` reads and `chainStoreRoot` derives, so a `dd` through the
    *  store mount lands where the next attach looks. Unset, no chain command reaches the store. */
   chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string;
@@ -436,20 +440,42 @@ export class FakeSandbox {
   onStart(): Promise<void> {
     return Promise.resolve();
   }
-  /** A missing `cwd` is refused: the session shell chdirs first, so the command never runs.
-   *  An accepted `cwd` stays: one persistent session shell serves every command. */
+  /** A missing `cwd` is refused: the session shell chdirs first, so the command never runs. */
   #chdir(cwd: string | undefined): { stdout: string; stderr: string; exitCode: number } | null {
-    if (cwd === undefined) return null;
+    if (cwd === undefined || this.directories.has(cwd)) return null;
+    this.sequence.push(`chdirRefused:${cwd}`);
 
-    if (!this.directories.has(cwd)) {
-      this.sequence.push(`chdirRefused:${cwd}`);
+    return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
+  }
 
-      return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
+  async #execInSession(
+    session: string,
+    command: string,
+    options?: { readonly cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const refusedChdir = this.#chdir(options?.cwd);
+
+    if (refusedChdir !== null) return refusedChdir;
+    const resting = this.sessionCwds.get(session) ?? '/workspace';
+    const moved = options?.cwd === undefined ? /^cd '([^']*)'$/.exec(command)?.[1] : undefined;
+
+    if (moved !== undefined) {
+      const refusedMove = this.#chdir(moved);
+
+      if (refusedMove !== null) return refusedMove;
+      this.sessionCwds.set(session, moved);
+      this.sequence.push(`cd:${session}:${moved}`);
+
+      return { stdout: '', stderr: '', exitCode: 0 };
     }
 
-    this.sessionCwd = cwd;
+    this.sessionCwds.set(session, options?.cwd ?? resting);
 
-    return null;
+    try {
+      return await this.#execIn(command, options);
+    } finally {
+      this.sessionCwds.set(session, resting);
+    }
   }
 
   /** `mkdir -p` creates what it names: how a container earns the directories
@@ -495,6 +521,7 @@ export class FakeSandbox {
       if (mounted && this.#mountIsBusy(unmount)) return { stdout: '', stderr: `fusermount3: failed to unmount ${unmount}: Device or resource busy`, exitCode: 1 };
       this.overlayMounts.delete(unmount);
       this.layerMounts.delete(unmount);
+      this.#layerSources.delete(unmount);
       this.s3fsMounts.delete(unmount);
 
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -511,9 +538,11 @@ export class FakeSandbox {
 
     if (command.includes('/usr/local/bin/devbox-squashfuse')) {
       const quoted = quotedSegments(command.slice(command.indexOf('/usr/local/bin/devbox-squashfuse')));
-      const mountPoint = quoted[1];
+      const [source, mountPoint] = quoted;
 
       if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
+
+      if (mountPoint !== undefined && source !== undefined) this.#layerSources.set(mountPoint, source);
 
       return { stdout: '', stderr: '', exitCode: 0 };
     }
@@ -642,7 +671,7 @@ export class FakeSandbox {
         (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
       ),
       ...[...this.layerMounts].map(
-        (path) => `squashfuse ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
+        (path) => `${this.#layerSources.get(path) ?? 'squashfuse'} ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
       ),
     ];
 
@@ -657,6 +686,14 @@ export class FakeSandbox {
   }
 
   async exec(
+    command: string,
+    options?: { readonly cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return await this.#execInSession('default', command, options);
+  }
+
+  /** A command in no session shell, as the image's program runs its own. */
+  async #execIn(
     command: string,
     options?: { readonly cwd?: string },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -802,7 +839,7 @@ export class FakeSandbox {
     };
 
     const worker = syncWorker(snapshotChainStorage(containerChainPorts(decodeSyncConfig(flush[1]), {
-      exec: async (inner) => await FakeSandbox.prototype.exec.call(this, inner, { cwd: DEVBOX_RUNTIME_DIR }),
+      exec: async (inner) => await this.#execIn(inner, { cwd: DEVBOX_RUNTIME_DIR }),
       call: syncCaller(transport, generation),
       generation,
       log: () => undefined,
@@ -811,9 +848,9 @@ export class FakeSandbox {
     return { stdout: JSON.stringify(await worker.run(parseCheckpointKind(flush[2]))), stderr: '', exitCode: 0 };
   }
 
-  /** A named session runs its commands in its own shell; this container has one command model. */
+  /** A named session runs its commands in its own shell. */
   async getSession(id: string): Promise<{ readonly id: string; exec: FakeSandbox['exec'] }> {
-    return await Promise.resolve({ id, exec: async (command, options) => await FakeSandbox.prototype.exec.call(this, command, options) });
+    return await Promise.resolve({ id, exec: async (command, options) => await this.#execInSession(id, command, options) });
   }
 
   async setOutboundByHost(host: string, method: string): Promise<void> {
@@ -848,7 +885,7 @@ export class FakeSandbox {
   }
 
   #mountIsBusy(path: string): boolean {
-    return this.sessionCwd === path || this.sessionCwd.startsWith(`${path}/`);
+    return [...this.sessionCwds.values()].some((cwd) => cwd === path || cwd.startsWith(`${path}/`));
   }
 
   async renameFile(oldPath: string, newPath: string, sessionId?: string): Promise<FileOperation> {
@@ -1065,8 +1102,10 @@ export class FakeSandbox {
     this.processes.clear();
     this.overlayMounts.clear();
     this.layerMounts.clear();
+    this.#layerSources.clear();
     this.s3fsMounts.clear();
-    this.sessionCwd = '/workspace';
+    this.sessionCwds.clear();
+    this.sessionCwds.set('default', '/workspace');
     this.changeVersion = 0;
   }
 

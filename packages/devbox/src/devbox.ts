@@ -45,6 +45,7 @@ import {
   racedRestoreSteps, runRestoreStep, ContainerStartOverrun, ContainerStartInterrupted, type RestoreSteps,
   REAL_START_CLOCK, type StartClock,
 } from './lifecycle';
+import { shellPath } from './chunked-delta';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
   deliverIncidents, INCIDENT_PREFIX, incidentTotals, recordIncident,
@@ -877,15 +878,36 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       return { kind: 'skipped', reason: 'container is not running', bytes: undefined, movedBytes: 0 };
     }
 
-    // The flush calls back through `devboxSync`, so this checkpoint's lane must not gate it: the
-    // record's fenced write is that path's concurrency control.
-    const command = syncFlushCommand(this.#syncConfig(store), kind);
-    const session = await this.getSession(DEVBOX_SYNC_SESSION);
-    const flushed = await session.exec(command, { cwd: DEVBOX_RUNTIME_DIR });
-    this.#containerCommandBytes.sent += Buffer.byteLength(command);
-    this.#containerCommandBytes.received += Buffer.byteLength(flushed.stdout) + Buffer.byteLength(flushed.stderr);
+    // A quiesce may reseat the base, unmounting the work directory the idle default shell holds (D10).
+    const parked = kind === 'quiesce';
 
-    return parseSyncOutcome(flushed.stdout, flushed.stderr, flushed.exitCode);
+    if (parked) await this.#moveDefaultShell(DEVBOX_RUNTIME_DIR);
+
+    try {
+      // The flush calls back through `devboxSync`, so this checkpoint's lane must not gate it: the
+      // record's fenced write is that path's concurrency control.
+      const command = syncFlushCommand(this.#syncConfig(store), kind);
+      const session = await this.getSession(DEVBOX_SYNC_SESSION);
+      const flushed = await session.exec(command, { cwd: DEVBOX_RUNTIME_DIR });
+      this.#containerCommandBytes.sent += Buffer.byteLength(command);
+      this.#containerCommandBytes.received += Buffer.byteLength(flushed.stdout) + Buffer.byteLength(flushed.stderr);
+
+      return parseSyncOutcome(flushed.stdout, flushed.stderr, flushed.exitCode);
+    } finally {
+      if (parked && this.ctx.container?.running === true) await this.#moveDefaultShell(DEVBOX_WORKDIR);
+    }
+  }
+
+  /** Only a bare `cd` moves a session's shell; a command given a `cwd` returns after. */
+  async #moveDefaultShell(dir: string): Promise<void> {
+    const command = `cd ${shellPath(dir)}`;
+    const moved = await super.exec(command);
+    this.#containerCommandBytes.sent += Buffer.byteLength(command);
+    this.#containerCommandBytes.received += Buffer.byteLength(moved.stdout) + Buffer.byteLength(moved.stderr);
+
+    if (moved.exitCode !== 0) {
+      throw new Error(`the default session's shell did not move to ${dir}: ${moved.stderr.trim() || `exit ${String(moved.exitCode)}`}`);
+    }
   }
 
   async devboxSync(body: string): Promise<SyncAnswer> {

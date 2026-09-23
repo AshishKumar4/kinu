@@ -43,6 +43,12 @@ const ATTACH_WAIT_MS = 600_000;
 
 const log = (line: string): void => { process.stderr.write(`[standalone] ${line}\n`); };
 
+/** The manifest declares no resource of this kind, so the check has nothing to ask; a probe that
+ *  answered anyway would pass a resource nobody looked at. */
+const undeclared = (kind: string) => async (): Promise<boolean> => {
+  throw new Error(`the standalone run declares no ${kind}, so none can be probed`);
+};
+
 /** What the teardown observed, filled when it runs and read after. */
 interface Closing {
   report: CleanupReport | null;
@@ -222,6 +228,8 @@ async function main(): Promise<number> {
   }
 
   process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
+  // Read before deploying: a later read could name edits made after the deploy.
+  const revision = sourceRevision();
   const runId = `s${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
   const worker = `kinu-devbox-example-${runId}`;
   const application = `${worker}-examplebox`;
@@ -250,11 +258,11 @@ async function main(): Promise<number> {
       closing.report = await checkCleanup(REPO, manifest, {
         ...cleanupObservationProbes({ wrangler: (args, options) => runWrangler(REPO, args, options), residue }),
         containerAppAbsent: async (name) => containerAppIds(REPO, [name], log).length === 0,
-        boxStateEmpty: async () => true,
-        alarmAbsent: async () => true,
-        mountAbsent: async () => true,
+        boxStateEmpty: undeclared('box state'),
+        alarmAbsent: undeclared('alarm'),
+        mountAbsent: undeclared('mount'),
         localPathAbsent: async (path) => !existsSync(path),
-        processAbsent: async () => true,
+        processAbsent: undeclared('process'),
         counters: async () => ({ ...manifest.counters }),
       }, R2_OP_VOCABULARY);
     } catch (cause) {
@@ -306,7 +314,7 @@ async function main(): Promise<number> {
   const observed = {
     runId,
     date: new Date().toISOString(),
-    revision: sourceRevision(),
+    revision,
     workerVersion,
     steps,
     failure,
