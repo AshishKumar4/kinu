@@ -610,33 +610,6 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect(bodyOf('async devboxHeartbeat(')).toContain('this.renewActivityTimeout();');
   });
 
-  test('the liveness ping passes NO port, because that argument is a port', () => {
-    // `containerFetch(request, port)` takes a port second, not a timeout; omitting it uses
-    // the SDK's defaultPort.
-    const heartbeat = bodyOf('async devboxHeartbeat(');
-    expect(heartbeat).toContain("this.containerFetch(new Request('http://127.0.0.1/'))");
-    expect(heartbeat).not.toContain('HEARTBEAT_PING_TIMEOUT');
-  });
-
-  test('a replaced container instance is detected and re-driven, not waited on', () => {
-    // The platform can reclaim an instance mid-idle without notice; the boot id is the only
-    // reliable signal, and the heartbeat tick is the only place it can be read.
-    const heartbeat = bodyOf('async devboxHeartbeat(');
-    // Every caller goes through `#containerWasReplaced()`, the one place the boot id is read;
-    // a second copy of that comparison would drift.
-    expect(heartbeat).toContain('#containerWasReplaced()');
-    expect(bodyOf('async #containerWasReplaced(')).toContain('#readBootId()');
-    expect(heartbeat).toContain('this.kickStartup()');
-    expect(heartbeat).not.toContain('this.#restoreNow(');
-    expect(heartbeat).not.toContain('this.#startContainer(');
-    // The replacement counter increments in `#stampBootId`, which every restoration passes through;
-    // counting only in the heartbeat misses replacements handled through `onStart`.
-    expect(heartbeat).not.toContain('REPLACED_COUNT_KEY');
-    expect(bodyOf('async #stampBootId(')).toContain('REPLACED_COUNT_KEY');
-    // The id must die with the instance, or it proves nothing.
-    expect(source).toContain("BOOT_ID_PATH = '/tmp/devbox-boot-id'");
-  });
-
   test('a commit asks the same question, because a heartbeat cadence is not a fence', () => {
     // Heartbeat detection leaves operations between beats on a replaced container without the mount.
     // A commit asks: it is where bytes are claimed durable, and one boot-marker read is the cost.

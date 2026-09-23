@@ -1245,6 +1245,17 @@ function checkpointCommand(
   return undefined;
 }
 
+/** The upper's metadata walk: content is never read, so holes cost nothing and a large sparse
+ *  file is one row. */
+function upperWalkDigest(disk: ContainerDisk): string {
+  const rows = disk.snapshot(`${DEVBOX_RUNTIME_DIR}/upper`).map((entry) => [
+    entry.ino, entry.kind, entry.mode, entry.content === undefined ? 0 : contentSize(entry.content),
+    entry.metadata?.mtimeNs ?? '0', entry.metadata?.ctimeNs ?? '0', entry.target ?? '', entry.path,
+  ].join('\0'));
+
+  return createHash('sha256').update(rows.length === 0 ? 'empty' : rows.sort().join('\0')).digest('hex');
+}
+
 function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
@@ -1338,6 +1349,8 @@ function chainExec(
     if (fault !== undefined) return fault;
 
     const ok = shellOk;
+
+    if (command.startsWith('# devbox-tick-probe-v1\n')) return ok(`${disk.procMounts()}\0${upperWalkDigest(disk)}`);
     const delta = deltaCommand(command, disk);
 
     if (delta !== undefined) return delta;
@@ -1373,20 +1386,7 @@ function chainExec(
 
     if (checkpoint !== undefined) return checkpoint;
 
-    if (command.includes('sha256sum') && command.includes('sort -z')) {
-      // Mirrors the real walk: metadata only, never content, so holes are never read
-      // and a large sparse file costs one row.
-      const upper = `${DEVBOX_RUNTIME_DIR}/upper`;
-
-      const rows = disk.snapshot(upper).map((entry) => [
-        entry.ino, entry.kind, entry.mode, entry.content === undefined ? 0 : contentSize(entry.content),
-        entry.metadata?.mtimeNs ?? '0', entry.metadata?.ctimeNs ?? '0', entry.target ?? '', entry.path,
-      ].join('\0'));
-
-      const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
-
-      return ok(digest(rows.length === 0 ? 'empty' : rows.sort().join('\0')));
-    }
+    if (command.includes('sha256sum') && command.includes('sort -z')) return ok(upperWalkDigest(disk));
 
     const statted = /^stat -c %s '(?<path>[^']+)'/.exec(command)?.groups?.path;
 

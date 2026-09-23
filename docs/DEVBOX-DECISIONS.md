@@ -1137,6 +1137,23 @@ ten gates, and no other design measured under the contract below was shown
 better (D5's table). A new design reopens the search only with a comparison
 run under that contract; none is scheduled (O3).
 
+D28. The Durable Object batches the container calls it keeps (DBX-7,
+2026-09-23; asked in m712: "combine multiple exec api calls to single ones
+wherever possible, as the DO <> container I/O can be flaky"). Measured
+first with `scripts/bench-devbox-exec-census.ts` over the deployed `kinu`
+Worker, 6 h to 2026-09-23T03:44Z: 509 `sandbox.exec` events in 303 Durable
+Object invocations across 16 boxes. Per invocation: a heartbeat alarm, 1
+exec (235 of them) plus a `containerFetch` ping; an idle checkpoint tick, 2
+or 3 (the mount table, the upper's fingerprint walk, a boot-id read; 44); a
+committing checkpoint, 9 or 10; a restore, 8. Process-lane commands
+(`startProcess`) raise no event and are outside the count. The heartbeat's
+ping and boot-id read are now one exec, since the read crosses the same
+control plane; the idle tick's mount-table read and fingerprint walk are one
+exec (`tickProbeCommand`). The committing checkpoint's calls stay as they
+are: DBX-5 moves backup and sync into the container (m712: that machinery
+"should live inside the docker image/container itself, and NOT be issued via
+the DO"), which takes them off the Durable Object entirely.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

@@ -644,6 +644,15 @@ function chainShell(exec: ContainerExec, root: string) {
 
   return {
     readMounts: async (): Promise<string> => await must('reading the mount table', 'cat /proc/mounts'),
+    /** The checkpoint gate's reads, one container call ({@link tickProbeCommand}). */
+    probeTick: async (): Promise<{ readonly mounts: string; readonly fingerprint: string }> => {
+      const probed = await must('reading the mount table and the upper fingerprint', tickProbeCommand(upperDir));
+      const split = probed.indexOf('\0');
+
+      return split === -1
+        ? { mounts: probed, fingerprint: '' }
+        : { mounts: probed.slice(0, split), fingerprint: probed.slice(split + 1).trim() };
+    },
     /** A mount line without a usable upper is a box whose writes have nowhere to land. */
     pathExists: async (path: string): Promise<boolean> =>
       (await exec(`test -e ${shellPath(path)} && echo yes || echo no`)).stdout.trim() === 'yes',
@@ -792,13 +801,6 @@ function chainShell(exec: ContainerExec, root: string) {
       if (free >= need) return null;
 
       return `staging ${sourceDir} needs up to ${need} bytes and ${stageDir} has ${free} free.`;
-    },
-    /** Skip-gate fingerprint of the upper: walks metadata, not content, O(entries).
-     *  The gate in `checkpoint` states why the SDK's change check is not the question. */
-    upperFingerprint: async (): Promise<string> => {
-      const measured = await exec(upperFingerprintCommand(upperDir));
-
-      return measured.exitCode === 0 ? measured.stdout.trim() : '';
     },
     statBytes: async (path: string): Promise<number | undefined> => {
       const raw = (await exec(`stat -c %s ${shellPath(path)} 2>/dev/null || echo ''`)).stdout.trim();
@@ -1895,7 +1897,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     // Attachment is checked before the change gate: without an overlay there is no changed set,
     // so a chain box must report failure rather than 'unchanged'.
-    const procMounts = await shell.readMounts();
+    const gate = await shell.probeTick();
+    const procMounts = gate.mounts;
     const overlayMounted = isOverlayMounted(procMounts, DEVBOX_WORKDIR);
 
     if (state !== null && state.mode === 'chain' && !overlayMounted) {
@@ -1920,8 +1923,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     // `checkChanges` with no `since` answers `unchanged` while establishing a baseline; skip on the
-    // upper fingerprint instead, and an unreadable (empty) fingerprint never matches, so it commits.
-    const mark = overlayMounted ? await shell.upperFingerprint() : '';
+    // upper fingerprint instead (metadata, not content, O(entries)), and an unreadable (empty)
+    // fingerprint never matches, so it commits.
+    const mark = overlayMounted ? gate.fingerprint : '';
 
     if (overlayMounted) {
       // The layer's mount point names its generation, so `/proc/mounts` shows whether a delta
@@ -2091,3 +2095,10 @@ export function upperFingerprintCommand(sourceDir: string): string {
   return `bash -o pipefail -c ${shellPath(walk)}`;
 }
 
+
+/** The checkpoint gate's reads in one exec: `/proc/mounts`, a NUL, then the fingerprint only when
+ *  its walk succeeds, so a failed walk reads as an empty mark, never a hash of a partial walk. */
+function tickProbeCommand(sourceDir: string): string {
+  return '# devbox-tick-probe-v1\n'
+    + `cat /proc/mounts && printf '\\0' && { mark=$(${upperFingerprintCommand(sourceDir)}) && printf %s "$mark"; true; }`;
+}

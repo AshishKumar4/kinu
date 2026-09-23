@@ -613,16 +613,8 @@ export class FakeSandbox {
 
     if (command.includes('conv=fsync')) return this.#execPublish(command);
 
-    // Content-hashed, not metadata-hashed: this stand-in keeps no inodes or times, and a
-    // fingerprint moving without a byte change would commit where the box skips.
     if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
-      // The shipped caller fingerprints only the overlay upper, inside nested quoting,
-      // so the path is matched rather than parsed out of the quoting.
-      return {
-        stdout: createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex'),
-        stderr: '',
-        exitCode: 0,
-      };
+      return { stdout: this.#upperMark(), stderr: '', exitCode: 0 };
     }
 
     if (command.includes('then seen=1; break; fi')) {
@@ -711,6 +703,37 @@ export class FakeSandbox {
     return { stdout: `0 ${String(bytes.byteLength)} "etag"`, stderr: '', exitCode: 0 };
   }
 
+  /** Lists every path the box's `mountBucket` holds, as `/proc/mounts` does in a container,
+   *  so a strategy's read-back observes the fake's changes, not test-staged state. */
+  #procMounts(): string {
+    const lines = [
+      'proc /proc proc rw,relatime 0 0',
+      ...[...this.s3fsMounts].map(
+        (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
+      ),
+      ...(this.journalRunning() && this.journalMounts
+        ? ['kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev,relatime 0 0']
+        : []),
+      // Present until a stop takes the FUSE daemons down; the fstype must match the container's
+      // because `isOverlayMounted` reads it while `findMount` reads the mount point.
+      ...[...this.overlayMounts].map(
+        (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+      ),
+      ...[...this.layerMounts].map(
+        (path) => `squashfuse ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
+      ),
+    ];
+
+    return `${lines.join('\n')}\n`;
+  }
+
+  /** Content-hashed, not metadata-hashed: this stand-in keeps no inodes or times, and a
+   *  fingerprint moving without a byte change would commit where the box skips. The shipped
+   *  caller fingerprints only the overlay upper. */
+  #upperMark(): string {
+    return createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex');
+  }
+
   async exec(
     command: string,
     options?: { readonly cwd?: string },
@@ -746,28 +769,10 @@ export class FakeSandbox {
       return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
     }
 
-    if (command === 'cat /proc/mounts') {
-      // Lists every path the box's `mountBucket` holds, as `/proc/mounts` does in a container,
-      // so a strategy's read-back observes the fake's changes, not test-staged state.
-      const lines = [
-        'proc /proc proc rw,relatime 0 0',
-        ...[...this.s3fsMounts].map(
-          (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
-        ),
-        ...(this.journalRunning() && this.journalMounts
-          ? ['kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev,relatime 0 0']
-          : []),
-        // Present until a stop takes the FUSE daemons down; the fstype must match the container's
-        // because `isOverlayMounted` reads it while `findMount` reads the mount point.
-        ...[...this.overlayMounts].map(
-          (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
-        ),
-        ...[...this.layerMounts].map(
-          (path) => `squashfuse ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
-        ),
-      ];
+    if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
 
-      return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
+    if (command.startsWith('# devbox-tick-probe-v1\n')) {
+      return { stdout: `${this.#procMounts()}\0${this.#upperMark()}`, stderr: '', exitCode: 0 };
     }
 
     if (command.startsWith('sync')) {
@@ -1155,6 +1160,8 @@ export class FakeSandbox {
   }
 
   async containerFetch(): Promise<Response> {
+    this.sequence.push('fetch');
+
     return new Response();
   }
 

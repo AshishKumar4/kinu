@@ -262,6 +262,8 @@ function shellLabel(world: ShellWorld): ShellOutcome {
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
 
+  if (command.startsWith('# devbox-tick-probe-v1\n')) return { call: 'probeTick', stdout: `${mounts}\0${upperMark}` };
+
   const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]);
 
   if (delta !== undefined) return delta;
@@ -2460,6 +2462,36 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       && call.includes('change watermark could not be advanced'))).toBe(true);
   });
 
+  test('an unchanged attached tick reads its gate in one container call, which bash runs', async () => {
+    const record = harness({ state: chainState({ upperMark: '7:4096:1700000000' }), mounts: MOUNTED });
+    const sent: string[] = [];
+    const inner = record.ports.exec;
+    record.ports.exec = async (command) => {
+      sent.push(command);
+
+      return await inner(command);
+    };
+
+    const outcome = await checkpointOf(record, 'tick');
+
+    expect(outcome.reason).toBe('work directory is unchanged');
+    expect(record.calls.filter((call) => ['probeTick', 'readMounts', 'upperFingerprint'].includes(call)))
+      .toEqual(['probeTick']);
+    const probe = sent.find((command) => command.startsWith('# devbox-tick-probe-v1\n')) ?? '';
+
+    // The command as sent, run on a scratch upper: the mount table, a NUL, then the mark only
+    // when the walk succeeds.
+    const run = (dir: string) => {
+      const out = Bun.spawnSync(['bash', '-c', probe.replaceAll('/var/tmp/devbox/upper', dir)]).stdout.toString();
+
+      return { mounts: out.slice(0, out.indexOf('\0')), mark: out.slice(out.indexOf('\0') + 1).trim() };
+    };
+
+    const scratch = devboxScratchDir('devbox-probe');
+    expect(run(scratch).mark).toBe(fingerprintOf(scratch));
+    expect(run(join(scratch, 'absent'))).toEqual({ mounts: expect.stringContaining(' /proc proc '), mark: '' });
+  });
+
   test('a failed publication leaves the previous record intact and records the reason', async () => {
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });
     const outcome = await checkpointOf(record, 'tick');
@@ -2682,6 +2714,7 @@ function fingerprintOf(dir: string): string {
 }
 
 describe('the skip-gate fingerprint keeps sub-second mtime', () => {
+
   test('a same-size rename changes the per-path mark', () => {
     const dir = devboxScratchDir('devbox-fingerprint-rename');
 

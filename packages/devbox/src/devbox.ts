@@ -771,10 +771,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** The heartbeat re-drives a stale restoration; commit paths must not commit to a gone container.
    *  No stamp means no claim about any instance, so the answer is `false`, not replaced. */
-  async #containerWasReplaced(): Promise<boolean> {
+  async #containerWasReplaced(observed?: { readonly bootId: string | undefined }): Promise<boolean> {
     const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
 
-    return expected !== undefined && (await this.#readBootId()) !== expected;
+    if (expected === undefined) return false;
+
+    return (observed === undefined ? await this.#readBootId() : observed.bootId) !== expected;
   }
 
   /** A checkpoint must refuse a replaced workspace until the startup hook restores it. */
@@ -2173,11 +2175,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         return beat;
       }
 
+      let observed: string | undefined;
+
       try {
-        // No port argument: `containerFetch`'s second parameter is a port, not a timeout;
-        // omitting it targets the SDK's `defaultPort`, the control plane this box talks to.
-        const ping = await this.containerFetch(new Request('http://127.0.0.1/'));
-        await ping.body?.cancel();
+        // The boot-id read is the liveness ping too: one container call, not two (D28).
+        observed = await this.#readBootId();
       } catch (error) {
         const reason = describe({ cause: error });
         console.error(`[devbox] heartbeat ping failed: ${reason}`);
@@ -2188,7 +2190,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
       // Replacement check runs only on a settled restoration: the stamp is a restoration's last step,
       // so mid-wake the row and fresh instance always mismatch; an in-flight attempt owns its identity.
-      if (settled && await this.#containerWasReplaced()) {
+      if (await this.#containerWasReplaced({ bootId: observed })) {
         this.#invalidateGeneration();
         await this.#tick({ running: true, ping: 'ok', armedNext: true, replaced: true });
         await this.kickStartup();
