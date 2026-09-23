@@ -337,6 +337,57 @@ describe('compareRuns — refuses what it cannot attribute', () => {
   });
 });
 
+describe('compareRuns — a declared treatment admits exactly one arm field', () => {
+  const observations = [0, 0, 0, 4, 4, 4].map((passed, i) =>
+    scored(`task-${String(i)}`, 1, [score(SCORER, 4, passed)]));
+
+  const baseline = run('base', observations);
+  const full: EvalArmState = { evolution: true, settle: 'first', tools: FULL_TOOL_SURFACE };
+  const solo: EvalArmState = { ...full, tools: FULL_TOOL_SURFACE.filter((tool) => tool !== 'agents') };
+
+  test('the declared field may differ, and the report names it', () => {
+    const comparison = attributable(compareRuns(baseline, run('cand', observations, { arm: solo }), {
+      ...OPTS, treatment: 'tools',
+    }));
+
+    expect(comparison.treatment?.field).toBe('tools');
+    expect(comparison.treatment?.baseline).toContain('agents');
+    expect(comparison.treatment?.candidate).not.toContain('agents');
+    expect(formatComparison(comparison)).toContain('treatment: arm.tools');
+  });
+
+  test('every undeclared field still refuses, the prompt included', () => {
+    const moved: EvalArmState = { ...solo, evolution: false, prompt: 'caveman' };
+    const comparison = compareRuns(baseline, run('cand', observations, { arm: moved }), { ...OPTS, treatment: 'tools' });
+
+    if (comparison.comparable) throw new Error('expected a refusal');
+    expect(comparison.refusals.map((r) => r.field).sort()).toEqual(['arm.evolution', 'arm.prompt']);
+  });
+
+  test('a declared treatment that both runs share is refused: there is nothing to attribute', () => {
+    const comparison = compareRuns(baseline, run('cand', observations), { ...OPTS, treatment: 'prompt' });
+
+    if (comparison.comparable) throw new Error('expected a refusal');
+    expect(comparison.refusals.map((r) => r.field)).toEqual(['arm.prompt']);
+  });
+});
+
+describe('compareRuns — pass^k is reported only where k reaches the floor', () => {
+  test('three repeats print pass^3; two do not', () => {
+    const three = formatComparison(compareRuns(
+      repeatRun('a', [0, 4, 4, 4, 4, 4], 3), repeatRun('b', [4, 4, 4, 4, 4, 4], 3), OPTS,
+    ));
+
+    const two = formatComparison(compareRuns(
+      repeatRun('a', [0, 4, 4, 4, 4, 4], 2), repeatRun('b', [4, 4, 4, 4, 4, 4], 2), OPTS,
+    ));
+
+    expect(three).toContain('pass^3');
+    expect(two).not.toContain('pass^2');
+    expect(two).toContain('pass^k not reported');
+  });
+});
+
 describe('compareRuns — an empty denominator is not a zero rate', () => {
   const withAbsent = (runId: string, passed: number) => run(runId, [0, 1, 2, 3].map((i) =>
     scored(`task-${String(i)}`, 1, [score(SCORER, 4, passed), score(ABSENT, 0, 0)])));

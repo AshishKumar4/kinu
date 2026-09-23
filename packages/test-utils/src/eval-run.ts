@@ -36,7 +36,11 @@ export interface EvalArmState {
   readonly evolution: boolean;
   readonly settle: string;
   readonly tools: readonly string[];
+  /** Absent: as written. */
+  readonly prompt?: EvalPromptStyle;
 }
+
+export type EvalPromptStyle = 'caveman' | 'use-swarm';
 
 export const FULL_TOOL_SURFACE: readonly string[] = [...BUILTIN_TOOLS];
 
@@ -469,9 +473,11 @@ export function modelObservedFromEvents(events: readonly RunEvent[]): string | n
 
 function collectServingIds(events: readonly RunEvent[], seen: Set<string>): void {
   for (const event of events) {
-    if (event.type !== 'step_finish') continue;
+    // CLI steps carry no modelId; their agent operations do.
+    const serving = event.type === 'step_finish'
+      || (event.type === 'model_operation' && event.source === 'agent' && event.phase === 'end');
 
-    if (event.modelId !== undefined && event.modelId.length > 0) seen.add(event.modelId);
+    if (serving && event.modelId !== undefined && event.modelId.length > 0) seen.add(event.modelId);
   }
 }
 
@@ -718,7 +724,7 @@ export function formatRunRecord(record: EvalRunRecord): string {
     `  ledger observed: ${record.modelObserved ?? 'no serving model — the record carries no ledger check'}`,
     `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,
     `  arm: evolution ${record.arm.evolution ? 'ON' : 'OFF'}, settle ${record.arm.settle}, `
-      + `${String(record.arm.tools.length)} tools`,
+      + `${String(record.arm.tools.length)} tools, prompt ${record.arm.prompt ?? 'as written'}`,
     `  tasks ${String(record.executedTasks.length)}/${String(record.declaredTasks.length)} `
       + `× ${String(record.repeats)} repeats, seed ${String(record.seed)}`,
     `  ADMISSIBLE: ${a.admissible ? 'yes' : 'NO'} — ${String(a.gradedTurns)} graded turns, `
