@@ -1,8 +1,10 @@
 // The signed-in AI proxy (/api/user/ai/v1/*): local CLI agents use the user's Cloudflare AI without
 // the Cloudflare token leaving the server. Auth: CLI bearer only (pta_ needs ai.proxy; no cookie path).
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
+import type { CliRoutesEnv } from '../src/cli/routes';
+import { aiProxyRoutes } from '../src/user/ai-proxy';
 import { cliAccount, unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
 import {
   asFetchFunction,
@@ -14,6 +16,8 @@ import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
 import { requestBodyText } from '@kinu.run/test-utils';
+
+const aiProxy = serveFamily(aiProxyRoutes);
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -199,13 +203,13 @@ function completionResponse(model: string): Response {
 describe('AI proxy auth gate', () => {
   test('requires a CLI bearer — no token is 401, never a cookie fallthrough', async () => {
     const { env } = setupEnv();
-    const res = await handleCliRequest(chatRequest(null, { model: '@cf/x/y', messages: [] }), env);
+    const res = await aiProxy(chatRequest(null, { model: '@cf/x/y', messages: [] }), env);
     expect(res?.status).toBe(401);
   });
 
   test('other /api/user routes stay outside the CLI handler', async () => {
     const { env } = setupEnv();
-    const res = await handleCliRequest(new Request('https://kinu.example.com/api/user/profile'), env);
+    const res = await aiProxy(new Request('https://kinu.example.com/api/user/profile'), env);
     expect(res).toBeNull();
   });
 
@@ -213,14 +217,14 @@ describe('AI proxy auth gate', () => {
     const { env } = setupEnv();
     captureUpstream(() => completionResponse('@cf/moonshotai/kimi-k2.6'));
 
-    const denied = await handleCliRequest(chatRequest(READ_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
+    const denied = await aiProxy(chatRequest(READ_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
     expect(denied?.status).toBe(403);
     expect(v.parse(StringErrorSchema, await handled(denied).json()).error).toContain('ai.proxy');
 
-    const scoped = await handleCliRequest(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
+    const scoped = await aiProxy(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
     expect(scoped?.status).toBe(200);
 
-    const session = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
+    const session = await aiProxy(chatRequest(SESSION_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
     expect(session?.status).toBe(200);
   });
 });
@@ -230,7 +234,7 @@ describe('AI proxy model → upstream selection', () => {
     const { env } = setupEnv({ token: 'cf-user-token' });
     const captured = captureUpstream(() => completionResponse('@cf/moonshotai/kimi-k2.6'));
 
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, {
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
     }, { 'x-session-affinity': 'kinu-jarvis' }), env);
@@ -250,7 +254,7 @@ describe('AI proxy model → upstream selection', () => {
   test('the eval identity streams over the direct Workers AI binding', async () => {
     const { env, directRuns } = setupEnv({ evalService: true });
 
-    const res = await handleCliRequest(chatRequest(AI_TOKEN, {
+    const res = await aiProxy(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
       stream: true,
@@ -287,7 +291,7 @@ describe('AI proxy model → upstream selection', () => {
       ].join(''),
     });
 
-    const res = await handleCliRequest(chatRequest(AI_TOKEN, {
+    const res = await aiProxy(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
       stream: true,
@@ -314,7 +318,7 @@ describe('AI proxy model → upstream selection', () => {
       },
     });
 
-    const res = await handleCliRequest(chatRequest(AI_TOKEN, {
+    const res = await aiProxy(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
       stream: true,
@@ -331,7 +335,7 @@ describe('AI proxy model → upstream selection', () => {
     const { env } = setupEnv({ gatewayId: 'prod-gw', token: 'cf-user-token' });
     const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));
 
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(200);
     expect(captured[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
     expect(captured[0].headers.get('cf-aig-gateway-id')).toBe('prod-gw');
@@ -340,7 +344,7 @@ describe('AI proxy model → upstream selection', () => {
 
   test('a bare model id cannot be routed — 400 with the accepted shapes', async () => {
     const { env } = setupEnv();
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'gpt-4.1', messages: [] }), env);
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(400);
     expect(v.parse(MessageErrorSchema, await handled(res).json()).error.message).toContain('@cf/{model}');
   });
@@ -348,7 +352,7 @@ describe('AI proxy model → upstream selection', () => {
   test('a missing Cloudflare connection is an actionable 401, not an upstream call', async () => {
     const { env } = setupEnv({ gatewayId: null });
     const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(401);
     expect(v.parse(MessageErrorSchema, await handled(res).json()).error.message).toContain('select an AI Gateway');
     expect(captured).toHaveLength(0);
@@ -372,7 +376,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
       { headers: { 'content-type': 'text/event-stream' } },
     ));
 
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, {
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [],
       stream: true,
@@ -396,7 +400,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
         })
         : completionResponse('openai/gpt-4.1'));
 
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(200);
     expect(captured.map((c) => c.headers.get('authorization'))).toEqual(['Bearer cf-stale', 'Bearer cf-fresh']);
   });
@@ -408,7 +412,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
       errors: [{ code: 2021, message: 'Invalid User Credentials' }],
     }), { status: 400, headers: { 'content-type': 'application/json' } }));
 
-    const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'minimax/m3', messages: [] }), env);
+    const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'minimax/m3', messages: [] }), env);
     expect(res?.status).toBe(400);
     const message = v.parse(MessageErrorSchema, await handled(res).json()).error.message;
     expect(message).toContain('AI Gateway "my-gw"');
@@ -451,7 +455,7 @@ describe('AI proxy model listing', () => {
       throw new Error(`unexpected fetch: ${url}`);
     });
 
-    const res = await handleCliRequest(new Request('https://kinu.example.com/api/user/ai/v1/models', {
+    const res = await aiProxy(new Request('https://kinu.example.com/api/user/ai/v1/models', {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
 

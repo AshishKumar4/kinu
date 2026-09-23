@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import { inScope } from './dead-code';
 import { readMatching, readTests } from './sources';
 import {
-  BLIND_SPOTS, buildGraph, builtinToolNames, findEntrypoints, findUnreached, findUnsupplied,
+  BLIND_SPOTS, buildGraph, builtinToolNames, findEntrypoints, findUnreached, findUnserved, findUnsupplied,
   isReacher, keyOf, measureFields, measureReach, type EntrypointKind,
 } from './wired';
 
@@ -110,6 +110,7 @@ function census(
   return [
     ...findUnreached(graph, reach, tests, read),
     ...findUnsupplied(graph, reach, facts, read),
+    ...findUnserved(reach, entrypoints),
   ].map(keyOf).sort();
 }
 
@@ -563,7 +564,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
 
 const KINDS: readonly EntrypointKind[] = [
   'builtin-tool', 'callable-rpc', 'cli-command', 'platform-hook', 'module-default',
-  'browser-bundle', 'process-entry', 'spawned-script',
+  'browser-bundle', 'process-entry', 'spawned-script', 'http-route',
 ];
 
 function kindsOf(reachers: ReadonlyMap<string, string>): Set<EntrypointKind> {
@@ -605,7 +606,62 @@ describe('entrypoint discovery', () => {
           fork(workerPath, ['db']);
         }`],
       [`${BASE}worker.ts`, 'process.stdout.write("ready");'],
+      [`${BASE}routes.ts`, `
+        import { Hono } from 'hono';
+        export const probeRoutes = new Hono();
+        probeRoutes.get('/api/probe', (c) => c.text('ok'));`],
     ]))).toEqual(new Set(KINDS));
+  });
+
+  describe('a Hono route', () => {
+    // The /api surface is a route table: each registration is named, and one in a file the
+    // Worker's fetch never reaches is an endpoint nobody can call.
+    // A path may be a constant: one bound to a literal is read through, any other keeps its name.
+    const family = `
+      import { Hono } from 'hono';
+      export const probeRoutes = new Hono();
+      const ITEM = '/api/probe/item';
+      const FEED = feedPath();
+      function feedPath(): string { return '/api/probe/feed'; }
+      probeRoutes.get('/api/probe/:name', (c) => c.text('ok'));
+      probeRoutes.on('POST', ['/api/probe', '/api/probe/'], (c) => c.text('made'));
+      probeRoutes.delete(ITEM, (c) => c.text('gone'));
+      probeRoutes.all(FEED, (c) => c.text('fed'));
+      probeRoutes.use(async (_c, next) => { await next(); });`;
+
+    const served = `
+      import { probeRoutes } from './routes';
+      export default {
+        async fetch(request: Request): Promise<Response> { return probeRoutes.fetch(request); },
+      } satisfies ExportedHandler;`;
+
+    const ROUTES = ['GET /api/probe/:name', 'POST /api/probe | /api/probe/', 'DELETE /api/probe/item', 'ALL FEED'];
+
+    const UNSERVED = ROUTES.map((route) => `${BASE}routes.ts#${route} (unserved-route)`);
+
+    test('is read off its registration, method and pattern as written', () => {
+      const reachers = fixture('', [[`${BASE}routes.ts`, family]]);
+      const graph = buildGraph(reachers);
+      const read = (file: string): string => reachers.get(file) ?? '';
+
+      const routes = findEntrypoints(reachers, graph.modules, builtinToolNames(graph.modules, read))
+        .filter((entry) => entry.kind === 'http-route').map((entry) => entry.at);
+
+      expect(routes).toEqual(ROUTES);
+    });
+
+    test('registered where no served module reaches is reported, and roots nothing', () => {
+      // Rooting a registration would make an unmounted family look served: its own export stays unreached.
+      expect(census(fixture('', [[`${BASE}routes.ts`, family]]))).toEqual(expect.arrayContaining([
+        ...UNSERVED, `${BASE}routes.ts#probeRoutes (unreached-export)`,
+      ]));
+    });
+
+    test('served through the Worker entry is not', () => {
+      const findings = census(fixture('', [[`${BASE}routes.ts`, family], [`${BASE}server.ts`, served]]));
+
+      expect(findings.filter((finding) => finding.endsWith('(unserved-route)'))).toEqual([]);
+    });
   });
 
   test('an import.meta.main process root reaches the runtime imports it executes', () => {

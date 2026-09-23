@@ -95,7 +95,7 @@
 # each checked rather than assumed:
 #
 #   1. The route does not exist. Our inference path is the deployment's own
-#      proxy, and `handleUserAIProxyRequest` serves exactly two routes —
+#      proxy, and `aiProxyRoutes` serves exactly two routes —
 #      `GET /models` and `POST /chat/completions` — answering 404 to everything
 #      else (cf-backend/src/user/ai-proxy.ts). The eval identity, which this tier uses,
 #      goes through `createDirectWorkersAIFetch`, which turns ONE

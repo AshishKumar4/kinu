@@ -3,6 +3,7 @@
  * cookie. Cross-preview cookie-site isolation remains a deployment prerequisite (below).
  */
 import { afterAll, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -13,7 +14,9 @@ import {
   isPreviewHostRequest,
   previewHostSuffix,
 } from '@kinu.run/core';
-import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
+import { publicHtmlHeaders, previewSuffixMetaName, serveApp, withAppSecurityHeaders, type AssetFetcher } from '@kinu.run/core';
+import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { DEPLOY_API } from '@kinu.run/core/deploy';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
 } from '../src/auth/session';
@@ -27,7 +30,9 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
-import { unreachableNamespace, unreachableObjects } from './helpers/bindings';
+import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import { appProbe, PROBE_ORIGIN } from './helpers/app-probe';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import type { SandboxOptions } from '@cloudflare/sandbox';
@@ -75,6 +80,20 @@ afterAll(() => { setSandboxSdk(null); });
 
 const { servePreviewRequest } =
   await import('../src/preview-proxy');
+
+// The whole Worker, for the wiring below: its module graph reaches the Agents SDK, mocked first.
+mockAgentsSdk();
+
+const { api } = await import('../src/api/app');
+
+const { default: worker } = await import('../src/server');
+
+/** The single-page app's document, as ASSETS serves every path it has no file for. */
+const APP_DOCUMENT: AssetFetcher = {
+  fetch: async () => new Response('<!doctype html><html><head></head><body></body></html>', {
+    headers: { 'content-type': 'text/html; charset=utf-8' },
+  }),
+};
 
 const root = join(import.meta.dir, '..');
 
@@ -887,8 +906,9 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("frame-src 'self'");
   });
 
-  test('the app names the preview wildcard, not a single host', () => {
-    expect(source('src/server.ts')).toContain('`https://*.${suffix}`');
+  test('the app names the preview wildcard, not a single host', async () => {
+    const shell = await serveApp(new Request(`${APP}/`), { PREVIEW_HOST_SUFFIX: SUFFIX, ASSETS: APP_DOCUMENT });
+    expect(shell.headers.get('content-security-policy')).toContain(`https://*.${SUFFIX}`);
   });
 
   test('the chat WebSocket survives the connect-src rule', () => {
@@ -955,44 +975,79 @@ describe('CSRF on cookie-authenticated requests', () => {
   });
 });
 
+/** What the /api app answers before its session gate: each authorizes itself, or is public by design. */
+const PUBLIC_API = [
+  '/api/control/', // Cloudflare Access, ahead of every bypass
+  '/api/auth/', // the sign-in state reads; every other path there is the app shell
+  `${USER_AI_PROXY_PATH}/`, // a CLI bearer holding ai.proxy
+  `${PROVIDER_PROXY_PATH}/`, // the same
+  '/api/cli', // a CLI bearer
+  `${DEPLOY_API}/`, // the deploy door's run key
+  '/api/health', // the build stamp
+  '/api/shared/blueprint/', // a signed blueprint id
+  '/api/workspaces/:name/webhook/', // a signed delivery URL
+];
+
 describe('worker wiring', () => {
   const server = source('src/server.ts');
 
-  const SOURCE_ORDER_GATES = [
-    {
-      name: 'the preview host serves previews and nothing else',
-      gate: 'isPreviewHostRequest(url, env)',
-      answers: 'return servePreviewRequest(request, env)',
-      before: 'handlePcRequest(request, env)',
-    },
-    {
-      name: 'the CSRF gate runs before any authenticated route',
-      gate: 'crossSiteRejection(request)',
-      // The gate must come first in source order, whatever the call shape.
-      answers: 'handleUserRequest(req, env, identity, ctx)',
-      before: 'handleUserRequest(req, env, identity, ctx)',
-    },
-  ] as const;
+  test('the preview host serves previews and nothing else, /api included', async () => {
+    sdkResponse = new Response('from the container');
+    sdkQueue = [];
+    sdkForwards = 0;
+    repairs = [];
+    repairFailure = null;
+    const partialEnv: Partial<Env> = {};
+    Object.assign(partialEnv, { ...CONTAINERS, ASSETS: APP_DOCUMENT, UserDO: unreachableNamespace('UserDO') });
 
-  for (const { name, gate, answers, before } of SOURCE_ORDER_GATES) {
-    test(name, () => {
-      expect(server).toContain(gate);
-      expect(server).toContain(answers);
-      expect(server.indexOf(gate)).toBeLessThan(server.indexOf(before));
-    });
-  }
+    // SAFETY: this fixture constructs every binding a preview host reads (the preview rail's, above); the app's are refusals.
+    const answer = await worker.fetch(new Request(`https://${PREVIEW_HOST}/api/user/profile`), partialEnv as Env, workerContext());
+
+    expect(await answer.text()).toBe('from the container');
+    expect(sdkForwards).toBe(1);
+  });
+
+  test('the CSRF gate runs before any authenticated route', async () => {
+    // Hono dispatches in registration order, so the route table IS the gate order: the session gate
+    // is the app's first catch-all, and every route ahead of it is public by design and listed.
+    const gate = api.routes.findIndex((route) => route.method === 'ALL' && route.path === '/api/*');
+    expect(gate).toBeGreaterThan(0);
+
+    for (const { path } of api.routes.slice(0, gate)) {
+      expect(PUBLIC_API.some((prefix) => path.startsWith(prefix)), path).toBe(true);
+    }
+
+    // That catch-all is the session gate with its cross-site check.
+    const { env, ctx, cookie } = await appProbe();
+    const anonymous = await api.fetch(new Request(`${PROBE_ORIGIN}/api/user/profile`), env, ctx);
+    expect(anonymous.status).toBe(401);
+
+    const forged = await api.fetch(new Request(`${PROBE_ORIGIN}/api/user/profile`, {
+      method: 'PATCH',
+      headers: { cookie, origin: 'https://evil.example', 'content-type': 'application/json' },
+      body: JSON.stringify({ displayName: 'Mallory' }),
+    }), env, ctx);
+
+    expect(forged.status).toBe(403);
+    expect(v.parse(v.object({ code: v.string() }), await forged.json()).code).toBe('CROSS_SITE');
+  });
+
+  test('every asset response goes through the app document policy', async () => {
+    // What no /api route answers, and every public page the Worker serves, is the app shell.
+    const { env, ctx } = await appProbe();
+
+    for (const answer of [
+      await api.fetch(new Request(`${PROBE_ORIGIN}/api/auth/unknown`), env, ctx),
+      await worker.fetch(new Request(`${PROBE_ORIGIN}/deploy`), env, ctx),
+    ]) {
+      expect(answer.headers.get('content-security-policy')).toContain('https://*.kinu.example.com');
+      expect(await answer.text()).toContain(`<meta name="${previewSuffixMetaName()}" content="kinu.example.com">`);
+    }
+  });
 
   test('no route on the app host serves previews', () => {
     expect(source('src/auth/session.ts')).not.toContain('_preview');
     expect(server).not.toContain('_preview');
-  });
-
-  test('every asset response goes through the app document policy', () => {
-    expect(server).toContain('serveApp(request, env)');
-    expect(server).not.toContain('return env.ASSETS.fetch(request)');
-    expect(server).not.toContain('await env.ASSETS.fetch(request), identity');
-    expect(server).toContain('previewSuffixMetaName()');
-    expect(server).toContain('new HTMLRewriter()');
   });
 
   test('Nimbus previews route on the isolated host before app authentication', () => {

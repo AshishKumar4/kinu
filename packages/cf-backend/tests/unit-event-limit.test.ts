@@ -2,6 +2,7 @@
 // and `?limit=abc` as NaN (500). Measured on this suite's storage, 700 rows seeded: -1 returned 700, abc 500.
 // A real `OrchestratorAgent` over bun:sqlite, because the defect was in what SQL did with the value.
 import { describe, test, expect } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import { boundEventQuery, type IngressDescriptor } from '@kinu.run/core';
 
 /** Asked of `boundEventQuery` rather than restated here. */
@@ -14,7 +15,7 @@ import type { HubEnv, HubResolver } from '../src/events/routes';
 
 // Dynamic: the route module resolves the Agent SDK at import time, so it loads after `actor-harness`
 // installs the stand-in.
-const { handleHubRequest } = await import('../src/events/routes');
+const { hubRoutes } = await import('../src/events/routes');
 
 const WORKSPACE = 'harness-actor';
 
@@ -45,12 +46,7 @@ const NO_BINDING_READ: HubEnv = {};
 async function eventsVia(
   resolveAgent: HubResolver, query: string,
 ): Promise<{ status: number; count: number }> {
-  const res = await handleHubRequest(
-    new Request(`https://kinu.example.com/api/workspaces/${WORKSPACE}/events${query}`),
-    NO_BINDING_READ,
-    WORKSPACE,
-    resolveAgent,
-  );
+  const res = await serveFamily(hubRoutes(() => resolveAgent), { workspace: { name: WORKSPACE } })(new Request(`https://kinu.example.com/api/workspaces/${WORKSPACE}/events${query}`), NO_BINDING_READ);
 
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();

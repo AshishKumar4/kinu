@@ -14,7 +14,8 @@ import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_USER
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
-import { handleSharedRequest } from '../src/shared/routes';
+import { sharedRoutes } from '../src/shared/routes';
+import { serveFamily } from './helpers/api';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
 import type { UserCaller } from '@kinu.run/core';
@@ -137,7 +138,7 @@ async function twoUserWorld(): Promise<World> {
 }
 
 const sharedRequest = (env: Env, identity: AuthIdentity, request: Request) =>
-  handleSharedRequest(request, env, identity);
+  serveFamily(sharedRoutes, { identity })(request, env);
 
 const jsonBody = async <Schema extends v.GenericSchema>(res: Response, schema: Schema): Promise<v.InferOutput<Schema>> =>
   v.parse(schema, await res.json());

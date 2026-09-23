@@ -4,9 +4,11 @@
  * No rate gate: callers are session+CSRF-gated browsers and `components/ErrorBoundary.tsx` bounds reports client-side.
  */
 
+import { Hono } from 'hono';
 import * as v from 'valibot';
 import { KinuError, diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
+import type { FamilyEnv } from '../api/context';
 import { err, json, readBounded } from '@kinu.run/core';
 import { readBuildStamp } from '@kinu.run/core';
 import {
@@ -28,7 +30,7 @@ function releaseMatch(reported: string | undefined, current: string | undefined)
   return reported === current ? 'match' : 'stale';
 }
 
-/** Refuses a null `identity` itself even behind server.ts's auth gate: an anonymous writer would be a log-injection endpoint. */
+/** Refuses a null `identity` itself: an anonymous writer would be a log-injection endpoint. */
 async function handleClientErrorReport(
   request: Request,
   env: ClientErrorEnv,
@@ -77,14 +79,9 @@ async function handleClientErrorReport(
 
 export type ClientErrorEnv = Parameters<typeof readBuildStamp>[0];
 
-export async function handleClientErrorRequest(
-  request: Request,
-  env: ClientErrorEnv,
-  identity: AuthIdentity | null,
-): Promise<Response | null> {
-  if (new URL(request.url).pathname !== CLIENT_ERROR_ENDPOINT) return null;
+/** Optional so the route's own 401 holds wherever it is mounted. */
+export const clientErrorRoutes = new Hono<FamilyEnv<ClientErrorEnv, { identity?: AuthIdentity }>>();
 
-  return request.method === 'POST'
-    ? handleClientErrorReport(request, env, identity)
-    : err(405, 'use POST');
-}
+clientErrorRoutes.all(CLIENT_ERROR_ENDPOINT, async (c) => (c.req.method === 'POST'
+  ? handleClientErrorReport(c.req.raw, c.env, c.get('identity') ?? null)
+  : err(405, 'use POST')));

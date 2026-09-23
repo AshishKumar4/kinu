@@ -1,6 +1,7 @@
 // Files route transfer contract: byte-exact chunking, the 413 before any large allocation,
 // counted (not announced) request bytes, and a streamed response.
 import { describe, expect, test } from "bun:test";
+import { serveFamily } from './helpers/api';
 import * as v from "valibot";
 import type { FilesRouteAgent } from "../src/files-routes";
 import type {
@@ -15,7 +16,7 @@ import { present } from "@kinu.run/test-utils";
 
 mockAgentsSdk();
 
-const { handleFilesRequest } = await import("../src/files-routes");
+const { filesRoutes } = await import("../src/files-routes");
 
 const {
   ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, VfsRevisionSchema,
@@ -172,7 +173,7 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
 }
 
 async function route(request: Request, harness: Harness): Promise<Response> {
-  const response = await handleFilesRequest(request, null, "ws", async () => harness.agent);
+  const response = await serveFamily(filesRoutes(async () => harness.agent), { workspace: { name: "ws" } })(request, {});
 
   if (response === null) throw new Error("route did not claim the request");
 

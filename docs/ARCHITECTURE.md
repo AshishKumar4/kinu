@@ -327,8 +327,9 @@ The browser side is `WorkspacePage.tsx` through `use-kinu.ts` (`useAgent` and
 protocol onto `ChatSession`: a chat request becomes one `ChatSession.send` per
 new message, a cancel becomes an interrupt, and the transport writes no row
 itself. The worker entrypoint is `packages/cf-backend/src/server.ts`
-(`routeAgentRequest`, plus the `email()` handler). The CLI drives the same
-`ChatSession` through `LocalAgentSession`.
+(`routeAgentRequest`, plus the `email()` handler); it hands every `/api/` path to
+one Hono app (`packages/cf-backend/src/api/app.ts`), whose registration order is
+its gate order. The CLI drives the same `ChatSession` through `LocalAgentSession`.
 
 ## Events and ingress
 

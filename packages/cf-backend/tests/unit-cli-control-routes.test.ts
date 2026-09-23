@@ -1,7 +1,8 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import {
-  handleCliRequest, type CliAgentTarget, type CliRoutesAuthority, type CliRoutesEnv,
+  cliRoutes, type CliAgentTarget, type CliRoutesAuthority, type CliRoutesEnv,
 } from '../src/cli/routes';
 import { cliAccount, workspaceObject, unreachableAssets, unreachableKv } from './helpers/bindings';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -9,6 +10,8 @@ import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import type { ReasoningEffort, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
+
+const cli = serveFamily(cliRoutes);
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -224,7 +227,7 @@ function rpcRequest(method: string, args: JsonValue[] = [], agent = 'jarvis') {
 }
 
 async function rpcResult(env: CliRoutesEnv<string>, method: string, args: JsonValue[] = []): Promise<JsonValue> {
-  const res = await handleCliRequest(rpcRequest(method, args), env);
+  const res = await cli(rpcRequest(method, args), env);
   expect(`${method}:${res?.status}`).toBe(`${method}:200`);
 
   return v.parse(RpcResponseSchema, await handled(res).json()).result;
@@ -234,12 +237,12 @@ describe('CLI control routes', () => {
   test('deletes an owned workspace through the authenticated user DO', async () => {
     const { env, calls } = setupEnv();
 
-    const deleted = await handleCliRequest(cliRequest('/api/cli/workspaces/%6Aarvis', { method: 'DELETE' }), env);
+    const deleted = await cli(cliRequest('/api/cli/workspaces/%6Aarvis', { method: 'DELETE' }), env);
     expect(deleted?.status).toBe(200);
     expect(v.parse(OkResponseSchema, await handled(deleted).json())).toEqual({ ok: true });
     expect(calls).toContain(`workspace:remove:jarvis:${USER_ID}`);
 
-    const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
+    const missing = await cli(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
     expect(missing?.status).toBe(404);
     expect(calls.some((call) => call.includes('workspace:remove:unknown'))).toBe(false);
   });
@@ -247,7 +250,7 @@ describe('CLI control routes', () => {
   test('mints scoped agent websocket tickets for owned agents', async () => {
     const { env, calls } = setupEnv();
 
-    const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
+    const ticket = await cli(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
     // A ticket is a bearer credential; `json()` applies the account-wide no-store policy.
     expect(handled(ticket).headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
@@ -255,7 +258,7 @@ describe('CLI control routes', () => {
       .toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
     expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
 
-    const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown/connect-ticket', { method: 'POST' }), env);
+    const missing = await cli(cliRequest('/api/cli/workspaces/unknown/connect-ticket', { method: 'POST' }), env);
     expect(missing?.status).toBe(404);
   });
 
@@ -307,7 +310,7 @@ describe('CLI control routes', () => {
     const { env, calls } = setupEnv();
 
     for (const method of ['deviceRpc', 'claimOwner', 'constructor', '__proto__', 'destroyAgent']) {
-      const res = await handleCliRequest(rpcRequest(method, ['x']), env);
+      const res = await cli(rpcRequest(method, ['x']), env);
       expect(`${method}:${res?.status}`).toBe(`${method}:404`);
       expect((await errorBody(res)).error).toContain('No such agent RPC method');
     }
@@ -318,7 +321,7 @@ describe('CLI control routes', () => {
   test('malformed rpc bodies are 400s, unknown workspaces are 404s', async () => {
     const { env } = setupEnv();
 
-    const noMethod = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/rpc', {
+    const noMethod = await cli(cliRequest('/api/cli/workspaces/jarvis/rpc', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ args: [] }),
@@ -326,7 +329,7 @@ describe('CLI control routes', () => {
 
     expect(noMethod?.status).toBe(400);
 
-    const badArgs = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/rpc', {
+    const badArgs = await cli(cliRequest('/api/cli/workspaces/jarvis/rpc', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'getAgentStatus', args: { not: 'an array' } }),
@@ -334,7 +337,7 @@ describe('CLI control routes', () => {
 
     expect(badArgs?.status).toBe(400);
 
-    const unknownAgent = await handleCliRequest(rpcRequest('getAgentStatus', [], 'unknown'), env);
+    const unknownAgent = await cli(rpcRequest('getAgentStatus', [], 'unknown'), env);
     expect(unknownAgent?.status).toBe(404);
   });
 
@@ -346,7 +349,7 @@ describe('CLI control routes', () => {
 
     const env = testEnv(tokenHolderUserDO(), { idFromName: (n) => n, get: () => workspace });
 
-    const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
+    const thrown = await cli(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
     expect((await errorBody(thrown)).error).toContain('Timer trigger requires cron or atMs');
   });
@@ -375,7 +378,7 @@ describe('shared ownership claim status mapping', () => {
 
   for (const { name, message, status } of claimFailures) {
     test(name, async () => {
-      const res = await handleCliRequest(rpcRequest('getAgentStatus'), envWithClaimFailure(message));
+      const res = await cli(rpcRequest('getAgentStatus'), envWithClaimFailure(message));
       expect(res?.status).toBe(status);
     });
   }
@@ -390,14 +393,14 @@ describe('CLI webhook creation step-up gate', () => {
 
   test('freshly-minted token (recent kinu auth) may create webhooks', async () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 60_000 });
-    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
+    const res = await cli(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(201);
     expect(calls.some((c) => c.startsWith('triggers:webhook:'))).toBe(true);
   });
 
   test('long-lived token is denied with 401 step-up (same policy as the web route)', async () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
-    const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
+    const res = await cli(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(401);
     expect((await errorBody(res)).error).toContain('step-up auth required');
     expect(calls.some((c) => c.startsWith('triggers:webhook:'))).toBe(false);
@@ -405,7 +408,7 @@ describe('CLI webhook creation step-up gate', () => {
 
   test('timer triggers are not step-up gated (matches web semantics)', async () => {
     const { env } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
-    const res = await handleCliRequest(rpcRequest('createTimerTrigger', [{ atMs: Date.now() + 1000, trust: 'owner' }]), env);
+    const res = await cli(rpcRequest('createTimerTrigger', [{ atMs: Date.now() + 1000, trust: 'owner' }]), env);
     expect(res?.status).toBe(200);
   });
 });

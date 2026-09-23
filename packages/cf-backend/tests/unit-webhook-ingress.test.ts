@@ -3,6 +3,7 @@
  * is unknown, so this governs cost (body size, knock rate). Unminted URLs: `unit-webhook-route.test.ts`.
  */
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import { Database } from 'bun:sqlite';
 import {
   initWebhookRateLimitTables,
@@ -21,7 +22,7 @@ import type {
 // The route's module graph reaches `cloudflare:email` through `agents`, so the stub is installed before the dynamic import.
 mockAgentsSdk();
 
-const { handleWebhookDeliveryRequest } = await import('../src/events/routes');
+const { webhookDeliveryRoutes } = await import('../src/events/routes');
 
 const { webhookRoutePath } = await import('@kinu.run/core');
 
@@ -87,7 +88,7 @@ describe('what a signed webhook delivery may cost', () => {
   test('a body within the ceiling reaches the ingress byte for byte', async () => {
     const { env, probe, resolveAgent } = harness();
     const body = JSON.stringify({ note: 'x'.repeat(4096) });
-    const response = await handleWebhookDeliveryRequest(await delivery(body), env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(await delivery(body), env);
 
     expect(response?.status).toBe(202);
     expect(probe.bodyText).toBe(body);
@@ -96,7 +97,7 @@ describe('what a signed webhook delivery may cost', () => {
   test('a body over the ceiling is refused, and no workspace object is woken', async () => {
     const { env, probe, resolveAgent } = harness();
     const request = await delivery('x'.repeat(1024 * 1024 + 17));
-    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(request, env);
 
     expect(response?.status).toBe(413);
     expect(probe.woken).toEqual([]);
@@ -110,7 +111,7 @@ describe('what a signed webhook delivery may cost', () => {
       headers: { 'content-length': String(8 * 1024 * 1024) },
     });
 
-    const response = await handleWebhookDeliveryRequest(request, env, resolveAgent);
+    const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(request, env);
 
     expect(response?.status).toBe(413);
     expect(probe.woken).toEqual([]);
@@ -122,9 +123,7 @@ describe('what a signed webhook delivery may cost', () => {
     let refused: Response | null = null;
 
     for (let attempt = 0; attempt < 61 && !refused; attempt += 1) {
-      const response = await handleWebhookDeliveryRequest(
-        await delivery('{}', { headers }), env, resolveAgent,
-      );
+      const response = await serveFamily(webhookDeliveryRoutes(() => resolveAgent))(await delivery('{}', { headers }), env);
 
       if (response?.status === 429) refused = response;
     }

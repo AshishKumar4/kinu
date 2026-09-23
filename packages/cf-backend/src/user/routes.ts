@@ -1,8 +1,5 @@
-/**
- * `/api/user/*` HTTP routes. All are user-scoped: auth middleware resolves the caller's `userId` first.
- * `GET /credentials` returns key/kind/timestamps only; no secret is readable back.
- */
-import type { AuthIdentity } from '../auth/session';
+/** `/api/user/*`, behind the session gate. `GET /credentials` never returns a secret. */
+import { Hono, type Context } from 'hono';
 import type { UserDO } from './user-do';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
@@ -16,13 +13,14 @@ import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { err, json, safeJson } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
-import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from '@kinu.run/core';
+import type { UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator, type AdminGateEnv } from '../control-plane/admin-caller';
+import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
 
-const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+export const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
 
-/** Every UserDO call `/api/user/*` makes, joined because one dispatcher holds one stub for all. */
+/** Every UserDO call `/api/user/*` makes: one gate holds one stub. */
 export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
   'ensureProfile' | 'userMcp_warmConnections' | 'getProfile' | 'getProfileCatalog' | 'putProfileCatalog'
@@ -42,24 +40,23 @@ export interface UserRoutesEnv<Id> extends CreateWorkspaceEnv<Id>, AdminGateEnv 
   CLI_PUBLIC_ORIGIN?: string;
 }
 
-function getUserDOStub<Id>(env: UserRoutesEnv<Id>, userId: string): UserRoutesAuthority {
-  return env.UserDO.get(env.UserDO.idFromName(userId));
+interface UserVariables extends ApiVariables {
+  owner: UserCaller;
+  stub: UserRoutesAuthority;
+  key: string;
 }
+
+type UserContext = Context<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>;
 
 /** Users whose MCP warm-up already started in this isolate; warm once per process so a cold
  *  UserDO reconnects in parallel with the first orchestrator turn, not on its critical path. */
 const warmedMcpUsers = new Set<string>();
 
-interface WorkspaceRosterContext {
-  readonly stub: Pick<UserDO, 'listWorkspaces'>;
-  readonly owner: UserCaller;
-  readonly url: URL;
-}
-
 /** GET /api/user/workspaces: one roster page; a garbage cursor maps to 400. */
-async function listWorkspaceRoster(ctx: WorkspaceRosterContext): Promise<Response> {
-  const cursor = ctx.url.searchParams.get('cursor');
-  const limitRaw = ctx.url.searchParams.get('limit');
+async function listWorkspaceRoster(c: UserContext): Promise<Response> {
+  const url = new URL(c.req.url);
+  const cursor = url.searchParams.get('cursor');
+  const limitRaw = url.searchParams.get('limit');
   const limit = limitRaw === null || limitRaw.trim() === '' ? undefined : Number(limitRaw);
 
   // Roster bounds live in user-do's clampRosterLimit; this only keeps NaN from reaching the
@@ -69,7 +66,7 @@ async function listWorkspaceRoster(ctx: WorkspaceRosterContext): Promise<Respons
   }
 
   try {
-    return json({ body: await ctx.stub.listWorkspaces(ctx.owner, { cursor, limit }) });
+    return json({ body: await c.get('stub').listWorkspaces(c.get('owner'), { cursor, limit }) });
   } catch (e) {
     const message = renderThrownChain({ cause: e });
 
@@ -80,436 +77,76 @@ async function listWorkspaceRoster(ctx: WorkspaceRosterContext): Promise<Respons
   }
 }
 
-interface UserRouteContext<Id> {
-  readonly request: Request;
-  readonly env: UserRoutesEnv<Id>;
-  readonly identity: AuthIdentity;
-  readonly ctx: Pick<ExecutionContext, 'waitUntil'> | undefined;
-  readonly url: URL;
-  readonly path: string;
-  readonly method: string;
-  readonly owner: UserCaller;
-  readonly stub: UserRoutesAuthority;
+function cliOriginFor(c: UserContext): string {
+  const configured = c.env.CLI_PUBLIC_ORIGIN ?? '';
+
+  return normalizeCliOrigin(configured === '' ? new URL(c.req.url).origin : configured);
 }
 
-/** A route family: its response, or null when the address is not one of its own. */
-type UserRouteFamily = <Id>(route: UserRouteContext<Id>) => Promise<Response | null>;
-
-function cliOriginFor<Id>(env: UserRoutesEnv<Id>, url: URL): string {
-  const configured = env.CLI_PUBLIC_ORIGIN ?? '';
-
-  return normalizeCliOrigin(configured === '' ? url.origin : configured);
+/** Workers preserves the visitor's scheme and host in `request.url` for proxied requests. */
+function publicOrigin(c: UserContext): string {
+  return new URL(c.req.url).origin;
 }
 
-async function handleProfileRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, env, identity, path, method, owner, stub } = route;
-
-  if (path === '/profile' && method === 'GET') {
-    const profile = await stub.getProfile(await ownerCaller(env));
-    // Uses the same allowlist as `authorizeAdmin` so the nav link and gate agree. Not authorization:
-    // Access covers only `/control*` and `/api/control*`, so the gate still checks both halves.
-    const controlPlane = isControlPlaneOperator(env, identity);
-
-    return json({ body: profile === null ? null : { ...profile, controlPlane } });
-  }
-
-  if (path === '/profile-catalog' && method === 'GET') {
-    return json({ body: await stub.getProfileCatalog(owner) });
-  }
-
-  if (path === '/profile-catalog' && method === 'PUT') {
-    const body = await safeJson(request, v.object({
-      catalog: JsonValueSchema,
-      expectedVersion: v.number(),
-    }));
-
-    if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
-    const result = await stub.putProfileCatalog(owner, body.catalog, body.expectedVersion);
-
-    if (result.ok) return json({ body: result.envelope });
-
-    if (result.kind === 'conflict') {
-      return json({
-        body: {
-          error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
-          currentVersion: result.currentVersion,
-          currentDigest: result.currentDigest,
-        },
-      }, { status: 409 });
-    }
-
-    return err(400, result.reason);
-  }
-
-  return null;
+/** Credential writes refresh live workspaces' provider caches via waitUntil. */
+function credentialsChanged(c: UserContext): void {
+  notifyWorkspacesCredentialsChanged(c.env, c.get('stub'), c.executionCtx);
 }
 
-function handleCliRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { env, url, path, method } = route;
+type CatalogWrite = (
+  catalog: Parameters<UserDO['putProfileCatalog']>[1], expectedVersion: number,
+) => ReturnType<UserDO['putProfileCatalog']>;
 
-  if (path !== '/cli' || method !== 'GET') return Promise.resolve(null);
-  const cliOrigin = cliOriginFor(env, url);
+/** A profile-catalog `PUT`, from the browser or the CLI. */
+export async function answerCatalogPut(request: Request, write: CatalogWrite): Promise<Response> {
+  const body = await safeJson(request, v.object({ catalog: JsonValueSchema, expectedVersion: v.number() }));
 
-  return Promise.resolve(json({
-    body: {
-      publicOrigin: cliOrigin,
-      installCommand: buildCliInstallCommand({ origin: cliOrigin }),
-      setupCommand: buildCliSetupCommand(cliOrigin),
-      authCommand: buildCliAuthCommand(cliOrigin),
-    },
-  }));
+  if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
+  const result = await write(body.catalog, body.expectedVersion);
+
+  if (result.ok) return json({ body: result.envelope });
+
+  if (result.kind === 'conflict') {
+    return json({
+      body: {
+        error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
+        currentVersion: result.currentVersion,
+        currentDigest: result.currentDigest,
+      },
+    }, { status: 409 });
+  }
+
+  return err(400, result.reason);
 }
 
-async function handleWorkspaceRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, env, identity, url, path, method, owner, stub } = route;
-
-  if (path === '/workspaces' && method === 'GET') {
-    return listWorkspaceRoster({ stub, owner, url });
-  }
-
-  if (path === '/workspaces' && method === 'POST') {
-    return handleCreateWorkspaceRequest({ request, env, userId: identity.userId, userDO: stub });
-  }
-
-  const agentTouchMatch = path.match(/^\/workspaces\/([^/]+)\/touch$/);
-
-  if (agentTouchMatch && method === 'POST') {
-    try {
-      await stub.touchWorkspace(await ownerCaller(env), decodeURIComponent(agentTouchMatch[1]));
-
-      return json({ body: { ok: true } });
-    }
-    catch (e) { return err(400, renderThrownChain({ cause: e })); }
-  }
-
-  const agentMatch = path.match(/^\/workspaces\/([^/]+)$/);
-
-  if (agentMatch && method === 'DELETE') {
-    try {
-      await stub.removeWorkspace(await ownerCaller(env), decodeURIComponent(agentMatch[1]), identity.userId);
-
-      return json({ body: { ok: true } });
-    }
-    catch (e) { return err(400, renderThrownChain({ cause: e })); }
-  }
-
-  return null;
+/** A failed MCP read is a 500 naming it. */
+function mcpRead<Body>(read: (stub: UserRoutesAuthority, owner: UserCaller) => Promise<Body>) {
+  return async (c: UserContext): Promise<Response> => {
+    try { return json({ body: await read(c.get('stub'), c.get('owner')) }); }
+    catch (e) { return err(500, renderThrownChain({ cause: e })); }
+  };
 }
 
-/** Bare `/devices/:id` arms are matched before `/devices/consents`, so DELETE `/devices/consents`
- *  revokes a device named `consents`; keep these routes in this order. */
-async function handleDeviceRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, env, url, path, method, stub } = route;
-
-  if (path === '/devices' && method === 'GET') {
-    return json({ body: await stub.listDevices(await ownerCaller(env)) });
-  }
-
-  if (path === '/devices' && method === 'POST') {
-    const body = await safeJson(request, OptionalLabelSchema);
-    const cliOrigin = cliOriginFor(env, url);
-
-    const installCommand = buildCliInstallCommand({
-      origin: cliOrigin,
-      setup: false,
-      connect: true,
-      label: body?.label,
-    });
-
-    return json({ body: { origin: cliOrigin, installCommand } }, { status: 201 });
-  }
-
-  const deviceAcknowledgeMatch = path.match(/^\/devices\/([^/]+)\/unstopped$/);
-
-  if (deviceAcknowledgeMatch && method === 'DELETE') {
-    try {
-      const result = await stub.acknowledgeUnstoppedDevice(await ownerCaller(env), decodeURIComponent(deviceAcknowledgeMatch[1]));
-
-      if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
-
-      return json({ body: { ok: true } });
-    } catch (e) {
-      return err(400, renderThrownChain({ cause: e }));
-    }
-  }
-
-  const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
-
-  if (deviceMatch && method === 'DELETE') {
-    try {
-      const result = await stub.revokeDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]));
-
-      return json({ body: result });
-    } catch (e) {
-      return err(400, renderThrownChain({ cause: e }));
-    }
-  }
-
-  if (deviceMatch && method === 'PATCH') {
-    const body = await safeJson(request, v.object({ name: v.optional(v.string()) }));
-    const name = body?.name?.trim();
-
-    if (!name) return err(400, 'Body must be { name }');
-    const result = await stub.renameDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]), name);
-
-    if (!result.ok) return err(404, 'device not found');
-
-    return json({ body: { ok: true } });
-  }
-
-  if (path === '/devices/consents' && method === 'GET') {
-    return json({ body: await stub.listDeviceConsents(await ownerCaller(env)) });
-  }
-
-  const consentMatch = path.match(/^\/devices\/([^/]+)\/consent$/);
-  // Owner session only: the UserDO refuses a workspace caller, which could otherwise disable
-  // its own sandbox.
-  const sandboxMatch = path.match(/^\/devices\/([^/]+)\/sandbox$/);
-
-  if (sandboxMatch && method === 'PUT') {
-    const body = await safeJson(request, v.object({ tier: v.optional(v.picklist(DEVICE_TIERS)) }));
-    const tier = body?.tier;
-
-    if (!tier) return err(400, `Body must be { tier: ${DEVICE_TIERS.map((t) => `'${t}'`).join(' | ')} }`);
-    const result = await stub.setDeviceTier(await ownerCaller(env), decodeURIComponent(sandboxMatch[1]), tier);
-
-    if (!result.ok) return err(404, 'device not found');
-
-    return json({ body: { ok: true } });
-  }
-
-  if (consentMatch && method === 'DELETE') {
-    const agentName = url.searchParams.get('agentName')?.trim();
-
-    if (!agentName) return err(400, 'Query must carry ?agentName=');
-
-    const result = await stub.revokeDeviceConsent(
-      await ownerCaller(env), agentName, decodeURIComponent(consentMatch[1]),
-    );
-
-    if (!result.ok) return err(400, 'grant not revoked');
-
-    return json({ body: { ok: true } });
-  }
-
-  return null;
-}
-
-/** /api/user/credentials*: no secret is readable back. */
-async function handleCredentialRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, env, ctx, path, method, stub } = route;
-
-  if (path === '/credentials' && method === 'GET') {
-    return json({ body: await stub.listCredentials(await ownerCaller(env)) });
-  }
-
-  const credMatch = path.match(/^\/credentials\/([^/]+)$/);
-
-  if (credMatch) {
-    const key = decodeURIComponent(credMatch[1]);
-
-    if (method === 'POST') {
-      const body = await safeJson(request, JsonValueSchema);
-
-      if (body === null) return err(400, 'Body must be JSON');
-
-      try { await stub.setCredential(await ownerCaller(env), key, body); }
-      catch (e) { return err(400, renderThrownChain({ cause: e })); }
-
-      notifyWorkspacesCredentialsChanged(env, stub, ctx);
-
-      return json({ body: { ok: true } });
-    }
-
-    if (method === 'DELETE') {
-      try { await stub.deleteCredential(await ownerCaller(env), key); }
-      catch (e) { return err(400, renderThrownChain({ cause: e })); }
-
-      notifyWorkspacesCredentialsChanged(env, stub, ctx);
-
-      return json({ body: { ok: true } });
-    }
-  }
-
-  return null;
-}
-
-async function handleCodexRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { env, ctx, path, method, stub } = route;
-
-  if (path === '/codex' && method === 'GET') {
-    return json({ body: await stub.getCodexStatus(await ownerCaller(env)) });
-  }
-
-  if (path === '/codex' && method === 'DELETE') {
-    await stub.disconnectCodex(await ownerCaller(env));
-    notifyWorkspacesCredentialsChanged(env, stub, ctx);
-
-    return json({ body: { ok: true } });
-  }
-
-  if (path === '/codex/start' && method === 'POST') {
-    try { return json({ body: await stub.startCodexDeviceFlow(await ownerCaller(env)) }); }
-    catch (e) { return err(502, renderThrownChain({ cause: e })); }
-  }
-
-  if (path === '/codex/poll' && method === 'POST') {
-    try {
-      const status = await stub.pollCodexDeviceFlow(await ownerCaller(env));
-
-      if (status.connected) notifyWorkspacesCredentialsChanged(env, stub, ctx);
-
-      return json({ body: status });
-    } catch (e) { return err(502, renderThrownChain({ cause: e })); }
-  }
-
-  return null;
-}
-
-/** /api/user/config*: the profile catalog has its own route and is refused here. */
-async function handleConfigRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, env, path, method, stub } = route;
-
-  if (path === '/config' && method === 'GET') {
-    return json({ body: await stub.listConfig(await ownerCaller(env)) });
-  }
-
-  const cfgMatch = path.match(/^\/config\/([^/]+)$/);
-
-  if (cfgMatch) {
-    const key = decodeURIComponent(cfgMatch[1]);
-
-    if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      return err(400, 'Profile catalogs use /api/user/profile-catalog.');
-    }
-
-    if (method === 'GET') {
-      return json({ body: { key, value: await stub.getConfig(await ownerCaller(env), key) } });
-    }
-
-    if (method === 'PUT') {
-      const body = await safeJson(request, v.object({ value: v.string() }));
-
-      if (!body) return err(400, 'value (string) required');
-      await stub.setConfig(await ownerCaller(env), key, body.value);
-
-      return json({ body: { ok: true } });
-    }
-  }
-
-  return null;
-}
-
-async function handleModelRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { env, identity, path, method, stub } = route;
-
-  if (path === '/providers' && method === 'GET') {
-    return json({ body: await stub.listConnectedProviders(await ownerCaller(env)) });
-  }
-
-  if (path === '/providers/catalog' && method === 'GET') {
-    return json({ body: await listProviderCatalog(env, identity.userId, await ownerCaller(env)) });
-  }
-
-  if (path === '/models' && method === 'GET') {
-    return json({ body: await listAvailableModels(env, identity.userId, await ownerCaller(env)) });
-  }
-
-  return null;
-}
-
-async function handleCloudflareRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, env, ctx, path, method, stub } = route;
-
-  if (path === '/cloudflare/accounts' && method === 'GET') {
-    return json({ body: await stub.listCloudflareAccounts(await ownerCaller(env)) });
-  }
-
-  if (path === '/cloudflare/account' && method === 'PUT') {
-    const body = await safeJson(request, v.object({ id: v.string() }));
-
-    if (!body) return err(400, 'id (string) required');
-
-    try { await stub.selectCloudflareAccount(await ownerCaller(env), body.id); }
-    catch (e) { return err(400, renderThrownChain({ cause: e })); }
-
-    notifyWorkspacesCredentialsChanged(env, stub, ctx);
-
-    return json({ body: { ok: true } });
-  }
-
-  if (path === '/cloudflare/gateways' && method === 'GET') {
-    return json({ body: await stub.listAIGateways(await ownerCaller(env)) });
-  }
-
-  if (path === '/cloudflare/gateway' && method === 'PUT') {
-    const body = await safeJson(request, v.object({ id: v.nullable(v.string()) }));
-
-    if (!body) {
-      return err(400, 'id (string | null) required');
-    }
-
-    try { await stub.selectAIGateway(await ownerCaller(env), body.id); }
-    catch (e) { return err(400, renderThrownChain({ cause: e })); }
-
-    notifyWorkspacesCredentialsChanged(env, stub, ctx);
-
-    return json({ body: { ok: true } });
-  }
-
-  return null;
-}
-
-/** Families own disjoint address spaces, so dispatch order carries no meaning. */
-const USER_ROUTE_FAMILIES: readonly UserRouteFamily[] = [
-  handleProfileRoutes,
-  handleCliRoutes,
-  handleWorkspaceRoutes,
-  handleDeviceRoutes,
-  handleCredentialRoutes,
-  handleCodexRoutes,
-  handleConfigRoutes,
-  handleModelRoutes,
-  handleCloudflareRoutes,
-  handleMcpRoutes,
-];
-
-export async function handleUserRequest<Id>(
-  request: Request,
-  env: UserRoutesEnv<Id>,
-  identity: AuthIdentity,
-  ctx?: Pick<ExecutionContext, 'waitUntil'>,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-
-  if (!url.pathname.startsWith('/api/user')) return null;
-  const path = url.pathname.slice('/api/user'.length);
-  const method = request.method;
-
-  let owner: UserCaller;
-
-  try { owner = await ownerCaller(env); }
-  catch (e) {
-    // A deployment with no root secret cannot authorize the owner; the error names the secret.
-    if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);
-    throw e;
-  }
-
-  const stub = getUserDOStub(env, identity.userId);
+export const userRoutes = new Hono<FamilyEnv<UserRoutesEnv<unknown>, UserVariables>>();
+
+// `/api/user*`: every path starting with the text, as before.
+userRoutes.use('/api/user*', ownerGate(), async (c, next) => {
+  const identity = c.get('identity');
+  const owner = c.get('owner');
+  const stub = c.env.UserDO.get(c.env.UserDO.idFromName(identity.userId));
   // Every /api/user route passes through this upsert; it is idempotent, so transient
   // DO failures are retried rather than failing the request.
   await retryTransientDO('ensureProfile',
     () => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined));
 
-  // `ctx` is the Worker's ExecutionContext; waitUntil is a no-op only in a DO
-  // (`do.wait_until.no_op`). A failed warm removes the user from the set so the next request retries.
-  if (ctx && !warmedMcpUsers.has(identity.userId)) {
+  // waitUntil is a no-op only in a DO (`do.wait_until.no_op`). A failed warm removes the user from
+  // the set so the next request retries.
+  if (!warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
-    const caller = await ownerCaller(env);
 
     const warmMcp = async (): Promise<void> => {
       try {
-        await stub.userMcp_warmConnections(caller);
+        await stub.userMcp_warmConnections(owner);
       } catch (cause) {
         warmedMcpUsers.delete(identity.userId);
         diagnostics.failure('user.bootstrap_failed', toKinuError({
@@ -520,89 +157,318 @@ export async function handleUserRequest<Id>(
       }
     };
 
-    ctx.waitUntil(warmMcp());
+    c.executionCtx.waitUntil(warmMcp());
   }
 
-  const route: UserRouteContext<Id> = { request, env, identity, ctx, url, path, method, owner, stub };
+  c.set('stub', stub);
+  await next();
+});
 
-  for (const family of USER_ROUTE_FAMILIES) {
-    const answer = await family(route);
+userRoutes.get('/api/user/profile', async (c) => {
+  const profile = await c.get('stub').getProfile(c.get('owner'));
+  // Uses the same allowlist as `authorizeAdmin` so the nav link and gate agree. Not authorization:
+  // Access covers only `/control*` and `/api/control*`, so the gate still checks both halves.
+  const controlPlane = isControlPlaneOperator(c.env, c.get('identity'));
 
-    if (answer) return answer;
+  return json({ body: profile === null ? null : { ...profile, controlPlane } });
+});
+
+userRoutes.get('/api/user/profile-catalog', async (c) => json({ body: await c.get('stub').getProfileCatalog(c.get('owner')) }));
+
+userRoutes.put('/api/user/profile-catalog', async (c) => answerCatalogPut(c.req.raw,
+  (catalog, expectedVersion) => c.get('stub').putProfileCatalog(c.get('owner'), catalog, expectedVersion)));
+
+userRoutes.get('/api/user/cli', async (c) => {
+  const cliOrigin = cliOriginFor(c);
+
+  return json({
+    body: {
+      publicOrigin: cliOrigin,
+      installCommand: buildCliInstallCommand({ origin: cliOrigin }),
+      setupCommand: buildCliSetupCommand(cliOrigin),
+      authCommand: buildCliAuthCommand(cliOrigin),
+    },
+  });
+});
+
+userRoutes.get('/api/user/workspaces', listWorkspaceRoster);
+
+userRoutes.post('/api/user/workspaces', async (c) => handleCreateWorkspaceRequest({
+  request: c.req.raw, env: c.env, userId: c.get('identity').userId, userDO: c.get('stub'),
+}));
+
+userRoutes.post('/api/user/workspaces/:name/touch', async (c) => {
+  try {
+    await c.get('stub').touchWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')));
+
+    return json({ body: { ok: true } });
+  }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+});
+
+userRoutes.delete('/api/user/workspaces/:name', async (c) => {
+  try {
+    await c.get('stub').removeWorkspace(c.get('owner'), decodeURIComponent(rawParam(c, 'name')), c.get('identity').userId);
+
+    return json({ body: { ok: true } });
+  }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+});
+
+userRoutes.get('/api/user/devices', async (c) => json({ body: await c.get('stub').listDevices(c.get('owner')) }));
+
+userRoutes.post('/api/user/devices', async (c) => {
+  const body = await safeJson(c.req.raw, OptionalLabelSchema);
+  const cliOrigin = cliOriginFor(c);
+
+  const installCommand = buildCliInstallCommand({
+    origin: cliOrigin,
+    setup: false,
+    connect: true,
+    label: body?.label,
+  });
+
+  return json({ body: { origin: cliOrigin, installCommand } }, { status: 201 });
+});
+
+userRoutes.delete('/api/user/devices/:id/unstopped', async (c) => {
+  try {
+    const result = await c.get('stub').acknowledgeUnstoppedDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));
+
+    if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
+
+    return json({ body: { ok: true } });
+  } catch (e) {
+    return err(400, renderThrownChain({ cause: e }));
+  }
+});
+
+// `/devices/:id` also matches `/devices/consents`, as before.
+userRoutes.delete('/api/user/devices/:id', async (c) => {
+  try {
+    const result = await c.get('stub').revokeDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')));
+
+    return json({ body: result });
+  } catch (e) {
+    return err(400, renderThrownChain({ cause: e }));
+  }
+});
+
+userRoutes.patch('/api/user/devices/:id', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ name: v.optional(v.string()) }));
+  const name = body?.name?.trim();
+
+  if (!name) return err(400, 'Body must be { name }');
+  const result = await c.get('stub').renameDevice(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), name);
+
+  if (!result.ok) return err(404, 'device not found');
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/devices/consents', async (c) => json({ body: await c.get('stub').listDeviceConsents(c.get('owner')) }));
+
+// Owner session only: the UserDO refuses a workspace caller, which could otherwise disable its own sandbox.
+userRoutes.put('/api/user/devices/:id/sandbox', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ tier: v.optional(v.picklist(DEVICE_TIERS)) }));
+  const tier = body?.tier;
+
+  if (!tier) return err(400, `Body must be { tier: ${DEVICE_TIERS.map((t) => `'${t}'`).join(' | ')} }`);
+  const result = await c.get('stub').setDeviceTier(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), tier);
+
+  if (!result.ok) return err(404, 'device not found');
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.delete('/api/user/devices/:id/consent', async (c) => {
+  const agentName = new URL(c.req.url).searchParams.get('agentName')?.trim();
+
+  if (!agentName) return err(400, 'Query must carry ?agentName=');
+
+  const result = await c.get('stub').revokeDeviceConsent(
+    c.get('owner'), agentName, decodeURIComponent(rawParam(c, 'id')),
+  );
+
+  if (!result.ok) return err(400, 'grant not revoked');
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/credentials', async (c) => json({ body: await c.get('stub').listCredentials(c.get('owner')) }));
+
+userRoutes.all('/api/user/credentials/:key', async (c, next) => {
+  c.set('key', decodeURIComponent(rawParam(c, 'key')));
+  await next();
+});
+
+userRoutes.post('/api/user/credentials/:key', async (c) => {
+  const body = await safeJson(c.req.raw, JsonValueSchema);
+
+  if (body === null) return err(400, 'Body must be JSON');
+
+  try { await c.get('stub').setCredential(c.get('owner'), c.get('key'), body); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
+  credentialsChanged(c);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.delete('/api/user/credentials/:key', async (c) => {
+  try { await c.get('stub').deleteCredential(c.get('owner'), c.get('key')); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
+  credentialsChanged(c);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/codex', async (c) => json({ body: await c.get('stub').getCodexStatus(c.get('owner')) }));
+
+userRoutes.delete('/api/user/codex', async (c) => {
+  await c.get('stub').disconnectCodex(c.get('owner'));
+  credentialsChanged(c);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.post('/api/user/codex/start', async (c) => {
+  try { return json({ body: await c.get('stub').startCodexDeviceFlow(c.get('owner')) }); }
+  catch (e) { return err(502, renderThrownChain({ cause: e })); }
+});
+
+userRoutes.post('/api/user/codex/poll', async (c) => {
+  try {
+    const status = await c.get('stub').pollCodexDeviceFlow(c.get('owner'));
+
+    if (status.connected) credentialsChanged(c);
+
+    return json({ body: status });
+  } catch (e) { return err(502, renderThrownChain({ cause: e })); }
+});
+
+userRoutes.get('/api/user/config', async (c) => json({ body: await c.get('stub').listConfig(c.get('owner')) }));
+
+// Refused whatever the method.
+userRoutes.all('/api/user/config/:key', async (c, next) => {
+  const key = decodeURIComponent(rawParam(c, 'key'));
+
+  if (key === PROFILE_CATALOG_CONFIG_KEY) return err(400, 'Profile catalogs use /api/user/profile-catalog.');
+  c.set('key', key);
+  await next();
+});
+
+userRoutes.get('/api/user/config/:key', async (c) => {
+  const key = c.get('key');
+
+  return json({ body: { key, value: await c.get('stub').getConfig(c.get('owner'), key) } });
+});
+
+userRoutes.put('/api/user/config/:key', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ value: v.string() }));
+
+  if (!body) return err(400, 'value (string) required');
+  await c.get('stub').setConfig(c.get('owner'), c.get('key'), body.value);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/providers', async (c) => json({ body: await c.get('stub').listConnectedProviders(c.get('owner')) }));
+
+userRoutes.get('/api/user/providers/catalog', async (c) => json({
+  body: await listProviderCatalog(c.env, c.get('identity').userId, c.get('owner')),
+}));
+
+userRoutes.get('/api/user/models', async (c) => json({
+  body: await listAvailableModels(c.env, c.get('identity').userId, c.get('owner')),
+}));
+
+userRoutes.get('/api/user/cloudflare/accounts', async (c) => json({ body: await c.get('stub').listCloudflareAccounts(c.get('owner')) }));
+
+userRoutes.put('/api/user/cloudflare/account', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ id: v.string() }));
+
+  if (!body) return err(400, 'id (string) required');
+
+  try { await c.get('stub').selectCloudflareAccount(c.get('owner'), body.id); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
+  credentialsChanged(c);
+
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/cloudflare/gateways', async (c) => json({ body: await c.get('stub').listAIGateways(c.get('owner')) }));
+
+userRoutes.put('/api/user/cloudflare/gateway', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ id: v.nullable(v.string()) }));
+
+  if (!body) {
+    return err(400, 'id (string | null) required');
   }
 
-  return err(404, `No such user route: ${method} ${path}`);
-}
+  try { await c.get('stub').selectAIGateway(c.get('owner'), body.id); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
 
-async function handleMcpRoutes<Id>(route: UserRouteContext<Id>): Promise<Response | null> {
-  const { request, stub, owner, path, method } = route;
+  credentialsChanged(c);
 
-  if (path === '/mcp/servers' && method === 'GET') {
-    try { return json({ body: await stub.userMcp_list(owner) }); }
-    catch (e) { return err(500, renderThrownChain({ cause: e })); }
+  return json({ body: { ok: true } });
+});
+
+userRoutes.get('/api/user/mcp/servers', mcpRead((stub, owner) => stub.userMcp_list(owner)));
+
+userRoutes.get('/api/user/mcp/presets', mcpRead((stub, owner) => stub.userMcp_presets(owner)));
+
+userRoutes.post('/api/user/mcp/servers', async (c) => {
+  const body = await safeJson(c.req.raw, JsonValueSchema);
+
+  if (body === null) return err(400, 'Body must be JSON');
+
+  try { return json({ body: await c.get('stub').userMcp_add(c.get('owner'), body, publicOrigin(c)) }, { status: 201 }); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+});
+
+userRoutes.all('/api/user/mcp/servers/:id', async (c, next) => {
+  c.set('key', decodeURIComponent(rawParam(c, 'id')));
+  await next();
+});
+
+userRoutes.delete('/api/user/mcp/servers/:id', async (c) => {
+  try {
+    await c.get('stub').userMcp_remove(c.get('owner'), c.get('key'));
+
+    return json({ body: { ok: true } });
   }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+});
 
-  if (path === '/mcp/presets' && method === 'GET') {
-    try { return json({ body: await stub.userMcp_presets(owner) }); }
-    catch (e) { return err(500, renderThrownChain({ cause: e })); }
+userRoutes.patch('/api/user/mcp/servers/:id', async (c) => {
+  const body = await safeJson(c.req.raw, JsonValueSchema);
+
+  if (body === null) return err(400, 'Body must be JSON');
+
+  try {
+    await c.get('stub').userMcp_update(c.get('owner'), c.get('key'), body);
+
+    return json({ body: { ok: true } });
   }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+});
 
-  if (path === '/mcp/servers' && method === 'POST') {
-    const body = await safeJson(request, JsonValueSchema);
+userRoutes.get('/api/user/mcp/callback', async (c) => {
+  // `userMcp_handleOAuthCallback` validates the `<nonce>.<serverId>` state inside UserDO.
+  const result = await c.get('stub').userMcp_handleOAuthCallback(c.get('owner'), c.req.url);
+  // Redirect to settings regardless of outcome; the page polls userMcp_list for status.
+  const settingsUrl = new URL('/user/settings/mcp', publicOrigin(c));
+  settingsUrl.searchParams.set('mcp_auth', result.ok ? 'ok' : 'failed');
 
-    if (body === null) return err(400, 'Body must be JSON');
-    const origin = publicOrigin(request);
+  if (result.error) settingsUrl.searchParams.set('error', result.error.slice(0, 200));
 
-    try { return json({ body: await stub.userMcp_add(owner, body, origin) }, { status: 201 }); }
-    catch (e) { return err(400, renderThrownChain({ cause: e })); }
-  }
+  if (result.serverId) settingsUrl.searchParams.set('server_id', result.serverId);
 
-  const mcpIdMatch = path.match(/^\/mcp\/servers\/([^/]+)$/);
+  return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
+});
 
-  if (mcpIdMatch) {
-    const id = decodeURIComponent(mcpIdMatch[1]);
-
-    if (method === 'DELETE') {
-      try {
-        await stub.userMcp_remove(owner, id);
-
-        return json({ body: { ok: true } });
-      }
-      catch (e) { return err(400, renderThrownChain({ cause: e })); }
-    }
-
-    if (method === 'PATCH') {
-      const body = await safeJson(request, JsonValueSchema);
-
-      if (body === null) return err(400, 'Body must be JSON');
-
-      try {
-        await stub.userMcp_update(owner, id, body);
-
-        return json({ body: { ok: true } });
-      }
-      catch (e) { return err(400, renderThrownChain({ cause: e })); }
-    }
-  }
-
-  if (path === '/mcp/callback' && method === 'GET') {
-    // `userMcp_handleOAuthCallback` validates the `<nonce>.<serverId>` state inside UserDO.
-    const result = await stub.userMcp_handleOAuthCallback(owner, request.url);
-    // Redirect to settings regardless of outcome; the page polls userMcp_list for status.
-    const settingsUrl = new URL('/user/settings/mcp', publicOrigin(request));
-    settingsUrl.searchParams.set('mcp_auth', result.ok ? 'ok' : 'failed');
-
-    if (result.error) settingsUrl.searchParams.set('error', result.error.slice(0, 200));
-
-    if (result.serverId) settingsUrl.searchParams.set('server_id', result.serverId);
-
-    return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
-  }
-
-  return null;
-}
-
-function publicOrigin(request: Request): string {
-  // Workers preserves the visitor's scheme and host in `request.url` for proxied requests.
-  return new URL(request.url).origin;
-}
+userRoutes.all('/api/user*', async (c) =>
+  err(404, `No such user route: ${c.req.method} ${c.req.path.slice('/api/user'.length)}`));

@@ -5,6 +5,7 @@
  * so the key cannot reach other hosts or key-minting/deletion routes; see `PROXY_DENIED_CRED_KEYS`.
  * Bodies pass through byte-for-byte; no cached-usage repair is applied here.
  */
+import { Hono } from 'hono';
 import {
   PROVIDER_PROXY_PATH,
   PROXY_CRED_HEADER, PROXY_DENIED_CRED_KEYS, PROXY_TARGET_HEADER,
@@ -13,11 +14,11 @@ import {
 import type { UserDO } from './user-do';
 import { errorResponse } from '@kinu.run/core';
 import { json } from '@kinu.run/core';
-import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
+import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import { validateCredentialKey } from '@kinu.run/core';
 import { renderCauseChain, renderThrownChain } from '@kinu.run/core/obs';
-
-export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;
+import { beneath } from '../api/context';
+import { inferenceProxyGate, type CliEnv } from '../cli/routes';
 
 /** Client view of a proxyable credential; never carries secret material. `baseURL` is set for
  * openai-compat credentials; `failure` marks an unreadable entry without failing the listing. */
@@ -39,24 +40,20 @@ const STRIPPED_REQUEST_HEADERS: readonly string[] = [
 
 export type ProxyCredentialSource = Pick<UserDO, 'listCredentials' | 'getCredentialBaseURL' | 'getAuthHeaders'>;
 
-export async function handleUserProviderProxyRequest(
-  request: Request,
-  env: OwnerCapabilityEnv,
-  cli: { userDO: ProxyCredentialSource },
-): Promise<Response> {
-  const path = new URL(request.url).pathname.slice(USER_AI_PROXY_FORWARD_PREFIX.length);
-  const owner = await ownerCaller(env);
+export const providerProxyRoutes = new Hono<CliEnv>();
 
-  if (path === '/credentials' && request.method === 'GET') {
-    return json({ body: { credentials: await listProxyableCredentials(cli.userDO, owner) } });
-  }
+providerProxyRoutes.use(`${PROVIDER_PROXY_PATH}/*`, beneath(PROVIDER_PROXY_PATH, inferenceProxyGate));
 
-  if (path === '/forward') {
-    return forwardUpstream(request, cli.userDO, owner);
-  }
+providerProxyRoutes.get(`${PROVIDER_PROXY_PATH}/credentials`, async (c) => json({
+  body: { credentials: await listProxyableCredentials(c.get('cli').userDO, await ownerCaller(c.env)) },
+}));
 
-  return errorResponse(404, `No such provider proxy route: ${request.method} ${path}`);
-}
+// Any method: `forwardUpstream` checks the target.
+providerProxyRoutes.all(`${PROVIDER_PROXY_PATH}/forward`, async (c) =>
+  forwardUpstream(c.req.raw, c.get('cli').userDO, await ownerCaller(c.env)));
+
+providerProxyRoutes.all(`${PROVIDER_PROXY_PATH}/*`, beneath(PROVIDER_PROXY_PATH, async (c) =>
+  errorResponse(404, `No such provider proxy route: ${c.req.method} ${c.req.path.slice(PROVIDER_PROXY_PATH.length)}`)));
 
 /** Proxyable = a base URL is derivable (credential or provider layer); others are omitted
  * rather than advertised and refused at send time. */

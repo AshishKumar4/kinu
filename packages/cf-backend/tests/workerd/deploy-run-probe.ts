@@ -6,8 +6,9 @@
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { DeployRunDO } from '../../src/deploy/deploy-do';
-import { handleDeployRequest } from '../../src/deploy/routes';
-import { handleUpdatesRequest } from '../../src/updates/routes';
+import { deployRoutes, handleDeployCallback } from '../../src/deploy/routes';
+import { updatesRoutes } from '../../src/updates/routes';
+import { serveFamily } from '../helpers/api';
 import type { AuthIdentity } from '../../src/auth/session';
 import type { DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
 import {
@@ -178,10 +179,9 @@ export class UpdatesProbe extends WorkerEntrypoint<Env> {
     const plane = await fetch('http://deploy-control.invalid/state', { method: 'POST' });
     const written = v.parse(DeployFakeStateSchema, await plane.json()).secrets.KINU_SELF_DEPLOY_REFRESH_TOKEN;
 
-    const response = await handleUpdatesRequest(
+    const response = await serveFamily(updatesRoutes, { identity: session })(
       new Request(`https://kinu.probe.workers.dev${path}`, { method }),
       { ...this.env, KINU_SELF_DEPLOY_REFRESH_TOKEN: written ?? this.env.KINU_SELF_DEPLOY_REFRESH_TOKEN },
-      session,
     );
 
     if (response === null) throw new Error(`the updates routes do not answer ${method} ${path}`);
@@ -197,14 +197,16 @@ export interface DoorProbeAnswer {
   readonly setCookie: readonly string[];
 }
 
-/** `handleDeployRequest`: what a callback must prove before a stranger's Cloudflare tokens land in a run.
+/** The deploy door (`deployRoutes`, and the callback the Worker answers itself): what a callback must prove before a stranger's Cloudflare tokens land in a run.
  *  No cookie jar: the test carries the cookie itself, which a forwarded URL cannot do. */
 export class DeployDoorProbe extends WorkerEntrypoint<Env> {
   async hit(method: string, path: string, headers: Readonly<Record<string, string>> = {}): Promise<DoorProbeAnswer> {
-    const response = await handleDeployRequest(
-      new Request(`https://kinu.probe.workers.dev${path}`, { method, headers }),
-      this.env,
-    );
+    const request = new Request(`https://kinu.probe.workers.dev${path}`, { method, headers });
+
+    // As the Worker dispatches: every `/api/` path is the app's, the OAuth return is its own.
+    const response = path.startsWith('/api/')
+      ? await serveFamily(deployRoutes)(request, this.env)
+      : await handleDeployCallback(request, this.env);
 
     if (response === null) throw new Error(`the deploy routes do not answer ${method} ${path}`);
 

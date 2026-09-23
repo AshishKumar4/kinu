@@ -1,5 +1,6 @@
 // Both transports delegate to the same UserDO CAS row; neither serializes credentials.
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import * as v from 'valibot';
 import {
   BUILTIN_PROFILE_CATALOG,
@@ -12,9 +13,9 @@ import {
   type ProfileCatalog,
 } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
-import { handleCliRequest, type CliRoutesEnv } from '../src/cli/routes';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
-import { unreachableAssets, unreachableKv, unreachableNamespace } from './helpers/bindings';
+import { cliRoutes, type CliRoutesEnv } from '../src/cli/routes';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { unreachableAssets, unreachableKv, unreachableNamespace, workerContext } from './helpers/bindings';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO,
@@ -114,7 +115,7 @@ describe('browser profile catalog route', () => {
   test('GET exposes the pristine account envelope and PUT advances it', async () => {
     const { harness, env } = await setup();
 
-    const initialResponse = handled(await handleUserRequest(userRequest(), env, IDENTITY));
+    const initialResponse = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(userRequest(), env));
     const initial = validateProfileCatalogEnvelope({ value: await initialResponse.json() });
     expect(initialResponse.status).toBe(200);
     expect(initial).toEqual({
@@ -124,10 +125,10 @@ describe('browser profile catalog route', () => {
       catalog: BUILTIN_PROFILE_CATALOG,
     });
 
-    const putResponse = handled(await handleUserRequest(userRequest('PUT', {
+    const putResponse = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(userRequest('PUT', {
       catalog: CUSTOM_CATALOG,
       expectedVersion: 0,
-    }), env, IDENTITY));
+    }), env));
 
     const written = validateProfileCatalogEnvelope({ value: await putResponse.json() });
     expect(putResponse.status).toBe(200);
@@ -138,12 +139,12 @@ describe('browser profile catalog route', () => {
 
   test('a stale writer receives the current version and digest', async () => {
     const { harness, env } = await setup();
-    await handleUserRequest(userRequest('PUT', { catalog: CUSTOM_CATALOG, expectedVersion: 0 }), env, IDENTITY);
+    await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(userRequest('PUT', { catalog: CUSTOM_CATALOG, expectedVersion: 0 }), env);
 
-    const response = handled(await handleUserRequest(userRequest('PUT', {
+    const response = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(userRequest('PUT', {
       catalog: BUILTIN_PROFILE_CATALOG,
       expectedVersion: 0,
-    }), env, IDENTITY));
+    }), env));
 
     const body = v.parse(v.object({
       error: v.string(), currentVersion: v.number(), currentDigest: v.string(),
@@ -158,10 +159,10 @@ describe('browser profile catalog route', () => {
   test('malformed input is 400 and never advances storage', async () => {
     const { harness, env } = await setup();
 
-    const response = handled(await handleUserRequest(userRequest('PUT', {
+    const response = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(userRequest('PUT', {
       catalog: { roles: {}, tiers: { default: {} } },
       expectedVersion: 0,
-    }), env, IDENTITY));
+    }), env));
 
     expect(response.status).toBe(400);
     expect(await response.text()).toContain('invalid profile catalog');
@@ -172,11 +173,7 @@ describe('browser profile catalog route', () => {
   test('the generic config route cannot become a second catalog path', async () => {
     const { harness, env } = await setup();
 
-    const response = handled(await handleUserRequest(
-      new Request('https://kinu.example.com/api/user/config/profile_catalog'),
-      env,
-      IDENTITY,
-    ));
+    const response = handled(await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(new Request('https://kinu.example.com/api/user/config/profile_catalog'), env));
 
     expect(response.status).toBe(400);
     expect(await response.text()).toContain('/api/user/profile-catalog');
@@ -188,12 +185,12 @@ describe('CLI profile catalog route', () => {
   test('the session route reads and CAS-writes the same account authority', async () => {
     const { harness, env, token } = await setup();
 
-    const initial = handled(await handleCliRequest(cliRequest(token), env));
+    const initial = handled(await serveFamily(cliRoutes)(cliRequest(token), env));
     const read = validateProfileCatalogEnvelope({ value: await initial.json() });
     expect(read.version).toBe(0);
     expect(read.authority).toEqual({ kind: 'account', accountId: USER_ID });
 
-    const put = handled(await handleCliRequest(cliRequest(token, 'PUT', {
+    const put = handled(await serveFamily(cliRoutes)(cliRequest(token, 'PUT', {
       catalog: CUSTOM_CATALOG,
       expectedVersion: read.version,
     }), env));
@@ -211,7 +208,7 @@ describe('CLI profile catalog route', () => {
 
     if (!minted.ok) throw new Error(minted.error);
 
-    const response = handled(await handleCliRequest(cliRequest(minted.token), env));
+    const response = handled(await serveFamily(cliRoutes)(cliRequest(minted.token), env));
 
     expect(response.status).toBe(403);
     expect(await response.text()).toContain('interactive CLI session token');

@@ -14,7 +14,8 @@ import {
   withCloudflareAccount,
 } from '@kinu.run/core';
 import { buildCliInstallCommand } from '@kinu.run/core';
-import { handleCliRequest } from '../src/cli/routes';
+import { cliRoutes, handleCliRequest } from '../src/cli/routes';
+import { serveFamily } from './helpers/api';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
 import { handleAuthRequest, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
@@ -57,9 +58,9 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('the ambient session cookie cannot approve a device flow over JSON', async () => {
-    // The CLI module runs ahead of server.ts's CSRF gate, so a cookie-authed JSON approval was
+    // The CLI family answers ahead of the app's CSRF gate, so a cookie-authed JSON approval was
     // reachable same-site and minted an unrestricted token. Approval is the browser form's alone.
-    const response = await handleCliRequest(
+    const response = await serveFamily(cliRoutes)(
       new Request('https://kinu.example.com/api/cli/auth/approve', {
         method: 'POST',
         headers: {
@@ -73,32 +74,30 @@ describe('auth and desktop security invariants', () => {
     );
 
     expect(response?.status).toBe(401);
-    expect(source('src/cli/routes.ts')).not.toContain("path === '/auth/approve'");
+    expect(cliRoutes.routes.filter((route) => route.path.includes('/approve'))).toEqual([]);
   });
 
   test('dashboard and PC install paths do not expose KINU_TOKEN setup commands', () => {
     const userRoutes = source('src/user/routes.ts');
-    const cliRoutes = source('src/cli/routes.ts');
+    const cliSource = source('src/cli/routes.ts');
     const pcHandler = source('../core/src/http/pc-ingress.ts');
     expect(userRoutes).not.toContain('KINU_TOKEN=');
-    expect(cliRoutes).not.toContain('KINU_TOKEN=');
+    expect(cliSource).not.toContain('KINU_TOKEN=');
     expect(pcHandler).not.toContain('KINU_TOKEN=');
   });
 
   test('CLI agent websocket uses scoped tickets and has no local-turn HTTP bridge', () => {
     const server = source('src/server.ts');
-    const cliRoutes = source('src/cli/routes.ts');
     const userSchema = source('../core/src/state/user-schema.ts');
     const orchestrator = source('src/orchestrator.ts');
-    expect(cliRoutes).toContain('/connect-ticket');
+    const cliPaths = cliRoutes.routes.map(({ method, path }) => `${method} ${path}`);
+    expect(cliPaths).toContain('POST /api/cli/workspaces/:name/connect-ticket');
     expect(userSchema).toContain('cli_agent_connect_tickets');
     expect(server).toContain('verifyCliAgentConnectTicket');
     expect(server).toContain("url.searchParams.delete('ticket')");
     expect(server).not.toContain('looksInteractive');
     expect(server).not.toContain('registerWorkspace(agentName');
-    expect(cliRoutes).not.toContain('/local-turn/prepare');
-    expect(cliRoutes).not.toContain('/local-turn/tool');
-    expect(cliRoutes).not.toContain('/local-turn/commit');
+    expect(cliPaths.filter((route) => route.includes('/local-turn'))).toEqual([]);
     expect(orchestrator).not.toContain('cliPrepareLocalTurn');
     expect(orchestrator).not.toContain('cliInvokeLocalTool');
     expect(orchestrator).not.toContain('cliCommitLocalTurn');
@@ -500,7 +499,6 @@ async function cloudflareSignIn(
     const wrangler = source('wrangler.jsonc');
     const session = source('src/auth/session.ts');
     const store = source('src/auth/store.ts');
-    const cliRoutes = source('src/cli/routes.ts');
     expect(wrangler).toContain('"binding": "AUTH_KV"');
     // No D1 and no auth DO: a singleton DO in front of every sign-in is a chokepoint.
     expect(wrangler).not.toContain('d1_databases');
@@ -508,8 +506,6 @@ async function cloudflareSignIn(
     expect(wrangler).not.toContain('CLIAuthDO');
     expect(wrangler).not.toContain('AuthDO');
     expect(session).toContain('verifySession(env, sessionToken)');
-    expect(cliRoutes).toContain('startCliAuth(env');
-    expect(cliRoutes).not.toContain('authDO(env)');
     // Liveness is the user's own DO's answer per request; unreachable is a 503, never a KV-only pass.
     expect(store).toContain('verifyBrowserSession(caller, tokenHash)');
     expect(session).toContain('new AuthError(503');
@@ -622,16 +618,15 @@ async function cloudflareSignIn(
     );
   });
 
-  test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
-    const cliRoutes = source('src/cli/routes.ts');
-    expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
-    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId, await ownerCaller(env))');
+  test('CLI model menu uses CLI bearer auth rather than browser-only user routes', async () => {
+    // The CLI's own menu route, behind the CLI bearer: without one it is refused, not answered.
+    expect(cliRoutes.routes.map(({ method, path }) => `${method} ${path}`)).toContain('GET /api/cli/models');
+    const anonymous = await serveFamily(cliRoutes)(new Request('https://kinu.example.com/api/cli/models'), PUBLIC_ROUTE_ENV);
+    expect(anonymous?.status).toBe(401);
   });
 
   test('web agent creation requires an available model and stores the selected initial model', () => {
-    const routes = source('src/user/routes.ts');
     const createAgent = source('src/user/workspace-create.ts');
-    expect(routes).toContain('listAvailableModels(env, identity.userId, await ownerCaller(env))');
     expect(createAgent).toContain('Cloudflare Workers AI is not connected');
     expect(createAgent).toContain('defaultSpecFor');
     expect(createAgent).toContain('await orchestrator.setModel(model)');

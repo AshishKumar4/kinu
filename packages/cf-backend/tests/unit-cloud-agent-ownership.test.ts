@@ -1,10 +1,11 @@
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { asFetchFunction, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalogEnvelope } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
-import { handleUserRequest } from '../src/user/routes';
+import { userRoutes } from '../src/user/routes';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
@@ -15,7 +16,7 @@ import type { WorkspaceRegistrationSource } from '../src/user/user-do';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 import type { IndexFeedSink } from '../src/control-plane/index-feed';
-import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
+import { bootstrappedProfile, userAccount, workspaceObject, workerContext } from './helpers/bindings';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -773,14 +774,14 @@ describe('cloud agent ownership safety', () => {
       userId: OWNER, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
     };
 
-    const del = (body?: { ownerUserId?: string }): Promise<Response | null> => handleUserRequest(new Request(
+    const del = (body?: { ownerUserId?: string }): Promise<Response | null> => serveFamily(userRoutes, { identity, ctx: workerContext() })(new Request(
       'https://kinu.example.com/api/user/workspaces/jarvis',
       {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
       },
-    ), env, identity);
+    ), env);
 
     // The session's id is the destroy authority; a forged body cannot retarget it.
     expect((await del())?.status).toBe(200);
@@ -822,9 +823,9 @@ describe('cloud agent ownership safety', () => {
       userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
     };
 
-    const response = await handleUserRequest(new Request(
+    const response = await serveFamily(userRoutes, { identity, ctx: workerContext() })(new Request(
       'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
-    ), env, identity);
+    ), env);
 
     expect(response?.status).toBe(200);
     expect(userDO.destroyedWorkspaces).toEqual(['jarvis']);
@@ -854,11 +855,11 @@ describe('cloud agent ownership safety', () => {
     const owner = await testOwner();
     await userDO.userDO.registerWorkspace(owner, 'jarvis');
 
-    const response = await handleUserRequest(new Request(
-      'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
-    ), env, {
+    const response = await serveFamily(userRoutes, { identity: {
       userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
-    });
+    }, ctx: workerContext() })(new Request(
+      'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
+    ), env);
 
     expect(response?.status).toBe(400);
     expect(healthy.tableNames()).toContain('workspace_identity');

@@ -7,15 +7,10 @@ import { ORCHESTRATOR_AGENT_SLUG } from '../cloud-wire';
 import { readBuildStamp } from './deployed-assets';
 
 
-export async function handleHealthRequest(
+export async function healthResponse(
   request: Request,
   env: Parameters<typeof readBuildStamp>[0] & { readonly CF_VERSION_METADATA?: { readonly id: string } },
-): Promise<Response | null> {
-  const url = new URL(request.url);
-
-  if (url.pathname !== '/api/health') return null;
-
-  if (request.method !== 'GET') return null;
+): Promise<Response> {
   const build = await readBuildStamp(env, request.url);
 
   return Response.json({

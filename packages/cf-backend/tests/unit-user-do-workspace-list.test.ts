@@ -1,14 +1,15 @@
 // Paged workspace listing: a cursor reaches every row and the total is whole-roster; fans that must
 // reach every active workspace use the exact read.
 import * as v from 'valibot';
+import { serveFamily } from './helpers/api';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY,
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
-import { unreachableNamespace, userAccount } from './helpers/bindings';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
 import { orchestratorHarness } from './helpers/actor-harness';
 
@@ -423,9 +424,7 @@ describe('malformed paging over HTTP', () => {
     };
 
     const call = async (query: string): Promise<Response> => {
-      const response = await handleUserRequest(
-        new Request(`https://kinu.example.com/api/user/workspaces${query}`), env, IDENTITY,
-      );
+      const response = await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(new Request(`https://kinu.example.com/api/user/workspaces${query}`), env);
 
       if (!response) throw new Error('roster route did not handle the request');
 

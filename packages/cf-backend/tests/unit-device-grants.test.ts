@@ -3,7 +3,6 @@
  * driven over a real UserDO whose device socket answers, so a grant that did nothing is visible.
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import {
   createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO,
@@ -14,6 +13,9 @@ import {
 import type { UserCaller } from '@kinu.run/core';
 import { DeviceSocketHub } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
+import { present } from '@kinu.run/test-utils';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+import { appProbe, PROBE_ORIGIN } from './helpers/app-probe';
 import {
   DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
@@ -21,6 +23,11 @@ import {
   NO_DEVICE_CONNECTED, type JsonValue,
 } from '@kinu.run/core';
 
+
+// The /api app's module graph reaches the Agents SDK: mocked before it loads.
+mockAgentsSdk();
+
+const { api } = await import('../src/api/app');
 
 const DeviceRpcFrameSchema = v.object({
   id: v.string(),
@@ -1285,11 +1292,54 @@ describe('a copied device.json goes stale', () => {
   });
 });
 
+/** One value per path parameter the /api routes declare; a regex param's sample must satisfy it. */
+const PARAM_SAMPLES = new Map([
+  ['name', 'jarvis'], ['id', 'device-1'], ['key', 'openai.bearer'], ['hash', 'a'.repeat(64)], ['run', 'run-1'],
+  ['userId', 'b'.repeat(32)], ['ref', 'ci'],
+]);
+
+/** A concrete path a route pattern matches: each `:param` (with its `{regex}`) sampled, a trailing wildcard dropped. */
+function concretePath(pattern: string): string {
+  const filled = pattern.replace(/:(\w+)(?:\{((?:[^{}]|\{[^{}]*\})*)\})?/g, (_whole, name: string, regex: string | undefined) => {
+    const sample = present(PARAM_SAMPLES.get(name), `a sample for :${name} in ${pattern}`);
+
+    if (regex !== undefined && !new RegExp(`^(?:${regex})$`).test(sample)) throw new Error(`${sample} does not match :${name}{${regex}} in ${pattern}`);
+
+    return sample;
+  });
+
+  return filled.replace(/\/?\*$/, '');
+}
+
 describe('device RPC stays unreachable from owner HTTP routes', () => {
-  test('no /api/user route forwards an arbitrary method to deviceRpc', () => {
-    const source = readFileSync(new URL('../src/user/routes.ts', import.meta.url).pathname, 'utf8');
+  test('no signed-in /api route reaches deviceRpc, whatever it is sent', async () => {
     // Checkpoint reads are the only consent-free methods; an HTTP pass-through would widen the
-    // device RPC surface.
-    expect(source).not.toContain('deviceRpc');
+    // device RPC surface. Every route the app registers behind its session gate is sent a
+    // forward-shaped body by a live session; none may call `deviceRpc`.
+    const { env, ctx, cookie, accountCalls } = await appProbe();
+    const gate = api.routes.findIndex((route) => route.method === 'ALL' && route.path === '/api/*');
+    const probed = new Set<string>();
+
+    // `/api/control*` sits behind Cloudflare Access, which this probe does not hold.
+    for (const route of api.routes.slice(gate).filter(({ path }) => !path.startsWith('/api/control'))) {
+      const method = route.method === 'ALL' ? 'POST' : route.method;
+      const path = concretePath(route.path);
+
+      if (probed.has(`${method} ${path}`)) continue;
+      probed.add(`${method} ${path}`);
+
+      const answer = await api.fetch(new Request(`${PROBE_ORIGIN}${path}`, {
+        method,
+        headers: { cookie, origin: PROBE_ORIGIN, 'content-type': 'application/json' },
+        body: method === 'GET' ? undefined : JSON.stringify({ method: 'exec', args: ['ls'], deviceId: 'device-1', path: '/' }),
+      }), env, ctx);
+
+      // Past the gates: neither the session gate nor its cross-site check answered.
+      expect(await answer.text(), `${method} ${path}`).not.toMatch(/No Kinu session|Kinu session expired|CROSS_SITE/);
+    }
+
+    await Promise.allSettled(ctx.retained);
+    expect(probed.size).toBeGreaterThan(50);
+    expect(accountCalls).not.toContain('deviceRpc');
   });
 });

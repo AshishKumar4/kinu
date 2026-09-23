@@ -1,11 +1,12 @@
 // One cache policy for authenticated JSON at the `json()` boundary, so a shared or disk cache cannot replay a
 // signed-in body after the session ends. A route opts out by naming a policy.
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
-import { bootstrappedProfile, unreachableNamespace, userAccount } from './helpers/bindings';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { bootstrappedProfile, unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
-import { handleHealthRequest } from '@kinu.run/core';
+import { healthResponse } from '@kinu.run/core';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { err, json } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
@@ -34,10 +35,7 @@ function userEnv(): UserRoutesEnv<string> {
 
 describe('authenticated JSON is private and never stored', () => {
   test('an account surface carries the policy without naming it', async () => {
-    const response = await handleUserRequest(
-      new Request('https://kinu.example.com/api/user/credentials'),
-      userEnv(), IDENTITY,
-    );
+    const response = await serveFamily(userRoutes, { identity: IDENTITY, ctx: workerContext() })(new Request('https://kinu.example.com/api/user/credentials'), userEnv());
 
     expect(response?.status).toBe(200);
     expect(response?.headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
@@ -54,12 +52,12 @@ describe('authenticated JSON is private and never stored', () => {
 
 describe('a route that names its own policy keeps it', () => {
   test('the public health stamp stays revalidatable', async () => {
-    const response = await handleHealthRequest(
+    const response = await healthResponse(
       new Request('https://kinu.example.com/api/health'),
       { ASSETS: { fetch: async () => new Response('', { status: 404 }) } },
     );
 
-    expect(response?.headers.get('cache-control')).toBe('no-cache');
+    expect(response.headers.get('cache-control')).toBe('no-cache');
   });
 
   test('an explicit policy on any json() answer wins', () => {

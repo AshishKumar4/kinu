@@ -1,5 +1,6 @@
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import {
-  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, USER_AI_PROXY_PATH, timingSafeEqual,
+  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, timingSafeEqual,
 } from '@kinu.run/core';
 import type { AuthIdentity } from '../auth/session';
 import {
@@ -28,6 +29,8 @@ import {
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
+import { answerCatalogPut, OptionalLabelSchema } from '../user/routes';
+import { WebhookRequestSchema } from '../events/routes';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
 import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
 import type { SessionAuthority } from '../auth/store';
@@ -35,22 +38,12 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
-import { handleUserAIProxyRequest, type UserAIProxyEnv } from '../user/ai-proxy';
+import type { UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
-import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
+import { rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
-
-const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
-
-const WebhookRequestSchema = v.object({
-  label: v.optional(v.string()),
-  auth_mode: v.optional(v.picklist(['hmac', 'bearer', 'mtls'])),
-  secret: v.optional(v.string()),
-  accepted_content_type: v.optional(v.string()),
-  rate_limit_per_min: v.optional(v.number()),
-});
 
 /** Content-type for a published download path, or null. Public: a fresh install and a
  *  self-updating deployment have no session here. */
@@ -88,8 +81,21 @@ export interface CliRoutesEnv<Id>
   CLI_APPROVAL_ORIGIN?: string;
 }
 
+export type CliIdentity = CliTokenIdentity<CliRoutesAuthority>;
+
+export interface CliVariables extends ApiVariables {
+  /** Set by `cliBearer`. */
+  cli: CliIdentity;
+  key: string;
+}
+
+export type CliEnv = FamilyEnv<CliRoutesEnv<unknown>, CliVariables>;
+
+type CliContext = Context<CliEnv>;
+
+/** Public pages, downloads and the browser approval; `/api/cli` is `cliRoutes`. */
 export async function handleCliRequest<Id>(
-  request: Request, env: CliRoutesEnv<Id>, ctx?: Pick<ExecutionContext, 'waitUntil'>,
+  request: Request, env: CliRoutesEnv<Id>,
 ): Promise<Response | null> {
   const url = new URL(request.url);
   const method = request.method;
@@ -122,314 +128,302 @@ export async function handleCliRequest<Id>(
     return approveFromBrowser(request, env);
   }
 
-  // AI proxies are CLI-bearer-authenticated, so their gate lives here despite the /api/user/… path;
-  // both spend the owner's inference credentials and share the ai.proxy scope.
-  const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PATH}/`);
-  const providerProxy = url.pathname.startsWith(`${USER_AI_PROXY_FORWARD_PREFIX}/`);
+  return null;
+}
 
-  if (aiProxy || providerProxy) {
-    const cli = await authenticateCli(request, env);
+async function authenticateCli(c: CliContext): Promise<CliIdentity | Response> {
+  try {
+    const result = await authenticateCliToken(c.req.raw, c.env);
 
-    if (cli instanceof Response) return cli;
-
-    if (cli.kind === 'access' && !tokenAllows(cli, 'ai.proxy')) {
-      return err(403, 'This access token does not have the ai.proxy scope.');
-    }
-
-    return aiProxy
-      ? handleUserAIProxyRequest(request, env, cli)
-      : handleUserProviderProxyRequest(request, env, cli);
+    return result.ok ? result.identity : err(401, result.error);
+  } catch (e) {
+    // No root secret: say so rather than surfacing an unexplained 500.
+    if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);
+    throw e;
   }
+}
 
-  if (!url.pathname.startsWith('/api/cli')) return null;
-  const path = url.pathname.slice('/api/cli'.length) || '/';
+const cliBearer: MiddlewareHandler<CliEnv> = async (c, next) => {
+  const cli = await authenticateCli(c);
 
-  if (path === '/auth/start' && method === 'POST') {
-    const body = await safeJson(request, v.object({ deviceName: v.optional(v.string()) }));
+  if (cli instanceof Response) return cli;
+  c.set('cli', cli);
+  await next();
+};
 
-    try {
-      return json({
-        body: await startCliAuth(env, {
-          origin: url.origin, approvalOrigin: approvalOrigin(env, url),
-          deviceName: body?.deviceName, clientKey: clientKey(request),
-        }),
-      });
-    } catch (e) {
-      return cliAuthError(toError({ cause: e }));
-    }
-  }
-
-  if (path === '/auth/poll' && method === 'POST') {
-    const body = await safeJson(request, v.object({ deviceToken: v.optional(v.string()) }));
-
-    if (!body?.deviceToken) return err(400, 'deviceToken required');
-
-    try {
-      return json({ body: await pollCliAuth(env, body.deviceToken, clientKey(request)) });
-    } catch (e) {
-      return cliAuthError(toError({ cause: e }));
-    }
-  }
-
-  // Deliberately no JSON approval route: this module runs before server.ts's CSRF gate, so a
-  // cookie-only JSON POST would let any same-site page mint a CLI token. Use the form flow only.
-
-  const cli = await authenticateCli(request, env);
+/** A CLI bearer holding `ai.proxy`. */
+export const inferenceProxyGate: MiddlewareHandler<CliEnv> = async (c, next) => {
+  const cli = await authenticateCli(c);
 
   if (cli instanceof Response) return cli;
 
-  // The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
-  const rpcMatch = path.match(/^\/workspaces\/([^/]+)\/rpc$/);
-
-  if (rpcMatch && method === 'POST') {
-    return handleAgentRpc(request, env, cli, decodeURIComponent(rpcMatch[1]));
+  if (cli.kind === 'access' && !tokenAllows(cli, 'ai.proxy')) {
+    return err(403, 'This access token does not have the ai.proxy scope.');
   }
 
-  const denied = accessTokenDenial(cli, method, path);
+  c.set('cli', cli);
+  await next();
+};
 
-  if (denied) return denied;
-
-  if (path === '/me' && method === 'GET') {
-    return json({
-      body: {
-        user: { id: cli.userId, email: cli.email, displayName: cli.displayName },
-        tokenHash: cli.tokenHash,
-        token: { kind: cli.kind, scopes: cli.scopes === 'all' ? 'all' : cli.scopes },
-      },
-    });
-  }
-
-  if (path === '/logout' && method === 'POST') {
-    await cli.userDO.revokeCliTokenHash(await ownerCaller(env), cli.tokenHash);
-
-    return json({ body: { ok: true } });
-  }
-
-  // Session inventory: lets a re-authenticated owner find and end bearers only stored as hashes.
-  // Interactive sessions only.
-  if (path === '/sessions' && method === 'GET') {
-    return json({ body: { sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) } });
-  }
-
-  if (path === '/sessions' && method === 'DELETE') {
-    const result = await cli.userDO.revokeAllCliTokens(await ownerCaller(env));
-
-    return json({ body: { ok: true, revoked: result.revoked } });
-  }
-
-  const sessionRevokeMatch = path.match(/^\/sessions\/([a-f0-9]{64})$/);
-
-  if (sessionRevokeMatch && method === 'DELETE') {
-    await cli.userDO.revokeCliTokenHash(await ownerCaller(env), sessionRevokeMatch[1]);
-
-    return json({ body: { ok: true } });
-  }
-
-  // Profile catalog: the route gate blocks scoped tokens; the UserDO separately blocks workspace callers.
-  if (path === '/profile' && method === 'GET') {
-    return json({ body: await cli.userDO.getProfileCatalog(await ownerCaller(env)) });
-  }
-
-  if (path === '/profile' && method === 'PUT') {
-    const body = await safeJson(request, v.object({
-      catalog: JsonValueSchema,
-      expectedVersion: v.number(),
-    }));
-
-    if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
-
-    const result = await cli.userDO.putProfileCatalog(
-      await ownerCaller(env), body.catalog, body.expectedVersion,
-    );
-
-    if (result.ok) return json({ body: result.envelope });
-
-    if (result.kind === 'conflict') {
-      return json({
-        body: {
-          error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
-          currentVersion: result.currentVersion,
-          currentDigest: result.currentDigest,
-        },
-      }, { status: 409 });
-    }
-
-    return err(400, result.reason);
-  }
-
-  if (path === '/tokens' && method === 'GET') {
-    return json({ body: { tokens: await cli.userDO.listAccessTokens(await ownerCaller(env)) } });
-  }
-
-  if (path === '/tokens' && method === 'POST') {
-    // Step-up gated like webhook creation: requires a fresh `kinu auth`.
-    if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `kinu auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
-    }
-
-    const body = await safeJson(request, v.object({
-      name: v.optional(v.string()),
-      scopes: v.optional(v.array(v.string())),
-    }));
-
-    if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
-      return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
-    }
-
-    const minted = await cli.userDO.mintAccessToken(await ownerCaller(env), cli.userId, body.name, body.scopes);
-
-    if (!minted.ok) return err(400, minted.error);
-
-    return json({
-      body: {
-        token: minted.token,
-        name: minted.record.name,
-        scopes: minted.record.scopes,
-        createdAt: minted.record.createdAt,
-      },
-    }, { status: 201 });
-  }
-
-  const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
-
-  if (tokenRevokeMatch && method === 'DELETE') {
-    const ref = decodeURIComponent(tokenRevokeMatch[1]);
-    const result = await cli.userDO.revokeAccessToken(await ownerCaller(env), ref);
-
-    if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
-
-    return json({ body: { ok: true } });
-  }
-
-  if (path === '/workspaces' && method === 'GET') {
-    return json({ body: await cli.userDO.listActiveWorkspaces(await ownerCaller(env)) });
-  }
-
-  if (path === '/models' && method === 'GET') {
-    return json({ body: await listAvailableModels(env, cli.userId, await ownerCaller(env)) });
-  }
-
-  if (path === '/workspaces' && method === 'POST') {
-    return handleCreateWorkspaceRequest({ request, env, userId: cli.userId, userDO: cli.userDO });
-  }
-
-  const workspaceMatch = path.match(/^\/workspaces\/([^/]+)$/);
-
-  if (workspaceMatch && method === 'DELETE') {
-    try {
-      const name = decodeURIComponent(workspaceMatch[1]);
-
-      if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
-      await cli.userDO.removeWorkspace(await ownerCaller(env), name, cli.userId);
-
-      return json({ body: { ok: true } });
-    } catch (e) {
-      return err(400, renderThrownChain({ cause: e }));
-    }
-  }
-
-  const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
-
-  if (connectTicketMatch && method === 'POST') {
-    const name = decodeURIComponent(connectTicketMatch[1]);
-
-    if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
-
-    const issued = await cli.userDO.issueCliAgentConnectTicket(await ownerCaller(env), {
-      userId: cli.userId,
-      agentClass: ORCHESTRATOR_AGENT_SLUG,
-      agentName: name,
-      cliTokenHash: cli.tokenHash,
-      capabilities: ['agent.websocket'],
-    });
-
-    if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');
-
-    return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
-  }
-
-  const webhookTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/webhook$/);
-
-  if (webhookTriggerMatch && method === 'POST') {
-    const agent = await cliAgent(env, cli, decodeURIComponent(webhookTriggerMatch[1]));
-
-    if (agent instanceof Response) return agent;
-
-    // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
-    if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
-    }
-
-    // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
-    if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
-    const body = await safeJson(request, WebhookRequestSchema);
-
-    if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
-
-    try {
-      return json({
-        body: await agent.createDurableWebhook({
-          label: body.label,
-          auth_mode: body.auth_mode,
-          secret: body.secret,
-          accepted_content_type: body.accepted_content_type,
-          rate_limit_per_min: body.rate_limit_per_min,
-        }),
-      }, { status: 201 });
-    } catch (e) {
-      return err(400, renderThrownChain({ cause: e }));
-    }
-  }
-
-  if (path === '/devices' && method === 'GET') {
-    return json({ body: await cli.userDO.listDevices(await ownerCaller(env)) });
-  }
-
-  if (path === '/devices' && method === 'POST') {
-    const body = await safeJson(request, OptionalLabelSchema);
-    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label);
-
-    return json({ body: { deviceId, token, userId: cli.userId, origin: url.origin } }, { status: 201 });
-  }
-
-  // Interactive sessions only: a CI token writing a provider key could swap the account's inference
-  // credentials. Secrets are never readable back.
-  if (path === '/credentials' && method === 'GET') {
-    return json({ body: await cli.userDO.listCredentials(await ownerCaller(env)) });
-  }
-
-  const cliCredMatch = path.match(/^\/credentials\/([^/]+)$/);
-
-  if (cliCredMatch) {
-    const key = decodeURIComponent(cliCredMatch[1]);
-
-    if (method === 'POST') {
-      const body = await safeJson(request, JsonValueSchema);
-
-      try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
-      catch (e) { return err(400, renderThrownChain({ cause: e })); }
-
-      // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
-      notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
-
-      return json({ body: { ok: true } }, { status: 201 });
-    }
-
-    if (method === 'DELETE') {
-      try { await cli.userDO.deleteCredential(await ownerCaller(env), key); }
-      catch (e) { return err(400, renderThrownChain({ cause: e })); }
-
-      notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
-
-      return json({ body: { ok: true } });
-    }
-  }
-
-  return err(404, `No such CLI route: ${method} ${path}`);
+function cliPath(c: CliContext): string {
+  return c.req.path.slice('/api/cli'.length) || '/';
 }
 
+export const cliRoutes = new Hono<CliEnv>();
+
+cliRoutes.post('/api/cli/auth/start', async (c) => {
+  const url = new URL(c.req.url);
+  const body = await safeJson(c.req.raw, v.object({ deviceName: v.optional(v.string()) }));
+
+  try {
+    return json({
+      body: await startCliAuth(c.env, {
+        origin: url.origin, approvalOrigin: approvalOrigin(c.env, url),
+        deviceName: body?.deviceName, clientKey: clientKey(c.req.raw),
+      }),
+    });
+  } catch (e) {
+    return cliAuthError(toError({ cause: e }));
+  }
+});
+
+cliRoutes.post('/api/cli/auth/poll', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ deviceToken: v.optional(v.string()) }));
+
+  if (!body?.deviceToken) return err(400, 'deviceToken required');
+
+  try {
+    return json({ body: await pollCliAuth(c.env, body.deviceToken, clientKey(c.req.raw)) });
+  } catch (e) {
+    return cliAuthError(toError({ cause: e }));
+  }
+});
+
+// No JSON approval: this family runs ahead of the CSRF check, so a cookie-only POST could mint a token.
+
+// `/api/cli*`: every path starting with the text, as before.
+cliRoutes.use('/api/cli*', cliBearer);
+
+// The agent RPC endpoint has its own per-method policy (AGENT_RPC_ACCESS), so it precedes the access-token gate.
+cliRoutes.post('/api/cli/workspaces/:name/rpc', async (c) => handleAgentRpc(c, decodeURIComponent(rawParam(c, 'name'))));
+
+cliRoutes.use('/api/cli*', async (c, next) => {
+  const denied = accessTokenDenial(c.get('cli'), c.req.method, cliPath(c));
+
+  if (denied) return denied;
+  await next();
+});
+
+cliRoutes.get('/api/cli/me', async (c) => {
+  const cli = c.get('cli');
+
+  return json({
+    body: {
+      user: { id: cli.userId, email: cli.email, displayName: cli.displayName },
+      tokenHash: cli.tokenHash,
+      token: { kind: cli.kind, scopes: cli.scopes === 'all' ? 'all' : cli.scopes },
+    },
+  });
+});
+
+cliRoutes.post('/api/cli/logout', async (c) => {
+  const cli = c.get('cli');
+  await cli.userDO.revokeCliTokenHash(await ownerCaller(c.env), cli.tokenHash);
+
+  return json({ body: { ok: true } });
+});
+
+// Session inventory: lets a re-authenticated owner find and end bearers only stored as hashes.
+// Interactive sessions only.
+cliRoutes.get('/api/cli/sessions', async (c) =>
+  json({ body: { sessions: await c.get('cli').userDO.listCliTokens(await ownerCaller(c.env)) } }));
+
+cliRoutes.delete('/api/cli/sessions', async (c) => {
+  const result = await c.get('cli').userDO.revokeAllCliTokens(await ownerCaller(c.env));
+
+  return json({ body: { ok: true, revoked: result.revoked } });
+});
+
+cliRoutes.delete('/api/cli/sessions/:hash{[a-f0-9]{64}}', async (c) => {
+  await c.get('cli').userDO.revokeCliTokenHash(await ownerCaller(c.env), rawParam(c, 'hash'));
+
+  return json({ body: { ok: true } });
+});
+
+// Scoped tokens stop at the access-token gate.
+cliRoutes.get('/api/cli/profile', async (c) => json({ body: await c.get('cli').userDO.getProfileCatalog(await ownerCaller(c.env)) }));
+
+cliRoutes.put('/api/cli/profile', async (c) => answerCatalogPut(c.req.raw,
+  async (catalog, expectedVersion) => c.get('cli').userDO.putProfileCatalog(await ownerCaller(c.env), catalog, expectedVersion)));
+
+cliRoutes.get('/api/cli/tokens', async (c) =>
+  json({ body: { tokens: await c.get('cli').userDO.listAccessTokens(await ownerCaller(c.env)) } }));
+
+cliRoutes.post('/api/cli/tokens', async (c) => {
+  const cli = c.get('cli');
+
+  // Step-up gated like webhook creation: requires a fresh `kinu auth`.
+  if (!isFreshAuthTime(await sessionTokenMintedAt(c.env, cli))) {
+    return err(401, 'step-up auth required: run `kinu auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
+  }
+
+  const body = await safeJson(c.req.raw, v.object({
+    name: v.optional(v.string()),
+    scopes: v.optional(v.array(v.string())),
+  }));
+
+  if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
+    return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
+  }
+
+  const minted = await cli.userDO.mintAccessToken(await ownerCaller(c.env), cli.userId, body.name, body.scopes);
+
+  if (!minted.ok) return err(400, minted.error);
+
+  return json({
+    body: {
+      token: minted.token,
+      name: minted.record.name,
+      scopes: minted.record.scopes,
+      createdAt: minted.record.createdAt,
+    },
+  }, { status: 201 });
+});
+
+cliRoutes.delete('/api/cli/tokens/:ref', async (c) => {
+  const ref = decodeURIComponent(rawParam(c, 'ref'));
+  const result = await c.get('cli').userDO.revokeAccessToken(await ownerCaller(c.env), ref);
+
+  if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
+
+  return json({ body: { ok: true } });
+});
+
+cliRoutes.get('/api/cli/workspaces', async (c) =>
+  json({ body: await c.get('cli').userDO.listActiveWorkspaces(await ownerCaller(c.env)) }));
+
+cliRoutes.get('/api/cli/models', async (c) =>
+  json({ body: await listAvailableModels(c.env, c.get('cli').userId, await ownerCaller(c.env)) }));
+
+cliRoutes.post('/api/cli/workspaces', async (c) => {
+  const cli = c.get('cli');
+
+  return handleCreateWorkspaceRequest({ request: c.req.raw, env: c.env, userId: cli.userId, userDO: cli.userDO });
+});
+
+cliRoutes.delete('/api/cli/workspaces/:name', async (c) => {
+  const cli = c.get('cli');
+
+  try {
+    const name = decodeURIComponent(rawParam(c, 'name'));
+
+    if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
+    await cli.userDO.removeWorkspace(await ownerCaller(c.env), name, cli.userId);
+
+    return json({ body: { ok: true } });
+  } catch (e) {
+    return err(400, renderThrownChain({ cause: e }));
+  }
+});
+
+cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
+  const cli = c.get('cli');
+  const name = decodeURIComponent(rawParam(c, 'name'));
+
+  if (!(await cli.userDO.hasWorkspace(await ownerCaller(c.env), name))) return err(404, `Agent ${name} not found.`);
+
+  const issued = await cli.userDO.issueCliAgentConnectTicket(await ownerCaller(c.env), {
+    userId: cli.userId,
+    agentClass: ORCHESTRATOR_AGENT_SLUG,
+    agentName: name,
+    cliTokenHash: cli.tokenHash,
+    capabilities: ['agent.websocket'],
+  });
+
+  if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');
+
+  return json({ body: { ticket: issued.ticket, expiresAt: issued.expiresAt } });
+});
+
+cliRoutes.post('/api/cli/workspaces/:name/triggers/webhook', async (c) => {
+  const cli = c.get('cli');
+  const agent = await cliAgent(c.env, cli, decodeURIComponent(rawParam(c, 'name')));
+
+  if (agent instanceof Response) return agent;
+
+  // Step-up gated on every path; the CLI's interactive-auth time is its token mint time.
+  if (!isFreshAuthTime(await sessionTokenMintedAt(c.env, cli))) {
+    return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
+  }
+
+  // A webhook whose delivery URL cannot be signed is a row nobody can deliver to.
+  if (webhookRouteSecret(c.env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
+  const body = await safeJson(c.req.raw, WebhookRequestSchema);
+
+  if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+
+  try {
+    return json({
+      body: await agent.createDurableWebhook({
+        label: body.label,
+        auth_mode: body.auth_mode,
+        secret: body.secret,
+        accepted_content_type: body.accepted_content_type,
+        rate_limit_per_min: body.rate_limit_per_min,
+      }),
+    }, { status: 201 });
+  } catch (e) {
+    return err(400, renderThrownChain({ cause: e }));
+  }
+});
+
+cliRoutes.get('/api/cli/devices', async (c) => json({ body: await c.get('cli').userDO.listDevices(await ownerCaller(c.env)) }));
+
+cliRoutes.post('/api/cli/devices', async (c) => {
+  const cli = c.get('cli');
+  const body = await safeJson(c.req.raw, OptionalLabelSchema);
+  const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(c.env), body?.label);
+
+  return json({ body: { deviceId, token, userId: cli.userId, origin: new URL(c.req.url).origin } }, { status: 201 });
+});
+
+// Interactive sessions only: a CI token writing a provider key could swap the account's inference
+// credentials. Secrets are never readable back.
+cliRoutes.get('/api/cli/credentials', async (c) => json({ body: await c.get('cli').userDO.listCredentials(await ownerCaller(c.env)) }));
+
+cliRoutes.all('/api/cli/credentials/:key', async (c, next) => {
+  c.set('key', decodeURIComponent(rawParam(c, 'key')));
+  await next();
+});
+
+cliRoutes.post('/api/cli/credentials/:key', async (c) => {
+  const cli = c.get('cli');
+  const body = await safeJson(c.req.raw, JsonValueSchema);
+
+  try { await cli.userDO.setCredential(await ownerCaller(c.env), c.get('key'), body); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
+  // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
+  notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
+
+  return json({ body: { ok: true } }, { status: 201 });
+});
+
+cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
+  const cli = c.get('cli');
+
+  try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
+  catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
+  notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
+
+  return json({ body: { ok: true } });
+});
+
+cliRoutes.all('/api/cli*', async (c) => err(404, `No such CLI route: ${c.req.method} ${cliPath(c)}`));
+
 async function cliAgent<Id>(
-  env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, name: string,
+  env: CliRoutesEnv<Id>, cli: CliIdentity, name: string,
 ): Promise<CliAgentTarget | Response> {
   const result = await claimOwnedWorkspace(env, cli.userId, name);
 
@@ -439,10 +433,10 @@ async function cliAgent<Id>(
 }
 
 /** The one method-shaped transport; AGENT_RPC_ACCESS table membership is the dispatch allowlist. */
-async function handleAgentRpc<Id>(
-  request: Request, env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>, name: string,
-): Promise<Response> {
-  const body = await safeJson(request, v.object({
+async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
+  const cli = c.get('cli');
+
+  const body = await safeJson(c.req.raw, v.object({
     method: v.string(),
     args: v.optional(v.array(JsonValueSchema)),
   }));
@@ -470,7 +464,7 @@ async function handleAgentRpc<Id>(
     if (!tokenAllows(cli, scope)) return err(403, `This access token does not have the ${scope} scope.`);
   }
 
-  const agent = await cliAgent(env, cli, name);
+  const agent = await cliAgent(c.env, cli, name);
 
   if (agent instanceof Response) return agent;
 
@@ -488,7 +482,7 @@ async function handleAgentRpc<Id>(
 
 /** The session token's mint time (minting requires a live browser approval); access tokens never qualify. */
 async function sessionTokenMintedAt<Id>(
-  env: CliRoutesEnv<Id>, cli: CliTokenIdentity<CliRoutesAuthority>,
+  env: CliRoutesEnv<Id>, cli: CliIdentity,
 ): Promise<number | null> {
   if (cli.kind !== 'session') return null;
   const tokens = await cli.userDO.listCliTokens(await ownerCaller(env));
@@ -534,20 +528,6 @@ function clientKey(request: Request): string {
   return request.headers.get('cf-connecting-ip')
     ?? request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     ?? 'unknown';
-}
-
-async function authenticateCli<Id>(
-  request: Request, env: CliRoutesEnv<Id>,
-): Promise<CliTokenIdentity<CliRoutesAuthority> | Response> {
-  try {
-    const result = await authenticateCliToken(request, env);
-
-    return result.ok ? result.identity : err(401, result.error);
-  } catch (e) {
-    // No root secret: say so rather than surfacing an unexplained 500.
-    if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);
-    throw e;
-  }
 }
 
 async function renderBrowserApproval<Id>(request: Request, env: CliRoutesEnv<Id>): Promise<Response> {

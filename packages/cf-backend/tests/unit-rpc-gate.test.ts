@@ -6,7 +6,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   AGENT_RPC_ACCESS,
+  CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
+  SESSION_BEARER_HEADER,
+  appendIdentityHeaders,
   cliScopesConnectionTag,
   rejectOutOfScopeRpc,
   requiredRpcAccess,
@@ -14,6 +17,12 @@ import {
 } from '../src/cli/rpc-gate';
 import { extractTicketOrchestratorAgentName } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
+import { mockAgentsSdk } from './helpers/agents-sdk';
+
+// The /api app's module graph reaches the Agents SDK: mocked before it loads.
+mockAgentsSdk();
+
+const { api } = await import('../src/api/app');
 
 const root = join(import.meta.dir, '..');
 
@@ -183,10 +192,31 @@ describe('rpc gate on scoped connections', () => {
 
 describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
   test('the edge rewrites the scope header from the verified identity', () => {
-    const server = source('src/server.ts');
-    expect(server).toContain('next.delete(CLI_SCOPES_HEADER)');
-    expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
-    expect(server).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
+    // A client's own identity headers never survive the edge: each is rewritten from the verified
+    // identity, or removed when the identity has none.
+    const forged = new Headers({
+      [CLI_SCOPES_HEADER]: 'workspace.exec',
+      [CLI_BEARER_HEADER]: 'forged:9',
+      [SESSION_BEARER_HEADER]: 'forged',
+    });
+
+    const browser = appendIdentityHeaders(forged, {
+      userId: 'user-1', email: 'owner@example.com', sub: 'sub', authTime: 5, sessionTokenHash: 'session-1',
+    });
+
+    expect(browser.get(SESSION_BEARER_HEADER)).toBe('session-1');
+    expect(browser.has(CLI_SCOPES_HEADER)).toBe(false);
+    expect(browser.has(CLI_BEARER_HEADER)).toBe(false);
+
+    const ticket = appendIdentityHeaders(forged, {
+      userId: 'user-1', email: 'owner@example.com', sub: 'cli', authTime: 5,
+      cliScopes: ['workspace.read'], cliBearer: { tokenHash: 'token-1', generation: 2 },
+    });
+
+    expect(ticket.get(CLI_SCOPES_HEADER)).toBe('workspace.read');
+    expect(ticket.get(CLI_BEARER_HEADER)).toBe('token-1:2');
+    expect(ticket.has(SESSION_BEARER_HEADER)).toBe(false);
+    expect(source('src/server.ts')).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
     // Tickets admit the root and one hosted actor beneath it; a `/sub/` hop names nothing.
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/workspace')).toBe('workspace');
     expect(extractTicketOrchestratorAgentName(
@@ -216,12 +246,17 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
   });
 
   test('the HTTP dispatcher consumes THIS table — no second scope policy anywhere', () => {
-    const routes = source('src/cli/routes.ts');
-    expect(routes).toContain("from './rpc-gate'");
-    expect(routes).toContain('requiredRpcAccess(');
-    // No per-agent-method scope map may exist outside rpc-gate.ts.
-    expect(routes).not.toContain('SCOPED_RPC_ALLOWLIST');
-    expect(routes).not.toContain(String.raw`/^\/workspaces\/[^/]+\/[^/]+/`);
+    // One route in the whole /api app dispatches agent RPC. Hono dispatches in registration order, so
+    // its place in the table is its policy: after the CLI bearer, ahead of the access-token route
+    // policy (`/api/cli*` then holds [bearer, route policy, not-found]), so this table decides alone.
+    const rpc = api.routes.filter((route) => route.path.endsWith('/rpc'));
+    expect(rpc.map(({ method, path }) => `${method} ${path}`)).toEqual(['POST /api/cli/workspaces/:name/rpc']);
+
+    const cliGates = api.routes.flatMap((route, index) => (route.method === 'ALL' && route.path === '/api/cli*' ? [index] : []));
+    const at = api.routes.indexOf(present(rpc[0], 'the RPC route'));
+    expect(cliGates).toHaveLength(3);
+    expect(present(cliGates[0], 'the CLI bearer')).toBeLessThan(at);
+    expect(at).toBeLessThan(present(cliGates[1], 'the access-token route policy'));
   });
 
   test('the header constant has one home', () => {

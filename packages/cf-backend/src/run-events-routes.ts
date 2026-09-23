@@ -4,16 +4,19 @@
  * cannot hold a persistent server-push channel here.
  */
 
+import { Hono } from 'hono';
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
 import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
-  type RunEventType, type WorkspaceOverview } from "@kinu.run/core";
+  type RunEventType } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
   resumeIndexFromLastEventId, type RunEvent,
 } from '@kinu.run/core';
 import { err, json, waitOn, type Clock } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { rawParam, type FamilyEnv } from './api/context';
+import type { WorkspaceVariables } from './api/workspace';
 
 /** Record each 500 as a fleet signal. The workspace name is user text, so the row names the surface instead. */
 function reportRouteFailure(input: { surface: string; cause: unknown }): Response {
@@ -61,22 +64,17 @@ function parseTypesParam(s: string | null): RunEventType[] | undefined {
   return valid.length > 0 ? valid : undefined;
 }
 
-export async function handleRunEventsRequest(
-  request: Request,
-  resolveAgent: RunEventsResolver,
+const RUNS = '/api/workspaces/:name/runs';
+
+/** Run-event routes and the overview, on the proven workspace; trailing slashes accepted, as before. */
+export function runEventsRoutes<Bindings extends object>(
   clock: Clock,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-  const path = url.pathname;
+  resolverFor: (env: Bindings) => RunEventsResolver,
+): Hono<FamilyEnv<Bindings, WorkspaceVariables>> {
+  const routes = new Hono<FamilyEnv<Bindings, WorkspaceVariables>>();
 
-  if (!path.startsWith('/api/workspaces/')) return null;
-
-  if (request.method !== 'GET') return null;
-
-  const listMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/?$/);
-
-  if (listMatch) {
-    const [, agentName] = listMatch;
+  routes.on('GET', [RUNS, `${RUNS}/`], async (c) => {
+    const url = new URL(c.req.url);
 
     // Forwarded raw: `listRuns` validates it in core for every caller.
     const limit = url.searchParams.has('limit')
@@ -87,18 +85,16 @@ export async function handleRunEventsRequest(
     const after = url.searchParams.get('after');
 
     try {
-      const stub = await resolveAgent(agentName);
+      const stub = await resolverFor(c.env)(c.get('workspace').name);
 
       return Response.json(await stub.listRuns({ limit, cursor: after ? { after } : undefined }));
     } catch (cause) {
       return reportRouteFailure({ surface: 'runs', cause });
     }
-  }
+  });
 
-  const eventsMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/events\/?$/);
-
-  if (eventsMatch) {
-    const [, agentName, runId] = eventsMatch;
+  routes.on('GET', [`${RUNS}/:run/events`, `${RUNS}/:run/events/`], async (c) => {
+    const url = new URL(c.req.url);
 
     // The read-model's own closed parser; it reads NaN as "unstated".
     const opts = boundRunEventQuery({
@@ -108,30 +104,45 @@ export async function handleRunEventsRequest(
     });
 
     try {
-      const stub = await resolveAgent(agentName);
-      const events = await stub.getRunEvents(runId, opts);
+      const stub = await resolverFor(c.env)(c.get('workspace').name);
+      const events = await stub.getRunEvents(rawParam(c, 'run'), opts);
 
       return Response.json(events);
     } catch (cause) {
       return reportRouteFailure({ surface: 'events', cause });
     }
-  }
+  });
 
-  const streamMatch = path.match(/^\/api\/workspaces\/([^/]+)\/runs\/([^/]+)\/stream\/?$/);
-
-  if (streamMatch) {
-    const [, agentName, runId] = streamMatch;
+  routes.on('GET', [`${RUNS}/:run/stream`, `${RUNS}/:run/stream/`], async (c) => {
+    const request = c.req.raw;
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
 
     return streamRunEvents({
-      resolveAgent, agentName, runId,
+      resolveAgent: resolverFor(c.env),
+      agentName: c.get('workspace').name,
+      runId: rawParam(c, 'run'),
       sinceIndex: resumeIndexFromLastEventId(lastEventId),
       signal: request.signal,
       clock,
     });
-  }
+  });
 
-  return null;
+  // A failed read is a 500, never a zeroed card.
+  routes.get('/api/workspaces/:name/overview', async (c) => {
+    try {
+      return json({ body: await c.get('workspace').agent.getWorkspaceOverview() });
+    } catch (cause) {
+      diagnostics.failure("http.workspace_overview_failed", toKinuError({
+        doing: `answering a workspace overview request`,
+        cause,
+        otherwise: "unavailable",
+      }), { workspace: rawParam(c, 'name') });
+
+      return err(500, `Workspace overview failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  });
+
+  return routes;
 }
 
 
@@ -249,32 +260,3 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
     },
   });
 }
-
-/** `GET /api/workspaces/:name/overview`; ownership is proven in server.ts. A failed read is a 500, never a zeroed card. */
-export async function handleWorkspaceOverviewRequest(
-  request: Request,
-  read: () => Promise<WorkspaceOverview>,
-): Promise<Response | null> {
-  const url = new URL(request.url);
-  const match = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/overview$/);
-
-  if (match === null || request.method !== "GET") return null;
-
-  const workspace = match[1];
-
-  if (workspace === undefined) return null;
-
-  try {
-    return json({ body: await read() });
-  } catch (cause) {
-    diagnostics.failure("http.workspace_overview_failed", toKinuError({
-      doing: `answering a workspace overview request`,
-      cause,
-      otherwise: "unavailable",
-    }), { workspace });
-
-    return err(500, `Workspace overview failed: ${cause instanceof Error ? cause.message : String(cause)}`);
-  }
-}
-
-

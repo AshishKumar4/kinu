@@ -4,15 +4,17 @@
  * reach browser history and invocation logs. The OAuth leg is bound to its browser by the
  * `__Host-kinu_deploy_state` cookie holding the `state` digest, as `auth/session.ts` does for sign-in.
  */
+import { Hono } from 'hono';
 import {
   CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID,
   DEPLOY_SOCKET_PROTOCOL, DeployInputsSchema, RELEASE_MANIFEST_PATH, authorizeUrl, createPkcePair,
-  isDeployPath, mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
+  mintDeployRun, parseReleaseManifest, promptedSecrets, runKeyDigest,
   type DeployOptions,
 } from '@kinu.run/core/deploy';
-import { err, fetchDeployedAsset, json, safeJson, sha256Hex, timingSafeEqual } from '@kinu.run/core';
+import { err, fetchDeployedAsset, json, safeJson, serveApp, sha256Hex, timingSafeEqual } from '@kinu.run/core';
 import * as v from 'valibot';
 import { DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/session';
+import { beneath, type FamilyEnv } from '../api/context';
 import type { DeployRunDO } from './deploy-do';
 
 /** Long enough to read a permission list; short enough that a shared machine carries no usable half-leg. */
@@ -51,85 +53,102 @@ function presentedKey(request: Request): string {
   return offered[0] === DEPLOY_SOCKET_PROTOCOL ? offered[1] ?? '' : '';
 }
 
-export async function handleDeployRequest(request: Request, env: Env): Promise<Response | null> {
+interface DeployVariables {
+  run: DurableObjectStub<DeployRunDO>;
+  tail: string;
+}
+
+const RUN_PATH = /^\/api\/deploy\/runs\/([A-Za-z0-9_-]+)(\/[a-z/-]*)?$/u;
+
+/** The OAuth return; the door's API is `deployRoutes`. */
+export async function handleDeployCallback(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
-  const path = url.pathname;
 
-  if (!isDeployPath(path)) return null;
+  return url.pathname === DEPLOY_CALLBACK_PATH ? callback(request, env, url) : null;
+}
 
-  if (path === `${DEPLOY_API}/options`) return options(request, env);
+export const deployRoutes = new Hono<FamilyEnv<Env, DeployVariables>>();
 
-  if (path === `${DEPLOY_API}/runs` && request.method === 'POST') return create(env);
+deployRoutes.all(`${DEPLOY_API}/options`, async (c) => options(c.req.raw, c.env));
 
-  if (path === DEPLOY_CALLBACK_PATH) return callback(request, env, url);
+deployRoutes.post(`${DEPLOY_API}/runs`, async (c) => create(c.env));
 
-  const run = /^\/api\/deploy\/runs\/([A-Za-z0-9_-]+)(\/[a-z/-]*)?$/u.exec(path);
+deployRoutes.use(`${DEPLOY_API}/runs/:run/*`, async (c, next) => {
+  const run = RUN_PATH.exec(c.req.path);
 
-  if (run === null) return null;
+  if (run === null) return serveApp(c.req.raw, c.env);
   const runId = run[1] ?? '';
-  const tail = run[2] ?? '';
 
   if (!DEPLOY_RUN_ID.test(runId)) return err(404, 'No such deploy run.');
+  const stub = runStub(c.env, runId);
 
-  const stub = runStub(env, runId);
-  const key = presentedKey(request);
+  if (!await stub.admits(presentedKey(c.req.raw))) return err(403, 'This deploy run does not know that key.');
+  c.set('run', stub);
+  c.set('tail', run[2] ?? '');
+  await next();
+});
 
-  if (!await stub.admits(key)) return err(403, 'This deploy run does not know that key.');
+deployRoutes.all(`${DEPLOY_API}/runs/:run/socket`, async (c) => {
+  if (c.req.header('upgrade')?.toLowerCase() !== 'websocket') return err(426, 'Expected WebSocket');
 
-  if (tail === '/socket') {
-    if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return err(426, 'Expected WebSocket');
+  return c.get('run').fetch(c.req.raw);
+});
 
-    return stub.fetch(request);
-  }
+deployRoutes.get(`${DEPLOY_API}/runs/:run`, async (c) => json({ body: await c.get('run').snapshot() }));
 
-  if (tail === '' && request.method === 'GET') return json({ body: await stub.snapshot() });
+// Read with the person's own token; neither answer is stored.
+deployRoutes.get(`${DEPLOY_API}/runs/:run/accounts`, async (c) => json({ body: await c.get('run').accounts() }));
 
-  // Read with the person's own token; neither answer is stored.
-  if (tail === '/accounts' && request.method === 'GET') return json({ body: await stub.accounts() });
+deployRoutes.get(`${DEPLOY_API}/runs/:run/zones`, async (c) => json({ body: await c.get('run').zones() }));
 
-  if (tail === '/zones' && request.method === 'GET') return json({ body: await stub.zones() });
+// A POST, so the key authorizes it in a header; the navigated `location` carries only `state` and the challenge.
+deployRoutes.post(`${DEPLOY_API}/runs/:run/authorize`, async (c) => authorize(c.req.raw, c.env, c.get('run')));
 
-  // A POST, so the key authorizes it in a header; the navigated `location` carries only `state` and the challenge.
-  if (tail === '/authorize' && request.method === 'POST') return authorize(request, env, stub);
+deployRoutes.post(`${DEPLOY_API}/runs/:run/start`, async (c) => {
+  const inputs = await safeJson(c.req.raw, DeployInputsSchema);
 
-  if (tail === '/start' && request.method === 'POST') {
-    const inputs = await safeJson(request, DeployInputsSchema);
+  if (inputs === null) return err(400, 'Those answers are not a deployment this flow can run.');
+  const stub = c.get('run');
 
-    if (inputs === null) return err(400, 'Those answers are not a deployment this flow can run.');
+  if (!await stub.authorized()) return err(409, 'This run is not authorized with Cloudflare yet.');
 
-    if (!await stub.authorized()) return err(409, 'This run is not authorized with Cloudflare yet.');
+  return json({ body: await stub.start(inputs) });
+});
 
-    return json({ body: await stub.start(inputs) });
-  }
+deployRoutes.post(`${DEPLOY_API}/runs/:run/retry/*`, async (c, next) => {
+  const tail = c.get('tail');
 
-  if (tail.startsWith('/retry/') && request.method === 'POST') {
-    return json({ body: await stub.retry(tail.slice('/retry/'.length)) });
-  }
+  if (!tail.startsWith('/retry/')) return next();
 
-  if (tail === '/keys' && request.method === 'POST') {
-    const parsed = await safeJson(request, ProviderKeySchema);
+  return json({ body: await c.get('run').retry(tail.slice('/retry/'.length)) });
+});
 
-    if (parsed === null) return err(400, 'That is not a provider key this flow stores.');
-    await stub.holdProviderKey(parsed.name, parsed.value);
+deployRoutes.post(`${DEPLOY_API}/runs/:run/keys`, async (c) => {
+  const parsed = await safeJson(c.req.raw, ProviderKeySchema);
 
-    return json({ body: { held: parsed.name } });
-  }
+  if (parsed === null) return err(400, 'That is not a provider key this flow stores.');
+  await c.get('run').holdProviderKey(parsed.name, parsed.value);
 
-  // The CLI authorizes on its own localhost redirect, like wrangler, and hands over the token pair.
-  if (tail === '/token' && request.method === 'POST') {
-    const parsed = await safeJson(request, TokenSchema);
+  return json({ body: { held: parsed.name } });
+});
 
-    if (parsed === null) return err(400, 'That is not a Cloudflare token pair.');
-    const clientId = deployClientId(env);
+// The CLI authorizes on its own localhost redirect, like wrangler, and hands over the token pair.
+deployRoutes.post(`${DEPLOY_API}/runs/:run/token`, async (c) => {
+  const parsed = await safeJson(c.req.raw, TokenSchema);
 
-    if (clientId === '') return err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.');
-    await stub.landToken(clientId, parsed.accessToken, parsed.refreshToken, parsed.expiresInSeconds);
+  if (parsed === null) return err(400, 'That is not a Cloudflare token pair.');
+  const clientId = deployClientId(c.env);
 
-    return json({ body: { authorized: true } });
-  }
+  if (clientId === '') return err(503, 'This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare.');
+  await c.get('run').landToken(clientId, parsed.accessToken, parsed.refreshToken, parsed.expiresInSeconds);
 
-  return err(404, 'No such deploy route.');
-}
+  return json({ body: { authorized: true } });
+});
+
+deployRoutes.all(`${DEPLOY_API}/runs/:run/*`, async () => err(404, 'No such deploy route.'));
+
+// The door's other paths are the app's.
+deployRoutes.all(`${DEPLOY_API}/*`, beneath<FamilyEnv<Env, DeployVariables>>(DEPLOY_API, async (c) => serveApp(c.req.raw, c.env)));
 
 /** Read from this deployment's own asset bundle via `fetchDeployedAsset`, which handles the SPA shell
  *  answering a missing file (`core/src/http/deployed-assets.ts`). */

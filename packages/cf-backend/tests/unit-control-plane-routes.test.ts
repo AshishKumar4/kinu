@@ -3,6 +3,7 @@
  * inside one handler that a store test cannot see. Only the transport is stood in for.
  */
 import { describe, expect, test } from 'bun:test';
+import { serveFamily } from './helpers/api';
 import { Database } from 'bun:sqlite';
 import type { AuthIdentity } from '../src/auth/session';
 import type { AccessIdentity } from '../src/control-plane/access-gate';
@@ -24,7 +25,7 @@ mockAgentsSdk();
 
 // `routes.ts` reaches the orchestrator's module graph at load: import it after the mock is
 // registered.
-const { handleControlRequest: routeControlRequest } = await import('../src/control-plane/routes');
+const { controlRoutes } = await import('../src/control-plane/routes');
 
 const { requireControl } = await import('@kinu.run/core/control-plane');
 
@@ -342,13 +343,14 @@ function access(over: Partial<AccessIdentity> = {}): AccessIdentity {
   return { email: OPERATOR, sub: 'access-uuid-1', ...over };
 }
 
-function handleControlRequest(
+/** The control family behind both of its outer gates: the session proved `who`, Access proved `outer`. */
+function control(
   request: Request,
   env: ControlRoutesEnv,
   who: AuthIdentity,
   outer: AccessIdentity = access(),
 ): Promise<Response | null> {
-  return routeControlRequest(request, env, who, outer);
+  return serveFamily(controlRoutes, { identity: who, access: outer })(request, env);
 }
 
 function get(path: string): Request {
@@ -376,7 +378,7 @@ describe('the gate, over HTTP', () => {
   test('a path outside the control plane is declined, not answered', async () => {
     const h = harness();
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       new Request('https://kinu.run/api/user/profile'), h.env, identity(),
     );
 
@@ -386,7 +388,7 @@ describe('the gate, over HTTP', () => {
 
   test('an ordinary signed-in user gets a 404 and no data', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/users'), h.env, identity({ email: 'nobody@example.com' }));
+    const answer = await control(get('/users'), h.env, identity({ email: 'nobody@example.com' }));
     expect(answer?.status).toBe(404);
     expect(await bodyOf(answer)).toEqual({ error: 'Not found' });
     h.close();
@@ -395,7 +397,7 @@ describe('the gate, over HTTP', () => {
   test('a dev-synthesized identity is refused even when allowlisted', async () => {
     const h = harness({ admins: 'eval-service@kinu.run' });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       get('/overview'), h.env, identity({ email: 'eval-service@kinu.run', provider: 'dev' }),
     );
 
@@ -406,7 +408,7 @@ describe('the gate, over HTTP', () => {
   test('an unconfigured deployment says so instead of pretending the route is absent', async () => {
     const h = harness();
     const unconfigured: ControlRoutesEnv = { ...h.env, CREDENTIAL_ENCRYPTION_KEY: '' };
-    const answer = await handleControlRequest(get('/overview'), unconfigured, identity());
+    const answer = await control(get('/overview'), unconfigured, identity());
     expect(answer?.status).toBe(503);
     h.close();
   });
@@ -414,7 +416,7 @@ describe('the gate, over HTTP', () => {
   test('an operator reads the overview', async () => {
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
-    const answer = await handleControlRequest(get('/overview'), h.env, identity());
+    const answer = await control(get('/overview'), h.env, identity());
     expect(answer?.status).toBe(200);
     expect(await bodyOf(answer)).toMatchObject({ users: 1, workspaces: 0 });
     h.close();
@@ -422,8 +424,8 @@ describe('the gate, over HTTP', () => {
 
   test('an unknown control path is a 404 even for an operator', async () => {
     const h = harness();
-    expect((await handleControlRequest(get('/nope'), h.env, identity()))?.status).toBe(404);
-    expect((await handleControlRequest(
+    expect((await control(get('/nope'), h.env, identity()))?.status).toBe(404);
+    expect((await control(
       new Request('https://kinu.run/api/control/overview', { method: 'DELETE' }), h.env, identity(),
     ))?.status).toBe(405);
     h.close();
@@ -435,7 +437,7 @@ describe('the gate, over HTTP', () => {
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       get('/overview'), h.env, identity(), access({ email: 'someone-else@kinu.run' }),
     );
 
@@ -448,7 +450,7 @@ describe('the gate, over HTTP', () => {
     // Access is an outer gate, never a substitute for the allowlist.
     const h = harness();
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       get('/overview'), h.env, identity({ email: 'colleague@kinu.run' }),
       access({ email: 'colleague@kinu.run' }),
     );
@@ -462,7 +464,7 @@ describe('the gate, over HTTP', () => {
     // must not satisfy it.
     const h = harness();
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' }),
       h.env, identity({ authTime: Date.now() - 6 * 60 * 1000 }), access(),
     );
@@ -478,7 +480,7 @@ describe('mutations', () => {
     const h = harness();
     const stale = identity({ authTime: Date.now() - 6 * 60 * 1000 });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' }), h.env, stale,
     );
 
@@ -496,7 +498,7 @@ describe('mutations', () => {
   test('a body the schema does not recognize is refused AND audited', async () => {
     const h = harness();
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'setModel', userId: USER_ID, workspace: 'alpha', model: 'anything' }),
       h.env, identity(),
     );
@@ -512,7 +514,7 @@ describe('mutations', () => {
   test('a fresh operator action reaches the existing RPC and is audited as ok', async () => {
     const h = harness();
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
@@ -529,7 +531,7 @@ describe('mutations', () => {
   test('a refusal by the owning object is a 409, and its reason is the audited detail', async () => {
     const h = harness({ behaviour: { retry: { ok: false, error: 'that job already succeeded' } } });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'job.retry', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
@@ -544,7 +546,7 @@ describe('mutations', () => {
   test('a throwing RPC is a 502 audited as failed, kept apart from a refusal', async () => {
     const h = harness({ behaviour: { throws: 'the workspace is evicted' } });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
@@ -560,7 +562,7 @@ describe('mutations', () => {
   test('revoking shell grants reads them first, so the audited count is real', async () => {
     const grants = [{ rule: 'git', executor: 'workspace' }, { rule: 'npm', executor: 'sandbox' }];
     const h = harness({ behaviour: { grants: { grants } } });
-    await handleControlRequest(
+    await control(
       post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),
       h.env, identity(),
     );
@@ -574,7 +576,7 @@ describe('mutations', () => {
   test('revoking nothing is a refusal, not an "ok" with nothing revoked', async () => {
     const h = harness({ behaviour: { grants: { grants: [] } } });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),
       h.env, identity(),
     );
@@ -588,7 +590,7 @@ describe('mutations', () => {
   test('removing a workspace needs the name retyped, and the refusal is audited', async () => {
     const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', {
         action: 'workspace.remove', workspace: 'alpha', userId: OTHER_ID, confirm: 'alpha-typo',
       }),
@@ -608,7 +610,7 @@ describe('mutations', () => {
     const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
     store.observeWorkspace(h.sql, { userId: OTHER_ID, name: 'alpha', displayName: 'Alpha', at: 1_000 });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', {
         action: 'workspace.remove', workspace: 'alpha', userId: OTHER_ID, confirm: 'alpha',
       }),
@@ -639,7 +641,7 @@ describe('mutations', () => {
     const h = harness();
 
     for (const attempt of attempts) {
-      await handleControlRequest(post('/actions', attempt), h.env, identity());
+      await control(post('/actions', attempt), h.env, identity());
     }
 
     const rows = store.listAudit(h.sql, { limit: 50 }).items;
@@ -669,7 +671,7 @@ describe('the audit log is written before the action, not after', () => {
     ];
 
     for (const attempt of attempts) {
-      const answer = await handleControlRequest(post('/actions', attempt), h.env, identity());
+      const answer = await control(post('/actions', attempt), h.env, identity());
       expect(answer?.status).toBe(503);
     }
 
@@ -682,7 +684,7 @@ describe('the audit log is written before the action, not after', () => {
   test('a lost settlement leaves a pending row and does not answer success', async () => {
     const h = harness({ audit: 'settle' });
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
@@ -710,7 +712,7 @@ describe('cross-user isolation', () => {
     store.observeWorkspace(h.sql, { userId: USER_ID, name: 'shared-name', displayName: 'Mine', at: 2_000 });
     store.observeWorkspace(h.sql, { userId: OTHER_ID, name: 'shared-name', displayName: 'Theirs', at: 3_000 });
 
-    const answer = await handleControlRequest(get(`/workspaces?userId=${OTHER_ID}`), h.env, identity());
+    const answer = await control(get(`/workspaces?userId=${OTHER_ID}`), h.env, identity());
     const page = await bodyOf(answer);
     expect(page).toMatchObject({
       items: [{ userId: OTHER_ID, displayName: 'Theirs', email: 'someone@example.com' }],
@@ -723,7 +725,7 @@ describe('cross-user isolation', () => {
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
     store.observeWorkspace(h.sql, { userId: USER_ID, name: 'stale', displayName: 'Stale', at: 1_000 });
 
-    const answer = await handleControlRequest(get(`/users/${USER_ID}`), h.env, identity());
+    const answer = await control(get(`/users/${USER_ID}`), h.env, identity());
     const detail = await bodyOf(answer);
     expect(detail).toMatchObject({ reconcile: { status: 'ok' }, viewer: OPERATOR });
     const rows = store.listWorkspaces(h.sql, {}, { userId: USER_ID }).items;
@@ -736,7 +738,7 @@ describe('cross-user isolation', () => {
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
     store.observeWorkspace(h.sql, { userId: USER_ID, name: 'kept', displayName: 'Kept', at: 1_000 });
 
-    const answer = await handleControlRequest(get(`/users/${USER_ID}`), h.env, identity());
+    const answer = await control(get(`/users/${USER_ID}`), h.env, identity());
     const detail = await bodyOf(answer);
     expect(detail).toMatchObject({
       reconcile: { status: 'failed', reason: expect.stringContaining('the user object is evicted') },
@@ -748,14 +750,14 @@ describe('cross-user isolation', () => {
 
   test('a user id that is not one is refused before any read', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/users/not-a-user-id'), h.env, identity());
+    const answer = await control(get('/users/not-a-user-id'), h.env, identity());
     expect(answer?.status).toBe(400);
     h.close();
   });
 
   test('a workspace read without an owner is refused, because the name is not an address', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/workspaces/alpha'), h.env, identity());
+    const answer = await control(get('/workspaces/alpha'), h.env, identity());
     expect(answer?.status).toBe(400);
     expect(h.rpc.calls).toEqual([]);
     h.close();
@@ -776,7 +778,7 @@ describe('a global-name collision between two accounts', () => {
   test('the owner reaches the workspace and the other account does not', async () => {
     const h = collided();
 
-    const mine = await handleControlRequest(
+    const mine = await control(
       get(`/workspaces/contested?userId=${USER_ID}`), h.env, identity(),
     );
 
@@ -785,7 +787,7 @@ describe('a global-name collision between two accounts', () => {
 
     h.rpc.calls.length = 0;
 
-    const theirs = await handleControlRequest(
+    const theirs = await control(
       get(`/workspaces/contested?userId=${OTHER_ID}`), h.env, identity(),
     );
 
@@ -808,7 +810,7 @@ describe('a global-name collision between two accounts', () => {
     ];
 
     for (const attempt of attempts) {
-      const answer = await handleControlRequest(post('/actions', attempt), h.env, identity());
+      const answer = await control(post('/actions', attempt), h.env, identity());
       expect(answer?.status, JSON.stringify(attempt)).not.toBe(200);
     }
 
@@ -830,7 +832,7 @@ describe('a global-name collision between two accounts', () => {
 
     store.observeUser(h.sql, { userId: OTHER_ID, email: 'loser@example.com', at: 1_000 });
 
-    const answer = await handleControlRequest(get(`/users/${OTHER_ID}`), h.env, identity());
+    const answer = await control(get(`/users/${OTHER_ID}`), h.env, identity());
     expect(await bodyOf(answer)).toMatchObject({
       reconcile: { status: 'ok' },
       workspaces: { items: [] },
@@ -859,7 +861,7 @@ describe('paging over HTTP', () => {
     let query = '?limit=200';
 
     for (let pages = 0; pages < 5; pages += 1) {
-      const answer = await handleControlRequest(get(`/users${query}`), h.env, identity());
+      const answer = await control(get(`/users${query}`), h.env, identity());
       expect(answer?.status).toBe(200);
       const page = v.parse(PageSchema, await answered(answer).json());
 
@@ -902,7 +904,7 @@ describe('paging over HTTP', () => {
     let query = '?limit=200';
 
     for (let pages = 0; pages < 5; pages += 1) {
-      const answer = await handleControlRequest(get(`/users/${USER_ID}${query}`), h.env, identity());
+      const answer = await control(get(`/users/${USER_ID}${query}`), h.env, identity());
       expect(answer?.status).toBe(200);
       const detail = v.parse(DetailSchema, await answered(answer).json());
       reconciles.push(detail.reconcile.status);
@@ -922,7 +924,7 @@ describe('paging over HTTP', () => {
   test('a cursor the plane did not issue is refused rather than restarting the walk', async () => {
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
-    const answer = await handleControlRequest(get('/users?cursor=forged'), h.env, identity());
+    const answer = await control(get('/users?cursor=forged'), h.env, identity());
     // A 500, not a silent first page: restarting a walk looks like success and repeats rows.
     expect(answer?.status).toBe(500);
     expect(JSON.stringify(await bodyOf(answer))).toContain('cursor');
@@ -934,7 +936,7 @@ describe('reads that reach through', () => {
   test('the workspace drilldown reports a down panel instead of blanking the page', async () => {
     const h = harness();
 
-    const answer = await handleControlRequest(
+    const answer = await control(
       get(`/workspaces/alpha?userId=${USER_ID}`), h.env, identity(),
     );
 
@@ -951,7 +953,7 @@ describe('reads that reach through', () => {
 
   test('incidents are readable, which they never were before', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/incidents'), h.env, identity());
+    const answer = await control(get('/incidents'), h.env, identity());
     expect(await bodyOf(answer)).toMatchObject({
       incidents: [{ probe: 'health', failures: 3, alertedAt: null }],
     });
@@ -960,7 +962,7 @@ describe('reads that reach through', () => {
 
   test('metrics report themselves unconfigured rather than failing', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/metrics?hours=24'), h.env, identity());
+    const answer = await control(get('/metrics?hours=24'), h.env, identity());
     expect(answer?.status).toBe(200);
     expect(await bodyOf(answer)).toMatchObject({
       windowHours: 24,
@@ -972,9 +974,9 @@ describe('reads that reach through', () => {
 
   test('an out-of-range metrics window is rounded up to one the cache keys on', async () => {
     const h = harness();
-    const answer = await handleControlRequest(get('/metrics?hours=12'), h.env, identity());
+    const answer = await control(get('/metrics?hours=12'), h.env, identity());
     expect(await bodyOf(answer)).toMatchObject({ windowHours: 24 });
-    const wide = await handleControlRequest(get('/metrics?hours=99999'), h.env, identity());
+    const wide = await control(get('/metrics?hours=99999'), h.env, identity());
     expect(await bodyOf(wide)).toMatchObject({ windowHours: 720 });
     h.close();
   });
