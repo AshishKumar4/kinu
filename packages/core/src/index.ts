@@ -1297,6 +1297,8 @@ export {
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
+export { compareCodeUnits } from './utils/text';
+
 // Sleep-time compute
 export {
   runSleepTimeCompute, applySleepTimeUpdate,

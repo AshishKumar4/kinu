@@ -13,6 +13,7 @@ import {
   discoverSkills, readSkillFile, type DiscoverOpts, type SkillsVfs,
 } from '../skills/discover';
 import { boundedInt } from '../utils/bounds';
+import { compareCodeUnits } from '../utils/text';
 import { seekPage, type Page, type PageRequest } from '../session/page';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import { tolerateAsync } from '../obs/index';
@@ -92,13 +93,7 @@ function instructionAnchor(row: InstructionSourceRow): string {
 }
 
 function compareRows(a: InstructionSourceMeta, b: InstructionSourceMeta): number {
-  if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
-
-  if (a.path < b.path) return -1;
-
-  if (a.path > b.path) return 1;
-
-  return 0;
+  return compareCodeUnits(a.kind, b.kind) || compareCodeUnits(a.path, b.path);
 }
 
 /** Ordered by identity (kind, path) only, so a cursor survives a rewrite between pages. */
