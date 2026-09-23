@@ -33,7 +33,7 @@ export {
 
 // Records that keyed work happened, kept after its row is retired.
 export {
-  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone, oncePerTick, type TickedPass,
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
