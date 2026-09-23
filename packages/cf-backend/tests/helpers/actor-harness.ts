@@ -1587,6 +1587,8 @@ export function makeEnv(
 
             return [];
           },
+          // A job holding no device commands: what the hub answers when nothing needs stopping.
+          cancelDeviceRequestsForBackgroundJob: async (): Promise<[]> => [],
         };
 
         const owned = (prop: string | symbol): prop is keyof typeof ownerPlane => prop in ownerPlane;
