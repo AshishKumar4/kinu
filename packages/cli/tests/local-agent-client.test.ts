@@ -407,7 +407,7 @@ describe('LocalAgentClient', () => {
     const history = await client.history();
     expect(history.map((message) => [message.role, message.content])).toEqual([
       ['user', 'here is your standing brief'], ['assistant', 'standing brief, noted'],
-      ['user', 'list every tool you have'], ['user', 'and your version'], ['assistant', 'answer 2'],
+      ['user', 'list every tool you have\n\nand your version'], ['assistant', 'answer 2'],
     ]);
     expect(history[2]).not.toHaveProperty('steered');
     expect(history[3]).not.toHaveProperty('steered');

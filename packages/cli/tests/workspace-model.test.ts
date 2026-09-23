@@ -1,5 +1,6 @@
 /**
- * The model a local workspace's turns run on, read where it lands: the model each request names at the endpoint.
+ * The model a local workspace's turns run on, read where it lands: the model each request names at the endpoint,
+ * and the conversation those turns continue, read where a reopened workspace shows it.
  * The profile's default tier is the one default: a first provider connect names it, a later one leaves it, the home
  * screen's Defaults change it, and an unpinned workspace runs it. A model or effort chosen for one workspace (the TUI
  * picker, `/model`, `/effort`, `kinu model`, `kinu effort`, the rpc `model` command) is that workspace's alone and
@@ -322,5 +323,19 @@ describe('a model or effort chosen for a workspace', () => {
 
     expect(rpc).toContain('openai-compat/beta-model');
     expect(nextTurnModel(machine, 'scripted')).toBe('beta-model');
+  });
+});
+
+describe('a reopened workspace', () => {
+  test('shows in the TUI the conversation its next turn continues', async () => {
+    const machine = await connectedMachine();
+    mustRun(machine, ['create', 'resumed', '--mode', 'local']);
+    mustRun(machine, ['run', 'resumed', 'remember the fixture']);
+
+    inTerminal(machine, ['chat', 'resumed'], [
+      { wait: 'Send a message', timeout: 45 },
+      { wait: 'remember the fixture', timeout: 10 },
+      { wait: REPLY, timeout: 10 },
+    ]);
   });
 });

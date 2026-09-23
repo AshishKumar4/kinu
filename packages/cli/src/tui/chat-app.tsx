@@ -115,7 +115,6 @@ export interface TuiCreatedAgent {
 
 export interface ChatAppOpts {
   client: AgentClient;
-  hydrateHistory?: boolean;
   onExit?: () => void | Promise<void>;
   /** Walk-back forks swap clients; exit cleanup must close the current one. */
   onClientChange?: (client: AgentClient) => void;
@@ -200,7 +199,6 @@ export function ChatApp(props: ChatAppOpts) {
 
 function ChatScene({
   client: initialClient,
-  hydrateHistory,
   onExit,
   onClientChange,
   workspaceSource: workspaceSourceInput,
@@ -1383,7 +1381,7 @@ function ChatScene({
     let settled = false;
     task = (async () => {
       try {
-        if (hydrateHistory && !skipHydrationRef.current) {
+        if (!skipHydrationRef.current) {
           try {
             const history = await client.history();
 
@@ -1443,7 +1441,7 @@ function ChatScene({
       abort.abort();
       unsubscribe();
     };
-  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
+  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent]);
 
   useEffect(() => {
     const abort = new AbortController();

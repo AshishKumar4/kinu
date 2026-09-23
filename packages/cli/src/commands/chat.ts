@@ -91,8 +91,6 @@ export async function chatCommand(
   if (target.mode === 'local') ensureLocalDaemonRunning();
   installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
-  // Only cloud replays history; a local conversation seeds the model from the database.
-  const hydrateHistory = target.mode === 'cloud';
 
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
     await runChatLoop({ client });
@@ -100,7 +98,6 @@ export async function chatCommand(
     const { runTuiChat } = await import('../tui/chat-app');
     await runTuiChat({
       client,
-      hydrateHistory,
       onWorkspaceSelect: async (selectedName) => {
         const selectedTarget = resolveAgentTarget(selectedName);
 
