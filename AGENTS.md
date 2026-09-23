@@ -48,6 +48,7 @@ The owner is a Cloudflare employee; Workers, DOs, R2, Containers, Sandboxes, Wor
 
 ## Delegation
 The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a loop with an `expert`, splits it into lanes, and briefs each with full context, an output contract and its own worktree. `expert` and `task` lanes implement and fix; `scout` researches; `sidekick` pairs. One dependent chain stays in one lane; independent problems run in parallel. A lane's result is a claim: main reads the diff and reruns the proof before merging, and only main deploys.
+- Few lanes, reused. New work goes to the lane already holding that area, with its context; a new lane only for a genuinely new area. Each lane owns an area, not a single bug: chat pane and roster; deploy ladder and first-run tier; Nimbus and preview routing; skills, codemode and prompts; providers and tool schemas; devices and secrets; CLI and TUI; test honesty; evals; Lean proofs; devbox.
 
 ## Owner Preferences
 - Short commit subjects; no comment that restates code or narrates an edit.
