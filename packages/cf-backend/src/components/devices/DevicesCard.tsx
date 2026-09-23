@@ -65,7 +65,7 @@ export function DevicesCard() {
       setAcknowledged((current) => new Set(current).add(id));
       reloadDevices();
     } catch (e) {
-      setErr(`Could not acknowledge the command warning: ${renderThrownChain({ cause: e })}`);
+      setErr(`Could not acknowledge the device warning: ${renderThrownChain({ cause: e })}`);
     }
   }, [reloadDevices]);
 

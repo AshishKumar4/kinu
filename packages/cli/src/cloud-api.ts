@@ -61,6 +61,7 @@ export interface CloudDevice {
   lastSeenAt: number | null;
   /** Per-workspace home and roots live on the runtime status; the registry knows nothing per workspace. */
   sandbox: CloudDeviceSandbox;
+  wholeMachine: boolean;
 }
 
 export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
@@ -185,6 +186,7 @@ const CloudDeviceSchema: v.GenericSchema<unknown, CloudDevice> = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
   sandbox: v.optional(CloudDeviceSandboxSchema, UNREPORTED_SANDBOX),
+  wholeMachine: v.optional(v.boolean(), false),
 });
 
 const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = v.object({
@@ -507,8 +509,14 @@ export async function revokeCliAccessToken(origin: string, token: string, ref: s
   return cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token });
 }
 
-export async function registerCloudDevice(origin: string, token: string, label?: string): Promise<CloudDeviceRegistration> {
-  const body: JsonValue = label ? { label } : {};
+export async function registerCloudDevice(
+  origin: string, token: string, label?: string, replaces?: string,
+): Promise<CloudDeviceRegistration> {
+  const body: Record<string, JsonValue> = {};
+
+  if (label) body.label = label;
+
+  if (replaces !== undefined) body.replaces = replaces;
 
   return cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
 }

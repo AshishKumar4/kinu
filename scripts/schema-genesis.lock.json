@@ -1426,6 +1426,12 @@
     "update_check INTEGER NOT NULL DEFAULT 1",
     "reported_at INTEGER NOT NULL"
   ],
+  "user_device_retired_tokens@packages/core/src/state/user-schema.ts": [
+    "token_hash TEXT PRIMARY KEY",
+    "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",
+    "retired_at INTEGER NOT NULL",
+    "reuse_detected_at INTEGER"
+  ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "token_hash TEXT NOT NULL",

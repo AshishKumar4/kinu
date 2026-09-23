@@ -50,6 +50,10 @@ const {
   supervisionSupported,
 } = require('../src/index.js');
 
+/** The block a hub with the owner's Sandbox switch OFF sends. Every frame that
+ *  reaches the machine carries a tier, so an unscoped frame is a refusal. */
+const RAW = { tier: 'raw', agentHome: '', roots: [] };
+
 function fakeWs() {
   const frames = [];
 
@@ -131,7 +135,7 @@ describe('daemon token rotation', () => {
   test('a failed atomic rename preserves config and reports rotation failure', () => {
     const root = scratchDir('daemon-token');
     const configPath = path.join(root, 'device.json');
-    const cfg = { user: 'user-1', token: 'T0' };
+    const cfg = { user: 'user-1', token: `pdt_${'0'.repeat(32)}` };
     const messages = [];
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
 
@@ -142,17 +146,37 @@ describe('daemon token rotation', () => {
     try {
       expect(handleTokenRotation(
         cfg,
-        { type: 'ROTATE', token: 'T1' },
+        { type: 'ROTATE', token: `pdt_${'1'.repeat(32)}` },
         configPath,
         (...args) => messages.push(args),
       )).toBe(true);
-      expect(cfg.token).toBe('T0');
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe('T0');
+      expect(cfg.token).toBe(`pdt_${'0'.repeat(32)}`);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe(`pdt_${'0'.repeat(32)}`);
       expect(fs.readdirSync(root)).toEqual(['device.json']);
       expect(messages[0]?.[0]).toBe('Device token rotation failed:');
     } finally {
       rename.mockRestore();
     }
+  });
+
+  test('a rotation carrying anything but a device token is neither stored nor taken', () => {
+    const root = scratchDir('daemon-token');
+    const configPath = path.join(root, 'device.json');
+    const held = `pdt_${'0'.repeat(32)}`;
+    const messages = [];
+
+    for (const token of [{ weird: 'object' }, 42, 'pdt_short', `ptc_${'1'.repeat(32)}`]) {
+      const cfg = { user: 'user-1', token: held };
+      fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+
+      expect(handleTokenRotation(cfg, { type: 'ROTATE', token }, configPath, (...args) => messages.push(args))).toBe(true);
+      // The daemon acknowledges only when its held token equals the frame's,
+      // so an untaken token is also an unacknowledged one.
+      expect(cfg.token).toBe(held);
+      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe(held);
+    }
+
+    expect(messages.map((message) => message[0])).toEqual(Array(4).fill('Device token rotation refused:'));
   });
 });
 
@@ -176,6 +200,22 @@ describe('daemon startup hardening', () => {
     expect(failure.message).not.toContain(secret);
     expect(() => readDeviceConfig(path.join(DEVICE_HOME, 'missing-device.json')))
       .toThrow('run: kinu connect');
+  });
+
+  test('a device config naming a plaintext origin off this machine is refused before any token is sent', () => {
+    const configPath = path.join(DEVICE_HOME, 'origin-device.json');
+    const config = (origin) => JSON.stringify({ user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin });
+
+    for (const origin of ['http://kinu.example', 'ftp://kinu.example', 'http://192.0.2.10:8787', 'not a url']) {
+      fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
+      expect(() => readDeviceConfig(configPath)).toThrow('https');
+    }
+
+    // The owner's own machine may serve a development hub over plain http.
+    for (const origin of ['https://kinu.run', 'http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787']) {
+      fs.writeFileSync(configPath, config(origin), { mode: 0o600 });
+      expect(readDeviceConfig(configPath).origin).toBe(origin);
+    }
   });
 
   test('redacts rejected device credentials from ticket exchange failures', async () => {
@@ -387,6 +427,7 @@ describe('daemon exec output bound', () => {
     handle({
       id: 'rpc-noisyexec0-1',
       method: 'exec',
+      sandbox: RAW,
       params: [`${JSON.stringify(process.execPath)} -e "process.stdout.write('x'.repeat(600000))"`],
     }, ws, {});
 
@@ -410,59 +451,80 @@ describe('daemon device path confinement', () => {
     };
   }
 
-  test('dot-dot and symlink paths outside the consented root are read-only, never writable', async () => {
-    // The fixture sits under /tmp BY NAME, not os.tmpdir(): TMPDIR follows the
-    // tier that runs the suite and has pointed inside the owner's home, where
-    // the same paths translate into the agent home and read the agent's own
-    // (absent) file instead. Outside the home, what these paths reach is the
-    // read-only disk the sandbox shows the shell. (The home swap itself is a
-    // property of the policy object and is pinned with an explicit home in
-    // sandbox.test.js; the daemon under test reads the real home, which no
-    // unit test may touch.) Each path is judged by where it LANDS: a `..`
-    // spelling and a symlink both resolve to the same file, and neither
-    // spelling can write it.
+  /** A file outside every home, every temp root and every system tree:
+   *  /dev/shm is writable on every Linux and nothing in the sandbox names it. */
+  function plantOutside(label) {
+    const planted = path.join('/dev/shm', `kinu-daemon-${label}-${process.pid}`);
+    fs.writeFileSync(planted, 'secret', { mode: 0o600 });
+
+    return planted;
+  }
+
+  test('a frame that names no sandbox tier is refused by every method that reaches the machine', async () => {
+    const planted = plantOutside('untiered');
+    const ws = fakeWs();
+
+    try {
+      const frames = [
+        ['untiered-read', 'readFile', [planted]],
+        ['untiered-range', 'readRange', [planted, 0, 6]],
+        ['untiered-write', 'writeFile', [planted, 'planted']],
+        ['untiered-list', 'listFiles', [path.dirname(planted)]],
+        ['untiered-stat', 'statPath', [planted]],
+        ['untiered-exists', 'exists', [planted]],
+        ['untiered-unlink', 'unlinkPath', [planted]],
+        ['untiered-mkdir', 'mkdirPath', [`${planted}-dir`]],
+        ['rpc-untiered00-1', 'exec', [`cat ${JSON.stringify(planted)}`]],
+      ];
+
+      for (const [id, method, params] of frames) handle({ id, method, params }, ws, {});
+
+      for (const [id] of frames) {
+        const frame = await ws.response(id);
+        expect(frame.result).toBeUndefined();
+        expect(frame.error).toContain('names no sandbox tier');
+      }
+
+      expect(fs.readFileSync(planted, 'utf8')).toBe('secret');
+      expect(fs.existsSync(`${planted}-dir`)).toBe(false);
+    } finally {
+      fs.rmSync(planted, { force: true });
+    }
+  });
+
+  test('dot-dot and symlink paths outside the consented root are refused, never served', async () => {
+    // Each path is judged by where it LANDS: a `..` spelling and a symlink both
+    // reach a file no home and no consented directory holds, and neither
+    // spelling reads or writes it.
     const root = scratchDir("daemon-root");
     const project = path.join(root, 'project');
-    const outside = path.join(root, 'outside.txt');
+    const outside = plantOutside('escape');
+    const climb = `${project}/${'../'.repeat(project.split('/').filter(Boolean).length)}${outside.slice(1)}`;
     fs.mkdirSync(project);
-    fs.writeFileSync(outside, 'secret');
     fs.symlinkSync(outside, path.join(project, 'link'));
     const ws = fakeWs();
 
-    handle({
-      id: 'traversal',
-      method: 'readFile',
-      sandbox: scoped([project]),
-      params: [path.join(project, '..', 'outside.txt')],
-    }, ws, {});
-    handle({
-      id: 'symlink',
-      method: 'readFile',
-      sandbox: scoped([project]),
-      params: [path.join(project, 'link')],
-    }, ws, {});
-    handle({
-      id: 'traversal-write',
-      method: 'writeFile',
-      sandbox: scoped([project]),
-      params: [path.join(project, '..', 'outside.txt'), 'planted'],
-    }, ws, {});
-    handle({
-      id: 'symlink-write',
-      method: 'writeFile',
-      sandbox: scoped([project]),
-      params: [path.join(project, 'link'), 'planted'],
-    }, ws, {});
+    try {
+      for (const [id, method, params] of [
+        ['traversal', 'readFile', [climb]],
+        ['symlink', 'readFile', [path.join(project, 'link')]],
+        ['traversal-range', 'readRange', [climb, 0, 6]],
+        ['traversal-write', 'writeFile', [climb, 'planted']],
+        ['symlink-write', 'writeFile', [path.join(project, 'link'), 'planted']],
+      ]) {
+        handle({ id, method, sandbox: scoped([project]), params }, ws, {});
+        const frame = await ws.response(id);
+        expect(frame.result).toBeUndefined();
+        expect(frame.error).toContain('does not expose');
+      }
 
-    expect((await ws.response('traversal')).result).toBe('secret');
-    expect((await ws.response('symlink')).result).toBe('secret');
-    expect((await ws.response('traversal-write')).error).toContain('read-only in this device');
-    expect((await ws.response('symlink-write')).error).toContain('read-only in this device');
-    expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
+      expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
 
-    // A path outside the home is readable — the whole disk is, in the
-    // sandbox — and refuses a write, which is what the kernel does to the
-    // shell for the same path.
+    // The system trees a program needs stay readable and refuse a write,
+    // which is what the kernel does to the shell for the same paths.
     handle({ id: 'read-system', method: 'readFile', sandbox: scoped([project]), params: ['/etc/hostname'] }, ws, {});
     expect((await ws.response('read-system')).error).toBeUndefined();
     handle({
@@ -488,6 +550,93 @@ describe('daemon device path confinement', () => {
     expect((await ws.response('kinu-link')).result).toBeUndefined();
     expect(fs.readFileSync(baited, 'utf8')).toContain('machine-secret');
     fs.rmSync(baited, { force: true });
+  });
+
+  test('an agent home that is not one workspace under the daemon\'s own root is refused', async () => {
+    // A workspace name carrying `a/../b` composes a home that resolves under
+    // the root yet belongs to workspace b.
+    const agents = path.join(DEVICE_HOME, 'agents');
+    const sibling = path.join(agents, 'ws-b', 'home');
+    fs.mkdirSync(sibling, { recursive: true });
+    fs.writeFileSync(path.join(sibling, 'notes.txt'), 'ws-b-private');
+    const ws = fakeWs();
+
+    for (const [id, agentHome] of [
+      ['home-climb', path.join(agents, 'ws-a') + '/../ws-b/home'],
+      ['home-deep', path.join(agents, 'ws-a', 'nested', 'home')],
+      ['home-not-home', path.join(agents, 'ws-b', 'elsewhere')],
+    ]) {
+      handle({
+        id,
+        method: 'readFile',
+        sandbox: { tier: 'sandboxed', agentHome, roots: [] },
+        params: [path.join(sibling, 'notes.txt')],
+      }, ws, {});
+      const frame = await ws.response(id);
+      expect(frame.result).toBeUndefined();
+      expect(frame.error).toContain('agent home must be');
+    }
+  });
+
+  test('a consented root of / is the whole machine, as with the Sandbox switch off', async () => {
+    const outside = plantOutside('whole-machine');
+    fs.writeFileSync(path.join(DEVICE_HOME, 'whole-machine-device.json'), '{"token":"machine-secret"}', { mode: 0o600 });
+    const whole = { tier: 'sandboxed', agentHome: path.join(DEVICE_HOME, 'agents', 'ws-1', 'home'), roots: ['/'] };
+    const ws = fakeWs();
+
+    try {
+      handle({ id: 'rpc-wholemach0-1', method: 'exec', sandbox: whole, params: [`cat ${JSON.stringify(outside)}`] }, ws, {});
+      handle({ id: 'whole-read', method: 'readFile', sandbox: whole, params: [outside] }, ws, {});
+      handle({
+        id: 'whole-kinu', method: 'readFile', sandbox: whole, params: [path.join(DEVICE_HOME, 'whole-machine-device.json')],
+      }, ws, {});
+
+      expect((await ws.response('rpc-wholemach0-1')).result.stdout).toBe('secret');
+      expect((await ws.response('whole-read')).result).toBe('secret');
+      // Kinu's own directory is the one thing no tier serves.
+      expect((await ws.response('whole-kinu')).error).toContain("inside Kinu's own directory");
+    } finally {
+      fs.rmSync(outside, { force: true });
+    }
+  });
+
+  test('a range answers what the file holds, however long a range was asked for', async () => {
+    const root = scratchDir('daemon-range');
+    const small = path.join(root, 'small.txt');
+    fs.writeFileSync(small, 'twelve bytes');
+    const ws = fakeWs();
+
+    // Allocating the asked length would be a terabyte before the first byte is read.
+    handle({ id: 'long-range', method: 'readRange', sandbox: scoped([root]), params: [small, 7, 2 ** 40] }, ws, {});
+    const frame = await ws.response('long-range');
+
+    expect(frame.error).toBeUndefined();
+    expect(Buffer.from(frame.result.content, 'base64').toString('utf8')).toBe('bytes');
+  });
+
+  test('a directory lists completely, one page at a time', async () => {
+    const root = scratchDir('daemon-pages');
+    const names = Array.from({ length: 25 }, (_, index) => `f${String(index)}`);
+
+    for (const name of names) fs.writeFileSync(path.join(root, name), '');
+    const ws = fakeWs();
+    const listed = [];
+    let offset = 0;
+
+    for (let page = 0; offset !== null; page += 1) {
+      handle({ id: `page-${String(page)}`, method: 'listFiles', sandbox: scoped([root]), params: [root, { offset, limit: 10 }] }, ws, {});
+      const frame = await ws.response(`page-${String(page)}`);
+      expect(frame.result.entries.length).toBeLessThanOrEqual(10);
+      listed.push(...frame.result.entries.map((entry) => entry.name));
+      offset = frame.result.next;
+    }
+
+    const byName = (left, right) => left.localeCompare(right);
+    expect(listed.sort(byName)).toEqual(names.sort(byName));
+
+    // A hub from before paging names no page and still gets every entry.
+    handle({ id: 'unpaged', method: 'listFiles', sandbox: scoped([root]), params: [root] }, ws, {});
+    expect((await ws.response('unpaged')).result.map((entry) => entry.name).sort(byName)).toEqual(names.sort(byName));
   });
 
   test('scoped native mutations stay inside the resolved root', async () => {
@@ -529,7 +678,7 @@ describe('daemon checkpoint protocol', () => {
     const ws = fakeWs();
 
     handle({
-      id: 'rpc-checkprex0-1', method: 'exec', params: [`echo CLOBBERED > ${work}/data.txt && rm -f ${work}/data.txt && echo gone > ${work}/extra.txt`],
+      id: 'rpc-checkprex0-1', method: 'exec', sandbox: RAW, params: [`echo CLOBBERED > ${work}/data.txt && rm -f ${work}/data.txt && echo gone > ${work}/extra.txt`],
       checkpoint: { agent: 'cloud-agent', turnId: 'turn-1', sessionId: 'default', dir: work },
     }, ws, ctx);
     const exec = await ws.response('rpc-checkprex0-1');
@@ -544,13 +693,13 @@ describe('daemon checkpoint protocol', () => {
     expect(list[0].sessionId).toBe('default');
     expect(list[0].dir).toBe(work);
 
-    handle({ id: 'r3', method: 'checkpointPlan', params: ['cloud-agent', work, list[0].id] }, ws, ctx);
+    handle({ id: 'r3', method: 'checkpointPlan', sandbox: RAW, params: ['cloud-agent', work, list[0].id] }, ws, ctx);
     const plan = (await ws.response('r3')).result;
     const kinds = Object.fromEntries(plan.files.map((f) => [f.path, f.kind]));
     expect(kinds['data.txt']).toBe('create');
     expect(kinds['extra.txt']).toBe('delete');
 
-    handle({ id: 'r4', method: 'checkpointRestore', params: ['cloud-agent', work, list[0].id] }, ws, ctx);
+    handle({ id: 'r4', method: 'checkpointRestore', sandbox: RAW, params: ['cloud-agent', work, list[0].id] }, ws, ctx);
     const restore = (await ws.response('r4')).result;
     expect(restore.preRestoreId).toBeTruthy();
     expect(fs.readFileSync(path.join(work, 'data.txt'), 'utf8')).toBe('original');
@@ -564,16 +713,16 @@ describe('daemon checkpoint protocol', () => {
     const hint = (turnId) => ({ agent: 'a', turnId, sessionId: 's', dir: work });
 
     fs.writeFileSync(path.join(work, 'f.txt'), 'v1');
-    handle({ id: 'e1', method: 'exec', params: ['true'], checkpoint: hint('t1') }, ws, ctx);
-    await ws.response('e1');
+    handle({ id: 'rpc-ckptdedupe-1', method: 'exec', sandbox: RAW, params: ['true'], checkpoint: hint('t1') }, ws, ctx);
+    await ws.response('rpc-ckptdedupe-1');
     fs.writeFileSync(path.join(work, 'f.txt'), 'v2');
-    handle({ id: 'e2', method: 'exec', params: ['true'], checkpoint: hint('t1') }, ws, ctx);
-    await ws.response('e2');
+    handle({ id: 'rpc-ckptdedupe-2', method: 'exec', sandbox: RAW, params: ['true'], checkpoint: hint('t1') }, ws, ctx);
+    await ws.response('rpc-ckptdedupe-2');
     handle({ id: 'l1', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l1')).result).toHaveLength(1); // deduped within turn
 
-    handle({ id: 'e3', method: 'exec', params: ['true'], checkpoint: hint('t2') }, ws, ctx);
-    await ws.response('e3');
+    handle({ id: 'rpc-ckptdedupe-3', method: 'exec', sandbox: RAW, params: ['true'], checkpoint: hint('t2') }, ws, ctx);
+    await ws.response('rpc-ckptdedupe-3');
     handle({ id: 'l2', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l2')).result).toHaveLength(2);
   });
@@ -587,7 +736,7 @@ describe('daemon checkpoint protocol', () => {
     const ws = fakeWs();
 
     handle({
-      id: 'w1', method: 'writeFile', params: [path.join(work, 'src', 'a.txt'), 'CLOBBERED'],
+      id: 'w1', method: 'writeFile', sandbox: RAW, params: [path.join(work, 'src', 'a.txt'), 'CLOBBERED'],
       checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: null },
     }, ws, ctx);
     expect((await ws.response('w1')).result).toEqual({ success: true });
@@ -598,7 +747,7 @@ describe('daemon checkpoint protocol', () => {
     expect(list).toHaveLength(1);
     expect(list[0].dir).toBe(work); // walked up to the package.json marker
 
-    handle({ id: 'r', method: 'checkpointRestore', params: ['a', work, list[0].id] }, ws, ctx);
+    handle({ id: 'r', method: 'checkpointRestore', sandbox: RAW, params: ['a', work, list[0].id] }, ws, ctx);
     await ws.response('r');
     expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('original');
   });
@@ -607,7 +756,7 @@ describe('daemon checkpoint protocol', () => {
     const { work, ctx } = setup();
 
     const ws = fakeWs();
-    handle({ id: 'rpc-nosnapexe0-1', method: 'exec', params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
+    handle({ id: 'rpc-nosnapexe0-1', method: 'exec', sandbox: RAW, params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
     expect((await ws.response('rpc-nosnapexe0-1')).result.exitCode).toBe(0);
     handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l')).result).toEqual([]);
@@ -619,7 +768,7 @@ describe('daemon checkpoint protocol', () => {
     const ws = fakeWs();
     // The mutation is never blocked by the unavailable engine.
     handle({
-      id: 'rpc-degexe1120-1', method: 'exec', params: [`echo ok > ${work}/y.txt`],
+      id: 'rpc-degexe1120-1', method: 'exec', sandbox: RAW, params: [`echo ok > ${work}/y.txt`],
       checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work },
     }, ws, ctx);
     expect((await ws.response('rpc-degexe1120-1')).result.exitCode).toBe(0);
@@ -631,7 +780,7 @@ describe('daemon checkpoint protocol', () => {
     });
     handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
     expect((await ws.response('l')).result).toEqual([]);
-    handle({ id: 'r', method: 'checkpointRestore', params: ['a', work, 'abcdef0'] }, ws, ctx);
+    handle({ id: 'r', method: 'checkpointRestore', sandbox: RAW, params: ['a', work, 'abcdef0'] }, ws, ctx);
     expect((await ws.response('r')).error).toBe('checkpoints unavailable: git not found');
   });
 
@@ -642,8 +791,8 @@ describe('daemon checkpoint protocol', () => {
 
     for (let i = 0; i < 4; i++) {
       fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
-      handle({ id: `e${i}`, method: 'exec', params: ['true'], checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work } }, ws, ctx);
-      await ws.response(`e${i}`);
+      handle({ id: `rpc-ckptretain-${i + 1}`, method: 'exec', sandbox: RAW, params: ['true'], checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work } }, ws, ctx);
+      await ws.response(`rpc-ckptretain-${i + 1}`);
     }
 
     handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
@@ -667,10 +816,10 @@ describe('daemon checkpoint protocol', () => {
     for (let i = 0; i < 3; i++) {
       fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
       handle({
-        id: `e${i}`, method: 'exec', params: ['true'],
+        id: `rpc-ckptnarrow-${i + 1}`, method: 'exec', sandbox: RAW, params: ['true'],
         checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work },
       }, ws, ctx);
-      await ws.response(`e${i}`);
+      await ws.response(`rpc-ckptnarrow-${i + 1}`);
     }
 
     // A limit of 1 keeps only the newest, so the oldest turn is outside it.
@@ -688,6 +837,65 @@ describe('daemon checkpoint protocol', () => {
     // make every turn look restorable.
     handle({ id: 'n', method: 'checkpointList', params: ['a', 50, 'never-ran'] }, ws, ctx);
     expect((await ws.response('n')).result).toEqual([]);
+  });
+
+  test('a checkpoint never covers Kinu\'s own directory', async () => {
+    const { ctx } = setup();
+    fs.writeFileSync(path.join(DEVICE_HOME, 'device.json'), '{"token":"pdt_never_in_a_store"}', { mode: 0o600 });
+    const ws = fakeWs();
+
+    // A daemon that updated itself runs from its own directory, and a hint
+    // with no directory once fell back to that working directory.
+    handle({
+      id: 'rpc-kinuckpt00-1', method: 'exec', sandbox: RAW, params: ['true'],
+      checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: DEVICE_HOME },
+    }, ws, ctx);
+    expect((await ws.response('rpc-kinuckpt00-1')).result.exitCode).toBe(0);
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    expect((await ws.response('l')).result).toEqual([]);
+  });
+
+  test('a sandboxed frame snapshots and restores only what it may write', async () => {
+    const { work, ctx } = setup();
+    const outside = path.join('/dev/shm', `kinu-ckpt-outside-${process.pid}`);
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, 'kept.txt'), 'owner-bytes');
+    const scoped = { tier: 'sandboxed', agentHome: path.join(DEVICE_HOME, 'agents', 'ws-1', 'home'), roots: [work] };
+    const ws = fakeWs();
+
+    try {
+      handle({
+        id: 'w-outside', method: 'writeFile', sandbox: scoped, params: [path.join(work, 'a.txt'), 'x'],
+        checkpoint: { agent: 'a', turnId: 't1', sessionId: 's', dir: outside },
+      }, ws, ctx);
+      expect((await ws.response('w-outside')).result).toEqual({ success: true });
+      handle({ id: 'l1', method: 'checkpointList', params: ['a'] }, ws, ctx);
+      expect((await ws.response('l1')).result.map((entry) => entry.dir)).not.toContain(outside);
+
+      // A store for that directory from a raw frame exists; a sandboxed frame
+      // still cannot restore into it.
+      handle({
+        id: 'rpc-rawckpt000-1', method: 'exec', sandbox: RAW, params: ['true'],
+        checkpoint: { agent: 'a', turnId: 't2', sessionId: 's', dir: outside },
+      }, ws, ctx);
+      await ws.response('rpc-rawckpt000-1');
+      handle({ id: 'l2', method: 'checkpointList', params: ['a', 50, 't2'] }, ws, ctx);
+      const [taken] = (await ws.response('l2')).result;
+      fs.writeFileSync(path.join(outside, 'kept.txt'), 'owner-edited');
+      handle({ id: 'r', method: 'checkpointRestore', sandbox: scoped, params: ['a', outside, taken.id] }, ws, ctx);
+      expect((await ws.response('r')).error).toContain('does not expose');
+      expect(fs.readFileSync(path.join(outside, 'kept.txt'), 'utf8')).toBe('owner-edited');
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('an unsandboxed command with no directory runs in the consented one, never the daemon\'s own', async () => {
+    const { work } = setup();
+    const ws = fakeWs();
+
+    handle({ id: 'rpc-rawcwd0000-1', method: 'exec', sandbox: { ...RAW, roots: [work] }, params: ['pwd'] }, ws, {});
+    expect((await ws.response('rpc-rawcwd0000-1')).result.stdout.trim()).toBe(fs.realpathSync(work));
   });
 });
 
@@ -947,7 +1155,7 @@ describe('daemon process under Bun against a local hub', () => {
         // the result and exits only once the cloud confirms receipt, so an
         // un-acked exec leaves a detached grandchild holding this runner's
         // process table open after the test ends.
-        hub.socket().send(JSON.stringify({ id: 'rpc-e2eexec00A-1', method: 'exec', params: ['echo hello-from-daemon'] }));
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2eexec00A-1', method: 'exec', sandbox: RAW, params: ['echo hello-from-daemon'] }));
         const execResult = await reply('rpc-e2eexec00A-1');
         expect(execResult.result.exitCode).toBe(0);
         expect(execResult.result.stdout).toContain('hello-from-daemon');
@@ -955,7 +1163,7 @@ describe('daemon process under Bun against a local hub', () => {
         await reply('rpc-e2eack00A-1');
 
         // execCancel: a command that outlives its cancellation window.
-        hub.socket().send(JSON.stringify({ id: 'rpc-e2ecancelf-1', method: 'exec', params: ['sleep 30'] }));
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2ecancelf-1', method: 'exec', sandbox: RAW, params: ['sleep 30'] }));
         await untilHub(() => fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1', 'state')));
         hub.socket().send(JSON.stringify({ id: 'rpc-e2ecanclX-1', method: 'execCancel', params: ['rpc-e2ecancelf-1', 1] }));
         const cancelResult = await reply('rpc-e2ecanclX-1');
@@ -967,7 +1175,7 @@ describe('daemon process under Bun against a local hub', () => {
 
         // file op: an absolute path the owner could have consented to.
         const note = path.join(files, 'note.txt');
-        hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', params: [note, 'bun wrote this'] }));
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', sandbox: RAW, params: [note, 'bun wrote this'] }));
         const writeResult = await reply('rpc-e2efile0-1');
         expect(writeResult.result).toEqual({ success: true });
         expect(fs.readFileSync(note, 'utf-8')).toBe('bun wrote this');
@@ -1048,8 +1256,8 @@ describe('daemon process under Bun against a local hub', () => {
   // F2. ~/.kinu holds device.json (this machine's long-lived token) and
   // config.json (the owner's interactive CLI bearer). Reading either one turns
   // a file grant into the tier that granted it, so the fence does not depend
-  // on which root the call carries: these frames send NO root at all, which is
-  // the full tier — the strongest thing a workspace can hold.
+  // on which root the call carries: these frames are the raw tier, with the
+  // owner's Sandbox switch off — the strongest thing a workspace can hold.
   test('Kinu\'s own directory is never served through the tunnel, at any tier', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     await withDaemon(undefined, async ({ hub, root, reply }) => {
@@ -1066,7 +1274,7 @@ describe('daemon process under Bun against a local hub', () => {
       ];
 
       for (const [id, method, params] of refused) {
-        hub.socket().send(JSON.stringify({ id, method, params }));
+        hub.socket().send(JSON.stringify({ id, method, sandbox: RAW, params }));
         const frame = await reply(id);
         // Result first: an un-fenced daemon answers with the credential
         // itself, and that is the sentence the failure should print.
@@ -1084,7 +1292,7 @@ describe('daemon process under Bun against a local hub', () => {
       fs.symlinkSync(path.join(root, 'device.json'), bait);
 
       try {
-        hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readFile', params: [bait] }));
+        hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readFile', sandbox: RAW, params: [bait] }));
         expect((await reply('rpc-fence00sy-1')).error).toContain("inside Kinu's own directory");
       } finally {
         fs.rmSync(bait, { force: true });
@@ -1128,6 +1336,7 @@ describe('daemon process under Bun against a local hub', () => {
       hub.socket().send(JSON.stringify({
         id: 'rpc-bashsyntax-1',
         method: 'exec',
+        sandbox: RAW,
         params: ['set -o pipefail; [[ 1 == 1 ]] && printf %s "bash=${BASH_VERSION%%.*}"'],
       }));
       const ran = await reply('rpc-bashsyntax-1');
@@ -1197,7 +1406,7 @@ describe('daemon process under Bun against a local hub', () => {
       }));
       const refused = await reply('rpc-sandboxbad-1');
       expect(refused.result).toBeUndefined();
-      expect(refused.error).toContain('agent home must sit under');
+      expect(refused.error).toContain('agent home must be');
     });
   });
 
@@ -1223,7 +1432,7 @@ describe('daemon process under Bun against a local hub', () => {
     };
 
     await withDaemon(poison, async ({ hub, reply }) => {
-      hub.socket().send(JSON.stringify({ id: 'rpc-envdump000-1', method: 'exec', params: ['env'] }));
+      hub.socket().send(JSON.stringify({ id: 'rpc-envdump000-1', method: 'exec', sandbox: RAW, params: ['env'] }));
       const dumped = await reply('rpc-envdump000-1');
       expect(dumped.error).toBeUndefined();
       expect(dumped.result.exitCode).toBe(0);
@@ -1267,7 +1476,7 @@ describe('daemon process under Bun against a local hub', () => {
         const first = spawnDaemon(root);
         const firstLog = () => fs.readFileSync(first.logPath, 'utf-8');
         expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
-        hub.socket().send(JSON.stringify({ id: requestId, method: 'exec', params: ['printf orphan-check'] }));
+        hub.socket().send(JSON.stringify({ id: requestId, method: 'exec', sandbox: RAW, params: ['printf orphan-check'] }));
         const done = await untilHub(() => hub.frames.find((f) => f.id === requestId));
 
         if (!done) throw new Error(`no exec reply: log says ${firstLog()}`);
@@ -1333,7 +1542,7 @@ describe('daemon process under Bun against a local hub', () => {
         try {
           const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
           expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
-          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', params: ['sig', 80, 24] }));
+          hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', sandbox: RAW, params: ['sig', 80, 24] }));
           const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptysignal0-1'));
 
           if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);

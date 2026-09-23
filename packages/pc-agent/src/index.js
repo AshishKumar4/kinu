@@ -76,6 +76,13 @@ const SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 const CREDENTIALS_REJECTED = 'device credentials were rejected; re-run: kinu connect';
 
+/** The shape the hub mints a device token in (`pdt_` and 32 url-safe characters). */
+const DEVICE_TOKEN = /^pdt_[A-Za-z0-9_-]{32,}$/;
+
+/** Hosts a development hub may serve over plain http from the owner's own
+ *  machine; the token never crosses a network there. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
 const REJECTED_EXIT = 4;
 
 /** The hub answers this text frame with `pong` (its socket auto-response), so
@@ -141,6 +148,10 @@ const CANCEL_PROTOCOL = 1;
  * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
  * past the cap without retaining them, so a noisy process cannot grow its heap. */
 const EXEC_STREAM_MAX_BYTES = 512 * 1024;
+
+/** How much a range read allocates at a time, so memory follows the bytes the
+ *  file actually has rather than the length a caller asked for. */
+const READ_CHUNK_BYTES = 1024 * 1024;
 
 /**
  * The terminal protocol, which is the one thing on this socket that is not a
@@ -690,7 +701,10 @@ function createCheckpoints(opts = {}) {
       return { dir: abs, id, files, preRestoreId };
     },
 
-    workdirForPath(p) {
+    /** The project directory holding `p`, climbing only through directories
+     *  `covers` admits, so a marker above what the frame may write never widens
+     *  a checkpoint past it. */
+    workdirForPath(p, covers = () => true) {
       const abs = path.resolve(p);
       let candidate = abs;
 
@@ -700,7 +714,7 @@ function createCheckpoints(opts = {}) {
       const home = path.resolve(os.homedir());
       let probeDir = candidate;
 
-      while (probeDir !== path.dirname(probeDir) && probeDir !== home) {
+      while (probeDir !== path.dirname(probeDir) && probeDir !== home && covers(probeDir)) {
         if (PROJECT_MARKERS.some((m) => fs.existsSync(path.join(probeDir, m)))) return probeDir;
         probeDir = path.dirname(probeDir);
       }
@@ -1208,6 +1222,7 @@ try {
   child = spawn(argv[0], argv.slice(1), {
     detached: true,
     env: plan.env,
+    cwd: plan.cwd,
     // A fourth pipe when the plan asked for one: bwrap writes its
     // --json-status-fd there, and the first line carries the host pid of the
     // sandbox's pid 1. Killing THAT is deterministic — the kernel reaps every
@@ -1562,7 +1577,7 @@ function startSupervisor(requestId, command, plan) {
   // it from `command`, which it unlinks before the command runs.
   fs.writeFileSync(
     planFile,
-    JSON.stringify({ argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd }),
+    JSON.stringify({ argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd, cwd: plan.spawnCwd }),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
 
@@ -1617,6 +1632,75 @@ function waitForSupervisorState(dir, child) {
 
 // ── RPC dispatch ───────────────────────────────────────────────────────
 
+const UNTIERED = 'this device refuses a frame that names no sandbox tier: '
+  + 'the hub decides one for every call that runs a command or touches a file';
+
+/** One workspace's segment under the agent root: the characters a workspace
+ *  name may carry, and never `.` or `..`. */
+const AGENT_SEGMENT = /^[A-Za-z0-9._-]{1,64}$/;
+
+/**
+ * The agent home a sandboxed frame names: exactly `<agentRoot>/<workspace>/home`
+ * for ONE workspace. A name carrying `a/../b` composes a path that resolves
+ * under the root and is workspace b's home.
+ */
+function frameAgentHome(value) {
+  const spelled = parseString(value, 'device sandbox options must name an agent home');
+  const segments = spelled.startsWith(`${AGENT_ROOT}/`) ? spelled.slice(AGENT_ROOT.length + 1).split('/') : [];
+  const [workspace = '', home = ''] = segments;
+
+  if (segments.length !== 2 || home !== 'home' || !AGENT_SEGMENT.test(workspace) || workspace === '.' || workspace === '..') {
+    throw new Error(`device sandbox agent home must be ${AGENT_ROOT}/<workspace>/home, for one workspace`);
+  }
+
+  return spelled;
+}
+
+/**
+ * The sandbox block of a frame that reaches this machine: the tier, the
+ * consented roots, and a sandboxed frame's one agent home. The hub composes it
+ * from the owner's Sandbox switch for every method that runs something or
+ * touches a file, so a frame without a tier did not come from a hub that
+ * decided one: it is refused, never read as unconfined. A consented root of
+ * `/` is the whole machine, which is what the switch off means, so that frame
+ * runs raw. `agentHome()` checks the agent home a sandboxed frame names.
+ */
+function frameSandbox(msg) {
+  const block = parseRecord(msg.sandbox ?? null, UNTIERED);
+
+  if (block.tier !== 'raw' && block.tier !== 'sandboxed') throw new Error(UNTIERED);
+
+  const roots = Array.isArray(block.roots)
+    ? block.roots.map((root) => path.resolve(parseString(root, 'device sandbox roots must be paths')))
+    : [];
+
+  return {
+    tier: block.tier === 'raw' || roots.includes('/') ? 'raw' : 'sandboxed',
+    roots,
+    agentHome: () => frameAgentHome(block.agentHome),
+  };
+}
+
+function isDirectory(candidate) {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EACCES')) return false;
+    throw err;
+  }
+}
+
+/**
+ * Where an unsandboxed command runs when the frame names no directory: the
+ * directory the owner shared, else their home. Never this daemon's own working
+ * directory, which is Kinu's directory once the daemon has updated itself.
+ */
+function rawWorkingDirectory(msg, roots) {
+  const named = msg.cwd === undefined ? null : path.resolve(parseString(msg.cwd, 'exec cwd must be a path'));
+
+  return [named, ...roots].find((dir) => dir !== null && isDirectory(dir)) ?? os.homedir();
+}
+
 /**
  * The sandbox the hub asked for, as this daemon will enforce it.
  *
@@ -1632,35 +1716,20 @@ function waitForSupervisorState(dir, child) {
  * the terminal it was just given, which is the only difference between them.
  */
 function planFromFrame(msg, command, source = process.env) {
-  const requested = parseRecord(msg.sandbox ?? {}, 'exec sandbox options must be an object');
-  // Only an EXPLICIT 'sandboxed' enters the sandbox. The hub decides the tier
-  // and its default is on, but the hub and this daemon ship separately: a
-  // frame with no sandbox field comes from a hub that has not been told about
-  // the switch yet, and a daemon that read that as "sandbox it" would refuse
-  // every command on the machine for want of an agent home it was never sent.
-  const tier = requested.tier === 'sandboxed' ? 'sandboxed' : 'raw';
+  const frame = frameSandbox(msg);
 
-  if (tier === 'sandboxed' && SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
+  if (frame.tier === 'raw') {
+    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: rawWorkingDirectory(msg, frame.roots), source });
+  }
+
+  if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
     const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
     error.code = 'sandbox_unavailable';
     error.reason = SANDBOX_CAPABILITY.status;
     throw error;
   }
 
-  if (tier === 'raw') {
-    return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: process.cwd(), source });
-  }
-
-  const agentHome = path.resolve(parseString(requested.agentHome, 'exec sandbox options must name an agent home'));
-
-  if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
-    throw new Error(`exec sandbox agent home must sit under ${AGENT_ROOT}`);
-  }
-
-  const roots = Array.isArray(requested.roots)
-    ? requested.roots.map((root) => path.resolve(parseString(root, 'exec sandbox roots must be paths')))
-    : [];
-
+  const agentHome = frame.agentHome();
   const agentTmp = path.join(path.dirname(agentHome), 'tmp');
 
   // Created on first use, 0700: the hub computes the path per (device,
@@ -1674,7 +1743,7 @@ function planFromFrame(msg, command, source = process.env) {
     agentHome,
     agentTmp,
     deviceHome: DEVICE_HOME,
-    roots,
+    roots: frame.roots,
     cwd: msg.cwd === undefined ? agentHome : path.resolve(parseString(msg.cwd, 'exec cwd must be a path')),
     command,
     source,
@@ -1683,30 +1752,19 @@ function planFromFrame(msg, command, source = process.env) {
 }
 
 /**
- * The view this FRAME's file methods are confined to.
+ * The view this FRAME's file methods are confined to: the same block an exec
+ * frame carries, so both enforcers read one policy — the kernel for the shell,
+ * this view for the file methods.
  *
- * A file frame carries the same `sandbox` block an exec frame does, so both
- * enforcers read one policy: the kernel for the shell, this view for the file
- * methods. A frame with no block is raw — exactly as an exec frame with no
- * block is — which keeps a hub that has not been told about the switch working
- * and keeps ~/.kinu refused either way.
+ * NO capability check here, deliberately. A machine that cannot sandbox is
+ * `files_only`, and that state exists so its file methods keep working: this
+ * enforcer is JavaScript in the daemon and needs no kernel to be correct.
  */
 function viewFromFrame(msg) {
-  const requested = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+  const frame = frameSandbox(msg);
 
-  if (requested.tier !== 'sandboxed') {
-    return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
-  }
-
-  // NO capability check here, deliberately. A machine that cannot sandbox is
-  // `files_only`, and that state exists so its file methods keep working: this
-  // enforcer is JavaScript in the daemon and needs no kernel to be correct.
-  // Only `exec` refuses, because only `exec` needs the kernel.
-  const agentHome = path.resolve(parseString(requested.agentHome, 'device sandbox options must name an agent home'));
-
-  if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
-    throw new Error(`device sandbox agent home must sit under ${AGENT_ROOT}`);
-  }
+  if (frame.tier === 'raw') return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
+  const agentHome = frame.agentHome();
 
   return sandbox.viewFor({
     platform: os.platform(),
@@ -1714,16 +1772,93 @@ function viewFromFrame(msg) {
     agentHome,
     agentTmp: path.join(path.dirname(agentHome), 'tmp'),
     deviceHome: DEVICE_HOME,
-    roots: Array.isArray(requested.roots)
-      ? requested.roots.map((root) => path.resolve(parseString(root, 'device sandbox roots must be paths')))
-      : [],
+    roots: frame.roots,
   });
 }
 
 /** One file method's path, through the frame's view. `mode` is what the method
  *  does to the path, and the view refuses exactly what the kernel would. */
-function confinedDeviceViewPath(msg, requested, mode) {
-  return viewFromFrame(msg).resolvePath(parseString(requested, 'device paths must be strings'), mode);
+function confinedDeviceViewPath(view, requested, mode) {
+  return view.resolvePath(parseString(requested, 'device paths must be strings'), mode);
+}
+
+/**
+ * The directory a checkpoint hint covers through this frame's view, or null
+ * when the frame may not write it; the mutation it precedes still runs.
+ */
+function checkpointDirOf(view, dir) {
+  const verdict = view.checkpointDirectory(dir);
+
+  if (verdict.why === null) return verdict.path;
+  log('device.checkpoint_skipped', dir, verdict.why);
+
+  return null;
+}
+
+/** A checkpoint RPC's directory, through the frame's view; a refusal names why. */
+function checkpointDirFor(view, requested) {
+  const dir = parseString(requested, 'checkpoint directories must be paths');
+  const verdict = view.checkpointDirectory(dir);
+
+  if (verdict.why !== null) throw new Error(`device path '${dir}' is ${verdict.why}`);
+
+  return verdict.path;
+}
+
+/**
+ * Up to `length` bytes of `file` from `offset`, fewer at its end. The hub asks
+ * for a large file a range at a time, each answer under the socket's 32 MiB
+ * receive ceiling, so the whole file crosses whatever its size.
+ */
+function readRangeBytes(file, offset, length) {
+  const descriptor = fs.openSync(file, 'r');
+
+  try {
+    const chunks = [];
+    let total = 0;
+
+    while (total < length) {
+      const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, length - total));
+      const read = fs.readSync(descriptor, chunk, 0, chunk.length, offset + total);
+
+      if (read === 0) break;
+      chunks.push(chunk.subarray(0, read));
+      total += read;
+    }
+
+    return Buffer.concat(chunks, total);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function listEntry(entry) {
+  return { name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' };
+}
+
+/**
+ * One page of a directory, in the order the filesystem yields it: `next` is
+ * the offset of the page after, or null past the last entry. The hub pages a
+ * large directory so each answer stays under the socket's receive ceiling.
+ */
+function listPage(dir, offset, limit) {
+  const opened = fs.opendirSync(dir);
+  const entries = [];
+
+  try {
+    let index = 0;
+
+    for (let entry = opened.readSync(); entry !== null; entry = opened.readSync(), index += 1) {
+      if (index < offset) continue;
+
+      if (entries.length === limit) return { entries, next: index };
+      entries.push(listEntry(entry));
+    }
+  } finally {
+    opened.closeSync();
+  }
+
+  return { entries, next: null };
 }
 
 /**
@@ -1851,9 +1986,14 @@ function execCommand(msg, ws, ctx) {
   const checkpoints = ctx && ctx.checkpoints;
   assertSupervisionSupported();
   assertCommandShellPresent();
-
-  if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
   const dir = requestDirectory(INFLIGHT_ROOT, id);
+  const plan = fs.existsSync(dir) ? null : planFromFrame(msg, cmd);
+
+  if (plan !== null && checkpoints && msg.checkpoint) {
+    const covered = checkpointDirOf(plan.view, hintedDir(msg.checkpoint) ?? plan.cwd);
+
+    if (covered !== null) checkpoints.ensure({ ...msg.checkpoint, dir: covered }, covered);
+  }
 
   /** @param {unknown} error */
   function reportExecReplyFailure(error) {
@@ -1862,10 +2002,10 @@ function execCommand(msg, ws, ctx) {
 
   (async () => {
     try {
-      if (fs.existsSync(dir)) {
+      if (plan === null) {
         await waitForFile(path.join(dir, 'state'));
       } else {
-        const supervisor = startSupervisor(id, cmd, planFromFrame(msg, cmd));
+        const supervisor = startSupervisor(id, cmd, plan);
         await waitForSupervisorState(supervisor.dir, supervisor.child);
         inFlight.register(id, supervisor.dir);
       }
@@ -1916,7 +2056,7 @@ function handle(msg, ws, ctx) {
       );
     } else if (method === 'readFile') {
       const options = params[1] ?? {};
-      const confined = confinedDeviceViewPath(msg, params[0], 'read');
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
       if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
       else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
@@ -1927,20 +2067,19 @@ function handle(msg, ws, ctx) {
         return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
 
-      const file = fs.openSync(confinedDeviceViewPath(msg, params[0], 'read'), 'r');
-
-      try {
-        const bytes = Buffer.allocUnsafe(length);
-        const read = fs.readSync(file, bytes, 0, length, offset);
-        rpc(ws, id, { encoding: 'base64', content: bytes.subarray(0, read).toString('base64') });
-      } finally { fs.closeSync(file); }
+      const bytes = readRangeBytes(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read'), offset, length);
+      rpc(ws, id, { encoding: 'base64', content: bytes.toString('base64') });
     } else if (method === 'writeFile') {
       const options = params[2] ?? {};
-      const confined = confinedDeviceViewPath(msg, params[0], 'write');
+      const view = viewFromFrame(msg);
+      const confined = confinedDeviceViewPath(view, params[0], 'write');
 
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
-        checkpoints.ensure(hint, hintedDir(hint) ?? checkpoints.workdirForPath(confined));
+        const covers = (candidate) => view.checkpointDirectory(candidate).why === null;
+        const covered = checkpointDirOf(view, hintedDir(hint) ?? checkpoints.workdirForPath(confined, covers));
+
+        if (covered !== null) checkpoints.ensure({ ...hint, dir: covered }, covered);
       }
 
       fs.mkdirSync(path.dirname(confined), { recursive: true });
@@ -1949,17 +2088,22 @@ function handle(msg, ws, ctx) {
     } else if (method === 'listFiles') {
       // The home DEFAULTS to the agent's when the frame carries one, which is
       // the directory the model is told `~` is, not the owner's.
-      const frame = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+      const frame = frameSandbox(msg);
+      const requested = params[0] ?? (frame.tier === 'sandboxed' ? frame.agentHome() : os.homedir());
+      const dir = confinedDeviceViewPath(viewFromFrame(msg), requested, 'read');
+      const page = parseRecord(params[1] ?? {}, 'listFiles options must be an object');
 
-      const requested = params[0] ?? (frame.tier === 'sandboxed'
-        ? parseString(frame.agentHome, 'device sandbox options must name an agent home')
-        : os.homedir());
+      // A hub from before paging names no page and reads every entry in one answer.
+      if (page.limit === undefined) return rpc(ws, id, fs.readdirSync(dir, { withFileTypes: true }).map(listEntry));
+      const offset = page.offset ?? 0;
 
-      const confined = confinedDeviceViewPath(msg, requested, 'read');
-      const entries = fs.readdirSync(confined, { withFileTypes: true });
-      rpc(ws, id, entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })));
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0) {
+        return rpc(ws, id, null, 'listFiles pages by a non-negative offset and a positive limit');
+      }
+
+      rpc(ws, id, listPage(dir, offset, page.limit));
     } else if (method === 'statPath') {
-      const confined = confinedDeviceViewPath(msg, params[0], 'read');
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
 
       if (!fs.existsSync(confined)) return rpc(ws, id, null);
       const stat = fs.statSync(confined);
@@ -1973,12 +2117,12 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, { success: true });
     } else if (method === 'mkdirPath') {
       const options = params[1] ?? {};
-      fs.mkdirSync(confinedDeviceViewPath(msg, params[0], 'write'), {
+      fs.mkdirSync(confinedDeviceViewPath(viewFromFrame(msg), params[0], 'write'), {
         recursive: options.recursive === true,
       });
       rpc(ws, id, { success: true });
     } else if (method === 'exists') {
-      const confined = confinedDeviceViewPath(msg, params[0], 'read');
+      const confined = confinedDeviceViewPath(viewFromFrame(msg), params[0], 'read');
       rpc(ws, id, fs.existsSync(confined));
     } else if (method === 'listPorts') {
       rpc(ws, id, listListeningPorts());
@@ -1991,10 +2135,10 @@ function handle(msg, ws, ctx) {
       rpc(ws, id, checkpoints.list(params[0], params[1], params[2]));
     } else if (method === 'checkpointPlan') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
-      rpc(ws, id, checkpoints.plan(params[0], params[1], params[2]));
+      rpc(ws, id, checkpoints.plan(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else if (method === 'checkpointRestore') {
       if (!checkpoints) return rpc(ws, id, null, 'checkpoints are not configured');
-      rpc(ws, id, checkpoints.restore(params[0], params[1], params[2]));
+      rpc(ws, id, checkpoints.restore(params[0], checkpointDirFor(viewFromFrame(msg), params[1]), params[2]));
     } else {
       rpc(ws, id, null, 'unknown method: ' + method);
     }
@@ -2038,7 +2182,7 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
   const cfg = parseRecord(parsed, expectation);
   const user = parseString(cfg.user, expectation);
   const token = parseString(cfg.token, expectation);
-  const origin = cfg.origin === undefined ? undefined : parseString(cfg.origin, expectation);
+  const origin = cfg.origin === undefined ? undefined : trustedOrigin(parseString(cfg.origin, expectation), configPath);
   // The directory `kinu connect` ran in, parsed HERE with everything else so
   // the dial site sends a domain value rather than branching on a
   // representation. Absent on a config written before it existed, and absent
@@ -2053,6 +2197,26 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
   if (root !== undefined) config.root = root;
 
   return config;
+}
+
+/**
+ * The origin this daemon POSTs its long-lived token to: https, or plain http to
+ * this machine. Any other scheme hands the token to whatever the network path
+ * is, so the daemon refuses to start rather than send it.
+ */
+function trustedOrigin(text, configPath) {
+  let url;
+
+  try {
+    url = new URL(text);
+  } catch (cause) {
+    throw new Error(`device config at ${configPath} names an origin that is not a URL; it must be an https origin`, { cause });
+  }
+
+  if (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname))) return text;
+
+  throw new Error(`device config at ${configPath} names ${url.protocol}//${url.host}; this daemon sends its token `
+    + 'only to an https origin, or over plain http to this machine');
 }
 
 function redactConnectSecrets(value, secrets) {
@@ -2334,7 +2498,16 @@ function handleTokenRotation(
   configPath = CONFIG_PATH,
   logger = log,
 ) {
-  if (!msg || msg.type !== TOKEN_ROTATION || msg.token == null || msg.token === '') return false;
+  if (!msg || msg.type !== TOKEN_ROTATION) return false;
+
+  // The daemon acknowledges only when the token it holds equals the frame's,
+  // so a token it refuses to store is also one it never acknowledges, and the
+  // hub keeps honouring the one on disk.
+  if (!(Object(msg.token) instanceof String) || !DEVICE_TOKEN.test(String(msg.token))) {
+    logger('Device token rotation refused:', 'the frame carries no device token; the one on disk stays');
+
+    return true;
+  }
 
   try {
     persistRotatedToken(cfg, msg.token, configPath);
