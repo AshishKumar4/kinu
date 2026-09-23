@@ -1938,7 +1938,6 @@ export type {
 
 export {
   getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-  walkWorkspaceTextFiles,
 } from './read-models/workspace-diff';
 
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';

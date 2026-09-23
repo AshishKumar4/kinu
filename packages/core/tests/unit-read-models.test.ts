@@ -7,7 +7,7 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 
 import { present, testActorHandle } from '@kinu.run/test-utils';
 import {
-  collectWorkspaceTextFiles, createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
+  createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -468,13 +468,11 @@ describe('workspace change-set', () => {
     await rt.storage.vfs.writeFile('notes.md', 'one\n');
 
     const first = await getWorkspaceDiff(rt);
-    expect(first.baselineJustCaptured).toBe(false);
     expect(first.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'added', 2]]);
 
     expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
     await rt.storage.vfs.writeFile('notes.md', 'one\ntwo\n');
     const after = await getWorkspaceDiff(rt);
-    expect(after.baselineJustCaptured).toBe(false);
     expect(after.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'changed', 1]]);
 
     expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
@@ -482,13 +480,14 @@ describe('workspace change-set', () => {
     db.close();
   });
 
-  test('binary files are excluded from the snapshot', async () => {
+  test('binary files are excluded from the change-set', async () => {
     const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('text.txt', 'readable');
-    await rt.storage.vfs.writeFile('blob.bin', `has nul`);
-    const files = await collectWorkspaceTextFiles(rt);
-    expect(files['text.txt']).toBe('readable');
-    expect(files['blob.bin']).toBeUndefined();
+    await rt.storage.vfs.writeFile('blob.bin', 'has\u0000nul');
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => file.path)).toEqual(['text.txt']);
     db.close();
   });
 });

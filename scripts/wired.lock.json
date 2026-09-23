@@ -326,7 +326,6 @@
   "packages/core/src/read-models/tool-failures.ts#censusToolFailures (unreached-export)",
   "packages/core/src/read-models/tool-failures.ts#classifyToolFailure (unreached-export)",
   "packages/core/src/read-models/tool-failures.ts#toolFailureKey (unreached-export)",
-  "packages/core/src/read-models/workspace-diff.ts#walkWorkspaceTextFiles (unreached-export)",
   "packages/core/src/release/engine.ts#parseDeployOutput (unreached-export)",
   "packages/core/src/release/path-safety.ts#isSecretReleasePath (unreached-export)",
   "packages/core/src/release/path-safety.ts#normalizeReleasePath (unreached-export)",

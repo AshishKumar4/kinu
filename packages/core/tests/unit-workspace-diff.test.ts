@@ -14,7 +14,8 @@ import {
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import type { SqlValue } from '../src/types/primitives';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
-import { collectWorkspaceTextFiles, createTestRuntime, makeAgentDatabase } from './helpers';
+import { PLATFORM_CATALOG } from '../src/platform-catalog';
+import { createTestRuntime, makeAgentDatabase } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
@@ -30,10 +31,9 @@ describe('workspace diff lifecycle', () => {
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
 
     const baseline = db.query<{ path: string }, []>(
-      "SELECT path FROM vfs_baseline WHERE active = 1 AND path <> '' ORDER BY path",
+      "SELECT path FROM vfs_baseline_manifest WHERE active = 1 AND path <> '' ORDER BY path",
     ).all().map((row) => row.path);
 
-    expect(baseline).toEqual(Object.keys(await collectWorkspaceTextFiles(rt)).sort());
     expect(baseline).toContain('scaffold/agent.js.v0');
   });
 
@@ -46,7 +46,6 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.writeFile('finished-before-output.txt', 'done');
     const result = await getWorkspaceDiff(rt);
 
-    expect(result.baselineJustCaptured).toBe(false);
     expect(result.files).toHaveLength(1);
     expect(result.files[0]).toMatchObject({
       path: 'finished-before-output.txt', status: 'added', added: 1, removed: 0,
@@ -72,51 +71,70 @@ describe('workspace diff lifecycle', () => {
     expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added hello.py']);
   });
 
-  test('an intentionally empty baseline is stable and reads never move it', async () => {
+  test('a workspace past four hundred files still diffs, reading only the file that moved', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.mkdir('s', { recursive: true });
+
+    for (let i = 0; i < 450; i++) await rt.storage.vfs.writeFile(`s/f-${i}.txt`, `line ${i}\n`);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('s/f-7.txt', 'line 7\nchanged\n');
+    const readFile = rt.storage.vfs.readFile.bind(rt.storage.vfs);
+    const read: string[] = [];
+
+    rt.storage.vfs.readFile = async (path, options) => {
+      read.push(path);
+
+      return readFile(path, options);
+    };
+
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed s/f-7.txt']);
+    expect(read).toEqual(['s/f-7.txt']);
+  });
+
+  test('a file past one row is listed as changed without a body', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const row = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
+    await rt.storage.vfs.writeFile('big.log', 'x'.repeat(row));
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('big.log', 'y'.repeat(row + 1));
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([
+      { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], truncated: true },
+    ]);
+  });
+
+  test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     await rt.storage.vfs.exists('scaffold/agent.js');
     await rt.storage.vfs.writeFile('already-there.txt', 'v1');
+    const before = Date.now();
 
     const first = await getWorkspaceDiff(rt);
+
+    expect(first.files).toEqual([]);
+    expect(first.trackedSince).toBeGreaterThanOrEqual(before);
+
+    await rt.storage.vfs.writeFile('written-after.txt', 'new');
     const second = await getWorkspaceDiff(rt);
 
-    expect(first.files.map((file) => file.path)).toContain('already-there.txt');
-    expect(second.files).toEqual(first.files);
+    expect(second.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added written-after.txt']);
+    expect(second.trackedSince).toBe(first.trackedSince);
   });
 
-  test('dependency and repository metadata cannot consume the snapshot file budget', async () => {
+  test('dependency and repository trees are never reviewed', async () => {
     const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.mkdir('.git', { recursive: true });
     await rt.storage.vfs.mkdir('node_modules/pkg', { recursive: true });
-
-    for (let i = 0; i < 401; i++) {
-      await rt.storage.vfs.writeFile(`.git/object-${i}`, 'metadata');
-      await rt.storage.vfs.writeFile(`node_modules/pkg/file-${i}.js`, 'dependency');
-    }
-
+    await rt.storage.vfs.writeFile('.git/object-1', 'metadata');
+    await rt.storage.vfs.writeFile('node_modules/pkg/file-1.js', 'dependency');
     await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
 
-    const files = await collectWorkspaceTextFiles(rt);
-
-    expect(files['app.ts']).toBe('export const visible = true;');
-    expect(Object.keys(files).some((path) => path.startsWith('.git/'))).toBe(false);
-    expect(Object.keys(files).some((path) => path.startsWith('node_modules/'))).toBe(false);
-  });
-
-  test('excluded binary and oversized files cannot consume the text snapshot budget', async () => {
-    const { rt } = createTestRuntime();
-
-    for (let i = 0; i < 401; i++) {
-      await rt.storage.vfs.writeFile(`binary-${i}.dat`, new Uint8Array([0, i % 255]));
-    }
-
-    await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
-
-    const files = await collectWorkspaceTextFiles(rt);
-
-    expect(files['app.ts']).toBe('export const visible = true;');
-    expect(Object.keys(files).some((path) => path.startsWith('binary-'))).toBe(false);
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added app.ts']);
   });
 
   test('the change-set never holds more than one baseline body at a time', async () => {
@@ -127,8 +145,7 @@ describe('workspace diff lifecycle', () => {
     await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('f-7.txt', 'v2 7');
 
-    // The invariant is peak residency: baseline bodies must arrive one at a time. Matched on the query text
-    // `content FROM vfs_baseline`, which both the per-path read and the ruled-out batch read contain.
+    // The invariant is peak residency: baseline bodies must arrive one at a time.
     const sql = rt.storage.sql;
     let baselineRowsRead = 0;
     let peakBodiesInOneResult = 0;
@@ -136,9 +153,9 @@ describe('workspace diff lifecycle', () => {
       const rows = sql<T>(query, ...values);
       const text = query.join('?');
 
-      if (text.includes('vfs_baseline')) baselineRowsRead += rows.length;
+      if (text.includes('vfs_baseline_manifest')) baselineRowsRead += rows.length;
 
-      if (text.includes('content FROM vfs_baseline')) {
+      if (text.includes('content FROM vfs_baseline_blob')) {
         peakBodiesInOneResult = Math.max(peakBodiesInOneResult, rows.length);
       }
 
@@ -205,13 +222,14 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.writeFile('old.txt', 'old');
     await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('bad.txt', 'bad');
-    db.exec(`CREATE TRIGGER reject_bad_baseline BEFORE INSERT ON vfs_baseline
+    db.exec(`CREATE TRIGGER reject_bad_baseline BEFORE INSERT ON vfs_baseline_manifest
       WHEN NEW.path = 'bad.txt' BEGIN SELECT RAISE(FAIL, 'forced baseline failure'); END`);
 
     await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('forced baseline failure');
 
     const rows = db.query<{ path: string; content: string; active: number }, []>(
-      "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
+      `SELECT m.path, b.content, m.active FROM vfs_baseline_manifest m
+        LEFT JOIN vfs_baseline_blob b ON b.hash = m.hash WHERE m.path <> ''`,
     ).all();
 
     // The failed generation is neither active nor left behind; the previous one keeps its content.
@@ -248,7 +266,8 @@ describe('workspace diff lifecycle', () => {
     await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('could not read "kept.txt"');
 
     const rows = db.query<{ path: string; content: string; active: number }, []>(
-      "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
+      `SELECT m.path, b.content, m.active FROM vfs_baseline_manifest m
+        LEFT JOIN vfs_baseline_blob b ON b.hash = m.hash WHERE m.path <> ''`,
     ).all();
 
     expect(rows.filter((r) => r.active === 0)).toEqual([]);
