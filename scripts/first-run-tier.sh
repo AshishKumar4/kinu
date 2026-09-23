@@ -99,7 +99,7 @@ echo "Operator-only checks need their explicit target and authority; skipped cas
 # neither of which exists under node-hosted vitest.
 #
 # TWO PROCESSES, SIDE BY SIDE (vitest.first-run.config.ts states why): the
-# cases that attach machines to the account's device fleet run one at a time in
+# cases that read the account's device fleet run one at a time in
 # `first-run-fleet`, and every other case runs concurrently in
 # `first-run-cases`. Two processes because vitest runs its projects one after
 # another inside one; each writes its own JUnit, and a red in either is the

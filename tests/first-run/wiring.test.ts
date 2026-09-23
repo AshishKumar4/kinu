@@ -11,7 +11,9 @@ import { isFirstRunSuite, trackedFiles } from '../../scripts/sources';
 import {
   CI_EXEMPT, LADDER, packageScripts,
 } from '../../scripts/ladder';
-import firstRunConfig, { FIRST_RUN_INCLUDE, FIRST_RUN_PROJECTS, FLEET_MODULE, fleetCases } from '../../vitest.first-run.config';
+import firstRunConfig, {
+  EXECUTOR_READERS, FIRST_RUN_INCLUDE, FIRST_RUN_PROJECTS, FLEET_MODULE, fleetCases, TUI_HARNESS,
+} from '../../vitest.first-run.config';
 import {
   FIRST_RUN_ARM, FIRST_RUN_CASES, FIRST_RUN_DEFECTS, FIRST_RUN_FAMILY,
 } from './first-run';
@@ -93,16 +95,26 @@ describe('the first-run corpus is the set this tier runs', () => {
     }
   });
 
-  test('a case that attaches machines is derived into the fleet, however many hops out', () => {
+  test('a case that attaches a machine or drives the TUI is derived into the fleet, however many hops out', () => {
     const fleet = fleetCases(new Map([
       [FLEET_MODULE, 'export const attachMachine = 1;'],
+      [TUI_HARNESS, 'export const runTuiInPty = 1;'],
       ['tests/first-run/helper.ts', "export { attachMachine } from './daemon';"],
       ['tests/first-run/direct.first-run.ts', "import { attachMachine } from './daemon';"],
       ['tests/first-run/indirect.first-run.ts', "import { attachMachine } from './helper';"],
+      ['tests/first-run/tui.first-run.ts', "import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';"],
       ['tests/first-run/alone.first-run.ts', "import { firstRunCasePlan } from './first-run';"],
-    ]));
+    ]), ['reader']);
 
-    expect(fleet).toEqual(['tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts']);
+    expect(fleet).toEqual([
+      'tests/first-run/direct.first-run.ts', 'tests/first-run/indirect.first-run.ts',
+      'tests/first-run/reader.first-run.ts', 'tests/first-run/tui.first-run.ts',
+    ]);
+  });
+
+  test('every declared executor reader is a case on disk', () => {
+    expect(Object.keys(EXECUTOR_READERS).map((id) => `tests/first-run/${id}.first-run.ts`).filter((file) => !onDisk.includes(file)))
+      .toEqual([]);
   });
 
   test('the fleet cases run one at a time, the rest beside them, and together they are the corpus', () => {
