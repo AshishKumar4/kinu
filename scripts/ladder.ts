@@ -39,7 +39,9 @@ import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
-import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
+import {
+  CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
+} from './ladder-cache';
 import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -49,6 +51,7 @@ import {
   trackedFiles,
 } from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
+import { modulesReaching } from './import-closure';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, machineName, readCosts } from './gate-cost';
 
@@ -187,6 +190,12 @@ const AMBIENT_BY_NAME: Inputs = {
   ],
 };
 
+/** A row that builds the client with vite: vite reads the client graph by
+ *  path and Tailwind scans the tree for class names, so every tracked file is
+ *  an input. Measured by `--audit-closure` 2026-09-23: React runtime identity
+ *  opened 1,319 tracked files off its module graph. */
+const CLIENT_BUILD: Inputs = { ...AMBIENT_BY_NAME, corpus: true };
+
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
  *  failure is also the fastest to reproduce. */
@@ -221,8 +230,8 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/pattern-inventory.ts',
     label: 'Pattern inventory',
-    tier: 'push',
-    seconds: 2.5, // Measured 2026-09-06 on the 24-thread workstation.
+    tier: 'commit',
+    seconds: 2.5, // Measured 2026-09-23 on the 24-thread box at load 5: 2.50/2.51/2.63 s.
     catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
     blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
     inputs: { kind: 'derived' },
@@ -532,20 +541,21 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:bench-corpus',
     label: 'Seeded bench defects still apply',
-    // PUSH, not commit, and the reason is cost placement rather than the gate: the
-    // commit tier is the pre-commit hook and declares 53.24s, so a whole-corpus
-    // check belongs at push — still the author's machine, before the code leaves
-    // it — where a stale patch is fully recoverable. That is what 'drift must fail
-    // on the same push that causes it' asked for.
-    tier: 'push',
-    seconds: 0.31,
-    catches: 'a refactor that silently unruns a bench task. Each of the 159 seeded defects is a '
+    // COMMIT. Held at push, it let comment-only commits on 2026-09-22 break 37
+    // seeded patches and still commit cleanly: a comment reflow moves the
+    // context a patch anchors on as surely as a rename does, and the author had
+    // already moved on by push. At 0.34s over the whole corpus (measured
+    // 2026-09-23 at load 20) the refusal belongs on the commit that moves the
+    // anchor.
+    tier: 'commit',
+    seconds: 0.34,
+    catches: 'a refactor that silently unruns a bench task. Each seeded defect is a '
       + 'context diff against source that keeps moving, so renaming or reflowing the code a '
       + 'patch anchors on stops it applying — and `prepare` then throws OUTSIDE the '
       + 'per-attempt catch, killing a whole compare/gain/validate run mid-flight with no '
       + 'partial report. All 16 re-anchors to date landed as a follow-up commit AFTER the '
       + 'change that caused them, because the only thing proving applicability was a pair of '
-      + 'near-duplicate assertions at the ci tier. At 0.31s over the whole corpus there was no '
+      + 'near-duplicate assertions at the ci tier. At 0.34s over the whole corpus there was no '
       + 'reason for that: the breaking change now fails on the machine that made it, while the '
       + 'person who moved the code is still holding it. It caught the branch that introduced '
       + 'it breaking sealed-validate-flags-the-good-tasks. Both enumerations, so an ORPHAN '
@@ -567,10 +577,9 @@ export const LADDER: readonly Gate[] = [
     // budget exists so nobody learns to bypass the hook, and a skip set is fully
     // recoverable at push. Nothing it asserts was narrowed to fit.
     tier: 'push',
-    // Re-measured 2026-09-05 on the 24-thread box: 11.5/11.9/12.3s (in-tier plus two
-    // solo). The 2.9s was the move-day figure; the vitest arm has grown since.
-    // Replaces 2.9s.
-    seconds: 12,
+    // Re-measured 2026-09-23 on the 24-thread box at load 5: 17.8/17.9/18.5 s; the
+    // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
+    seconds: 18,
     catches: 'a test that starts skipping, and a declared skip that has started running '
       + 'without the lock being tightened. Credential-free the eval tier reports 60 skips '
       + 'across its two runners and exits 0, and that exit code is all anyone reads — so the '
@@ -773,31 +782,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/test-census.ts --ratchet',
     label: 'Test census ratchet',
-    // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
-    // WHOLE-TREE census — 835 test files parsed, plus every product module a
-    // test imports — and a test cannot become coupled to an implementation
-    // between a commit and the push that follows it.
-    //
-    // NOT COMMIT, and the arithmetic decides it rather than taste. The commit
-    // tier declares 53.24s against the ladder-budget lock (re-measured 2026-09-05
-    // on the 24-thread box; the per-row figures above carry the date), so a
-    // whole-tree census that walls several seconds fits at push, beside the other
-    // censuses.
-    // The original intent for this gate was the commit tier on the precedent
-    // of `bun scripts/schema-drift.ts` at 0.23s; that precedent does not
-    // carry, because schema-drift walls a quarter of a second and this walls
-    // several.
-    //
-    // MEASURED, AND CALIBRATED, because this box is not the box the rest of
-    // this file's figures came from. Six readings on a 24-thread box under load
-    // ~70, taken in one window and interleaved so the load is common to all of
-    // them: this gate 13.25/16.09/11.94s, `gate:complexity` 8.29/8.00/8.78s
-    // against its declared 1.8s, `gate:wired` 8.66/7.70/9.34s against its
-    // declared 3.6s. Scaling the median 13.25s by each neighbour's own ratio
-    // gives 2.9s and 5.5s, and the LARGER is declared: a budget may only ever
-    // be made stricter by a reading nobody can reproduce on the reference box.
-    tier: 'push',
-    seconds: 5.5,
+    // COMMIT, with the other static gates that take seconds: a coupled test
+    // found at push is found after the lane has built on it (2026-09-23, Main).
+    // Measured 2026-09-23 on the 24-thread box at load 5: 3.88/4.05/5.14 s.
+    tier: 'commit',
+    seconds: 4.1,
     catches: 'a NEW coupled test, by the five axes a test review judges on — an assertion '
       + "over the implementation's TEXT, a constant restating a module's own, a matcher that "
       + 'cannot fail on the defect its title names, a reach into a member production declares '
@@ -818,22 +807,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:complexity',
     label: 'Complexity budget',
-    // PUSH, beside the other whole-tree censuses: 1.8s measured 2026-09-01 on
-    // the 24-thread box for 1,906 files and 48,048 functions, and a function
-    // cannot become complex between a commit and the push that follows it.
-    //
-    // ONE ROW, and it was two. A second entry for this same `run` string sat
-    // earlier in this array declaring 3s over 1,907 files and 48,052 functions
-    // — the same command measured at a different commit, so the ladder ran
-    // `gate:complexity` TWICE per push and counted 4.8s for it in the tier's
-    // declared sum. Both readings are kept here because the deletion of one is
-    // a decision rather than a tidy-up: 2.2s over 1,907/48,052 and 1.8s over
-    // 1,906/48,048, both 2026-09-01. The row that survives is the one whose
-    // blind spots and oxlint cross-check are written out. A third reading,
-    // 8.29/8.00/8.78s, is this same gate on a 24-thread box under load ~70 —
-    // recorded because the census row below is calibrated against it.
-    tier: 'push',
-    seconds: 1.8,
+    // COMMIT: at push, lanes had already committed functions over the line
+    // (2026-09-23). Measured that day on the 24-thread box at load 5 over 2,575
+    // files and 63,573 functions: 2.44/2.50/2.54 s.
+    tier: 'commit',
+    seconds: 2.5,
     catches: 'a new function at the hard end of this codebase, arriving unnamed. The budget is '
       + 'MEASURED rather than chosen: cyclomatic complexity for every function in the '
       + 'enumeration, a ceiling at the highest (126, `handleUserRequest`) and a budget line at '
@@ -856,8 +834,9 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:silent-drop',
     label: 'Silently dropped failures',
-    tier: 'push',
-    seconds: 1.4,
+    tier: 'commit',
+    // Measured 2026-09-23 on the 24-thread box at load 5: 0.98/1.00/1.03 s.
+    seconds: 1,
     catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
       + 'structurally blind to — a sentinel returned behind a log line (the rule fires on a '
       + 'ONE-statement handler only), a cause chain projected down to `error.message`, an '
@@ -873,9 +852,9 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:test-clocks',
     label: 'Wall-clock waits in tests',
-    tier: 'push',
-    // Measured 2026-09-15 on the 24-thread workstation: 1.4 s over 1,130 test
-    // files, one oxc parse each.
+    tier: 'commit',
+    // Measured 2026-09-23 on the 24-thread box at load 5: 1.41/1.44/1.46 s over
+    // 1,248 test files, one oxc parse each.
     seconds: 1.5,
     catches: 'a test that waits on a duration instead of an end condition — a timer call '
       + '(`setTimeout`, `Bun.sleep`, `timers/promises`, `AbortSignal.timeout`), a comparison '
@@ -1155,7 +1134,9 @@ export const LADDER: readonly Gate[] = [
       + 'equality with the gate that runs it.',
     // Measured by `--audit-closure` 2026-09-15: the suite opens hundreds of
     // tracked sources by path (it scans the tree), so its closure is the corpus.
-    inputs: { ...AMBIENT_BY_NAME, corpus: true },
+    // `mutation-exploration-policy.test.ts` imports mutant copies of core
+    // sources, written outside the tree, by computed specifier.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/'] },
   },
   {
     run: 'bun run test:spine',
@@ -1227,7 +1208,9 @@ export const LADDER: readonly Gate[] = [
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
       + 'whole files instead of the members they named because this was untested.',
     blind: 'the suites that use it.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23: git runs in the tree and reads
+    // every `.gitignore` in it, beside `wrangler.jsonc` and `.mailmap`.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     // Measured 2026-08-22: 6.43s, four isolated workers. Re-measured 2026-09-05 on the
@@ -1243,8 +1226,10 @@ export const LADDER: readonly Gate[] = [
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
     // `unit-codemode-sandbox.test.ts` imports the node shim it wrote to scratch
-    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's.
-    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
+    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's. Measured by
+    // `--audit-closure` 2026-09-23: the suite opens 247 tracked files off its
+    // graph, across docs/, public/ and src/components/, so it reads the tree.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
   },
 
   {
@@ -1299,7 +1284,10 @@ export const LADDER: readonly Gate[] = [
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23: 14 tracked files off its graph
+    // in five packages and the repository root (git's ignore files, AGENTS.md,
+    // spawned workers, sibling manifests), so it reads the tree.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     // Measured 2026-08-23: 40.0s. `behavior.test.ts` alone took 23.36s and
@@ -1329,7 +1317,8 @@ export const LADDER: readonly Gate[] = [
       + '`node --check`s this package\'s syntax, so the suite is the only thing that '
       + 'reads it.',
     blind: 'the pairing and transport it talks to.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23: git in the root reads these two.
+    inputs: { ...AMBIENT_BY_NAME, reads: ['.gitattributes', '.gitignore'] },
   },
   {
     run: 'bun scripts/tracing-gate.ts',
@@ -1478,7 +1467,8 @@ export const LADDER: readonly Gate[] = [
       + 'scripts/eval-triage.verdicts.json is right. A verdict is a written argument about a '
       + 'trajectory, so nothing here can check one; what is checked is that a stale verdict '
       + 'and an unverified group both print.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-23.
+    inputs: { ...AMBIENT_BY_NAME, reads: ['tests/eval/corpus/seed.jsonl'] },
   },
   {
     // The COMMAND deploy.sh runs, spelled identically. Stopping at the
@@ -1567,7 +1557,7 @@ export const LADDER: readonly Gate[] = [
       + 'over a locally built bundle — never a deployed session, a real OAuth flow or a '
       + 'live model — and nothing compares pixels. The diagnostics drive costs nothing '
       + 'measurable: 55.8s before and 55.6s after for this suite, 2026-09-01.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts scripts/*-ux.test.ts scripts/computed-style.test.ts',
@@ -1662,7 +1652,7 @@ export const LADDER: readonly Gate[] = [
       + 'memory after read faults. Those run over a local browser and a locally built bundle: '
       + 'a stale edge asset, a real network stall and whether a report reaches a deployed '
       + 'sink are outside it, and nothing compares pixels.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
@@ -1687,7 +1677,7 @@ export const LADDER: readonly Gate[] = [
       + 'The old product name is not grepped here at all: that gate is '
       + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
       + 'documents rather than the rendered page.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/react-runtime-identity.test.ts',
@@ -1705,7 +1695,7 @@ export const LADDER: readonly Gate[] = [
       + 'and to every source-reading instrument here.',
     blind: 'the locally built artifact, not the object the edge serves. It cannot see a '
       + 'CDN serving an older bundle, and it says nothing about render correctness.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/nested-container-resolution.test.ts',
@@ -1750,7 +1740,7 @@ export const LADDER: readonly Gate[] = [
       + '— the refused run, the named preset, the fan-in composition — is proven to mount '
       + 'by `gate:computed-style` and measured by nothing. Chrome cost keeps it out of '
       + 'the commit tier, so a geometry regression reaches a branch before it is caught.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun test --timeout=0 scripts/chat-scroll.test.ts',
@@ -1776,7 +1766,7 @@ export const LADDER: readonly Gate[] = [
       + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
-    inputs: AMBIENT_BY_NAME,
+    inputs: CLIENT_BUILD,
   },
   {
     run: 'bun run layergate',
@@ -1786,7 +1776,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers.',
     blind: '`tool-construction`, declared and measured at 0/0 — and all three tool-surface '
       + 'defects live exactly there.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', reads: [] },
   },
   {
     run: 'bun run layergate --matrix',
@@ -1796,7 +1786,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a layer whose probes cannot localise a fault to it — cross-talk. Without '
       + 'this a layer at 100% may be scoring another layer\'s behaviour.',
     blind: 'a layer with no probes, which scores null and localises nothing.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', reads: [] },
   },
   {
     run: 'bun run gate:capability-parity',
@@ -2072,9 +2062,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run verify:lean',
     label: 'Lean proofs, consistency, and traceability',
     tier: 'deploy',
-    // 2.2s WARM, median of 2.19 / 2.20 on the 24-thread box, 2026-08-21: `lake
-    // build` is a no-op once the Lean build cache holds the build, so this figure sits on
-    // the same basis as every other one here, a prepared checkout.
+    // 10 s WARM: 10.1 and 9.3 s at 5e22e792f (lane/formal-proofs) in a detached
+    // worktree on the 24-thread box, 2026-09-22, at load 20-21 with other lanes
+    // running, after one cold run of 24.4 s. The growth from 2.2 s (2026-08-21,
+    // warm, `lake build` a no-op) is the refinement fixtures regenerated and
+    // diffed and 824 refinement cases under bun test (2.4 s of it).
     //
     // COLD IT IS ~15 MINUTES, and that is what CI pays: the lean-verify workflow
     // caches `~/.elan` and not the Lean build cache, so a runner rebuilds 330 theorems
@@ -2084,7 +2076,7 @@ export const LADDER: readonly Gate[] = [
     //
     // Declared at ZERO until 2026-08-21, which made the deploy tier's cost line
     // fiction and its budget unenforceable.
-    seconds: 2.2,
+    seconds: 10,
     catches: 'a Lean module that stops compiling, an axiom set that makes the model '
       + 'inconsistent, a requirement in lean/traceability.yaml with no theorem behind it, '
       + 'and a TypeScript comment citing a theorem no module defines. `check-no-false.sh` '
@@ -2141,9 +2133,29 @@ export const LADDER: readonly Gate[] = [
       + 'this box\'s, and the edge, the deployed assets and the real identity belong to '
       + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
-      + 'the right one. With `KINU_E2E_ORIGIN` set the same rows drive a named deployment '
-      + 'instead; that arm runs in no tier.',
+      + 'the right one. The deployed build\'s browser rows are the product flows\' '
+      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
+      + 'deployment alike.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
+  },
+  {
+    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
+    label: 'Product flows in a browser, on the local dev server',
+    tier: 'deploy',
+    // 133.3s alone on 2026-09-23 (gate-cost-measure, load 1.1 at start): the dev
+    // server's boot, then ten rows, three of them waiting on a real model turn.
+    seconds: 133,
+    catches: 'a flow a person runs in the page that breaks while every API, socket and '
+      + 'fixture-backed browser gate stays green: the owner\'s #13, where every agent a '
+      + 'workspace held was present over the API and the reloaded page showed none of them. '
+      + 'Each row drives real Chrome through the product\'s own controls against `vite dev` '
+      + '(the real Worker and Durable Objects, no fixtures) and asserts only what the page '
+      + 'shows. The rows are the same file the deployment runs after the publish, with the '
+      + 'origin the only difference, so a flow red here is red before it ships.',
+    blind: 'what `vite dev` is not: the production isolate, the edge, the deployed assets and '
+      + 'the real identity, which are the post-publish row\'s. One viewport, one theme. The '
+      + 'model is real, so a row that needs an answer reads that one arrived, never its words.',
+    inputs: { kind: 'live', why: 'boots `vite dev` on an ephemeral port with this box\'s `.dev.vars` credentials, drives Chrome against it and spends real model turns; a hash over the tracked tree stands for none of them.' },
   },
   {
     run: 'bun run gate:infra',
@@ -2247,6 +2259,30 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and live model turns.' },
   },
   {
+    run: 'bash scripts/product-flows-tier.sh',
+    label: 'Product flows in a browser, on the deployment',
+    phase: 'post-publish',
+    alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
+      + 'other tiers whose subject is the build that just shipped. Its workspaces carry the '
+      + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
+      + 'so it stands outside the device fleet the first-run tier counts.',
+    tier: 'deploy',
+    // 66s, 67s and 128s against 41494531d on 2026-09-23, ten rows over the public
+    // edge: the first answer's model turn (35 to 97s) is the spread.
+    seconds: 128,
+    catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
+      + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
+      + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
+      + 'the deployment over its API and socket and the trajectory tier drives the model, so '
+      + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
+      + 'page showed no agents.',
+    blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
+      + 'pixels. It reports on a build that is already serving, so a red here is a red users '
+      + 'have now. The model is real, so a row that needs an answer reads that one arrived, '
+      + 'never its words.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the eval identity and spends real model turns.' },
+  },
+  {
     run: 'bun run gate:trajectory',
     label: 'Trajectory tier',
     phase: 'post-publish',
@@ -2339,9 +2375,13 @@ export interface PlanRow {
 
 /**
  * The deploy plan: every deploy-tier gate with its phase, label, measured cost
- * and deadline, in phase order and, within a phase, in ladder order. This is
- * what `bash scripts/deploy.sh` schedules from — the single source of what
- * blocks a publish.
+ * and deadline, in phase order. This is what `bash scripts/deploy.sh`
+ * schedules from — the single source of what blocks a publish.
+ *
+ * LONGEST FIRST inside the concurrent `source` wave, by the row's measured
+ * solo wall: the runner launches the first row that fits, so a long row
+ * listed late starts late and the wave waits on its tail. Every other phase
+ * keeps ladder order; its rows run alone or are the two post-publish tiers.
  *
  * REFUSES rather than defaults. A `source` row is admitted CONCURRENTLY, so a
  * row there with no measurement is a row the wave would schedule against a
@@ -2354,7 +2394,7 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
   const tracked = trackedTestFiles();
   const browsers = sharedBrowserModules();
 
-  return deployOrder().map((gate) => {
+  const rows = deployOrder().map((gate): PlanRow => {
     const phase = gate.phase ?? 'source';
     const cost = costs.rows[gate.run];
 
@@ -2376,6 +2416,14 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
       shared: sharedOf(gate, tracked, browsers) ?? 'none',
       run: gate.run,
     };
+  });
+
+  const wall = (row: PlanRow): number => costs.rows[row.run]?.wallSeconds ?? 0;
+
+  return DEPLOY_PHASES.flatMap((phase) => {
+    const inPhase = rows.filter((row) => row.phase === phase);
+
+    return phase === 'source' ? inPhase.sort((left, right) => wall(right) - wall(left)) : inPhase;
   });
 }
 
@@ -2438,24 +2486,6 @@ export const SHARED_POOL = /(?:vitest|workerd|vite )/u;
  *  `computed-style.ts` → `gallery-harness.ts` → puppeteer). */
 const BROWSER_IMPORT = /from ['"]puppeteer['"]/u;
 
-/** A relative module edge, as this repository spells one: extensionless, so
- *  the resolution below appends `.ts` and keeps only what the corpus holds. */
-const RELATIVE_IMPORT = /(?:from|import)\s*\(?\s*['"](\.[^'"]+)['"]/gu;
-
-function collapseRelative(from: string, specifier: string): string {
-  const parts = `${from.slice(0, from.lastIndexOf('/'))}/${specifier}`.split('/');
-  const out: string[] = [];
-
-  for (const part of parts) {
-    if (part === '.' || part === '') continue;
-
-    if (part === '..') out.pop();
-    else out.push(part);
-  }
-
-  return out.join('/');
-}
-
 /**
  * Every module in `sources` that reaches a headless browser: one that imports
  * puppeteer, or one that imports — however many hops out — a module that does.
@@ -2468,48 +2498,9 @@ function collapseRelative(from: string, specifier: string): string {
  * import a harness that imports another one. A row whose browser cost is
  * invisible to the derivation is a row the wave admits beside another browser
  * row, which is the 2026-09-18 failure.
- *
- * Pure over the map it is given, so the fixture in `ladder.test.ts` proves
- * both directions without the tree.
  */
 export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
-  const reaching = new Set<string>();
-  const importers = new Map<string, string[]>();
-
-  for (const [file, text] of sources) {
-    if (BROWSER_IMPORT.test(text)) reaching.add(file);
-
-    for (const [, specifier] of text.matchAll(RELATIVE_IMPORT)) {
-      if (specifier === undefined) continue;
-      const base = collapseRelative(file, specifier);
-
-      for (const target of [base, `${base}.ts`]) {
-        if (!sources.has(target)) continue;
-        const seen = importers.get(target);
-
-        if (seen === undefined) importers.set(target, [file]);
-        else seen.push(file);
-      }
-    }
-  }
-
-  // Reverse edges, so the walk is over importers of what already reaches a
-  // browser: one pass per newly reached module, never a re-scan of the corpus.
-  const pending = [...reaching];
-
-  while (pending.length > 0) {
-    const next = pending.pop();
-
-    if (next === undefined) continue;
-
-    for (const importer of importers.get(next) ?? []) {
-      if (reaching.has(importer)) continue;
-      reaching.add(importer);
-      pending.push(importer);
-    }
-  }
-
-  return reaching;
+  return modulesReaching(sources, (_file, text) => BROWSER_IMPORT.test(text));
 }
 
 /** The corpus the closure reads: every parseable tracked file. Measured
@@ -2544,6 +2535,10 @@ export const PYTHON_SUITES_SCRIPT = 'scripts/python-suites.ts';
 
 /** The path of the eval tier's runner, as `bun run test:eval` spells it. */
 export const EVAL_TIER_SCRIPT = 'scripts/eval-tier.sh';
+
+/** The wrapper that boots the local dev server and runs a command against it,
+ *  as a gate spells it. */
+export const DEV_SERVER_WRAPPER = 'scripts/with-dev-server.ts';
 
 /** The eval tier's arms, as data. */
 export interface EvalTierArms {
@@ -2667,6 +2662,12 @@ export const CI_EXEMPT = {
     + 'neither of which belongs on a pull request. Its subject is production as it stands, '
     + 'which a pull request has not changed; it runs at deploy, alone, as the last gate '
     + 'before the build.',
+  'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts':
+    'boots the same dev server the live-app row does, on the same `.dev.vars` credentials a '
+    + 'pull request must not hold, and spends real model turns on the account through it.',
+  'bash scripts/product-flows-tier.sh':
+    'has nothing to run against at CI: its subject is the deployment that just went up, as the '
+    + 'eval identity, whose secret no pull request holds.',
   'bun test --timeout=0 scripts/live-app-tier.test.ts':
     'needs the account\'s own dev credentials in PROCESS env for the product\'s dev server to '
     + 'boot at all — measured 2026-09-17, `vite dev` exits "error when starting dev server" '
@@ -2759,10 +2760,15 @@ export const PATH_IGNORE_FLAG = '--path-ignore-patterns';
 export function claims(command: string, tracked: readonly string[]): string[] {
   const words = command.split(/\s+/).filter((word) => word.length > 0);
 
-  // The deadline wrapper runs the command that follows it and claims nothing
-  // of its own, so the claim is the wrapped command's.
+  // The deadline wrapper and the dev-server wrapper each run the command that
+  // follows them and claim nothing of their own, so the claim is the wrapped
+  // command's.
   if (words[0] === 'bun' && words[1] === 'scripts/ladder.ts' && words[2] === '--run') {
     return claims(words.slice(3).join(' '), tracked);
+  }
+
+  if (words[0] === 'bun' && words[1] === DEV_SERVER_WRAPPER) {
+    return claims(words.slice(2).join(' '), tracked);
   }
 
   if (words[0] === 'bun' && words[1] === 'run') {
@@ -3236,17 +3242,28 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  // THE CLOSURE AUDIT. Every cacheable gate in the tier runs once under
-  // strace, and every tree file it opened that its closure does not hold is
+  // THE CLOSURE AUDIT. Every cacheable gate in the tier — or the one row
+  // `--gate` names — runs once under strace in the environment the ladder
+  // gives it, and every tree file it opened that its closure does not hold is
   // a finding. This is the measurement behind a `reads` declaration, and the
   // red direction of the cache's soundness: a closure that errs narrow is a
   // stale green, and this is the one place that can see it.
   if (process.argv.includes('--audit-closure')) {
     const flag = process.argv.find((argument) => argument.startsWith('--tier='));
     const tier = TIERS.find((candidate) => candidate === flag?.slice('--tier='.length)) ?? 'push';
+    const named = process.argv.indexOf('--gate');
     const repo = repoAt(root, (run, files) => claims(run, files));
     const tracked = trackedTestFiles();
-    const gates = gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+
+    const gates = named === -1
+      ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+      : LADDER.filter((gate) => gate.run === process.argv[named + 1]);
+
+    if (gates.length === 0) {
+      console.error('ladder --audit-closure --gate: expected an exact command from the declared gate table');
+      process.exit(2);
+    }
+
     let holes = 0;
     let audited = 0;
 
@@ -3258,7 +3275,7 @@ if (import.meta.main) {
         continue;
       }
 
-      const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure);
+      const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure, gateEnvironment(closure));
       audited += 1;
 
       if (audit.undeclared.length === 0) {
@@ -3272,7 +3289,10 @@ if (import.meta.main) {
       for (const file of audit.undeclared) console.error(`        ${file}`);
     }
 
-    console.log(`\naudit-closure --tier=${tier}: ${String(audited)} gate(s) audited, ${String(holes)} with undeclared reads`);
+    console.log(
+      `\naudit-closure ${named === -1 ? `--tier=${tier}` : '--gate'}: ${String(audited)} gate(s) audited, `
+      + `${String(holes)} with undeclared reads`,
+    );
     process.exit(holes === 0 ? 0 : 1);
   }
 
@@ -3383,7 +3403,7 @@ if (import.meta.main) {
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
@@ -3424,7 +3444,9 @@ if (import.meta.main) {
   // else does, and there is no per-gate switch. A row declared `live`, or
   // whose closure cannot be computed, runs every time and the reason is
   // printed beside it, so an uncached gate is a visible fact rather than a
-  // quiet one.
+  // quiet one. A derived gate runs under exactly the environment its key
+  // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
+  // taken in one environment.
   const caching = !process.argv.includes('--no-cache');
   const repo = repoAt(root, (run, files) => claims(run, files));
   const tools = toolVersions(root);
@@ -3452,10 +3474,17 @@ if (import.meta.main) {
       console.log(`      never cached: ${plan.closure.why}`);
       uncached.push(`${gate.run} — ${plan.closure.why}`);
     } else if (plan?.kind === 'miss') {
-      console.log(`      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure)`);
+      console.log(
+        `      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure, `
+        + `${String(gateEnvNames(plan.closure).length)} environment names given)`,
+      );
+
+      if (plan.unreadable !== undefined) console.log(`      the entry stored under this key proves nothing — ${plan.unreadable}`);
 
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }
+
+    const closure = plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo);
 
     // Under the row's own deadline: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -3463,6 +3492,7 @@ if (import.meta.main) {
     const outcome = await runUnderDeadline({
       argv: runnableArgv(gate.run, tracked), cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
+      env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
     });
 
     const { seconds } = outcome;

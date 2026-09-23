@@ -2008,7 +2008,7 @@ export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
 
-export { buildPendingActions } from './read-models/pending-actions';
+export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
 
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
@@ -2035,7 +2035,7 @@ export {
 
 export type { TurnAuthor } from './utils/ui-message';
 
-export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
+export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks } from './read-models/pending-actions';
 
 export { buildWorkspaceOverview, overviewHeadline, rosterActivity, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
@@ -2338,6 +2338,19 @@ export {
   partEffect,
   callFailed,
 } from './read-models/tool-call-grouping';
+
+export {
+  type SlateSurfaceKind,
+  type SurfaceContent,
+  type SurfaceKind,
+  ACTIVITY_SURFACE,
+  SLATE_PREFIX,
+  SURFACES,
+  landedSurface,
+  openPortOf,
+  pruneSlateReloads,
+  surfaceHasContent,
+} from './read-models/surface-presence';
 
 export {
   ACCESS_TOKEN_SCOPES,

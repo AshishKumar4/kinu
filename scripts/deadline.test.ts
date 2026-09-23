@@ -27,6 +27,24 @@ describe('a run under a deadline', () => {
     expect(failed.stderr).not.toContain('KILLED');
   });
 
+  test('a given environment is the child\'s whole environment, and none inherits this process\'s', async () => {
+    // The ladder runs a cached gate under exactly the names its key hashes;
+    // an environment merged over this process's would hand the gate every
+    // unkeyed ambient name. `PATH` is the one name the child needs to find bun.
+    process.env.KINU_DEADLINE_PLANTED = 'ambient';
+    const probe = 'process.exit(process.env.KINU_DEADLINE_PLANTED === undefined ? 0 : 1)';
+
+    const given = await runUnderDeadline({
+      argv: [process.execPath, '-e', probe], seconds: 30, label: 'given', stdio: 'pipe', env: { PATH: process.env.PATH ?? '' },
+    });
+
+    const inherited = await runUnderDeadline({ argv: [process.execPath, '-e', probe], seconds: 30, label: 'inherited', stdio: 'pipe' });
+    delete process.env.KINU_DEADLINE_PLANTED;
+
+    expect(given.exitCode).toBe(0);
+    expect(inherited.exitCode).toBe(1);
+  });
+
   test('a package script runs under its own ladder row deadline, and an unrowed one under the default', () => {
     const rows = LADDER.filter((row) => row.run.startsWith('bun run test:'));
 

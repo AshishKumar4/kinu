@@ -622,7 +622,7 @@ export async function runLifecycle(
 
   /** A step's own assertion. Inside the ceiling and wrong is still a failure,
    *  and it reads as one rather than as a timeout. */
-  const require = (condition: boolean, what: string): void => {
+  const demand = (condition: boolean, what: string): void => {
     if (!condition) throw new Error(what);
   };
 
@@ -653,7 +653,7 @@ export async function runLifecycle(
     await seam.exec(`mkdir -p ${HARNESS_DIR}`);
     await seam.write(HARNESS_PATH, options.workloadSource);
     const present = await seam.exec(`test -f ${HARNESS_PATH} && echo YES || echo NO`);
-    require(present.stdout.includes('YES'), `the workload harness is not present at ${HARNESS_PATH}`);
+    demand(present.stdout.includes('YES'), `the workload harness is not present at ${HARNESS_PATH}`);
   };
 
   const digest = async (what: string): Promise<TreeDigest> =>
@@ -664,7 +664,7 @@ export async function runLifecycle(
   const commit = async (op: LifecycleOp, which: string): Promise<void> => {
     await step(op, async (deadlineMs) => {
       const settled = await seam.checkpoint(`${strategy} ${which} checkpoint`, deadlineMs);
-      require(settled.ok, `the ${which} checkpoint did not commit: ${settled.detail}`);
+      demand(settled.ok, `the ${which} checkpoint did not commit: ${settled.detail}`);
 
       return settled;
     });
@@ -674,7 +674,7 @@ export async function runLifecycle(
   const recycle = async (op: LifecycleOp, what: string): Promise<void> => {
     await step(op, async (deadlineMs) => {
       const settled = await seam.stop(`${strategy} ${what}`, deadlineMs);
-      require(settled.ok, `the ${what} did not confirm: ${settled.detail}`);
+      demand(settled.ok, `the ${what} did not confirm: ${settled.detail}`);
 
       return settled;
     });
@@ -703,7 +703,7 @@ export async function runLifecycle(
         await workload(`small --root ${WORK_ROOT} --seed ${options.seed}`, 'small workload'),
       );
 
-      require(written.ok, 'the small workload did not report success');
+      demand(written.ok, 'the small workload did not report success');
       // The one file whose bytes THIS PROCESS knows, so the restore is checked
       // against the driver's own ground truth and not only against a digest the
       // container computed twice.
@@ -724,9 +724,9 @@ export async function runLifecycle(
         await workload(`read --root ${WORK_ROOT} --path ${OPEN_WRITE_PATH}`, 'open-write arming'),
       );
 
-      require(held.content === openWriteContent, `the open write was not flushed before the checkpoint: ${held.content}`);
+      demand(held.content === openWriteContent, `the open write was not flushed before the checkpoint: ${held.content}`);
       const taken = await digest('small tree digest');
-      require(taken.files > 100, `the small tree holds ${String(taken.files)} files`);
+      demand(taken.files > 100, `the small tree holds ${String(taken.files)} files`);
 
       return taken.digest;
     });
@@ -758,7 +758,7 @@ export async function runLifecycle(
     await step('restore-verify', async () => {
       await installHarness();
       const restored = await digest('restored tree digest');
-      require(
+      demand(
         restored.digest === smallDigest,
         `the restored tree is not the tree that was checkpointed `
         + `(${String(restored.files)} files / ${String(restored.bytes)} B restored)`,
@@ -769,9 +769,9 @@ export async function runLifecycle(
         await workload(`read --root ${WORK_ROOT} --path marker.txt`, 'marker read'),
       );
 
-      require(readMarker.content === marker, `the marker file came back as ${readMarker.content.slice(0, 60)}`);
+      demand(readMarker.content === marker, `the marker file came back as ${readMarker.content.slice(0, 60)}`);
       const back = await resurrected();
-      require(
+      demand(
         back.length === 0,
         `a file deleted before the checkpoint came back after the restore: ${back.join(', ')}`,
       );
@@ -781,7 +781,7 @@ export async function runLifecycle(
         await workload(`read --root ${WORK_ROOT} --path ${OPEN_WRITE_PATH}`, 'open-write read'),
       );
 
-      require(
+      demand(
         openWrite.content === openWriteContent,
         'the bytes a writer flushed before the checkpoint did not survive the recycle '
         + `(${String(openWrite.bytes)} B back)`,
@@ -800,9 +800,9 @@ export async function runLifecycle(
         ),
       );
 
-      require(written.ok, 'the mid-scale workload did not report success');
+      demand(written.ok, 'the mid-scale workload did not report success');
       const taken = await digest('mid tree digest');
-      require(
+      demand(
         taken.bytes > options.midScaleMib * 1_000_000,
         `the mid tree holds ${String(taken.bytes)} B, short of the ${String(options.midScaleMib)} MiB asked for`,
       );
@@ -822,13 +822,13 @@ export async function runLifecycle(
     await step('reattach-verify', async () => {
       await installHarness();
       const restored = await digest('reattached tree digest');
-      require(
+      demand(
         restored.digest === midDigest,
         'the tree a fresh container attached is not the tree that was checkpointed '
         + `(${String(restored.files)} files / ${String(restored.bytes)} B restored)`,
       );
       const back = await resurrected();
-      require(
+      demand(
         back.length === 0,
         `a file deleted two checkpoints ago came back on the cold reattach: ${back.join(', ')}`,
       );

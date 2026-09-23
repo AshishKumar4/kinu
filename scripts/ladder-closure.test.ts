@@ -206,6 +206,36 @@ describe('ladder-closure — what a closure holds', () => {
     expect(files).toContain('fixtures/a.txt');
     expect(files).toContain('fixtures/b.txt');
   });
+
+  test('a script run through the ladder\'s deadline wrapper holds the wrapped command\'s graph', () => {
+    const repo = fixture({
+      'scripts/ladder.ts': 'export const ladder = 1;',
+      'packages/a/tests/a.test.ts': 'export const t = process.env.ALPHA;',
+    }, { 'test:a': 'bun scripts/ladder.ts --run bun test packages/a/' });
+
+    const closure = deriveClosure('bun run test:a', DERIVED, repo);
+    expect(derived(closure)).toContain('packages/a/tests/a.test.ts');
+    expect(closure.kind === 'derived' ? closure.env : []).toContain('ALPHA');
+  });
+
+  test('the configs a tsconfig on the path extends are inputs', () => {
+    const repo = fixture({
+      'tsconfig.base.json': '{ "compilerOptions": {} }',
+      'packages/a/tsconfig.json': '{ "extends": "../../tsconfig.base.json" }',
+      'packages/a/src/a.ts': 'export const a = 1;',
+    });
+
+    expect(derived(deriveClosure('bun packages/a/src/a.ts', DERIVED, repo))).toContain('tsconfig.base.json');
+  });
+
+  test('a type-only import resolves to the declaration file it names', () => {
+    const repo = fixture({
+      'scripts/g.ts': "import type { E } from './env';\nexport type G = E;",
+      'scripts/env.d.ts': 'export interface E { readonly x: 1 }',
+    });
+
+    expect(derived(deriveClosure('bun scripts/g.ts', DECLARED, repo))).toContain('scripts/env.d.ts');
+  });
 });
 
 describe('ladder-closure — red in every direction it refuses', () => {
@@ -250,7 +280,11 @@ describe('ladder-closure — red in every direction it refuses', () => {
     expect(refused(deriveClosure('bun scripts/g.ts', DECLARED, repo))).toContain('resolves to no parsed source');
   });
 
-  test('an environment read whole refuses the gate whatever the row declares', () => {
+  test('an environment read whole or by a computed key is derived, not refused', () => {
+    // The runner hands a derived gate only the names its key hashes
+    // (`gateEnvironment` in ladder-cache.ts), so however a graph reads the
+    // environment it sees keyed values or nothing; the soundness half is
+    // proved in ladder-cache.test.ts.
     for (const body of [
       'export const g = { ...process.env };',
       'export const g = Object.entries(process.env);',
@@ -258,16 +292,11 @@ describe('ladder-closure — red in every direction it refuses', () => {
       "export const g = 'X' in Bun.env;",
       'const { PATH, ...rest } = process.env;\nexport const g = [PATH, rest];',
       "const k = 'X';\nconst { [k]: v } = process.env;\nexport const g = v;",
+      'export const g = (k: string) => process.env[k];',
     ]) {
       const repo = fixture({ 'scripts/g.ts': body });
-      expect(refused(deriveClosure('bun scripts/g.ts', DECLARED, repo))).toContain('reads the environment whole');
+      expect(deriveClosure('bun scripts/g.ts', DERIVED, repo).kind).toBe('derived');
     }
-  });
-
-  test('a computed environment key needs a declared env list', () => {
-    const repo = fixture({ 'scripts/g.ts': 'export const g = (k: string) => process.env[k];' });
-    expect(refused(deriveClosure('bun scripts/g.ts', DERIVED, repo))).toContain('computed key');
-    expect(deriveClosure('bun scripts/g.ts', { kind: 'derived', env: [] }, repo).kind).toBe('derived');
   });
 
   test('a read by path or a spawn needs a declared reads list, and a runtime resolve is a path read', () => {

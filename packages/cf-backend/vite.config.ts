@@ -82,6 +82,11 @@ const wgslClientOnly = {
 const devStateDir = process.env.KINU_DEV_STATE_DIR;
 
 export default defineConfig({
+  // The dependency optimizer's cache for one harness boot; unset leaves vite's default, `node_modules/.vite`.
+  // Every worktree's `.vite` is the primary checkout's (setup-worktree.sh), so two dev servers booting at once on
+  // different lockfiles re-optimize into one directory and delete each other's deps: "The file does not exist at
+  // .../.vite/deps_kinu/..." (2026-09-23).
+  cacheDir: process.env.KINU_DEV_CACHE_DIR,
   plugins: [
     promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(),
     cloudflare(devStateDir === undefined ? {} : { persistState: { path: devStateDir } }),

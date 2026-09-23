@@ -11,7 +11,7 @@ import {
   type MctsProgress,
 } from '../src/hooks/use-kinu';
 import { explorationForkTree } from '@kinu.run/core';
-import { pruneSlateReloads } from '../src/components/surfaces/presence';
+import { pruneSlateReloads } from '@kinu.run/core';
 import type { ForkNode } from '@kinu.run/core';
 import {
   activateMctsProgressActor,

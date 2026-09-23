@@ -631,18 +631,47 @@ export function sizeViolations(message: string): Violation[] {
   }];
 }
 
-/**
- * A `commit-msg` file as git will store it: comment lines dropped, and
- * everything from the `--verbose` scissors line cut. The hook runs BEFORE git's
- * own cleanup, so a message read raw carries the entire commit template and the
- * whole staged diff, and a gate reading that would find `the owner` in somebody
- * else's docstring.
- */
-export function cleanMessage(raw: string): string {
-  const scissors = raw.indexOf('# ------------------------ >8 ------------------------');
-  const kept = scissors === -1 ? raw : raw.slice(0, scissors);
+/** `git commit --cleanup`'s modes, as a commit resolves them. */
+export type CleanupMode = 'strip' | 'whitespace' | 'scissors' | 'verbatim';
 
-  return kept.split('\n').filter((line) => !line.startsWith('#')).join('\n').trim();
+/**
+ * The cleanup git applies before it stores this commit's message: `commit.cleanup`,
+ * whose `default` drops `#` lines only when an editor opened. Git exports
+ * `GIT_EDITOR=:` to every commit hook when none will (githooks(5)), and then it
+ * KEEPS them: a `--no-edit` merge stores its `# Conflicts:` list, which the hook
+ * once read stripped and passed, and the history gate refused at the next commit
+ * (2026-09-23), where only a rewrite fixes a message.
+ */
+export function cleanupMode(configured: string, editorOpened: boolean): CleanupMode {
+  if (configured === 'strip' || configured === 'whitespace' || configured === 'verbatim') return configured;
+
+  if (configured === 'scissors') return editorOpened ? 'scissors' : 'whitespace';
+
+  return editorOpened ? 'strip' : 'whitespace';
+}
+
+/**
+ * A `commit-msg` file as git will store it under `mode`: comment lines dropped
+ * only by `strip`, and everything from the `--verbose` scissors line cut when an
+ * editor showed it. The hook runs BEFORE git's own cleanup, so a message read raw
+ * from an editor carries the entire commit template and the whole staged diff,
+ * and a gate reading that would find `the owner` in somebody else's docstring.
+ */
+export function cleanMessage(raw: string, mode: CleanupMode): string {
+  if (mode === 'verbatim') return raw;
+
+  const scissors = mode === 'whitespace' ? -1 : raw.indexOf('# ------------------------ >8 ------------------------');
+  const kept = (scissors === -1 ? raw : raw.slice(0, scissors)).split('\n');
+
+  return (mode === 'strip' ? kept.filter((line) => !line.startsWith('#')) : kept).join('\n').trim();
+}
+
+/** `commit.cleanup` of the repository git is committing into, read with the
+ *  environment git handed the hook; `default` when unset. */
+function configuredCleanup(): string {
+  const read = spawnSync('git', ['config', '--get', 'commit.cleanup'], { encoding: 'utf8' });
+
+  return read.status === 0 ? read.stdout.trim() : 'default';
 }
 
 /** The ambient git environment, removed. A `commit-msg` hook exports `GIT_DIR`,
@@ -932,6 +961,10 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'requires lowercase in each hump so that GEPA, LATS, MCTS and OpenAI are not findings.',
   'THE DIFF. Nothing here reads what the commit changed, so a subject that is well-formed, '
   + 'in-vocabulary, and describes a different commit passes every rule.',
+  'A --cleanup FLAG. The hook knows the configured `commit.cleanup` and whether an editor opened, '
+  + 'not the command line: `--cleanup=strip` with no editor is judged with its `#` lines kept, a '
+  + 'refusal git would not have needed, and `--cleanup=whitespace` from an editor is judged without '
+  + 'them, a pass the history tier then refuses at the next commit.',
 ];
 
 if (import.meta.main) {
@@ -976,7 +1009,10 @@ if (import.meta.main) {
 
   const governed: readonly GovernedCommit[] = messageFile === undefined
     ? sinceConvention
-    : [{ sha: messageFile, message: cleanMessage(readFileSync(messageFile, 'utf8')) }];
+    : [{
+      sha: messageFile,
+      message: cleanMessage(readFileSync(messageFile, 'utf8'), cleanupMode(configuredCleanup(), process.env.GIT_EDITOR !== ':')),
+    }];
 
   // The size rule dates from its own commit: in the ladder it reads only the
   // commits written under it; in the hook it reads the message being written.

@@ -385,3 +385,36 @@ export const planWalkthrough: ScriptedModel = (request) => {
     ].join(' '),
   };
 };
+
+/** The kept-tab row's two asks, by the words the row sends. */
+export const KEPT_TAB_NOTE = 'Kept-tab probe: save one note.';
+
+export const KEPT_TAB_FORGET = 'Kept-tab probe: forget every note.';
+
+/** The workspace's notes file, as the agent's file tool addresses it. */
+const NOTES_FILE = '/home/user/memory/MEMORY.md';
+
+/**
+ * The kept-tab row's turns, or null for any other request: the first saves a
+ * note, which gives the Work tab content; the second rewrites the notes file
+ * with no note in it, which takes that content away again.
+ */
+export function keptTabProbe(request: ScriptedRequest): ScriptedAnswer | null {
+  const last = request.userTexts.at(-1) ?? '';
+
+  if (request.available.length === 0) return null;
+
+  if (last.includes(KEPT_TAB_NOTE)) {
+    return request.called.includes('memory')
+      ? { text: 'Saved.' }
+      : { toolCall: { name: 'memory', arguments: { action: 'save', content: 'The kept-tab probe was here.' } } };
+  }
+
+  if (last.includes(KEPT_TAB_FORGET)) {
+    return request.called.includes('file')
+      ? { text: 'Forgotten.' }
+      : { toolCall: { name: 'file', arguments: { action: 'write', path: NOTES_FILE, content: '# Memory\n' } } };
+  }
+
+  return null;
+}

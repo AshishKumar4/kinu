@@ -196,7 +196,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   effect: ToolCallEffect;
   /** Protocol-level failure reason; never present together with `output`. */
   errorText?: string;
-  /** Keyed by toolCallId on the message: a row folding into a group mid-stream remounts. */
+  /** Keyed by toolCallId on the message: a row that joins a fold mid-stream remounts. */
   expanded: boolean;
   onToggleExpand: () => void;
 }) {
@@ -227,7 +227,6 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   const description = describeToolCall(toolName, input);
 
   const failed = isError || provisionErr !== null;
-  const prominent = effect === 'mutate' || isRunning;
 
   // Free-text previews bypass the structured `redactPayload` walk, so they pass through
   // `redactSecrets` here.
@@ -251,33 +250,23 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   }
 
   return (
-    <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
+    <div>
       <button
         type="button"
         onClick={onToggleExpand}
         aria-expanded={expanded}
         data-tool-state={stateName}
         data-tool-effect={effect}
-        className={`group/tool grid w-full cursor-pointer items-center text-left transition-colors hover:bg-[var(--c-elevated)] ${prominent ? "grid-cols-[34px_minmax(0,1fr)_auto_auto] gap-3 px-3.5 py-3" : "grid-cols-[20px_minmax(0,1fr)_auto_auto] gap-2 px-3 py-2"}`}
+        className="group/tool grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--c-elevated)]"
       >
-        <span className={`flex items-center justify-center ${prominent ? `size-[34px] rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-accent" : "p-border p-recessed p-text-3"}` : "size-5 p-text-4"}`}>
+        <span className="flex size-5 items-center justify-center p-text-4">
           {toolIcon(toolName)}
         </span>
-        {prominent ? (
-          <span className="min-w-0">
-            <span className="flex min-w-0 items-center gap-2">
-              <strong className="truncate p-row-text font-semibold p-text">{description || toolLabel(toolName)}</strong>
-              {runtime && <span className="shrink-0 rounded-full p-fill px-2 py-0.5 p-annotation p-text-3">{runtime}</span>}
-            </span>
-            <span className="mt-0.5 block truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
-          </span>
-        ) : (
-          <span className="flex min-w-0 items-baseline gap-2">
-            <strong className="min-w-0 truncate p-row-text font-medium p-text-2">{description || toolLabel(toolName)}</strong>
-            <span className="min-w-0 flex-1 truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
-            {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
-          </span>
-        )}
+        <span className="flex min-w-0 items-baseline gap-2">
+          <strong className="min-w-0 truncate p-row-text font-medium p-text-2">{description || toolLabel(toolName)}</strong>
+          <span className="min-w-0 flex-1 truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+          {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
+        </span>
         <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${stateTone}`}>
           {stateBadge}
         </span>
@@ -328,43 +317,33 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   );
 }
 
-function ToolCallGroup({ parts, expandedCalls, onToggleCall }: {
+/** A run of read-only calls long enough to fold: its first and last rows stand,
+ *  and the calls between them wait behind one control until the reader asks. */
+function ToolCallFold({ parts, expandedCalls, onToggleCall }: {
   parts: readonly AnyToolPart[];
   expandedCalls: ReadonlySet<string>;
   onToggleCall: (toolCallId: string) => void;
 }) {
-  const [showAll, setShowAll] = useState(false);
-  const failedCount = parts.filter(callFailed).length;
+  const [open, setOpen] = useState(false);
+  const middle = parts.slice(1, -1);
 
-  const collapsed = parts.length <= 8 ? parts : parts.filter((part, index) =>
-    index === 0 || index === parts.length - 1 || expandedCalls.has(part.toolCallId));
-
-  const shown = showAll ? parts : collapsed;
-  const hiddenCount = parts.length - collapsed.length;
+  const row = (part: AnyToolPart) => (
+    <div key={part.toolCallId} className={BLOCK_GAP.row}>
+      <ToolCallPart part={part} expanded={expandedCalls.has(part.toolCallId)} onToggleExpand={() => onToggleCall(part.toolCallId)} />
+    </div>
+  );
 
   return (
-    <div data-tool-group data-tool-count={parts.length} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
-      <div className="flex flex-wrap items-center gap-2 border-b p-border p-sidebar px-3.5 py-2">
-        <LightningIcon size={13} className="p-text-4" weight="fill" />
-        <span className="p-row-text font-semibold p-text-2">Agent activity</span>
-        <span className="p-annotation p-text-4">· {parts.length} call{parts.length === 1 ? "" : "s"}</span>
-        {failedCount > 0 && <span className="ml-auto p-t-status p-text-4">{failedCount} failed</span>}
-      </div>
-      <div className="divide-y divide-dashed divide-[var(--c-dash)]">
-        {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} expanded={expandedCalls.has(part.toolCallId)} onToggleExpand={() => onToggleCall(part.toolCallId)} />)}
-      </div>
-      {hiddenCount > 0 && (
-        <button
-          type="button"
-          onClick={() => setShowAll((current) => !current)}
-          aria-expanded={showAll}
-          data-tool-group-toggle
-          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left p-t-control p-accent"
-        >
-          {showAll ? "Collapse activity" : `Show ${hiddenCount} more call${hiddenCount === 1 ? "" : "s"}`}
+    <>
+      {parts.slice(0, 1).map(row)}
+      {open ? middle.map(row) : (
+        <button type="button" onClick={() => setOpen(true)} aria-expanded={false}
+          className={`${BLOCK_GAP.row} w-full px-3 py-1.5 text-left p-t-control p-accent`}>
+          {middle.length} more
         </button>
       )}
-    </div>
+      {parts.slice(-1).map(row)}
+    </>
   );
 }
 
@@ -787,12 +766,8 @@ export const MessageView = memo(function MessageView({
                 </button>
               )}
               {groupMessageParts(segment.parts).map((block, i) => {
-                if (block.kind === "tool-run") {
-                  const first = block.parts[0];
-
-                  return first ? <div key={first.toolCallId} className={BLOCK_GAP.section}>
-                    <ToolCallGroup parts={block.parts} expandedCalls={callToggles} onToggleCall={toggleCall} />
-                  </div> : null;
+                if (block.kind === "fold") {
+                  return <ToolCallFold key={block.parts[0]?.toolCallId ?? i} parts={block.parts} expandedCalls={callToggles} onToggleCall={toggleCall} />;
                 }
 
                 const part = block.part;

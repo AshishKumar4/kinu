@@ -1,5 +1,5 @@
 {
-  "measured": "83cd1fd49: 1143 test files, 1008 runnable suites, 13050 tests, 40 runners, 91 non-public product members",
+  "measured": "5080e0981: 1159 test files, 1012 runnable suites, 13084 tests, 41 runners, 91 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-codemode-sandbox.test.ts :: (file scope) :: declared mirror",
@@ -684,18 +684,6 @@
     {
       "key": "source_text :: scripts/bench-fuse-probe.test.ts :: driver waits for authenticated propagation before container setup :: expect(<source text>).toContain",
       "count": 2
-    },
-    {
-      "key": "source_text :: scripts/ladder.test.ts :: the installer writes a RELATIVE hooks path :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/ladder.test.ts :: the two runners cannot reach each other :: expect(<source text>).toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: scripts/ladder.test.ts :: the two runners cannot reach each other :: reads a source file",
-      "count": 1
     },
     {
       "key": "source_text :: scripts/payload-transport.test.ts :: (file scope) :: reads a source file",

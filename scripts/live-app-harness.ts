@@ -18,6 +18,7 @@
  * `.wrangler/state` (`statePath` below).
  */
 
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from '@kinu.run/test-utils';
@@ -272,6 +273,12 @@ function liveAppEnv() {
   // .dev.vars into the worktree.
   env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true';
 
+  // The Drive signs its listing cursors with JWT_SECRET and is unbound without
+  // one (drive/tenant.ts `driveBound`: every Drive route answers 503). .dev.vars
+  // carries none, and nothing durable is sealed with it (infra-manifest.ts), so
+  // a boot on its own state gets its own.
+  env.JWT_SECRET ??= randomBytes(32).toString('base64');
+
   return env;
 }
 
@@ -284,9 +291,42 @@ export interface LiveAppOptions {
   readonly env?: Record<string, string | undefined>;
 }
 
-/** Boot vite dev, launch the browser, run `body`, tear both down entirely. */
-export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
-  if (options.port === 3000) throw new Error('withLiveApp: port 3000 is reserved');
+/** One booted dev server: the product on loopback, on state minted for it. */
+export interface DevServer {
+  /** `http://127.0.0.1:<port>`. */
+  readonly origin: string;
+  /** See {@link LiveApp.statePath}. */
+  readonly statePath: string;
+}
+
+/** The desktop viewport every browser row reads at: the inspector column, its
+ *  separator and the rail lane exist above 900px (`INSPECTOR_WIDE_QUERY`), and
+ *  puppeteer's own default page is 800x600, where the column is a mobile pane. */
+export const DESKTOP = { width: 1440, height: 900 } as const;
+
+/** Chrome for a browser row: the box's own build when one is installed, a
+ *  desktop pointer declared, and no protocol clock. */
+async function openBrowser(extraArgs: readonly string[]): Promise<Browser> {
+  const launchOptions: LaunchOptions = {
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+      ...extraArgs,
+    ],
+    protocolTimeout: 0,
+  };
+
+  const executablePath = chromePath();
+
+  if (executablePath) launchOptions.executablePath = executablePath;
+
+  return puppeteer.launch(launchOptions);
+}
+
+/** Boot vite dev, run `body` against it, tear it down entirely. */
+export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
+  if (options.port === 3000) throw new Error('withDevServer: port 3000 is reserved');
 
   const requested = options.port ?? 0;
 
@@ -323,7 +363,13 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
       // handed to the plugin as `persistState.path`; `options.env` cannot
       // reach it, a caller asking for the checkout's state is asking for the
       // defect this directory exists to end.
-      env: { ...process.env, ...liveAppEnv(), ...options.env, KINU_DEV_STATE_DIR: statePath },
+      env: {
+        ...process.env, ...liveAppEnv(), ...options.env,
+        KINU_DEV_STATE_DIR: statePath,
+        // Its own dependency-optimizer cache too: the default is one directory
+        // every worktree shares (packages/cf-backend/vite.config.ts).
+        KINU_DEV_CACHE_DIR: scratchDir('live-app-vite-cache'),
+      },
       // setsid, so vite leads its own process group: teardown can signal the
       // workerd children with it rather than orphaning them to systemd
       // (deploy.sh:357-362 — this accumulation OOM-killed the box once).
@@ -331,60 +377,25 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     },
   );
 
-  // Resolved once the browser is up; held from here so a row killed during
-  // the dev server's own boot still lets vite go.
-  let browserGroup: number | undefined;
-
-  const held = holdForRelease('the live app and its browser', () => {
-    // Both groups, in one hold, because both of this row's heavy children
-    // leave its process group: vite leads its own (setsid, above) and
-    // puppeteer spawns Chrome detached. A killed row leaks whichever it is
-    // not told to end, and under `bun test` this is the ONLY teardown that
-    // runs — the preload's signal listener releases and then ends the process
-    // inside its own re-raise, so neither `finally` below ever opens
-    // (scripts/test-scratch-home.ts; gallery-harness.ts says the same).
+  // Under `bun test` this is the ONLY teardown that runs when a row is killed:
+  // the preload's signal listener releases and then ends the process inside
+  // its own re-raise, so the `finally` below never opens
+  // (scripts/test-scratch-home.ts; gallery-harness.ts says the same).
+  const held = holdForRelease('the live app dev server', () => {
     signalGroup(child.pid, 'SIGTERM');
-    signalGroup(browserGroup, 'SIGTERM');
     signalGroup(child.pid, 'SIGKILL');
-    signalGroup(browserGroup, 'SIGKILL');
   });
 
   try {
     const origin = await waitForDevServer(child, port, output);
+
     // From here, a failing request can quote the server that failed it.
     devServerOutput.set(origin, output);
-    const executablePath = chromePath();
-
-    const launchOptions: LaunchOptions = {
-      args: [
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
-        ...(options.browserArgs ?? []),
-      ],
-      protocolTimeout: 0,
-    };
-
-    if (executablePath) launchOptions.executablePath = executablePath;
-    const browser = await puppeteer.launch(launchOptions);
-    browserGroup = browser.process()?.pid;
-
-    const newPage = async (): Promise<Page> => {
-      const page = await browser.newPage();
-
-      page.setDefaultTimeout(0);
-      page.setDefaultNavigationTimeout(0);
-
-      return page;
-    };
 
     try {
-      return await body({ browser, newPage, origin, statePath });
+      return await body({ origin, statePath });
     } finally {
       devServerOutput.delete(origin);
-      signalGroup(browserGroup, 'SIGTERM');
-      await browser.close();
-      signalGroup(browserGroup, 'SIGKILL');
     }
   } finally {
     held();
@@ -396,4 +407,42 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
     await child.exited;
     signalGroup(child.pid, 'SIGKILL');
   }
+}
+
+/** Launch Chrome, run `body` with it, and end it and every process it started.
+ *  Puppeteer spawns Chrome detached, outside this process group, so a killed
+ *  row would leak it but for the hold. */
+export async function withBrowser<T>(body: (browser: Browser) => Promise<T>, extraArgs: readonly string[] = []): Promise<T> {
+  const browser = await openBrowser(extraArgs);
+  const group = browser.process()?.pid;
+
+  const held = holdForRelease('a row\'s browser', () => {
+    signalGroup(group, 'SIGTERM');
+    signalGroup(group, 'SIGKILL');
+  });
+
+  try {
+    return await body(browser);
+  } finally {
+    held();
+    signalGroup(group, 'SIGTERM');
+    await browser.close();
+    signalGroup(group, 'SIGKILL');
+  }
+}
+
+/** Boot vite dev, launch the browser, run `body`, tear both down entirely. */
+export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
+  return withDevServer(({ origin, statePath }) => withBrowser((browser) => {
+    const newPage = async (): Promise<Page> => {
+      const page = await browser.newPage();
+
+      page.setDefaultTimeout(0);
+      page.setDefaultNavigationTimeout(0);
+
+      return page;
+    };
+
+    return body({ browser, newPage, origin, statePath });
+  }, options.browserArgs), options);
 }

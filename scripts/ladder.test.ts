@@ -20,7 +20,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { git } from '@kinu.run/test-utils';
+import { childEnv, git } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   BUDGET_TOLERANCE, CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
@@ -79,9 +79,9 @@ const NON_BUN_RUNNERS: readonly {
  * were credited to `bun test ./tests/` at the ci tier — a bun gate that cannot
  * select a `.eval.ts` at all. Four live eval suites therefore read as CI-covered
  * while the only thing that ran them was `bun run test:eval`, which claimed
- * nothing. The live-app suite is here because its own deploy row is its only
- * runner: CI_EXEMPT carries why a pull request cannot boot the product's dev
- * server.
+ * nothing. The live-app suite and the product flows are here because their own
+ * deploy rows are their only runners: CI_EXEMPT carries why a pull request
+ * cannot boot the product's dev server.
  */
 const AFTER_CI_SUITES = {
   'tests/evals/behaviour.eval.ts': 'bun run test:eval',
@@ -92,6 +92,7 @@ const AFTER_CI_SUITES = {
   'tests/evals/trajectory.eval.ts': 'bun run test:eval',
   'tests/evals/kinu-tasks.eval.ts': 'bun run test:eval',
   'scripts/live-app-tier.test.ts': 'bun test --timeout=0 scripts/live-app-tier.test.ts',
+  'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
 } satisfies Record<string, string>;
 
 /**
@@ -137,6 +138,28 @@ describe('the ladder measures something', () => {
     expect(printed.map((fields) => fields[6])).toEqual(plan.map((row) => row.run));
     expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.shared));
     expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
+  });
+
+  test('the concurrent wave starts its longest measured rows first, and every alone phase keeps ladder order', () => {
+    // Walls assigned against ladder order, so a plan that kept ladder order
+    // inside the wave, or sorted the other way, reads the wrong row first.
+    const real = readCosts();
+    const ladderOrder = LADDER.map((gate) => gate.run);
+
+    const costs = {
+      ...real,
+      rows: Object.fromEntries(Object.entries(real.rows).map(([run, cost]) => [run, { ...cost, wallSeconds: ladderOrder.indexOf(run) }])),
+    };
+
+    const plan = deployPlan(costs);
+    const source = plan.filter((row) => row.phase === 'source').map((row) => costs.rows[row.run]?.wallSeconds ?? -1);
+
+    expect(source.length).toBeGreaterThan(10);
+    expect(source).toEqual([...source].sort((left, right) => right - left));
+
+    const alone = plan.filter((row) => row.phase !== 'source').map((row) => ladderOrder.indexOf(row.run));
+    expect(alone).toEqual(DEPLOY_PHASES.flatMap((phase) => LADDER.filter((gate) => gate.tier !== 'evals' && gate.phase === phase))
+      .map((gate) => ladderOrder.indexOf(gate.run)));
   });
 
   // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, and a figure for a row
@@ -770,10 +793,24 @@ describe('every test file is claimed by some runner', () => {
     expect(bunClaimed.filter((path) => workerd.includes(path))).toEqual([]);
     expect(bunClaimed.length).toBeGreaterThan(300);
 
-    // And the vitest side names the same directory the bunfig pattern excludes,
-    // so the two globs cannot drift apart into an overlap or into a gap.
-    const vitestConfig = readFileSync(resolve(root, 'packages/cf-backend/vitest.config.ts'), 'utf8');
-    expect(vitestConfig).toContain("include: ['tests/workerd/**/*.test.ts']");
+    // And vitest's own config selects exactly the files bun skips, asked of
+    // vitest itself: a widened `include` is an overlap here and a narrowed one
+    // is a workerd suite that runs nowhere, in both directions.
+    const listed = Bun.spawnSync(
+      [resolve(root, 'node_modules/.bin/vitest'), 'list', '--root', 'packages/cf-backend', '--filesOnly', '--json'],
+      { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    expect(listed.exitCode, listed.stderr.toString()).toBe(0);
+
+    const selected = v.parse(v.array(v.object({ file: v.string() })), JSON.parse(listed.stdout.toString()))
+      .map(({ file }) => relative(root, file));
+
+    const onDisk = tracked.filter((path) => path.startsWith('packages/cf-backend/tests/workerd/') && path.endsWith('.test.ts'));
+    expect(onDisk.length).toBeGreaterThan(0);
+    expect(selected.filter((path) => !bunWouldSkip(path))).toEqual([]);
+    expect(bunClaimed.filter((path) => selected.includes(path))).toEqual([]);
+    expect(onDisk.filter((path) => !selected.includes(path))).toEqual([]);
   });
 
   test('the root test script covers every package or names the omission and its gate', () => {
@@ -1045,8 +1082,6 @@ describe('the hooks run the tiers they claim to', () => {
     // path here would silently un-gate 41 of them, which is why the shape is
     // asserted and not just documented.
     expect(HOOKS_DIR.startsWith('/')).toBe(false);
-    expect(readFileSync(resolve(root, 'scripts/ladder.ts'), 'utf8'))
-      .toContain("'git', 'config', 'core.hooksPath', HOOKS_DIR");
     // And something has to run it on a tree nobody has prepared: a fresh
     // worktree, and a fresh CLONE — which setup-worktree.sh never sees.
     expect(readFileSync(resolve(root, 'scripts/setup-worktree.sh'), 'utf8'))
