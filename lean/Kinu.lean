@@ -4,7 +4,7 @@
   published theorem depends on it. `lean/traceability.yaml` is the inventory.
 
   Core: Types
-  Safety: Credentials
+  Safety: Credentials, DeviceView, DeviceToken
   MCTS: StorageIsolation, Backpropagation, Uct, Convergence
   Evolution: Timescales, CraftStore, Scaffold, FullCraftLifecycle
   Agent: Lifecycle, FiberDurability, TurnQueue
@@ -21,6 +21,8 @@ import Kinu.Types
 
 -- Safety proofs
 import Kinu.Safety.Credentials
+import Kinu.Safety.DeviceView
+import Kinu.Safety.DeviceToken
 
 -- MCTS proofs
 import Kinu.MCTS.StorageIsolation

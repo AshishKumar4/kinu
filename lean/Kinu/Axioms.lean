@@ -148,6 +148,34 @@ import Kinu
 #print axioms Kinu.Safety.Credentials.rewrap_keeps_every_readable_secret
 #print axioms Kinu.Safety.Credentials.rewrap_seals_plaintext_only_in_a_never_sealed_store
 
+/-! ## Kinu/Safety/DeviceView.lean -/
+
+#print axioms Kinu.Safety.DeviceView.outside_is_never_writable
+#print axioms Kinu.Safety.DeviceView.kinu_own_directory_is_invisible_raw
+#print axioms Kinu.Safety.DeviceView.kinu_own_directory_is_invisible
+#print axioms Kinu.Safety.DeviceView.a_sandboxed_write_lands_where_consented
+#print axioms Kinu.Safety.DeviceView.a_valid_segment_has_no_slash
+#print axioms Kinu.Safety.DeviceView.an_accepted_home_is_one_workspace
+#print axioms Kinu.Safety.DeviceView.no_frame_reaches_a_kinu_secret
+#print axioms Kinu.Safety.DeviceView.another_workspace_is_invisible
+#print axioms Kinu.Safety.DeviceView.a_spanning_name_reaches_a_kinu_secret
+#print axioms Kinu.Safety.DeviceView.an_untiered_frame_is_refused
+#print axioms Kinu.Safety.DeviceView.a_root_of_slash_is_raw
+
+/-! ## Kinu/Safety/DeviceToken.lean -/
+
+#print axioms Kinu.Safety.DeviceToken.a_ticket_is_spent_once
+#print axioms Kinu.Safety.DeviceToken.a_ticket_dies_at_its_minute
+#print axioms Kinu.Safety.DeviceToken.a_revoked_devices_ticket_admits_nothing
+#print axioms Kinu.Safety.DeviceToken.revocation_is_permanent
+#print axioms Kinu.Safety.DeviceToken.a_retired_token_revokes_its_device
+#print axioms Kinu.Safety.DeviceToken.the_grace_is_one_shot
+#print axioms Kinu.Safety.DeviceToken.ahead_after_own
+#print axioms Kinu.Safety.DeviceToken.out_after_other
+#print axioms Kinu.Safety.DeviceToken.revoked_after_out
+#print axioms Kinu.Safety.DeviceToken.two_copies_cannot_alternate
+#print axioms Kinu.Safety.DeviceToken.one_holder_is_never_revoked
+
 /-! ## Kinu/Storage/FTS5Search.lean -/
 
 #print axioms Kinu.Storage.FTS5Search.index_includes_new

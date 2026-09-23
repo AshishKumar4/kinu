@@ -282,6 +282,65 @@ requirements:
       - The never-sealed-store rule rests on the user_schema_meta marker, which rewrapCredentials writes only after a clean pass; the fixture exercises the envelope, not the marker
     refinement:
       - lean/fixtures/credential-envelope.json :: packages/core/tests/refinement-credentials.test.ts
+  PR-DEVICE-001:
+    statement: The daemon's file methods never reach Kinu's own directory outside a frame's own agent directories, in either tier and under any consented root; a sandboxed frame writes only in its own agent directories and the consented roots and never sees another workspace's; its agent home is one workspace segment, without which a spanning name would make device.json writable; a frame that names no tier is refused, and a consented root of / is the raw tier.
+    status: proved-and-refined
+    theorems:
+      - Kinu.Safety.DeviceView.outside_is_never_writable
+      - Kinu.Safety.DeviceView.kinu_own_directory_is_invisible_raw
+      - Kinu.Safety.DeviceView.kinu_own_directory_is_invisible
+      - Kinu.Safety.DeviceView.a_sandboxed_write_lands_where_consented
+      - Kinu.Safety.DeviceView.a_valid_segment_has_no_slash
+      - Kinu.Safety.DeviceView.an_accepted_home_is_one_workspace
+      - Kinu.Safety.DeviceView.no_frame_reaches_a_kinu_secret
+      - Kinu.Safety.DeviceView.another_workspace_is_invisible
+      - Kinu.Safety.DeviceView.a_spanning_name_reaches_a_kinu_secret
+      - Kinu.Safety.DeviceView.an_untiered_frame_is_refused
+      - Kinu.Safety.DeviceView.a_root_of_slash_is_raw
+    tsRefs:
+      - packages/pc-agent/src/sandbox.js#viewFor
+      - packages/pc-agent/src/sandbox.js#rawViewFor
+      - packages/pc-agent/src/sandbox.js#within
+      - packages/pc-agent/src/sandbox.js#realTarget
+      - packages/pc-agent/src/index.js#frameSandbox
+      - packages/pc-agent/src/index.js#frameAgentHome
+      - packages/pc-agent/src/index.js#AGENT_SEGMENT
+    remainingEvidence:
+      - Classification is proved on the path a syscall reaches, which realTarget computes; a link swapped between the check and the syscall is outside the model
+      - The raw tier confines only the daemon's file methods: a raw command runs as the owner and can read device.json, which is what the owner's Sandbox switch turned off means
+      - Whether bwrap or sandbox-exec enforces the same policy for a sandboxed command is the kernel sandbox's part, outside this model
+      - config.json is the CLI's bearer only when the CLI keeps its configuration in Kinu's device directory, the default ~/.kinu
+      - The fixture runs viewFor on a real tree with real links, as macOS's view on this host; the Linux mounts, the temp remap and frameAgentHome are proved but not exercised by it
+    refinement:
+      - lean/fixtures/device-view.json :: packages/pc-agent/tests/refinement-device-view.test.js
+  PR-DEVICE-002:
+    statement: A device connect ticket admits at most once, never from its minute on and never for a revoked device; revocation is permanent, a retired device token revokes its device and the grace a rotation keeps is one shot; two holders of one device.json cannot alternate, and a single holder connects forever.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Safety.DeviceToken.a_ticket_is_spent_once
+      - Kinu.Safety.DeviceToken.a_ticket_dies_at_its_minute
+      - Kinu.Safety.DeviceToken.a_revoked_devices_ticket_admits_nothing
+      - Kinu.Safety.DeviceToken.revocation_is_permanent
+      - Kinu.Safety.DeviceToken.a_retired_token_revokes_its_device
+      - Kinu.Safety.DeviceToken.the_grace_is_one_shot
+      - Kinu.Safety.DeviceToken.ahead_after_own
+      - Kinu.Safety.DeviceToken.out_after_other
+      - Kinu.Safety.DeviceToken.revoked_after_out
+      - Kinu.Safety.DeviceToken.two_copies_cannot_alternate
+      - Kinu.Safety.DeviceToken.one_holder_is_never_revoked
+    tsRefs:
+      - packages/cf-backend/src/user/user-do.ts#DEVICE_CONNECT_TICKET_TTL_MS
+      - packages/cf-backend/src/user/user-do.ts#UserDO.issueDeviceConnectTicket
+      - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceConnectTicket
+      - packages/cf-backend/src/user/user-do.ts#UserDO.verifyDeviceToken
+      - packages/cf-backend/src/user/user-do.ts#UserDO.acceptDeviceSocket
+      - packages/cf-backend/src/user/user-do.ts#UserDO.rotateDeviceToken
+      - packages/cf-backend/src/user/user-do.ts#UserDO.revokeOnTokenReuse
+    remainingEvidence:
+      - A connection is one step, ticket and rotation together; a socket that fails between the two, and two connections of one device inside one ticket's minute, are outside the model
+      - Every connection falls inside the token's absolute window and the retired tokens' retention, both DEVICE_TOKEN_TTL_MS; outside them the hub refuses without revoking, which the model leaves out
+      - Tokens and tickets are their SHA-256 hashes; the model assumes distinct secrets hash apart
+      - No fixture runs the UserDO's ticket and token paths against the model; they need a workerd Durable Object
   PR-STORE-001:
     statement: The abstract memory index preserves new and unrelated chunks and bounds modeled search result length and score sign by construction.
     status: by-construction-witness

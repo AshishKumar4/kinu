@@ -3,7 +3,7 @@
 `lean/` holds hand-written abstract models of selected agent, evolution,
 execution, exploration, MCTS, safety and storage behavior. Check them with
 `bash scripts/verify-lean.sh`. Plain `lake build` compiles the declarations and
-skips the audits that follow it. Six requirements are also refined against
+skips the audits that follow it. Seven requirements are also refined against
 the deployed TypeScript and SQLite on generated cases (see *Implementation
 correspondence*); the rest are proved of their model only.
 
@@ -25,11 +25,11 @@ evidence.
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 6 | what each shipped executor claims, over the inputs its constructor reads | The capability lists are transcribed from the constructors; no fixture runs them |
-| Safety | 8 | the credential store's client view, envelope binding and rotation | The cipher's guarantees are premises. The device connection is not yet modelled |
+| Safety | 30 | the credential store's client view, envelope binding and rotation; what a connected machine's file methods reach in each tier; the connect ticket, token rotation and reuse revocation | The cipher's guarantees are premises. Paths are judged where a syscall reaches them, and a link swapped after the check is outside the model. A connection is one atomic step inside the token's window |
 
 Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
-reports 429 named declarations, and the traceability map enrolls all 429: 64
-under `proved-and-refined` requirements, 305 under `proved-in-abstract-model`
+reports 451 named declarations, and the traceability map enrolls all 451: 75
+under `proved-and-refined` requirements, 316 under `proved-in-abstract-model`
 and 60 under `by-construction-witness`.
 
 Status is declared on a requirement and inherited by every theorem it claims,
@@ -40,7 +40,7 @@ Near-definitional statements, such as the nonnegativity of a `Nat` EMA score,
 count as witnesses. They are not deep safety
 proofs.
 
-By requirement, over 46: 6 `proved-and-refined`, 30 `proved-in-abstract-model`,
+By requirement, over 48: 7 `proved-and-refined`, 31 `proved-in-abstract-model`,
 9 `by-construction-witness`, 1 `trusted-model-assumption`. The last status
 appears only in this total, because that requirement claims no theorem.
 
@@ -123,18 +123,18 @@ The script runs these checks, then builds the devbox proof corpus in
 5. `scripts/lean-citations.ts` checks every Lean citation in the tree. Each
    cited module must exist, and each cited name needs an exact
    `theorem <name>` declaration in it.
-6. `bun test` runs every test a `refinement` entry names.
+6. `bun test`, from the repository root, runs every test a `refinement` entry names.
 
 The traceability checker has no dependencies. It fails on any of these: `sorry`
 in any Lean source; a published theorem missing from the audit or the map; a
 YAML name without an exact declaration; a theorem that uses an axiom beyond the
 three kernel ones, unless its requirement is `trusted-model-assumption` and
 enrolls that exact axiom; a standalone axiom not enrolled exactly once; an
-invalid status, missing evidence or duplicate claims; a TypeScript reference
-whose file or line does not exist; a `refinement` list on any status but
-`proved-and-refined`, or missing from one; a fixture that does not name itself
-or holds no case; a named test that does not exist or never reads its fixture;
-a file in `lean/fixtures/` that no requirement claims.
+invalid status, missing evidence or duplicate claims; a TypeScript or
+JavaScript reference whose file or line does not exist; a `refinement` list on
+any status but `proved-and-refined`, or missing from one; a fixture that does
+not name itself or holds no case; a named test that does not exist or never
+reads its fixture; a file in `lean/fixtures/` that no requirement claims.
 
 ### Citation-gate blind spots
 
@@ -157,10 +157,10 @@ over 3,264 files: 95 module citations, 43 theorem citations, 1 line citation.
 
 ## Implementation correspondence
 
-A proof covers its model. The refinement fixtures tie six requirements to the
+A proof covers its model. The refinement fixtures tie seven requirements to the
 deployed code: `lean/Kinu/Refine/` evaluates the model's own definitions on
-generated inputs, and a test runs the deployed function on the same inputs
-against real `bun:sqlite`.
+generated inputs, and a test runs the deployed function on the same inputs:
+against real `bun:sqlite`, or, for the device view, on a real directory tree.
 
 | Fixture | Model | Deployed code | Test | Requirements |
 |---|---|---|---|---|
@@ -168,10 +168,12 @@ against real `bun:sqlite`.
 | `convergence.json` | `Convergence.outcomeOf`, backprop sums | `backpropagate`, `converge` in plan mode | `refinement-convergence.test.ts` | `PR-MCTS-001`, `PR-MCTS-005` |
 | `records.json` | `Concurrent.runC` | `recordExploration`, `sealRecords` | `refinement-records.test.ts` | `PR-PUBLISH-004`, `PR-RECORDS-003` |
 | `credential-envelope.json` | `Credentials.openStored`, transparent cipher | `createCredentialCipher`, AES-GCM | `refinement-credentials.test.ts` | `PR-CRED-001` |
+| `device-view.json` | `DeviceView.frameView`, `Sandboxed.classify` | `viewFor` on a tree with real links | `refinement-device-view.test.js` | `PR-DEVICE-001` |
 
-Measured 2026-09-23: 824 cases pass. Each test went red on planted breaks in
+Measured 2026-09-23: 980 cases pass. Each test went red on planted breaks in
 the deployed code: six in `uct.ts`, five in `convergence.ts`, `takes.ts` and
-`backpropagation.ts`, four in `records.ts` and `objective.ts`, and three in
-`envelope.ts`. A fixture is
-a finite sample. It shows agreement on its cases, not on every input, and it
-runs on `bun:sqlite`, not on a Durable Object's SQLite.
+`backpropagation.ts`, four in `records.ts` and `objective.ts`, three in
+`envelope.ts`, and six in `sandbox.js`. A fixture is a finite sample. It shows
+agreement on its cases, not on every input. The SQLite fixtures run on
+`bun:sqlite`, not on a Durable Object's SQLite, and the device view runs as
+macOS's view, without the Linux mounts and the temp remap.
