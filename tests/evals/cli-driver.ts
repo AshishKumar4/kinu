@@ -59,8 +59,15 @@ const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
  * files cannot land beside `config.json` and the workspace stores the driver
  * reads its ledgers from — and because `canonicalProjectRoot` derives a project
  * identity from cwd, which should be scratch too.
+ *
+ * It is also the child's FILESYSTEM. `kinu create` records this directory as the
+ * workspace's placement and `kinu exec` binds it, so the child's `file` tool and
+ * shell read and write here, never the in-database plane an unbound runtime
+ * opens. Measured 2026-09-23: an agent's `answer.txt` landed in this directory
+ * while an unbound reopen of the same store found no such file. A family's seed
+ * files go in here, and its verifier reads here.
  */
-function childProjectRoot(home: string): string {
+export function childProjectRoot(home: string): string {
   const root = join(home, 'project');
   mkdirSync(root, { recursive: true });
 
