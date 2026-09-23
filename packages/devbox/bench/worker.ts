@@ -50,6 +50,7 @@ import type { ExecOptions } from '@cloudflare/sandbox';
 import {
   Devbox,
   describeThrown,
+  devboxSyncHandlers,
   parseDevboxStrategyName,
   type CheckpointKind,
   type CheckpointOutcome,
@@ -59,7 +60,9 @@ import {
   type RestoreClockPhase,
 } from '../src/index';
 import type { RestorePhaseStamps } from '../src/durability/contracts';
-import type { LateStartFailure } from '../src/lifecycle';
+import { DEFAULT_DEVBOX_POLICY, type LateStartFailure } from '../src/lifecycle';
+import { upperFingerprintCommand } from '../src/snapshot-chain';
+import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
   R2_CLASS_B_OPERATIONS as CLASS_B,
@@ -90,6 +93,10 @@ interface BenchEnv {
   BENCH_SELECTED_ARMS?: string;
   /** Immutable per deployment. Absent and zero leave object writes uninstrumented. */
   BENCH_PUBLICATION_CUT?: string;
+  /** '1' runs the container's own sync at the shipped period, as production does, for the
+   *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
+   *  is the only tick source. */
+  BENCH_PRODUCTION_SYNC?: string;
   /** Set to '1' ONLY for a local `wrangler dev` run, where there is no container
    *  outbound interception and therefore no store mount. Absent on every deploy,
    *  which is what stops a deployed arm from measuring extraction and reporting
@@ -928,10 +935,11 @@ class BenchBox extends Devbox<BenchEnv> {
    * mis-attributed skips in one run. With the schedule off,
    * `checkpointNow` is the only tick source; `policy.checkpointIntervalMs`
    * stays as the guard the driver waits out before ticking, because the gate
-   * itself is product behaviour under test.
+   * itself is product behaviour under test. A loss-window run turns the sync on
+   * (`BENCH_PRODUCTION_SYNC`), because there the cadence is what is measured.
    */
   protected override get ambientCheckpoints(): boolean {
-    return false;
+    return this.env.BENCH_PRODUCTION_SYNC === '1';
   }
 
   protected override get store(): DevboxStore {
@@ -954,10 +962,7 @@ class BenchBox extends Devbox<BenchEnv> {
       heartbeatSeconds: 30,
       idleMs: 60_000,
       quietConfirmMs: 30_000,
-      // 2s, not the shipped 5 minutes: the bench measures checkpoint COST,
-      // not cadence, and every measured tick waits this interval out first.
-      // At 30s a run slept ~20 minutes doing nothing.
-      checkpointIntervalMs: 2_000,
+      checkpointIntervalMs: benchCheckpointIntervalMs(this.env),
       // A BUDGET IS A CEILING, NOT A DELAY.
       //
       // MEASURED: at 25_000 an arm died with `Devbox.attach exceeded its
@@ -979,11 +984,6 @@ class BenchBox extends Devbox<BenchEnv> {
       // the fixture's own server binds immediately.
       portWaitMs: 6_000,
       portProbeIntervalMs: 1_000,
-      // The DRIVER re-asks, so a held request buys nothing here: it polls
-      // `/state` on its own cadence and the arm's numbers are the fixture's own
-      // timestamps. Long enough that an ordinary cold attach still answers in
-      // one request, bounded so a slow one cannot hold an edge connection.
-      requestJoinMs: 5_000,
     };
   }
 }
@@ -993,6 +993,12 @@ export class SnapshotChainBox extends BenchBox {
     return 'snapshot-chain';
   }
 }
+
+SnapshotChainBox.outboundHandlers = devboxSyncHandlers((env: BenchEnv) => {
+  if (env.SnapshotChainBox === undefined) throw new Error('this deployment binds no SnapshotChainBox');
+
+  return env.SnapshotChainBox;
+});
 
 // ── the driver API ──────────────────────────────────────────────────────────
 
@@ -1101,6 +1107,13 @@ async function purgePrefix(bucket: R2Bucket, prefix: string): Promise<number> {
   }
 }
 
+/** 2 s, not the shipped 5 minutes: the bench measures checkpoint COST, not cadence, and every
+ *  measured tick waits this interval out first (at 30 s a run slept ~20 minutes doing nothing).
+ *  A loss-window run (`BENCH_PRODUCTION_SYNC`) measures cadence, so it keeps the shipped period. */
+function benchCheckpointIntervalMs(env: BenchEnv): number {
+  return env.BENCH_PRODUCTION_SYNC === '1' ? DEFAULT_DEVBOX_POLICY.checkpointIntervalMs : 2_000;
+}
+
 /** One instrument request: the route and its body, and the box it addresses. */
 interface InstrumentRequest {
   readonly route: string;
@@ -1129,9 +1142,18 @@ async function serveInstrumentRoutes(
         box: name,
         extractionAllowed: env.ALLOW_EXTRACTION === '1',
         storePrefix: storePrefixOf(env, strategy, name),
+        checkpointIntervalMs: benchCheckpointIntervalMs(env),
         state,
         ms: Date.now() - started,
       } });
+    }
+
+    case 'GET /upper-mark': {
+      // The upper's fingerprint as the checkpoint gate reads it, which a commit records as its
+      // `upperMark`: the loss-window driver's witness that a commit holds a write.
+      const read = await box.exec(upperFingerprintCommand(`${DEVBOX_RUNTIME_DIR}/upper`));
+
+      return json({ payload: { ok: read.exitCode === 0, mark: read.stdout.trim(), error: read.stderr.trim() } });
     }
 
     case 'GET /restore-probe': {

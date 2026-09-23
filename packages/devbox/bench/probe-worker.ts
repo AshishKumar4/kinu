@@ -11,6 +11,10 @@
  *   POST /probe/onstart?mode=&box=  P2: start | ports — one minimal exec in onStart
  *   GET  /probe/onstart?box=        P2 stamps, read after the POST settles or resets
  *   POST /probe/onstart/destroy?box= tear the probe container down after a run
+ *   POST /probe/reentry?box=&windowMs=&holdMs=&pending=  D8's control: the start block
+ *                                   reopened while a timer set outside it is pending
+ *   POST /probe/reentry/touch?box=  a request sent while the reentered hook holds
+ *   GET  /probe/reentry?box=        reentry stamps, read after the POST settles or resets
  *
  * COMPLETE RESOURCE INVENTORY — everything a probe campaign creates, and how
  * it is removed. Per-run ids (`op`, `box`) are unique per run, so runs never
@@ -31,6 +35,7 @@
  */
 import { ContainerProxy } from '@cloudflare/sandbox';
 import { GateProbe, OnStartExecProbe, type ProbeBindings } from './onstart-probe';
+import { REENTRY_PENDING } from './reentry';
 
 export { ContainerProxy };
 
@@ -143,8 +148,35 @@ export default {
         return json({ payload: { ok: true, box, ...(await probe.destroyProbe()) } });
       }
 
+      case 'POST /probe/reentry':
+      case 'POST /probe/reentry/touch':
+      case 'GET /probe/reentry':
+        return await reentryRoute(route, url, env);
+
       default:
         return json({ payload: { ok: false, error: `unknown probe route: ${route}` }, status: 404 });
     }
   },
 };
+
+/** The reentry control's three routes on one box's probe object. */
+async function reentryRoute(route: string, url: URL, env: ProbeEnv): Promise<Response> {
+  const box = url.searchParams.get('box') ?? '';
+
+  if (box === '') return json({ payload: { ok: false, error: 'box is required' }, status: 400 });
+
+  const probe = env.OnStartExecProbe.get(env.OnStartExecProbe.idFromName(`exec-${box}`));
+
+  if (route === 'POST /probe/reentry/touch') return json({ payload: { ok: true, box, at: await probe.touch() } });
+
+  if (route === 'GET /probe/reentry') return json({ payload: { ok: true, box, stamp: await probe.reentryReport() } });
+  const windowMs = Number(url.searchParams.get('windowMs') ?? '5000');
+  const holdMs = Number(url.searchParams.get('holdMs') ?? '2000');
+  const pending = REENTRY_PENDING.find((kind) => kind === (url.searchParams.get('pending') ?? 'connection'));
+
+  if (!Number.isInteger(windowMs) || !Number.isInteger(holdMs) || windowMs < 0 || holdMs < 0 || pending === undefined) {
+    return json({ payload: { ok: false, error: `windowMs and holdMs must be non-negative integers; pending one of ${REENTRY_PENDING.join(', ')}` }, status: 400 });
+  }
+
+  return json({ payload: { ok: true, box, stamp: await probe.probeReentry(windowMs, holdMs, pending) } });
+}

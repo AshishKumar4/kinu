@@ -1,5 +1,4 @@
-/** Storage seam that makes an ephemeral container disk look permanent; no store is a valid state.
- *  `attach()` takes no deadline: `racedRestoreSteps` budgets the whole restore around it. */
+/** `attach()` takes no deadline: `racedRestoreSteps` budgets the whole restore around it. */
 
 /** `tick` may decline when nothing changed or the minimum interval has not elapsed.
  *  `quiesce` declines only when nothing changed: the interval is efficiency, not correctness. */
@@ -101,20 +100,17 @@ export interface DevboxStore {
  *  the choice is carried as a name and a box records which format its bytes are in. */
 export type DevboxStrategyName = 'snapshot-chain';
 
-/** Measured basis: `bench/measure-first/DECISIVE-2026-09-05.md`. A change is a new decision:
- *  it gets a new dated report beside that one, never an edit to it. */
+/** Measured basis: `bench/measure-first/DECISIVE-2026-09-05.md`; D27 stopped the search. */
 export const DEFAULT_DEVBOX_STRATEGY: DevboxStrategyName = 'snapshot-chain';
 
 export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {
   return value === 'snapshot-chain' ? value : null;
 }
 
-/** The directory a devbox makes durable, and the default working directory for every command.
- *  A constant, not a setting: nothing would set it otherwise, and an unset setting goes untested. */
+/** The directory a devbox makes durable, and every command's default working directory. */
 export const DEVBOX_WORKDIR = '/workspace';
 
-/** Under `/var/tmp`: it must survive nothing and holds binaries' worth of bytes.
- *  The Sandbox SDK's backup-directory allowlist includes this path, so the container may touch it. */
+/** In the SDK's backup-directory allowlist, so the container may touch it. */
 export const DEVBOX_RUNTIME_DIR = '/var/tmp/devbox';
 
 /** A stored row may come from any release of this package, so this types only the JSON medium;

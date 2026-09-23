@@ -204,7 +204,7 @@ describe('the start hook owns restoration', () => {
     });
   }
 
-  test('T1: restore holds the hook and readiness is absent until it settles', async () => {
+  test('T1: the restore holds the start block; a delivered status waits for it and reads ready', async () => {
     const { box, container, rows } = await stoppedBoxWithService();
 
     const parked = gate();
@@ -213,15 +213,24 @@ describe('the start hook owns restoration', () => {
     const start = box.start().then(() => { returned = true; });
     await parked.reached;
     expect(returned).toBe(false);
-    expect(container.initGate).toBeUndefined();
+    expect(container.initGate).toBeDefined();
     expect(rows.get('devbox:restoration')).toEqual({
       phase: 'restoring', where: 'start', since: expect.any(Number),
     });
-    expect((await box.devboxState()).ready).toBe(false);
+    let delivered = false;
+
+    const status = deliver(container, async () => {
+      delivered = true;
+
+      return await box.devboxState();
+    });
+
+    await Promise.resolve();
+    expect(delivered).toBe(false);
     parked.release();
     await start;
+    expect((await status).ready).toBe(true);
     expect(rows.get('devbox:restoration')).toEqual({ phase: 'attached' });
-    expect((await box.devboxState()).ready).toBe(true);
   });
 
   test('T2: the delivered command follows restore, process resumption and exposure', async () => {
@@ -338,13 +347,13 @@ describe('the start hook owns restoration', () => {
     expect(armed(container)).toBe(0);
   });
 
-  test('T5: delivered requests join readiness while the RPC input gate stays open', async () => {
+  test('T5: delivered requests wait on the start block and run after the restore', async () => {
     const { box, container } = await stoppedBoxWithService();
     const parked = gate();
     container.stampGate = parked;
     const start = box.start();
     await parked.reached;
-    expect(container.initGate).toBeUndefined();
+    expect(container.initGate).toBeDefined();
     const first = deliver(container, () => box.exec('echo first'));
     const second = deliver(container, () => box.exec('echo second'));
     expect(container.execs.some(command => command.startsWith('echo'))).toBe(false);

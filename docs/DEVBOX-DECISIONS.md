@@ -7,6 +7,9 @@ so. A change that reverses an entry names the entry and re-runs its
 measurement under both shapes before it lands.
 
 Report files named below live under `packages/devbox/bench/measure-first/`.
+The probes that took them left the tree once D27 closed the strategy search;
+`git log --diff-filter=D -- packages/devbox/bench/measure-first` finds their
+last version.
 Owner messages live under `docs/research/user-messages/`.
 
 ## Requirements (the owner's, verbatim where quoted)
@@ -37,12 +40,14 @@ Official: developers.cloudflare.com/containers/concepts/architecture,
 "Persistent disk", updated 2026-08-28. A Durable Object reset beside a
 container that keeps running does not lose that disk.
 
-P2. A timer set inside `blockConcurrencyWhile` fires on schedule. Measured
-2026-09-13 on a plain Durable Object: a 50 ms `setTimeout` awaited inside the
-block completed at exactly 50 ms. Evidence: `kinu-logs/startup-probe/`
-(`p1-get-timer-inside.body`, `observations.md`). The earlier claim in
-`lifecycle.ts` that timers starve in the block was a hypothesis written as
-fact; it is withdrawn.
+P2. A timer set inside `blockConcurrencyWhile` fires on schedule while no
+timer set outside the block falls due first (P5). Measured 2026-09-13 on a
+plain Durable Object: a 50 ms `setTimeout` awaited inside the block completed
+at exactly 50 ms. Evidence: `kinu-logs/startup-probe/`
+(`p1-get-timer-inside.body`, `observations.md`). Remeasured deployed
+2026-09-23 (run `s20260923020822`): 50 ms alone and 50 ms with reads queued
+at the gate. The earlier claim in `lifecycle.ts` that timers starve in the
+block was a hypothesis written as fact; it is withdrawn.
 
 P3. One control exec inside `onStart` completes when the block opens against
 an accepting control server, and never completes when it does not. Measured
@@ -53,6 +58,38 @@ the block to the cap and reset the object at 41 s, 3/3. Port 3000 is
 port wait runs outside the block with real timers. Probe source:
 `packages/devbox/bench/onstart-probe.ts`, `probe-worker.ts`,
 `wrangler.probe.jsonc`.
+
+P4. A WebSocket delivers its messages under the input gate current when it
+was accepted. A reply over a connection accepted before a
+`blockConcurrencyWhile` block cannot arrive inside the block; a reply over a
+connection accepted inside it can. Source, read 2026-09-23: workerd
+`src/workerd/api/web-socket.c++` (`internalAccept(js,
+IoContext::current().getCriticalSection())`; `readLoop` runs each message
+through `context.run(..., mapAddRef(cs))`). Measured deployed 2026-09-23 (run
+`s20260923013446`): a hook exec over the connection opened before the block
+got no reply, 4 of 4, and the object reset at the cap; over a connection
+opened inside the block it answered in 152 to 176 ms, 4 of 4.
+
+P5. Timers fire in due order, and each runs under the input gate current when
+it was set. A timer set outside a block that falls due while the block holds
+the gate waits for the block to end, and every later timer, those set inside
+the block included, waits behind it. `clearTimeout` of the waiting timer
+drops its pending run and the queue moves on. Source, read 2026-09-23: workerd
+`src/workerd/io/io-context.c++`, `TimeoutManagerImpl::setTimeoutImpl` (captures
+`context.getCriticalSection()` when the timer is set; an entry of
+`timeoutTimes` is fulfilled "when the time has been reached AND all previous
+timeouts have completed") and `TimeoutState::cancel`; `scheduler.wait` and
+`AbortSignal.timeout` use the same queue (`src/workerd/api/basics.c++`,
+`setTimeoutInternal`). Measured 2026-09-23, local workerd: a 250 ms interval
+set inside the block stopped at the first tick after the SDK's 1 s connection
+poll, set before the block, fell due; the block then reset at 30 s, 3 of 3.
+With that poll cleared at block entry, the hook's timers fired and the hook
+returned, 3 of 3. A third such timer is the containers package's port ping:
+`addTimeoutSignal` arms a 5 s timer per ping and clears it only on abort, so
+the pings that prove a port just before a start block fall due inside it.
+With the hold past 5 s, the hook's timers stalled locally, 4 of 4 (run
+`s20260923031614`), and fired once each ping cleared its timer on settling,
+4 of 4 (`s20260923031930`).
 
 ## Decisions
 
@@ -271,7 +308,7 @@ The eager counterexamples `c3_attach_copies_the_whole_64mib_base` and
 implementation. They do not describe v2 storage attach. No product deployment,
 full-hook latency guarantee or callback-only publication bound is claimed.
 
-D8. SDK input blocks contain storage work only (`4bca22e3c`, 2026-09-13).
+D8. SDK input blocks contain storage work only (`4bca22e3c`, 2026-09-13). Reversed by D26.
 This supersedes D1/D3's
 in-block restore placement and the input-block part of R1, as authorized by
 the lifecycle-defect assignment on 2026-09-13. Restore still runs once per
@@ -995,6 +1032,268 @@ ran a real recycle: stop 8578 ms, wake 579 store calls in 45917 ms, boot
 were identical. No write was lost. The cause stays an inference: stops that
 never completed were measured as recycles. `requireConfirmedStop` in
 `scripts/bench-devbox-strategies.ts` refuses a wake after an unconfirmed stop.
+
+D26. Restore runs inside the SDK start block again (2026-09-23,
+`5d3197bfe` and `61aa55ef7`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
+(hook after the block) and restores R1: no event reaches the object until
+the restore settles. Two platform facts made the in-block hook deadlock, and
+the patched SDK isolates the hook from both.
+
+P4 was D8's deadlock. In the first start block of D8's trace
+`b20260913105359` the hook's execs answered (700, 143, 59, 99, 56, 55 ms),
+because their capnweb connection opened inside that block. The second
+block, 12 ms after a request exec, sent the boot-id RPC over that earlier
+connection, and the reply could not arrive inside the new block. The SDK
+closes an idle connection after 1 s, so the window is narrow.
+
+P5 was found while measuring the P4 fix: a timer the hook set never fired.
+The SDK's control client polls every 1 s while a connection is open, the
+alarm loop waits between schedule rows, the containers package arms a 5 s
+timer per port ping and never clears it after a successful ping, and
+Devbox's admission window ran for `portWaitMs`. Each is set before the
+block, and once due it holds every timer the hook sets, the D19 restore
+budget's included.
+
+The change. The containers patch runs `setHealthy`, then `callOnStart()`,
+inside both start blocks; `callOnStart()` ends the alarm loop's wait (as a
+container exit does; the loop re-arms) and calls `onStart()`; each port ping
+clears its timer when the ping settles. The sandbox patch overrides
+`callOnStart()`: it suspends the outer control client's poll and idle
+timers and runs the hook on a fresh client (`createClientForTransport`),
+whose connection opens inside the block and never starts a container;
+afterwards it restores the outer client and resumes its timers, and
+in-flight calls on the outer client keep their connection. Devbox disarms
+its admission window when the hook starts, a checkpoint that meets a pending
+startup waits for it to settle instead of racing a timer (`requestJoinMs` is
+gone), and `resolveReadiness` no longer joins the hook, because no request
+runs while the block holds the gate. `scripts/do-init-gate.ts` requires both
+start blocks to run the hook through `callOnStart`, the installed
+`callOnStart` to suspend the outer timers and swap the client before the
+hook, the base `callOnStart` to clear the alarm wait before `onStart()`, and
+every `addTimeoutSignal` result to be cleared in a `finally`; every other
+input block still reaches no container RPC.
+
+Residual. A timer another event sets before the block, outside the SDK's and
+Devbox's own, still holds the hook's timers once it falls due (the stray
+column below). The hook's ordinary path awaits no timer; the budget's races
+need one only when a step overruns, and then the platform resets the object
+at 30 s and the next activation recovers the interrupted restore (the
+`restoring` row, `ContainerStartInterrupted`).
+
+Measured on the tree that ships, deployed 2026-09-23 with
+`scripts/bench-devbox-onstart-shapes.ts --pending connection,alarm,stray
+--runs 3 --hold-ms 6000`: `@cloudflare/sandbox` 0.12.9 and
+`@cloudflare/containers` 0.3.7 from npm, the product image
+`kinu-devbox-block-layer@sha256:8561558654fd05c04ff1c229ab24c1e248852fc8fb7953cd4300134f2ef13957`
+(built on `cloudflare/sandbox@sha256:4a56a37a…`), window 5,000 ms, a request
+every 250 ms. Each arm is the same probe (`probeReentry`: start, leave one
+timer pending, start again at once, hook execs once, then holds 6 s, past
+the 5 s ping timers) built from those packages plus one patch set: outside
+is `b2c60d09f`'s pair and inside is upstream's containers package with
+`b2c60d09f`'s sandbox patch, both ported onto the 0.12.9 chunk; rotated is
+this tree's pair. Pending timer: connection (an exec just before, so the 1 s
+poll is armed), alarm (two schedule rows, the loop waiting for the second),
+stray (a 1 s `setTimeout` nothing clears). Outside and inside ran as
+`s20260923032104` (03:21 to 03:33 UTC); that driver died in the rotated arm
+after its connection cell, so the rotated arm ran again, whole, as
+`s20260923033729` (03:37 to 03:42 UTC).
+
+| Arm, run | connection | alarm | stray |
+| --- | --- | --- | --- |
+| outside (D8), `s20260923032104` | exec 88, 114, 131 ms; 22, 21, 22 requests ran during the hook; exited | exec 269, 361, 375 ms; 21, 22, 22 requests; exited | exec 292, 339, 292 ms; 22, 23, 22 requests; exited |
+| inside (upstream block), `s20260923032104` | no reply, 3 of 3; reset at the cap | exec 377, 347, 369 ms; hold never ended, 3 of 3; reset | exec 325, 350, 311 ms; hold never ended, 3 of 3; reset |
+| rotated (D26), `s20260923033729` | exec 209, 180, 172 ms; no request during the hook; exited at +6.2 s, 3 of 3 | exec 271, 362, 578 ms; no request; exited at +6.3 to +6.6 s, 3 of 3 | exec 338, 312, 268 ms; hold never ended, 3 of 3; reset |
+
+The partial rotated arm of `s20260923032104` agrees: connection 3 of 3, exec
+53 to 61 ms, gate held, exited at +6.1 s. Every arm deleted its Worker and
+container application and listed the application absent; the one the dead
+driver left (`kinu-devbox-shapes-s20260923032104-rotated`) was deleted by
+hand at 03:37:23 UTC. At 2026-09-23T03:42:36Z the account listed 67 Worker
+scripts and 6 container applications, none named `kinu-devbox-shapes-*`
+(Workers API `GET /workers/scripts`, `wrangler containers list --json`).
+
+History, superseded by the table above. Deployed `s20260923013446`
+(0.12.8, connection only, before the timer suspension): outside answered in
+80 to 103 ms with 6 to 7 requests during the hook; inside got no reply, 4 of
+4; rotated answered in 152 to 176 ms and its 2 s hold never ended, 4 of 4,
+the first sighting of P5. Deployed `s20260923030235` (0.12.8, suspension in,
+ping timers leaking): rotated exited 1 of 2 on connection and 0 of 2 on
+alarm, which found the ping timers. Local `s20260923025542` (0.12.8,
+suspension in, 2 s hold, 2 runs per cell) matched the table above except
+that the 2 s hold ended before the ping timers fell due. `s20260923011640` is
+void: `git apply` inside the repository skipped every patch.
+
+Tests: `tests/restore-after-start.test.ts` T1 and T5 are red on D8's harness
+(the hook outside the block) and green on the block-holding harness;
+`scripts/do-init-block-bodies.test.ts` is red on D8's shape, on upstream's
+block, on a `callOnStart` that keeps the old client or leaves its timers
+running, on a start block that leaves the alarm wait armed, and on a port
+ping that leaves its timer pending. On the tree that ships (a clean install
+of 0.12.9 with both patches, 2026-09-23): `scripts/do-init-block-bodies.test.ts`
+10 pass, 0 fail; the devbox package 483 pass, 0 fail; its workerd suite 7
+pass; `bun scripts/do-init-gate.ts` ok; `bun scripts/patch-parity.ts` ok.
+
+D27. Snapshot-chain stays and the storage strategy search stops (owner
+decision, 2026-09-23, checklist row DBX-10; asked first in m1191). The
+evidence is D18: settlement `20260915065241` admitted snapshot-chain on all
+ten gates, and no other design measured under the contract below was shown
+better (D5's table). A new design reopens the search only with a comparison
+run under that contract; none is scheduled (O3).
+
+D28. The Durable Object batches the container calls it keeps (DBX-7,
+`b60c5d873`, 2026-09-23; asked in m712: "combine multiple exec api calls to single ones
+wherever possible, as the DO <> container I/O can be flaky"). Measured
+first with `scripts/bench-devbox-exec-census.ts` over the deployed `kinu`
+Worker, 6 h to 2026-09-23T03:44Z: 509 `sandbox.exec` events in 303 Durable
+Object invocations across 16 boxes. Per invocation: a heartbeat alarm, 1
+exec (235 of them) plus a `containerFetch` ping; an idle checkpoint tick, 2
+or 3 (the mount table, the upper's fingerprint walk, a boot-id read; 44); a
+committing checkpoint, 9 or 10; a restore, 8. Process-lane commands
+(`startProcess`) raise no event and are outside the count. The heartbeat's
+ping and boot-id read are now one exec, since the read crosses the same
+control plane; the idle tick's mount-table read and fingerprint walk are one
+exec (`tickProbeCommand`). The committing checkpoint's calls stay as they
+are: DBX-5 moves backup and sync into the container (m712: that machinery
+"should live inside the docker image/container itself, and NOT be issued via
+the DO"), which takes them off the Durable Object entirely.
+
+D29. Checkpoint payloads do not cross the Durable Object; DBX-5 moves the
+orchestration, not the bytes (2026-09-23). The chain's publish (D15) and its
+layer reads go to `r2.internal`, which the SDK serves in its `ContainerProxy`
+WorkerEntrypoint: `@cloudflare/sandbox` 0.12.9, `dist/sandbox-D0rNqxlr.js`
+lines 7199-7222 (`ContainerProxy$1.fetch` sends `r2EgressMount` to
+`r2EgressHandler`), with the SDK's note that the handler registry is "NOT
+shared between the Durable Object's execution context and the ContainerProxy
+WorkerEntrypoint context"; `putRequestBody` and `handleUploadPart` stream
+each object and part through a `FixedLengthStream` into the R2 binding, with
+no buffering. Cloudflare
+documents outbound handlers as running on the container's machine. Presigned
+URLs straight to `<account>.r2.cloudflarestorage.com` were weighed and
+dropped: `KinuSandbox` sets `interceptHttps` with a catch-all handler, and
+the documented precedence sends even an allowed host through that handler,
+so the hop would stay and signing keys would return to the Worker. Status:
+read from source. The Durable Object byte meter that shows zero payload
+bytes on a deployed run lands with DBX-5's in-image checkpoint.
+
+D30. The container syncs itself; the Durable Object keeps the record
+(DBX-5, 2026-09-23; asked in m702, m712, m859). Writes land on the
+overlay's local upper, the local cache, and the image's `sync.js` publishes
+them in the background: every `checkpointIntervalMs` (5 min, as before) it runs the
+chain checkpoint on the container's own shell, fingerprint-gated, so an idle
+box costs one local walk per period and no request. The code that runs is
+`snapshotChainStorage(...).checkpoint`, the same code the box ran, bundled
+from `packages/devbox/src/sync-main.ts` into the block-lower image. What a
+container cannot reach, it asks its box for, over the path Cloudflare
+documents for this ("Connect to Workers and Bindings", containers docs, read
+2026-09-23): a POST to `http://devbox.internal/v1/sync`, which the class's
+outbound handler (`devboxSyncHandlers`, registered per concrete class because
+the registry is keyed by class name) sends to the box resolved from
+`ctx.containerId`. The box answers `devboxSync` with its own ports:
+`readState`, the fenced `writeState`, `checkChanges`, the store mount, and
+`objectFacts`/`deleteObjects` on the binding. Any process in the container
+can reach that host, so the box holds every request to its own record:
+a container generation other than the one it restored is refused, a key
+outside the box's store prefix is refused, and a record that names a new
+layer must name one the store holds at the declared size (the box checks
+with its own `head`). A request can therefore damage only this box's own
+history, which a process in the container could already do by deleting its
+files. The box starts the program after each restore; when the heartbeat's
+single container call finds it gone (D28's call now also carries that probe),
+the box files an incident, since nothing commits while it is down, and starts
+it again. Its alarm no longer ticks checkpoints. A stop's final checkpoint
+is one exec, `sync.js flush`, answered by the running program after its tick
+in flight, or in that process when none runs. When the stop goes ahead, the
+box ends the program before it detaches: the program finishes the checkpoint
+in flight, then exits, so no tick races the detach; a refused stop leaves it
+running. The flush runs in its own SDK session (`devbox-sync`): the container
+server runs one command at a time per session (`executeInSession` holds a
+per-session lock, read from the 0.12.9 container server), and a store mount
+the sync asks for runs in the default session, which the flush would
+otherwise hold until it finished. The container remembers the record it last
+read or wrote, so a tick with nothing to commit asks its box nothing; the
+retained-change query now runs only when a commit is due. A box that may
+extract (local
+`wrangler dev`, whose containers get no outbound interception, measured
+2026-09-23: a request to an intercepted host connected and never reached its
+handler) keeps driving its own checkpoints, as before. The block lower's log
+and the sync's log go to the container's stdout, which Workers Logs carries
+(DBX-7). Both redirect through bash process substitution; the session shell
+is `bash --norc` (read from the 0.12.9 container server), so the tests' parse
+gate now models bash where it modelled POSIX `sh`. The image and the box move
+together: `block-lower/upstream.json` pins the bundle's sha256
+(`9f89cd2a…`, image `kinu-devbox-block-layer@sha256:5391d6b4…`), and
+`tests/block-image.test.ts` bundles the tree again and fails on any other
+bytes, so a change to the sync's code fails until the image is rebuilt and
+re-pinned. The flush's own session left the default session's shell on the
+work directory: the container server returns a shell to where it rests after
+each command given a `cwd`, and keeps only a bare `cd`. So a first base's
+reseat inside the container failed EBUSY, D10's defect again (strategies run
+`20260923160413`: "reseating it failed: ... failed to unmount /workspace:
+Device or resource busy"). The box now parks that shell in the runtime
+directory with a bare `cd` for a quiesce's flush, and returns it after.
+
+Deployed, run `w260923160453` (2026-09-23, `2080bdbde`, one box, P = 300 s,
+5 writes at random offsets into the period): write-to-commit windows 153.9,
+194.0, 137.6, 262.8 and 53.5 s; p50 153.9 s, max 262.8 s, each inside
+P plus the commit. The box's own wire (commands, replies and sync requests)
+was 27,018 bytes for a small write's commit and 29,918 bytes for the commit
+that added 67,108,864 bytes to the store: payload bytes stay off the Durable
+Object (D29). That run predates D31, so its commits after the first were
+deltas; D31 makes them fresh bases until the box's next wake.
+
+D31. A delta is committed only over the base the overlay serves (2026-09-23,
+DBX-9). The standalone acceptance run `s20260923160514` deleted a file after
+the container's sync had committed the box's first base from a tick. The
+stop committed a delta, and the file was back after the wake. The upper is
+a delta relative to the lowers the overlay serves, not to the record's base.
+A fresh box's overlay serves no base, so its upper still held the file and
+deleting it left no whiteout. The old code reseated only a first base
+committed by a quiesce, and D30 made the first commit a tick. The same holds
+after a collapse: a file created after the old base, captured by the new
+one and then deleted leaves no whiteout, and a chunked delta's blocks are
+computed against the old base, not the new one.
+
+So while the base the overlay serves (the `fsname` of its `lower-base` mount)
+is not the record's, a changed checkpoint archives the merged view as a fresh
+base. A base is exact by construction. Recording deletions against the base
+instead, with whiteouts for base paths missing from the view, was rejected.
+In the common case (a fresh box before its first wake) the upper holds the
+whole tree and no base is mounted to diff blocks against, so a delta there
+already carries every byte a base does. It would save bytes only after a
+collapse while the box keeps running, and it would still need the base's path
+list at every tick, plus pruned whiteouts under replaced directories.
+
+Cost: until the box's next wake seats its base, each changed period uploads
+the whole tree. For a fresh box that equals what its deltas moved. After a
+collapse while running (a legacy layered delta at a tick, or a quiesce rebase
+whose stop was refused), it replaces the changes since the old base. The
+store holds at most the fallback and the current generation; each commit
+sweeps the rest. Tests: the conformance suite deletes a file after a tick
+commits the first base, commits by quiesce or by tick, wakes, and expects
+the file gone. It was red on `2080bdbde` (the file came back) and is green
+here. Deployed re-proof: owed on this image.
+
+D32. The dd-style storage arm DBX-8 asks for is not built (2026-09-23): D27
+stopped the storage search (owner, DBX-10), and a new design reopens it only
+under the measurement contract below. The platform would allow one. In the
+deployed container of run `w260923160453` (16:05Z, image `8a2c971c…`) the
+process held every capability (`CapEff 000001ffffffffff`), `/dev/loop-control`
+and `/dev/loop0` existed, `losetup` and `mkfs.ext4` were present (`fuse2fs`
+absent), ext4 was a registered filesystem, and a 64 MiB ext4 image
+loop-mounted and unmounted. The same run proved DBX-8's other half. Three
+benches started within 61 s on their own Worker, bucket and container
+application: strategies `20260923160413`, sync-window `w260923160453` and
+standalone `s20260923160514`. Each later start's sweep left the live runs
+alone ("run 20260923160413 is still running"). The sync-window and standalone
+runs tore down their own resources and passed their cleanup checks. One sweep
+misreported: at 16:02Z a start's sweep drained the bucket of the interrupted
+run `w260923143440`, logged it deleted and marked the entry done. The bucket,
+created 14:34:43Z, was still listed at 21:37Z. It was deleted by hand at
+21:39Z and the listing then showed it gone. Why the delete reported success
+is not established; the sweep should observe a bucket absent before marking
+it done. The account still lists `kinu-devbox-bench-*` resources from
+2026-08-31 to 2026-09-11 (9 Workers, 2 container applications, 11 buckets),
+created before manifests recorded owners and by none of these runs.
 
 ## Measurement contract for a strategy comparison
 

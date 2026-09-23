@@ -174,10 +174,6 @@
       "complexity": 36
     },
     {
-      "key": "packages/devbox/bench/measure-first/worker.ts#fetch",
-      "complexity": 36
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#executeDecisiveSegment",
       "complexity": 36
     },
@@ -195,10 +191,6 @@
     },
     {
       "key": "packages/core/src/release/engine.ts#ReleaseEngine.rollback",
-      "complexity": 35
-    },
-    {
-      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
       "complexity": 35
     },
     {

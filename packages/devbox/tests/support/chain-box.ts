@@ -75,8 +75,8 @@ export class ChainTestBox extends Devbox<Record<string, never>> {
   }
 }
 
-export function chainBox(): ChainBox {
-  const { box, container, rows } = harness(ChainTestBox);
+export function chainBox(Box: typeof ChainTestBox = ChainTestBox): ChainBox {
+  const { box, container, rows } = harness(Box);
   const objects = new Map<string, Uint8Array>();
   container.chainStore = { objects, root: chainStoreRoot(`boxes/${TEST_BOX_ID}`) };
   box.useStore({ binding: 'BACKUP_BUCKET', bucket: memoryBucket(objects) });

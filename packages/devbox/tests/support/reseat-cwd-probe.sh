@@ -6,10 +6,12 @@ base=/fixture/lower-base
 delta=$probe_dir/$generation
 block=$probe_dir/block
 mkdir -p /workspace /var/tmp/devbox "$base" "$delta" "$block" "$probe_dir/empty" /fixture/work
+# Lowers detach lazily: the overlay's daemon still holds them while it exits (block-lower-probe.sh).
 cleanup() {
   cd /
-  for mount in /workspace "$block" "$delta" "$base"; do
-    if mountpoint -q "$mount"; then fusermount3 -u "$mount"; fi
+  if mountpoint -q /workspace; then fusermount3 -u /workspace; fi
+  for mount in "$block" "$delta" "$base"; do
+    if mountpoint -q "$mount"; then fusermount3 -uz "$mount"; fi
   done
   chown -R --no-dereference "$(stat -c %u:%g /fixture)" /fixture
 }
