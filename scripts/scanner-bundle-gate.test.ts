@@ -34,11 +34,16 @@ describe('the gate goes red', () => {
     expect(verdict.findings[0]).toContain('bun run build:scanner');
   });
 
-  test('when a bare import survives bundling', () => {
+  test('when a dependency import survives bundling, and not for a runtime builtin', () => {
     const external = `${BUNDLE_BANNER}\nimport * as v from "valibot";\nexport const scanner = v;\n`;
     const verdict = judgeBundle(external, external, WIRED_BUNFIG);
     expect(verdict.findings).toHaveLength(1);
     expect(verdict.findings[0]).toContain('SecurityScannerNotInDependencies');
+    expect(verdict.findings[0]).toContain('valibot');
+
+    // A builtin resolves with no node_modules, in either spelling Bun.build emits.
+    const builtins = `${BUNDLE_BANNER}\nimport { join } from "path";\nimport { lstatSync } from "node:fs";\nexport const scanner = [join, lstatSync];\n`;
+    expect(judgeBundle(builtins, builtins, WIRED_BUNFIG).findings).toEqual([]);
   });
 
   test('when bunfig names the source, or nothing', () => {
