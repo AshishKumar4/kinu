@@ -144,7 +144,7 @@ import {
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
-  parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized,
+  parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized, callRenewingExpiredSession,
   storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability, readUndiscoveredToolList,
   mcpListingRefusals,
   type McpPresetAvailability, type McpServerSummary, type McpToolListing, type McpTransport,
@@ -4919,7 +4919,7 @@ export class UserDO extends Agent<Env> {
     );
 
     try {
-      const result = await manager.callTool({ serverId, name, arguments: callArgs });
+      const result = await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }));
 
       return JSON.stringify(decodeJsonValue({ value: result }));
     } catch (err) {
