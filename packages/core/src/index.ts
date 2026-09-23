@@ -1019,6 +1019,8 @@ export {
 // Schemas
 export { initSearchTables } from './mcts/schemas';
 
+export { initSwarmNodeRecords } from './strategy/swarm-resume';
+
 export {
   MctsSearchStore,
   initMctsSearchTable,
@@ -1967,7 +1969,7 @@ export { inlineFileType } from './read-models/file-types';
 
 export {
   readLatestSearchTree, readSearchTree, readSearchNodeDetail,
-  type SearchNodeDetail,
+  type SearchNodeDetail, type SearchTreeRow,
 } from './read-models/search-tree';
 
 export { readExplorationCanvas, readExplorationRun } from './read-models/exploration-canvas';

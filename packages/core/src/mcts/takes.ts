@@ -110,13 +110,11 @@ export interface ScoredSearchNode extends SearchNode {
   readonly ownScore: number;
 }
 
-/** One search's rows, best own score first, then deepest. A failed evaluation scores 0; the root
- *  keeps its mean. `MCTS/Convergence.lean — the_winner_carries_the_best_reward`. */
+/** One MCTS search's rows, best own score first, then deepest.
+ *  `MCTS/Convergence.lean — the_winner_carries_the_best_reward`. */
 export function searchTree(sql: SqlExecutor, actor: ActorHandle, rootId: string): ScoredSearchNode[] {
   return sql<SearchNode & { own_score: number }>`
-    SELECT *, CASE WHEN parent_id IS NULL THEN value
-      ELSE COALESCE(json_extract(evaluation_json, '$.score'), 0) END AS own_score
-    FROM search_nodes
+    SELECT * FROM search_node_scores
     WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
     ORDER BY own_score DESC, depth DESC`
     .map(({ own_score: ownScore, ...node }) => ({ ...node, ownScore }));

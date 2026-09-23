@@ -7,14 +7,15 @@
   candidate was backpropagated from itself to the root, so a node's `value` is
   the mean reward of the evaluations in its subtree
   (`backprop_accumulates_the_evaluations_through_a_node`), and `converge` takes
-  the open or terminal node first under `ORDER BY value DESC, depth DESC`.
+  the open or terminal row of `search_node_scores` first under
+  `ORDER BY own_score DESC, depth DESC`.
 
   A candidate is a complete answer, and `converge` returns the winner's own
   proposal, so it ranks a candidate by its own reward, the score its evaluation
-  measured, never by the subtree mean `value` holds once refinements
-  backpropagate. Then every winner carries the best reward a population
-  candidate reached (`the_winner_carries_the_best_reward`), the search's best
-  candidate survives its own weak refinements
+  measured (`own_score`), never by the subtree mean `value` holds once
+  refinements backpropagate. Then every winner carries the best reward a
+  population candidate reached (`the_winner_carries_the_best_reward`), the
+  search's best candidate survives its own weak refinements
   (`the_search_expands_its_best_candidate_and_converges_on_it`), and that reward
   never falls as the tree grows, so it stabilizes
   (`a_bounded_rising_reward_stabilizes`). No ancestor is a rival of its
@@ -66,8 +67,8 @@ theorem backprop_accumulates_the_evaluations_through_a_node (es : List Cand) (n 
 
 /-! ## What `converge` reads -/
 
-/-- One population row: its id, depth, the exact numerator and count of its
-    `value`, and what `findNearTiedRivals` compares. -/
+/-- One population row: its id, depth, the exact numerator and count of the
+    `own_score` it ranks by, and what `findNearTiedRivals` compares. -/
 structure Member where
   id : String
   depth : Nat
@@ -91,10 +92,10 @@ def population (es : List Cand) (rootId : String) (rootStatus : NodeStatus) : Li
   (if inPopulation rootStatus then [rootMember es rootId] else []) ++
     (es.filter (fun c => inPopulation c.status)).map memberOf
 
-/-- The denominator of `value`; an unvisited row keeps its default `value` 0. -/
+/-- The denominator of `own_score`; an unvisited root keeps its default `value` 0. -/
 def Member.den (m : Member) : Int := ((max 1 m.cnt : Nat) : Int)
 
-/-- value(a) < value(b), exactly. -/
+/-- own_score(a) < own_score(b), exactly. -/
 def valueLt (a b : Member) : Prop := a.sum * b.den < b.sum * a.den
 
 def valueEq (a b : Member) : Prop := a.sum * b.den = b.sum * a.den
@@ -102,7 +103,7 @@ def valueEq (a b : Member) : Prop := a.sum * b.den = b.sum * a.den
 instance (a b : Member) : Decidable (valueLt a b) := inferInstanceAs (Decidable (_ < _))
 instance (a b : Member) : Decidable (valueEq a b) := inferInstanceAs (Decidable (_ = _))
 
-/-- `a` sorts strictly before `b` under `ORDER BY value DESC, depth DESC`. -/
+/-- `a` sorts strictly before `b` under `ORDER BY own_score DESC, depth DESC`. -/
 def ranksAbove (a b : Member) : Prop := valueLt b a ∨ (valueEq a b ∧ b.depth < a.depth)
 
 instance (a b : Member) : Decidable (ranksAbove a b) := inferInstanceAs (Decidable (_ ∨ _))
@@ -115,7 +116,7 @@ def IsWinner (pop : List Member) (w : Member) : Prop := w ∈ pop ∧ ∀ x ∈ 
 instance (pop : List Member) (w : Member) : Decidable (IsWinner pop w) :=
   inferInstanceAs (Decidable (_ ∧ _))
 
-/-- **No row has a greater value than the winner.** -/
+/-- **No row has a greater score than the winner.** -/
 theorem the_winner_has_the_greatest_value (pop : List Member) (w : Member) (h : IsWinner pop w) :
     ∀ x ∈ pop, ¬ valueLt w x :=
   fun x hx hlt => h.2 x hx (Or.inl hlt)
@@ -127,7 +128,7 @@ def lineage (m : Member) : List String := m.id :: m.path
 
 /-- `findNearTiedRivals(population, winner, 0)` kept to exact ties: another row,
     off depth 0, neither an ancestor nor a descendant of the winner, with a
-    non-empty proposal the winner's differs from, and the winner's value. -/
+    non-empty proposal the winner's differs from, and the winner's score. -/
 def tiedRival (w x : Member) : Bool :=
   x.id != w.id && x.depth != 0 && decide (valueEq x w) &&
     !((lineage w).contains x.id) && !((lineage x).contains w.id) &&
@@ -147,7 +148,7 @@ def outcomeOf (pop : List Member) (scale minNum minDen : Nat) (w : Member) : Out
   else .converged w.id
 
 /-- A search converges only on a winner with no exact tie among unrelated rows and
-    a value at or above the bar. -/
+    a score at or above the bar. -/
 theorem a_converged_winner_is_undisputed_and_acceptable (pop : List Member)
     (scale minNum minDen : Nat) (w : Member)
     (h : outcomeOf pop scale minNum minDen w = .converged w.id) :

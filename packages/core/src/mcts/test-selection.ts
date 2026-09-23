@@ -1,6 +1,6 @@
 /**
  * Test-based selection at MCTS convergence: near-tied candidates (within `takesEpsilon`) are
- * separated by a generated check suite run through the grounded executor; value order otherwise.
+ * separated by a generated check suite run through the grounded executor; score order otherwise.
  * CodeMonkeys, arXiv:2501.14723.
  */
 
@@ -21,29 +21,23 @@ export async function selectWinnerByTest(
   winner: ScoredSearchNode,
   epsilon: number,
   deps: TestSelectionDeps,
-): Promise<string> {
+): Promise<ScoredSearchNode> {
   const rivals = findNearTiedRivals(nodes, winner, epsilon);
 
-  if (rivals.length === 0) return winner.id;
+  if (rivals.length === 0) return winner;
   const candidates = [winner, ...rivals];
 
   // One assertion harness can compare candidates written in one language.
   const language = candidates.find((node) => (node.code_used ?? '').trim().length > 0)?.code_language;
 
-  if (!language) return winner.id;
+  if (!language) return winner;
 
   const runnable = candidates.filter((node) =>
     (node.code_used ?? '').trim().length > 0 && node.code_language === language);
 
-  if (runnable.length < 2) return winner.id;
-
-  // A winner with no runnable code in this language cannot lose, so value order holds.
-  const winnerRunnable = runnable.find((node) => node.id === winner.id);
-
-  if (!winnerRunnable) return winner.id;
-  const winnerCode = (winnerRunnable.code_used ?? '').trim();
-
-  if (!winnerCode) return winner.id;
+  // A winner with no runnable code in this language cannot lose, so score order holds.
+  if (runnable.length < 2 || !runnable.includes(winner)) return winner;
+  const winnerCode = (winner.code_used ?? '').trim();
 
   // Suite generation is best-effort: a judge failure keeps the argmax winner.
   let checks: readonly string[];
@@ -58,17 +52,17 @@ export async function selectWinnerByTest(
       { winnerId: winner.id },
     );
 
-    return winner.id;
+    return winner;
   }
 
-  if (checks.length === 0) return winner.id;
+  if (checks.length === 0) return winner;
 
   const verdicts = await Promise.all(
     runnable.map(async (n) => {
       const code = (n.code_used ?? '').trim();
       const execution = await runForVerdict(deps.executor, code, checks, language);
 
-      // The pass share, not the pass bit: all-pass/all-fail would otherwise fall back to value order.
+      // The pass share, not the pass bit: all-pass/all-fail would otherwise fall back to score order.
       return { node: n, share: checkFraction(execution) ?? (execution.passed ? 1 : 0) };
     }),
   );
@@ -77,7 +71,7 @@ export async function selectWinnerByTest(
   const best = Math.max(...verdicts.map((v) => v.share));
   const winnerShare = verdicts.find((v) => v.node.id === winner.id)?.share;
 
-  if (winnerShare === undefined || winnerShare >= best) return winner.id;
+  if (winnerShare === undefined || winnerShare >= best) return winner;
 
-  return verdicts.find((v) => v.share === best)?.node.id ?? winner.id;
+  return verdicts.find((v) => v.share === best)?.node ?? winner;
 }

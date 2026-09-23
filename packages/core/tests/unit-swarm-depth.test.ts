@@ -16,6 +16,9 @@ import { diversityAngle } from '../src/mcts/diversity';
 import { runSwarm } from '../src/strategy/swarm-run';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 import { readExplorationCanvas } from '../src/read-models/exploration-canvas';
+import { explorationForkTree } from '../src/read-models/fork-tree-rows';
+import { readSearchTree } from '../src/read-models/search-tree';
+import { findForkNode } from '../src/read-models/swarm-tree-model';
 import type { Refusal } from '../src/obs/error';
 import {
   arbitrateBranch, resolveSwarm, swarmValidity, JUDGE_MARGINALISATION_MIN,
@@ -1857,5 +1860,25 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
       if (branch === WINNER) continue;
       expect(best.score ?? 0).toBeGreaterThan(score);
     }
+  });
+});
+
+describe("the drawn tree shows each swarm node's own score", () => {
+  test("a node whose children scored otherwise draws its scorer's number, not its subtree's mean", async () => {
+    const { rt } = createTestRuntime();
+    const { nodes, result } = await run({ depth: 2, branches: 2, proposeWidth: null, answers: [THOROUGH, OPTIMAL], rt });
+    expect('reason' in result).toBe(false);
+
+    if ('reason' in result) return;
+    const root = present(nodes.find((node) => node.parent_id === null), 'the swarm root');
+    const rows = readSearchTree(rt.storage.sql, rt.actor, root.id);
+    const drawn = present(explorationForkTree({ tree: rows, head: null }), 'the drawn tree');
+    const scored = result.candidates.filter((candidate) => candidate.score !== null);
+    const ownScore = new Map(scored.map((candidate) => [candidate.id, candidate.score]));
+
+    // Some expanded node's mean moved off its own score, so a tree drawn from `value` fails here.
+    expect(nodes.some((node) => ownScore.has(node.id) && ownScore.get(node.id) !== node.value)).toBe(true);
+
+    for (const [id, score] of ownScore) expect(findForkNode(drawn, id)?.value).toBe(score);
   });
 });

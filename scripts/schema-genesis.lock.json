@@ -495,6 +495,9 @@
     "recorded_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, scope, key)"
   ],
+  "events_v@packages/core/src/events/hub/schema.ts": [
+    "SELECT actor_id, id, turn_id, parent_id AS caused_by, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, schema_version, dedupe_key FROM agent_log WHERE kind = 'event'"
+  ],
   "evolution_events@packages/core/src/identity/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL DEFAULT (lower(hex(randomblob(9))))",
@@ -1020,6 +1023,9 @@
     "FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id)",
     "FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id)"
   ],
+  "run_event_v@packages/core/src/events/hub/schema.ts": [
+    "SELECT actor_id, id, turn_id, step_idx, kind, parent_id, payload, received_at FROM agent_log WHERE kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision') ORDER BY actor_id, turn_id, step_idx, id"
+  ],
   "run_events@packages/core/src/events/recorder.ts": [
     "actor_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
@@ -1079,6 +1085,9 @@
     "parent_version INTEGER",
     "pathology TEXT",
     "PRIMARY KEY (actor_id, version)"
+  ],
+  "search_node_scores@packages/core/src/mcts/schemas.ts": [
+    "SELECT n.*, CASE WHEN n.parent_id IS NULL THEN n.value WHEN r.record_json IS NOT NULL THEN json_extract(r.record_json, '$.outcome.score') ELSE COALESCE(json_extract(n.evaluation_json, '$.score'), 0) END AS own_score FROM search_nodes n LEFT JOIN swarm_node_records r ON r.actor_id = n.actor_id AND r.node_id = n.id"
   ],
   "search_nodes@packages/core/src/mcts/schemas.ts": [
     "actor_id TEXT NOT NULL",
@@ -1373,6 +1382,9 @@
     "created_at INTEGER NOT NULL",
     "evidence TEXT",
     "PRIMARY KEY (actor_id, id)"
+  ],
+  "turn_phase_log_v@packages/core/src/events/hub/schema.ts": [
+    "SELECT actor_id, id, turn_id, payload, received_at FROM agent_log WHERE kind = 'phase' ORDER BY actor_id, received_at"
   ],
   "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash TEXT PRIMARY KEY",

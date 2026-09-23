@@ -97,7 +97,7 @@ import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
-  PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
+  PendingAction, ProducerSpend, RunSummary, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import { McpServerSummarySchema } from "@/lib/user-api";
@@ -901,7 +901,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
  return row; };
 
   const root = push({
-    id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028,
+    id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028, own_score: 0.028,
     status: "open", action: "Find why the SAVE20 coupon 500s",
     task: "Find why the SAVE20 coupon 500s and fix it.",
     observation: "Four candidate fixes explored; one line survived to depth 6.",
@@ -959,7 +959,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
 
       const child = push({
         id: `n${String(rows.length).padStart(3, "0")}`,
-        parent_id: parent.id, depth: parent.depth + 1, visits, value: score, status,
+        parent_id: parent.id, depth: parent.depth + 1, visits, value: score, own_score: score, status,
         action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length],
         observation: status === "failed"
           ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
@@ -1640,35 +1640,35 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
 // `lean/Checkout/Coupon.lean` is invented along with the coupon table; the module does not exist. Enrolled in `CITATION_ILLUSTRATIVE`.
 const PROVE_ROWS: MctsRow[] = [
   {
-    id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "pv000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Prove the coupon guard terminates",
     task: "Prove that applyCoupon terminates for every coupon row, including kind = null.",
     observation: "The workspace as found: lean/Checkout/Coupon.lean, 3 sorries.",
     created_at: NOW - 78e5,
   },
   {
-    id: "pv001", parent_id: "pv000", depth: 1, visits: 4, value: 0.31, status: "open",
+    id: "pv001", parent_id: "pv000", depth: 1, visits: 4, value: 0.31, own_score: 0.31, status: "open",
     action: "Induct on the discount list", observation: "Checker accepted 1 of 3 goals.",
     created_at: NOW - 77e5,
   },
   {
-    id: "pv002", parent_id: "pv000", depth: 1, visits: 1, value: 0.12, status: "pruned",
+    id: "pv002", parent_id: "pv000", depth: 1, visits: 1, value: 0.12, own_score: 0.12, status: "pruned",
     action: "Case-split on kind first", observation: "Below the prune floor after one rollout.",
     created_at: NOW - 77e5,
   },
   {
-    id: "pv003", parent_id: "pv001", depth: 2, visits: 3, value: 0.68, status: "open",
+    id: "pv003", parent_id: "pv001", depth: 2, visits: 3, value: 0.68, own_score: 0.68, status: "open",
     action: "Strengthen the induction hypothesis", observation: "Checker accepted 2 of 3 goals.",
     created_at: NOW - 76e5,
   },
   {
-    id: "pv004", parent_id: "pv000", depth: 1, visits: 0, value: 0, status: "failed",
+    id: "pv004", parent_id: "pv000", depth: 1, visits: 0, value: 0, own_score: 0, status: "failed",
     action: "Reduce to the existing monotonicity lemma",
     observation: "Branch errored: the lemma this cites was renamed and no longer resolves.",
     created_at: NOW - 77e5,
   },
   {
-    id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, status: "terminal",
+    id: "pv005", parent_id: "pv003", depth: 3, visits: 5, value: 0.94, own_score: 0.94, status: "terminal",
     action: "Discharge the null case from the guard",
     observation: "Checker accepted 3 of 3 goals. No sorries remain.",
     code_used: "theorem applyCoupon_terminates : ∀ c, Terminates (applyCoupon c) := by",
@@ -1679,57 +1679,57 @@ const PROVE_ROWS: MctsRow[] = [
 /** A `custom` composition that fans in (`expand:'aggregate'`): `sw004` and `sw009` are the aggregate vertices, readable only from the journal. */
 const SWARM_ROWS: MctsRow[] = [
   {
-    id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "sw000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Reconcile the three coupon fixes",
     task: "Reduce checkout p95 without regressing the coupon guard.",
     observation: "The workspace as found: p95 = 412ms on the failing fixture.",
     created_at: NOW - 22e5,
   },
   {
-    id: "sw001", parent_id: "sw000", depth: 1, visits: 3, value: 0.44, status: "open",
+    id: "sw001", parent_id: "sw000", depth: 1, visits: 3, value: 0.44, own_score: 0.44, status: "open",
     action: "Cache the resolved kind per coupon id", observation: "p95 = 318ms.",
     created_at: NOW - 21e5,
   },
   {
-    id: "sw002", parent_id: "sw000", depth: 1, visits: 2, value: 0.37, status: "open",
+    id: "sw002", parent_id: "sw000", depth: 1, visits: 2, value: 0.37, own_score: 0.37, status: "open",
     action: "Index rules by kind at load", observation: "p95 = 341ms.",
     created_at: NOW - 21e5,
   },
   {
-    id: "sw003", parent_id: "sw000", depth: 1, visits: 1, value: 0.19, status: "pruned",
+    id: "sw003", parent_id: "sw000", depth: 1, visits: 1, value: 0.19, own_score: 0.19, status: "pruned",
     action: "Precompute the whole discount table", observation: "p95 = 402ms — below the prune floor.",
     created_at: NOW - 21e5,
   },
   {
-    id: "sw004", parent_id: "sw001", depth: 2, visits: 4, value: 0.71, status: "open",
+    id: "sw004", parent_id: "sw001", depth: 2, visits: 4, value: 0.71, own_score: 0.71, status: "open",
     action: "Reconcile the cache with the load-time index",
     observation: "p95 = 244ms. Both parents' writes touched pricing.ts; this candidate is the merge.",
     created_at: NOW - 20e5,
   },
   {
-    id: "sw005", parent_id: "sw002", depth: 2, visits: 2, value: 0.52, status: "open",
+    id: "sw005", parent_id: "sw002", depth: 2, visits: 2, value: 0.52, own_score: 0.52, status: "open",
     action: "Narrow the index to the percentage path", observation: "p95 = 296ms.",
     created_at: NOW - 20e5,
   },
   {
-    id: "sw006", parent_id: "sw002", depth: 2, visits: 1, value: 0.28, status: "pruned",
+    id: "sw006", parent_id: "sw002", depth: 2, visits: 1, value: 0.28, own_score: 0.28, status: "pruned",
     action: "Index every rule field", observation: "p95 = 377ms — below the prune floor.",
     created_at: NOW - 20e5,
   },
   {
-    id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, status: "terminal",
+    id: "sw007", parent_id: "sw004", depth: 3, visits: 6, value: 0.93, own_score: 0.93, status: "terminal",
     action: "Drop the redundant second lookup",
     observation: "p95 = 188ms. The guard's fixture still passes.",
     code_used: "const kind = cached ?? inferKind(coupon);",
     created_at: NOW - 19e5,
   },
   {
-    id: "sw008", parent_id: "sw004", depth: 3, visits: 2, value: 0.61, status: "open",
+    id: "sw008", parent_id: "sw004", depth: 3, visits: 2, value: 0.61, own_score: 0.61, status: "open",
     action: "Warm the cache on first read", observation: "p95 = 271ms.",
     created_at: NOW - 19e5,
   },
   {
-    id: "sw009", parent_id: "sw005", depth: 3, visits: 3, value: 0.66, status: "open",
+    id: "sw009", parent_id: "sw005", depth: 3, visits: 3, value: 0.66, own_score: 0.66, status: "open",
     action: "Reconcile the narrowed index with the warm cache",
     observation: "p95 = 258ms. Consumed both depth-2 candidates that scored.",
     created_at: NOW - 19e5,
@@ -1797,7 +1797,7 @@ const SWARM_RUN: HeadRunView = {
  */
 const REFUSED_ROWS: MctsRow[] = [
   {
-    id: "rf000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "rf000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Find a coupon row that breaks the guard",
     task: "Find a coupon row that makes applyCoupon throw after the migration.",
     observation: "The workspace as found: 41 coupon fixtures.",
@@ -1827,7 +1827,7 @@ const REFUSED_RUN: HeadRunView = {
  */
 const RUNNING_ROWS: MctsRow[] = [
   {
-    id: "lv000", parent_id: null, depth: 0, visits: 0, value: 0, status: "open",
+    id: "lv000", parent_id: null, depth: 0, visits: 0, value: 0, own_score: 0, status: "open",
     action: "Audit the coupon guard for unsafe kind reads",
     task: "Audit every reader of coupon.kind across the checkout package and report the ones "
       + "that can throw on a null kind, with the call path and a suggested guard.",
@@ -1835,13 +1835,13 @@ const RUNNING_ROWS: MctsRow[] = [
     created_at: NOW - 42e4,
   },
   {
-    id: "lv001", parent_id: "lv000", depth: 1, visits: 1, value: 0.72, status: "open",
+    id: "lv001", parent_id: "lv000", depth: 1, visits: 1, value: 0.72, own_score: 0.72, status: "open",
     action: "Walk the cart serializer's null path",
     observation: "Two readers dereference rules[kind] with no guard.",
     created_at: NOW - 30e4,
   },
   {
-    id: "lv002", parent_id: "lv000", depth: 1, visits: 1, value: 0.44, status: "open",
+    id: "lv002", parent_id: "lv000", depth: 1, visits: 1, value: 0.44, own_score: 0.44, status: "open",
     action: "Check the admin coupon report",
     observation: "One reader, already guarded by an early return.",
     created_at: NOW - 26e4,
@@ -2418,7 +2418,7 @@ const CANVAS_ROWS: readonly ExplorationCanvasRun[] = FORK_RUNS.map((run) => ({
 }));
 
 /** The stub stands in for the server, so the canvas payload must be the server's full row, not the client's loose shape. */
-function asSearchNode(row: MctsRow, rootId: string): SearchNode {
+function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
   return {
     id: row.id,
     parent_id: row.parent_id,
@@ -2430,6 +2430,7 @@ function asSearchNode(row: MctsRow, rootId: string): SearchNode {
     code_language: row.code_used ? "typescript" : null,
     visits: row.visits,
     value: row.value,
+    own_score: row.own_score,
     depth: row.depth,
     // `running` is a merged-head status the search_nodes CHECK constraint cannot hold.
     status: row.status === "running" ? "open" : row.status,

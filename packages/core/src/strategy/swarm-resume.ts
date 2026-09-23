@@ -76,7 +76,8 @@ export type SettledChildOutcome = Exclude<ChildOutcome, { kind: 'instrument-faul
  * DAG's dependency edges (*Merge-back*'s order), distinct from `parent_id`.
  */
 export interface SwarmNodeRecord {
-  /** Null when the `score` axis measures nothing, distinct from an outcome with no number. */
+  /** Null when the `score` axis measures nothing, distinct from an outcome with no number.
+   *  `search_node_scores` reads its `score` in SQL. */
   readonly outcome: SettledChildOutcome | null;
   readonly conclusion: string | null;
   readonly aggregated: readonly string[];

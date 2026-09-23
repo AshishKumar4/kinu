@@ -249,6 +249,8 @@ requirements:
       - packages/core/src/mcts/backpropagation.ts#backpropagate
       - packages/core/src/mcts/uct.ts#selectNode
       - packages/core/src/mcts/takes.ts#findNearTiedRivals
+      - packages/core/src/mcts/takes.ts#searchTree
+      - packages/core/src/mcts/schemas.ts#initSearchTables
     remainingEvidence:
       - Until the fix that accompanies this model, converge ranked by the subtree mean and walked lineage through population rows only; the fixture's expands-then-converges and pruned-parent cases are those regressions
       - The fixture runs converge in plan mode; build mode adds the near-tie test selection, the memory writes and the task history, which it does not exercise

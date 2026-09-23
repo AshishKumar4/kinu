@@ -41,16 +41,12 @@ export async function converge(
     throw new Error('No viable nodes — all branches failed or were pruned');
   }
 
-  const selectedId = mode === 'plan'
-    ? argmaxWinner.id
+  const winner = mode === 'plan'
+    ? argmaxWinner
     : await selectWinnerByTest(tree, argmaxWinner, takesEpsilon, {
         executor: rt.executor,
         judge: rt.judgeModel ?? rt.llm,
       });
-
-  const winner = selectedId === argmaxWinner.id
-    ? argmaxWinner
-    : population.find((n) => n.id === selectedId) ?? argmaxWinner;
 
   // Distinct approaches scoring exactly equal mean the scorer carries no signal: not converged.
   // Only exact ties count; findNearTiedRivals' epsilon window also keeps rivals above the winner.
@@ -118,14 +114,9 @@ export async function converge(
     );
     await rt.memory.index('memory/MEMORY.md');
 
-    const winnerCode = rt.storage.sql<{ code_used: string | null; code_language: string | null }>`
-      SELECT code_used, code_language FROM search_nodes
-      WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
-    `[0];
-
-    if (winnerCode?.code_used && isCraftable(winnerCode.code_language)
+    if (winner.code_used && isCraftable(winner.code_language)
         && winner.ownScore > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
-      await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.ownScore);
+      await maybeStoreCraftedTool(rt, winner.code_used, winner.ownScore);
     }
 
     // Rivals are the turn's only preference signal, so a capture failure must surface.
