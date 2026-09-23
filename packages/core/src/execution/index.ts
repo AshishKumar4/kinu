@@ -8,6 +8,7 @@ export type {
   ExecutorInfo,
   ResourceLimits,
   ExecutionRouter,
+  PreviewRouteCheck,
 } from './types';
 
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';

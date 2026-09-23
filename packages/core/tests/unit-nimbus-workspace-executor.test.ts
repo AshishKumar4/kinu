@@ -66,7 +66,7 @@ function fakeBox() {
       logs: async (pid) => ({ pid, text: 'ready' }),
     },
     ports: {
-      expose: async (port) => ({ port, url: `https://${port}.example.test`, listening: true }),
+      expose: async (port) => ({ port, url: `https://${port}.example.test`, route: { reached: true } }),
       unexpose: async () => ({ ok: true }),
       list: async () => [{ port: 4321, url: 'https://4321.example.test' }],
       url: (port) => `https://${port}.example.test`,
@@ -128,12 +128,13 @@ describe('hosted Nimbus workspace provider', () => {
     expect(started).toContain('workspace.logs(41)');
     expect(started).not.toContain('nimbus.');
     expect(await provider.tools.logs.execute(41)).toContain('ready');
-    expect(await provider.tools.exposePort.execute(4321)).toBe('https://4321.example.test');
+    expect(await provider.tools.exposePort.execute(4321))
+      .toBe('https://4321.example.test\nverified: a request to this URL reaches the server on port 4321');
     expect(await provider.exposePort(4321)).toEqual({
       supported: true,
       port: 4321,
       url: 'https://4321.example.test',
-      verified_listening: true,
+      route: { reached: true },
     });
   });
 
@@ -284,7 +285,7 @@ describe('hosted Nimbus workspace provider', () => {
     const box = fakeBox();
     const reason = 'the workspace name "MyAgent" cannot be a preview hostname label';
     box.ports = {
-      expose: async (port) => ({ port, listening: true }),
+      expose: async (port) => ({ port, route: { reached: true } }),
       unexpose: async () => ({ ok: true }),
       list: async () => [{ port: 4321, unavailable: reason }],
     };
@@ -310,7 +311,7 @@ describe('hosted Nimbus workspace provider', () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
     box.ports = {
-      expose: async (port) => ({ port, listening: true }),
+      expose: async (port) => ({ port, route: { reached: true } }),
       unexpose: async () => ({ ok: true }),
       list: async () => [{ port: 4321, url: 'https://4321.example.test' }, { port: 9090 }],
     };

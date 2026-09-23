@@ -192,7 +192,7 @@ export function adaptCloudflareSandbox(
     listFiles: (path, opts) => onFile(path, () => handle.listFiles(path, opts)),
     deleteFile: (path) => onFile(path, () => jsonResultOrVoid(handle.deleteFile(path))),
     // Published first: the edge verifies preview hostnames against the record (`preview-proxy.ts`).
-    // The token comes from the minted URL, so what is recorded is what the caller got.
+    // Then `servePreviewRequest`'s gates run here, without forwarding.
     exposePort: async (port, opts) => {
       if (previews === null) throw new Error(PREVIEWS_UNPUBLISHABLE);
       const exposed = await onContainer(() => handle.exposePort(port, opts));
@@ -204,7 +204,15 @@ export function adaptCloudflareSandbox(
 
       await previews.publish(port, label.token);
 
-      return exposed;
+      if (!await previews.exposed(port, label.token)) {
+        return { ...exposed, route: { reached: false, gate: 'published', detail: 'the edge holds no published record for this URL' } };
+      }
+
+      const live = await onContainer(() => handle.getExposedPorts(opts.hostname));
+
+      return live.some((row) => row.port === port && row.url === exposed.url)
+        ? { ...exposed, route: { reached: true } }
+        : { ...exposed, route: { reached: false, gate: 'exposed', detail: `the container holds no live exposure of port ${port} for this URL` } };
     },
     // Withdrawn first: a live unreachable port is safe; a revoked port the edge still admits is not.
     unexposePort: async (port) => {

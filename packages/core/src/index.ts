@@ -1171,7 +1171,7 @@ export {
   EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
-  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
+  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits, type PreviewRouteCheck,
   commandResult, CommandResultSchema, COMMAND_RESULT_TYPE, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,

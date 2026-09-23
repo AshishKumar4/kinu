@@ -423,7 +423,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect((await ordinary.routePreview(20000, handle, new Request('https://preview.test/'), '/')).status).toBe(404);
   });
 
-  test('a resident exposed with exposePort routes to its server, never through the slate host', async () => {
+  test('a resident exposed with exposePort is verified and routes to its server, never through the slate host', async () => {
     const actor = actorObject();
     const kv = new Map<string, JsonValue>();
     Object.assign(actor.ctx.storage, durableStorage(kv));
@@ -446,12 +446,38 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const ports = workspace.box('agent').ports;
 
     if (ports?.expose === undefined) throw new Error('the workspace box has no port exposure');
-    const exposed = v.parse(v.object({ url: v.string(), capability: v.string() }), await ports.expose(8090));
+    const result = await ports.expose(8090);
+    const exposed = v.parse(v.object({ url: v.string(), capability: v.string() }), result);
     const response = await workspace.routePreview(8090, exposed.capability.slice(0, 10), new Request(exposed.url), '/');
 
+    expect(result.route).toEqual({ reached: true });
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('<h1>2048</h1>');
     expect(asked).toEqual([]);
+  });
+
+  test('exposePort names the gate that refuses when the exposed server has stopped', async () => {
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, durableStorage(kv));
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: workspaceBindings(),
+      previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
+    });
+
+    const pid = await listen(workspace, 8090, ['python3', '-m', 'http.server', '8090'], {
+      handleHttpRequest: async () => new Response('<h1>2048</h1>'),
+    });
+
+    const ports = workspace.box('agent').ports;
+
+    if (ports?.expose === undefined) throw new Error('the workspace box has no port exposure');
+    await ports.expose(8090);
+    (await workspace.facetManager()).manager.kill(pid);
+
+    expect((await ports.expose(8090)).route)
+      .toEqual({ reached: false, gate: 'no-listener', detail: 'nothing is listening on port 8090' });
   });
 
   test('a launch a hibernation interrupted is re-driven through the slate host on the next wake', async () => {

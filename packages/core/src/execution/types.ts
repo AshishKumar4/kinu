@@ -128,10 +128,7 @@ export interface ExecutorProvider {
 
   readonly positionalArgs?: boolean;
 
-  /**
-   * Returns the public preview URL, or `{supported: false}` with a reason. The sandbox impl verifies
-   * a server is listening before returning the URL.
-   */
+  /** The public preview URL and what the preview route's own gates answered for it, or `{supported: false}`. */
   exposePort?: (port: number, opts?: { name?: string }) => Promise<PortExposureResult>;
 
   /** No-op if the port wasn't exposed. */
@@ -145,13 +142,18 @@ export type PortAnsweringExecutor =
   ExecutorProvider
   & Required<Pick<ExecutorProvider, 'exposePort' | 'unexposePort' | 'listExposedPorts'>>;
 
+/** The preview route's own gates for a URL, run without calling the server. */
+export type PreviewRouteCheck =
+  | { readonly reached: true }
+  | { readonly reached: false; readonly gate: string; readonly detail: string };
+
 export type PortExposureResult =
   | {
       supported: true;
       url: string;
       port: number;
       name?: string;
-      verified_listening: boolean;
+      route: PreviewRouteCheck;
     }
   | {
       supported: false;

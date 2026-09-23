@@ -9,7 +9,7 @@ import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.r
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
   JsonValue,
-  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
+  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, tolerate, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -239,6 +239,23 @@ function previewUnavailable(refusal: Refusal): Response {
   });
 }
 
+interface PreviewGateRefusal {
+  readonly gate: 'no-exposure' | 'handle-mismatch' | 'ensure-missing' | 'ensure-unavailable' | 'no-listener' | 'capability-mismatch';
+  readonly owner: string | null;
+  readonly detail: string;
+  readonly refusal?: Refusal;
+}
+
+type PreviewGates =
+  | { readonly routed: false; readonly refused: PreviewGateRefusal }
+  | { readonly routed: true; readonly capability: string; readonly refused: PreviewGateRefusal | null };
+
+function routeCheck(gates: PreviewGates): PreviewRouteCheck {
+  return gates.refused === null
+    ? { reached: true }
+    : { reached: false, gate: gates.refused.gate, detail: gates.refused.detail };
+}
+
 /** Rows carry the recipe, never the inputs: the slate host re-drives through its own boot and the row is
  * released by answering null. An interpreter resident is never an embedder's launch. */
 /** A throw inside `waitUntil` would otherwise vanish. */
@@ -354,6 +371,44 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
   const runtime = async (): Promise<HostedRuntime> => (await compose()).runtime;
 
+  // Checked against the durable record: a port never handed a URL is refused even if something listens.
+  const previewGates = async (port: number, handle: string): Promise<PreviewGates> => {
+    const exposure = await readPortReservation(deps.ctx, port);
+    const capability = exposure?.capability ?? null;
+
+    if (exposure === null || capability === null) {
+      return { routed: false, refused: { gate: 'no-exposure', owner: null, detail: `no exposure record holds port ${port}` } };
+    }
+
+    const { owner } = exposure;
+
+    if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+      return { routed: false, refused: { gate: 'handle-mismatch', owner, detail: `the URL names another exposure of port ${port}` } };
+    }
+
+    const refusal = owner !== null && exposure.kind === 'explicit' ? await deps.ensureSlate?.(owner) ?? null : null;
+
+    if (refusal !== null) {
+      const gate = refusal.reason === 'missing' ? 'ensure-missing' : 'ensure-unavailable';
+
+      return { routed: false, refused: { gate, owner, detail: refusal.error, refusal } };
+    }
+
+    const listener = portRegistry.get(port);
+
+    if (listener === undefined) {
+      return { routed: true, capability, refused: { gate: 'no-listener', owner, detail: `nothing is listening on port ${port}` } };
+    }
+
+    if (listener.capability !== capability) {
+      const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
+
+      return { routed: true, capability, refused: { gate: 'capability-mismatch', owner, detail: `pid=${String(listener.pid)} state=${state}` } };
+    }
+
+    return { routed: true, capability, refused: null };
+  };
+
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
   const boxes = new Map<string, NimbusSandboxHandle>();
 
@@ -370,7 +425,11 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       const held = boxes.get(shellId);
 
       if (held) return held;
-      const built = workspaceBox({ runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl });
+
+      const built = workspaceBox({
+        runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
+      });
+
       boxes.set(shellId, built);
 
       return built;
@@ -414,48 +473,21 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       },
     },
     async routePreview(port, handle, request, pathname) {
+      const gates = await previewGates(port, handle);
+
       // Every refusal names its branch: a bare 404 is otherwise indistinguishable from the runner's own.
-      const refused = (reason: string, owner: string | null, detail = ''): void => {
-        diagnostics.event('preview.route.refused', { port, handle, reason, owner: owner ?? '', detail });
-      };
-
-      // Checked against the durable record: a port never handed a URL is a 404 even if something listens.
-      const exposure = await readPortReservation(deps.ctx, port);
-      const capability = exposure?.capability ?? null;
-
-      if (exposure === null || capability === null) {
-        refused('no-exposure', null);
-
-        return previewNotFound();
+      if (gates.refused !== null) {
+        const { gate, owner, detail } = gates.refused;
+        diagnostics.event('preview.route.refused', { port, handle, reason: gate, owner: owner ?? '', detail });
       }
 
-      if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
-        refused('handle-mismatch', exposure.owner);
+      if (!gates.routed) {
+        const { refusal } = gates.refused;
 
-        return previewNotFound();
+        return refusal === undefined || refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
       }
 
-      const namesSlate = exposure.owner !== null && exposure.kind === 'explicit';
-
-      if (namesSlate) {
-        const refusal = await deps.ensureSlate?.(exposure.owner) ?? null;
-
-        if (refusal !== null) {
-          refused(refusal.reason === 'missing' ? 'ensure-missing' : 'ensure-unavailable', exposure.owner, refusal.error);
-
-          return refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
-        }
-      }
-
-      const listener = portRegistry.get(port);
-
-      if (listener === undefined) {
-        refused('no-listener', exposure.owner);
-      } else if (listener.capability !== capability) {
-        const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
-
-        refused('capability-mismatch', exposure.owner, `pid=${String(listener.pid)} state=${state}`);
-      }
+      const { capability } = gates;
 
       const publicRequest = new Request(request);
       // Drop the visitor's header first: naming the invocation stops retained preview bindings standing in
@@ -496,6 +528,7 @@ function workspaceBox(deps: {
   files: NimbusSandboxHandle['files'];
   shellId: string;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
+  previewGates(port: number, handle: string): Promise<PreviewGates>;
 }): NimbusSandboxHandle {
   const { runtime, shellId } = deps;
 
@@ -532,7 +565,9 @@ function workspaceBox(deps: {
           throw new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
         }
 
-        return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url };
+        const gates = await deps.previewGates(port, exposed.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH));
+
+        return { port: exposed.port, pid: exposed.pid, capability: exposed.capability, url: answer.url, route: routeCheck(gates) };
       },
       // Retire the capability before dropping the listener, so a crash leaves a dead token, not a live one.
       unexpose: async (port) => {

@@ -183,7 +183,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
       return { exitCode: 0, stdout: '' };
     },
     async exposePort(port, opts) {
-      const exposed = { url: `https://preview.invalid/${port}`, port };
+      const exposed = { url: `https://preview.invalid/${port}`, port, route: { reached: true } as const };
 
       return opts.name ? { ...exposed, name: opts.name } : exposed;
     },

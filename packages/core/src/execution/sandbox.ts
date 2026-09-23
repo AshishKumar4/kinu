@@ -2,9 +2,9 @@
 
 import * as v from 'valibot';
 import { isAbortError } from '@kinu.run/agent-utils';
-import type { ExecutorProvider, ExecutorCapability } from './types';
+import type { ExecutorProvider, ExecutorCapability, PortExposureResult, PreviewRouteCheck } from './types';
 import { readExecSignal } from './signal';
-import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
+import { commandResult, COMMAND_RESULT_TYPE, exposedPortText, refusalText, type CommandResult } from './exec-result';
 import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { isVfsError, makeVfsError, type VfsErrorCode } from '../vfs/errno';
@@ -65,7 +65,7 @@ export interface SandboxHandle {
   deleteFile(path: string): Promise<JsonValue | void>;
   /** `hostname` is the preview URL suffix; `token` comes from {@link SandboxHandle.portToken}. */
   exposePort(port: number, opts: { hostname: string; name?: string; token?: string }):
-    Promise<{ url: string; port: number; name?: string }>;
+    Promise<{ url: string; port: number; name?: string; route: PreviewRouteCheck }>;
   unexposePort(port: number): Promise<JsonValue | void>;
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
@@ -213,16 +213,32 @@ export function createSandboxExecutor(
     }
   };
 
-  /** Mints the durable token before exposing, so the returned URL is the one restarts rebuild. */
-  const exposeWithDurableToken = async (
-    box: SandboxHandle, suffix: string, port: number, name?: string,
-  ): Promise<string> => {
+  /** The one exposure path. A probe that cannot run is stepped over: the exposure reports its own error. */
+  const exposeOn = async (box: SandboxHandle, suffix: string, port: number, name?: string): Promise<PortExposureResult> => {
+    const probe = await probeListener(box, port);
+
+    if ('unprobeable' in probe) {
+      diagnostics.failure('sandbox.port_probe_failed', toKinuError({
+        doing: 'probe a sandbox port before exposing it', cause: probe.unprobeable, otherwise: 'unavailable',
+      }), { port });
+    } else if (!probe.listening) {
+      return {
+        supported: false,
+        reason: `nothing is listening on port ${port} inside the sandbox. `
+          + `Start your server FIRST with a SUPERVISED process, then call sandbox.exposePort again. Examples:\n`
+          + `  • Static site: await sandbox.startProcess("python3 -m http.server ${port} --directory /workspace/<app-dir>")\n`
+          + `  • Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
+          + `Supervision is what makes the process survive a container restart; a bare \`nohup … &\` does not and will be lost.`,
+      };
+    }
+
     const { urlToken } = await box.portToken(port, name);
     const opts: SandboxExposeOptions = { hostname: suffix, token: urlToken };
 
     if (name !== undefined) opts.name = name;
+    const exposed = await withSandboxRetry(() => touch(() => box.exposePort(port, opts)));
 
-    return (await withSandboxRetry(() => touch(() => box.exposePort(port, opts)))).url;
+    return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
   const tools: ExecutorProvider['tools'] = {
@@ -394,11 +410,11 @@ export function createSandboxExecutor(
     },
     exposePort: {
       description:
-        'Expose a TCP port from the sandbox and return the public preview URL. ' +
-        'PRE-REQUISITE: a SUPERVISED server must already be listening on the port — start it ' +
-        'with sandbox.startProcess, never a bare `nohup … &` (unsupervised children die with ' +
-        'the container and do not come back). The call verifies the port responds (HTTP HEAD ' +
-        'against localhost) and names the fix if nothing listens.',
+        'Expose a TCP port from the sandbox. Returns the public preview URL, then one line: "verified" when a ' +
+        'request to the URL reaches the container port, or "not reached" naming the preview-route gate that ' +
+        'refused; that check never calls your server. PRE-REQUISITE: a SUPERVISED server must already be ' +
+        'listening on the port — start it with sandbox.startProcess, never a bare `nohup … &` (unsupervised ' +
+        'children die with the container and do not come back). Nothing listening is refused with the fix.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
 
@@ -410,36 +426,13 @@ export function createSandboxExecutor(
           return refusalText(new KinuError('bad_input', `sandbox exposePort: invalid port ${String(args[0])}`));
         }
 
-        // Pre-flight: without a listener the preview URL 502s.
-        const probe = await probeListener(handle, p);
-
-        if ('unprobeable' in probe) {
-          // Probe glitch: recorded and stepped over; exposePort reports its own error.
-          diagnostics.failure(
-            'sandbox.port_probe_failed',
-            toKinuError({
-              doing: 'probe a sandbox port before exposing it',
-              cause: probe.unprobeable,
-              otherwise: 'unavailable',
-            }),
-            { port: p },
-          );
-        } else if (!probe.listening) {
-          // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
-          return refusalText(new KinuError('bad_input',
-            `nothing is listening on port ${p} inside the sandbox. `
-            + `Start your server FIRST with a SUPERVISED process, then call `
-            + `sandbox.exposePort again. Examples:\n`
-            + `  • Static site: await sandbox.startProcess(`
-            + `"python3 -m http.server ${p} --directory /workspace/<app-dir>")\n`
-            + `  • Node:        await sandbox.startProcess("node server.js", {cwd:"/workspace/<app-dir>"})\n`
-            + `Supervision is what makes the process survive a container restart; `
-            + `a bare \`nohup … &\` does not and will be lost.`,
-          ));
-        }
-
         try {
-          return await exposeWithDurableToken(handle, previewHostSuffix, p, name);
+          const exposed = await exposeOn(handle, previewHostSuffix, p, name);
+
+          // `bad_input`: the caller must start the server first; `unavailable` or `missing` would misfile it.
+          return exposed.supported
+            ? exposedPortText(exposed.url, p, exposed.route)
+            : refusalText(new KinuError('bad_input', exposed.reason));
         } catch (err) {
           return refusalText(sandboxFailure({ doing: `sandbox exposePort ${p}`, cause: err }));
         }
@@ -647,7 +640,6 @@ declare namespace sandbox {
     types,
     positionalArgs: true,
 
-    // Generic ExecutorProvider port surface, mirroring the codemode `sandbox.exposePort` tool.
     async exposePort(port, opts) {
       if (!handle) return { supported: false, reason: NOT_CONFIGURED };
 
@@ -657,32 +649,8 @@ declare namespace sandbox {
         return { supported: false, reason: `invalid port ${port}` };
       }
 
-      // A probe that cannot run is reported, not stepped over: the container cannot execute commands.
-      const probe = await probeListener(handle, Number(port));
-
-      if ('unprobeable' in probe) {
-        return { supported: false, reason: renderThrownChain({ cause: probe.unprobeable }) };
-      }
-
-      if (!probe.listening) {
-        return {
-          supported: false,
-          reason:
-            `nothing is listening on port ${port} inside the sandbox. ` +
-            `Start a SUPERVISED server first — sandbox.startProcess("python3 -m http.server ${port}" +
-            " --directory /workspace/<app>") or sandbox.startProcess("node server.js") — ` +
-            `then call exposePort again. Supervision survives restarts; nohup does not.`,
-        };
-      }
-
       try {
-        return {
-          supported: true,
-          url: await exposeWithDurableToken(handle, previewHostSuffix, port, opts?.name),
-          port,
-          name: opts?.name,
-          verified_listening: true,
-        };
+        return await exposeOn(handle, previewHostSuffix, port, opts?.name);
       } catch (err) {
         return { supported: false, reason: renderThrownChain({ cause: err }) };
       }
