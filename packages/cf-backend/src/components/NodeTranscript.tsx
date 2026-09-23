@@ -213,9 +213,8 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
 
   const liveness: TurnLiveness = live ? { kind: "live", turnId: null } : { kind: "idle" };
 
-  const durableTail = threadLiveTail({ last: messages.at(-1), liveness });
-
-  const arrivingTail = threadLiveTail({ last: arriving ?? undefined, liveness });
+  // The arriving step owns the tail while it streams.
+  const liveTail = threadLiveTail({ last: arriving ?? messages.at(-1), liveness });
 
   return (
     <div className="min-h-0 flex-1 flex flex-col">
@@ -245,17 +244,16 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
                 onRetry={onLoadOlder ?? (() => {})}
               />
             )}
-            {/* Only the arriving step claims the live caret. */}
             {messages.map((message, index) => (
               <MessageView key={message.id} message={message}
-                liveTail={arriving === null && index === messages.length - 1 ? durableTail : null} />
+                liveTail={arriving === null && index === messages.length - 1 ? liveTail : null} />
             ))}
             {arriving && (
               <div data-node-pending-step>
-                <MessageView message={arriving} liveTail={arrivingTail} />
-                <ChatLiveTail tail={arrivingTail} />
+                <MessageView message={arriving} liveTail={liveTail} />
               </div>
             )}
+            <ChatLiveTail tail={liveTail} />
             <div ref={tail} />
           </div>
         )}

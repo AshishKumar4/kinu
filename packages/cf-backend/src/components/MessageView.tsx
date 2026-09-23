@@ -28,7 +28,7 @@ import {
   partOutput, partInput, partEffect, callFailed, parseProvisionError,
   type AnyToolPart,
 } from "@kinu.run/core";
-import type { LiveTail } from "@kinu.run/core";
+import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, endedMidWork, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
@@ -90,19 +90,16 @@ function ThinkingLabel({ live }: { live: boolean }) {
   );
 }
 
-/** Rendered only while the stream is open with no active part. */
-function ThinkingRow() {
+// A sibling of the message list, not a child of its last message: a turn with no assistant
+// row yet has nothing to hang it on.
+export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
+  if (tail?.kind !== "thinking") return null;
+
   return (
     <div data-live-indicator="thinking" className="animate-fade-in py-1.5" aria-live="polite">
       <ThinkingLabel live />
     </div>
   );
-}
-
-// A sibling of the message list, not a child of its last message: a turn with no assistant
-// row yet has nothing to hang it on.
-export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
-  return tail?.kind === "thinking" ? <ThinkingRow /> : null;
 }
 
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
@@ -383,7 +380,7 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         input={input}
         output={output}
         effect={partEffect(part)}
-        isRunning={part.state === "input-available" || part.state === "input-streaming"}
+        isRunning={toolCallRunning(part)}
         isError={callFailed(part)}
         errorText={part.state === "output-error" ? part.errorText : undefined}
         expanded={expanded}
@@ -742,9 +739,9 @@ export const MessageView = memo(function MessageView({
     const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
 
     if (part.type === "reasoning") {
-      const t = part.text;
+      const t = drawnText(part);
 
-      return t ? <ReasoningBlock key={key} text={t} live={isTailPart} /> : null;
+      return t === null ? null : <ReasoningBlock key={key} text={t} live={isTailPart} />;
     }
 
     if (part.type === "file") {
@@ -752,9 +749,9 @@ export const MessageView = memo(function MessageView({
     }
 
     if (part.type === "text") {
-      const t = part.text;
+      const t = drawnText(part);
 
-      if (!t) return null;
+      if (t === null) return null;
 
       // `p-streaming` draws the caret inside the last markdown block; a sibling element would land on its own line.
       return (
