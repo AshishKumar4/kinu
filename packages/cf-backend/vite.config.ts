@@ -82,6 +82,8 @@ const wgslClientOnly = {
  */
 const devStateDir = process.env.KINU_DEV_STATE_DIR;
 
+const previewPort = devPreviewPort(__dirname);
+
 export default defineConfig(({ command }) => ({
   // The dependency optimizer's cache for one harness boot; unset leaves vite's default, `node_modules/.vite`.
   // Every worktree's `.vite` is the primary checkout's (setup-worktree.sh), so two dev servers booting at once on
@@ -94,10 +96,10 @@ export default defineConfig(({ command }) => ({
       persistState: devStateDir === undefined ? true : { path: devStateDir },
       // `vite dev` serves its own preview zone (vite-preview-zone.ts); a build keeps the deployed zone.
       config: command === "serve"
-        ? (worker) => ({ vars: { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(devPreviewPort()) } })
+        ? (worker) => ({ vars: { ...worker.vars, PREVIEW_HOST_SUFFIX: DEV_PREVIEW_SUFFIX, PREVIEW_HOST_PORT: String(previewPort) } })
         : undefined,
     }),
-    devPreviewZone(devPreviewTlsDir(__dirname)),
+    devPreviewZone(devPreviewTlsDir(__dirname), previewPort),
     tailwindcss(),
   ],
   // The zone's requests reach vite with their preview host.
