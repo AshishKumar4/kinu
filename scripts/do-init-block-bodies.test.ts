@@ -1,7 +1,8 @@
 /** D26: the SDK start block runs the hook through `callOnStart`, which suspends the outer client's
- * timers, ends the alarm loop's wait and opens the hook's control client inside the block; no
- * other input block reaches a container RPC. Red on D8's shape (hook after the block), on
- * upstream's (hook in the block on the connection already open), and on each missing piece. */
+ * timers, ends the alarm loop's wait and opens the hook's control client inside the block; every
+ * port ping clears its timer; no other input block reaches a container RPC. Red on D8's shape
+ * (hook after the block), on upstream's (hook in the block on the connection already open), and on
+ * each missing piece. */
 import { expect, test } from 'bun:test';
 import { auditBlockBodies, containerBlockSources } from './do-init-gate';
 import { readSources } from './sources';
@@ -82,6 +83,18 @@ test("a start block that leaves the alarm loop's wait armed is red", () => {
 
   expect(audited.alarmWait).toBeNull();
   expect(audited.violations.some((found) => found.member === 'clearTimeout')).toBe(true);
+});
+
+test("a port ping that leaves its timeout timer pending is red; one cleared in a finally is green", () => {
+  const ping = (body: string) => `class Container {
+    async waitForPort(port) { for (;;) { try { ${body} break; } catch { await this.sleep(); } } }
+  }`;
+
+  const leaking = check(ping("const combinedSignal = addTimeoutSignal(this.signal, 5000); await port.fetch('http://ping', { signal: combinedSignal });"));
+  expect(leaking.violations.map((found) => [found.owner, found.member])).toEqual([['addTimeoutSignal', 'combinedSignal']]);
+
+  const clearing = check(ping("const ping = addTimeoutSignal(this.signal, 5000); try { await port.fetch('http://ping', { signal: ping.signal }); } finally { ping.clear(); }"));
+  expect(clearing.violations).toEqual([]);
 });
 
 test('a callback parameter cannot put a container RPC into a storage block', () => {

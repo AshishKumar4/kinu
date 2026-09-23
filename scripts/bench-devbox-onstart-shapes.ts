@@ -1,6 +1,8 @@
 /**
  * D8's control under each SDK shape: the probe's reentry run (`probeReentry`) on three builds of
- * the same probe, told apart only by the patches applied to the pristine SDK packages.
+ * the same probe, told apart only by the patches applied to the pristine SDK packages at the
+ * versions `packages/devbox` pins. A base patch cut for another SDK release is ported onto the
+ * pinned release's chunk.
  *
  *   outside  the base revision's pair: `onStart` after the start block (D8, shipped 2026-09-13)
  *   inside   upstream's block with the base revision's sandbox patch: the hook in the block,
@@ -10,9 +12,10 @@
  *
  * Each run leaves one timer set outside the start block pending (`--pending`): the control
  * connection's timers after an exec, the alarm loop's wait between two schedule rows, or a stray
- * timer nothing clears. `--local` runs each build under `wrangler dev` with Docker; otherwise each
- * build deploys as its own Worker, waits for its container application, runs, and deletes both.
- * Every run uses a fresh box; `--reset-window` adds one run whose window outlives the 30 s cap.
+ * timer nothing clears. A hold past 5 s (`--hold-ms`) also covers the SDK's port-ping timers.
+ * `--local` runs each build under `wrangler dev` with Docker; otherwise each build deploys as its
+ * own Worker, waits for its container application, runs, and deletes both. Every run uses a fresh
+ * box; `--reset-window` adds one run whose window outlives the 30 s cap.
  *
  *   bun scripts/bench-devbox-onstart-shapes.ts [--local] [--arms outside,inside,rotated]
  *     [--pending connection,alarm,stray] [--runs 3] [--window-ms 5000] [--hold-ms 2000]
@@ -39,10 +42,6 @@ const PROBE_DIR = join(REPO, 'packages/devbox/bench');
 const ARMS = ['outside', 'inside', 'rotated'] as const;
 
 type Arm = (typeof ARMS)[number];
-
-const CONTAINERS_PATCH = 'patches/@cloudflare%2Fcontainers@0.3.7.patch';
-
-const SANDBOX_PATCH = 'patches/@cloudflare%2Fsandbox@0.12.8.patch';
 
 /** Past the platform's 30 s `blockConcurrencyWhile` cap, so a hook that never hears its reply
  *  is reset by the platform, as D8's control was, rather than cut short by the probe. */
@@ -117,8 +116,19 @@ function git(args: readonly string[]): string {
   return execFileSync('git', [...args], { cwd: REPO, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
 }
 
-/** A patch's text at a revision; `worktree` reads this tree's file as it stands. */
-function patchText(path: string, revision: string): string {
+/** The patch `patches/` holds for `name` at a revision, whatever version it was cut for;
+ *  `worktree` reads this tree as it stands. */
+function patchText(name: string, revision: string): string {
+  const prefix = `patches/${name.replace('/', '%2F')}@`;
+
+  const listed = revision === 'worktree'
+    ? readdirSync(join(REPO, 'patches')).map((file) => `patches/${file}`)
+    : git(['ls-tree', '--name-only', revision, 'patches/']).trim().split('\n');
+
+  const path = listed.find((file) => file.startsWith(prefix) && file.endsWith('.patch'));
+
+  if (path === undefined) throw new Error(`no ${name} patch under patches/ at ${revision}`);
+
   return revision === 'worktree' ? readFileSync(join(REPO, path), 'utf8') : git(['show', `${revision}:${path}`]);
 }
 
@@ -153,8 +163,13 @@ function materialize(arm: Arm, base: string, runDir: string) {
   const containersFrom = { outside: base, inside: 'none', rotated: 'worktree' }[arm];
   const sandboxFrom = arm === 'rotated' ? 'worktree' : base;
 
-  if (containersFrom !== 'none') applyPatch(patchText(CONTAINERS_PATCH, containersFrom), containersDir, runDir, `${arm}-containers`);
-  applyPatch(patchText(SANDBOX_PATCH, sandboxFrom), sandboxDir, runDir, `${arm}-sandbox`);
+  const sandboxChunk = readdirSync(join(sandboxDir, 'dist')).find((name) => /^sandbox-.*\.js$/.test(name));
+
+  if (sandboxChunk === undefined) throw new Error(`no sandbox chunk under ${sandboxDir}/dist`);
+
+  if (containersFrom !== 'none') applyPatch(patchText('@cloudflare/containers', containersFrom), containersDir, runDir, `${arm}-containers`);
+  // A patch cut for another release names that release's chunk; the hunks are ported onto this one.
+  applyPatch(patchText('@cloudflare/sandbox', sandboxFrom).replaceAll(/dist\/sandbox-[A-Za-z0-9_-]+\.js/g, `dist/${sandboxChunk}`), sandboxDir, runDir, `${arm}-sandbox`);
   const require = createRequire(join(REPO, 'node_modules/@cloudflare/sandbox/package.json'));
 
   for (const dependency of ['capnweb', 'aws4fetch']) {
@@ -162,9 +177,6 @@ function materialize(arm: Arm, base: string, runDir: string) {
   }
 
   const digest = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 16);
-  const sandboxChunk = readdirSync(join(sandboxDir, 'dist')).find((name) => /^sandbox-.*\.js$/.test(name));
-
-  if (sandboxChunk === undefined) throw new Error(`no sandbox chunk under ${sandboxDir}/dist`);
 
   return {
     modules,

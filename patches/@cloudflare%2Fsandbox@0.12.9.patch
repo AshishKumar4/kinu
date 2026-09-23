@@ -1,7 +1,7 @@
-diff --git a/dist/sandbox-CPj2jsbz.js b/dist/sandbox-CPj2jsbz.js
-index cdb0475..5dac3f9 100644
---- a/dist/sandbox-CPj2jsbz.js
-+++ b/dist/sandbox-CPj2jsbz.js
+diff --git a/dist/sandbox-D0rNqxlr.js b/dist/sandbox-D0rNqxlr.js
+index 63771b5..8700e86 100644
+--- a/dist/sandbox-D0rNqxlr.js
++++ b/dist/sandbox-D0rNqxlr.js
 @@ -4188,6 +4188,20 @@ var ContainerControlClient = class {
  			this.idleTimer = null;
  		}
@@ -23,7 +23,7 @@ index cdb0475..5dac3f9 100644
  	destroyConnection(cause) {
  		this.stopBusyPoll();
  		this.clearIdleTimer();
-@@ -7642,7 +7656,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -7650,7 +7664,7 @@ var Sandbox = class Sandbox extends Container {
  	* `rpc` currently selects the primary container-control client. `http` and
  	* `websocket` select the route-based compatibility client.
  	*/
@@ -32,7 +32,7 @@ index cdb0475..5dac3f9 100644
  		if (transport === "rpc") {
  			const self = this;
  			return new ContainerControlClient({
-@@ -7654,7 +7668,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -7662,7 +7676,7 @@ var Sandbox = class Sandbox extends Container {
  					id: this.ctx.id.toString(),
  					name: this.sandboxName ?? void 0
  				}),
@@ -41,7 +41,7 @@ index cdb0475..5dac3f9 100644
  				localMain: this.controlCallback,
  				onActivity: () => {
  					this.renewActivityTimeout();
-@@ -8291,10 +8305,13 @@ var Sandbox = class Sandbox extends Container {
+@@ -8299,10 +8313,13 @@ var Sandbox = class Sandbox extends Container {
  			} else {
  				let unmounted = false;
  				try {
@@ -59,7 +59,7 @@ index cdb0475..5dac3f9 100644
  					}
  					unmounted = true;
  					mountInfo.mounted = false;
-@@ -8572,6 +8589,32 @@ var Sandbox = class Sandbox extends Container {
+@@ -8580,6 +8597,32 @@ var Sandbox = class Sandbox extends Container {
  			});
  		}
  	}
@@ -92,7 +92,7 @@ index cdb0475..5dac3f9 100644
  	async onStart() {
  		this.logger.debug("Sandbox started");
  		await this.currentRuntime.markStarted();
-@@ -8830,7 +8873,15 @@ var Sandbox = class Sandbox extends Container {
+@@ -8838,7 +8881,15 @@ var Sandbox = class Sandbox extends Container {
  	*/
  	async startContainerForRPC() {
  		try {
@@ -109,7 +109,7 @@ index cdb0475..5dac3f9 100644
  				ports: 3e3,
  				cancellationOptions: {
  					instanceGetTimeoutMS: RPC_START_INSTANCE_GET_TIMEOUT_MS,
-@@ -11495,7 +11546,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -11503,7 +11554,7 @@ var Sandbox = class Sandbox extends Container {
  		const ctx = this.ctx;
  		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("R2 binding mounts require container outbound interception support");
  		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("R2 binding mounts require exporting ContainerProxy from the Worker entrypoint");
@@ -118,7 +118,7 @@ index cdb0475..5dac3f9 100644
  		if (Object.keys(params.buckets).length > 0) await this.setOutboundByHost("r2.internal", "r2EgressMount", params);
  		else await this.removeOutboundByHost("r2.internal");
  		this.logger.debug("r2 egress: registering host interception", {
-@@ -11520,7 +11571,7 @@ var Sandbox = class Sandbox extends Container {
+@@ -11528,7 +11579,7 @@ var Sandbox = class Sandbox extends Container {
  		if (!ctx.container?.interceptOutboundHttp) throw new InvalidMountConfigError("Credential proxy bucket mounts require container outbound interception support");
  		if (!ctx.exports?.ContainerProxy) throw new InvalidMountConfigError("Credential proxy bucket mounts require exporting ContainerProxy from the Worker entrypoint");
  		const hosts = [S3_CREDENTIAL_PROXY_HOST, S3_CREDENTIAL_PROXY_DIAGNOSTIC_HOST];

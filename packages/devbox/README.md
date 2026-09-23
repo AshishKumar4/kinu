@@ -172,7 +172,7 @@ starts of that shape (2026-09-10,
 `bench/measure-first/DECISIVE-2026-09-05.md`): one admitted at 3,270 ms, five
 reset by the platform at 30.0 s with no phase stamped. The first command on a
 fresh container opens the SDK's control connection, whose connect abort
-(`@cloudflare/sandbox` `dist/sandbox-CPj2jsbz.js:3563`, 30 s) and retry backoff
+(`@cloudflare/sandbox` `dist/sandbox-D0rNqxlr.js:3563`, 30 s) and retry backoff
 (`:812`, 3 s) both run on the Durable Object. Admission now waits for that
 control listener, never for an app port the restore has not started yet.
 
@@ -350,7 +350,7 @@ Devbox declares three dependencies, `@cloudflare/sandbox`,
 reads the forbidden scope from a sibling manifest, so a rename cannot leave a
 dead guard.
 
-`patches/@cloudflare%2Fsandbox@0.12.8.patch` makes the SDK merge
+`patches/@cloudflare%2Fsandbox@0.12.9.patch` makes the SDK merge
 `outboundHandlers` rather than assign them. A bucket mount cannot then unbind a
 host handler.
 

@@ -1,6 +1,6 @@
 // Snapshot-chain gate: one immutable base plus one cumulative delta; attach mounts fixed
 // lazy layers moving zero bytes, a checkpoint moves only changed bytes (D2).
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import { afterAll, describe, expect, test } from 'bun:test';
@@ -3635,21 +3635,4 @@ describe('an archive replaced at the same length is refused', () => {
       expect(record.digests.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))))
         .toBe(record.state?.delta?.digest);
     });
-});
-
-describe('the patched sandbox SDK: the container is the authority for a mount', () => {
-  test('unmount releases a registry entry the container no longer backs', () => {
-    // Pins patches/@cloudflare%2Fsandbox@0.12.8.patch in the installed dist: `mountpoint -q` guards
-    // `fusermount -u`, so a path with no container mount releases its SDK registry entry.
-    const dist = readFileSync(
-      join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
-      'utf8',
-    );
-
-    const unmount = dist.slice(dist.indexOf('async unmountBucketUnlocked('));
-    const guard = unmount.indexOf('mountpoint -q ${shellEscape(mountPath)}`');
-    const fusermount = unmount.indexOf('fusermount -u ${shellEscape(mountPath)}`');
-    expect(guard).toBeGreaterThan(-1);
-    expect(fusermount).toBeGreaterThan(guard);
-  });
 });

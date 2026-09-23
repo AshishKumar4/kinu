@@ -91,8 +91,8 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  */
 const SANDBOX_IMAGE = {
   repository: 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer',
-  version: '0.12.8',
-  digest: 'sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e',
+  version: '0.12.9',
+  digest: 'sha256:8561558654fd05c04ff1c229ab24c1e248852fc8fb7953cd4300134f2ef13957',
 } as const;
 
 const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;

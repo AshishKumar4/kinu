@@ -6,12 +6,13 @@
  * The block rule rests on dated measurements (D26, P4, P5 in DEVBOX-DECISIONS).
  * Deployed 2026-09-13 (D8, trace b20260913105359): a start block's boot-id RPC
  * over the control connection opened before the block never answered, and the
- * object reset at the 30 s cap. Deployed 2026-09-23 (run s20260923013446): the
- * same reentered hook got no reply on upstream's block, 4 of 4, and answered in
- * 152-176 ms on a client opened inside the block, 4 of 4; in both, a timer the
- * hook set never fired once the SDK's 1 s connection timer, set before the block,
- * fell due. Local workerd 2026-09-23: with that timer cleared at block entry the
- * hook's timers fired and the hook returned, 3 of 3.
+ * object reset at the 30 s cap. Deployed 2026-09-23 on the tree that ships
+ * (@cloudflare/sandbox 0.12.9, image kinu-devbox-block-layer@sha256:85615586…):
+ * with a timer set before the block left pending, upstream's block got no reply
+ * or never ended its hook, 9 of 9 (run s20260923032104), and this rule's shape
+ * answered and returned with the gate held, 6 of 6 for the SDK's own timers
+ * (connection poll, alarm wait, port pings; run s20260923033729). A timer
+ * another event leaves pending still stalls the hook, 3 of 3: the rule's residual.
  */
 
 import { readFileSync } from 'node:fs';
@@ -828,6 +829,45 @@ function alarmWaitOf(file: string, tree: Parsed): HookIsolation | null {
   return found;
 }
 
+/** Every `addTimeoutSignal` result is cleared in a `finally` of its own block: the containers
+ *  package leaves each port ping's 5 s timer pending otherwise, and one falling due inside the
+ *  start block holds every timer the hook sets (P5). */
+function leakedPingTimers(file: string, tree: Parsed): Violation[] {
+  const leaks: Violation[] = [];
+
+  walk(tree.root, (node) => {
+    const raw = node.raw;
+
+    if (raw.type !== 'VariableDeclarator' || raw.id.type !== 'Identifier' || raw.init?.type !== 'CallExpression'
+      || raw.init.callee.type !== 'Identifier' || raw.init.callee.name !== 'addTimeoutSignal') return;
+    const name = raw.id.name;
+    let block = node.parent;
+
+    while (block !== undefined && block.type !== 'BlockStatement') block = block.parent;
+    let cleared = false;
+
+    if (block !== undefined) walk(block, (inner) => {
+      const statement = inner.raw;
+
+      if (cleared || statement.type !== 'TryStatement' || statement.finalizer === null) return;
+      const finalizer = inner.children.find((child) => child.start === statement.finalizer?.start);
+
+      if (finalizer !== undefined) walk(finalizer, (call) => {
+        const callee = call.raw.type === 'CallExpression' ? call.raw.callee : undefined;
+
+        if (callee?.type === 'MemberExpression' && callee.object.type === 'Identifier' && callee.object.name === name
+          && callee.property.type === 'Identifier' && callee.property.name === 'clear') cleared = true;
+      });
+    });
+
+    if (!cleared) {
+      leaks.push({ file, line: tree.lineAt(node.start), owner: 'addTimeoutSignal', member: name, reason: `\`${name}\`'s timeout timer is never cleared when its ping settles; it falls due later, maybe inside the start block, and holds every timer the hook sets` });
+    }
+  });
+
+  return leaks;
+}
+
 /** The method a node sits in, by its declared name. */
 function enclosingMethod(node: SyntaxNode): string | undefined {
   for (let at = node.parent; at !== undefined; at = at.parent) {
@@ -845,8 +885,8 @@ function enclosingMethod(node: SyntaxNode): string | undefined {
  * order, each under the gate it was set under, so one set outside the block that falls due inside
  * it holds every timer the hook sets. So the start block runs the hook only through `callOnStart`,
  * which suspends the outer client's timers, ends the alarm loop's wait and opens the hook's client
- * inside the block; no other input block reaches a container RPC. Follows named local methods and
- * the virtual `onStart` edge.
+ * inside the block; every port ping clears its timeout timer when it settles; no other input block
+ * reaches a container RPC. Follows named local methods and the virtual `onStart` edge.
  */
 export function auditBlockBodies(sources: ReadonlyMap<string, string>): BlockAudit {
   const methods = new Map<string, SyntaxNode[]>();
@@ -887,7 +927,7 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): BlockAud
       if (body) methods.set(parameter, [...methods.get(parameter) ?? [], body]);
     }
   });
-  const violations: Violation[] = [];
+  const violations: Violation[] = parsed.flatMap(({ file, tree }) => leakedPingTimers(file, tree));
   const hookBlocks = new Set<string>();
   const startMethods = new Set<string>();
 

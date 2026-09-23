@@ -81,7 +81,12 @@ timeouts have completed") and `TimeoutState::cancel`; `scheduler.wait` and
 set inside the block stopped at the first tick after the SDK's 1 s connection
 poll, set before the block, fell due; the block then reset at 30 s, 3 of 3.
 With that poll cleared at block entry, the hook's timers fired and the hook
-returned, 3 of 3.
+returned, 3 of 3. A third such timer is the containers package's port ping:
+`addTimeoutSignal` arms a 5 s timer per ping and clears it only on abort, so
+the pings that prove a port just before a start block fall due inside it.
+With the hold past 5 s, the hook's timers stalled locally, 4 of 4 (run
+`s20260923031614`), and fired once each ping cleared its timer on settling,
+4 of 4 (`s20260923031930`).
 
 ## Decisions
 
@@ -1026,10 +1031,10 @@ never completed were measured as recycles. `requireConfirmedStop` in
 `scripts/bench-devbox-strategies.ts` refuses a wake after an unconfirmed stop.
 
 D26. Restore runs inside the SDK start block again (2026-09-23,
-`lane/devbox`). This reverses D8's placement (hook after the block) and
-restores R1: no event reaches the object until the restore settles. Two
-platform facts made the in-block hook deadlock, and the patched SDK isolates
-the hook from both.
+`lane/devbox`, `@cloudflare/sandbox` 0.12.9). This reverses D8's placement
+(hook after the block) and restores R1: no event reaches the object until
+the restore settles. Two platform facts made the in-block hook deadlock, and
+the patched SDK isolates the hook from both.
 
 P4 was D8's deadlock. In the first start block of D8's trace
 `b20260913105359` the hook's execs answered (700, 143, 59, 99, 56, 55 ms),
@@ -1040,74 +1045,90 @@ closes an idle connection after 1 s, so the window is narrow.
 
 P5 was found while measuring the P4 fix: a timer the hook set never fired.
 The SDK's control client polls every 1 s while a connection is open, the
-alarm loop waits between schedule rows, and Devbox's admission window ran
-for `portWaitMs`; each is set before the block, and once due it holds every
-timer the hook sets, the D19 restore budget's included.
+alarm loop waits between schedule rows, the containers package arms a 5 s
+timer per port ping and never clears it after a successful ping, and
+Devbox's admission window ran for `portWaitMs`. Each is set before the
+block, and once due it holds every timer the hook sets, the D19 restore
+budget's included.
 
 The change. The containers patch runs `setHealthy`, then `callOnStart()`,
 inside both start blocks; `callOnStart()` ends the alarm loop's wait (as a
-container exit does; the loop re-arms) and calls `onStart()`. The sandbox
-patch overrides `callOnStart()`: it suspends the outer control client's poll
-and idle timers and runs the hook on a fresh client
-(`createClientForTransport`), whose connection opens inside the block and
-never starts a container; afterwards it restores the outer client and resumes
-its timers, and in-flight calls on the outer client keep their connection.
-Devbox disarms its admission window when the hook starts, a checkpoint that
-meets a pending startup waits for it to settle instead of racing a timer
-(`requestJoinMs` is gone), and `resolveReadiness` no longer joins the hook,
-because no request runs while the block holds the gate.
-`scripts/do-init-gate.ts` requires both start blocks to run the hook through
-`callOnStart`, the installed `callOnStart` to suspend the outer timers and
-swap the client before the hook, and the base `callOnStart` to clear the
-alarm wait before `onStart()`; every other input block still reaches no
-container RPC.
+container exit does; the loop re-arms) and calls `onStart()`; each port ping
+clears its timer when the ping settles. The sandbox patch overrides
+`callOnStart()`: it suspends the outer control client's poll and idle
+timers and runs the hook on a fresh client (`createClientForTransport`),
+whose connection opens inside the block and never starts a container;
+afterwards it restores the outer client and resumes its timers, and
+in-flight calls on the outer client keep their connection. Devbox disarms
+its admission window when the hook starts, a checkpoint that meets a pending
+startup waits for it to settle instead of racing a timer (`requestJoinMs` is
+gone), and `resolveReadiness` no longer joins the hook, because no request
+runs while the block holds the gate. `scripts/do-init-gate.ts` requires both
+start blocks to run the hook through `callOnStart`, the installed
+`callOnStart` to suspend the outer timers and swap the client before the
+hook, the base `callOnStart` to clear the alarm wait before `onStart()`, and
+every `addTimeoutSignal` result to be cleared in a `finally`; every other
+input block still reaches no container RPC.
 
-Residual. A timer another event sets before the block, outside the SDK's two
-and Devbox's own, still holds the hook's timers once it falls due. The
-hook's ordinary path awaits no timer; the budget's races need one only when
-a step overruns, and then the platform resets the object at 30 s and the
-next activation recovers the interrupted restore (the `restoring` row,
-`ContainerStartInterrupted`).
+Residual. A timer another event sets before the block, outside the SDK's and
+Devbox's own, still holds the hook's timers once it falls due (the stray
+column below). The hook's ordinary path awaits no timer; the budget's races
+need one only when a step overruns, and then the platform resets the object
+at 30 s and the next activation recovers the interrupted restore (the
+`restoring` row, `ContainerStartInterrupted`).
 
-Measured 2026-09-23 with `scripts/bench-devbox-onstart-shapes.ts --local`
-(workerd under `wrangler dev`, Docker, image `cloudflare/sandbox:0.12.8`),
-run `s20260923025542`, base `b2c60d09f`, window 5,000 ms, hold 2,000 ms, a
-request every 250 ms, 2 runs per cell. Each arm is the same probe
-(`probeReentry`: start, leave one timer pending, start again at once, hook
-execs once, then holds) built from pristine npm packages plus one patch set:
-outside is `b2c60d09f`'s pair, inside is upstream's containers package with
-`b2c60d09f`'s sandbox patch, rotated is this tree's pair. Pending timer:
-connection (an exec just before, so the 1 s poll is armed), alarm (two
-schedule rows, the loop waiting for the second), stray (a 1 s `setTimeout`
-nothing clears).
+Measured on the tree that ships, deployed 2026-09-23 with
+`scripts/bench-devbox-onstart-shapes.ts --pending connection,alarm,stray
+--runs 3 --hold-ms 6000`: `@cloudflare/sandbox` 0.12.9 and
+`@cloudflare/containers` 0.3.7 from npm, the product image
+`kinu-devbox-block-layer@sha256:8561558654fd05c04ff1c229ab24c1e248852fc8fb7953cd4300134f2ef13957`
+(built on `cloudflare/sandbox@sha256:4a56a37a…`), window 5,000 ms, a request
+every 250 ms. Each arm is the same probe (`probeReentry`: start, leave one
+timer pending, start again at once, hook execs once, then holds 6 s, past
+the 5 s ping timers) built from those packages plus one patch set: outside
+is `b2c60d09f`'s pair and inside is upstream's containers package with
+`b2c60d09f`'s sandbox patch, both ported onto the 0.12.9 chunk; rotated is
+this tree's pair. Pending timer: connection (an exec just before, so the 1 s
+poll is armed), alarm (two schedule rows, the loop waiting for the second),
+stray (a 1 s `setTimeout` nothing clears). Outside and inside ran as
+`s20260923032104` (03:21 to 03:33 UTC); that driver died in the rotated arm
+after its connection cell, so the rotated arm ran again, whole, as
+`s20260923033729` (03:37 to 03:42 UTC).
 
-| Arm | connection | alarm | stray |
+| Arm, run | connection | alarm | stray |
 | --- | --- | --- | --- |
-| outside (D8) | exec 7, 6 ms; 8, 8 requests ran during the hook; exited | exec 60, 37 ms; 8, 7 requests; exited | exec 30, 26 ms; 7, 7 requests; exited |
-| inside (upstream block) | no reply; reset at the cap | exec 45, 20 ms; hold never ended; reset | exec 31, 31 ms; hold never ended; reset |
-| rotated (D26) | exec 11, 13 ms; no request during the hook; exited at +2.0 s | exec 22, 22 ms; no request; exited at +2.0 s | exec 18, 69 ms; hold never ended; reset |
+| outside (D8), `s20260923032104` | exec 88, 114, 131 ms; 22, 21, 22 requests ran during the hook; exited | exec 269, 361, 375 ms; 21, 22, 22 requests; exited | exec 292, 339, 292 ms; 22, 23, 22 requests; exited |
+| inside (upstream block), `s20260923032104` | no reply, 3 of 3; reset at the cap | exec 377, 347, 369 ms; hold never ended, 3 of 3; reset | exec 325, 350, 311 ms; hold never ended, 3 of 3; reset |
+| rotated (D26), `s20260923033729` | exec 209, 180, 172 ms; no request during the hook; exited at +6.2 s, 3 of 3 | exec 271, 362, 578 ms; no request; exited at +6.3 to +6.6 s, 3 of 3 | exec 338, 312, 268 ms; hold never ended, 3 of 3; reset |
 
-Deployed, run `s20260923013446` (01:34:46 to 01:48:15 UTC, connection cell
-only, four runs per arm, with the rotated arm's client swap but before the
-timer suspension): outside answered in 80 to 103 ms with 6 to 7 requests
-delivered during the hook; inside got no reply, 4 of 4, and reset at the cap;
-rotated answered in 152 to 176 ms, 4 of 4, and its 2 s hold never ended.
-That run is P4's deployed evidence and the first sighting of P5. Each arm
-deleted its Worker and container application and listed the application
-absent; at 2026-09-23T02:06:52Z the account listed 65 Worker scripts and 6
-container applications, none named `kinu-devbox-shapes-*` (Workers API `GET
-/workers/scripts`, `wrangler containers list --json`). The earlier local runs
-`s20260923011640` (void: `git apply` inside the repository skipped every
-patch) and `s20260923012340` preceded the timer finding.
+The partial rotated arm of `s20260923032104` agrees: connection 3 of 3, exec
+53 to 61 ms, gate held, exited at +6.1 s. Every arm deleted its Worker and
+container application and listed the application absent; the one the dead
+driver left (`kinu-devbox-shapes-s20260923032104-rotated`) was deleted by
+hand at 03:37:23 UTC. At 2026-09-23T03:42:36Z the account listed 67 Worker
+scripts and 6 container applications, none named `kinu-devbox-shapes-*`
+(Workers API `GET /workers/scripts`, `wrangler containers list --json`).
+
+History, superseded by the table above. Deployed `s20260923013446`
+(0.12.8, connection only, before the timer suspension): outside answered in
+80 to 103 ms with 6 to 7 requests during the hook; inside got no reply, 4 of
+4; rotated answered in 152 to 176 ms and its 2 s hold never ended, 4 of 4,
+the first sighting of P5. Deployed `s20260923030235` (0.12.8, suspension in,
+ping timers leaking): rotated exited 1 of 2 on connection and 0 of 2 on
+alarm, which found the ping timers. Local `s20260923025542` (0.12.8,
+suspension in, 2 s hold, 2 runs per cell) matched the table above except
+that the 2 s hold ended before the ping timers fell due. `s20260923011640` is
+void: `git apply` inside the repository skipped every patch.
 
 Tests: `tests/restore-after-start.test.ts` T1 and T5 are red on D8's harness
 (the hook outside the block) and green on the block-holding harness;
 `scripts/do-init-block-bodies.test.ts` is red on D8's shape, on upstream's
 block, on a `callOnStart` that keeps the old client or leaves its timers
-running, and on a start block that leaves the alarm wait armed, and green on
-this tree's install. In a clean install of this tree, 2026-09-23: `bun test`
-over the devbox package 484 pass, 0 fail; its workerd suite 7 pass;
-`bun scripts/do-init-gate.ts` ok.
+running, on a start block that leaves the alarm wait armed, and on a port
+ping that leaves its timer pending. On the tree that ships (a clean install
+of 0.12.9 with both patches, 2026-09-23): `scripts/do-init-block-bodies.test.ts`
+10 pass, 0 fail; the devbox package 483 pass, 0 fail; its workerd suite 7
+pass; `bun scripts/do-init-gate.ts` ok; `bun scripts/patch-parity.ts` ok.
 
 D27. Snapshot-chain stays and the storage strategy search stops (owner
 decision, 2026-09-23, checklist row DBX-10; asked first in m1191). The
