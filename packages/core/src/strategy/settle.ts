@@ -410,11 +410,11 @@ const result: SwarmResult = {
   publication: {
     state: publication,
     caveat: publication.kind === 'sealed'
-      ? 'this run measured a candidate past its floor, so the floor is SUSPENDED for the rest of '
-        + 'the run and the answer is not publishable: the number may be a cheat the verifier '
-        + 'missed, or the bound may be wrong, and this observation cannot tell which. The seal '
-        + 'holds for this objective and floor; a re-derived bound or a replaced verifier is a '
-        + 'new objective key and publishes again.'
+      ? 'a candidate on this objective was measured past its floor, so the floor is SUSPENDED and '
+        + 'the answer is not publishable: the number may be a cheat the verifier missed, or the '
+        + 'bound may be wrong, and this observation cannot tell which. The seal holds for this '
+        + 'objective and floor; a re-derived bound or a replaced verifier is a new objective key '
+        + 'and publishes again.'
       : null,
   },
   best,

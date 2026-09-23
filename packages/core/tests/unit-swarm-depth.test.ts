@@ -896,6 +896,44 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(breached.result.report.carrySuppressed?.carry).toBe('elites');
     expect(breached.result.report.carrySuppressed?.refused).toContain('records');
   });
+
+  test('A BREACH SEALS ITS OBJECTIVE AND FLOOR for every later run, not only its own', async () => {
+    // Spec 4.4: "Publication STOPS for that objective". The later run's candidates make
+    // 2n-1 calls, over the refuted floor, so any refusal it meets is the earlier run's seal.
+    // `Concurrent.lean — a_breach_stops_every_run_on_its_floor`.
+    const { rt } = createTestRuntime();
+
+    const breached = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, floor: REFUTED_FLOOR,
+      config: { carry: { kind: 'elites' } },
+    });
+
+    expect('reason' in breached.result).toBe(false);
+
+    const later = await run({
+      depth: 1, branches: 2, proposeWidth: null, rt, floor: REFUTED_FLOOR,
+      answers: [THOROUGH], config: { carry: { kind: 'elites' } },
+    });
+
+    expect('reason' in later.result).toBe(false);
+
+    if ('reason' in later.result) return;
+    expect(later.result.publication.state).toMatchObject({ kind: 'sealed', breach: { floor: REFUTED_FLOOR } });
+    expect(later.result.report.records).toMatchObject({ written: 0 });
+    expect(later.result.report.carrySuppressed?.refused).toContain('records');
+    expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: REFUTED_FLOOR })).toHaveLength(0);
+
+    const unsealed = await run({
+      depth: 1, branches: 2, proposeWidth: null, floor: REFUTED_FLOOR,
+      answers: [THOROUGH], config: { carry: { kind: 'elites' } },
+    });
+
+    expect('reason' in unsealed.result).toBe(false);
+
+    if ('reason' in unsealed.result) return;
+    expect(unsealed.result.publication.state.kind).toBe('open');
+    expect(unsealed.result.report.records?.written).toBeGreaterThan(0);
+  });
 });
 
 // The swarm path reaches `mcts/evaluation.ts`'s judge ensemble. The pool derives from the request
