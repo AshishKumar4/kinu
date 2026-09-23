@@ -204,10 +204,6 @@ export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile
   return files;
 }
 
-export function longHorizonCorpusChars(spec: LongHorizonSpec): number {
-  return generateLongHorizonFiles(spec).reduce((sum, f) => sum + f.text.length, 0);
-}
-
 type MarkedEntry = LongHorizonEntry & { marker: NonNullable<LongHorizonEntry['marker']> };
 
 export type LongHorizonQuestionKind = 'count' | 'list' | 'verbatim';
