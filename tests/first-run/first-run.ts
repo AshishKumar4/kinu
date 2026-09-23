@@ -52,7 +52,7 @@ import { join } from 'node:path';
 
 import { REAL_CLOCK } from '../../packages/core/src/index';
 import {
-  createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow,
+  createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, scoreToolOutcomes, toolOutcomes,
   projectRunEventProvenance, publishRunRecord,
   reportLiveModelSpend, retainEpisodeTranscript, subgoalsOutcome, withEpisodeEvidence,
   type EpisodeEvidenceReader, type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
@@ -272,7 +272,9 @@ export const FIRST_RUN_DEFECTS = {
       + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
       + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
       + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
-      + 'closed with an error or a refusal; `reported` when the agent never says DONE.',
+      + 'closed with an error or a refusal; `no-unexpected-tool-failure` names any failure the '
+      + 'census calls unexpected, a codemode call inside `eval` included; `reported` when the '
+      + 'agent never says DONE.',
   },
   'sandbox-mount-write': {
     id: 'sandbox-mount-write',
@@ -624,7 +626,9 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     const retained = retainEpisodeTranscript(TRANSCRIPTS, episode, { events, history, subgoals });
 
     const outcome = subgoalsOutcome(subgoals, { turns: totals.turns, toolCalls: totals.toolCalls });
-    const scores: EvalScoreRow[] = [outcomeRow(outcome)];
+    // The census every other family records, off the same ledger: a subgoal met over a broken call stays visible.
+    const tools = { ...scoreToolOutcomes(events), name: toolOutcomes.name, asserts: toolOutcomes.asserts };
+    const scores: EvalScoreRow[] = [outcomeRow(outcome), tools];
     observations.push({
       taskId: spec.id, repetition: 0, outcome: 'scored', scores,
       turns: totals.turns, toolCalls: totals.toolCalls + (spec.calls?.() ?? 0),
