@@ -301,7 +301,7 @@ requirements:
       - lean/fixtures/convergence.json :: packages/core/tests/refinement-convergence.test.ts
   PR-CRED-001:
     statement: No client operation on the credential store answers anything that depends on a stored secret, an envelope opens only under the store and key it was sealed for, credential and MCP header contexts never meet, a deleted credential yields no headers, rotation keeps every readable secret, and a row without the envelope prefix opens under every context.
-    status: proved-in-abstract-model
+    status: proved-and-refined
     theorems:
       - Kinu.Safety.Credentials.an_envelope_opens_only_where_it_was_sealed
       - Kinu.Safety.Credentials.a_plain_row_opens_under_every_context
@@ -320,9 +320,11 @@ requirements:
       - packages/cf-backend/src/user/user-do.ts#UserDO.getAuthHeaders
     remainingEvidence:
       - The cipher's guarantees are premises satisfied by the transparent cipher; AES-GCM's confidentiality and the key id's freedom from HMAC collisions are assumed, not proved
-      - CredentialCipher.open passes an unprefixed value through as plaintext, contrary to the envelope module's no-plaintext-fallback claim, so the binding theorem holds only for sealed rows
-      - The model's client operations are list, set and delete; getAuthHeaders answers a Worker-internal caller with the secret by design and is modelled as egress
-      - No fixture yet runs the deployed envelope or the UserDO against the model
+      - CredentialCipher.open passes an unprefixed value through as plaintext, contrary to the envelope module's no-plaintext-fallback claim, so the binding theorem holds only for sealed rows; the fixture's plain row opens under a foreign context on the deployed code too
+      - The fixture runs the deployed envelope; the UserDO's list, set and delete, and its private credentialAad, are modelled but not exercised, because they need a workerd Durable Object
+      - getAuthHeaders answers a Worker-internal caller with the secret by design and is modelled as egress, not as a client view
+    refinement:
+      - lean/fixtures/credential-envelope.json :: packages/core/tests/refinement-credentials.test.ts
   PR-STORE-001:
     statement: The abstract memory index preserves new and unrelated chunks and bounds modeled search result length and score sign by construction.
     status: by-construction-witness

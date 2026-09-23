@@ -12,7 +12,8 @@ open Kinu.Refine
 def fixtures : List (String × String) :=
   [("uct-select.json", UctCases.fixture),
    ("convergence.json", ConvergenceCases.fixture),
-   ("records.json", RecordsCases.fixture)]
+   ("records.json", RecordsCases.fixture),
+   ("credential-envelope.json", CredentialCases.fixture)]
 
 def main (args : List String) : IO UInt32 := do
   let dir := args.headD "fixtures"

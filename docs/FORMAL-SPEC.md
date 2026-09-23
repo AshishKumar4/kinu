@@ -3,7 +3,7 @@
 `lean/` holds hand-written abstract models of selected agent, evolution,
 execution, exploration, MCTS, safety and storage behavior. Check them with
 `bash scripts/verify-lean.sh`. Plain `lake build` compiles the declarations and
-skips the audits that follow it. Five requirements are also refined against
+skips the audits that follow it. Six requirements are also refined against
 the deployed TypeScript and SQLite on generated cases (see *Implementation
 correspondence*); the rest are proved of their model only.
 
@@ -25,11 +25,11 @@ evidence.
 | Evolution | 22 | counter postconditions, craft-list operations, a scaled-natural EMA, scaffold lookup and append | The real EMA uses configurable JavaScript floating-point arithmetic, and the model asserts several transition postconditions |
 | Agent | 18 | lifecycle counters, an abstract turn queue, durable-fiber budget fields | The production queue and SDK persistence semantics are not refined from these models |
 | Execution | 18 | an executor capability lattice, action-to-tool mapping, workspace-call isolation | The capability lattice and tool vocabulary are stale against the current provider and the eight tools in `BUILTIN_TOOLS` |
-| Safety | 14 | the shape of operations constructible from modeled provider names; the credential store's client view, envelope binding and rotation | The constructor witnesses are not a proof of the deployed sandbox boundary. The cipher's guarantees are premises, and no fixture yet runs the deployed envelope |
+| Safety | 14 | the shape of operations constructible from modeled provider names; the credential store's client view, envelope binding and rotation | The constructor witnesses are not a proof of the deployed sandbox boundary. The cipher's guarantees are premises. The device connection is not yet modelled |
 
 Measured 2026-09-23: `node lean/check-traceability.mjs --list-declarations`
-reports 452 named declarations, and the traceability map enrolls all 452: 59
-under `proved-and-refined` requirements, 319 under `proved-in-abstract-model`
+reports 452 named declarations, and the traceability map enrolls all 452: 67
+under `proved-and-refined` requirements, 311 under `proved-in-abstract-model`
 and 74 under `by-construction-witness`.
 
 Status is declared on a requirement and inherited by every theorem it claims,
@@ -40,7 +40,7 @@ Near-definitional statements (nonnegativity of a `Nat` EMA score; a constructor
 that never produces `SQLWrite`) count as witnesses. They are not deep safety
 proofs.
 
-By requirement, over 49: 5 `proved-and-refined`, 31 `proved-in-abstract-model`,
+By requirement, over 49: 6 `proved-and-refined`, 30 `proved-in-abstract-model`,
 12 `by-construction-witness`, 1 `trusted-model-assumption`. The last status
 appears only in this total, because that requirement claims no theorem.
 
@@ -161,7 +161,7 @@ over 3,264 files: 95 module citations, 43 theorem citations, 1 line citation.
 
 ## Implementation correspondence
 
-A proof covers its model. The refinement fixtures tie five models to the
+A proof covers its model. The refinement fixtures tie six requirements to the
 deployed code: `lean/Kinu/Refine/` evaluates the model's own definitions on
 generated inputs, and a test runs the deployed function on the same inputs
 against real `bun:sqlite`.
@@ -171,9 +171,11 @@ against real `bun:sqlite`.
 | `uct-select.json` | `Uct.select` in doubles | `selectNode` | `refinement-uct.test.ts` | `PR-MCTS-004` |
 | `convergence.json` | `Convergence.outcomeOf`, backprop sums | `backpropagate`, `converge` in plan mode | `refinement-convergence.test.ts` | `PR-MCTS-001`, `PR-MCTS-005` |
 | `records.json` | `Concurrent.runC` | `recordExploration` with one seal per run | `refinement-records.test.ts` | `PR-PUBLISH-004`, `PR-RECORDS-003` |
+| `credential-envelope.json` | `Credentials.openStored`, transparent cipher | `createCredentialCipher`, AES-GCM | `refinement-credentials.test.ts` | `PR-CRED-001` |
 
-Measured 2026-09-23: 618 cases pass. Each test went red on planted breaks in
+Measured 2026-09-23: 824 cases pass. Each test went red on planted breaks in
 the deployed code: six in `uct.ts`, five in `convergence.ts`, `takes.ts` and
-`backpropagation.ts`, and four in `records.ts` and `objective.ts`. A fixture is
+`backpropagation.ts`, four in `records.ts` and `objective.ts`, and three in
+`envelope.ts`. A fixture is
 a finite sample. It shows agreement on its cases, not on every input, and it
 runs on `bun:sqlite`, not on a Durable Object's SQLite.
