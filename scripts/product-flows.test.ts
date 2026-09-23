@@ -12,10 +12,11 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { resolveWebIdentity } from '../tests/evals/public-session';
 import { withBrowser } from './live-app-harness';
 import {
-  FLOW_PROBE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, driveKeepsWhatIsDone, reachesHome, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndDiffs,
+  FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,
+  agentIsThereOnReturn, driveKeepsWhatIsDone, reachesHome, slateShowsItsPreview, workspaceGetsFirstAnswer,
+  writtenFileShowsInFilesAndDiffs,
   type AgentReturnVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict, type FlowTarget,
-  type WrittenFileVerdict,
+  type SlatePreviewVerdict, type WrittenFileVerdict,
 } from './product-flows';
 
 interface FlowVerdicts {
@@ -23,11 +24,12 @@ interface FlowVerdicts {
   firstAnswer: FirstAnswerVerdict | null;
   agentReturn: AgentReturnVerdict | null;
   writtenFile: WrittenFileVerdict | null;
+  slate: SlatePreviewVerdict | null;
   drive: DriveVerdict | null;
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, writtenFile: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, writtenFile: null, slate: null, drive: null,
 };
 
 /** Why no row could start: no origin, or no identity for it. */
@@ -80,6 +82,7 @@ beforeAll(async () => {
     observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndDiffs(target));
+    observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
   });
 
@@ -141,6 +144,15 @@ describe('a file the agent wrote shows where a reader looks for it', () => {
 
     expect(written.diffsTab).toBe(true);
     expect(written.diffPaths.some((path) => path.endsWith(FLOW_PROBE))).toBe(true);
+  });
+});
+
+describe('a slate the agent built shows its running preview', () => {
+  test('its tab appears under its title and its frame shows the page it serves', () => {
+    const slate = verdictOf(observed.slate, 'slate-preview');
+
+    expect(slate.slateTab).toBe(true);
+    expect(slate.frameText).toContain(FLOW_SLATE.page);
   });
 });
 

@@ -25,6 +25,10 @@ export interface PreviewSuffixEnv {
   PREVIEW_HOST_SUFFIX?: string;
 }
 
+export interface PreviewPortEnv {
+  PREVIEW_HOST_PORT?: string;
+}
+
 /** The app's own origin is the one host under the suffix that is never preview territory. */
 export interface PreviewHostEnv extends PreviewSuffixEnv {
   CLI_PUBLIC_ORIGIN?: string;
@@ -49,6 +53,12 @@ export function previewHostSuffix(env: PreviewSuffixEnv): string | null {
   }
 
   return suffix;
+}
+
+export function previewPortSuffix(env: PreviewPortEnv): string {
+  const port = Number(env.PREVIEW_HOST_PORT);
+
+  return validPort(env.PREVIEW_HOST_PORT) && port !== 443 ? `:${String(port)}` : '';
 }
 
 export function previewSuffixMetaName(): string {

@@ -326,6 +326,7 @@ Classification is narrow. 429 and 529 always count. A 503 counts only when statu
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
 | `SANDBOX_TRANSPORT` | wrangler.jsonc `vars` | Container control plane, `rpc`. A stored per-sandbox transport beats this var on a cold start; the var covers a future `getSandbox` that omits the option. |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
+| `PREVIEW_HOST_PORT` | `vite dev` only | The port preview and share URLs carry when the preview zone is not on 443. `vite dev` serves `*.preview.localhost` on its own https port (`packages/cf-backend/vite-preview-zone.ts`) and sets this with `PREVIEW_HOST_SUFFIX`; production leaves it unset. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
 | `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |

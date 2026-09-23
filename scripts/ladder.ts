@@ -2141,10 +2141,18 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
     label: 'Product flows in a browser, on the local dev server',
+    deadline: {
+      seconds: 900,
+      why: 'six rows, four of them waiting on a real model turn over the shared account: 209s '
+        + 'and 273s on 2026-09-23, the slate turn alone 121s, and the same turn took 240s against the '
+        + 'deployment that day. About three times the wall, so a slow model answers rather than '
+        + 'being killed as a hang.',
+    },
     tier: 'deploy',
-    // 133.3s alone on 2026-09-23 (gate-cost-measure, load 1.1 at start): the dev
-    // server's boot, then ten rows, three of them waiting on a real model turn.
-    seconds: 133,
+    // 209s on 2026-09-23 (gate-cost-measure, load 3.4 at start, above the quiet
+    // line, so an upper figure): the dev server's boot, then six rows, four of
+    // them waiting on a real model turn and the slate's the longest.
+    seconds: 209,
     catches: 'a flow a person runs in the page that breaks while every API, socket and '
       + 'fixture-backed browser gate stays green: the owner\'s #13, where every agent a '
       + 'workspace held was present over the API and the reloaded page showed none of them. '
@@ -2152,7 +2160,8 @@ export const LADDER: readonly Gate[] = [
       + '(the real Worker and Durable Objects, no fixtures) and asserts only what the page '
       + 'shows. The rows are the same file the deployment runs after the publish, with the '
       + 'origin the only difference, so a flow red here is red before it ships.',
-    blind: 'what `vite dev` is not: the production isolate, the edge, the deployed assets and '
+    blind: 'what `vite dev` is not: the production isolate, the edge and its preview zone (a '
+      + 'slate\'s frame loads through vite-preview-zone.ts on loopback), the deployed assets and '
       + 'the real identity, which are the post-publish row\'s. One viewport, one theme. The '
       + 'model is real, so a row that needs an answer reads that one arrived, never its words.',
     inputs: { kind: 'live', why: 'boots `vite dev` on an ephemeral port with this box\'s `.dev.vars` credentials, drives Chrome against it and spends real model turns; a hash over the tracked tree stands for none of them.' },
@@ -2262,14 +2271,20 @@ export const LADDER: readonly Gate[] = [
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
+    deadline: {
+      seconds: 900,
+      why: 'six rows, four of them waiting on a real model turn over the public edge: 329s '
+        + 'against 41494531d on 2026-09-23, the slate turn alone 240s. About three times the '
+        + 'wall, so a slow model answers rather than being killed as a hang.',
+    },
     alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
       + 'other tiers whose subject is the build that just shipped. Its workspaces carry the '
       + 'eval prefix and are torn down by the row that made them, and it attaches no machine, '
       + 'so it stands outside the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 66s, 67s and 128s against 41494531d on 2026-09-23, ten rows over the public
-    // edge: the first answer's model turn (35 to 97s) is the spread.
-    seconds: 128,
+    // 329s against 41494531d on 2026-09-23 with the slate row (66s to 128s without
+    // it); the model turns are the spread.
+    seconds: 329,
     catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
       + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
       + 'as the eval identity, asserting only what the page shows. The first-run tier reads '
