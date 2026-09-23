@@ -29,6 +29,7 @@ import {
   createFileCodexAuthStore,
   ensureSecretDir,
   kinuHome,
+  stripProvider,
   withConfigLock,
   writeSecretFile,
   type LocalCloudSession,
@@ -940,10 +941,6 @@ function preferredModelFromCredentials(file: KinuConfig): string | undefined {
   if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return `anthropic/${ANTHROPIC_DEFAULT_MODEL}`;
 
   return undefined;
-}
-
-function stripProvider(model: string, provider: string): string {
-  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
 }
 
 function workersAIModelId(model: string | undefined): string {

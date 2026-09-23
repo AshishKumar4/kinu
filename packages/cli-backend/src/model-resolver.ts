@@ -737,10 +737,13 @@ export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | 
   const provider = defaultProviderFor(llm);
 
   if (provider === null || llm === null) return null;
-  // Some `codex` configs already carry the prefix; avoid `codex/codex/…`.
-  const model = llm.model.startsWith(`${provider}/`) ? llm.model.slice(provider.length + 1) : llm.model;
 
-  return `${provider}/${model}`;
+  // Some `codex` configs already carry the prefix; avoid `codex/codex/…`.
+  return `${provider}/${stripProvider(llm.model, provider)}`;
+}
+
+export function stripProvider(model: string, provider: string): string {
+  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
 }
 
 interface LocalAuthStore {

@@ -1,5 +1,5 @@
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
-import { checkClaudeAvailability } from '@kinu.run/cli-backend';
+import { checkClaudeAvailability, stripProvider } from '@kinu.run/cli-backend';
 import { loadConfigFile } from '../config';
 import { adoptDefaultModel } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -157,7 +157,7 @@ export async function setupCommand(opts: {
       return;
     }
 
-    const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProviderPrefix(opts.model, 'workers-ai')}`;
+    const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProvider(opts.model, 'workers-ai')}`;
     const current = adoptDefaultModel(named)?.model;
     console.log(`${OK('✓')} Using Cloudflare Workers AI`);
 
@@ -254,8 +254,4 @@ function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | '
     default:
       throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
   }
-}
-
-function stripProviderPrefix(model: string, provider: string): string {
-  return model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
 }
