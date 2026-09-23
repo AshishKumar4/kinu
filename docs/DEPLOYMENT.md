@@ -343,7 +343,7 @@ Classification is narrow. 429 and 529 always count. A 503 counts only when statu
 | `CONTROL_PLANE_ADMINS` | wrangler.jsonc `vars` | Operator emails allowed on `/control` |
 | `CONTROL_PLANE_ACCESS_TEAM_DOMAIN`, `CONTROL_PLANE_ACCESS_AUD` | wrangler.jsonc `vars` | The Cloudflare Access team and application the `/control` assertion is verified against (`control-plane/access-gate.ts`). Unset or empty means the admin plane answers 404 to everyone |
 | `DEV_USER_EMAIL` | wrangler.jsonc `vars` | The eval service identity, `eval-service@kinu.run`. Off localhost it applies only to a request presenting `DEV_IDENTITY_SECRET`, and the admin gate refuses it regardless |
-| `DEV_IDENTITY_SECRET` | Wrangler secret | The whole authority for the `DEV_USER_EMAIL` identity, sent in `x-kinu-dev-identity` |
+| `DEV_IDENTITY_SECRET` | Wrangler secret | The whole authority for the `DEV_USER_EMAIL` identity, sent in `x-kinu-dev-identity-secret` (core `DEV_IDENTITY_HEADER`; Workers Logs redacts a header whose name contains `secret`) |
 | `KINU_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
 | `KINU_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
 | `KINU_AUTH` | CLI shell env | Advanced direct LLM auth override for local agents |

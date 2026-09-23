@@ -5,7 +5,7 @@
  */
 
 import { routeAgentRequest } from "agents";
-import { ORCHESTRATOR_AGENT_SLUG, REAL_CLOCK } from "@kinu.run/core";
+import { DEV_IDENTITY_HEADER, ORCHESTRATOR_AGENT_SLUG, REAL_CLOCK } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
@@ -262,6 +262,8 @@ export default {
 
 function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);
+  // The object reads the identity below, never the credential.
+  next.delete(DEV_IDENTITY_HEADER);
   next.set(USER_ID_HEADER, identity.userId);
 
   if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
