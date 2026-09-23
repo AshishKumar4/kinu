@@ -150,29 +150,33 @@ export default {
 
       case 'POST /probe/reentry':
       case 'POST /probe/reentry/touch':
-      case 'GET /probe/reentry': {
-        const box = url.searchParams.get('box') ?? '';
-
-        if (box === '') return json({ payload: { ok: false, error: 'box is required' }, status: 400 });
-
-        const probe = env.OnStartExecProbe.get(env.OnStartExecProbe.idFromName(`exec-${box}`));
-
-        if (route === 'POST /probe/reentry/touch') return json({ payload: { ok: true, box, at: await probe.touch() } });
-
-        if (route === 'GET /probe/reentry') return json({ payload: { ok: true, box, stamp: await probe.reentryReport() } });
-        const windowMs = Number(url.searchParams.get('windowMs') ?? '5000');
-        const holdMs = Number(url.searchParams.get('holdMs') ?? '2000');
-        const pending = REENTRY_PENDING.find((kind) => kind === (url.searchParams.get('pending') ?? 'connection'));
-
-        if (!Number.isInteger(windowMs) || !Number.isInteger(holdMs) || windowMs < 0 || holdMs < 0 || pending === undefined) {
-          return json({ payload: { ok: false, error: `windowMs and holdMs must be non-negative integers; pending one of ${REENTRY_PENDING.join(', ')}` }, status: 400 });
-        }
-
-        return json({ payload: { ok: true, box, stamp: await probe.probeReentry(windowMs, holdMs, pending) } });
-      }
+      case 'GET /probe/reentry':
+        return await reentryRoute(route, url, env);
 
       default:
         return json({ payload: { ok: false, error: `unknown probe route: ${route}` }, status: 404 });
     }
   },
 };
+
+/** The reentry control's three routes on one box's probe object. */
+async function reentryRoute(route: string, url: URL, env: ProbeEnv): Promise<Response> {
+  const box = url.searchParams.get('box') ?? '';
+
+  if (box === '') return json({ payload: { ok: false, error: 'box is required' }, status: 400 });
+
+  const probe = env.OnStartExecProbe.get(env.OnStartExecProbe.idFromName(`exec-${box}`));
+
+  if (route === 'POST /probe/reentry/touch') return json({ payload: { ok: true, box, at: await probe.touch() } });
+
+  if (route === 'GET /probe/reentry') return json({ payload: { ok: true, box, stamp: await probe.reentryReport() } });
+  const windowMs = Number(url.searchParams.get('windowMs') ?? '5000');
+  const holdMs = Number(url.searchParams.get('holdMs') ?? '2000');
+  const pending = REENTRY_PENDING.find((kind) => kind === (url.searchParams.get('pending') ?? 'connection'));
+
+  if (!Number.isInteger(windowMs) || !Number.isInteger(holdMs) || windowMs < 0 || holdMs < 0 || pending === undefined) {
+    return json({ payload: { ok: false, error: `windowMs and holdMs must be non-negative integers; pending one of ${REENTRY_PENDING.join(', ')}` }, status: 400 });
+  }
+
+  return json({ payload: { ok: true, box, stamp: await probe.probeReentry(windowMs, holdMs, pending) } });
+}

@@ -16,6 +16,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import type { Expression, Super } from 'oxc-parser';
 import * as v from 'valibot';
 
 import { readContainerInputBlockSources, readSources } from './sources';
@@ -868,6 +869,27 @@ function leakedPingTimers(file: string, tree: Parsed): Violation[] {
   return leaks;
 }
 
+/** Calls that carry a callback the block runs as part of itself. */
+const CALLBACK_CARRIERS: ReadonlySet<string> = new Set(['transaction', 'then', 'blockConcurrencyWhile']);
+
+/** Container-reaching methods that are the start hook's own restore steps. */
+const HOOK_STEPS: ReadonlySet<string> = new Set(['adoptOrTurnOver', 'restoreNow', 'stampBootId']);
+
+function reachesContainer(called: string): boolean {
+  return CONTAINER_REACHES.includes(called) && !HOOK_STEPS.has(called);
+}
+
+/** A member call inside an input block: SQLite's `exec` (not a container command), the start
+ *  hook's edge, a call on this object, or anything else. */
+function blockEdge(called: string, receiver: Expression | Super): 'sql' | 'hook' | 'self' | 'other' {
+  if (receiver.type === 'MemberExpression' && !receiver.computed
+    && receiver.property.type === 'Identifier' && receiver.property.name === 'sql') return 'sql';
+
+  if (receiver.type !== 'ThisExpression' && receiver.type !== 'Super') return 'other';
+
+  return called === START_HOOK_EDGE ? 'hook' : 'self';
+}
+
 /** The method a node sits in, by its declared name. */
 function enclosingMethod(node: SyntaxNode): string | undefined {
   for (let at = node.parent; at !== undefined; at = at.parent) {
@@ -951,26 +973,22 @@ export function auditBlockBodies(sources: ReadonlyMap<string, string>): BlockAud
         const raw = call.raw;
 
         if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression') {
-          const receiver = raw.callee.object;
+          const edge = blockEdge(called, raw.callee.object);
 
-          // SQLite's exec is not a container command.
-          if (receiver.type === 'MemberExpression' && !receiver.computed
-            && receiver.property.type === 'Identifier' && receiver.property.name === 'sql') return;
+          if (edge === 'sql') return;
 
           // The start hook's own edge: its container calls are judged by `hookConnection`.
-          if (called === START_HOOK_EDGE && (receiver.type === 'ThisExpression' || receiver.type === 'Super')) {
+          if (edge === 'hook') {
             runsHook = true;
 
             return;
           }
 
-          if (CONTAINER_REACHES.includes(called) && called !== 'adoptOrTurnOver' && called !== 'restoreNow' && called !== 'stampBootId') reached.add(called);
+          if (reachesContainer(called)) reached.add(called);
 
-          if (receiver.type === 'ThisExpression' || receiver.type === 'Super') {
-            for (const target of methods.get(called) ?? []) inspect(target);
-          }
+          if (edge === 'self') for (const target of methods.get(called) ?? []) inspect(target);
 
-          if (called === 'transaction' || called === 'then' || called === 'blockConcurrencyWhile') {
+          if (CALLBACK_CARRIERS.has(called)) {
             for (const child of call.children) if (isFunctionLike(child)) inspect(child);
           }
         } else if (called) {
