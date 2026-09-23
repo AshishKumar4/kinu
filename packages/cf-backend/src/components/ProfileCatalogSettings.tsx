@@ -20,6 +20,7 @@ import {
   type RoleDefinition,
   type RoleCatalog,
   type RoleId,
+  type TierAssignment,
   type TierId,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -205,19 +206,32 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
     setDraft({ ...draft, tiers });
   };
 
-  const setTierEffort = (id: TierId, effort: ReasoningEffort | '') => {
+  const editTier = (id: TierId, edit: (tier: TierAssignment) => TierAssignment) => {
     if (!draft) return;
     const tiers = { ...draft.tiers };
-    const current = id === 'default' ? tiers.default : tiers[id] ?? tiers.default;
-    const next = { ...current };
-
-    if (effort) next.reasoningEffort = effort;
-    else delete next.reasoningEffort;
+    const next = edit({ ...(id === 'default' ? tiers.default : tiers[id] ?? tiers.default) });
 
     if (id === 'default') tiers.default = next;
     else tiers[id] = next;
     setDraft({ ...draft, tiers });
   };
+
+  const setTierEffort = (id: TierId, effort: ReasoningEffort | '') => editTier(id, (tier) => {
+    const next = { ...tier };
+
+    if (effort) next.reasoningEffort = effort;
+    else delete next.reasoningEffort;
+
+    return next;
+  });
+
+  const setTierFallbacks = (id: TierId, fallbacks: readonly string[]) => editTier(id, (tier) => {
+    const next: TierAssignment = { ...tier, fallbacks: [...fallbacks] };
+
+    if (fallbacks.length === 0) delete next.fallbacks;
+
+    return next;
+  });
 
   const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
 
@@ -289,6 +303,13 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                         ...efforts.map((effort) => ({ value: effort, label: reasoningEffortLabel(effort) })),
                       ]}
                       onChange={(effort) => setTierEffort(tierId, effort)}
+                    />
+                    <TierFallbacks
+                      tierId={tierId}
+                      chain={resolved.fallbacks ?? []}
+                      model={resolved.model}
+                      menu={menu}
+                      onChange={(fallbacks) => setTierFallbacks(tierId, fallbacks)}
                     />
                   </div>
                 );
@@ -413,6 +434,43 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
         </div>
       )}
     </>
+  );
+}
+
+function TierFallbacks(props: {
+  tierId: TierId;
+  chain: readonly string[];
+  model: string;
+  menu: ModelMenu;
+  onChange: (fallbacks: readonly string[]) => void;
+}) {
+  const labelOf = (spec: string) => props.menu.models.find((entry) => entry.spec === spec)?.label ?? spec;
+  const taken = new Set([props.model, ...props.chain]);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 md:col-span-2 md:col-start-2" role="group" aria-label={`${props.tierId} fallbacks`}>
+      <span className="p-meta p-text-3">Fallbacks</span>
+      {props.chain.map((spec, index) => (
+        <span key={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+          <span className="p-text-3">{index + 1}.</span>
+          {labelOf(spec)}
+          <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.tierId} fallbacks`}
+            onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
+            <XIcon size={11} />
+          </button>
+        </span>
+      ))}
+      <ModelPicker
+        models={props.menu.models.filter((entry) => !taken.has(entry.spec))}
+        failures={props.menu.failures}
+        value=""
+        onChange={(spec) => { if (spec) props.onChange([...props.chain, spec]); }}
+        placeholder={props.chain.length === 0 ? 'Add a fallback model…' : 'Add another…'}
+        label={`${props.tierId} add fallback`}
+        size="sm"
+        className="w-56"
+      />
+    </div>
   );
 }
 

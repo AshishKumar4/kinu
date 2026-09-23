@@ -3540,6 +3540,49 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.close();
     });
   });
+
+  test('a tier\'s fallbacks are chosen in order, never repeat a model of its chain, and leave by their remove', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1000, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="New tier id"]');
+
+      const chain = () => page.$eval('[aria-label="deep fallbacks"]', (group) => [...group.querySelectorAll('span.inline-flex')]
+        .map((chip) => chip.textContent?.trim() ?? ''));
+
+      const pick = async (label: string) => {
+        await page.click('[aria-label="deep add fallback"]');
+        await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+        for (const option of await page.$$('[role="option"]')) {
+          if (await option.evaluate((node, wanted) => node.checkVisibility() && node.textContent?.includes(wanted) === true, label)) {
+            await option.click();
+
+            return;
+          }
+        }
+
+        throw new Error(`no option ${label}`);
+      };
+
+      expect(await chain()).toEqual([]);
+      expect((await choiceOptions(page, 'deep add fallback')).some((option) => option.includes('Claude Opus 4.7'))).toBe(true);
+      await pick('Claude Opus 4.7');
+      await page.waitForFunction(() => document.querySelector('[aria-label="deep fallbacks"]')?.textContent?.includes('Claude Opus 4.7') === true);
+
+      // A model already in the chain is not offered again.
+      expect((await choiceOptions(page, 'deep add fallback')).some((option) => option.includes('Claude Opus 4.7'))).toBe(false);
+      await pick('Llama 4');
+      await page.waitForFunction(() => document.querySelector('[aria-label="deep fallbacks"]')?.textContent?.includes('Llama 4') === true);
+      expect(await chain()).toEqual(['1.Claude Opus 4.7', '2.Llama 4']);
+
+      await page.click('[aria-label="Remove anthropic/claude-opus-4-7 from the deep fallbacks"]');
+      await page.waitForFunction(() => document.querySelector('[aria-label="deep fallbacks"]')?.textContent?.includes('Claude Opus 4.7') === false);
+      expect(await chain()).toEqual(['1.Llama 4']);
+      await page.close();
+    });
+  });
 });
 
 describe('the workbench type scale, as the browser computes it', () => {
