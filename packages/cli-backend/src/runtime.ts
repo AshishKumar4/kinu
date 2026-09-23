@@ -7,14 +7,15 @@
 import type { Database, SQLQueryBindings } from 'bun:sqlite';
 import type {
   AgentRuntime, ActorHandle, ActorReference, CraftStore as CoreCraftStore, LLM, ModelRouteResolution,
-  ResolvedTurnProfile, Shell,
+  ResolvedTurnProfile, Shell, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
 import type {
   Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
 import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
-import { mkdirSync, rmSync, chmodSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
+import { constants as osConstants } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, type SessionFilePlane, actorScaffoldPath, actorReferenceOf, buildRuntime, agentHome, agentArtifactDirectory, headAgentName, subordinateAgentName, MAIN_AGENT, facetHomeProvisioner, agentAffinityKey,
@@ -31,6 +32,7 @@ import {
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
+  BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS,
 } from '@kinu.run/core';
 import {
   createWorkspace as createWorkspaceFilesystem,
@@ -65,7 +67,7 @@ import {
 } from './profile-authority';
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { FileCheckpoints } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, toKinuError } from '@kinu.run/core/obs';
 import { adoptLocalActorHandle, localActorDirectory, bindLocalActor, bindLocalActorReference, openLocalRootActor, requireLocalDatabasePath, requireLocalActorWorkspace, type LocalActorConfig, type LocalActorBinding } from './actor-identity';
 import * as v from 'valibot';
 
@@ -843,78 +845,141 @@ const shellOptionsSchema = v.object({
   signal: v.optional(v.instance(AbortSignal)),
 });
 
-
 export function createHostShell(cwd: string, env: NodeJS.ProcessEnv = process.env): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
-      return new Promise((resolve) => {
-        const stdinText = v.safeParse(v.string(), stdinOrOptions);
-        const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
-        const optionsStdin = options.success ? options.output.stdin : undefined;
-        const stdin = stdinText.success ? stdinText.output : optionsStdin;
-        const signal = options.success ? options.output.signal : undefined;
-        let settled = false;
+      const { promise, resolve } = Promise.withResolvers<ShellExecResult>();
+      const stdinText = v.safeParse(v.string(), stdinOrOptions);
+      const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
+      const optionsStdin = options.success ? options.output.stdin : undefined;
+      const stdin = stdinText.success ? stdinText.output : optionsStdin;
+      const signal = options.success ? options.output.signal : undefined;
+      const outputId = nanoid(10);
+      let settled = false;
 
-        const child = spawn('/bin/sh', ['-lc', command], {
-          cwd,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env,
-          detached: true,
-        });
-
-        let stdout = '';
-        let stderr = '';
-
-        const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
-          if (settled) return;
-          settled = true;
-          signal?.removeEventListener('abort', onAbort);
-          resolve(result);
-        };
-
-        const onAbort = () => {
-          const pid = child.pid;
-
-          if (!pid) return;
-          tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
-          setTimeout(() => {
-            if (!settled) {
-              tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
-            }
-          }, 1500).unref();
-        };
-
-        if (signal?.aborted) onAbort();
-        else signal?.addEventListener('abort', onAbort, { once: true });
-        child.stdout.on('data', (d) => { stdout += d.toString(); });
-        child.stderr.on('data', (d) => { stderr += d.toString(); });
-        child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
-
-        const settle = (code: number | null, signalName: NodeJS.Signals | null) => {
-          const aborted = (signal?.aborted ?? false) || signalName === 'SIGTERM' || signalName === 'SIGKILL';
-          finish({
-            stdout,
-            stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
-            exitCode: code ?? (aborted ? 130 : 0),
-          });
-        };
-
-        // A backgrounded grandchild keeps stdout open, so `close` may never
-        // come; `exit` starts a bounded drain instead.
-        child.on('close', settle);
-        child.on('exit', (code, signalName) => {
-          setTimeout(() => {
-            if (settled) return;
-            child.stdout.destroy();
-            child.stderr.destroy();
-            child.unref();
-            settle(code, signalName);
-          }, EXITED_COMMAND_DRAIN_MS).unref();
-        });
-
-        if (stdin) child.stdin.end(stdin);
-        else child.stdin.end();
+      const child = spawn('/bin/sh', ['-lc', command], {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env,
+        detached: true,
       });
+
+      const stdout = new BoundedOutput(COMMAND_OUTPUT_LIMITS, () => hostOutputSpill(cwd, `shell-${outputId}.stdout.log`));
+      const stderr = new BoundedOutput(COMMAND_OUTPUT_LIMITS, () => hostOutputSpill(cwd, `shell-${outputId}.stderr.log`));
+
+      const conclude = (end: ProcessEnd | { readonly error: Error }) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', onAbort);
+        const out = stdout.finish('stdout');
+        const err = stderr.finish('stderr');
+
+        if ('error' in end) {
+          resolve({ stdout: out, stderr: end.error.message, exitCode: 1 });
+
+          return;
+        }
+
+        const { exitCode, note } = exitStatus(end, signal?.aborted === true);
+        resolve({ stdout: out, stderr: note === '' ? err : `${err}${err ? '\n' : ''}${note}`, exitCode });
+      };
+
+      const onAbort = () => {
+        const pid = child.pid;
+
+        if (!pid) return;
+        tolerate(() => process.kill(-pid, 'SIGTERM'), 'esrch');
+        setTimeout(() => {
+          if (!settled) {
+            tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
+          }
+        }, 1500).unref();
+      };
+
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+      child.stdout.on('data', (chunk: Buffer) => { stdout.write(chunk); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr.write(chunk); });
+      child.on('error', (error) => conclude({ error }));
+
+      // A backgrounded grandchild keeps stdout open, so `close` may never
+      // come; `exit` starts a bounded drain instead.
+      child.on('close', (code, signalName) => conclude({ code, signalName }));
+      child.on('exit', (code, signalName) => {
+        setTimeout(() => {
+          if (settled) return;
+          child.stdout.destroy();
+          child.stderr.destroy();
+          child.unref();
+          conclude({ code, signalName });
+        }, EXITED_COMMAND_DRAIN_MS).unref();
+      });
+
+      if (stdin) child.stdin.end(stdin);
+      else child.stdin.end();
+
+      return promise;
+    },
+  };
+}
+
+interface ProcessEnd {
+  readonly code: number | null;
+  readonly signalName: NodeJS.Signals | null;
+}
+
+interface ExitStatus {
+  readonly exitCode: number;
+  readonly note: string;
+}
+
+function exitStatus(end: ProcessEnd, aborted: boolean): ExitStatus {
+  if (aborted) return { exitCode: end.code ?? 130, note: 'Command aborted.' };
+
+  if (end.signalName !== null) {
+    return { exitCode: 128 + osConstants.signals[end.signalName], note: `Command terminated by ${end.signalName}.` };
+  }
+
+  return end.code === null
+    ? { exitCode: 1, note: 'Command ended with neither an exit code nor a signal.' }
+    : { exitCode: end.code, note: '' };
+}
+
+function hostOutputSpill(cwd: string, name: string): OutputSpill {
+  const path = `${SPILL_DIRS.toolOutput}/${name}`;
+  let fd: number | null = null;
+  let failure: string | null = null;
+
+  const fail = (input: { doing: string; cause: unknown }): void => {
+    const error = toKinuError({ ...input, otherwise: 'io' });
+    diagnostics.failure('shell.output_spill_failed', error);
+    failure = renderCauseChain(error);
+  };
+
+  try {
+    mkdirSync(join(cwd, SPILL_DIRS.toolOutput), { recursive: true });
+    fd = openSync(join(cwd, path), 'w', 0o600);
+  } catch (cause) {
+    fail({ doing: `opening ${path} for a command's output`, cause });
+  }
+
+  return {
+    write(chunk) {
+      if (fd === null) return;
+
+      try {
+        for (let offset = 0; offset < chunk.length;) offset += writeSync(fd, chunk, offset);
+      } catch (cause) {
+        fail({ doing: `writing a command's output to ${path}`, cause });
+        closeSync(fd);
+        fd = null;
+      }
+    },
+    close(): SpillOutcome {
+      if (fd !== null) closeSync(fd);
+      fd = null;
+
+      return failure === null ? { path } : { failure };
     },
   };
 }

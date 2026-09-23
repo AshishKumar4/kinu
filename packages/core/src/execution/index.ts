@@ -18,6 +18,11 @@ export {
 } from './exec-result';
 
 export {
+  BoundedOutput, COMMAND_OUTPUT_LIMITS,
+  type CommandOutputLimits, type OutputSpill, type SpillOutcome,
+} from './bounded-output';
+
+export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
 } from './escalation';

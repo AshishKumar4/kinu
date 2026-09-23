@@ -1,10 +1,18 @@
 /**
  * The host shell's process contract: `exec` returns when the command exits, not when every inherited pipe closes
- * (a backgrounded server holds stdout), and leaves nothing keeping the event loop alive.
+ * (a backgrounded server holds stdout), leaves nothing keeping the event loop alive, reports a signal death as
+ * that signal, and holds a flood of output in bounded memory.
  */
 
 import { describe, expect, test } from 'bun:test';
+import { constants } from 'node:os';
+import { readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
+import { scratchDir } from '@kinu.run/test-utils';
 import { createHostShell } from '../src/runtime';
+
+const FloodReportSchema = v.object({ grew: v.number(), exitCode: v.number(), stdout: v.string() });
 
 describe('createHostShell', () => {
   test('aborts long-running commands through AbortSignal', async () => {
@@ -71,5 +79,52 @@ describe('createHostShell', () => {
     expect(result.exitCode).toBe(3);
     expect(result.stdout).toContain('out');
     expect(result.stderr).toContain('err');
+  });
+
+  test('a command killed by a signal reports that signal, never exit 0', async () => {
+    const shell = createHostShell(process.cwd());
+
+    for (const name of ['SIGSEGV', 'SIGABRT', 'SIGBUS'] as const) {
+      const expected = 128 + constants.signals[name];
+      const flag = name.slice(3);
+      // The login shell itself dies; then a lone binary the shell execs dies (what bash does to a one-command line).
+      const throughShell = await shell.exec(`kill -${flag} $$`);
+      const loneBinary = await shell.exec(`exec sh -c 'kill -${flag} $$'`);
+      // The catalog's spelling: dash forks the inner shell and reports its death itself; bash execs it.
+      const nested = await shell.exec(`sh -c 'kill -${flag} $$'`);
+
+      expect({ name, exitCode: throughShell.exitCode, named: throughShell.stderr.includes(name) }).toEqual({ name, exitCode: expected, named: true });
+      expect({ name, exitCode: loneBinary.exitCode, named: loneBinary.stderr.includes(name) }).toEqual({ name, exitCode: expected, named: true });
+      expect({ name, exitCode: nested.exitCode }).toEqual({ name, exitCode: expected });
+    }
+  });
+
+  // Peak resident memory is read from the kernel's high-water mark (`VmHWM`, reset at exec), so the capture runs
+  // in its own process and nothing samples on a timer. /proc is Linux's.
+  test.skipIf(process.platform !== 'linux')('a 400 MB single-line print is captured in bounded memory; head, tail and the saved whole survive', async () => {
+    const dir = scratchDir('host-shell-flood');
+
+    const script = `
+      import { readFileSync } from 'node:fs';
+      import { createHostShell } from ${JSON.stringify(new URL('../src/runtime.js', import.meta.url).pathname)};
+      const peak = () => Number(/VmHWM:\\s+(\\d+) kB/.exec(readFileSync('/proc/self/status', 'utf8'))?.[1]) * 1024;
+      const before = peak();
+      const result = await createHostShell(${JSON.stringify(dir)}).exec("head -c 400000000 /dev/zero | tr '\\\\0' a; printf END");
+      process.stdout.write(JSON.stringify({ grew: peak() - before, exitCode: result.exitCode, stdout: result.stdout }));
+    `;
+
+    const proc = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'inherit' });
+    const report = v.parse(FloodReportSchema, JSON.parse(await new Response(proc.stdout).text()));
+    await proc.exited;
+    const saved = /the full stdout is at (\S+)\]/.exec(report.stdout)?.[1] ?? '';
+
+    expect(report.grew).toBeLessThan(256 * 1024 * 1024);
+    expect(report.exitCode).toBe(0);
+    expect(report.stdout.length).toBeLessThan(1024 * 1024);
+    expect(report.stdout.startsWith('a'.repeat(4096))).toBe(true);
+    expect(report.stdout).toContain(`${'a'.repeat(4096)}END\n`);
+    expect(report.stdout).toContain('[stdout: 400000003 bytes, ');
+    expect(statSync(join(dir, saved)).size).toBe(400_000_003);
+    expect(readFileSync(join(dir, saved)).subarray(-3).toString()).toBe('END');
   });
 });
