@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { asFetchFunction, sha256Hex, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import * as v from 'valibot';
 import { getOAuthProvider, listConfiguredOAuthProviders } from '../src/auth/providers';
@@ -27,7 +27,7 @@ import {
 import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { handleUserRequest, type UserRoutesEnv } from '../src/user/routes';
-import { makeKv } from './helpers/kv';
+import { makeKv, type FakeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
@@ -445,6 +445,19 @@ describe('auth and desktop security invariants', () => {
   });
 
 /** The real /auth/cloudflare/callback handler, faking only the network. */
+const SIGNED_IN_AT = Date.UTC(2026, 8, 24, 12);
+
+/** The platform's clock moves only across I/O: each KV write returns a millisecond later. */
+function acrossIo(kv: FakeKv): FakeKv {
+  return {
+    ...kv,
+    put: async (key, value, options) => {
+      await kv.put(key, value, options);
+      setSystemTime(new Date(Date.now() + 1));
+    },
+  };
+}
+
 function cloudflareCallbackEnv() {
   const kv = makeKv();
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
@@ -671,11 +684,25 @@ async function cloudflareSignInSteps(
 
   test('nothing sign-in leaves in KV outlives the session it opened', async () => {
     const { env, kv } = cloudflareCallbackEnv();
-    const done = await cloudflareSignIn(env, { access_token: 'cf-a' }, { id: 'cf-user-8', email: 'p@example.com' });
-    const maxAge = Number(/Max-Age=(\d+)/u.exec(sessionCookie(done, true))?.[1]);
 
-    expect(kv.keys().length).toBeGreaterThan(0);
-    expect(kv.keys().filter((key) => (kv.ttlOf(key) ?? Infinity) > maxAge)).toEqual([]);
+    // A lifetime taken from a later clock read than its record's TTL now shows on every run, not on one in
+    // a thousand.
+    setSystemTime(new Date(SIGNED_IN_AT));
+
+    try {
+      const done = await cloudflareSignIn(
+        { ...env, AUTH_KV: acrossIo(kv) }, { access_token: 'cf-a' }, { id: 'cf-user-8', email: 'p@example.com' },
+      );
+
+      const maxAge = Number(/Max-Age=(\d+)/u.exec(sessionCookie(done, true))?.[1]);
+      const ttls = kv.keys().map((key) => kv.ttlOf(key) ?? Infinity);
+
+      expect(ttls.length).toBeGreaterThan(0);
+      // The session's record lives exactly as long as its cookie, and nothing sign-in wrote lives longer.
+      expect(Math.max(...ttls)).toBe(maxAge);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("a session is live only while the user's own object says so, and an unreachable object is an outage", async () => {
