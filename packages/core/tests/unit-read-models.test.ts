@@ -479,17 +479,6 @@ describe('workspace change-set', () => {
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
     db.close();
   });
-
-  test('binary files are excluded from the change-set', async () => {
-    const { rt, db } = createTestRuntime();
-    initWorkspaceBaselineTable(rt.storage.execRaw);
-    await resetWorkspaceBaseline(rt);
-    await rt.storage.vfs.writeFile('text.txt', 'readable');
-    await rt.storage.vfs.writeFile('blob.bin', 'has\u0000nul');
-
-    expect((await getWorkspaceDiff(rt)).files.map((file) => file.path)).toEqual(['text.txt']);
-    db.close();
-  });
 });
 
 describe('executor file plane', () => {

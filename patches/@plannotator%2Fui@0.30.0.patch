@@ -1,14 +1,14 @@
 diff --git a/components/AnnotationPanel.tsx b/components/AnnotationPanel.tsx
-index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b2d338e55 100644
+index 1969f7b1833d2ea81693560c21eaf49e568f2aea..4ce62a8cb7581e1f9b659341f1849f1ed07051a5 100644
 --- a/components/AnnotationPanel.tsx
 +++ b/components/AnnotationPanel.tsx
-@@ -1,769 +1,172 @@
+@@ -1,769 +1,196 @@
 -import React, { useState, useRef, useEffect } from 'react';
 -import { AnnotationType, type Annotation, type Block, type CodeAnnotation, type EditorAnnotation } from '../types';
 -import { isCurrentUser } from '../utils/identity';
 -import { ImageThumbnail } from './ImageThumbnail';
 -import { EditorAnnotationCard } from './EditorAnnotationCard';
-+import { useEffect, useRef, useState } from 'react';
++import { useEffect, useRef, useState, type ReactNode } from 'react';
 +import type { Annotation } from '../types';
 +import { AnnotationType } from '../types';
  import { useIsMobile } from '../hooks/useIsMobile';
@@ -94,6 +94,11 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 -    *  gates what belongs in it. Selection and scrolling still work.
 -    *  Default false — today's behavior. */
    readOnly?: boolean;
++  /** Where a note sits, for hosts whose notes are not in the text beside the panel (a diff's file and lines). */
++  placeOf?: (annotation: Annotation) => ReactNode;
++  /** Offered while the host has no note on the whole document yet. */
++  onAddGlobal?: () => void;
++  globalLabel?: string;
  }
  
 -export const AnnotationPanel: React.FC<PanelProps> = ({
@@ -452,6 +457,7 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 -  isMe: boolean;
 +  selected: boolean;
 +  readOnly: boolean;
++  place?: ReactNode;
    onSelect: () => void;
    onDelete: () => void;
    onEdit?: (updates: Partial<Annotation>) => void;
@@ -493,6 +499,7 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 +  annotation,
 +  selected,
 +  readOnly,
++  place,
 +  onSelect,
 +  onDelete,
 +  onEdit,
@@ -634,10 +641,8 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 -            )
 -          )}
 -        </>
-+      {annotation.originalText && (
-+        <blockquote className="mt-2 line-clamp-3 border-l-2 border-border pl-2 text-[11px] text-muted-foreground">
-+          {annotation.originalText}
-+        </blockquote>
++      {place !== undefined && place !== null && (
++        <div data-annotation-place className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground">{place}</div>
        )}
 -
 -      {/* Attached Images */}
@@ -653,6 +658,23 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 -              <div className="text-[9px] text-muted-foreground truncate max-w-[3rem]" title={img.name}>{img.name}</div>
 -            </div>
 -          ))}
+-        </div>
++      {annotation.originalText && (
++        <blockquote className="mt-2 line-clamp-3 border-l-2 border-border pl-2 text-[11px] text-muted-foreground">
++          {annotation.originalText}
++        </blockquote>
+       )}
+-
+-      {/* Host footer slot (reply/resolve UI etc.) — interactions inside it
+-          must not toggle card selection. */}
+-      {footer != null && footer !== false && (
+-        <div
+-          data-annotation-card-footer="true"
+-          className="mt-2"
+-          onClick={(e: React.MouseEvent) => e.stopPropagation()}
+-          onKeyDown={(e: React.KeyboardEvent) => e.stopPropagation()}
+-        >
+-          {footer}
 +      {editing ? (
 +        <div className="mt-2" onClick={(event) => event.stopPropagation()}>
 +          <textarea
@@ -665,19 +687,7 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 +            <button type="button" className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</button>
 +            <button type="button" className="rounded bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground disabled:opacity-40" disabled={!text.trim()} onClick={save}>Save</button>
 +          </div>
-         </div>
--      )}
--
--      {/* Host footer slot (reply/resolve UI etc.) — interactions inside it
--          must not toggle card selection. */}
--      {footer != null && footer !== false && (
--        <div
--          data-annotation-card-footer="true"
--          className="mt-2"
--          onClick={(e: React.MouseEvent) => e.stopPropagation()}
--          onKeyDown={(e: React.KeyboardEvent) => e.stopPropagation()}
--        >
--          {footer}
++        </div>
 +      ) : annotation.text ? (
 +        <p className="mt-2 whitespace-pre-wrap text-xs text-foreground/90">{annotation.text}</p>
 +      ) : null}
@@ -723,6 +733,9 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 +  width,
 +  onClose,
 +  readOnly = false,
++  placeOf,
++  onAddGlobal,
++  globalLabel = 'Add a global comment',
 +}: PanelProps) => {
 +  const isMobile = useIsMobile();
 +  const listRef = useRef<HTMLDivElement>(null);
@@ -848,7 +861,7 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 -            <Button variant="ghost" size="xxs" onClick={handleCancelEdit}>Cancel</Button>
 -            <Button size="xxs" disabled={!editText.trim()} onClick={handleSaveEdit}>Save</Button>
 +      <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
-+        {sorted.length === 0 ? (
++        {sorted.length === 0 && !onAddGlobal ? (
 +          <div className="grid flex-1 place-items-center px-4 text-center">
 +            <div><p className="text-xs text-muted-foreground">No annotations yet</p><p className="mt-1 text-[11px] text-muted-foreground/70">Select text to annotate</p></div>
            </div>
@@ -866,11 +879,22 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
 +            annotation={annotation}
 +            selected={selectedId === annotation.id}
 +            readOnly={readOnly}
++            place={placeOf?.(annotation)}
 +            onSelect={() => onSelect(annotation.id)}
 +            onDelete={() => onDelete(annotation.id)}
 +            onEdit={onEdit ? (updates) => onEdit(annotation.id, updates) : undefined}
 +          />
 +        ))}
++        {onAddGlobal && !readOnly && (
++          <button
++            type="button"
++            data-annotation-add-global
++            className="rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
++            onClick={onAddGlobal}
++          >
++            {globalLabel}
++          </button>
++        )}
 +      </div>
 +    </aside>
 +  );
@@ -895,7 +919,7 @@ index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b
    );
  };
 diff --git a/components/Viewer.tsx b/components/Viewer.tsx
-index 2072dc366d992240a0d1a12d00a25d61522a3662..ce3270009dc36862cdcd2270b72a121655cff41d 100644
+index 2072dc366d992240a0d1a12d00a25d61522a3662..7f3633c1c894f951dc1396dbb7265df1831e2367 100644
 --- a/components/Viewer.tsx
 +++ b/components/Viewer.tsx
 @@ -1,141 +1,36 @@
@@ -2731,7 +2755,7 @@ index b432ca54d621b920d202e7123aad14402696039f..b08a9668e92e0ab315a02e7868678f11
    const highlightRange = useCallback((range: Range, modeOverride?: EditorMode) => {
      const highlighter = highlighterRef.current;
 diff --git a/utils/codeHighlight.ts b/utils/codeHighlight.ts
-index a51ea6e888f4baaa8295d1a4e78fddbacd22ba67..8e9f91fa776e8e83697a9cb7db5b51329c05f6aa 100644
+index a51ea6e888f4baaa8295d1a4e78fddbacd22ba67..e113cf063fc050892400234c45a1a2c09a91e5cb 100644
 --- a/utils/codeHighlight.ts
 +++ b/utils/codeHighlight.ts
 @@ -1,293 +1,36 @@

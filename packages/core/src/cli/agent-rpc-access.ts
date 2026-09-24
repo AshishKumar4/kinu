@@ -133,6 +133,7 @@ export const AGENT_RPC_ACCESS = {
   deleteExecutorFile: 'interactive',
   recordOutcomeLabeling: 'interactive',
   resetWorkspaceBaseline: 'interactive',
+  restoreWorkspaceBaseline: 'interactive',
   resolveDeviceConsent: 'interactive',
   restoreFileCheckpoint: 'interactive',
   retryBackgroundJob: 'interactive',

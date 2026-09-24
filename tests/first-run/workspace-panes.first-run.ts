@@ -1,9 +1,9 @@
 /**
- * FIRST RUN: the Diffs, Supervise and Releases panes read a workspace that
+ * FIRST RUN: the Changes, Supervise and Releases panes read a workspace that
  * just did one piece of work.
  *
  * THE ASK. Every user-facing surface has a deployed row. After one turn that
- * writes one file, the Diffs pane shows the file against the review baseline
+ * writes one file, the Changes pane shows the file against the review baseline
  * and forgets it once the baseline is reset; the Supervise page lists the turn
  * among the workspace's runs and reads its triggers; the Releases pane reads
  * the workspace's release board. Each through the RPC its pane calls.
@@ -31,7 +31,7 @@ const PROBE = 'panes-probe.txt';
 const ASK = `Use your file tool to write a new file named ${PROBE} in the workspace, `
   + 'containing exactly the words panes probe. Then reply with one line: DONE.';
 
-/** The agent's own executor, which the Diffs pane opens on. */
+/** The agent's own executor, which the Changes pane opens on. */
 const WORKSPACE_EXECUTOR = 'workspace';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);

@@ -173,7 +173,7 @@ describe('the first landing yields a gated tab with no content', () => {
     expect(landedSurface('Work', { tabPresence: { ...FRESH, work: true }, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Work');
     expect(landedSurface('Releases', { tabPresence: FULL, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe('Releases');
 
-    // Diffs renders only while a mounted diff tree exists (`hasDiffs`), a gate lane counts cannot carry.
+    // Changes shows only once its change-set is read (`hasChanges`), a gate lane counts cannot carry.
     for (const surface of ['Files', 'Agent', 'Environment'] as const) {
       expect(landedSurface(surface, { tabPresence: FRESH, mctsTrees: EMPTY_TREES, slates: [] }, [], false)).toBe(surface);
     }

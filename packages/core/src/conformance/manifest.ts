@@ -334,6 +334,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     },
     vfs_baseline_manifest: EVERYWHERE,
     vfs_baseline_blob: EVERYWHERE,
+    vfs_baseline_generation: EVERYWHERE,
     // Container lifecycle announcement dedupe, keyed to the workspace's container.
     sandbox_lifecycle_incidents: {
       'cf-orchestrator': WIRED,

@@ -168,7 +168,7 @@ import {
   type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
-  getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, listEnvironments,
@@ -3612,6 +3612,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
     return resetWorkspaceBaseline(this.rt);
+  }
+
+  @callable()
+  async restoreWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
+    return restoreWorkspaceBaseline(this.rt);
   }
 
   /** Recent branching-head runs, grouped by root_id with heads, step traces and merged synthesis. */

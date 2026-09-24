@@ -14,7 +14,7 @@ import { withBrowser } from './live-app-harness';
 import {
   DRIVE_SLATE, FLOW_PROBE, FLOW_SLATE, INSPECTOR_SHUT_PX,
   agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, reachesHome, slateOpensFromMyStuff, slateSharesWithNoBindings,
-  slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndDiffs,
+  slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges,
   type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
   type FlowTarget, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type WrittenFileVerdict,
 } from './product-flows';
@@ -67,7 +67,7 @@ beforeAll(async () => {
     observed.welcome = await attempt('welcome', () => reachesHome(target));
     observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
-    observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndDiffs(target));
+    observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
     observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
     observed.driveOpens = await attempt('drive-opens', () => driveOpens(target));
@@ -121,11 +121,11 @@ describe('a file the agent wrote shows where a reader looks for it', () => {
     expect(verdictOf(observed.writtenFile, 'written-file').filesListed).toContain(FLOW_PROBE);
   });
 
-  test('the Diffs tab appears and lists it as a change', () => {
+  test('the Changes tab appears and lists it as a change', () => {
     const written = verdictOf(observed.writtenFile, 'written-file');
 
-    expect(written.diffsTab).toBe(true);
-    expect(written.diffPaths.some((path) => path.endsWith(FLOW_PROBE))).toBe(true);
+    expect(written.changesTab).toBe(true);
+    expect(written.changedPaths.some((path) => path.endsWith(FLOW_PROBE))).toBe(true);
   });
 });
 

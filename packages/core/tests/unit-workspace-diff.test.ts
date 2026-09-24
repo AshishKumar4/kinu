@@ -10,6 +10,7 @@ import {
   getWorkspaceDiff,
   initWorkspaceBaselineTable,
   resetWorkspaceBaseline,
+  restoreWorkspaceBaseline,
 } from '../src/read-models/workspace-diff';
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import type { SqlValue } from '../src/types/primitives';
@@ -19,6 +20,9 @@ import { createTestRuntime } from './helpers';
 import { commandResult, type CommandResult } from '../src/execution/exec-result';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
+
+/** A PNG signature and a NUL byte: binary to the change-set. */
+const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
 
 describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
@@ -92,7 +96,7 @@ describe('workspace diff lifecycle', () => {
     expect(read).toEqual(['s/f-7.txt']);
   });
 
-  test('a file past one row is listed as changed without a body', async () => {
+  test('a file past one row is listed as changed and large, without a body', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
     const row = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
@@ -101,8 +105,61 @@ describe('workspace diff lifecycle', () => {
     await rt.storage.vfs.writeFile('big.log', 'y'.repeat(row + 1));
 
     expect((await getWorkspaceDiff(rt)).files).toEqual([
-      { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], truncated: true },
+      { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'large' },
     ]);
+  });
+
+  test('binary files the agent adds, overwrites or deletes are listed as binary; an untouched one is not', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('old.png', PNG);
+    await rt.storage.vfs.writeFile('notes.txt', 'plain\n');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('chart.png', PNG);
+    await rt.storage.vfs.writeFile('notes.txt', PNG);
+    await rt.storage.vfs.unlink('old.png');
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([
+      { path: 'chart.png', status: 'added', added: 0, removed: 0, lines: [], omitted: 'binary' },
+      { path: 'notes.txt', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'binary' },
+      { path: 'old.png', status: 'removed', added: 0, removed: 0, lines: [], omitted: 'binary' },
+    ]);
+  });
+
+  test('a binary file whose bytes are unchanged stays off the list when its mtime moves; one with other bytes is on it', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('chart.png', PNG);
+    await resetWorkspaceBaseline(rt);
+    // Both written again since: the same bytes for the logo, one more byte for the chart.
+    db.exec(`UPDATE vfs_baseline_manifest SET mtime_ms = mtime_ms - 1000 WHERE path <> ''`);
+    await rt.storage.vfs.writeFile('chart.png', new Uint8Array([...PNG, 0]));
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([
+      { path: 'chart.png', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'binary' },
+    ]);
+  });
+
+  test('a baseline captured before binary files were listed shows them as added until the next review, and loses nothing', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('logo.png', PNG);
+    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await resetWorkspaceBaseline(rt);
+    // What that capture wrote: no generation row, and no row for a binary file.
+    db.exec('DELETE FROM vfs_baseline_generation');
+    db.exec(`DELETE FROM vfs_baseline_manifest WHERE path = 'logo.png'`);
+    await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
+
+    const listed = async (): Promise<string[]> => (await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`);
+
+    expect(await listed()).toEqual(['changed hello.py', 'added logo.png']);
+    await resetWorkspaceBaseline(rt);
+    expect(await listed()).toEqual([]);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect(await listed()).toEqual(['changed hello.py', 'added logo.png']);
   });
 
   test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {
@@ -236,6 +293,45 @@ describe('workspace diff lifecycle', () => {
     expect(rows.filter((r) => r.path === 'bad.txt')).toEqual([]);
     expect(rows.filter((r) => r.active === 0)).toEqual([]);
     expect(rows.find((r) => r.path === 'old.txt')).toMatchObject({ content: 'old', active: 1 });
+  });
+
+  test('Mark reviewed can be undone once: the changes it cleared come back, measured from the earlier review', async () => {
+    const { rt } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    const earlier = await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await resetWorkspaceBaseline(rt);
+
+    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(restoreWorkspaceBaseline(rt)).toEqual({ ok: true, capturedAt: earlier.capturedAt });
+
+    const restored = await getWorkspaceDiff(rt);
+
+    expect(restored.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added notes.md']);
+    expect(restored.trackedSince).toBe(earlier.capturedAt);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
+  });
+
+  test('a review that fails leaves the one before it undoable, and keeps no older generation', async () => {
+    const { rt, db } = createTestRuntime();
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await rt.storage.vfs.writeFile('old.txt', 'old');
+    await resetWorkspaceBaseline(rt);
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('between.txt', 'between');
+    await resetWorkspaceBaseline(rt);
+    await rt.storage.vfs.writeFile('bad.txt', 'bad');
+    db.exec(`CREATE TRIGGER reject_bad_baseline BEFORE INSERT ON vfs_baseline_manifest
+      WHEN NEW.path = 'bad.txt' BEGIN SELECT RAISE(FAIL, 'forced baseline failure'); END`);
+
+    await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('forced baseline failure');
+
+    const generations = db.query<{ generations: number }, []>('SELECT COUNT(DISTINCT generation) AS generations FROM vfs_baseline_manifest').get();
+
+    expect(generations).toEqual({ generations: 2 });
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect((await getWorkspaceDiff(rt)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added bad.txt', 'added between.txt']);
+    expect(restoreWorkspaceBaseline(rt)).toMatchObject({ ok: false });
   });
 
   test('a directory traversal failure is surfaced instead of becoming an empty diff', async () => {

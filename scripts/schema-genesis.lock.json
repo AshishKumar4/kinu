@@ -1564,6 +1564,12 @@
     "hash TEXT PRIMARY KEY",
     "content TEXT NOT NULL"
   ],
+  "vfs_baseline_generation@packages/core/src/read-models/workspace-diff.ts": [
+    "actor_id TEXT NOT NULL",
+    "generation TEXT NOT NULL",
+    "replaced TEXT",
+    "PRIMARY KEY (actor_id, generation)"
+  ],
   "vfs_baseline_manifest@packages/core/src/read-models/workspace-diff.ts": [
     "actor_id TEXT NOT NULL",
     "generation TEXT NOT NULL",
