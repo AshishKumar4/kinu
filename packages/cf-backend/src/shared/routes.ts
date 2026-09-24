@@ -10,7 +10,6 @@ import {
   type LiveShareVisibility, LiveShareCreatedSchema,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
-import { forgetPublicShare, indexPublicShare } from './public-index';
 import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
@@ -332,14 +331,6 @@ async function shareLive(request: Request, env: Env, identity: AuthIdentity, own
     }
   }
 
-  if (share.visibility === 'public') {
-    const reading = await owned.readLiveShare(share.id);
-    await indexPublicShare(env, {
-      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
-      kind: 'live', title: reading.ok ? reading.value.title : share.slate, createdAt: share.createdAt,
-    });
-  }
-
   return json({ body: { share, url } }, { status: 201 });
 }
 
@@ -354,7 +345,6 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
   const revoked = await workspaceOwner(env, body.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
 
   if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
-  await forgetPublicShare(env, { ownerUserId: identity.userId, workspace: body.workspace, shareId: body.share });
 
   return json({ body: revoked.value });
 }

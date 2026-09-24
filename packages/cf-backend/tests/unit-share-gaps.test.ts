@@ -10,16 +10,12 @@ import {
   type AgentRuntime, type SlateAnswer,
 } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles } from './helpers/actor-harness';
-import { createTestUserDO, provisionTestWorkspace, sqlExec, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, testOwner, TEST_USER_ENV, type TestUserDO } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools } from './helpers/agents-sdk';
 import { makeKv } from './helpers/kv';
 import { handleSharedPublicRequest, handleSharedRequest } from '../src/shared/routes';
 import { handleSlateShareHostRequest } from '../src/slate-share-route';
 import type { AuthIdentity } from '../src/auth/session';
-import type { UserCaller } from '@kinu.run/core';
-import { Database } from 'bun:sqlite';
-import { initControlPlaneSchema } from '@kinu.run/core/control-plane/store';
-import { indexPublicShare as indexRow, forgetPublicShare as forgetRow } from '@kinu.run/core/control-plane';
 import { present } from '@kinu.run/test-utils';
 
 function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
@@ -55,8 +51,6 @@ interface World {
   readonly owner: ActorHarness<HarnessOrchestratorAgent>;
   readonly viewer: ActorHarness<HarnessOrchestratorAgent>;
   readonly ownerUser: TestUserDO;
-  /** The share ids on the control plane's public index. */
-  readonly indexed: () => unknown[];
   readonly close: () => void;
 }
 
@@ -93,21 +87,12 @@ async function twoUserWorld(): Promise<World> {
   ]);
 
   const users = new Map<string, TestUserDO>([[OWNER_ID, ownerSide.user], [VIEWER_ID, viewerSide.user]]);
-  const controlDb = new Database(':memory:');
-  const controlSql = sqlExec(controlDb);
-  initControlPlaneSchema(controlSql);
-
-  const controlPlane = {
-    publicShares_put: async (_caller: UserCaller, row: Parameters<typeof indexRow>[1]) => indexRow(controlSql, row),
-    publicShares_forget: async (_caller: UserCaller, key: Parameters<typeof forgetRow>[1]) => forgetRow(controlSql, key),
-  };
 
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     ...TEST_USER_ENV,
     PREVIEW_HOST_SUFFIX: 'share.test',
     AUTH_KV: kv,
-    ControlPlaneDO: { idFromName: (name: string) => name, get: () => controlPlane },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (id: string) => present(agents.get(id), `the OrchestratorAgent stub ${id}`),
@@ -132,8 +117,7 @@ async function twoUserWorld(): Promise<World> {
 
   return {
     env, owner: ownerSide.agent, viewer: viewerSide.agent, ownerUser: ownerSide.user,
-    indexed: () => controlSql.exec('SELECT share_id FROM cp_public_shares').toArray().map((row) => row['share_id']),
-    close: () => { ownerSide.user.close(); viewerSide.user.close(); controlDb.close(); resetRecordedMcp(); },
+    close: () => { ownerSide.user.close(); viewerSide.user.close(); resetRecordedMcp(); },
   };
 }
 
@@ -271,7 +255,7 @@ test('D1: a live share forks for who it names, refuses who it does not, and hono
   expect(ownerFork?.status).toBe(201);
 });
 
-test('D2: one revoke route ends a public live share, its public index row, and a blueprint link', async () => {
+test('D2: one revoke route ends a public live share and a blueprint link', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
   const owner = identityOf(OWNER_ID, 'owner@example.test');
@@ -281,11 +265,12 @@ test('D2: one revoke route ends a public live share, its public index row, and a
     post('/api/shared/live', { workspace: 'issues-owner', slate: 'issues', visibility: 'public' })), 'the live share answer');
 
   expect(liveResp.status).toBe(201);
-  const live = (await jsonBody(liveResp, v.object({ share: v.object({ id: v.string() }) }))).share;
+  const live = await jsonBody(liveResp, v.object({ share: v.object({ id: v.string() }), url: v.nullable(v.string()) }));
+  const url = present(live.url, 'the share URL');
 
-  expect(world.indexed()).toContain(live.id);
-  expect((await revoke(live.id))?.status).toBe(200);
-  expect(world.indexed()).not.toContain(live.id);
+  expect((await visit(world, url, '203.0.113.9'))?.status).toBe(200);
+  expect((await revoke(live.share.id))?.status).toBe(200);
+  expect((await visit(world, url, '203.0.113.9'))?.status).toBe(404);
 
   const committed = await world.owner.agent.slate({ op: 'commit', id: 'issues' });
 
