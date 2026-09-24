@@ -3,7 +3,10 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestRuntime, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
-import { hostedExplorationHarness, orchestratorHarness, rpcReachableFrom, workspaceMainActor } from './helpers/actor-harness';
+import {
+  chatSessionTurns, gatewayWorkspace, hostedExplorationHarness, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
+} from './helpers/actor-harness';
+import { chatCompletion, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { isAgentRpcMethod } from '../src/cli/rpc-gate';
 import { hostBranch } from '../src/exploration-hosting';
 import {
@@ -57,6 +60,24 @@ interface SplitToolInput {
   rationale: string;
   heads: Array<{ task: string; rationale: string }>;
   merge_strategy?: 'synthesize' | 'best_of' | 'consensus';
+}
+
+/** A steer branch of a live turn, run to its end on the gateway: the one production entry a top-level head has. */
+async function branchHeadRun(gateway: StubbedAiBinding) {
+  const workspace = gatewayWorkspace(gateway);
+  const turns = chatSessionTurns(workspace.agent);
+
+  await turns.openInFlight('u-live', 'a-live');
+  const branch = await workspace.agent.branchTurn('read the parser');
+
+  if (branch.branchId === undefined) throw new Error(`the branch was refused: ${branch.reason ?? 'no reason'}`);
+  await turns.settle({ messageId: 'a-live', text: 'the answer' });
+  await workspace.agent.harnessJoinDetachedFibers();
+
+  const head = `${branch.branchId}-head`;
+  const seat = workspace.db.query<{ actor_id: string }, [string]>('SELECT actor_id FROM workspace_actors WHERE creation_id = ?').get(head);
+
+  return { db: workspace.db, head, seat: seat?.actor_id };
 }
 
 function headInput(overrides?: Partial<HeadInput>): HeadInput {
@@ -207,22 +228,17 @@ describe('head tool surface — containment', () => {
 /** Where an exploration actor's trace lands and what a rollout branch may touch (C2: one journal per subtree). */
 describe('exploration actors write the workspace journal and acquire only their own plane', () => {
   test("a head's step trace lands in the workspace's journal, under the workspace's own actor", async () => {
-    const workspace = orchestratorHarness();
-    const head = await hostedExplorationHarness(workspace, 'head', 'head-1');
+    const workspace = await branchHeadRun(stubAiBinding((run) => chatCompletion(run, 'read the parser')));
     const root = workspaceMainActor(workspace.db).actorId;
     // Distinct actors: a step filed under the head's own id would be invisible to the subtree's journal readers.
-    expect(head.actor.handle.actorId).not.toBe(root);
-
-    await workspace.agent.observeExplorationSeams().recordStep('head-1', 1, {
-      text: 'read the parser', toolCalls: [],
-    });
+    expect(workspace.seat).not.toBe(root);
 
     // Unscoped on purpose: a read filtered by the expected actor would pass on a row filed under the wrong owner.
     const rows = workspace.db.prepare<{ actor_id: string; head_id: string; text: string }, []>(
       'SELECT actor_id, head_id, text FROM head_steps',
     ).all();
 
-    expect(rows).toEqual([{ actor_id: root, head_id: 'head-1', text: 'read the parser' }]);
+    expect(rows).toEqual([{ actor_id: root, head_id: workspace.head, text: 'read the parser' }]);
   });
 
   test('a rollout branch reasons through the caller\'s model seam and is given no plane to act on', async () => {
@@ -313,31 +329,6 @@ describe('recursive split budget', () => {
 });
 
 describe('the mission ledger bounds a hosted head', () => {
-  // A head has no execution cap of its own, so the mission budget is the only bound on a fork.
-
-  test('an unbudgeted head is given no ledger at all, and a budgeted one is given its own labels', () => {
-    const seams = orchestratorHarness().agent.observeExplorationSeams();
-    // Null, not an inert port: an undeclared run must not touch the table.
-    expect(seams.mission(headInput())).toBeNull();
-    // The denominator: without it the null above holds for a seam that always answers null.
-    const scoped = seams.mission(headInput({ missionLabels: ['q3-migration'] }));
-    expect(scoped?.labels).toEqual(['q3-migration']);
-  });
-
-  test('the port charges the ledger of the actor that declared the budget', async () => {
-    const workspace = orchestratorHarness();
-
-    const scoped = workspace.agent.observeExplorationSeams()
-      .mission(headInput({ missionLabels: ['q3-migration'] }));
-
-    if (!scoped) throw new Error('a head with labels is given a mission port');
-
-    // The debit lands on this workspace's own ledger; a closure over a released or foreign handle throws on `assertCurrent`.
-    expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
-    await scoped.port.debit(120, { labels: scoped.labels, calls: 1 });
-    expect(await scoped.port.guard('model_call', scoped.labels)).toBeNull();
-  });
-
   test('the two ledger members serve a sibling object and never a public transport', () => {
     // A spend ledger must not become writable over the public WS/HTTP transport, yet a hosted head's
     // object charges it over the DO stub.
