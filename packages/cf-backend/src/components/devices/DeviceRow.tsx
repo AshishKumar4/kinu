@@ -18,6 +18,9 @@ const SANDBOX_MODE_COPY = {
   files_only: "Files only.",
 } satisfies Record<DeviceMode, string>;
 
+const WHOLE_MACHINE_COPY = "Linked from /, so the agent has this whole machine: every file you can open, and its commands "
+  + "run as you. The Sandbox switch applies again once you run kinu connect in a narrower folder.";
+
 /** An unknown count is still a warning: the hub could not confirm anything stopped. */
 function unstoppedLine(count: number | undefined): string {
   if (count === undefined) return "Commands may still run.";
@@ -46,6 +49,7 @@ export function DeviceRow({
 
   if (device.revokedAt !== null) {
     const countLine = unstoppedLine(unstoppedCommands);
+    const unstopped = device.unstoppedAt !== null;
 
     return (
       <div data-device-incident={device.id} role="alert"
@@ -54,9 +58,19 @@ export function DeviceRow({
           <WarningIcon size={14} className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1 space-y-1">
             <div className="font-medium">{device.label}</div>
-            <p>Kinu could not confirm that every command stopped after revocation.</p>
-            <p>{countLine}</p>
-            <p className="p-meta">Acknowledge clears this warning. It does not stop commands.</p>
+            {device.reuseDetectedAt !== null && (
+              <>
+                <p>Kinu revoked this device: its key was used after it had been replaced, so a copy of this machine&apos;s ~/.kinu/device.json exists somewhere else.</p>
+                <p>Run kinu connect on the machine you trust to link it again.</p>
+              </>
+            )}
+            {unstopped && (
+              <>
+                <p>Kinu could not confirm that every command stopped after revocation.</p>
+                <p>{countLine}</p>
+              </>
+            )}
+            <p className="p-meta">{unstopped ? "Acknowledge clears this warning. It does not stop commands." : "Acknowledge clears this warning."}</p>
           </div>
           <button type="button" disabled={acknowledging}
             onClick={() => {
@@ -66,7 +80,7 @@ export function DeviceRow({
                   await onAcknowledge();
                 } catch (cause) {
                   // A rejection escaping `onError` still leaves the row visibly unacknowledged.
-                  onError(`Could not acknowledge the command warning: ${renderThrownChain({ cause })}`);
+                  onError(`Could not acknowledge the device warning: ${renderThrownChain({ cause })}`);
                 } finally {
                   setAcknowledging(false);
                 }
@@ -101,7 +115,7 @@ export function DeviceRow({
 
   const { sandbox } = device;
   const sandboxOn = sandbox.tier === "sandboxed";
-  const mode = effectiveDeviceMode(sandbox);
+  const mode = device.wholeMachine ? "raw" : effectiveDeviceMode(sandbox);
   const cannotSandbox = sandbox.capability !== "sandboxed";
 
   // Only turning off asks; on only narrows what a command reaches.
@@ -164,7 +178,7 @@ export function DeviceRow({
             role="switch"
             aria-checked={sandboxOn}
             aria-label={`Sandbox on ${device.label}`}
-            disabled={switching}
+            disabled={switching || device.wholeMachine}
             onClick={async () => { await setSandbox(!sandboxOn); }}
             className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50 ${
               sandboxOn ? "border-[var(--c-accent)] bg-[var(--c-accent)]" : "border-[var(--c-border-strong)] bg-[var(--c-fill)]"
@@ -179,8 +193,8 @@ export function DeviceRow({
         {cannotSandbox && <span className="p-badge-warning px-1.5 py-0.5">Cannot sandbox</span>}
         {mode === "sandboxed" && <span className="p-text-3">GPU: {describeGpuNodes(sandbox.gpu)}</span>}
       </div>
-      <span className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode}>
-        {SANDBOX_MODE_COPY[mode]}
+      <span className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode} data-whole-machine={device.wholeMachine || undefined}>
+        {device.wholeMachine ? WHOLE_MACHINE_COPY : SANDBOX_MODE_COPY[mode]}
       </span>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
         {grants.length === 0 ? (

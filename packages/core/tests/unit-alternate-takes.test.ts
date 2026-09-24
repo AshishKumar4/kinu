@@ -37,10 +37,10 @@ function insertNode(
   actor: ActorHandle,
   node: { id: string; parentId?: string | null; value: number; depth?: number; status?: string; text?: string; visits?: number },
 ) {
-  void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+  void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status, evaluation_json)
       VALUES (${actor.actorId}, 'r', ${node.id}, ${node.parentId ?? null}, ${'the task'}, ${node.text ?? node.id},
               ${node.text ?? `proposal ${node.id}`}, ${node.value}, ${node.visits ?? 1},
-              ${node.depth ?? 1}, ${node.status ?? 'open'})`;
+              ${node.depth ?? 1}, ${node.status ?? 'open'}, ${JSON.stringify({ score: node.value })})`;
 }
 
 describe('captureAlternateTakes — the near-tie epsilon rule', () => {

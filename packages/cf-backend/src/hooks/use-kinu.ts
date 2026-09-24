@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
@@ -44,7 +44,7 @@ import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.
 import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
 import { turnLiveness, type TurnClaimState } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
-import { pruneSlateReloads } from "../components/surfaces/presence";
+import { pruneSlateReloads } from "@kinu.run/core";
 
 export type { ExecutorInfo };
 
@@ -199,6 +199,7 @@ const MctsRowSchema = v.object({
   depth: v.number(),
   visits: v.number(),
   value: v.number(),
+  own_score: v.nullable(v.number()),
   status: v.picklist(["open", "pruned", "terminal", "failed", "running"]),
   action: v.string(),
   task: v.string(),
@@ -833,7 +834,6 @@ export function useKinu(target?: string | KinuActorAddress) {
   const [pinnedPorts, setPinnedPorts] = useState<PinnedPreviewPort[]>([]);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const exposedPortsRefreshGeneration = useRef(0);
-  const subordinateRefreshGeneration = useRef(0);
   /** Held in a ref too: the socket handler's effect must not re-subscribe (its cleanup forgets the
    *  live head paint). Null on the workspace pane and until the load resolves it. */
   const ownActorIdRef = useRef<string | null>(null);
@@ -1263,6 +1263,19 @@ export function useKinu(target?: string | KinuActorAddress) {
     (listing) => applySlates(listing, true),
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
+  /** Through the "roster" admission, so a read still in flight cannot overwrite it. */
+  const writeRoster = useCallback((next: SetStateAction<SubordinateRosterEntry[]>) => refreshCurrentLiveResource(
+    "roster", async () => next, setSubordinates,
+  ), [refreshCurrentLiveResource]);
+
+  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", async () => {
+    const roster = parseSubordinateRoster({ value: await rpc<unknown>("listSubordinates", []) });
+
+    if (!roster) throw new Error("Subordinate roster returned an invalid response");
+
+    return roster;
+  }, setSubordinates), [refreshCurrentLiveResource, rpc]);
+
   // Stable identity: an inline arrow re-armed the changelog hook's effect and fired markChangelogSeen
   // every render.
   const clearChangelogUnseen = useCallback(() => {
@@ -1437,10 +1450,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster({ value: msg.subordinates });
 
-          if (roster) {
-            ++subordinateRefreshGeneration.current;
-            setSubordinates(roster);
-          }
+          if (roster) await writeRoster(roster);
         } else if (!isSubordinate && msg.type === "subordinate_event") {
           const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
 
@@ -1461,7 +1471,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     };
   }, [
     agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshSlates, refreshPendingActions,
-    retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
+    retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate, writeRoster,
   ]);
 
   const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent({
@@ -1665,7 +1675,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setTurnClaim(snap.turnClaim);
 
     try {
-      await Promise.all([refreshExposedPorts(), refreshPendingActions()]);
+      await Promise.all([refreshExposedPorts(), refreshPendingActions(), refreshRoster()]);
     } catch (cause) {
       diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
         doing: 'refreshing live workspace data',
@@ -1706,46 +1716,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSteerRuns(actorSnapshot.pendingSteers);
   }
 
-  const subordinateRefreshTasks = useRef(new Map<number, Promise<void>>());
-
-  const refreshSubordinates = useCallback((): void => {
-    if (isSubordinate) return;
-    const generation = ++subordinateRefreshGeneration.current;
-    let task: Promise<void> | null = null;
-    task = (async () => {
-      // Tested against the generation after the handler: a later reconnect owns the roster now.
-      let thrown: { cause: unknown } | null = null;
-
-      try {
-        const value = await rpc<unknown>("listSubordinates", []);
-
-        if (generation !== subordinateRefreshGeneration.current) return;
-        const roster = parseSubordinateRoster({ value });
-
-        if (!roster) throw new Error('Subordinate roster returned an invalid response');
-        setSubordinates(roster);
-        setSourceError("roster", null);
-      } catch (err) {
-        thrown = { cause: err };
-      } finally {
-        subordinateRefreshTasks.current.delete(generation);
-      }
-
-      if (thrown !== null && generation === subordinateRefreshGeneration.current) {
-        setSourceError("roster", errorMessage(thrown));
-      }
-    })();
-    subordinateRefreshTasks.current.set(generation, task);
-  }, [isSubordinate, rpc, setSourceError]);
-
-  useEffect(() => {
-    if (isSubordinate) return;
-    refreshSubordinates();
-  }, [isSubordinate, refreshSubordinates, loadGeneration]);
-
   useEffect(() => {
     ++exposedPortsRefreshGeneration.current;
-    ++subordinateRefreshGeneration.current;
     setLoadGeneration(0);
     failureStreak.current = 0;
     wasStreaming.current = false;
@@ -2083,7 +2055,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     subordinates,
     subordinateEvents,
     signalCards,
-    refreshSubordinates,
     /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. */
     createSubordinate: async () => {
       const result = await rpc<{
@@ -2092,12 +2063,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         subordinate: SubordinateRosterEntry;
       }>("createSubordinateAgent", []);
 
-      ++subordinateRefreshGeneration.current;
-      setSubordinates((current) => [
+      await writeRoster((current) => [
         ...current.filter((entry) => entry.name !== result.subordinate.name),
         result.subordinate,
       ]);
-      setSourceError("roster", null);
 
       return result;
     },
@@ -2109,11 +2078,9 @@ export function useKinu(target?: string | KinuActorAddress) {
       );
 
       const entry = result.subordinate;
-      ++subordinateRefreshGeneration.current;
-      setSubordinates((current) => current.map(
+      await writeRoster((current) => current.map(
         (existing) => existing.name === entry.name ? entry : existing,
       ));
-      setSourceError("roster", null);
 
       return entry;
     },
@@ -2121,9 +2088,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       const args = keepHistory === undefined ? [name] : [name, keepHistory];
       const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", args);
 
-      ++subordinateRefreshGeneration.current;
-      setSubordinates((current) => current.filter((entry) => entry.name !== result.name));
-      setSourceError("roster", null);
+      await writeRoster((current) => current.filter((entry) => entry.name !== result.name));
 
       return result;
     },

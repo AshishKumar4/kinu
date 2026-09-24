@@ -202,6 +202,9 @@ export interface UserDevice {
   replacedAt: number | null;
   revokedAt: number | null;
   unstoppedAt: number | null;
+  /** Revoked because its retired key came back: a copy exists. */
+  reuseDetectedAt: number | null;
+  wholeMachine: boolean;
   version: string | null;
   servedVersion: string | null;
   update: DeviceUpdateState;
@@ -233,6 +236,8 @@ const UserDeviceSchema = v.object({
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
   lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
+  reuseDetectedAt: v.optional(v.nullable(v.number()), null),
+  wholeMachine: v.optional(v.boolean(), false),
   sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
   version: v.optional(v.nullable(v.string()), null),
   servedVersion: v.optional(v.nullable(v.string()), null),

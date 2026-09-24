@@ -11,6 +11,7 @@ import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/run
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, headAgentName, restoreAgentTmpConfinements,
+  settleWorkspaceRoot, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
@@ -71,8 +72,12 @@ async function openOwner(): Promise<OwnerFixture> {
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
+    cwd: WORKSPACE_ROOT,
+    env: { HOME: WORKSPACE_ROOT },
   });
 
+  // The layout Kinu's boot gives every workspace: its root at /home/main.
+  settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
   const composed = programmaticHostOver(workspace);
   const host = composed.host;
 
@@ -278,16 +283,16 @@ describe('one box answers both surfaces with the same bytes', () => {
     try {
       const files = nimbusSessionFiles(originFilesBox(f));
 
-      // A relative shell path and its `/home/user` spelling name the same file; root paths are per-surface.
+      // A relative shell path and its `/home/main` spelling name the same file; root paths are per-surface.
       expect(await rpcExec(f.host, 'echo live-bytes > tree-probe.md', {}))
         .toMatchObject({ exitCode: 0 });
       expect(await files.readFile('tree-probe.md', { encoding: 'utf8' })).toBe('live-bytes\n');
-      expect(await files.readFile('/home/user/tree-probe.md', { encoding: 'utf8' })).toBe('live-bytes\n');
+      expect(await files.readFile('/home/main/tree-probe.md', { encoding: 'utf8' })).toBe('live-bytes\n');
 
       await files.writeFile('tree-probe-2.md', 'file-plane bytes\n');
       expect(await rpcExec(f.host, 'cat tree-probe-2.md', {}))
         .toMatchObject({ exitCode: 0, stdout: 'file-plane bytes\n' });
-      expect(await rpcExec(f.host, 'cat /home/user/tree-probe-2.md', {}))
+      expect(await rpcExec(f.host, 'cat /home/main/tree-probe-2.md', {}))
         .toMatchObject({ exitCode: 0, stdout: 'file-plane bytes\n' });
     } finally {
       for (const database of f.databases) database.close();

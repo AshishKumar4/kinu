@@ -9,6 +9,16 @@ Build: `cargo build --release --locked`. Test: `cargo test --locked`.
 The image build uses the pinned Rust Alpine image to produce a static musl
 binary that runs on the pinned upstream Sandbox image without a libc upgrade.
 
+The image also carries the container's backup sync (D30), bundled from
+`packages/devbox/src/sync-main.ts` before the Docker build and pinned in
+`upstream.json` like the binaries. `tests/block-image.test.ts` bundles it again,
+so a change to the sync's code fails until the image is rebuilt and re-pinned:
+
+```sh
+bun packages/devbox/block-lower/bundle-sync.ts
+docker build -t kinu-devbox-block-layer:<date> packages/devbox/block-lower
+```
+
 ## Format and reads
 
 `over.index` names `.devbox-delta/<sha256>`, a file in the same delta image.

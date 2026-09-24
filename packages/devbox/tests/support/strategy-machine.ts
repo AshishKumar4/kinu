@@ -907,7 +907,7 @@ export interface RestoreWork {
   /** Entries the restore materialized on the container. */
   readonly cpuSteps: number;
   readonly mounts: number;
-  /** Journal entries or layers replayed over a base. */
+  /** Delta layers served over a base. */
   readonly replayUnits: number;
 }
 
@@ -925,19 +925,6 @@ export interface Refusal {
 export interface HeldFinalize {
   readonly entered: Promise<void>;
   readonly release: () => void;
-}
-
-/** Container-side starts that survive a Durable Object isolate reset. */
-export interface LifecycleCounts {
-  readonly daemonStarts: number;
-  readonly restoreStarts: number;
-}
-
-/** The write-ahead journal a container still holds: one record per admitted
- *  write, and the records a refused effect cancelled. */
-export interface JournalFacts {
-  readonly records: readonly string[];
-  readonly failedWrites: readonly string[];
 }
 
 /** A second container on the same box: the same durable store and rows, its
@@ -985,14 +972,9 @@ export interface ConformanceArm extends ArmBoot {
   committedHeads(): Promise<readonly string[]>;
   /** The counted-work rows for the last checkpoint and the last attach. */
   work(): WorkRows;
-  /** Container-side starts that survive a Durable Object isolate reset. */
-  lifecycleCounts?(): LifecycleCounts;
   /** Evicts clean local bytes (the disk-pressure escape); returns the clean bytes it found.
    *  An arm without this hook can only refuse when full. */
   evictCleanBytes?(): number;
-  /** Journal lines a container still holds, in order: one per workload effect, 'W <path>' per
-   *  landed write. Empty for arms whose write path keeps no journal. */
-  journalFacts?(): JournalFacts;
   readonly refusedProperties: Readonly<Partial<Record<TreeProperty, Refusal>>>;
   readonly refusedCells: Readonly<Record<string, Refusal>>;
 }
@@ -1237,6 +1219,17 @@ function checkpointCommand(
   return undefined;
 }
 
+/** The upper's metadata walk: content is never read, so holes cost nothing and a large sparse
+ *  file is one row. */
+function upperWalkDigest(disk: ContainerDisk): string {
+  const rows = disk.snapshot(`${DEVBOX_RUNTIME_DIR}/upper`).map((entry) => [
+    entry.ino, entry.kind, entry.mode, entry.content === undefined ? 0 : contentSize(entry.content),
+    entry.metadata?.mtimeNs ?? '0', entry.metadata?.ctimeNs ?? '0', entry.target ?? '', entry.path,
+  ].join('\0'));
+
+  return createHash('sha256').update(rows.length === 0 ? 'empty' : rows.sort().join('\0')).digest('hex');
+}
+
 function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
@@ -1330,6 +1323,8 @@ function chainExec(
     if (fault !== undefined) return fault;
 
     const ok = shellOk;
+
+    if (command.startsWith('# devbox-tick-probe-v1\n')) return ok(`${disk.procMounts()}\0${upperWalkDigest(disk)}`);
     const delta = deltaCommand(command, disk);
 
     if (delta !== undefined) return delta;
@@ -1365,20 +1360,7 @@ function chainExec(
 
     if (checkpoint !== undefined) return checkpoint;
 
-    if (command.includes('sha256sum') && command.includes('sort -z')) {
-      // Mirrors the real walk: metadata only, never content, so holes are never read
-      // and a large sparse file costs one row.
-      const upper = `${DEVBOX_RUNTIME_DIR}/upper`;
-
-      const rows = disk.snapshot(upper).map((entry) => [
-        entry.ino, entry.kind, entry.mode, entry.content === undefined ? 0 : contentSize(entry.content),
-        entry.metadata?.mtimeNs ?? '0', entry.metadata?.ctimeNs ?? '0', entry.target ?? '', entry.path,
-      ].join('\0'));
-
-      const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
-
-      return ok(digest(rows.length === 0 ? 'empty' : rows.sort().join('\0')));
-    }
+    if (command.includes('sha256sum') && command.includes('sort -z')) return ok(upperWalkDigest(disk));
 
     const statted = /^stat -c %s '(?<path>[^']+)'/.exec(command)?.groups?.path;
 

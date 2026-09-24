@@ -59,6 +59,8 @@ declare global {
     AI_GATEWAY_URL: string;
     /** Zone for per-port preview hostnames; empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;
+    /** The zone's port when it is not 443; only `vite dev` sets it (vite-preview-zone.ts). */
+    PREVIEW_HOST_PORT?: string;
     /** Static assets; needed for SPA fallback under `run_worker_first`. */
     ASSETS: Fetcher;
     /** Google OAuth client settings. Client secret must be a Wrangler secret. */
@@ -97,7 +99,7 @@ declare global {
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
-    /** Presented in `x-kinu-dev-identity` to act as `DEV_USER_EMAIL` off localhost. */
+    /** Presented in core's `DEV_IDENTITY_HEADER` to act as `DEV_USER_EMAIL` off localhost. */
     DEV_IDENTITY_SECRET?: string;
     /** Email Sending (`send_email`); optional, outbound email skips without it. */
     EMAIL?: SendEmail;

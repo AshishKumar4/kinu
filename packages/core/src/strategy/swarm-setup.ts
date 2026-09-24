@@ -52,7 +52,7 @@ import { isBetter } from './objective';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { nanoid } from '../utils/nanoid';
 import { insertSearchNode } from '../mcts/record-node';
-import { reenterSwarm, type SwarmReentry } from './swarm-resume';
+import { outcomeFacts, reenterSwarm, type SwarmReentry } from './swarm-resume';
 import type { SwarmProfileSnapshot } from '../profiles';
 import { readArtifact, type TreeNode } from './swarm-tree';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -68,7 +68,7 @@ export function unavailable(error: string): Refusal {
   return refusalOf(new KinuError('unavailable', error));
 }
 
-export function badInput(error: string): Refusal {
+function badInput(error: string): Refusal {
   return refusalOf(new KinuError('bad_input', error));
 }
 
@@ -167,7 +167,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
 }
 
 /** The workspace as an instrument sees it: only the members *Measurement context* names. */
-export function measurementContext(rt: AgentRuntime): MeasurementContext | null {
+function measurementContext(rt: AgentRuntime): MeasurementContext | null {
   const shell = rt.shell;
 
   if (!shell) return null;
@@ -176,7 +176,7 @@ export function measurementContext(rt: AgentRuntime): MeasurementContext | null 
 }
 
 /** The measured baseline reported alongside a candidate, or null (*Measured baseline*). */
-export function baselineOf(measurement: Measurement, key: string | null): number | null {
+function baselineOf(measurement: Measurement, key: string | null): number | null {
   if (!key) return null;
   const reported = measurement.measured?.[key];
 
@@ -781,21 +781,11 @@ export function seedResumedSearch(input: {
     if (node.parentId === null) continue;
     inheritedExpansions += 1;
     const { record } = node;
-    const outcome = record?.outcome ?? null;
-
-    const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
-      ? outcome.measurement
-      : null;
-
-    const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
-      ? outcome.score
-      : null;
-
-    const pareto = outcome?.kind === 'pareto' ? outcome.evidence : null;
+    const { breach, rank, ensemble, ...facts } = outcomeFacts(record?.outcome ?? null);
     nodes.set(node.id, {
       id: node.id, parentId: node.parentId, depth: node.depth,
       artifact: node.artifact,
-      measurement, score, pareto,
+      measurement: facts.measured, score: facts.score, pareto: facts.pareto,
       // Named losses in `swarm-resume.ts`: the grant is refunded because nothing was created.
       proposal: null, proposalError: null, granted: null,
       conclusion: record?.conclusion ?? null,
@@ -806,37 +796,16 @@ export function seedResumedSearch(input: {
 
     if (!record) continue;
 
-    const candidate: SwarmCandidate = {
-      id: node.id,
-      artifact: node.artifact,
-      measured: measurement,
-      unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
-      witnessFound: outcome?.kind === 'sealed'
-        || outcome?.kind === 'scored'
-        || outcome?.kind === 'unmeasurable'
-        ? outcome.witnessFound ?? null
-        : null,
-      incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
-      score,
-      pareto,
-    };
+    const candidate: SwarmCandidate = { id: node.id, artifact: node.artifact, ...facts };
 
     candidates.push(candidate);
     spentBy.set(node.id, record.tokens);
 
     if (record.tokens !== null) inheritedTokens = (inheritedTokens ?? 0) + record.tokens;
 
-    if (outcome?.kind === 'judged' && outcome.ensemble > 0) ensembles.push(outcome.ensemble);
+    if (ensemble > 0) ensembles.push(ensemble);
 
-    if (outcome?.kind === 'sealed') {
-      publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
-    }
-
-    // Same rank expression as the loop: raw measurement, judged median, sealed ranks nothing.
-    let rank: number | null = null;
-
-    if (outcome?.kind === 'scored') rank = outcome.measurement.value;
-    else if (outcome?.kind === 'judged') rank = outcome.score;
+    if (breach !== null) publication = { kind: 'sealed', breach };
 
     if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
       best = candidate;

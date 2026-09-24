@@ -558,8 +558,8 @@ describe('agents tool — the swarm refusal seam', () => {
 describe('agents tool — subordinate actions', () => {
   test('Plan research children cannot acquire Build file authority from a Build-shaped parent provider', async () => {
     const { rt } = createTestRuntime();
-    const path = '/home/user/project.txt';
-    await rt.storage.vfs.mkdir('/home/user', { recursive: true });
+    const path = '/home/main/project.txt';
+    await rt.storage.vfs.mkdir('/home/main', { recursive: true });
     await rt.storage.vfs.writeFile(path, 'original');
     const team = makeTeam();
 

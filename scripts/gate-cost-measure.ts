@@ -282,6 +282,10 @@ function rusageCpuSeconds(report: string): number {
  *  minutes. */
 const KINU_WORK = /(?:vitest|vite|tsc|wrangler|workerd)/u;
 
+/** An editor's language server (`tsc --lsp`) lives as long as the editor and idles: it holds no pool, and a
+ *  wait on it never ends (2026-09-23, a browser row skipped behind one). */
+const LANGUAGE_SERVER = /\0--lsp(?:\0|$)/u;
+
 const KINU_TREE = /(?:Kinu-wt-|\/Proteus\/)/u;
 
 /** Why this box cannot be measured on right now. `shared` separates the two
@@ -315,7 +319,7 @@ function contention(own: number): Contention | undefined {
     if (stat === undefined || Number(stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[3]) === own) continue;
     const command = tolerate(() => readFileSync(`/proc/${entry}/cmdline`, 'utf8'), 'enoent') ?? '';
 
-    if (KINU_WORK.test(command) && KINU_TREE.test(command)) {
+    if (KINU_WORK.test(command) && KINU_TREE.test(command) && !LANGUAGE_SERVER.test(command)) {
       return {
         reason: `pid ${entry} holds a shared resource: ${command.replaceAll('\0', ' ').trim().slice(0, 90)}`,
         shared: true,

@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { isJsonObject, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+import { canonicalWorkspacePath } from '../vfs/workspace-path';
 import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateBinding, SlateProject } from './project';
@@ -116,17 +117,18 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
 
   // Each call's first argument must resolve inside a declared prefix.
   if (binding.paths !== undefined) {
-    const prefixes = binding.paths;
+    const prefixes = binding.paths.map(canonicalWorkspacePath);
     const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'];
 
     if (!FILE_MEMBERS.includes(member)) {
       throw new KinuError('denied', 'a path-scoped workspace binding offers only file members');
     }
 
-    const target = v.safeParse(v.string(), args[0]);
+    const named = v.safeParse(v.string(), args[0]);
+    const target = named.success ? canonicalWorkspacePath(named.output) : '';
 
-    if (!target.success || !target.output.startsWith('/') || target.output.split('/').includes('..')
-      || !prefixes.some((prefix) => target.output === prefix || target.output.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
+    if (!target.startsWith('/') || target.split('/').includes('..')
+      || !prefixes.some((prefix) => target === prefix || target.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
       throw new KinuError('denied',
         `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`);
     }

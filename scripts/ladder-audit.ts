@@ -43,15 +43,16 @@ function openedPaths(trace: string, cwd: string): string[] {
   return out;
 }
 
-/** Run `argv` under strace in `root` and compare what it opened with `closure`. */
-export function auditClosure(argv: readonly string[], root: string, closure: Derived): Audit {
+/** Run `argv` under strace in `root`, with the environment the ladder gives
+ *  the gate, and compare what it opened with `closure`. */
+export function auditClosure(argv: readonly string[], root: string, closure: Derived, env: Record<string, string>): Audit {
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-ladder-audit-'));
   const trace = join(scratch, 'trace');
 
   try {
     const proc = Bun.spawnSync(
       ['strace', '-f', '-qq', '-e', 'trace=openat,execve', '-o', trace, ...argv],
-      { cwd: root, stdout: 'ignore', stderr: 'ignore' },
+      { cwd: root, env, stdout: 'ignore', stderr: 'ignore' },
     );
 
     if (!existsSync(trace)) throw new Error(`strace wrote no trace for ${argv.join(' ')} (exit ${String(proc.exitCode)})`);

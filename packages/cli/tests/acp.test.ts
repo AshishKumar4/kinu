@@ -13,7 +13,7 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
-import type { ShellApprovalOutcome, ShellApprovalRequest } from '@kinu.run/core';
+import { missingSubordinateHistory, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
 import { createAcpAgent } from '../src/acp/agent';
 import { createCliSession } from '../src/session';
 import type { AgentClient, AgentClientEvent, AgentPrompt, AgentSendResult } from '../src/agent-client';
@@ -119,6 +119,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     getEvolutionConfig: async () => { throw new Error('no evolution config'); },
     setEvolutionConfig: async () => { throw new Error('no evolution config'); },
     listModels: async () => ({ models: [], failures: [] }),
+    inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
   };
 
   return {

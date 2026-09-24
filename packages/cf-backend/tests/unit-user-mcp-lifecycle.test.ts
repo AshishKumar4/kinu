@@ -8,7 +8,7 @@ import {
 import {
   dropLiveMcpFetch, failNextMcpRemove, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers,
-  resetRecordedMcp, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer,
+  recordedMcpToolCalls, resetRecordedMcp, seedMcpTools, seedMcpAuthContinuation, seedSdkMcpServer, seedUndiscoveredMcpTools,
   type RecordedMcpTransport,
 } from './helpers/agents-sdk';
 import { storedMcpOptionsCarryCredential, validateMcpServerInput } from '../src/user/mcp';
@@ -218,6 +218,42 @@ describe('the management surface completes a round trip', () => {
     const surface = await readSurface(h, owner);
     expect(surface.descriptors).toEqual([]);
     expect(surface.unavailable).toEqual([]);
+    h.close();
+  });
+
+  test('a server whose tool list breaks the spec keeps its good tools; the bad one is refused and named', async () => {
+    const h = harness();
+    const owner = await testOwner();
+    await seedServer(h, 'srv1', { name: 'github' });
+    await seedServer(h, 'srv2', { name: 'broken' });
+    // What a failed discovery leaves: the SDK's strict check refused each list as a whole.
+    seedUndiscoveredMcpTools('srv1', async () => ({
+      tools: [
+        { name: 'do_thing', inputSchema: { type: 'object', properties: { q: { type: 'string' }, note: { type: 'string' } }, required: ['q'] } },
+        { name: 'any_input', inputSchema: true },
+        { name: 'scalar_root', inputSchema: { type: 'string' } },
+      ],
+    }));
+    seedUndiscoveredMcpTools('srv2', async () => { throw new Error('server went away'); });
+
+    await h.userDO.userMcp_warmConnections(owner);
+    const surface = await readSurface(h, owner);
+    const listed = await h.userDO.userMcp_list(owner);
+
+    expect(surface.descriptors.map((d) => d.toolKey)).toEqual(['mcp_github_do_thing']);
+    expect(surface.unavailable.map((u) => [u.server, /"(\w+)" is not offered/.exec(u.reason)?.[1] ?? null])).toEqual([
+      ['broken', null],
+      ['github', 'any_input'],
+      ['github', 'scalar_root'],
+    ]);
+    expect(surface.unavailable[0]?.reason).toContain('server went away');
+    expect(surface.unavailable.some((u) => u.reason.includes('installed by the next turn'))).toBe(false);
+    expect(listed.map((server) => [server.name, server.toolsCount, server.error?.includes('"scalar_root"') ?? false]))
+      .toEqual([['broken', 0, false], ['github', 1, true]]);
+
+    // The offered tool runs, shaped by the schema the lenient read found: the untouched optional '' is dropped.
+    await h.userDO.userMcp_callTool(owner, 'srv1', 'do_thing', { q: '', note: '' });
+    expect(recordedMcpToolCalls()).toEqual([{ serverId: 'srv1', name: 'do_thing', arguments: { q: '' } }]);
     h.close();
   });
 });

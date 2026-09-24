@@ -79,7 +79,7 @@ resident process.
 A cloud workspace has one durable authority. The `OrchestratorAgent` Durable
 Object owns identity, conversations, plans, task and evolution state and the
 other relational tables. Over the same `ctx.storage.sql` it also owns
-`/home/user`, the shell over those bytes, installed runtimes, processes and
+`/home/main`, the shell over those bytes, installed runtimes, processes and
 exposed ports. Nimbus is held as a library (`cf-backend/src/workspace-host.ts`),
 which is what makes that possible: it owns no transport, no session and no
 Durable Object of its own.

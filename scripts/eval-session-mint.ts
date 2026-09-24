@@ -5,7 +5,7 @@
 // (`KINU_EVAL_WEB_IDENTITY`). Its CLI plane needs a bearer for the same account,
 // and the only way to get one is the device flow `kinu auth` runs — with the
 // approval made by the eval identity instead of a person in a browser. That
-// approval is `POST /cli/auth` presenting the secret in `x-kinu-dev-identity`,
+// approval is `POST /cli/auth` presenting the secret in core's `DEV_IDENTITY_HEADER`,
 // which `authenticateRequest` honours for exactly that header and nothing else.
 //
 // Writes `~/.config/kinu/eval-session/config.json` (mode 0600), the file
@@ -16,6 +16,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { homedir, hostname } from 'node:os';
 import { dirname } from 'node:path';
 import * as v from 'valibot';
+import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import { EVAL_DEPLOYMENT_ORIGIN, EVAL_IDENTITY_ENV, evalTargetVerdict } from '@kinu.run/test-utils';
 import { pollCliAuth, startCliAuth } from '../packages/cli/src/cloud-api';
 
@@ -61,7 +62,7 @@ const flow = await startCliAuth(target.origin, `eval-service@${hostname()}`);
 // The approval is the browser form: GET issues the CSRF cookie and the form
 // carrying its twin; POST returns both with a same-origin `Origin`. The dev
 // identity travels in its header on both, and only there.
-const identity = { 'x-kinu-dev-identity': webIdentity };
+const identity = { [DEV_IDENTITY_HEADER]: webIdentity };
 
 const page = await fetch(`${target.origin}/cli/auth?code=${encodeURIComponent(flow.userCode)}`, { headers: identity });
 

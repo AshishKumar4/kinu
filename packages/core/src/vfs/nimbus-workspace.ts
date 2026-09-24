@@ -1,6 +1,6 @@
 /**
  * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite,
- * sharing its transactions. `vfs` and `shell` address the same paths; no mount table.
+ * sharing its transactions. `vfs` and `shell` address the same paths.
  */
 
 // Type-only: the value import stays inside the lazy boot so Nimbus's wasm graph is not
@@ -16,13 +16,18 @@ import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.
 import type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
-import { agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
+import {
+  agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
+  type HomeRootVfs, type TmpConfiner,
+} from './agent-home';
 import { provisionWorkspaceRuntimes, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
-import { isVfsError } from './errno';
+import { atVfsPath, isVfsError } from './errno';
+import type { MountedVfs } from './mounts';
+import { mountedAuthority, type ShellMountTable } from './shell-mounts';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
@@ -36,15 +41,6 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
 }));
-
-/** Nimbus reports a missing path as ENOENT; the VFS contract maps it to `null`/`false`. */
-function isEnoent({ error }: { error: unknown }): boolean {
-  if (isVfsError(error)) return error.code === 'ENOENT';
-
-  if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return true;
-
-  return false;
-}
 
 function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
   const stdin = v.safeParse(v.string(), input.value);
@@ -62,43 +58,72 @@ export interface WorkspaceVFS extends VFS {
   readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
 }
 
+/** A vendor file view over absolute paths. */
+interface VendorFiles {
+  readText(path: string): string | Promise<string>;
+  readBytes(path: string): Uint8Array | Promise<Uint8Array>;
+  writeFile(path: string, data: string | Uint8Array): void | Promise<void>;
+  readdir(path: string): readonly { readonly name: string }[] | Promise<readonly { readonly name: string }[]>;
+  stat(path: string): VendorStat | Promise<VendorStat>;
+  remove(path: string, recursive: boolean): void | Promise<void>;
+  mkdir(path: string, opts?: { recursive?: boolean }): void | Promise<void>;
+  exists(path: string): boolean | Promise<boolean>;
+  rename(from: string, to: string): void | Promise<void>;
+  readRange(path: string, offset: number, length: number): Uint8Array | Promise<Uint8Array>;
+}
+
+interface VendorStat {
+  readonly size: number;
+  readonly mtime: number;
+  readonly type: string;
+}
+
+/** The VFS contract over one vendor view; a failure names its path. */
+function workspaceFiles(vendor: VendorFiles): WorkspaceVFS {
+  const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
+    const absolute = workspacePath(path);
+
+    return atVfsPath(absolute, syscall, () => call(absolute));
+  };
+
+  return {
+    readFile: (path, opts) => at(path, 'open', (absolute) => opts?.encoding === 'utf8' ? vendor.readText(absolute) : vendor.readBytes(absolute)),
+    writeFile: (path, data) => at(path, 'open', (absolute) => vendor.writeFile(absolute, data)),
+    readdir: async (path) => (await at(path, 'scandir', (absolute) => vendor.readdir(absolute))).map((entry) => entry.name),
+    async stat(path) {
+      try {
+        const st = await at(path, 'stat', (absolute) => vendor.stat(absolute));
+
+        return { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory' };
+      } catch (error) {
+        if (isVfsError(error) && error.code === 'ENOENT') return null;
+        throw error;
+      }
+    },
+    unlink: (path) => at(path, 'unlink', (absolute) => vendor.remove(absolute, false)),
+    mkdir: (path, opts) => at(path, 'mkdir', (absolute) => vendor.mkdir(absolute, opts)),
+    exists: (path) => at(path, 'access', (absolute) => vendor.exists(absolute)),
+    removeRecursive: (path) => at(path, 'rm', (absolute) => vendor.remove(absolute, true)),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (absolute) => vendor.rename(absolute, workspacePath(newPath))),
+    readRange: (path, offset, length) => at(path, 'read', (absolute) => vendor.readRange(absolute, offset, length)),
+  };
+}
+
 function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
   const fs = async (): Promise<NimbusWorkspace['fs']> => (await open()).fs;
 
-  const self: WorkspaceVFS = {
-    async readFile(path, opts) {
-      const abs = workspacePath(path);
-
-      return opts?.encoding === 'utf8' ? (await fs()).readFile(abs) : (await fs()).readFile(abs, null);
-    },
-    async writeFile(path, data) { await (await fs()).writeFile(workspacePath(path), data); },
-    async readdir(path) { return (await (await fs()).readdir(workspacePath(path))).map((entry) => entry.name); },
-    async stat(path) {
-      try {
-        const st = await (await fs()).stat(workspacePath(path));
-
-        return { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory' };
-      } catch (err) {
-        if (isEnoent({ error: err })) return null;
-        throw err;
-      }
-    },
-    async unlink(path) { await (await fs()).rm(workspacePath(path)); },
-    async mkdir(path, opts) { await (await fs()).mkdir(workspacePath(path), opts); },
-    async exists(path) { return (await fs()).exists(workspacePath(path)); },
-
-    async removeRecursive(path) { await (await fs()).rm(workspacePath(path), { recursive: true }); },
-
-    async rename(oldPath, newPath) {
-      await (await fs()).rename(workspacePath(oldPath), workspacePath(newPath));
-    },
-
-    async readRange(path, offset, length) {
-      return (await open()).vfs.as(CRED_SESSION_USER).readRange(workspacePath(path), offset, length);
-    },
-  };
-
-  return self;
+  return workspaceFiles({
+    readText: async (path) => (await fs()).readFile(path),
+    readBytes: async (path) => (await fs()).readFile(path, null),
+    writeFile: async (path, data) => (await fs()).writeFile(path, data),
+    readdir: async (path) => (await fs()).readdir(path),
+    stat: async (path) => (await fs()).stat(path),
+    remove: async (path, recursive) => (await fs()).rm(path, recursive ? { recursive } : undefined),
+    mkdir: async (path, opts) => (await fs()).mkdir(path, opts),
+    exists: async (path) => (await fs()).exists(path),
+    rename: async (from, to) => (await fs()).rename(from, to),
+    readRange: async (path, offset, length) => (await open()).vfs.as(CRED_SESSION_USER).readRange(path, offset, length),
+  });
 }
 
 /** No per-command `cwd`: the shell owns its working directory so `cd` persists. */
@@ -138,33 +163,18 @@ export interface WorkspaceAgent {
 
 /** The same `SqliteVFS`, credentialed as the agent; never the workspace `.fs`, which is pinned to the session user. */
 function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
-  const self: WorkspaceVFS = {
-    async readFile(path, opts) {
-      const absolute = workspacePath(path);
-
-      return opts?.encoding === 'utf8' ? vfs.readFileString(absolute) : vfs.readFile(absolute);
-    },
-    async writeFile(path, data) { vfs.writeFile(workspacePath(path), data); },
-    async readdir(path) { return vfs.readdir(workspacePath(path)).map((entry) => entry.name); },
-    async stat(path) {
-      try {
-        const stat = vfs.stat(workspacePath(path));
-
-        return { size: stat.size, mtimeMs: stat.mtime, isDir: stat.type === 'directory' };
-      } catch (error) {
-        if (isEnoent({ error })) return null;
-        throw error;
-      }
-    },
-    async unlink(path) { vfs.unlink(workspacePath(path)); },
-    async mkdir(path, opts) { vfs.mkdir(workspacePath(path), opts); },
-    async exists(path) { return vfs.exists(workspacePath(path)); },
-    async removeRecursive(path) { vfs.removeRecursive(workspacePath(path)); },
-    async rename(oldPath, newPath) { vfs.rename(workspacePath(oldPath), workspacePath(newPath)); },
-    async readRange(path, offset, length) { return vfs.readRange(workspacePath(path), offset, length); },
-  };
-
-  return self;
+  return workspaceFiles({
+    readText: (path) => vfs.readFileString(path),
+    readBytes: (path) => vfs.readFile(path),
+    writeFile: (path, data) => vfs.writeFile(path, data),
+    readdir: (path) => vfs.readdir(path),
+    stat: (path) => vfs.stat(path),
+    remove: (path, recursive) => { if (recursive) vfs.removeRecursive(path); else vfs.unlink(path); },
+    mkdir: (path, opts) => vfs.mkdir(path, opts),
+    exists: (path) => vfs.exists(path),
+    rename: (from, to) => vfs.rename(from, to),
+    readRange: (path, offset, length) => vfs.readRange(path, offset, length),
+  });
 }
 
 /** Uid-0 view of the same bytes plus the principal registry that scopes `/tmp` per uid. */
@@ -197,6 +207,8 @@ export interface WorkspaceBundle {
   asAgent(agent: WorkspaceAgent): Promise<WorkspaceAgentPlane>;
   session(): Promise<WorkspaceSession>;
   onFilesChanged(listener: (paths: readonly string[]) => void): () => void;
+  /** Shells running as `cred` (default: session user) serve `plane`'s mounts. */
+  mountTable(plane: MountedVfs, cred?: Readonly<VfsCred>): void;
   /** Drops only the workspace tables; the host's own rows stay. */
   destroy(): Promise<void>;
 }
@@ -224,6 +236,8 @@ export interface WorkspaceOptions {
 /** Returns synchronously; the workspace boots lazily on its first operation. */
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const fileListeners = new Set<(paths: readonly string[]) => void>();
+  const mountTables = new Map<number, MountedVfs>();
+  const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
   let booting: Promise<NimbusWorkspace> | undefined;
 
   const open = async (): Promise<NimbusWorkspace> => {
@@ -250,6 +264,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
           processes,
           fabric: opts.fabric,
+          filesystem: (authority) => mountedAuthority(authority, tableFor),
         };
 
         if (opts.runtimeSource !== undefined) {
@@ -257,6 +272,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         }
 
         const workspace = await NimbusWorkspace.create(creation);
+        settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
         // After substrate registrations so a runtime bin never shadows a coreutil.
         const provisioning: Parameters<typeof provisionWorkspaceRuntimes>[0] = {
@@ -305,6 +321,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { fileListeners.delete(listener); };
     },
+    mountTable(plane, cred) {
+      mountTables.set((cred ?? CRED_SESSION_USER).uid, plane);
+    },
     async stats() { return (await open()).stats(); },
     async privileged() {
       const workspace = await open();
@@ -351,6 +370,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
               runAs: origin.shell.getRunAsHost(),
             },
             fabric: opts.fabric,
+            filesystem: (authority) => mountedAuthority(authority, tableFor),
           });
 
           return {

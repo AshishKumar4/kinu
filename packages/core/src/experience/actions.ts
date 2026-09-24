@@ -27,7 +27,7 @@ export interface ExperienceActionDeps {
   facts: FactsStore;
 }
 
-export const EXPERIENCE_ACTIONS = ['publish', 'search', 'import'] as const;
+const EXPERIENCE_ACTIONS = ['publish', 'search', 'import'] as const;
 
 export type ExperienceAction = (typeof EXPERIENCE_ACTIONS)[number];
 

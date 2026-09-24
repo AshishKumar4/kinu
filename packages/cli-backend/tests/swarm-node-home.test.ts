@@ -161,14 +161,14 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
 
     if (!before.shell) throw new Error('node shell missing');
     expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
-    await first.storage.vfs.writeFile('/home/user/shared', 'shared');
+    await first.storage.vfs.writeFile('/home/main/shared', 'shared');
     const second = createCLIRuntime(database, config);
 
     if (!second.nodeRuntime) throw new Error('reset node plane missing');
     const after = await second.nodeRuntime(home, registerLocalNode(second.actor, { nodeId: 'reset', rootId: 'reset', depth: 1 }), second);
 
     if (!after.shell) throw new Error('reset node shell missing');
-    expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/user/shared'))
+    expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/main/shared'))
       .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
     expect(await second.storage.vfs.exists('/tmp/note')).toBe(false);
     await expect(second.storage.vfs.writeFile(`${home.home}/answer`, 'stolen')).rejects.toThrow();

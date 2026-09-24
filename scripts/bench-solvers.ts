@@ -261,7 +261,12 @@ async function spawnWorker(opts: {
     return { error: `worker emitted invalid output: ${detail}; ${line.slice(0, 400)}` };
   }
 
-  const error = parsed.error ?? (parsed.hadError ? 'worker reported an error without a diagnostic' : undefined);
+  // A turn error carries no `error` field: the worker writes its diagnostic to stderr
+  // (`[worker] <message>`), so that tail is the attempt's evidence.
+  const error = parsed.error ?? (parsed.hadError
+    ? `worker turn ended in an error: ${stderr.trim().slice(-800) || '(nothing on stderr)'}`
+    : undefined);
+
   // A worker that crashed before its meter could report omits the token fields
   // entirely, so they are copied only when the worker actually stated them —
   // filling them in here would invent a cost for an attempt nobody measured.

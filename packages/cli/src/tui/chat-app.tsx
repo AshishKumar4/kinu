@@ -11,7 +11,8 @@ import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } fro
 import { tierIdsOf,
   DEFAULT_ROLE_ID, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
   composerVisibleRows, effectiveRoleCatalog,
-  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type TierId,
+  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
+  type SubordinateRosterEntry, type TierId,
 } from '@kinu.run/core';
 import {
   findForkPivot,
@@ -35,16 +36,14 @@ import {
   renderPlanReview,
   performUndo,
   resolveCommandDraft,
-  setModelPreference,
-  setReasoningEffortPreference,
   type SlashOutcome,
 } from '../slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
 import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
-import { requireInteractiveTerminal } from '../prompt';
-import { loadActiveProfile } from '../profiles';
+import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
+import { loadActiveProfile } from '../default-model';
 import { canonicalProjectRoot } from '../config';
 import { guideFailure } from '../provider-guidance';
 import { openBrowser } from '../commands/auth';
@@ -84,7 +83,10 @@ import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from '@kinu.run/core';
 import { agentDisplayLabel, clipText } from '@kinu.run/core';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
-import { buildAgentHubEntries, HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
+import {
+  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster,
+  type TuiAgentHubEntry, type TuiHubData, type TuiHubView, type TuiSubagentChat,
+} from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
   TuiProductProvider,
@@ -98,6 +100,7 @@ import {
   type TuiRuntimeOptions,
   type TuiAgentSource,
   type TuiAgentSummary,
+  type TuiSubordinate,
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
@@ -112,7 +115,6 @@ export interface TuiCreatedAgent {
 
 export interface ChatAppOpts {
   client: AgentClient;
-  hydrateHistory?: boolean;
   onExit?: () => void | Promise<void>;
   /** Walk-back forks swap clients; exit cleanup must close the current one. */
   onClientChange?: (client: AgentClient) => void;
@@ -120,10 +122,6 @@ export interface ChatAppOpts {
   onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
   /** Host-wired: creation is a host concern. */
   onNewAgent?: (client: AgentClient) => Promise<TuiCreatedAgent>;
-  profileMutations?: {
-    setModel(spec: string): Promise<{ spec: string }>;
-    setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
-  };
   tui?: TuiRuntimeOptions;
   hubData?: TuiHubData;
   /** A host that supplies `hubData` must supply this too. */
@@ -139,6 +137,7 @@ export type ActiveSurface =
   | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
+  | { kind: 'subagent'; name: string; label: string }
   | null;
 
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
@@ -152,6 +151,7 @@ function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string 
     case 'model': return 'Model picker ›';
     case 'changelog': return 'Changelog ›';
     case 'takes': return 'Takes ›';
+    case 'subagent': return 'Subagent ›';
     case 'history': return 'Prompt history ›';
   }
 }
@@ -199,13 +199,11 @@ export function ChatApp(props: ChatAppOpts) {
 
 function ChatScene({
   client: initialClient,
-  hydrateHistory,
   onExit,
   onClientChange,
   workspaceSource: workspaceSourceInput,
   onWorkspaceSelect,
   onNewAgent,
-  profileMutations: suppliedProfileMutations,
   hubData,
   readHub,
 }: ChatAppOpts) {
@@ -250,6 +248,18 @@ function ChatScene({
     hubData ? { identity: `${initialClient.mode}:${initialClient.agentName}`, data: hubData } : null,
   );
 
+  const [hubSelectedId, setHubSelectedIdState] = useState<string | null>(null);
+  // Keys between renders read the latest choice.
+  const hubSelectedRef = useRef<string | null>(null);
+
+  const setHubSelectedId = useCallback((id: string | null) => {
+    hubSelectedRef.current = id;
+    setHubSelectedIdState(id);
+  }, []);
+
+  const [subagentChat, setSubagentChat] = useState<TuiSubagentChat | null>(null);
+  const subagentScrollRef = useRef<ScrollBoxRenderable | null>(null);
+
   const [draft, setDraft] = useState('');
   const draftValueRef = useRef('');
   const projectRoot = useMemo(() => canonicalProjectRoot(), []);
@@ -270,15 +280,8 @@ function ChatScene({
 
   // Editor-wrapped visual rows, not typed lines.
   const [composerRows, setComposerRows] = useState(1);
-  // Drafts are kept per conversation.
   const draftsRef = useRef(new Map<string, string>());
   const [inputState, setInputState] = useState(initialInputState);
-
-  const profileMutations = suppliedProfileMutations ?? {
-    setModel: (spec: string) => setModelPreference(client, spec),
-    setReasoningEffort: (effort: ReasoningEffort) =>
-      setReasoningEffortPreference(client, effort),
-  };
 
   const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
   const [toolDetailsExpanded, setToolDetailsExpanded] = useState(false);
@@ -319,6 +322,8 @@ function ChatScene({
   const hubRefreshTaskRef = useRef<Promise<void> | null>(null);
   const connectionTaskRef = useRef<Promise<void> | null>(null);
   const metadataTaskRef = useRef<Promise<void> | null>(null);
+  const rosterTaskRef = useRef<Promise<void> | null>(null);
+  const subagentTaskRef = useRef<Promise<void> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
@@ -645,8 +650,10 @@ function ChatScene({
           : []),
       ]);
       setClient(candidate);
+      setReady(true);
       onClientChange?.(candidate);
       candidate = null;
+      selectionPendingRef.current = false;
 
       try {
         await previous.close();
@@ -677,7 +684,6 @@ function ChatScene({
 
       setReady(true);
       addError({ cause: error });
-    } finally {
       selectionPendingRef.current = false;
     }
   }, [addError, addMessage, client, onClientChange, onWorkspaceSelect, setInputText, stream]);
@@ -746,10 +752,24 @@ function ChatScene({
     return () => { abort.abort(); };
   }, [client, hub, readHub]);
 
+  // Only the open agent's roster is read.
+  const shownRoster = useMemo(() => {
+    const subordinates = hub?.identity === `${client.mode}:${client.agentName}` ? hub.data.subordinates : [];
+
+    if (subordinates.length === 0) return roster;
+
+    const items = roster.page.items.map((item) => (item.name === client.agentName && item.mode === client.mode
+      ? { ...item, subordinates }
+      : item));
+
+    return { ...roster, page: { ...roster.page, items } };
+  }, [client, hub, roster]);
+
   const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
     ...hub.data,
     agents: buildAgentHubEntries({
       items: roster.page.items,
+      subordinates: hub.identity === `${client.mode}:${client.agentName}` ? hub.data.subordinates : [],
       current: { name: client.agentName, mode: client.mode },
       currentEntry: {
         ...(hub.data.agents[0] ?? { kind: 'main' as const }),
@@ -762,6 +782,51 @@ function ChatScene({
       projectRoot,
     }),
   }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot]);
+
+  useEffect(() => {
+    if (hubView !== 'agents') return;
+    const identity = `${client.mode}:${client.agentName}`;
+    let live = true;
+
+    rosterTaskRef.current = (async () => {
+      const read = await readRoster(client);
+
+      if (!live) return;
+
+      setHub((current) => (current?.identity === identity
+        ? { ...current, data: { agents: current.data.agents, profile: current.data.profile, ...read } }
+        : current));
+    })();
+
+    return () => { live = false; };
+  }, [client, hubView]);
+
+  const openSubagent = useCallback((entry: TuiAgentHubEntry) => {
+    const name = entry.path?.at(-1);
+
+    if (name !== undefined) setActiveSurface({ kind: 'subagent', name, label: entry.label });
+  }, []);
+
+  const subagentSurface = activeSurface?.kind === 'subagent' ? activeSurface : null;
+
+  useEffect(() => {
+    if (subagentSurface === null) return;
+    const { name, label } = subagentSurface;
+    let live = true;
+    setSubagentChat({ name, label, messages: null, error: null });
+
+    subagentTaskRef.current = (async () => {
+      try {
+        const conversation = await readSubagentConversation(client, name);
+
+        if (live) setSubagentChat({ name, label, messages: conversation, error: null });
+      } catch (cause) {
+        if (live) setSubagentChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain({ cause })}` });
+      }
+    })();
+
+    return () => { live = false; };
+  }, [client, subagentSurface]);
 
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
@@ -802,7 +867,7 @@ function ChatScene({
     setActiveSurface(null);
 
     try {
-      const result = await profileMutations.setModel(model.spec);
+      const result = await client.setModel(model.spec);
       setModelSpec(result.spec);
       addMessage({ role: 'system', content: `Model: ${result.spec}` });
     } catch (err) {
@@ -862,12 +927,12 @@ function ChatScene({
 
   const selectReasoningEffort = useCallback(async (chosen: ReasoningEffort) => {
     try {
-      await profileMutations.setReasoningEffort(chosen);
+      await client.setReasoningEffort(chosen);
       setStatus((value) => value === null ? value : { ...value, reasoningEffort: chosen });
     } catch (cause) {
       addError({ cause });
     }
-  }, [addError, profileMutations]);
+  }, [addError, client]);
 
   const applySlashOutcome = useCallback(async (outcome: SlashOutcome) => {
     switch (outcome.kind) {
@@ -949,6 +1014,7 @@ function ChatScene({
           model: 'Model selection cancelled.',
           changelog: 'Changelog closed. Everything kept.',
           takes: 'Takes closed. The answered take stays.',
+          subagent: 'Subagent conversation closed.',
         } satisfies Record<NonNullable<ActiveSurface>['kind'], string>;
 
         setActiveSurface(null);
@@ -1315,7 +1381,7 @@ function ChatScene({
     let settled = false;
     task = (async () => {
       try {
-        if (hydrateHistory && !skipHydrationRef.current) {
+        if (!skipHydrationRef.current) {
           try {
             const history = await client.history();
 
@@ -1375,7 +1441,7 @@ function ChatScene({
       abort.abort();
       unsubscribe();
     };
-  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent, hydrateHistory]);
+  }, [addError, addMessage, client, deviceConnect.offerIfUnconnected, handleClientEvent]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -1472,30 +1538,37 @@ function ChatScene({
   useEffect(() => {
     if (!rendererInstance?.root) return;
     let copied = false;
+
+    const copySelection = () => {
+      if (!rendererInstance.hasSelection) {
+        copied = false;
+
+        return;
+      }
+
+      if (copied) return;
+      const selection = rendererInstance.getSelection();
+
+      if (!selection) return;
+      const parts: string[] = [];
+
+      for (const r of selection.selectedRenderables ?? []) {
+        const text = r.getSelectedText();
+
+        if (text) parts.push(text);
+      }
+
+      const text = parts.join('\n').trim();
+
+      if (text) {
+        rendererInstance.copyToClipboardOSC52(text);
+        copied = true;
+      }
+    };
+
     rendererInstance.root.onMouseUp = () => {
       setTimeout(() => {
-        if (!rendererInstance.hasSelection) { copied = false;
-
- return; }
-
-        if (copied) return;
-        const selection = rendererInstance.getSelection();
-
-        if (!selection) return;
-        const parts: string[] = [];
-
-        for (const r of selection.selectedRenderables ?? []) {
-          const text = r.getSelectedText();
-
-          if (text) parts.push(text);
-        }
-
-        const text = parts.join('\n').trim();
-
-        if (text) {
-          rendererInstance.copyToClipboardOSC52(text);
-          copied = true;
-        }
+        copySelection();
 
         // A click moves native focus off the input; reclaim it.
         if (inputShouldFocusRef.current) inputRef.current?.focus();
@@ -1530,6 +1603,11 @@ function ChatScene({
     rememberScroll: scrollAnchor.remember,
     createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
     bumpModelRequest: () => { modelRequestRef.current += 1; },
+    hubAgents: hubLive?.agents ?? [],
+    hubSelectedId: () => hubSelectedRef.current,
+    setHubSelectedId,
+    openSubagent,
+    subagentHistory: () => subagentScrollRef.current,
   };
 
   const composerKeys: ComposerKeyDeps = {
@@ -1617,11 +1695,7 @@ function ChatScene({
     return handleSubmit(expandPastes(value));
   }, [draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
 
-  const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
-    && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
-    && !isProcessing && !/\s/.test(draft.trimStart())
-    ? filterCommands(commands, draft)
-    : [];
+  const commandHints = !overlayOpen && !isProcessing && !/\s/.test(draft.trimStart()) ? filterCommands(commands, draft) : [];
 
   const inputFocused = ready && !overlayOpen;
   const contextTokens = estimateContextTokens(messages);
@@ -1688,6 +1762,21 @@ function ChatScene({
       );
     }
 
+    if (subagentSurface !== null) {
+      const shown = subagentChat?.name === subagentSurface.name
+        ? subagentChat
+        : { name: subagentSurface.name, label: subagentSurface.label, messages: null, error: null };
+
+      return (
+        <SubagentChatOverlay
+          chat={shown}
+          width={sceneWidth}
+          height={height}
+          scrollRef={(value) => { subagentScrollRef.current = value; }}
+        />
+      );
+    }
+
     if (hubView !== null && hubLive !== undefined) {
       return (
         <HubOverlay
@@ -1695,6 +1784,7 @@ function ChatScene({
           data={hubLive}
           width={sceneWidth}
           height={height}
+          selectedAgentId={hubSelectedId}
           {...(onNewAgent !== undefined ? { newAgentHint: keybindings.hint('hub.new-agent') } : {})}
         />
       );
@@ -1767,7 +1857,7 @@ function ChatScene({
   return (
     <TuiShell
       scene="chat"
-      roster={roster}
+      roster={shownRoster}
       currentAgent={{ name: client.agentName, mode: client.mode }}
       navigationOverlayOpen={navigationOpen}
       onNavigationOverlayChange={setNavigationOpen}
@@ -1917,7 +2007,7 @@ function welcomeMessage(agentName: string): DisplayMessage {
 
 async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   const workspace = client.agentName;
-  const [envelope, status] = await Promise.all([loadActiveProfile(), client.status()]);
+  const [envelope, status, roster] = await Promise.all([loadActiveProfile(), client.status(), readRoster(client)]);
   const roles = effectiveRoleCatalog(envelope.catalog);
   const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : DEFAULT_ROLE_ID;
   const tierId = status.tierId && tierIdsOf(envelope.catalog).includes(status.tierId) ? status.tierId : roles[activeRoleId]?.tier ?? 'default';
@@ -1932,6 +2022,7 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
       tierId,
       workspace,
     }],
+    ...roster,
     profile: {
       envelope,
       activeRoleId,
@@ -1940,12 +2031,53 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   };
 }
 
+async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError'>> {
+  try {
+    return { subordinates: await readSubordinates(client) };
+  } catch (cause) {
+    return { subordinates: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause })}` };
+  }
+}
+
+/** Pages arrive newest first. */
+async function readSubagentConversation(client: AgentClient, name: string): Promise<DisplayMessage[]> {
+  const pages: DisplayMessage[][] = [];
+  let cursor: SeekCursor | undefined;
+
+  do {
+    const result = await client.inspectSubordinate({ path: [name], view: 'history', page: cursor === undefined ? {} : { cursor } });
+
+    if (result.view === 'missing') throw new Error(result.error);
+
+    if (result.view !== 'history') throw new Error(`the conversation read answered "${result.view}"`);
+    pages.unshift(result.page.items.map((item) => ({ id: item.id, role: item.role, content: item.content })));
+    cursor = result.page.status === 'more' ? result.page.next : undefined;
+  } while (cursor !== undefined);
+
+  return pages.flat();
+}
+
+async function readSubordinates(client: AgentClient): Promise<TuiSubordinate[]> {
+  const entries: SubordinateRosterEntry[] = [];
+  let cursor: SeekCursor | undefined;
+
+  do {
+    const result = await client.inspectSubordinate({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
+
+    if (result.view !== 'children') break;
+    entries.push(...result.page.items);
+    cursor = result.page.status === 'more' ? result.page.next : undefined;
+  } while (cursor !== undefined);
+
+  return subordinatesFromRoster(entries);
+}
+
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   requireInteractiveTerminal();
   const hubData = opts.hubData ?? await loadHubData(opts.client);
   const renderOptions: ChatAppOpts = { ...opts, hubData };
-  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true, exitSignals: [] });
   const root = createRoot(renderer);
   let currentClient = opts.client;
 
@@ -1966,7 +2098,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     process.exit(0);
   };
 
-  const exit = async () => {
+  const shutDown = async () => {
     try {
       await cleanup();
     } catch (cause) {
@@ -1975,12 +2107,20 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     }
   };
 
+  let exiting: Promise<void> | null = null;
+
+  const exit = () => {
+    exiting ??= shutDown();
+
+    return exiting;
+  };
+
   globalExit = exit;
-  process.on('SIGINT', exit);
+
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, exit);
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 
-  // Keep the process alive
   await new Promise<void>(() => {});
 }
 

@@ -1,18 +1,18 @@
 /** What waits on the owner: instruction files to follow, and commands the gate parked. */
 import { expect } from 'bun:test';
-import { DeferredApprovalStore, SKILLS_DIR } from '@kinu.run/core';
+import { DeferredApprovalStore, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
 import type { SharedCase } from '../cases';
 
 const SKILL = '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n';
 
-const PATH = `${SKILLS_DIR}/focused.md`;
+const PATH = workspaceSkillPath('focused');
 
 export const OWNER_DESK_CASES: readonly SharedCase[] = [
   {
     title: 'an instruction approval binds the bytes the owner read; a revoke keeps the refusal',
     covers: ['readInstructionApproval', 'approveInstruction', 'listInstructionApprovals', 'revokeInstruction'],
     async run({ surface, files }) {
-      await files.mkdir(SKILLS_DIR, { recursive: true });
+      await files.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
       await files.writeFile(PATH, SKILL);
 
       const reviewed = await surface.readInstructionApproval(PATH);

@@ -5,7 +5,7 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import { generateText, streamText, tool, jsonSchema, type ModelMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '@kinu.run/core/obs';
+import { classifyErrorCode, createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { ProviderPacer, type RateLimitRetryOptions } from '@kinu.run/core';
@@ -278,6 +278,34 @@ describe('direct Workers AI binding — a rate limit is waited out, never surren
     expect(response.status).toBe(200);
     expect(runs).toHaveLength(3);
     expect(waits).toEqual([1_000, 1_000]);
+  });
+
+  test('a spent daily allocation (3036) ends the request instead of waiting for tomorrow', async () => {
+    const waits: number[] = [];
+
+    const { fetch, runs } = directFetch(() => (runs.length > 1
+      ? { response: 'OK', usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } }
+      : new Response(JSON.stringify({ errors: [{ code: 3036, message: 'You have used up your daily free allocation of 10,000 neurons.' }] }), {
+        status: 429, headers: { 'content-type': 'application/json' },
+      })), {
+      sleep: async (ms) => { waits.push(ms); },
+      pacer: new ProviderPacer({ sleep: async () => {} }),
+      warn: () => {},
+    });
+
+    const failure = await (async () => {
+      try {
+        await fetch(ENDPOINT, { method: 'POST', body: chatBody() });
+      } catch (error) {
+        return error;
+      }
+
+      return new Error('a spent daily allocation was retried into a success');
+    })();
+
+    expect(runs).toHaveLength(1);
+    expect(waits).toEqual([]);
+    expect(classifyErrorCode({ cause: failure })).toBe('budget');
   });
 });
 

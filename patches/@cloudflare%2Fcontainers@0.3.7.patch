@@ -1,27 +1,114 @@
 diff --git a/dist/lib/container.js b/dist/lib/container.js
-index b7567e230..f6132d575 100644
+index b7567e2..999dbdd 100644
 --- a/dist/lib/container.js
 +++ b/dist/lib/container.js
-@@ -581,8 +581,9 @@ export class Container extends DurableObject {
+@@ -82,19 +82,29 @@ function getExitCodeFromError(error) {
+ /**
+  * Combines the existing user-defined signal with a signal that aborts after the timeout specified by waitInterval
+  */
++/**
++ * The caller clears the timer once its operation settles. A timer left pending
++ * falls due later, maybe while a start block holds the input gate, and workerd
++ * then holds every timer set after it until the block ends.
++ */
+ function addTimeoutSignal(existingSignal, timeoutMs) {
+     const controller = new AbortController();
+     // Forward existing signal abort
+     if (existingSignal?.aborted) {
+         controller.abort();
+-        return controller.signal;
++        return { signal: controller.signal, clear: () => { } };
+     }
+-    existingSignal?.addEventListener('abort', () => controller.abort());
++    const forward = () => controller.abort();
++    existingSignal?.addEventListener('abort', forward);
+     // Add timeout
+     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
++    const clear = () => {
++        clearTimeout(timeoutId);
++        existingSignal?.removeEventListener('abort', forward);
++    };
+     // Clean up timeout if signal is aborted early
+-    controller.signal.addEventListener('abort', () => clearTimeout(timeoutId));
+-    return controller.signal;
++    controller.signal.addEventListener('abort', clear);
++    return { signal: controller.signal, clear };
+ }
+ // ==== Glob helpers ====
+ /**
+@@ -581,7 +591,8 @@ export class Container extends DurableObject {
          this.setupMonitorCallbacks();
          // TODO: We should consider an onHealthy callback
          await this.ctx.blockConcurrencyWhile(async () => {
 -            await this.onStart();
 +            await this.state.setHealthy();
++            await this.callOnStart();
          });
-+        await this.onStart();
      }
      async startAndWaitForPorts(portsOrArgs, cancellationOptions, startOptions) {
-         // Parse arguments to handle different overload signatures
-@@ -632,8 +633,10 @@ export class Container extends DurableObject {
+@@ -632,7 +643,7 @@ export class Container extends DurableObject {
          await this.ctx.blockConcurrencyWhile(async () => {
              // All ports are ready
              await this.state.setHealthy();
 -            await this.onStart();
++            await this.callOnStart();
          });
-+        // RPC replies need input delivery. Application readiness remains held
-+        // by the awaited hook, never by a block that prevents its own reply.
-+        await this.onStart();
      }
      /**
-      *
+@@ -660,8 +671,13 @@ export class Container extends DurableObject {
+         // Try to connect to the port multiple times
+         for (let i = 0; i < tries; i++) {
+             try {
+-                const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
+-                await tcpPort.fetch(`http://${this.pingEndpoint}`, { signal: combinedSignal });
++                const ping = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
++                try {
++                    await tcpPort.fetch(`http://${this.pingEndpoint}`, { signal: ping.signal });
++                }
++                finally {
++                    ping.clear();
++                }
+                 // Successfully connected to this port
+                 break;
+             }
+@@ -728,6 +744,24 @@ export class Container extends DurableObject {
+     onStart() {
+         // Default implementation does nothing
+     }
++    /**
++     * Runs `onStart` inside the start block. A subclass that owns container
++     * connections overrides this to open them inside the block: a WebSocket
++     * delivers its messages under the input gate it was accepted under.
++     *
++     * workerd fires timers in due order, each under the input gate it was set
++     * under, so a timer set outside the block that falls due inside it holds
++     * every later timer until the block ends. The alarm loop's wait is such a
++     * timer; end it here, as a container exit does, and the loop re-arms.
++     */
++    callOnStart() {
++        if (this.timeout) {
++            clearTimeout(this.timeout);
++            this.timeout = undefined;
++            this.resolve?.();
++        }
++        return this.onStart();
++    }
+     /**
+      * Lifecycle method called when container shuts down
+      * Override this method in subclasses to handle Container stopped events
+@@ -1386,8 +1420,13 @@ export class Container extends DurableObject {
+             // TODO: Make this the port I'm trying to get!
+             const port = this.container.getTcpPort(waitOptions.portToCheck);
+             try {
+-                const combinedSignal = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
+-                await port.fetch('http://containerstarthealthcheck', { signal: combinedSignal });
++                const ping = addTimeoutSignal(waitOptions.signal, PING_TIMEOUT_MS);
++                try {
++                    await port.fetch('http://containerstarthealthcheck', { signal: ping.signal });
++                }
++                finally {
++                    ping.clear();
++                }
+                 return tries;
+             }
+             catch (error) {

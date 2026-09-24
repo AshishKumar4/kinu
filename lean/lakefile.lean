@@ -8,4 +8,4 @@ package kinu where
 
 @[default_target]
 lean_lib Kinu where
-  roots := #[`Kinu, `Kinu.Axioms]
+  roots := #[`Kinu, `Kinu.Axioms, `Kinu.Refine]

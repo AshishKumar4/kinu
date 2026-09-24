@@ -19,10 +19,12 @@ import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
-import type {
-  FloorBreach, MeasuredValue, ParetoAxis, ParetoEvidence, PublicationState,
+import {
+  FloorBreachSchema, MeasuredValueSchema,
+  type FloorBreach, type MeasuredValue, type ParetoAxis, type ParetoEvidence, type PublicationState,
 } from './objective';
 import type { SwarmProfileSnapshot } from '../profiles';
+import type { SwarmCandidate } from './swarm';
 
 /**
  * What scoring one child produced. Declared here because the settled arms are the persisted row;
@@ -70,38 +72,42 @@ export type ChildOutcome =
 /** Every arm a node can be recorded under. */
 export type SettledChildOutcome = Exclude<ChildOutcome, { kind: 'instrument-faulted' }>;
 
+/** One reading of a recorded outcome for scoring, re-entry and harvest; sealed ranks nothing. */
+export function outcomeFacts(outcome: SettledChildOutcome | null): Omit<SwarmCandidate, 'id' | 'artifact'> & {
+  readonly breach: FloorBreach | null;
+  readonly rank: number | null;
+  readonly ensemble: number;
+} {
+  const score = outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null;
+
+  return {
+    measured: outcome?.kind === 'sealed' || outcome?.kind === 'scored' ? outcome.measurement : null,
+    pareto: outcome?.kind === 'pareto' ? outcome.evidence : null,
+    unmeasurable: outcome?.kind === 'unmeasurable' ? outcome.detail : null,
+    incomplete: outcome?.kind === 'incomplete' ? outcome.detail : null,
+    score,
+    witnessFound: outcome?.kind === 'sealed' || outcome?.kind === 'scored' || outcome?.kind === 'unmeasurable'
+      ? outcome.witnessFound ?? null
+      : null,
+    breach: outcome?.kind === 'sealed' ? outcome.breach : null,
+    rank: outcome?.kind === 'scored' ? outcome.measurement.value : score,
+    ensemble: outcome?.kind === 'judged' ? outcome.ensemble : 0,
+  };
+}
+
 /**
  * What the engine recorded about one node that `search_nodes` cannot answer. `aggregated` is the
  * DAG's dependency edges (*Merge-back*'s order), distinct from `parent_id`.
  */
 export interface SwarmNodeRecord {
-  /** Null when the `score` axis measures nothing, distinct from an outcome with no number. */
+  /** Null when the `score` axis measures nothing, distinct from an outcome with no number.
+   *  `search_node_scores` reads its `score` in SQL. */
   readonly outcome: SettledChildOutcome | null;
   readonly conclusion: string | null;
   readonly aggregated: readonly string[];
   /** Null where the provider reported nothing; not zero. */
   readonly tokens: number | null;
 }
-
-const MeasuredValueSchema: v.GenericSchema<MeasuredValue> = v.object({
-  kind: v.literal('measured'),
-  value: v.number(),
-  detail: v.string(),
-  measured: v.optional(v.record(v.string(), v.number())),
-  perInstance: v.optional(v.record(v.string(), v.number())),
-});
-
-const FloorBreachSchema: v.GenericSchema<FloorBreach> = v.object({
-  floor: v.object({
-    value: v.number(),
-    proof: v.string(),
-    kind: v.picklist(['certificate', 'adversary', 'physical']),
-    bestKnownHonest: v.number(),
-  }),
-  measured: MeasuredValueSchema,
-  margin: v.number(),
-  hypotheses: v.tuple([v.literal('floor_wrong'), v.literal('verifier_gameable')]),
-});
 
 /** Stamped into every record envelope; an unknown version refuses by name. */
 export const RECORD_SCHEMA_VERSION = 1;
@@ -556,18 +562,9 @@ export function harvestSwarm(deps: {
     const artifact = row.observation.trim();
 
     if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;
+    const { score, breach, witnessFound } = outcomeFacts(outcome);
     candidates.push({
-      nodeId: row.id,
-      depth: row.depth,
-      artifact,
-      score: outcome?.kind === 'scored' || outcome?.kind === 'judged' ? outcome.score : null,
-      outcome: outcome?.kind ?? 'unrecorded',
-      breach: outcome?.kind === 'sealed' ? outcome.breach : null,
-      witnessFound: outcome?.kind === 'scored'
-        || outcome?.kind === 'sealed'
-        || outcome?.kind === 'unmeasurable'
-        ? outcome.witnessFound ?? null
-        : null,
+      nodeId: row.id, depth: row.depth, artifact, score, outcome: outcome?.kind ?? 'unrecorded', breach, witnessFound,
     });
   }
 
@@ -594,7 +591,7 @@ export function harvestSwarm(deps: {
   const publication: SwarmHarvest['publication'] = firstBreach === null
     ? { state: { kind: 'open' }, caveat: null }
     : {
-        state: { kind: 'sealed', breach: firstBreach, clearedBy: null },
+        state: { kind: 'sealed', breach: firstBreach },
         caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
       };
 

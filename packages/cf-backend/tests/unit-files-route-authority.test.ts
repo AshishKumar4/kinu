@@ -36,7 +36,7 @@ const DEVICE_FILE = `${DEVICE_HOME}/notes.md`;
 
 const PC_FILE = `/pc/ashish@studio${DEVICE_FILE}`;
 
-const WORKSPACE_FILE = '/home/user/report.bin';
+const WORKSPACE_FILE = '/home/main/report.bin';
 
 /** `which` and the exec ack are consent-free hub bookkeeping; counting them would make every refusal look like a leak. */
 const FILE_METHODS = {

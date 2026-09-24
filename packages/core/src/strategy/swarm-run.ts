@@ -556,7 +556,7 @@ export async function runSwarm(
         : expansions.filter((other) => other.id !== expansion.id);
 
       const scoringRefusal = await scoreExpansion({
-        expansion, siblings, measures, verifier, witnessVerifier, pareto, ctx, measured, baseline,
+        expansion, siblings, measures, verifier, witnessVerifier, pareto, ctx, measured, identity, baseline,
         judgeSamples, resolved, rt: deps.rt, mode: deps.mode, languages, sql, rootId,
         candidates, spentBy, nodes, log, searchLedger, ledgerEpoch, rankDirection,
         state: scoringState,

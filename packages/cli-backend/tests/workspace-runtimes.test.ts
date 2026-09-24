@@ -73,10 +73,10 @@ describe('workspace runtime provisioning', () => {
     const workspace = open(dbPath());
 
     // Present before any command runs: provisioning happens on the workspace-open path.
-    expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes')).toBe(false);
+    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes')).toBe(false);
     expect(await workspace.shell.exec('python3 --version')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
-    expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/bash')).toBe(false);
+    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
+    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes/bash')).toBe(false);
   });
 
   test('a runtime a previous session installed survives a reopen', async () => {

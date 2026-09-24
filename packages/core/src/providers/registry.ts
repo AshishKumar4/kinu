@@ -45,10 +45,10 @@ export interface ProviderRegistry {
 }
 
 /** Id for a failure of the dynamic source itself. */
-export const CATALOG_SOURCE_ID = 'catalog';
+const CATALOG_SOURCE_ID = 'catalog';
 
 /** The whole cause chain, never empty. */
-export function providerFailureReason({ error }: { error: unknown }): string {
+function providerFailureReason({ error }: { error: unknown }): string {
   return renderThrownChain({ cause: error }).trim() || 'unknown error';
 }
 

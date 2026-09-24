@@ -11,7 +11,7 @@ import {
   type MctsProgress,
 } from '../src/hooks/use-kinu';
 import { explorationForkTree } from '@kinu.run/core';
-import { pruneSlateReloads } from '../src/components/surfaces/presence';
+import { pruneSlateReloads } from '@kinu.run/core';
 import type { ForkNode } from '@kinu.run/core';
 import {
   activateMctsProgressActor,
@@ -106,6 +106,7 @@ function mctsProgress(
       depth: 0,
       visits: 1,
       value: 0.5,
+      own_score: 0.5,
       status: 'open',
       action: 'investigate',
       task: `Task for ${rootId}`,

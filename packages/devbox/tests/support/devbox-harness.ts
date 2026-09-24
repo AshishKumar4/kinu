@@ -5,8 +5,12 @@ import { mock } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 
-import { describeThrown } from '../../src/lifecycle';
-import type { StoredValue } from '../../src/storage';
+import { snapshotChainStorage } from '../../src/snapshot-chain';
+import { DEVBOX_RUNTIME_DIR, type StoredValue } from '../../src/storage';
+import {
+  DEVBOX_SYNC_HANDLER, DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
+  syncWorker, type SyncAnswer,
+} from '../../src/sync';
 import { sessionShellRefusal } from './session-shell';
 
 /** Models `@cloudflare/sandbox` errors: `code` is a getter on an unexported `SandboxError` class,
@@ -43,45 +47,12 @@ export function gate(): Gate {
   };
 }
 
-/** Uses the SDK's own status vocabulary: `isProcessLive` reads `status`, and
- *  `waitForRunnerExit` reads the exit code a settled row carries. */
+/** Uses the SDK's own status vocabulary: `isProcessLive` reads `status`. */
 export interface FakeProcessRow {
   readonly id: string;
   readonly pid: number;
   readonly status: string;
   readonly command: string;
-  readonly exitCode?: number;
-}
-
-export type LiveProcess = FakeProcessRow & {
-  getLogs(): Promise<{ stdout: string; stderr: string }>;
-};
-
-/** The box's argv split back into words, plus the control snapshot written to `--control`.
- *  Only `action` and `resultPath` are read by the fake; runners read the rest via `runnerOption`. */
-export interface RunnerInvocation {
-  readonly action: string;
-  readonly resultPath: string | undefined;
-  readonly control: string | undefined;
-  readonly argv: readonly string[];
-}
-
-export function runnerOption(argv: readonly string[], name: string): string | undefined {
-  const index = argv.indexOf(`--${name}`);
-
-  return index === -1 ? undefined : argv[index + 1];
-}
-
-/** Parses only `'word'` with `'\''` for a literal quote: the sole quoting `runnerCommand`
- *  and the journal daemon's argv produce. */
-function quotedWords(command: string): string[] {
-  const words: string[] = [];
-
-  for (const match of command.matchAll(/'((?:[^']|'\\'')*)'/g)) {
-    words.push((match[1] ?? '').replaceAll("'\\''", "'"));
-  }
-
-  return words;
 }
 
 /** The chain's builders quote every path with `shellPath`, so single-quoted segments name
@@ -325,22 +296,19 @@ export class FakeSandbox {
   readonly sequence: string[] = [];
   /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
   readonly s3fsMounts = new Set<string>();
+  /** Hosts the box bound to a named outbound handler (`setOutboundByHost`). */
+  readonly outboundHosts = new Map<string, string>();
+  /** The image's sync program, as `# devbox-sync-start-v1` leaves it; the heartbeat reads it. */
+  syncRunning = false;
+  /** The box's sync host, which `harness` wires to the box it built; the flush reaches it. */
+  syncHost: ((body: string) => Promise<SyncAnswer>) | undefined = undefined;
   /** s3fs runs under exactly these options; an option absent here is s3fs's own default. */
   readonly s3fsOptionsByMount = new Map<string, readonly string[]>();
-  /** While a holder is present, unmount answers EBUSY as real fusermount does for open files;
-   *  the stop's holder-kill clears it unless `survives`, `session` (never signalled) or `cwdOnly`. */
-  workdirHolder: {
-    readonly pid: number;
-    readonly comm: string;
-    readonly survives?: boolean;
-    readonly session?: boolean;
-    /** Holds the mount by cwd, invisible to an fd-only scan. Named, never signalled (container
-     *  server's own children): ordinary unmount stays refused; only a lazy detach releases it. */
-    readonly cwdOnly?: boolean;
-  } | undefined;
   /** The SDK default session starts with `cwd: "/workspace"` (the mount point) and `unmountBucket`
    *  runs in it without its own cwd; a shell standing on the mount holds it, so unmount can EBUSY. */
-  sessionCwd = '/workspace';
+  /** Each session shell's directory: `/workspace` at start, a command's `cwd` while it runs, a bare
+   *  `cd` after (0.12.9 container server). */
+  readonly sessionCwds = new Map<string, string>([['default', '/workspace']]);
   /** A fresh container holds only the image's dirs; `/var/tmp/devbox` is made by whatever runs
    *  first. Commands earn dirs by `mkdir -p`; a cwd absent here refuses chdir, as the container does. */
   readonly directories = new Set<string>(IMAGE_DIRECTORIES);
@@ -354,12 +322,8 @@ export class FakeSandbox {
   /** A standing platform refusal: every `start` is refused while set; never consumed.
    *  Models capacity exhaustion, which persists across retries, unlike the one-shot faults. */
   containerUnavailable: Error | undefined;
-  providerStatus: 'running' | 'healthy' | 'stopped' | 'stopping' = 'healthy';
   readonly getFaults: Error[] = [];
   readonly killFaults: Error[] = [];
-  /** A kill failure for one id, consulted before the order-based queue: a stop kills several,
-   *  so a queued fault lands on whichever kill runs first. */
-  readonly killFaultsById = new Map<string, Error>();
   readonly stampFaults: (Error | undefined)[] = [];
   startGate: Gate | undefined;
   /** Parks the container's own admission probe, `start()`, awaited before a generation is captured.
@@ -379,25 +343,15 @@ export class FakeSandbox {
   bootId: string | undefined;
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
-  /** False models a journal daemon that starts but whose mount never lands,
-   *  the case the readiness probe exists to catch. */
-  journalMounts = true;
-  /** False: socket lost while daemon and mount stand; process table and `/proc/mounts` read
-   *  healthy, only the socket probe sees it. A daemon start resets this (fresh socket). */
-  journalSocketUp = true;
-  /** Answers `startProcess` for `--action` commands: reply goes to {@link files}, a throw fails
-   *  the row with exit 1 and stderr. Unset, the runner stays `running` like an unanswered one. */
-  runner: ((invocation: RunnerInvocation) => Promise<string> | string) | undefined;
   readonly files = new Map<string, string>();
-  /** Lets a fixture hand accepted workload bytes to the runner's journal model;
-   *  unset, the write is still kept in {@link files}. */
-  fileWritten: ((path: string, content: string) => Promise<void> | void) | undefined;
   /** Recorded by the box's own `fuse-overlayfs` command and reported via `cat /proc/mounts`,
    *  which `isOverlayMounted` reads; termination clears them with the local filesystem (P1). */
   readonly overlayMounts = new Set<string>();
   /** Recorded when the box's own `squashfuse` command runs and read back via `/proc/mounts`;
    *  a stop clears them with the local filesystem, like `overlayMounts`. */
   readonly layerMounts = new Set<string>();
+  /** Each layer mount's `fsname`: the archive it serves, which `/proc/mounts` reports as its source. */
+  readonly #layerSources = new Map<string, string>();
   /** Must be the bucket `objectFacts` reads and `chainStoreRoot` derives, so a `dd` through the
    *  store mount lands where the next attach looks. Unset, no chain command reaches the store. */
   chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string;
@@ -411,15 +365,8 @@ export class FakeSandbox {
    *  caller holds still matches `checkChanges` until such a write. */
   changeVersion = 0;
 
-  /** The fake's process table is the container's, so this reads the same fact the daemon's
-   *  supervisor reads, not a flag a test sets beside it. */
-  journalRunning(): boolean {
-    return [...this.processes.values()].some(
-      (row) => row.command.includes('kinu-journal-daemon') && row.status === 'running',
-    );
-  }
-  /** An explicit platform input block. The patched SDK's container hook does
-   *  not hold one; delivered operations join Devbox readiness themselves. */
+  /** The SDK's start block (D26): set while the start hook runs, so `deliver` holds every
+   *  operation that arrives during the restore until the hook settles. */
   initGate: Promise<void> | undefined;
 
   constructor(readonly ctx: DurableObjectState) {
@@ -438,20 +385,42 @@ export class FakeSandbox {
   onStart(): Promise<void> {
     return Promise.resolve();
   }
-  /** A missing `cwd` is refused: the session shell chdirs first, so the command never runs.
-   *  An accepted `cwd` stays: one persistent session shell serves every command. */
+  /** A missing `cwd` is refused: the session shell chdirs first, so the command never runs. */
   #chdir(cwd: string | undefined): { stdout: string; stderr: string; exitCode: number } | null {
-    if (cwd === undefined) return null;
+    if (cwd === undefined || this.directories.has(cwd)) return null;
+    this.sequence.push(`chdirRefused:${cwd}`);
 
-    if (!this.directories.has(cwd)) {
-      this.sequence.push(`chdirRefused:${cwd}`);
+    return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
+  }
 
-      return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
+  async #execInSession(
+    session: string,
+    command: string,
+    options?: { readonly cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const refusedChdir = this.#chdir(options?.cwd);
+
+    if (refusedChdir !== null) return refusedChdir;
+    const resting = this.sessionCwds.get(session) ?? '/workspace';
+    const moved = options?.cwd === undefined ? /^cd '([^']*)'$/.exec(command)?.[1] : undefined;
+
+    if (moved !== undefined) {
+      const refusedMove = this.#chdir(moved);
+
+      if (refusedMove !== null) return refusedMove;
+      this.sessionCwds.set(session, moved);
+      this.sequence.push(`cd:${session}:${moved}`);
+
+      return { stdout: '', stderr: '', exitCode: 0 };
     }
 
-    this.sessionCwd = cwd;
+    this.sessionCwds.set(session, options?.cwd ?? resting);
 
-    return null;
+    try {
+      return await this.#execIn(command, options);
+    } finally {
+      this.sessionCwds.set(session, resting);
+    }
   }
 
   /** `mkdir -p` creates what it names: how a container earns the directories
@@ -480,29 +449,10 @@ export class FakeSandbox {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  /** Models the real holder release: stdout names who still holds after signalling, not before.
-   *  Matched on the `/proc/$pid/fd` scan, not the command prefix, which an ancestor walk changes. */
+  /** The holder release as a container with no process on the mount answers it. Matched on the
+   *  `/proc/$pid/fd` scan, not the command prefix, which an ancestor walk changes. */
   #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
-    if (!command.includes('/proc/$pid/fd')) return null;
-    const holder = this.workdirHolder;
-
-    if (holder === undefined) return { stdout: 'none', stderr: '', exitCode: 0 };
-    const named = `${String(holder.pid)}:${holder.comm}`;
-
-    if (holder.session === true) {
-      return { stdout: named, stderr: `not signalled, this session's own: ${named}`, exitCode: 0 };
-    }
-
-    if (holder.cwdOnly === true) {
-      return { stdout: named, stderr: `not signalled, cwd-only holders: ${named}`, exitCode: 0 };
-    }
-
-    if (holder.survives) return { stdout: named, stderr: `signalling: ${named}`, exitCode: 0 };
-    // Signalled, and it died: the re-scan at the end of the real command finds
-    // nothing, so this answers `none` rather than the name it started with.
-    this.workdirHolder = undefined;
-
-    return { stdout: 'none', stderr: `signalling: ${named}`, exitCode: 0 };
+    return command.includes('/proc/$pid/fd') ? { stdout: 'none', stderr: '', exitCode: 0 } : null;
   }
 
   /** Answers snapshot-chain commands as the container does; matched on the binary each runs,
@@ -516,6 +466,7 @@ export class FakeSandbox {
       if (mounted && this.#mountIsBusy(unmount)) return { stdout: '', stderr: `fusermount3: failed to unmount ${unmount}: Device or resource busy`, exitCode: 1 };
       this.overlayMounts.delete(unmount);
       this.layerMounts.delete(unmount);
+      this.#layerSources.delete(unmount);
       this.s3fsMounts.delete(unmount);
 
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -532,9 +483,11 @@ export class FakeSandbox {
 
     if (command.includes('/usr/local/bin/devbox-squashfuse')) {
       const quoted = quotedSegments(command.slice(command.indexOf('/usr/local/bin/devbox-squashfuse')));
-      const mountPoint = quoted[1];
+      const [source, mountPoint] = quoted;
 
       if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
+
+      if (mountPoint !== undefined && source !== undefined) this.#layerSources.set(mountPoint, source);
 
       return { stdout: '', stderr: '', exitCode: 0 };
     }
@@ -559,16 +512,8 @@ export class FakeSandbox {
 
     if (command.includes('conv=fsync')) return this.#execPublish(command);
 
-    // Content-hashed, not metadata-hashed: this stand-in keeps no inodes or times, and a
-    // fingerprint moving without a byte change would commit where the box skips.
     if (command.startsWith('bash -o pipefail -c ') && command.includes('/var/tmp/devbox/upper')) {
-      // The shipped caller fingerprints only the overlay upper, inside nested quoting,
-      // so the path is matched rather than parsed out of the quoting.
-      return {
-        stdout: createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex'),
-        stderr: '',
-        exitCode: 0,
-      };
+      return { stdout: this.#upperMark(), stderr: '', exitCode: 0 };
     }
 
     if (command.includes('then seen=1; break; fi')) {
@@ -657,7 +602,43 @@ export class FakeSandbox {
     return { stdout: `0 ${String(bytes.byteLength)} "etag"`, stderr: '', exitCode: 0 };
   }
 
+  /** Lists every path the box's `mountBucket` holds, as `/proc/mounts` does in a container,
+   *  so a strategy's read-back observes the fake's changes, not test-staged state. */
+  #procMounts(): string {
+    const lines = [
+      'proc /proc proc rw,relatime 0 0',
+      ...[...this.s3fsMounts].map(
+        (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
+      ),
+      // Present until a stop takes the FUSE daemons down; the fstype must match the container's
+      // because `isOverlayMounted` reads it while `findMount` reads the mount point.
+      ...[...this.overlayMounts].map(
+        (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
+      ),
+      ...[...this.layerMounts].map(
+        (path) => `${this.#layerSources.get(path) ?? 'squashfuse'} ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
+      ),
+    ];
+
+    return `${lines.join('\n')}\n`;
+  }
+
+  /** Content-hashed, not metadata-hashed: this stand-in keeps no inodes or times, and a
+   *  fingerprint moving without a byte change would commit where the box skips. The shipped
+   *  caller fingerprints only the overlay upper. */
+  #upperMark(): string {
+    return createHash('sha256').update(this.synthesizeArchive('/var/tmp/devbox/upper')).digest('hex');
+  }
+
   async exec(
+    command: string,
+    options?: { readonly cwd?: string },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return await this.#execInSession('default', command, options);
+  }
+
+  /** A command in no session shell, as the image's program runs its own. */
+  async #execIn(
     command: string,
     options?: { readonly cwd?: string },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -673,11 +654,12 @@ export class FakeSandbox {
     if (refusedChdir !== null) return refusedChdir;
     this.#recordDirectories(command);
     this.execs.push(command);
-    // The scan gets a fixed name, not its first word: ordering assertions read this row
-    // and must not silently stop matching when the template's first word changes.
+    const marker = /^# (devbox-[\w-]+)\n/.exec(command)?.[1];
+    // The scan and the marked programs get fixed names, not their first word: ordering assertions
+    // read these rows and must not silently stop matching when a template's first word changes.
     this.sequence.push(command.includes('/proc/$pid/fd')
       ? 'exec:release-workdir-holders'
-      : `exec:${command.split(' ')[0]}`);
+      : `exec:${marker ?? command.split(' ')[0]}`);
     const held = this.execGate;
 
     if (held !== undefined) {
@@ -688,33 +670,9 @@ export class FakeSandbox {
 
     if (this.execDelayMs > 0) await scheduler.wait(this.execDelayMs);
 
-    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
-      return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
-    }
+    const answered = await this.#execBoxProgram(command);
 
-    if (command === 'cat /proc/mounts') {
-      // Lists every path the box's `mountBucket` holds, as `/proc/mounts` does in a container,
-      // so a strategy's read-back observes the fake's changes, not test-staged state.
-      const lines = [
-        'proc /proc proc rw,relatime 0 0',
-        ...[...this.s3fsMounts].map(
-          (path) => `s3fs ${path} fuse.s3fs rw,nosuid,nodev,relatime,user_id=0 0 0`,
-        ),
-        ...(this.journalRunning() && this.journalMounts
-          ? ['kinu-journal /workspace fuse.kinu-journal rw,nosuid,nodev,relatime 0 0']
-          : []),
-        // Present until a stop takes the FUSE daemons down; the fstype must match the container's
-        // because `isOverlayMounted` reads it while `findMount` reads the mount point.
-        ...[...this.overlayMounts].map(
-          (path) => `fuse-overlayfs ${path} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
-        ),
-        ...[...this.layerMounts].map(
-          (path) => `squashfuse ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
-        ),
-      ];
-
-      return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
-    }
+    if (answered !== null) return answered;
 
     if (command.startsWith('sync')) {
       // `sync -f <dir> && sync; echo $?`: the fake holds no pages to flush, so it answers
@@ -725,14 +683,6 @@ export class FakeSandbox {
     if (command.startsWith('test -e')) {
       // The fake holds no filesystem, so `test -e` answers yes for any path a strategy asks about.
       return { stdout: 'yes', stderr: '', exitCode: 0 };
-    }
-
-    // Answers the journal socket probe as the container does: exit is 0 either way (`|| echo no`),
-    // so readers must take the stdout words; an exit-code read cannot see a lost socket.
-    if (command.startsWith('test -S ')) {
-      const serving = this.journalRunning() && this.journalMounts && this.journalSocketUp;
-
-      return { stdout: serving ? 'yes\n' : 'no\n', stderr: '', exitCode: 0 };
     }
 
     const removal = this.#execRemoval(command);
@@ -764,12 +714,10 @@ export class FakeSandbox {
       if (bootId !== null) this.bootId = bootId[1];
     }
 
-    // Lazy detach (`MNT_DETACH`) removes the mount even while a holder lives, so it clears
-    // both the mount and the holder row; the holder process survives without a mount.
+    // Lazy detach (`MNT_DETACH`) removes the mount even while something holds it.
     if (command.includes('fusermount -uz')) {
       this.sequence.push('exec:lazy-unmount');
       this.s3fsMounts.delete('/workspace');
-      this.workdirHolder = undefined;
 
       return { stdout: '', stderr: '', exitCode: 0 };
     }
@@ -778,23 +726,82 @@ export class FakeSandbox {
 
     if (release !== null) return release;
 
-    // The readiness probe waits inside the container, so one exec answers it; never answer per attempt.
-    // Matched on the line it prints: a fake keyed on anything else answers '' to a reshaped command.
-    if (command.includes('echo "socket=$socket mount=$mount"')) {
-      const serving = this.journalRunning() && this.journalMounts;
-
-      return {
-        stdout: `socket=${serving ? 'yes' : 'no'} mount=${serving ? 'yes' : 'no'}\n`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-
     const chain = this.#execChainCommand(command);
 
     if (chain !== null) return chain;
 
     return { stdout: '', stderr: '', exitCode: 0 };
+  }
+
+  /** The box's own programs and probes, answered from this container's state; null for any other. */
+  async #execBoxProgram(command: string): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
+    if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
+
+    if (command.startsWith("cat /tmp/devbox-boot-id 2>/dev/null; printf '\\0';")) {
+      return { stdout: `${this.bootId ?? ''}\0${this.syncRunning ? 'alive' : ''}`, stderr: '', exitCode: 0 };
+    }
+
+    if (command === 'cat /proc/mounts') return { stdout: this.#procMounts(), stderr: '', exitCode: 0 };
+
+    if (command.startsWith('# devbox-tick-probe-v1\n')) {
+      return { stdout: `${this.#procMounts()}\0${this.#upperMark()}`, stderr: '', exitCode: 0 };
+    }
+
+    if (command.startsWith('# devbox-sync-flush-v1\n')) return await this.#flushSync(command);
+
+    if (command.startsWith('# devbox-sync-start-v1\n') || command.startsWith('# devbox-sync-stop-v1\n')) {
+      this.syncRunning = command.startsWith('# devbox-sync-start-v1\n');
+
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
+    const counted = /^find '([^']*)' -mindepth 1 -maxdepth 1 \| wc -l$/.exec(command);
+
+    if (counted === null) return null;
+    // The fake's own listing: `this` is the box, whose `listFiles` is a caller's route and stamps the lease.
+    const { count } = await FakeSandbox.prototype.listFiles.call(this, counted[1] ?? '');
+
+    return { stdout: `${String(count)}\n`, stderr: '', exitCode: 0 };
+  }
+
+  /** The flush as the image's program takes it: the same chain checkpoint, run on this container's
+   *  own shell, asking the box through `devboxSync` for what the container cannot reach (D30). */
+  async #flushSync(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const flush = /DEVBOX_SYNC_CONFIG=(\S+) bun \S+ flush (\w+)/.exec(command);
+
+    if (flush === null) return { stdout: '', stderr: `unparsed flush: ${command}`, exitCode: 2 };
+    const host = this.syncHost;
+
+    if (host === undefined) return { stdout: '', stderr: 'no box serves this container\'s sync', exitCode: 2 };
+    const generation = async (): Promise<string | undefined> => await Promise.resolve(this.bootId);
+
+    const transport = async (body: string): Promise<{ status: number; text: string }> => {
+      // `.internal` resolves nowhere: without the box's binding the request never leaves the container.
+      if (this.outboundHosts.get(DEVBOX_SYNC_HOST) !== DEVBOX_SYNC_HANDLER) throw new Error('Unable to connect. Is the computer able to access the url?');
+      const answer = await host(body);
+
+      return { status: answer.status, text: answer.body };
+    };
+
+    const worker = syncWorker(snapshotChainStorage(containerChainPorts(decodeSyncConfig(flush[1]), {
+      exec: async (inner) => await this.#execIn(inner, { cwd: DEVBOX_RUNTIME_DIR }),
+      call: syncCaller(transport, generation),
+      generation,
+      log: () => undefined,
+    })));
+
+    return { stdout: JSON.stringify(await worker.run(parseCheckpointKind(flush[2]))), stderr: '', exitCode: 0 };
+  }
+
+  /** A named session runs its commands in its own shell. */
+  async getSession(id: string): Promise<{ readonly id: string; exec: FakeSandbox['exec'] }> {
+    return await Promise.resolve({ id, exec: async (command, options) => await this.#execInSession(id, command, options) });
+  }
+
+  async setOutboundByHost(host: string, method: string): Promise<void> {
+    this.outboundHosts.set(host, method);
+
+    await Promise.resolve();
   }
 
   async mountBucket(
@@ -823,8 +830,7 @@ export class FakeSandbox {
   }
 
   #mountIsBusy(path: string): boolean {
-    return this.sessionCwd === path || this.sessionCwd.startsWith(`${path}/`)
-      || (path === '/workspace' && this.workdirHolder !== undefined);
+    return [...this.sessionCwds.values()].some((cwd) => cwd === path || cwd.startsWith(`${path}/`));
   }
 
   async renameFile(oldPath: string, newPath: string, sessionId?: string): Promise<FileOperation> {
@@ -850,20 +856,10 @@ export class FakeSandbox {
     return request;
   }
 
-  async getState() {
-    return { status: this.providerStatus, lastChange: 0 };
-  }
-
-  /** A process as the SDK hands it back: the row plus its own `getLogs`, which
-   *  the box reads when a runner exits non-zero. */
-  #live(row: FakeProcessRow): LiveProcess {
-    return { ...row, getLogs: async () => await this.getProcessLogs(row.id) };
-  }
-
   async startProcess(
     command: string,
     options: { cwd?: string; processId?: string },
-  ): Promise<LiveProcess> {
+  ): Promise<FakeProcessRow> {
     this.starts.push({ command, cwd: options.cwd, processId: options.processId });
     const held = this.startGate;
 
@@ -884,32 +880,9 @@ export class FakeSandbox {
 
     this.processes.set(id, row);
 
-    // A fresh journal daemon brings a fresh control socket, the way the mount
-    // line and the readiness probe already treat a fresh daemon as serving.
-    if (command.includes('kinu-journal-daemon')) this.journalSocketUp = true;
-
     if (fault !== undefined) throw fault.error;
-    const argv = quotedWords(command);
-    const action = runnerOption(argv, 'action');
 
-    if (action === undefined || this.runner === undefined) return this.#live(row);
-    // The runner settles before start replies: a real shape and the only deterministic one, so
-    // the first exit poll finds a settled row with the reply at its path.
-    const resultPath = runnerOption(argv, 'result');
-    const controlPath = runnerOption(argv, 'control');
-
-    try {
-      const control = controlPath === undefined ? undefined : this.files.get(controlPath);
-      const reply = await this.runner({ action, resultPath, control, argv });
-
-      if (resultPath !== undefined) this.files.set(resultPath, reply);
-      this.processes.set(id, { ...row, status: 'completed', exitCode: 0 });
-    } catch (cause) {
-      this.processLogs.set(id, { stdout: '', stderr: describeThrown({ cause }) });
-      this.processes.set(id, { ...row, status: 'failed', exitCode: 1 });
-    }
-
-    return this.#live(row);
+    return row;
   }
 
   async readFile(path: string): Promise<{ content: string }> {
@@ -929,8 +902,6 @@ export class FakeSandbox {
     if (path.startsWith('/workspace/')) {
       this.files.set(`/var/tmp/devbox/upper/${path.slice('/workspace/'.length)}`, content);
     }
-
-    await this.fileWritten?.(path, content);
 
     return { success: true, path, timestamp: new Date().toISOString() };
   }
@@ -1019,38 +990,22 @@ export class FakeSandbox {
     return out;
   }
 
-  /** Models the platform reclaiming an instance mid-poll: the process record still answers
-   *  `running` after its reporter is gone, so the poll must observe the container stop. */
-  readonly stopsContainerOnPoll = new Set<string>();
-
-  getProcess(id: string): Promise<LiveProcess | null> {
+  getProcess(id: string): Promise<FakeProcessRow | null> {
     const fault = this.getFaults.shift();
 
     if (fault !== undefined) return Promise.reject(fault);
 
-    if (this.stopsContainerOnPoll.has(id)) this.running.running = false;
     const row = this.processes.get(id);
 
-    return Promise.resolve(row === undefined ? null : this.#live(row));
+    return Promise.resolve(row ?? null);
   }
 
   listProcesses(): Promise<readonly FakeProcessRow[]> {
     return Promise.resolve([...this.processes.values()]);
   }
 
-  /** Tests stage a daemon's own output here to assert failures report its words,
-   *  not a guessed "the mount did not land". */
-  readonly processLogs = new Map<string, { stdout: string; stderr: string }>();
-
-  getProcessLogs(id: string): Promise<{ stdout: string; stderr: string }> {
-    return Promise.resolve(this.processLogs.get(id) ?? { stdout: '', stderr: '' });
-  }
-
   killProcess(id: string): Promise<void> {
     this.kills.push(id);
-    const targeted = this.killFaultsById.get(id);
-
-    if (targeted !== undefined) return Promise.reject(targeted);
     const fault = this.killFaults.shift();
 
     if (fault !== undefined) return Promise.reject(fault);
@@ -1090,18 +1045,13 @@ export class FakeSandbox {
     this.bootId = undefined;
     this.stagedArchives.clear();
     this.processes.clear();
-    this.processLogs.clear();
     this.overlayMounts.clear();
     this.layerMounts.clear();
+    this.#layerSources.clear();
     this.s3fsMounts.clear();
-    this.workdirHolder = undefined;
-    this.sessionCwd = '/workspace';
+    this.sessionCwds.clear();
+    this.sessionCwds.set('default', '/workspace');
     this.changeVersion = 0;
-    this.journalSocketUp = false;
-  }
-
-  async containerFetch(): Promise<Response> {
-    return new Response();
   }
 
   /** Starting a running container is a health probe, not a new instance: it adds no start,
@@ -1141,10 +1091,16 @@ export class FakeSandbox {
       await beforeHook.promise;
     }
 
-    // Models the platform: an adoption RPC inside the SDK hook block never gets its reply,
-    // measured 2026-09-13. The storage block is released first; readiness singleflight gates callers.
-    await this.onStart();
+    // The patched SDK runs the hook inside its start block, which holds the input gate until the
+    // hook settles (D26); the hook's own container calls answer on a connection opened inside it.
+    const hook = this.onStart();
+    this.initGate = Promise.allSettled([hook]).then(() => undefined);
 
+    try {
+      await hook;
+    } finally {
+      this.initGate = undefined;
+    }
   }
 
   /** Proves the control listener or a requested app port before opening onStart (D1);
@@ -1234,28 +1190,8 @@ export class FakeSandbox {
   }
 }
 
-/** A real empty async iterator keeps the mocked SDK `streamFile` contract faithful; stream
- *  decoding is left to the SDK boundary tests that own it. */
-function emptyFileChunks() {
-  const metadata = {
-    mimeType: 'application/octet-stream',
-    size: 0,
-    isBinary: true,
-    encoding: 'base64' as const,
-  };
-
-  return {
-    next: async () => ({ done: true as const, value: metadata }),
-    return: async () => ({ done: true as const, value: metadata }),
-    [Symbol.asyncIterator]() {
-      return this;
-    },
-  };
-}
-
 await mock.module('@cloudflare/sandbox', () => ({
   Sandbox: FakeSandbox,
-  streamFile: emptyFileChunks,
 }));
 
 // A real timer on purpose: the probe loop and the stop-transition wait are under test,
@@ -1352,7 +1288,12 @@ export interface Harness<Box> {
 
 /** `id` defaults to `TEST_BOX_ID`; pass `deriveBoxId` output to model production identity.
  *  Starts stopped; a running-but-unsettled fixture is refused by readiness until the hook runs. */
-export function harness<Box>(
+/** The box side of the container's sync: its outbound handler's target (D30). */
+interface SyncServing {
+  devboxSync(body: string): Promise<SyncAnswer>;
+}
+
+export function harness<Box extends SyncServing>(
   Box: new (state: BoxState, env: TestEnv) => Box,
   id: string = TEST_BOX_ID,
 ): Harness<Box> {
@@ -1372,6 +1313,8 @@ export function harness<Box>(
   if (container === undefined) {
     throw new Error('the substituted Sandbox base class did not run its constructor');
   }
+
+  container.syncHost = async (body) => await box.devboxSync(body);
 
   // Set after construction because the class reads `ctx.container` only at call
   // time, and the fake owns the flag it flips on stop and destroy.

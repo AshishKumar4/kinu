@@ -7,7 +7,7 @@ import { makeSql, makeExecRaw } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import {
   bestInCell, initExplorationRecordsTable, objectiveIdOf, recordExploration, recordsFor,
-  verifierDigestOf,
+  sealRecords, verifierDigestOf,
   type ExplorationWrite,
 } from '../src/strategy/records';
 import {
@@ -64,17 +64,7 @@ const BREACH: FloorBreach = {
   hypotheses: ['floor_wrong', 'verifier_gameable'],
 };
 
-const SEALED: PublicationState = { kind: 'sealed', breach: BREACH, clearedBy: null };
-
-const REDERIVED: PublicationState = {
-  kind: 'sealed',
-  breach: BREACH,
-  clearedBy: {
-    floor: CORRECTED,
-    adjudication: 'the bound counted one token per call where a call touches two; H1 held',
-    at: 1_700_000_000_000,
-  },
-};
+const SEALED: PublicationState = { kind: 'sealed', breach: BREACH };
 
 function write(over?: Partial<ExplorationWrite>): ExplorationWrite {
   return {
@@ -107,12 +97,14 @@ describe('the seal gates the write, checked in the writer and not assumed of the
     expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(0);
   });
 
-  test('a seal is not a boolean: a RECORDED re-derivation publishes again', () => {
-    // The one edge out of a seal; a writer testing `kind === 'sealed'` would refuse this row forever.
+  test('a re-derived floor publishes under its own key while the breached floor stays sealed', () => {
     const { sql, actor } = store();
-    const verdict = recordExploration(sql, actor, { publication: REDERIVED, write: write() });
-    expect(verdict.kind).toBe('recorded');
-    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
+    sealRecords(sql, actor, { identity: CHEAPER, breach: BREACH, at: 0 });
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write() }))
+      .toEqual({ kind: 'refused', cause: 'sealed' });
+    expect(recordExploration(sql, actor, { publication: OPEN, write: write({ floor: CORRECTED }) }).kind)
+      .toBe('recorded');
+    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: CORRECTED })).toHaveLength(1);
   });
 
   test('an open run writes, so the two tests above are not passing on a store that never writes', () => {
@@ -529,10 +521,4 @@ describe('the seal gates the archive too, and it is checked BEFORE the cell is r
     expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
   });
 
-  test('a recorded re-derivation admits again, so the gate is the verdict and not the tag', () => {
-    const { sql, actor } = store();
-    expect(admitToArchive(sql, actor, { publication: REDERIVED, write: cellWrite(), novelty: 0.5 }).kind)
-      .toBe('recorded');
-    expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(1);
-  });
 });

@@ -22,9 +22,13 @@ the same bytes. The execution plane is an `ExecutionRouter`
 dispatches to whichever other environment is asked for. Commands run
 target-native, not emulated. Every other environment keeps its own filesystem
 at native paths, reached through its namespace. The workspace view mounts a
-live device under `/pc/<name>` and the container under `/sandbox`
-(`packages/core/src/vfs/mounts.ts`); a mount reads through that executor's own
-files and never copies them into the workspace.
+live device under `/pc/<name>`, the container under `/sandbox`, the owner's
+Drive under `/shared` and the actor's own context under `/context`
+(`packages/core/src/vfs/mounts.ts`); a mount reads through that plane's own
+files and never copies them into the workspace. The workspace shell serves the
+same table: Nimbus binds every process through a filesystem authority that
+routes a mount path there (`packages/core/src/vfs/shell-mounts.ts`), so the
+shell, the `file` tool and the Files tab list and read the same paths.
 
 ```mermaid
 graph TB
@@ -553,16 +557,17 @@ Two policies apply to every provider:
   unreadable 503 propagates. Without `Retry-After` it draws full-jitter waits
   under a ceiling doubling from 2 s to a 60 s cap (both unmeasured). Bodies that
   cannot be replayed pass untouched. Beside the retry, `ProviderPacer`
-  (`pacing.ts`) spaces request starts per host and holds the lane only while
-  awaiting headers, so a request sleeping out a `Retry-After` frees capacity for
-  a sibling, and streaming bodies stay untouched. Waits are declared before they
-  are taken, so siblings join one cooldown. The AI SDK transport retry stays at
+  (`pacing.ts`) holds each request to a host behind the cooldown a sibling
+  declared. Waits are declared before they are taken, so siblings join one
+  cooldown. The pacer counts no requests: Workers bounds connections per
+  invocation, and an isolate-wide count hung the requests queued on it (1101s
+  on kinu.run, 2026-09-23). The AI SDK transport retry stays at
   its default of 2, stated as `PROVIDER_SDK_RETRIES` so a vendor update cannot
   move it silently.
 
 Reasoning effort is set by the user. `/effort` in chat or
 `kinu effort <name> [level]` stores `reasoning_effort` in the workspace
-`agent_config`; `~/.kinu/config.json` holds the CLI-side default.
+`agent_config`; a workspace without its own runs the profile's default tier.
 `packages/core/src/strategy/effort.ts` maps the level onto each family's native
 option: `reasoningEffort` for Workers AI, OpenAI-shaped providers, and
 OpenRouter, and `effort` for Anthropic (levels Anthropic does not take are not

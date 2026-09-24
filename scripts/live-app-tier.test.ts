@@ -1,14 +1,11 @@
 /**
- * The live-app e2e suite: the real product in a real browser, ONE suite with
- * a parameterised origin.
+ * The live-app e2e suite: the real product in a real browser, before publish.
  *
- * `KINU_E2E_ORIGIN` points the rows at the product to drive:
- *   unset (the pre-publish run) — the suite boots the local dev server itself
- *     (vite dev = real Worker in workerd, real Durable Objects, real client)
- *     through live-app-harness, plus a local scripted model the workspaces are
- *     configured to use, so the visual rows have live content to render.
- *   an https origin (the comprehensive run) — the same three rows run against
- *     that deployment with no second harness and no second copy of any row.
+ * The suite boots the local dev server itself (vite dev = real Worker in
+ * workerd, real Durable Objects, real client) through live-app-harness, plus a
+ * local scripted model the workspaces are configured to use, so the visual rows
+ * have live content to render. The rows a deployment must also pass are the
+ * product flows (`scripts/product-flows.ts`), which run against both origins.
  *
  * SCOPE. This suite owns only what a rendered document can prove: geometry,
  * node identity, and what the DOM shows after a real interaction. The
@@ -31,10 +28,16 @@ import { hostedActorSocketPath } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
-import { withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
+import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
-  FALLBACK_ANSWER, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  planWalkthrough, registerScriptedModel, startScriptedModel,
+  CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, NEW_AGENT, OPEN_NAMES,
+  openInspector, pressUntil, settled,
+  type ControlAttempt,
+} from './product-flows';
+import {
+  FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_SILENCE_MS, PACED_TURN_ANSWER, PACED_TURN_ASK,
+  SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  keptTabProbe, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
 } from './scripted-model';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
@@ -58,12 +61,6 @@ async function shoot(page: Page, name: string): Promise<string> {
  *  state too: two runs put both runs' sent messages in one root transcript). */
 const RUN_ID = crypto.randomUUID().slice(0, 8);
 
-/** A desktop viewport for every row: the inspector column, its separator and
- *  the rail lane exist above 900px (`INSPECTOR_WIDE_QUERY`), and every defect
- *  these rows pin is a desktop layout. Puppeteer's own default page is
- *  800x600, where the column is a mobile pane whose geometry means nothing. */
-const DESKTOP = { width: 1440, height: 900 } as const;
-
 async function openWorkspace(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
   const page = await newPage();
 
@@ -79,12 +76,6 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
 
 /** Click the control; an absent control throws, and that is the finding. */
 const ClickScripts = {
-  newAgent: `(() => {
-    const create = [...document.querySelectorAll('nav[aria-label="Workspace agents"] button')]
-      .find((b) => (b.getAttribute('aria-label') ?? '').includes('New agent'));
-    if (create === undefined) throw new Error('no New agent control');
-    create.click();
-  })()`,
   lastAgentTab: `(() => {
     // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
     // the rename editor), so counting links saw one fewer tab than exists and
@@ -201,6 +192,18 @@ function readsBetween(
   return delta;
 }
 
+/** What the chat column drew while the paced turn ran, read every 20 ms. */
+interface LiveIndicatorVerdict {
+  /** How long Stop was offered, first sample to last. */
+  readonly runningMs: number;
+  /** Samples under Stop that drew no live state: a pane saying a turn runs and showing nothing of it. */
+  readonly blank: number;
+  /** The longest unbroken blank stretch, in ms. */
+  readonly longestBlankMs: number;
+  /** Samples under Stop that drew more than one live state. */
+  readonly doubled: number;
+}
+
 interface PanelVerdict {
   readonly nodeSurvives: boolean;
   readonly scrollSurvives: boolean;
@@ -259,14 +262,27 @@ interface StateVerdict {
   readonly foreign: readonly string[];
 }
 
+/** The kept-tab row: every tab the inspector marked, in order, from its first
+ *  resolved tab to the end, and what the product read of the Work tab. */
+interface KeptTabVerdict {
+  /** The marked tab's label at each change, the first entry being the tab the
+   *  panel resolved to. The reader's one click is the only change it asks for. */
+  readonly marks: readonly string[];
+  /** Every Work presence the page's socket read, in order. The row proves
+   *  nothing unless the product read Work as filled and then as empty. */
+  readonly workPresence: readonly boolean[];
+}
+
 interface TierVerdicts {
   bootFailure: string | null;
+  liveIndicator: LiveIndicatorVerdict | null;
   panel: PanelVerdict | null;
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
   stamped: StampedCardVerdict | null;
   walkthrough: WalkthroughVerdict | null;
+  keptTab: KeptTabVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -277,17 +293,10 @@ const StripGeometrySchema = v.object({
 });
 
 const observed: TierVerdicts = {
+  liveIndicator: null,
   bootFailure: null, panel: null, planTabs: null, geometry: null,
-  controls: null, stamped: null, walkthrough: null, state: null,
+  controls: null, stamped: null, walkthrough: null, keptTab: null, state: null,
 };
-
-/** The inspector column, `#inspector` — the id `use-inspector-layout` hands the
- *  panel and which `react-resizable-panels` renders on its element — as a
- *  rounded width; -1 when no such box is in the document at all. */
-const INSPECTOR_WIDTH = `(() => {
-  const panel = document.querySelector('#inspector');
-  return panel === null ? -1 : Math.round(panel.getBoundingClientRect().width);
-})()`;
 
 /** The lane the rail occupies, measured as the space left of the content
  *  column: `main`'s own left edge in the shell's flex row. Read this way on
@@ -299,13 +308,6 @@ const RAIL_LANE = `(() => {
   const content = document.querySelector('main');
   return content === null ? -1 : Math.round(content.getBoundingClientRect().left);
 })()`;
-
-/** The chat column, `#chat` — the id the workspace shell gives that panel. A
- *  live pane there has a composer its socket has enabled; a pane still
- *  connecting renders no composer at all (`WorkspacePage` returns the notice
- *  instead). Scoped on purpose: a textarea in the inspector column answers a
- *  page-wide query and is not a composer. */
-const CHAT_COMPOSER_LIVE = `[...document.querySelectorAll('#chat textarea')].some(t => !t.disabled)`;
 
 /** Which tab of the agent strip is current, by index: 0 is Main, the
  *  subordinates follow in roster order, -1 while none is marked. */
@@ -360,127 +362,83 @@ async function sendInChat(page: Page, text: string): Promise<SendSite> {
   return site;
 }
 
-/** A shut inspector column: the library leaves a 0px box, and a hair of border
- *  or padding still counts as shut. */
-const INSPECTOR_SHUT_PX = 40;
-
 /** A collapsed rail: an icon strip at most. Its open lane is 240px (`w-60`). */
 const RAIL_SHUT_PX = 64;
 
-const OPEN_NAMES = 'show|expand|open';
-
 const SHUT_NAMES = 'hide|collapse|close';
 
-/** The clockless settle after a press: the measured number, equal on two
- *  consecutive animation frames. A control that does nothing settles at the
- *  number it started with, so no deadline is needed to tell an inert control
- *  from a slow one, and a panel that animates is read after it lands. */
-async function settled(page: Page, read: string): Promise<void> {
-  await page.evaluate('window.__liveSettle = undefined');
+/** Every 20 ms from install: whether the chat column offers Stop, and how many live states it draws. A Thinking
+ *  row, a live reasoning label, a caret on text that shows, and running call rows (one state however many run)
+ *  are live states; a hook on an element that draws nothing is none. Held on `window` until read back. On the
+ *  page's own clock: the defect is what the pane draws through a real silence on the model's socket, which no
+ *  fake clock reaches. */
+const INSTALL_LIVE_SAMPLER = `(() => {
+  const samples = [];
+  const started = performance.now();
+  const shown = (el) => el.getClientRects().length > 0;
+  window.__liveSamples = samples;
+  window.__liveSampler = setInterval(() => {
+    const chat = document.querySelector('#chat');
+    if (chat === null) return;
+    const drawn = (kind) => [...chat.querySelectorAll('[data-live-indicator="' + kind + '"]')].filter(shown);
+    const carets = drawn('text').filter((el) => el.innerText.trim() !== '').length;
+    const running = [...chat.querySelectorAll('[data-tool-state="running"]')].some(shown) ? 1 : 0;
+    samples.push({
+      t: Math.round(performance.now() - started),
+      stop: [...chat.querySelectorAll('button[aria-label="Stop this turn"]')].some(shown),
+      states: drawn('thinking').length + drawn('reasoning').length + carets + running,
+    });
+  }, 20);
+})()`;
+
+const READ_LIVE_SAMPLES = `(() => { clearInterval(window.__liveSampler); return window.__liveSamples; })()`;
+
+const LiveSampleSchema = v.object({ t: v.number(), stop: v.boolean(), states: v.number() });
+
+const STOP_OFFERED = `document.querySelector('#chat button[aria-label="Stop this turn"]') !== null`;
+
+/** Row 0: a running turn draws exactly one live state, through the silences a thinking model leaves in its
+ *  stream (`pacedTurn`). */
+async function measureLiveIndicator(newPage: LiveApp['newPage'], origin: string): Promise<LiveIndicatorVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-indicator-${RUN_ID}`, purpose: 'live indicator probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await openWorkspace(newPage, origin, workspace);
+
+  // The create's own first turn ends first, so the paced turn is a turn of its own rather than words steered
+  // into that one.
   await page.waitForFunction(
-    `(() => {
-      const value = ${read};
-      const previous = window.__liveSettle;
-      window.__liveSettle = value;
-      return previous === value;
-    })()`,
-    { polling: 'raf' },
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)}) && !(${STOP_OFFERED})`,
+    { polling: 100 },
   );
-}
+  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await page.evaluate(INSTALL_LIVE_SAMPLER);
+  await sendInChat(page, PACED_TURN_ASK);
+  await page.waitForFunction(
+    `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(PACED_TURN_ANSWER)}) && !(${STOP_OFFERED})`,
+    { polling: 100 },
+  );
 
-/** One press: the accessible name of the control clicked, and the number that
- *  press left behind. */
-interface ControlAttempt {
-  readonly name: string;
-  readonly left: number;
-}
+  const samples = v.parse(v.array(LiveSampleSchema), await page.evaluate(READ_LIVE_SAMPLES));
 
-/** Click the first visible control whose accessible name matches, is not
- *  excluded by `outside`, and has not been tried; '' when the document holds
- *  no such control. Role and NAME only — `aria-label` or `title`, never a
- *  copied sentence. */
-function pressControl(input: {
-  names: string; within: string | null; outside: string | null; tried: readonly string[];
-}): string {
-  const re = new RegExp(input.names, 'iu');
-  const root = input.within === null ? document : document.querySelector(input.within);
+  await shoot(page, 'live-indicator-settled');
+  await page.close();
 
-  if (root === null) return '';
+  const running = samples.filter((sample) => sample.stop);
+  let longestBlankMs = 0;
+  let blankSince: number | null = null;
 
-  const nameOf = (el: Element): string => (el.getAttribute('aria-label') ?? el.getAttribute('title') ?? '').trim();
-  const excluded = input.outside;
-
-  const control = [...root.querySelectorAll('button, [role="button"], [role="separator"]')]
-    .filter((el) => el.getClientRects().length > 0)
-    .filter((el) => excluded === null || el.closest(excluded) === null)
-    .find((el) => re.test(nameOf(el)) && !input.tried.includes(nameOf(el)));
-
-  if (control === undefined) return '';
-
-  if (!(control instanceof HTMLElement)) throw new Error('matched control is not an element');
-
-  control.click();
-
-  return nameOf(control);
-}
-
-interface PressOutcome {
-  readonly attempts: readonly ControlAttempt[];
-  /** The measured number where the pressing stopped. */
-  readonly value: number;
-  readonly reached: boolean;
-}
-
-/** Press matching controls in document order until the measured number is what
- *  `reached` asks for, or until no untried candidate is left. Every name is
- *  tried once, so the loop shrinks its own candidate set and ends on its own.
- *  Escape follows each press: a control that raised a menu must not hide the
- *  next candidate behind it, and what the rows measure is the layout left
- *  standing, not a transient overlay. */
-async function pressUntil(page: Page, input: {
-  readonly names: string;
-  readonly read: string;
-  readonly reached: (value: number) => boolean;
-  readonly within?: string;
-  readonly outside?: string;
-}): Promise<PressOutcome> {
-  const attempts: ControlAttempt[] = [];
-
-  let value = v.parse(v.number(), await page.evaluate(input.read));
-
-  while (!input.reached(value)) {
-    const name = v.parse(v.string(), await page.evaluate(pressControl, {
-      names: input.names,
-      within: input.within ?? null,
-      outside: input.outside ?? null,
-      tried: attempts.map((attempt) => attempt.name),
-    }));
-
-    if (name === '') break;
-
-    await settled(page, input.read);
-    await page.keyboard.press('Escape');
-    await settled(page, input.read);
-
-    value = v.parse(v.number(), await page.evaluate(input.read));
-    attempts.push({ name, left: value });
+  for (const sample of samples) {
+    blankSince = sample.stop && sample.states === 0 ? (blankSince ?? sample.t) : null;
+    longestBlankMs = Math.max(longestBlankMs, blankSince === null ? 0 : sample.t - blankSince);
   }
 
-  return { attempts, value, reached: input.reached(value) };
-}
-
-/** The column starts collapsed on a workspace that holds nothing worth showing
- *  (`decideInspector`), so a row measuring it opens it through the product's
- *  own control first. A column that refuses to open is B8's finding, and
- *  nothing behind it can be measured. */
-async function openInspector(page: Page): Promise<void> {
-  const outcome = await pressUntil(page, {
-    names: OPEN_NAMES, read: INSPECTOR_WIDTH, reached: (width) => width > INSPECTOR_SHUT_PX,
-  });
-
-  if (outcome.reached) return;
-
-  throw new Error(`the inspector column stayed at ${String(outcome.value)}px; tried ${JSON.stringify(outcome.attempts)}`);
+  return {
+    runningMs: (running.at(-1)?.t ?? 0) - (running[0]?.t ?? 0),
+    blank: running.filter((sample) => sample.states === 0).length,
+    longestBlankMs,
+    doubled: running.filter((sample) => sample.states > 1).length,
+  };
 }
 
 /** Row 1 (B6): the right panel keeps its Work, Files and Env state across a
@@ -492,7 +450,7 @@ async function measurePanel(newPage: LiveApp['newPage'], origin: string): Promis
 
   const page = await openWorkspace(newPage, origin, workspace);
 
-  await page.evaluate(ClickScripts.newAgent);
+  await page.evaluate(NEW_AGENT);
   await page.waitForFunction(`${ACTIVE_TAB_INDEX} > 0`, { polling: 100 });
   await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
   await page.evaluate(ClickScripts.mainTab);
@@ -817,7 +775,7 @@ async function measureStampedCard(newPage: LiveApp['newPage'], origin: string): 
   );
   await shoot(page, 'stamp-root-before');
 
-  await page.evaluate(ClickScripts.newAgent);
+  await page.evaluate(NEW_AGENT);
   await page.waitForFunction(
     `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`,
     { polling: 100 },
@@ -891,6 +849,126 @@ async function measureWalkthrough(newPage: LiveApp['newPage'], origin: string): 
   return verdict;
 }
 
+/** The label of the inspector tab marked current, or null while none is. */
+const MARKED_TAB = `(document.querySelector('#inspector .p-tabstrip [aria-current="true"]')?.getAttribute('aria-label') ?? null)`;
+
+/** Record every change of the marked inspector tab from now on. */
+const RECORD_MARKS = `(() => {
+  const marks = [${MARKED_TAB}];
+  window.__keptTabMarks = marks;
+  new MutationObserver(() => {
+    const now = ${MARKED_TAB};
+    if (now !== marks[marks.length - 1]) marks.push(now);
+  }).observe(document.querySelector('#inspector') ?? document.body, {
+    subtree: true, childList: true, attributes: true, attributeFilter: ['aria-current'],
+  });
+})()`;
+
+const RpcAskSchema = v.looseObject({ id: v.string(), method: v.string() });
+
+const RpcAnswerSchema = v.looseObject({ id: v.string(), result: v.optional(v.unknown()) });
+
+/** Work's presence out of either answer that carries it. */
+const PresenceAnswerSchema = v.union([
+  v.pipe(v.looseObject({ work: v.boolean() }), v.transform((answer) => answer.work)),
+  v.pipe(v.looseObject({ tabPresence: v.looseObject({ work: v.boolean() }) }), v.transform((answer) => answer.tabPresence.work)),
+]);
+
+/** Every Work presence the page's socket was answered, in order, off the
+ *  socket itself; `next` settles on the first answer after it is asked that
+ *  matches, so a row waits on the product's own read rather than a clock. */
+interface PresenceWatch {
+  answers(): readonly boolean[];
+  next(work: boolean): Promise<void>;
+  stop(): Promise<void>;
+}
+
+async function watchWorkPresence(page: Page): Promise<PresenceWatch> {
+  const cdp = await page.createCDPSession();
+
+  await cdp.send('Network.enable');
+
+  const asked = new Set<string>();
+  const answers: boolean[] = [];
+  const waiters: { readonly work: boolean; readonly resolve: () => void }[] = [];
+
+  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+    const ask = v.safeParse(RpcAskSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+
+    if (ask.success && (ask.output.method === 'getWorkspaceTabPresence' || ask.output.method === 'getWorkspaceSnapshot')) asked.add(ask.output.id);
+  });
+  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+    const answer = v.safeParse(RpcAnswerSchema, tolerate<unknown>(() => JSON.parse(event.response?.payloadData ?? ''), 'malformed-input'));
+
+    if (!answer.success || !asked.delete(answer.output.id)) return;
+    const presence = v.safeParse(PresenceAnswerSchema, answer.output.result);
+
+    if (!presence.success) return;
+    const work = presence.output;
+    answers.push(work);
+
+    for (const waiter of waiters.splice(0)) {
+      if (waiter.work === work) waiter.resolve();
+      else waiters.push(waiter);
+    }
+  });
+
+  return {
+    answers: () => [...answers],
+    next: (work) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      waiters.push({ work, resolve });
+
+      return promise;
+    },
+    stop: async () => { await cdp.detach(); },
+  };
+}
+
+/** How many times the chat column shows the scripted model's fallback answer. */
+const FALLBACK_SHOWN = `((document.querySelector('#chat')?.textContent ?? '').split(${JSON.stringify(FALLBACK_ANSWER)}).length - 1)`;
+
+/** Row 8: the inspector never moves its selection on its own. In a new
+ *  workspace the panel resolves to its first tab; the first turn saves a note,
+ *  which gives Work content; the reader opens Work; the next turn forgets the
+ *  note, which empties Work under the reader. A third turn is the fence: its
+ *  answer renders after the page has taken in the emptied read, so a move the
+ *  panel made on that read is in the record by then. */
+async function measureKeptTab(newPage: LiveApp['newPage'], origin: string): Promise<KeptTabVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-kept-tab-${RUN_ID}`, purpose: 'kept tab probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await openWorkspace(newPage, origin, workspace);
+  const presence = await watchWorkPresence(page);
+
+  await page.waitForFunction(CHAT_COMPOSER_LIVE, { polling: 100 });
+  await openInspector(page);
+  await page.waitForFunction(`${MARKED_TAB} !== null`, { polling: 100 });
+  await page.evaluate(RECORD_MARKS);
+
+  const filled = presence.next(true);
+  await sendInChat(page, KEPT_TAB_NOTE);
+  await filled;
+  await page.waitForFunction(`document.querySelector('#inspector .p-tabstrip [aria-label="Work"]') !== null`, { polling: 100 });
+  await page.evaluate(`document.querySelector('#inspector .p-tabstrip [aria-label="Work"]').click()`);
+  await page.waitForFunction(`${MARKED_TAB} === 'Work'`, { polling: 100 });
+
+  const emptied = presence.next(false);
+  await sendInChat(page, KEPT_TAB_FORGET);
+  await emptied;
+
+  const shown = v.parse(v.number(), await page.evaluate(FALLBACK_SHOWN));
+  await sendInChat(page, 'Kept-tab probe: the fence.');
+  await page.waitForFunction(`${FALLBACK_SHOWN} > ${String(shown)}`, { polling: 100 });
+
+  const marks = v.parse(v.array(v.nullable(v.string())), await page.evaluate('window.__keptTabMarks'));
+
+  await presence.stop();
+  await page.close();
+
+  return { marks: marks.map((mark) => mark ?? '(none)'), workPresence: presence.answers() };
+}
+
 /** Row 7: the run's own state directory, measured on the LOCAL server in both
  *  modes — the question is what the harness booted on, not what a deployment
  *  holds. The roster read goes through UserDO, so its namespace directory is
@@ -906,13 +984,21 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
   };
 }
 
-/** The staging origin, when the comprehensive run is asked for by name. */
-const stagingOrigin = process.env.KINU_E2E_ORIGIN;
-
 async function run(): Promise<void> {
   const progress = (row: string): void => { process.stderr.write(`live-app-tier: ${row}\n`); };
 
-  const rows = async (newPage: LiveApp['newPage'], origin: string): Promise<void> => {
+  // The script answers the live-indicator row's paced turn, the kept-tab
+  // row's two asks, every row's throwaway turn with prose and the
+  // walkthrough's turns with the plan and the slate — one server, decided per
+  // request.
+  const model = await startScriptedModel((request) => pacedTurn(request) ?? keptTabProbe(request) ?? planWalkthrough(request));
+
+  await withLiveApp(async (app) => {
+    const { newPage, origin } = app;
+
+    await registerScriptedModel(origin, model.port);
+    observed.liveIndicator = await measureLiveIndicator(newPage, origin);
+    progress('live-indicator done');
     progress('panel start');
     observed.panel = await measurePanel(newPage, origin);
     progress('panel done');
@@ -926,38 +1012,13 @@ async function run(): Promise<void> {
     progress('stamped done');
     observed.walkthrough = await measureWalkthrough(newPage, origin);
     progress('walkthrough done');
-  };
-
-  if (stagingOrigin === undefined) {
-    // Pre-publish: boot the product locally, point it at the scripted model,
-    // run. The script answers every row's throwaway turn with prose and the
-    // walkthrough's turns with the plan and the slate — one server, decided
-    // per request.
-    const model = await startScriptedModel(planWalkthrough);
-
-    await withLiveApp(async (app) => {
-      await registerScriptedModel(app.origin, model.port);
-      await rows(app.newPage, app.origin);
-      observed.state = await measureState(app);
-      progress('state done');
-    });
-
-    await model.stop();
-
-    return;
-  }
-
-  // Comprehensive: same rows against the named deployment. The dev identity
-  // there is the deployment's; the rows are the same code.
-  await withLiveApp(async (app) => {
-    const page = await app.newPage();
-
-    await page.goto(stagingOrigin, { waitUntil: 'load' });
-    await rows(app.newPage, stagingOrigin);
+    observed.keptTab = await measureKeptTab(newPage, origin);
+    progress('kept-tab done');
     observed.state = await measureState(app);
-    await page.close();
-    await app.browser.close();
+    progress('state done');
   });
+
+  await model.stop();
 }
 
 beforeAll(async () => {
@@ -1001,6 +1062,20 @@ describe('the right panel keeps its Work, Files and Env state when the chat tab 
 
   test("the '+' tab's own actor socket answered its pane", () => {
     expect(verdictOf(observed.panel, 'panel').agentSocketFrames).toBeGreaterThan(0);
+  });
+});
+
+describe('a running turn draws exactly one live state', () => {
+  test("the pane was sampled through the paced turn's four silences", () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').runningMs).toBeGreaterThanOrEqual(4 * PACED_SILENCE_MS);
+  });
+
+  test('Stop never stands over a pane that draws nothing happening', () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').blank).toBe(0);
+  });
+
+  test('Thinking never stands beside a part that draws itself live', () => {
+    expect(verdictOf(observed.liveIndicator, 'live-indicator').doubled).toBe(0);
   });
 });
 
@@ -1091,6 +1166,20 @@ describe('the plan review flow end to end', () => {
 
   test("the slate that turn wrote stands in the strip under its own title", () => {
     expect(verdictOf(observed.walkthrough, 'walkthrough').stripLabels).toContain(SLATE_TITLE);
+  });
+});
+
+describe('the inspector never moves its selection on its own', () => {
+  test('a new workspace resolves to Files, and the one change after is the reader\'s click', () => {
+    const kept = verdictOf(observed.keptTab, 'kept-tab');
+
+    expect(kept.marks).toEqual(['Files', 'Work']);
+  });
+
+  test('the product read Work filled and then empty, so the emptying was exercised', () => {
+    const kept = verdictOf(observed.keptTab, 'kept-tab');
+
+    expect(kept.workPresence.slice(kept.workPresence.indexOf(true))).toContain(false);
   });
 });
 

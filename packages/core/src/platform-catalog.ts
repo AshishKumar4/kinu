@@ -13,7 +13,7 @@ export type EvidenceLabel =
   | 'speculative';
 
 /** Labels a fault injector may treat as real; `documented` gives a threshold, not the runtime's behaviour at it. */
-export const PROVEN_LABELS: readonly EvidenceLabel[] = [
+const PROVEN_LABELS: readonly EvidenceLabel[] = [
   'proven-by-probe',
   'proven-by-source',
   'observed-in-production',
@@ -1950,8 +1950,8 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-source',
-    provenance: 'node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js:961 DEFAULT_REQUEST_TIMEOUT_MS, @cloudflare/sandbox 0.12.8',
-    date: '2026-08-25',
+    provenance: 'node_modules/@cloudflare/sandbox/dist/sandbox-D0rNqxlr.js:961 DEFAULT_REQUEST_TIMEOUT_MS, @cloudflare/sandbox 0.12.9',
+    date: '2026-09-23',
     trigger: 'one exec-style request still unanswered 120 s after dispatch',
     onBreach: 'the SDK HTTP client abandons the request; the container-side command may keep running',
     observable: [{ context: 'the caller', message: 'Request failed' }],

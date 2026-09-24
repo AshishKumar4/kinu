@@ -114,7 +114,7 @@ interface Observed {
   readonly filesPreviewText: string;
   /** The edit buffer a whole file opens with. */
   readonly filesEditorSeedsFromTheFile: string;
-  /** /home/user rows after renaming SOUL.md → CREDO.md, then after deleting
+  /** /home/main rows after renaming SOUL.md → CREDO.md, then after deleting
    *  AGENTS.md — both against the frame's stateful fixture. */
   readonly filesAfterRename: string[];
   readonly filesAfterDelete: string[];
@@ -131,20 +131,41 @@ interface Observed {
   /** Exploration's run-node rows on the mixed-status run, by node id. */
   readonly runNodes: Record<string, RunNode>;
   readonly toolActivity: {
-    total: number;
-    collapsedRows: number;
-    expandedRows: number;
-    mutationRows: number;
-    compactHeight: number;
-    mutationHeight: number;
-    ground: string;
-    pageGround: string;
-    /** The mode the page actually rendered in, so a colour claim cannot be
-     *  satisfied by the wrong theme. */
-    mode: string | null;
+    /** Call rows drawn before the reader clicks anything, and once the fold's
+     *  control is pressed, each split into reads and everything else. */
+    folded: ToolRows;
+    unfolded: ToolRows;
+    /** The one control standing for the calls a fold holds back, by its words. */
+    foldLabel: string | null;
     /** What the preview card shows while the run is still folded. */
-    collapsedPreview: { text: string | null; height: number; folded: string | null };
+    collapsedPreview: { text: string | null; height: number };
   };
+}
+
+/** The call rows a message draws: how many read, how many did anything else,
+ *  and every row's height, so "the same compact row" is a measurement. */
+interface ToolRows {
+  readonly reads: number;
+  readonly others: number;
+  readonly heights: readonly number[];
+}
+
+/** The call rows on the page now, by the effect each row declares. Runs in
+ *  the page. */
+function toolRows(): ToolRows {
+  const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')];
+
+  return {
+    reads: rows.filter((row) => row.dataset.toolEffect === 'read').length,
+    others: rows.filter((row) => row.dataset.toolEffect !== 'read').length,
+    heights: rows.map((row) => Math.round(row.getBoundingClientRect().height)),
+  };
+}
+
+/** A fold's control, found by what it says: the only button whose words are a
+ *  count of calls held back. Runs in the page. */
+function foldControl(): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll('button')].find((button) => /^\d+ more$/u.test((button.textContent ?? '').trim()));
 }
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
@@ -343,10 +364,6 @@ async function run(): Promise<Observed> {
 
     const tools = await newPage();
     await tools.setViewport({ width: 1280, height: 1600 });
-    // `theme` is the key the pre-paint script in gallery.html reads (hooks/
-    // use-theme.ts MODE_KEY). Seeding any other name leaves the page in the
-    // default mode, and the light-mode assertion below then photographs dark.
-    await tools.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'light'); });
     await tools.goto(`${origin}/gallery.html?frame=toolrun`, { waitUntil: 'networkidle0' });
     await tools.reload({ waitUntil: 'networkidle0' });
     // The run's preview call points at the gallery's preview origin, which no
@@ -363,28 +380,11 @@ async function run(): Promise<Observed> {
       await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
     });
     await tools.reload({ waitUntil: 'networkidle0' });
-    await tools.waitForSelector('[data-tool-group]');
+    await tools.waitForSelector('[data-tool-state]');
 
-    const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
-      const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')];
-      const mutation = rows.find((row) => row.dataset.toolEffect === 'mutate');
-      const compact = rows.find((row) => row.dataset.toolEffect === 'read');
-      const standalone = rows.filter((row) => row.closest('[data-tool-group]') === null);
-
-      const foldedCount = [...document.querySelectorAll('[data-tool-group]')]
-        .reduce((count, block) => count + Number(block.getAttribute('data-tool-count')), 0);
-
-      return {
-        total: foldedCount + standalone.length,
-        collapsedRows: rows.length,
-        mutationRows: rows.filter((row) => row.dataset.toolEffect === 'mutate').length,
-        compactHeight: Math.round(compact?.getBoundingClientRect().height ?? 0),
-        mutationHeight: Math.round(mutation?.getBoundingClientRect().height ?? 0),
-        ground: getComputedStyle(group).backgroundColor,
-        pageGround: getComputedStyle(document.body).backgroundColor,
-        mode: document.documentElement.dataset.mode ?? null,
-      };
-    });
+    const folded = await tools.evaluate(toolRows);
+    const fold = await tools.evaluateHandle(foldControl);
+    const foldLabel = await tools.evaluate((button: HTMLButtonElement | undefined) => button?.textContent?.trim() ?? null, fold);
 
     // The preview card, read while the group is still folded: the reader has
     // clicked nothing, and the app the turn started is on screen.
@@ -399,20 +399,19 @@ async function run(): Promise<Observed> {
     const collapsedPreview = {
       text: await previewDocument.$eval('[data-run-preview]', (element) => element.textContent),
       height: Math.round(await previewFrameHandle.evaluate((element) => element.getBoundingClientRect().height)),
-      folded: await tools.$eval('[data-tool-group-toggle]', (element) => element.getAttribute('aria-expanded')),
     };
 
-    await tools.click('[data-tool-group-toggle]');
-    await tools.waitForFunction(
-      () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
-    );
+    // No fold drawn is a finding for the assertions below, never a wait on a
+    // control that is not there.
+    if (foldLabel !== null) {
+      await tools.evaluate((button: HTMLButtonElement | undefined) => { button?.click(); }, fold);
+      await tools.waitForFunction((drawn: number) => document.querySelectorAll('[data-tool-state]').length > drawn,
+        {}, folded.reads + folded.others);
+    }
 
-    const expandedRows = await tools.$$eval(
-      '[data-tool-state]',
-      (rows) => rows.length,
-    );
+    const unfolded = await tools.evaluate(toolRows);
 
-    const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
+    const toolActivity = { folded, unfolded, foldLabel, collapsedPreview };
     await tools.close();
 
     const files = await newPage();
@@ -472,24 +471,24 @@ async function run(): Promise<Observed> {
     await files.click('[data-files-crumb]');
     await waitForRow('sandbox');
     await files.click(rowSelector('home'));
-    await waitForRow('user');
-    await files.click(rowSelector('user'));
+    await waitForRow('main');
+    await files.click(rowSelector('main'));
     await waitForRow('notes.md');
 
     // The parent row goes UP ONE LEVEL — to /home, never straight to the root.
     await files.waitForSelector('[data-files-up-row]');
     await files.click('[data-files-up-row]');
-    await waitForRow('user');
+    await waitForRow('main');
     const filesAfterUp = await crumbs();
 
     // The tree carries FILES, not only folders — a recursion that drops file
     // entries leaves the sidebar unable to reach one. Each level is expanded
     // through its own caret.
-    await files.click(rowSelector('user'));
+    await files.click(rowSelector('main'));
     await waitForRow('notes.md');
     await files.click('[data-files-tree-node="/home"] button');
-    await files.waitForSelector('[data-files-tree-node="/home/user"]');
-    await files.click('[data-files-tree-node="/home/user"] button');
+    await files.waitForSelector('[data-files-tree-node="/home/main"]');
+    await files.click('[data-files-tree-node="/home/main"] button');
     await files.waitForSelector('[data-files-tree-file]');
 
     const treeFileNames = await files.$$eval(
@@ -700,35 +699,35 @@ describe('the streaming turn, as a browser lays it out', () => {
   });
 });
 
-describe('large tool runs, as the activity timeline draws them', () => {
-  test('the default stays bounded and expansion restores every call', () => {
-    const activity = observed.toolActivity;
-    expect(activity.total).toBeGreaterThan(50);
-    expect(activity.collapsedRows).toBeLessThanOrEqual(8);
-    expect(activity.expandedRows).toBe(activity.total);
+describe('large tool runs, as the timeline draws them', () => {
+  // The owner's rule, 2026-09-23: no activity card. Every call is one compact
+  // row; only a run of nine or more adjacent read-only calls folds, and only
+  // its middle, behind one "N more".
+  test('the run of reads keeps its first and last rows and folds the rest behind one count', () => {
+    const { folded, unfolded, foldLabel } = observed.toolActivity;
+
+    expect(folded.reads).toBe(2);
+    expect(foldLabel).toBe(`${String(unfolded.reads - folded.reads)} more`);
   });
 
-  test('mutations remain more prominent than observations', () => {
-    const activity = observed.toolActivity;
-    expect(activity.mutationRows).toBeGreaterThanOrEqual(2);
-    expect(activity.mutationHeight).toBeGreaterThan(activity.compactHeight);
+  test('nothing but reads folds', () => {
+    const { folded, unfolded } = observed.toolActivity;
+
+    expect(folded.others).toBeGreaterThan(0);
+    expect(folded.others).toBe(unfolded.others);
+  });
+
+  test('every call is the same compact row, a change as much as a read', () => {
+    expect(new Set(observed.toolActivity.unfolded.heights).size).toBe(1);
   });
 
   test('the app a mid-run call started is on screen before any click', () => {
-    // The app stays visible before the reader opens the folded reads.
-    const { collapsedPreview } = observed.toolActivity;
-    expect(collapsedPreview.folded).toBe('false');
+    const { collapsedPreview, foldLabel } = observed.toolActivity;
+
+    // Read while the reads were still folded: the reader has clicked nothing.
+    expect(foldLabel).not.toBeNull();
     expect(collapsedPreview.text).toBe('the running app');
     expect(collapsedPreview.height).toBeGreaterThan(200);
-  });
-
-  test('light mode uses a recessed activity ground instead of white cards', () => {
-    const activity = observed.toolActivity;
-    // First: that this page IS light. Without it the two colour assertions
-    // below are satisfied by the default dark theme, where they say nothing.
-    expect(activity.mode).toBe('light');
-    expect(activity.ground).not.toBe(activity.pageGround);
-    expect(activity.ground).not.toBe('rgb(255, 255, 255)');
   });
 });
 
@@ -1833,8 +1832,8 @@ describe('file preview request generation at the actual FilesSurface boundary', 
       const row = (name: string) => `[data-files-entry][title="${name}"]`;
       await page.waitForSelector(row('home'));
       await page.click(row('home'));
-      await page.waitForSelector(row('user'));
-      await page.click(row('user'));
+      await page.waitForSelector(row('main'));
+      await page.click(row('main'));
       await page.waitForSelector(row('notes.md'));
       await page.click(row('notes.md'));
       await page.waitForSelector('[data-files-preview-body] [class*="Loader"], [data-files-preview-body]');
@@ -3448,6 +3447,21 @@ describe('the Work tab reads the workspace, not the actor', () => {
  * border token: the earlier `--c-border-subtle` was never defined, so every
  * tier row drew its border in the text colour.
  */
+/** Opens the themed choice named `label`, reads its options, and closes it; a closed popup stays mounted, hidden. */
+async function choiceOptions(page: Page, label: string): Promise<string[]> {
+  await page.click(`[aria-label="${label}"]`);
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+  const options = await page.$$eval('[role="option"]', (nodes) => nodes
+    .filter((node) => node.checkVisibility())
+    .map((node) => node.textContent?.trim() ?? ''));
+
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => ![...document.querySelectorAll('[role="option"]')].some((node) => node.checkVisibility()));
+
+  return options;
+}
+
 describe('model tiers are the owner\'s to add, and each offers its model\'s own levels', () => {
   test('an added tier renders, takes its model\'s levels, and is offered to roles', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -3456,10 +3470,9 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="New tier id"]');
 
-      const rowBorder = await page.$eval('[aria-label="default reasoning effort"]', (select) => {
-        const row = select.closest('div.grid');
-        const border = row === null ? '' : getComputedStyle(row).borderTopColor;
-        const text = row === null ? '' : getComputedStyle(row).color;
+      const rowBorder = await page.$eval('[data-tier="default"]', (row) => {
+        const border = getComputedStyle(row).borderTopColor;
+        const text = getComputedStyle(row).color;
         const token = getComputedStyle(document.documentElement).getPropertyValue('--c-border').trim();
 
         return { border, text, token };
@@ -3471,35 +3484,29 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       await page.type('[aria-label="New tier id"]', 'review');
       await page.keyboard.press('Enter');
       await page.waitForSelector('[aria-label="review reasoning effort"]');
-      // A new tier starts as a copy of default (a Workers AI model, no levels).
-      expect(await page.$$eval('[aria-label="review reasoning effort"] option', (options) => options.map((option) => option.textContent)))
-        .toEqual(['Model default']);
+      // A new tier starts as a copy of default (a Workers AI model, no levels): nothing to pick.
+      expect(await page.$eval('[aria-label="review reasoning effort"]', (choice) => [
+        choice.textContent, choice.hasAttribute('disabled') || choice.hasAttribute('data-disabled'),
+      ])).toEqual(['Model default', true]);
 
-      // Point it at a model that documents five levels: the select offers
-      // exactly those, in the model's order. The picker is the same combobox
-      // every tier row carries; the new row's is the last one on the page.
-      const pickers = await page.$$('[aria-label$=" reasoning effort"]');
-      const reviewRow = await pickers[pickers.length - 1]?.evaluateHandle((select) => select.closest('div.grid'));
-      const reviewPicker = await reviewRow?.asElement()?.$('input');
-      expect(reviewPicker).toBeDefined();
+      // Point it at a model that documents five levels: the choice offers
+      // exactly those, in the model's order, through the combobox every tier row carries.
+      const reviewPicker = await page.$('[data-tier="review"] input');
+      expect(reviewPicker).not.toBeNull();
       await reviewPicker?.click();
       await reviewPicker?.type('Opus');
       await page.waitForSelector('[role="option"]');
       await page.click('[role="option"]');
       await page.waitForFunction(() => {
-        const select = document.querySelector('[aria-label="review reasoning effort"]');
+        const choice = document.querySelector('[aria-label="review reasoning effort"]');
 
-        return select !== null && select.querySelectorAll('option').length > 1;
+        return choice !== null && !choice.hasAttribute('disabled') && !choice.hasAttribute('data-disabled');
       });
-      expect(await page.$$eval('[aria-label="review reasoning effort"] option', (options) => options.map((option) => option.textContent)))
-        .toEqual(['Model default', 'low', 'medium', 'high', 'xhigh', 'max']);
+      expect(await choiceOptions(page, 'review reasoning effort'))
+        .toEqual(['Model default', 'Low', 'Medium', 'High', 'Extra high', 'Max']);
 
       // The role editor lists the new tier.
-      const roleTiers = await page.$$eval('select', (selects) => selects
-        .map((select) => [...select.options].map((option) => option.value))
-        .find((values) => values.includes('fast') && values.includes('deep')) ?? []);
-
-      expect(roleTiers).toContain('review');
+      expect(await choiceOptions(page, 'Default tier')).toContain('review');
 
       // Removing it is one click, and only a non-builtin offers it.
       expect(await page.$('[aria-label="Remove tier default"]')).toBeNull();

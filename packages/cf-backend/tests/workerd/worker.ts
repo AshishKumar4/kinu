@@ -142,7 +142,7 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
 }
 
 /**
- * `ctx.storage.transactionSync` atomicity, which `receiveSubordinateEvent` and `writeForkSnapshot`
+ * `ctx.storage.transactionSync` atomicity, which `receiveSubordinateEvent` and a fork's publication
  * rely on. The bun arm runs the body directly with no atomicity; `runDirectly` is that control.
  */
 export class TransactionDO extends DurableObject<Cloudflare.Env> {

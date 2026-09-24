@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
-import { generateReleaseSigningKey, signRelease, type SignedRelease } from '@kinu.run/core';
+import { DEVICE_TOKEN_ROTATION, generateReleaseSigningKey, signRelease, type SignedRelease } from '@kinu.run/core';
 import DAEMON_SOURCE from '../../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../../pc-agent/src/pty.js' with { type: 'text' };
@@ -22,6 +22,9 @@ export const DAEMON_FILES = {
 } as const;
 
 export const SOCKET_REPLACED_REASON = 'replaced by a new connection';
+
+/** The token the hub rotates every accepted socket to, as the real hub does on connect. */
+export const ROTATED_TOKEN = `pdt_${'c'.repeat(32)}`;
 
 export const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz`;
 
@@ -55,9 +58,10 @@ export type HubHello = v.InferOutput<typeof HelloSchema>;
 export type HubFrame = v.InferOutput<typeof FrameSchema>;
 
 export type HubPush =
-  | { type: 'ROTATE'; token: string }
+  | { type: typeof DEVICE_TOKEN_ROTATION; token: string }
   | { type: 'UPDATE'; version: string; urls: { tarball: string; checksum: string }; sha256: string; checksums?: Record<string, string>; signature?: string }
-  | { id: string; method: string; params: unknown[] };
+  /** A call, with the owner's Sandbox switch composed the way the hub composes it. */
+  | { id: string; method: string; params: unknown[]; sandbox?: { tier: 'raw' | 'sandboxed'; agentHome: string; roots: string[] } };
 
 export interface HubSocket {
   hello: HubHello;
@@ -177,7 +181,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         sockets.push(socket);
         openSockets.add(ws);
-        ws.send(JSON.stringify({ type: 'ROTATE', token: `pdt_${'c'.repeat(32)}` }));
+        ws.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token: ROTATED_TOKEN }));
 
         const behind = hello.version !== undefined && hello.version !== opts.served;
         const allowed = hello.updateCheck !== false;

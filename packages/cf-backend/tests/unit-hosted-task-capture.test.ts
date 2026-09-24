@@ -35,7 +35,7 @@ test("a delegated turn's tool call reaches the answer its caller gets", async ()
     // One call, then whitespace with no prose: the loop reads a step's text as final only when non-blank,
     // so the answer is synthesised from the capture.
     return step === 0
-      ? toolCallCompletion(run, { tool: 'file', args: { action: 'list', path: '/home/user' } }, 'file_0')
+      ? toolCallCompletion(run, { tool: 'file', args: { action: 'list', path: '/home/main' } }, 'file_0')
       : chatCompletion(run, '  ');
   });
 

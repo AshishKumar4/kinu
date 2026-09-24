@@ -287,7 +287,8 @@ export function sortedByPath(entries: readonly NodeEntry[]): NodeEntry[] {
   return [...entries].sort((a, b) => (a.path < b.path ? -1 : Number(a.path > b.path)));
 }
 
-/** Walked up with `dirname`, not the product's split: an oracle sharing the product's code shares its bugs. */
+/** The directories `mkdir -p` makes for `path`, shallowest first, found by walking `dirname` up
+ *  rather than by splitting, so the model never shares the product's derivation. */
 export function ancestorsOf(path: string): string[] {
   const out: string[] = [];
 

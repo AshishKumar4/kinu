@@ -66,16 +66,22 @@ export interface StartupState {
     delta?: LayerObservation & { id?: string } | null;
     mode?: string;
     rev?: number;
+    /** The upper's fingerprint the last commit recorded: the loss-window driver's commit witness. */
+    upperMark?: string;
     deltaFormat?: 'chunked';
     deltaFallback?: DeltaFallback;
   } | null;
   incidents?: { total?: number; undelivered?: number };
+  /** The box's own container traffic since it activated (D29, D30). */
+  wire?: { sent: number; received: number };
 }
 
 export interface StateReply {
   error?: string;
   extractionAllowed?: boolean;
   storePrefix?: string;
+  /** The box's checkpoint period as the fixture configured it. */
+  checkpointIntervalMs?: number;
   state?: StartupState;
 }
 
@@ -87,15 +93,17 @@ const AttachOutcomeSchema = v.looseObject({ kind: v.string(), detail: v.string()
 
 export const StateReplySchema = v.looseObject({
   error: v.optional(v.string()), extractionAllowed: v.optional(v.boolean()), storePrefix: v.optional(v.string()),
+  checkpointIntervalMs: v.optional(v.number()),
   state: v.optional(v.looseObject({
     restoration: v.optional(v.picklist(['unstarted', 'restoring', 'attached', 'repair', 'unattached'])),
     running: v.optional(v.boolean()), unready: v.optional(v.string()), lastAttach: v.optional(AttachOutcomeSchema), bootId: v.optional(v.string()),
     chain: v.optional(v.nullable(v.looseObject({
       base: v.optional(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) })),
       delta: v.optional(v.nullable(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) }))), mode: v.optional(v.string()), rev: v.optional(v.number()),
-      deltaFormat: v.optional(v.literal('chunked')), deltaFallback: v.optional(DeltaFallbackSchema),
+      upperMark: v.optional(v.string()), deltaFormat: v.optional(v.literal('chunked')), deltaFallback: v.optional(DeltaFallbackSchema),
     }))),
     incidents: v.optional(v.looseObject({ total: v.optional(v.number()), undelivered: v.optional(v.number()) })),
+    wire: v.optional(v.object({ sent: v.number(), received: v.number() })),
   })),
 }) satisfies v.GenericSchema<StateReply>;
 

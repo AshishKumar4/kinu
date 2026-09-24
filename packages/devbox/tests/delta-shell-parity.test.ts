@@ -15,7 +15,6 @@ import {
   buildDeltaStageOps,
   deltaBaseStatCommand,
   deltaBlockHashCommand,
-  deltaBlockHashPlan,
   deltaHashCandidates,
   deltaProbeCommand,
   parseDeltaBaseStat,
@@ -293,9 +292,9 @@ describe('the delta shell against bash', () => {
     const hashFiles = deltaHashCandidates(probe);
     expect(hashFiles).toEqual(['short.bin', 'vol/big.bin']);
 
-    const { files, wanted } = deltaBlockHashPlan({
-      hashFiles, probe, baseFacts: baseFromBash, upperDir: real.upper, lowerBase: real.base,
-    });
+    // The fixture's two candidates, each against its base copy, with the block counts their planted sizes make.
+    const files = hashFiles.map((path, index) => ({ index, upperPath: `${real.upper}/${path}`, basePath: `${real.base}/${path}` }));
+    const wanted = new Map([[0, { upperBlocks: 5, baseBlocks: 2 }], [1, { upperBlocks: 11, baseBlocks: 11 }]]);
 
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);

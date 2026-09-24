@@ -32,6 +32,7 @@ export interface RuntimeComponents {
   vfs: VFS;
   /** This agent's own state when `vfs` is a shared plane. */
   agentStateVfs?: VFS;
+  workspaceIsMachine: boolean;
   llm: LLM;
   executor: Executor;
   schedule: Schedule;
@@ -85,6 +86,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     actor: components.actor,
     storage: { vfs, sql, execRaw, transactionSync: components.transactionSync },
     agentStateVfs,
+    workspaceIsMachine: components.workspaceIsMachine,
     memory,
     executor,
     llm,

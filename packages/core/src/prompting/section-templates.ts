@@ -139,7 +139,7 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceReference}}{{workspaceRoot}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
   executorsSection.trimEnd(),
 );
 

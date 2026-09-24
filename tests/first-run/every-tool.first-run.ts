@@ -19,8 +19,10 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
-import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { BUILTIN_TOOLS, DEPS_GATED_TOOLS, normalizeFactKey, type JsonValue, type RunEvent } from '../../packages/core/src/index';
+import { formatFailureMix, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
+import {
+  BUILTIN_TOOLS, DEPS_GATED_TOOLS, censusToolFailures, normalizeFactKey, toolFailurePartOfKey, type JsonValue, type RunEvent,
+} from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -35,7 +37,7 @@ const CASE = 'every-tool' as const;
  *  table moves this row with it. */
 const ROOT_TOOLS: readonly string[] = BUILTIN_TOOLS.filter((name) => !DEPS_GATED_TOOLS.includes(name));
 
-const PROBE_PATH = '/home/user/tools-probe.txt';
+const PROBE_PATH = '/home/main/tools-probe.txt';
 
 const PROBE_BYTES = 'KINU-EVERY-TOOL';
 
@@ -151,6 +153,18 @@ function everyToolDetail(calls: readonly ToolCallEnd[], offenders: readonly Tool
   }
 
   return `${String(offenders.length)} of ${String(calls.length)} failed: ${offenders.map(describeFailure).join('; ')}`;
+}
+
+/** A scripted task runs clean: no failure the census calls unexpected (`broke`), codemode calls included. */
+function unexpectedFailures(calls: readonly ToolCallEnd[]): EvalSubgoal {
+  const broke = censusToolFailures(calls).byKey.filter(([key]) => toolFailurePartOfKey(key) === 'broke');
+
+  return {
+    what: 'no-unexpected-tool-failure', reached: broke.length === 0,
+    detail: broke.length === 0
+      ? `no unexpected failure in ${String(calls.length)} call(s), codemode calls included`
+      : `unexpected ${formatFailureMix(broke)}`,
+  };
 }
 
 describe(SUITE, () => {
@@ -279,6 +293,7 @@ describe(SUITE, () => {
           what: 'every-tool-answered', reached: calls.length > 0 && offenders.length === 0,
           detail: everyToolDetail(calls, offenders),
         });
+        subgoals.push(unexpectedFailures(calls));
 
         const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';
 

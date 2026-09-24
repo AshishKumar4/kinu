@@ -742,12 +742,12 @@ body { background: var(--c-bg); color: var(--c-text); }
    the scrollbar is suppressed, because a 6px classic scrollbar would change
    the strip's height and shift the underline.
 
-   Vertically it must not scroll at all: a tab overhangs the strip by the
-   pixel its `-mb-px` pulls back, which is layout the tab grammar depends on
-   but is not content, and left to compute as `auto` that pixel is enough for
-   a vertical scrollbar to appear beside a single row of tabs. */
+   Its tabs overhang the row's rule by the pixel their `-mb-px` pulls back.
+   That pixel is not content, so the strip never scrolls vertically, and its
+   covers and edge rules stop above it, so the rule runs unbroken beneath. */
 .p-tabstrip {
   --scroll-ground: var(--c-bg);
+  background-size: 12px calc(100% - 1px), 12px calc(100% - 1px), 1px calc(100% - 1px), 1px calc(100% - 1px);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;

@@ -105,7 +105,7 @@
   <text class="xs" x="677" y="305" text-anchor="start">dynamic context · compaction</text>
   <rect x="38" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="50" y="345" text-anchor="start">Workspace files</text>
-  <text class="xs" x="50" y="360" text-anchor="start">/home/user, plus one home per agent</text>
+  <text class="xs" x="50" y="360" text-anchor="start">/home/main, plus one home per agent</text>
   <rect x="316" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
   <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · device · parent</text>

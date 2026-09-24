@@ -124,12 +124,12 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   async start(): Promise<void> {
     await adoptGeneration(this.gen);
     this.processes.setPidBase(generation(this.gen) * PID_GEN_STRIDE);
-    const root = '/home/user/slates/board';
+    const root = '/home/main/slates/board';
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir(root, { recursive: true });
 
     // The user's slates are the user's, as a workspace's home is: an imported blueprint lands beside them.
-    for (const dir of ['/home/user', '/home/user/slates']) files.chown(dir, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
+    for (const dir of ['/home/main', '/home/main/slates']) files.chown(dir, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
     files.writeFile(`${root}/package.json`, JSON.stringify({
       name: SLATE_ID, main: 'server.ts',
       slate: {
@@ -149,7 +149,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       '  async fetch() { return new Response("share-ok"); }',
       '}',
     ].join('\n'));
-    const digest = '/home/user/slates/digest';
+    const digest = '/home/main/slates/digest';
     files.mkdir(digest, { recursive: true });
     files.writeFile(`${digest}/package.json`, JSON.stringify({
       name: 'digest', main: 'server.ts', slate: { title: 'Digest', runtime: 'worker', bindings: {} },

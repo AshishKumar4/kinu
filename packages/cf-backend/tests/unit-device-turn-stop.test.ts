@@ -43,7 +43,8 @@ interface StopRail {
   close: () => Promise<void>;
 }
 
-/** The rail: a turn is open on the actor because a durable device command is stamped with its turn, and Stop sweeps by that stamp. */
+/** The rail: a turn is open on the actor because a durable device command is stamped with its turn, and Stop sweeps by that stamp.
+ *  Its start asks the hub which machines are live. */
 async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   const user = createTestUserDO({ durableObjectId: OWNER_USER_ID, deviceResponder: responder });
   const { deviceId } = await user.userDO.registerDevice(await testOwner(), 'ashish@studio');
@@ -57,7 +58,6 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   });
 
   actor.agent.harnessHoldsCapability(token);
-  // The turn reads the hub before its first model call, which makes the connected device visible.
   await chatSessionTurns(actor.agent).openInFlight(TURN);
   const broadcasts: string[] = [];
   Reflect.set(actor.agent, 'broadcast', (payload: string) => { broadcasts.push(payload); });

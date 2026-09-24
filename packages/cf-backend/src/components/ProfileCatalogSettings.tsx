@@ -12,7 +12,6 @@ import {
   isTierId,
   tierIdsOf,
   effectiveRoleCatalog,
-  isReasoningEffort,
   isValidRoleId,
   offeredReasoningEfforts,
   type ProfileCatalog,
@@ -25,9 +24,9 @@ import {
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
-import { ModelPicker } from './ModelPicker';
+import { ModelPicker, reasoningEffortLabel } from './ModelPicker';
 import { BrandMark, providerBrand } from './ui/BrandMark';
-import { Card, Field, inputCls, tabCls } from './ui/form';
+import { Card, Choice, Field, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
@@ -222,6 +221,9 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
 
   const saveWhat = tiersOnly ? 'Save tiers' : 'Save roles and tiers';
 
+  const defaultModel = draft === null ? '' : draft.tiers.default.model;
+  const defaultLabel = menu.models.find((model) => model.spec === defaultModel)?.label ?? defaultModel;
+
   return (
     <>
       <Card title="Model tiers" icon={BrainIcon}
@@ -234,8 +236,6 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
           </div>
         ) : (
           <>
-            {/* The top border sits on every row, first included: a gate reads the default row's
-                borderTopColor. */}
             <div>
               {tierIdsOf(draft).map((tierId) => {
                 const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
@@ -244,7 +244,6 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
 
                 const entry = menu.models.find((model) => model.spec === resolved.model);
 
-                // Levels come from the model's menu entry (#9).
                 const efforts = offeredReasoningEfforts(
                   entry?.reasoningEfforts,
                   assignment?.reasoningEffort,
@@ -253,7 +252,7 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                 const brand = providerBrand(entry?.provider ?? '');
 
                 return (
-                  <div key={tierId} className="grid gap-x-3 gap-y-2 border-t p-border py-3 first:border-t-0 first:pt-0 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
+                  <div key={tierId} data-tier={tierId} className="grid gap-x-3 gap-y-2 border-t p-border py-3 first:border-t-0 first:pt-0 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1.5">
                         {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
@@ -276,23 +275,21 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                       value={assignment?.model ?? ''}
                       onChange={(model) => setTier(tierId, model)}
                       clearable={tierId !== 'default'}
-                      placeholder={tierId === 'default' ? resolved.model : `Use default (${resolved.model})`}
+                      placeholder={tierId === 'default' ? resolved.model : `Use default (${defaultLabel})`}
                       label={`${tierId} model`}
                       size="sm"
                     />
-                    <select
-                      className={selectSmCls}
+                    <Choice<ReasoningEffort | ''>
+                      label={`${tierId} reasoning effort`}
+                      size="sm"
                       value={assignment?.reasoningEffort ?? ''}
-                      onChange={(event) => {
-                        const effort = event.target.value;
-                        setTierEffort(tierId, isReasoningEffort(effort) ? effort : '');
-                      }}
-                      aria-label={`${tierId} reasoning effort`}
-                      title={efforts.length === 0 ? 'This model takes no reasoning effort setting.' : undefined}
-                    >
-                      <option value="">Model default</option>
-                      {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-                    </select>
+                      disabled={efforts.length === 0}
+                      options={[
+                        { value: '', label: 'Model default' },
+                        ...efforts.map((effort) => ({ value: effort, label: reasoningEffortLabel(effort) })),
+                      ]}
+                      onChange={(effort) => setTierEffort(tierId, effort)}
+                    />
                   </div>
                 );
               })}
@@ -447,15 +444,10 @@ function RoleEditor(props: {
             onChange={(event) => set('label', event.target.value)} />
         </Field>
         <Field label="Default tier" hint="The tier this role runs on.">
-          <select className={inputCls} aria-label="Default tier"
+          <Choice label="Default tier"
             value={props.role.tier}
-            onChange={(event) => {
-              const tier = props.tiers.find((value) => value === event.target.value);
-
-              if (tier) set('tier', tier);
-            }}>
-            {props.tiers.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
-          </select>
+            options={props.tiers.map((tier) => ({ value: tier, label: tier }))}
+            onChange={(tier) => set('tier', tier)} />
         </Field>
         <div className="sm:col-span-2">
           <Field label="Description" hint="One line in the role list: when an agent should use this role.">
@@ -473,15 +465,10 @@ function RoleEditor(props: {
           </Field>
         </div>
         <Field label="Default swarm preset">
-          <select className={inputCls} aria-label="Default swarm preset"
+          <Choice label="Default swarm preset"
             value={props.role.preset}
-            onChange={(event) => {
-              const preset = NAMED_SWARM_PRESETS.find((value) => value === event.target.value);
-
-              if (preset) set('preset', preset);
-            }}>
-            {NAMED_SWARM_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
-          </select>
+            options={NAMED_SWARM_PRESETS.map((preset) => ({ value: preset, label: preset }))}
+            onChange={(preset) => set('preset', preset)} />
         </Field>
         <Field label="Plan mode" hint="This role opens its workspace in Plan mode.">
           <label className="flex w-fit items-center gap-2 p-row-text p-text-2">

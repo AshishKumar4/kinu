@@ -4,7 +4,7 @@ import { createTestActors, createTestSql, present, toolExecute } from '@kinu.run
 import type { JsonObject } from '../src/utils/json';
 import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import {
-  buildMcpToolSet, claimToolEffect, initToolEffectClaimTable, releaseTurnEffectClaims,
+  buildMcpToolSet, claimToolEffect, initToolEffectClaimTable,
   settleToolEffect, TurnContextBudget,
   withEffectClaims, replayPolicyFor, type EffectClaimDeps, type JsonValue,
   type SerializableToolDescriptor,
@@ -118,19 +118,6 @@ describe('tool effect claims', () => {
 
     expect(sql`SELECT turn_id, normalized_call_id FROM tool_effect_claims`)
       .toEqual([{ turn_id: 'turn-7', normalized_call_id: 'call-from-provider' }]);
-  });
-
-  test('a released turn no longer replays, because its answer is durable', async () => {
-    const { sql, actor, deps, scope } = claimPlane();
-    const { calls, tools } = countingTool();
-    const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
-
-    await execute({ to: 'ops@example.test' }, OPTIONS);
-    releaseTurnEffectClaims(sql, actor, scope.turnId);
-    scope.turnId = 'turn-2';
-    await execute({ to: 'ops@example.test' }, OPTIONS);
-
-    expect(calls).toHaveLength(2);
   });
 
   test('a safe tool is untouched: no wrapper, no row', async () => {

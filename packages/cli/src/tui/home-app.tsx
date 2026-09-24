@@ -24,15 +24,10 @@ import {
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import { installTurnDiagnostics } from '../turn-log';
 import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
-import { requireInteractiveTerminal } from '../prompt';
+import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { VERSION } from '../display';
-import {
-  loadActiveProfile,
-  loadCachedAccountProfile,
-  loadLocalProfileAuthority,
-  resolveProfileAuthority,
-  updateDefaultTier,
-} from '../profiles';
+import { loadActiveProfile, updateDefaultTier } from '../default-model';
+import { readDefaultTier } from '../profiles';
 import { createKeyDispatcher, openTuiKeyBindings, type KeyScope, type TuiActionId } from './actions';
 import { GuidedOnboarding, type OnboardingRoleChoice, type TuiOnboardingOperations } from './onboarding';
 import { createFileTuiPreferenceStore, type WorkspaceLocationChoice } from './preferences';
@@ -100,24 +95,15 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const [navigationOpen, setNavigationOpen] = useState(false);
 
   const initialDefaults = useMemo(() => {
-    const config = loadConfigFile();
-    const authority = resolveProfileAuthority();
+    const tier = readDefaultTier();
 
-    const profile = authority.kind === 'local'
-      ? loadLocalProfileAuthority()
-      : loadCachedAccountProfile(authority.accountId);
-
-    return {
-      model: profile?.catalog.tiers.default.model ?? config.model ?? '',
-      reasoningEffort: profile?.catalog.tiers.default.reasoningEffort ?? config.reasoningEffort ?? 'medium',
-    };
+    return { model: tier?.model ?? '', reasoningEffort: tier?.reasoningEffort ?? 'medium' };
   }, []);
 
-  const [mode, setMode] = useState<AgentMode>(() => defaultCreateMode());
+  const [mode, setMode] = useState<AgentMode>(() => (isLocalModelConfigured() ? 'local' : defaultCreateMode()));
   const [defaultModel, setDefaultModelState] = useState(initialDefaults.model);
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort);
   const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
-  // Effort-row catalog (#9), refreshed when the picker opens.
   const [catalog, setCatalog] = useState<AgentModelMenu>(EMPTY_MODEL_MENU);
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -174,7 +160,6 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     initialFocusApplied.current = true;
     setFocusArea('agents');
   }, [sidebarFocusable]);
-  // A hidden sidebar cannot hold focus; hand it back to the mission field.
   useEffect(() => {
     if (focusArea === 'agents' && !sidebarFocusable) setFocusArea('mission');
   }, [focusArea, sidebarFocusable]);
@@ -790,12 +775,12 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   // Interactive surface: stderr is the person's screen, so diagnostics go to cli.log.
   installTurnDiagnostics();
   requireInteractiveTerminal();
-  const renderer = await createCliRenderer({ exitOnCtrlC: false });
+  const renderer = await createCliRenderer({ exitOnCtrlC: false, exitSignals: [] });
   const root = createRoot(renderer);
   const { promise, resolve } = Promise.withResolvers<HomeTuiAction>();
 
   const complete = (action: HomeTuiAction) => {
-    process.off('SIGINT', onSigint);
+    for (const signal of TUI_EXIT_SIGNALS) process.off(signal, onExitSignal);
     // Unmount synchronously (flushSync) before the renderer frees native state: a queued commit on a
     // destroyed renderer writes through a freed pointer and segfaults.
     flushSync(() => { root.unmount(); });
@@ -803,9 +788,10 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
     resolve(action);
   };
 
-  const onSigint = () => complete({ type: 'exit' });
+  const onExitSignal = () => complete({ type: 'exit' });
   finishHome = complete;
-  process.on('SIGINT', onSigint);
+
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, onExitSignal);
   root.render(<HomeApp opts={opts} />);
 
   return await promise.finally(() => {
@@ -871,11 +857,9 @@ function collisionNotice(collisions: readonly CloudRefCollision[]): string {
 }
 
 async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelMenu> {
-  return normalizeModelMenu({
-    payload: mode === 'cloud'
-      ? await loadCloudHomeModels(opts.origin)
-      : await createConfiguredLocalModelResolver(opts).resolver.listModels(),
-  });
+  return mode === 'cloud'
+    ? loadCloudHomeModels(opts.origin)
+    : normalizeModelMenu({ payload: await createConfiguredLocalModelResolver(opts).resolver.listModels() });
 }
 
 async function loadCloudHomeModels(originOverride: string | undefined) {

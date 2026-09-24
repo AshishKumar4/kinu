@@ -11,6 +11,7 @@ import {
 } from '../vfs/mounts';
 import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
+import { isSystemManaged } from './files-plane';
 import type { VFS, VfsRevision } from '../types/primitives';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -296,12 +297,12 @@ export class ExecutorFileDownload {
   }
 }
 
-export function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
+function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
   return router.getProvider(executorId)?.files ?? null;
 }
 
 /** Absolute-path arithmetic shared with the browser; restores the slash `normalizePath` strips. */
-export function normalizeDir(path: string): string {
+function normalizeDir(path: string): string {
   return `/${normalizePath(path)}`;
 }
 
@@ -370,7 +371,7 @@ export async function getExecutorFiles(
     const listed = await listWithVfsOps(vfs, dir);
 
     // A null `stat` is one unreadable child, not a failed listing.
-    const entries: DirEntry[] = listed.map(({ name, stat }) => ({
+    const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name)).map(({ name, stat }) => ({
       name, type: stat?.isDir ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
 

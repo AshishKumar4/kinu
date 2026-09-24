@@ -18,6 +18,7 @@ import {
   initHeadsTables,
 } from '../src/heads/index';
 import { initSearchTables } from '../src/mcts/schemas';
+import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { listForkRuns } from '../src/read-models/fork-runs';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
@@ -70,6 +71,7 @@ function freshJournal() {
   const execRaw = makeExecRaw(db);
   initHeadsTables(execRaw);
   initSearchTables(execRaw);
+  initSwarmNodeRecords(execRaw);
   initMctsSearchTable(execRaw);
   const sql = makeSql(db);
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'fork-identity-test');

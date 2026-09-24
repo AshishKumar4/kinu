@@ -91,12 +91,12 @@ export function readStoredInspector(account: InspectorAccount | null, workspace:
 }
 
 
-/** Stored choice, else collapsed unless the live signal fired or the auto-open already served this workspace. */
-export function decideInspector(stored: StoredInspectorLayout | null, showContent: boolean): InspectorTarget {
+/** Stored choice, else collapsed unless the person is needed or the auto-open already served this workspace. */
+export function decideInspector(stored: StoredInspectorLayout | null, needsUser: boolean): InspectorTarget {
   const width = stored?.width ?? INSPECTOR_DEFAULT_PX;
   const choice = stored?.choice ?? null;
 
-  return { collapsed: choice === null ? !showContent : !choice, widthPx: width };
+  return { collapsed: choice === null ? !needsUser : !choice, widthPx: width };
 }
 
 /** Decides and applies the layout. A user gesture wins; the signal open is a once-per-workspace latch;
@@ -104,13 +104,13 @@ export function decideInspector(stored: StoredInspectorLayout | null, showConten
 export function applyInspectorDecision(state: InspectorState, input: {
   readonly workspace: string | undefined;
   readonly stored: StoredInspectorLayout | null;
-  readonly worthShowing: boolean;
+  readonly needsUser: boolean;
   readonly panelPresent: boolean;
 }): InspectorStep {
   if (input.stored === null || state.userDecided === (input.workspace ?? null)) return { state, effects: {} };
 
-  const target = decideInspector(input.stored, input.worthShowing || state.autoOpened === (input.workspace ?? null));
-  const autoOpened = input.worthShowing && input.stored.choice === null ? input.workspace ?? null : state.autoOpened;
+  const target = decideInspector(input.stored, input.needsUser || state.autoOpened === (input.workspace ?? null));
+  const autoOpened = input.needsUser && input.stored.choice === null ? input.workspace ?? null : state.autoOpened;
 
   if (state.collapsed === target.collapsed && (target.collapsed || state.widthPx === target.widthPx)) {
     return { state: { ...state, autoOpened, ready: true }, effects: {} };

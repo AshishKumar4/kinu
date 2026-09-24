@@ -5,12 +5,12 @@
  */
 
 import { workspaceAddressRefusal } from '@kinu.run/core';
-import { previewHostSuffix } from '@kinu.run/core';
+import { previewHostSuffix, previewPortSuffix } from '@kinu.run/core';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run/core';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
-import type { LabelSignerEnv, PreviewSuffixEnv, WorkspacePreviewUrl } from '@kinu.run/core';
+import type { LabelSignerEnv, PreviewPortEnv, PreviewSuffixEnv, WorkspacePreviewUrl } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
 
@@ -38,7 +38,7 @@ function previewMessage(workspace: string, port: number, handle: string): string
 
 /** A reason rather than a throw: without a preview host, or with a name a hostname label cannot carry, the port still works. */
 export async function nimbusPreviewUrl(
-  env: PreviewSuffixEnv & LabelSignerEnv,
+  env: PreviewSuffixEnv & PreviewPortEnv & LabelSignerEnv,
   workspaceName: string,
   port: number,
   capability: string,
@@ -67,7 +67,7 @@ export async function nimbusPreviewUrl(
   // The name passed the label grammar, so null is a fault.
   if (host === null) throw new Error(`the preview label for "${workspaceName}" did not fit a hostname`);
 
-  return { url: `https://${host}/` };
+  return { url: `https://${host}${previewPortSuffix(env)}/` };
 }
 
 /** Runs before app authentication; `null` hands the request to the container-preview router. */

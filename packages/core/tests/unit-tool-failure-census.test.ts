@@ -536,7 +536,7 @@ describe('each executor tool files its own failure in the right part', () => {
       const census = censusOf(await escalate(createSandboxExecutor({
         exec: async () => { throw new Error(c.thrown); },
         readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
-        deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
+        deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0, route: { reached: true } }),
         unexposePort: async () => {}, getExposedPorts: async () => [],
         ...sandboxHandleLifecycle,
       })));
@@ -562,7 +562,7 @@ describe('each executor tool files its own failure in the right part', () => {
           + 'way; operations are refused until it lands.');
       },
       readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
-      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
+      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0, route: { reached: true } }),
       unexposePort: async () => {}, getExposedPorts: async () => [],
     });
 

@@ -7,7 +7,7 @@ import { EVENT_BRIEF_MAX_CHARS } from './visibility';
 import { diagnostics, renderCauseChain, toKinuError } from '../../obs/index';
 import { ensureDir } from '../../utils/vfs-helpers';
 
-export const EVENT_CONTENT_DIR = '.kinu/event-content';
+const EVENT_CONTENT_DIR = '.kinu/event-content';
 
 export function eventContentPath(content: string): string {
   return `${EVENT_CONTENT_DIR}/${sha256Hex(content, 24)}.txt`;

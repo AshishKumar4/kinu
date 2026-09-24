@@ -48,6 +48,8 @@ The owner is a Cloudflare employee; Workers, DOs, R2, Containers, Sandboxes, Wor
 
 ## Delegation
 The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a loop with an `expert`, splits it into lanes, and briefs each with full context, an output contract and its own worktree. `expert` and `task` lanes implement and fix; `scout` researches; `sidekick` pairs. One dependent chain stays in one lane; independent problems run in parallel. A lane's result is a claim: main reads the diff and reruns the proof before merging, and only main deploys.
+- Few lanes, reused. New work goes to the lane already holding that area, with its context; a new lane only for a genuinely new area. Each lane owns an area, not a single bug: chat pane and roster; deploy ladder and first-run tier; Nimbus and preview routing; skills, codemode and prompts; providers and tool schemas; devices and secrets; CLI and TUI; test honesty; evals; Lean proofs; devbox.
+- Main does risky and small work itself: merges, prunes, branch and history operations, secrets, deploys, and any task a few steps finish. Lanes get substantial coherent work; a delegated classification is a claim Main checks before acting on it.
 
 ## Owner Preferences
 - Short commit subjects; no comment that restates code or narrates an edit.
@@ -78,12 +80,18 @@ The main agent orchestrates; Opus 5.5 lanes build. Main plans each change in a l
 - The AI SDK (`ai`) is required by the core chat driver and is not up for replacement. `@earendil-works/pi-*` is a bench subject only; oh-my-pi (`can1357/oh-my-pi`) is the source for borrowed ideas, cited.
 - Port 3000 is reserved; dev servers bind `0.0.0.0`; wrangler uses `--ip 0.0.0.0`.
 
+## Every Fix
+- A bug has two root causes: the defect, and why the code let it exist (sloppy or unreadable code, a duplicated path, an anti-pattern, a noisy or source-coupled test that could not catch it). Name both in the commit body and fix both.
+- Each fix leaves its area smaller or clearer: delete the duplicate path, dead code or wrapper it touches, with no lost behaviour. A fix that only adds lines names why nothing could be cut.
+- 2026-09-23 example: the provider pacer applied a per-invocation platform limit as an isolate-wide lane budget; the parked request looked hung and was cancelled (1101). The cut deleted the budget, not the symptom.
+
 ## Waste
 Over-engineering that cost CPU, storage or latency and delivered nothing is named here as it is found, with the date and the measurement, so the next design is checked against the list. Add a line when you find one; remove it when the code is gone.
 - 2026-09-21 A streamed answer was one `message_updates` row AND one context revision per token, and every step re-read every row of every past answer: a 500-delta turn cost 6x after twenty long answers, one storage statement per token, and the eval objects spent their 30 s CPU budget on it (D23). Nothing ever read an intermediate cutoff. Rule: a durable record is written once per fact at the granularity a reader needs; a hot path is measured against transcript size before it ships.
 - 2026-09-21 `append` asked `operation IN ('open','content-end')` and walked every update of the part per delta; the two partial indexes existed but a bound parameter or an `IN` defeats a partial index. Rule: a query that must hit a partial index carries the literal in its text, and `EXPLAIN QUERY PLAN` is read before a per-item query ships.
 - 2026-09-21 `_kinuTerminalRetryTick` collapsed future rows only, so a resetting object piled up 16 overdue rows and the SDK ran all 16 in one alarm, each re-running the interrupted delegated turn (production log, `Processing 16 stale "_kinuTerminalRetryTick" schedules in a single alarm cycle`). Fixed: the callback retires every other due row before its one pass. Rule: a wake that re-arms itself proves, in a test, what N overdue copies of it do.
 - 2026-09-21 Three hand-rolled outside-click listeners for three menus (sidebar user menu, Drive upload menu, plugin row menu) before one hook replaced them. Rule: the second copy of a behaviour is the moment to name it.
+- 2026-09-23 The Diffs baseline refused any workspace past 400 text files (`MAX_SNAPSHOT_FILES`, added 2026-08-11 with no measurement): live, at 450 files both `getExecutorDiff` and `resetWorkspaceBaseline` failed with "exceeds the 400-file Output limit", so a medium repo cloned under home broke the tab, while the work cost about 0.3 ms of DO CPU per file (350 files: diff ~80 ms, baseline ~120 ms). It also stored every body per generation and re-read every body on each 2 s poll. Replaced by a manifest (size, mtime, hash) with bodies stored once per hash: a poll reads only files whose metadata moved, and only a file past `do.sqlite.row_bytes` goes without a body. Rule: a cap names the platform limit it stands for in `PLATFORM_CATALOG`, or it is not written.
 
 ## Errors and Logs
 - No catch discards its error: do not catch; or wrap and rethrow with `cause`; or handle a domain value and say so. One catch spans one condition. Ask (`tableExists`, `PRAGMA`) instead of catching; no DDL in a catch; no production catch for a test-only condition. `tolerate(op, 'enoent')` / `classify({ cause })` from `@kinu.run/core/obs` for expected absences.

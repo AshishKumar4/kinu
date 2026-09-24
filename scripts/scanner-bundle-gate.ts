@@ -22,6 +22,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import { join } from 'node:path';
 import { finding } from './gate-ratchet';
 
@@ -39,8 +40,21 @@ export const BUNDLE_BANNER =
   + '// Bun loads the install scanner before it installs anything, so the scanner\n'
   + '// cannot import a dependency; this bundle carries its decoder inlined.';
 
-/** A bare import is a dependency the bootstrap cannot satisfy. */
-const BARE_IMPORT = /^\s*import\b[^'"]*['"](?![./])/mu;
+/** The bundle's module graph as Bun itself reads it: every static import,
+ *  dynamic import and require a module names. */
+const importScanner = new Bun.Transpiler({ loader: 'js' });
+
+/** The imports a bundle names that the bootstrap cannot satisfy: anything but
+ *  a relative path and a runtime builtin. A builtin resolves in a checkout with
+ *  no `node_modules` at all (measured 2026-09-23, bun 1.4.0: a scanner
+ *  importing `node:fs` scanned a fresh install), and `Bun.build` writes
+ *  `node:fs` as `fs`. */
+export function dependencyImports(bundle: string): string[] {
+  return importScanner.scanImports(bundle)
+    .map(({ path }) => path)
+    .filter((specifier) => !specifier.startsWith('.') && !specifier.startsWith('node:')
+      && !specifier.startsWith('bun:') && !builtinModules.includes(specifier));
+}
 
 /**
  * One `// <path>` separator Bun writes before each bundled module. The path
@@ -94,11 +108,13 @@ export function judgeBundle(committed: string, fresh: string, bunfig: string): B
     }));
   }
 
-  if (BARE_IMPORT.test(fresh)) {
+  const dependencies = dependencyImports(fresh);
+
+  if (dependencies.length > 0) {
     findings.push(finding({
-      invariant: `${SCANNER_BUNDLE} imports nothing outside itself`,
+      invariant: `${SCANNER_BUNDLE} imports nothing but runtime builtins`,
       at: SCANNER_BUNDLE,
-      found: 'a bare import specifier survived bundling',
+      found: `a dependency import survived bundling: ${dependencies.join(', ')}`,
       silently: 'a fresh checkout cannot install: Bun loads the scanner before any dependency '
         + 'exists and dies with SecurityScannerNotInDependencies',
       fix: `remove the external import from ${SCANNER_SOURCE} or mark it bundleable`,
@@ -143,7 +159,7 @@ async function main(args: readonly string[]): Promise<number> {
 
   console.log(
     `${GATE}: ok — ${SCANNER_BUNDLE} is a fresh build of ${SCANNER_SOURCE} (${String(verdict.bytes)} bytes), `
-    + 'imports nothing, and is the scanner bunfig.toml names',
+    + 'imports nothing but runtime builtins, and is the scanner bunfig.toml names',
   );
   console.log(`  blind: whether the bundled decoder behaves as the source — that is scripts/dependency-advisory-gate.ts, at the ci tier, over a real \`bun pm scan\``);
 

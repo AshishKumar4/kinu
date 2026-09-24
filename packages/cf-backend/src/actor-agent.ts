@@ -61,7 +61,7 @@ import {
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   advisorWorkspaceGuidance,
   buildActorTools, buildBuiltinTools,
-  buildMcpToolSet,
+  buildMcpToolSet, toolSchemaDialect, withToolSchemaDialect,
   type WebSearchProvider,
   buildSystemPromptSync,
   type PromptIdentity,
@@ -1721,7 +1721,6 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-          modelWindow: () => this.modelCatalog.window(),
           steerSkills: (text) => steerSkillsBlock({
             vfs: this.rt.storage.vfs,
             config: this.config,
@@ -3845,7 +3844,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }));
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
 
-      return tools;
+      return withToolSchemaDialect(tools, toolSchemaDialect(this.effectiveModelSpec()));
     } catch (err) {
       const failure = toKinuError({
         doing: 'building the user MCP tool adapters for this turn',

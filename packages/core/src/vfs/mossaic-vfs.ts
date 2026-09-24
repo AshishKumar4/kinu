@@ -39,9 +39,10 @@ export interface MossaicClient {
   symlink(target: string, path: string): Promise<void>;
   readlink(path: string): Promise<string>;
   listChildren(path: string, opts?: { limit?: number; cursor?: string; includeStat?: boolean }): Promise<MossaicChildrenPage>;
+  createReadStream(path: string, opts?: { start?: number; end?: number }): Promise<ReadableStream<Uint8Array>>;
 }
 
-export interface MossaicVfs extends VFS, VfsNativeMutations, Pick<VfsNativeReads, 'readdirStats'> {
+export interface MossaicVfs extends VFS, VfsNativeMutations, Pick<VfsNativeReads, 'readdirStats' | 'readRange'> {
   readlink(path: string): Promise<string>;
   symlink(target: string, path: string): Promise<void>;
 }
@@ -139,6 +140,9 @@ export function mossaicVfs(client: MossaicClient): MossaicVfs {
     removeRecursive: (path) => guarded(path, () => client.removeRecursive(path)),
     readlink: (path) => guarded(path, () => client.readlink(path)),
     symlink: (target, path) => guarded(path, () => client.symlink(target, path)),
+    readRange: (path, offset, length) => guarded(path, async () => new Uint8Array(
+      await new Response(await client.createReadStream(path, { start: offset, end: offset + length })).arrayBuffer(),
+    )),
     async readdirStats(path) {
       const listed: VfsListedEntry[] = [];
       let cursor: string | undefined;

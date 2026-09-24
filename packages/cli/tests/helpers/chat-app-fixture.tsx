@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
-import type { EvolutionConfigView } from '@kinu.run/core';
+import { missingSubordinateHistory, type EvolutionConfigView } from '@kinu.run/core';
 
 import type {
   AgentClient,
@@ -42,6 +42,7 @@ export function soloHub(client: AgentClient): TuiHubData {
       id: client.agentName, label: client.agentName, kind: 'main', status: 'idle',
       roleId: 'task', tierId: 'default', workspace: client.agentName,
     }],
+    subordinates: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -71,6 +72,7 @@ interface FakeClientOptions {
   connect?: AgentClient['connect'];
   history?: AgentClient['history'];
   rename?: AgentClient['rename'];
+  inspectSubordinate?: AgentClient['inspectSubordinate'];
 }
 
 export function fakeClient(options: FakeClientOptions) {
@@ -157,6 +159,7 @@ export function fakeClient(options: FakeClientOptions) {
       }],
       failures: [],
     })),
+    inspectSubordinate: options.inspectSubordinate ?? (async (request) => missingSubordinateHistory(request.path)),
   };
 
   const rename = options.rename ?? (mode === 'local'
@@ -235,23 +238,36 @@ export async function mountChat(
       hubData={options.hubData}
       readHub={options.readHub ?? (async (target) => options.hubData ?? soloHub(target))}
       onNewAgent={options.onNewAgent}
-      profileMutations={{
-        setModel: (spec) => client.setModel(spec),
-        setReasoningEffort: (effort) => client.setReasoningEffort(effort),
-      }}
     />,
   );
   const frame = () => testRenderer.captureCharFrame();
 
-  const waitFor = async (what: string, predicate: () => boolean, rounds = 400) => {
-    for (let index = 0; index < rounds; index += 1) {
-      await testRenderer.renderOnce();
+  const { renderer } = testRenderer;
 
-      if (predicate()) return;
-      await Bun.sleep(10);
+  /** The next rendered frame; only the renderer's teardown ends the wait otherwise. */
+  const nextFrame = (what: string) => new Promise<void>((resolve, reject) => {
+    const onFrame = () => {
+      renderer.off('destroy', onDestroy);
+      resolve();
+    };
+
+    const onDestroy = () => {
+      renderer.off('frame', onFrame);
+      reject(new Error(`the renderer was destroyed while waiting for ${what}`));
+    };
+
+    renderer.once('frame', onFrame);
+    renderer.once('destroy', onDestroy);
+  });
+
+  /** Re-reads `predicate` after each rendered frame and the promise work it settled; no clock ends it. */
+  const waitFor = async (what: string, predicate: () => boolean) => {
+    await testRenderer.renderOnce();
+
+    while (!predicate()) {
+      await nextFrame(what);
+      await new Promise<void>((resolve) => { process.nextTick(resolve); });
     }
-
-    throw new Error(`timed out waiting for ${what}`);
   };
 
   const settled = options.settled ?? ((view: string) => view.includes('Send a message'));

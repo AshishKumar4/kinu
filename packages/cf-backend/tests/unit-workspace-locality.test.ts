@@ -7,8 +7,8 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createHostedWorkspace, type HostedWorkspace, type HostedWorkspaceEnv } from '../src/workspace-host';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
-import { sqlOver } from '@kinu.run/test-utils';
-import type { JsonValue } from '@kinu.run/core';
+import { fakeMossaic, sqlOver } from '@kinu.run/test-utils';
+import { mossaicVfs, sharedDriveMount, withMountTable, type JsonValue } from '@kinu.run/core';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
@@ -78,7 +78,7 @@ function workspaceBindings(): HostedWorkspaceEnv<string> {
   };
 }
 
-const SLATE_CWD = '/home/user/slates/a';
+const SLATE_CWD = '/home/main/slates/a';
 
 async function listen(workspace: HostedWorkspace, port: number, argv: string[], target: RouteableFacetTarget): Promise<number> {
   const session = await workspace.bundle.session();
@@ -151,8 +151,26 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await workspace.bundle.vfs.readFile('proof/from-shell.txt', { encoding: 'utf8' }))
       .toBe('from the shell');
 
-    expect(await box.files.read('/home/user/proof/from-shell.txt')).toBe('from the shell');
-    expect(await box.files.exists('/home/user/proof/from-vfs.txt')).toBe(true);
+    expect(await box.files.read('/home/main/proof/from-shell.txt')).toBe('from the shell');
+    expect(await box.files.exists('/home/main/proof/from-vfs.txt')).toBe(true);
+  });
+
+  test('the shell serves the file plane\'s mount points: /shared lists and reads through the same table', async () => {
+    const actor = actorObject();
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx,
+      env: workspaceBindings(),
+      previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+    });
+
+    const drive = mossaicVfs(fakeMossaic().tenant('owner'));
+    await drive.writeFile('/notes.md', 'from the Drive\n');
+    const box = workspace.box('agent:main');
+    box.mountTable?.(withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]));
+
+    expect((await box.exec('ls /')).stdout.split(/\s+/)).toEqual(expect.arrayContaining(['home', 'shared']));
+    expect(await box.exec('cat /shared/notes.md')).toMatchObject({ stdout: 'from the Drive\n', exitCode: 0 });
   });
 
   test('a named durable shell keeps its own cwd, and siblings do not see it', async () => {
@@ -175,9 +193,9 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const alpha = workspace.box('subordinate:alpha');
     const beta = workspace.box('head:beta');
-    expect(await alpha.exec('cd /home/user/alpha')).toMatchObject({ exitCode: 0 });
-    expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/user/alpha\n' });
-    expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/user\n' });
+    expect(await alpha.exec('cd /home/main/alpha')).toMatchObject({ exitCode: 0 });
+    expect(await alpha.exec('pwd')).toMatchObject({ stdout: '/home/main/alpha\n' });
+    expect(await beta.exec('pwd')).toMatchObject({ stdout: '/home/main\n' });
   });
 
   test('the workspace never reads a session binding out of env', async () => {
@@ -422,6 +440,63 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect((await ordinary.routePreview(20000, handle, new Request('https://preview.test/'), '/')).status).toBe(404);
   });
 
+  test('a resident exposed with exposePort is verified and routes to its server, never through the slate host', async () => {
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, durableStorage(kv));
+    const asked: string[] = [];
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: workspaceBindings(),
+      previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
+      // What the slate host answers for an owner that names no slate (`SlateHost.ensureDurable`).
+      ensureSlate: async (owner) => {
+        asked.push(owner);
+
+        return { reason: 'missing', error: `slate ${owner} durable app: ENOENT: home/user/slates/${owner}` };
+      },
+    });
+
+    await listen(workspace, 8090, ['python3', '-m', 'http.server', '8090', '--bind', '0.0.0.0'], {
+      handleHttpRequest: async () => new Response('<h1>2048</h1>'),
+    });
+    const ports = workspace.box('agent').ports;
+
+    if (ports?.expose === undefined) throw new Error('the workspace box has no port exposure');
+    const result = await ports.expose(8090);
+    const exposed = v.parse(v.object({ url: v.string(), capability: v.string() }), result);
+    const response = await workspace.routePreview(8090, exposed.capability.slice(0, 10), new Request(exposed.url), '/');
+
+    expect(result.route).toEqual({ reached: true });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('<h1>2048</h1>');
+    expect(asked).toEqual([]);
+  });
+
+  test('exposePort names the gate that refuses when the exposed server has stopped', async () => {
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, durableStorage(kv));
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: workspaceBindings(),
+      previewUrl: async (_port, capability) => ({ url: `https://preview.test/${capability}/` }),
+    });
+
+    const pid = await listen(workspace, 8090, ['python3', '-m', 'http.server', '8090'], {
+      handleHttpRequest: async () => new Response('<h1>2048</h1>'),
+    });
+
+    const ports = workspace.box('agent').ports;
+
+    if (ports?.expose === undefined) throw new Error('the workspace box has no port exposure');
+    await ports.expose(8090);
+    (await workspace.facetManager()).manager.kill(pid);
+
+    expect((await ports.expose(8090)).route)
+      .toEqual({ reached: false, gate: 'no-listener', detail: 'nothing is listening on port 8090' });
+  });
+
   test('a launch a hibernation interrupted is re-driven through the slate host on the next wake', async () => {
     // Vendor-format coupling: the seeded journal row copies worker 0.7's `resident-launch:<n>` recipe shape;
     // update here when the vendor changes it.
@@ -431,7 +506,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     kv.set('resident-launch:41', {
       pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
       recipe: {
-        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/home/user/slates/keeper', mainModule: 'runner.js',
+        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/home/main/slates/keeper', mainModule: 'runner.js',
         image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'],
       },
     });

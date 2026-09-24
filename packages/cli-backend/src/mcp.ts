@@ -1,11 +1,15 @@
 // Local MCP client over stdio child processes. Admission policy lives in core
 // (`admitMcpDescriptors`); the session applies it.
 
-import { describeMcpTool, decodeJsonValue, JsonObjectSchema, McpToolError, NO_TIMER_DEADLINE_MS, type JsonObject, type SerializableToolDescriptor } from '@kinu.run/core';
+import {
+  describeMcpTool, decodeJsonValue, JsonObjectSchema, listMcpToolsLeniently, McpToolError, NO_TIMER_DEADLINE_MS,
+  type JsonObject, type ListedMcpTools, type McpToolRefusal, type RemoteMcpTool, type SerializableToolDescriptor,
+} from '@kinu.run/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 
 /**
  * No wall clock on startup or tool calls; they end on answer, child exit, owner
@@ -25,6 +29,7 @@ export interface McpConnection {
   /** Every discovered tool, unadmitted; the session admits them via core's
    *  `admitMcpDescriptors`. `serverId` is the config key, unique per agent. */
   readonly descriptors: SerializableToolDescriptor[];
+  readonly refused: McpToolRefusal[];
   call(serverName: string, toolName: string, args: JsonObject, signal?: AbortSignal): Promise<string>;
   readonly diagnostics: McpConnectionDiagnostic[];
   /** Disconnect every server (kills the child processes). */
@@ -52,7 +57,8 @@ export async function connectMcpServers(
   const clients = new Map<string, Client>();
   const callTimeoutByServer = new Map<string, number>();
   const descriptors: SerializableToolDescriptor[] = [];
-  const diagnostics: McpConnectionDiagnostic[] = [];
+  const refused: McpToolRefusal[] = [];
+  const connectionDiagnostics: McpConnectionDiagnostic[] = [];
 
   for (const [serverName, cfg] of Object.entries(servers)) {
     const client = new Client({ name: 'kinu-cli', version: '0.1.0' });
@@ -72,30 +78,27 @@ export async function connectMcpServers(
         stderr = `${stderr}${String(chunk)}`.slice(-4_000);
       });
       await client.connect(transport, { timeout: NO_TIMER_DEADLINE_MS, signal });
-      const { tools: mcpTools } = await client.listTools(undefined, { timeout: NO_TIMER_DEADLINE_MS, signal });
+      const listed = await listServerTools(client, serverName, signal);
 
       if (cfg.timeoutMs !== undefined) callTimeoutByServer.set(serverName, cfg.timeoutMs);
+      const refusals = [...listed.refused];
 
-      for (const t of mcpTools) {
-        // One bad tool must not take down its server's good ones.
-        try {
-          descriptors.push(describeMcpTool(
-            { id: serverName, name: serverName },
-            {
-              name: t.name,
-              description: t.description,
-              annotations: t.annotations,
-              inputSchema: t.inputSchema ?? { type: 'object' },
-            },
-          ));
-        } catch (err) {
-          onLog?.(`mcp: ${serverName} tool '${t.name}' skipped: ${renderThrownChain({ cause: err })}`);
-        }
+      for (const t of listed.tools) {
+        const described = describeMcpTool({ id: serverName, name: serverName }, t);
+
+        if ('admitted' in described) descriptors.push(described.admitted);
+        else refusals.push(described.refused);
       }
 
+      for (const refusal of refusals) {
+        diagnostics.failure('mcp.tool_refused', new KinuError('bad_input', refusal.reason), { server: serverName });
+        onLog?.(`mcp: ${serverName} ${refusal.reason}`);
+      }
+
+      refused.push(...refusals);
       clients.set(serverName, client);
-      diagnostics.push({ server: serverName, status: 'connected', toolCount: mcpTools.length });
-      onLog?.(`mcp: ${serverName} → ${mcpTools.length} tool(s)`);
+      connectionDiagnostics.push({ server: serverName, status: 'connected', toolCount: listed.tools.length });
+      onLog?.(`mcp: ${serverName} → ${listed.tools.length} tool(s)`);
     } catch (err) {
       // A failed close on the half-open transport means a leaked child; report it, never drop it.
       const reasons = [renderThrownChain({ cause: err })];
@@ -108,7 +111,7 @@ export async function connectMcpServers(
 
       const reason = reasons.join('; ');
       const stderrText = stderr.trim();
-      diagnostics.push({
+      connectionDiagnostics.push({
         server: serverName,
         status: 'failed',
         toolCount: 0,
@@ -121,7 +124,8 @@ export async function connectMcpServers(
 
   return {
     descriptors,
-    diagnostics,
+    refused,
+    diagnostics: connectionDiagnostics,
     async call(serverName, toolName, args, callSignal) {
       const client = clients.get(serverName);
 
@@ -158,6 +162,34 @@ export async function connectMcpServers(
       }
     },
   };
+}
+
+/** Strict first, since it caches output validators. */
+async function listServerTools(client: Client, serverName: string, signal?: AbortSignal): Promise<ListedMcpTools> {
+  const options = { timeout: NO_TIMER_DEADLINE_MS, signal };
+
+  try {
+    const tools: RemoteMcpTool[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const page = await client.listTools(cursor === undefined ? undefined : { cursor }, options);
+
+      for (const t of page.tools) tools.push({ name: t.name, description: t.description, annotations: t.annotations, inputSchema: t.inputSchema });
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+
+    return { tools, refused: [] };
+  } catch (strict) {
+    signal?.throwIfAborted();
+    diagnostics.event('mcp.tool_list_rejected', { server: serverName, reason: renderThrownChain({ cause: strict }) });
+
+    return listMcpToolsLeniently({ name: serverName }, (next) => client.request(
+      { method: 'tools/list', params: next === undefined ? {} : { cursor: next } },
+      ResultSchema,
+      options,
+    ));
+  }
 }
 
 type McpToolResult = Awaited<ReturnType<Client['callTool']>>;

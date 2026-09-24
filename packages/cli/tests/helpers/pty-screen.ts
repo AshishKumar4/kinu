@@ -14,7 +14,8 @@ export type PtyStep =
   /** An overlay leaving is the product's signal that the covered surface has its keys back. */
   | { readonly gone: string; readonly timeout?: number }
   | { readonly send: string }
-  | { readonly sleep: number };
+  | { readonly sleep: number }
+  | { readonly signal: 'SIGHUP' | 'SIGTERM' };
 
 const PtyResultSchema = v.object({
   output: v.string(),
@@ -28,7 +29,7 @@ const PtyResultSchema = v.object({
 });
 
 const DRIVER = String.raw`
-import base64, codecs, json, os, pty, select, struct, sys, termios, fcntl, time, unicodedata
+import base64, codecs, json, os, pty, select, signal, struct, sys, termios, fcntl, time, unicodedata
 
 
 class Screen:
@@ -245,6 +246,8 @@ for step in spec["steps"]:
             break
     elif "send" in step:
         os.write(master, step["send"].encode("utf-8"))
+    elif "signal" in step:
+        os.kill(pid, getattr(signal, step["signal"]))
     else:
         alive = pump(step["sleep"])
 
@@ -271,6 +274,8 @@ export interface PtyRun {
   readonly raw: string;
   readonly screen: string;
   readonly waits: readonly PtyWait[];
+  /** The program closed its terminal before the run ended. */
+  readonly exited: boolean;
 }
 
 function installDriver() {
@@ -336,7 +341,7 @@ export function runTuiInPty(entry: string, options: {
 
   const raw = Buffer.from(result.output, 'base64').toString('utf8');
 
-  return { raw, screen: result.screen, waits: result.waits };
+  return { raw, screen: result.screen, waits: result.waits, exited: result.exited };
 }
 
 /** The screen after `bytes`, via the same model every `wait` reads; pins byte patterns captured from the renderer. */

@@ -341,7 +341,7 @@ describe('harvesting a capped swarm', () => {
     });
     const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.candidates[0]?.breach).toEqual(breach);
-    expect(harvest?.publication.state).toEqual({ kind: 'sealed', breach, clearedBy: null });
+    expect(harvest?.publication.state).toEqual({ kind: 'sealed', breach });
     expect(harvest?.publication.caveat).toContain('not publishable');
   });
 

@@ -78,7 +78,7 @@ export async function selectJudgeModel(opts: SelectJudgeModelOpts): Promise<Judg
 }
 
 /** Judges in a calibration ensemble: two is the smallest panel that can disagree; a third would outvote the split. */
-export const ENSEMBLE_JUDGE_COUNT = 2;
+const ENSEMBLE_JUDGE_COUNT = 2;
 
 export interface EnsembleJudgeSelection {
   /** One `<provider>/<modelId>` per distinct family; shorter than `ENSEMBLE_JUDGE_COUNT` when too few are connected. */

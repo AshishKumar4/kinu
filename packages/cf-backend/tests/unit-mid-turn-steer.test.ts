@@ -155,10 +155,10 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     await h.startTurn();
 
-    await h.agent.send('now build a slate that answers GET /ping', 'steer-ping');
+    await h.agent.send('/slates now build one that answers GET /ping', 'steer-ping');
 
     const carried = await stepMessages(h.agent, 0, HISTORY);
-    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: 'now build a slate that answers GET /ping' });
+    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: '/slates now build one that answers GET /ping' });
     const reference = carried[HISTORY.length + 1];
     expect(reference?.role).toBe('user');
     expect(JSON.stringify(reference?.content)).toContain('### slates');

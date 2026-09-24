@@ -46,6 +46,10 @@ interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
 /** Declared, not imported: a type import would drag the production worker graph in here. */
 interface SurfaceControlRpc extends Rpc.WorkerEntrypointBranded {
   resetModelLog(): Promise<void>;
+  holdProxyModel(): Promise<void>;
+  proxyModelParked(count: number): Promise<number>;
+  releaseProxyModel(): Promise<void>;
+  mintCliBearer(): Promise<string>;
 }
 
 interface UserSocketProbeRpc extends Rpc.DurableObjectBranded {
@@ -134,6 +138,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
     workspace: string; owner: string; id: string; body: string; preferredPort?: number;
   }): Promise<ServedSlate>;
   portReservations(workspace: string): Promise<DurabilityReservation[]>;
+  forgetActivation(workspace: string): Promise<void>;
   drivePreview(url: string): Promise<PreviewAnswer>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;

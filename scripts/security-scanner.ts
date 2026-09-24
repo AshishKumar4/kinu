@@ -49,7 +49,9 @@
  * a bundle that is not a fresh build of this source.
  */
 
+import { join } from 'node:path';
 import * as v from 'valibot';
+import { installRefusal } from './refuse-linked-install';
 
 /** npm's bulk advisory endpoint — the source `npm audit` reads, and the only
  *  one reachable without a vendor credential. One POST answers the whole tree. */
@@ -413,6 +415,11 @@ export function advisoriesFor(scan: AdvisoryScan): BunAdvisory[] {
 export const scanner: BunScanner = {
   version: '1',
   async scan({ packages }) {
+    // Bun consults the scanner before it writes anything, so this is where a
+    // linked worktree's install is refused (scripts/refuse-linked-install.ts).
+    const refusal = installRefusal(join(import.meta.dir, '..'));
+
+    if (refusal !== undefined) throw new Error(refusal);
     const scan = await queryAdvisories(packages);
 
     if ((process.env[REPORT_ENV] ?? '').trim().length > 0) {
