@@ -37,9 +37,9 @@ import {
 import { rowVerdicts } from './row-verdicts';
 import {
   FALLBACK_ANSWER, KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_SILENCE_MS, PACED_TURN_ANSWER,
-  PACED_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
-  heldCall, keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, registerScriptedModel, startScriptedModel,
-  type HeldCall,
+  PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SCRIPTED_MODEL_SPEC, SLATE_TITLE,
+  heldCall, keptTabProbe, pacedFirstTurn, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
+  startScriptedModel, type HeldCall,
 } from './scripted-model';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
 
@@ -222,6 +222,13 @@ interface OpenedMidTurnVerdict {
   readonly disagreed: number;
 }
 
+/** The answer's blocks in order, as `P:` and a prose block's first words or `T:` and a tool row's name, just before
+ *  the page's socket dropped and once the replay after its reconnect had been drawn (#30). */
+interface ReconnectVerdict {
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+}
+
 interface PanelVerdict {
   readonly nodeSurvives: boolean;
   readonly scrollSurvives: boolean;
@@ -295,6 +302,7 @@ interface TierVerdicts {
   bootFailure: string | null;
   liveIndicator: LiveIndicatorVerdict | null;
   openedMidTurn: OpenedMidTurnVerdict | null;
+  reconnect: ReconnectVerdict | null;
   panel: PanelVerdict | null;
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
@@ -312,7 +320,7 @@ const StripGeometrySchema = v.object({
 });
 
 const observed: TierVerdicts = {
-  liveIndicator: null, openedMidTurn: null,
+  liveIndicator: null, openedMidTurn: null, reconnect: null,
   bootFailure: null, panel: null, planTabs: null, geometry: null,
   controls: null, stamped: null, walkthrough: null, keptTab: null, state: null,
 };
@@ -1165,6 +1173,88 @@ async function measureOpenedMidTurn(
   }
 }
 
+/** Every socket the page opens, and how many replays have completed on them. */
+const RECORD_SOCKETS = `(() => {
+  window.__sockets = [];
+  window.__replaysComplete = 0;
+  const Socket = window.WebSocket;
+  window.WebSocket = class extends Socket {
+    constructor(url, protocols) {
+      super(url, protocols);
+      window.__sockets.push(this);
+      this.addEventListener('message', (event) => {
+        if (typeof event.data === 'string' && event.data.includes('"replayComplete":true')) window.__replaysComplete += 1;
+      });
+    }
+  };
+})()`;
+
+/** Close every open socket the way a sleeping laptop loses them; the page reconnects on its own. */
+const DROP_SOCKETS = `(() => {
+  let dropped = 0;
+  for (const socket of window.__sockets) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.close(3000, 'asleep');
+      dropped += 1;
+    }
+  }
+  return dropped;
+})()`;
+
+const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [data-tool-state]')].map((node) =>
+  node.matches('[data-tool-state]')
+    ? 'T:' + (node.querySelector('strong')?.textContent ?? '').trim()
+    : 'P:' + (node.textContent ?? '').trim().slice(0, 40))`;
+
+/** Row 10 (#30): a page whose socket drops while its turn runs draws the answer in the same order once it
+ *  reconnects and the server has replayed the turn from its start. The turn's steps each say what they do and call
+ *  a tool, then it waits on a held model call, so it is still running through the drop and the replay. */
+async function measureReconnect(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<ReconnectVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-reconnect-${RUN_ID}`, purpose: 'reconnect probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await newPage();
+
+  try {
+    await page.setViewport(DESKTOP);
+    await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+    await page.evaluateOnNewDocument(RECORD_SOCKETS);
+    await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+    await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
+    await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.evaluate(COUNT_PRESENCE_ASKS);
+    await sendInChat(page, RECONNECT_TURN_ASK);
+    await until(page, `the turn's ${String(RECONNECT_STEPS)} finished tool rows`,
+      `document.querySelectorAll('#chat [data-tool-state="done"]').length >= ${String(RECONNECT_STEPS)}`);
+    await painted(page);
+
+    // A turn that ended before the drop has nothing to replay, and the wait below would never end.
+    if (!v.parse(v.boolean(), await page.evaluate(STOP_OFFERED))) throw new Error('the turn ended before its sockets dropped');
+
+    const before = v.parse(v.array(v.string()), await page.evaluate(ANSWER_BLOCKS));
+
+    if (v.parse(v.number(), await page.evaluate(DROP_SOCKETS)) === 0) throw new Error('the page held no open socket to drop');
+
+    await until(page, 'the replay after the page reconnected', 'window.__replaysComplete > 0');
+
+    // The replay is batched and throttled into the thread; the page's next presence read comes after it is drawn.
+    const asked = v.parse(v.number(), await page.evaluate('window.__presenceAsks'));
+
+    await until(page, "the page's next presence read after the replay", `window.__presenceAsks > ${String(asked)}`);
+    await painted(page);
+
+    const after = v.parse(v.array(v.string()), await page.evaluate(ANSWER_BLOCKS));
+
+    await shoot(page, 'reconnect-replayed');
+
+    return { before, after };
+  } finally {
+    held.release();
+    await page.close();
+  }
+}
+
 /** The inspector strip's Work tab. */
 const WORK_TAB = `document.querySelector('#inspector .p-tabstrip [aria-label="Work"]')`;
 
@@ -1248,9 +1338,10 @@ async function run(): Promise<void> {
   // throwaway turn with prose and the walkthrough's turns with the plan and
   // the slate — one server, decided per request.
   const firstTurn = heldCall();
+  const reconnectHeld = heldCall();
 
   const model = await startScriptedModel((request) => pacedTurn(request) ?? pacedFirstTurn(request, firstTurn)
-    ?? keptTabProbe(request) ?? planWalkthrough(request));
+    ?? reconnectTurn(request, reconnectHeld) ?? keptTabProbe(request) ?? planWalkthrough(request));
 
   await withLiveApp(async (app) => {
     const { newPage, origin } = app;
@@ -1258,6 +1349,7 @@ async function run(): Promise<void> {
     await registerScriptedModel(origin, model.port);
     observed.liveIndicator = await attempt('live-indicator', () => measureLiveIndicator(newPage, origin));
     observed.openedMidTurn = await attempt('opened-mid-turn', () => measureOpenedMidTurn(newPage, origin, firstTurn));
+    observed.reconnect = await attempt('reconnect', () => measureReconnect(newPage, origin, reconnectHeld));
     observed.panel = await attempt('panel', () => measurePanel(newPage, origin));
     observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin));
     observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin));
@@ -1336,6 +1428,18 @@ describe('a page opened during a turn stops showing it once the turn ends', () =
     const verdict = verdictOf(observed.openedMidTurn, 'opened-mid-turn');
 
     expect({ headerless: verdict.headerless, disagreed: verdict.disagreed }).toEqual({ headerless: 0, disagreed: 0 });
+  });
+});
+
+describe('a page whose socket drops mid-turn keeps its answer in order', () => {
+  test("the turn's steps were drawn before the drop", () => {
+    expect(verdictOf(observed.reconnect, 'reconnect').before.filter((block) => block.startsWith('T:'))).toHaveLength(RECONNECT_STEPS);
+  });
+
+  test('the replay after the reconnect draws the answer as it stood', () => {
+    const { before, after } = verdictOf(observed.reconnect, 'reconnect');
+
+    expect(after).toEqual(before);
   });
 });
 
